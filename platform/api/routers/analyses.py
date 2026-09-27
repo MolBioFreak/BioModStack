@@ -9,8 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Design, Job, get_session
-from services.result_contracts import validate_design_analysis_request
 from services.analysis_runs import (
+    validate_owned_design_analysis_request,
     get_analysis_run_by_id,
     get_matching_design_analysis_run,
     get_matching_job_analysis_run,
@@ -74,8 +74,8 @@ def _job_analysis_params_from_query(
     }
 
 
-def _enforce_design_analysis_contract(design: Design, analysis_type: str) -> None:
-    reason = validate_design_analysis_request(design, analysis_type)
+async def _enforce_design_analysis_contract(design: Design, analysis_type: str, session: AsyncSession) -> None:
+    reason = await validate_owned_design_analysis_request(design, analysis_type, session)
     if reason:
         raise HTTPException(status_code=409, detail=reason)
 
@@ -93,7 +93,7 @@ async def get_design_analysis(
     design = result.scalar_one_or_none()
     if design is None:
         raise HTTPException(status_code=404, detail="Design not found")
-    _enforce_design_analysis_contract(design, analysis_type)
+    await _enforce_design_analysis_contract(design, analysis_type, session)
 
     params = _design_analysis_params_from_query(analysis_type, max_size, chain_id, ignore_cbeta)
     try:
@@ -130,7 +130,7 @@ async def trigger_design_analysis(
     design = result.scalar_one_or_none()
     if design is None:
         raise HTTPException(status_code=404, detail="Design not found")
-    _enforce_design_analysis_contract(design, analysis_type)
+    await _enforce_design_analysis_contract(design, analysis_type, session)
 
     try:
         run, cache_hit = await request_design_analysis(
@@ -246,7 +246,7 @@ async def get_analysis_run(
         design = subject_result.scalar_one_or_none()
         if design is None:
             raise HTTPException(status_code=404, detail="Analysis subject not found")
-        authority_error = validate_design_analysis_request(design, run.analysis_type)
+        authority_error = await validate_owned_design_analysis_request(design, run.analysis_type, session)
     elif run.subject_kind == "job":
         subject_result = await session.execute(select(Job).where(Job.id == run.subject_id))
         job = subject_result.scalar_one_or_none()

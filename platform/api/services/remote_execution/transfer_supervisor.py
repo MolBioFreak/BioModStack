@@ -40,9 +40,10 @@ def control_address(marker: Path) -> str:
     return '\0bms-return-' + hashlib.sha256(str(marker.resolve()).encode()).hexdigest()
 
 
-def supervise(marker: Path, control_fd: int, argv: list[str]) -> int:
+def supervise(marker: Path, control_fd: int, handoff_fd: int, argv: list[str]) -> int:
     record = json.loads(marker.read_text())
-    if record["schema"] != SCHEMA or record["phase"] != "starting":
+    if (record["schema"] != SCHEMA or record["phase"] != "starting"
+            or record.get('handoff') != 'kernel-lock-v1'):
         raise RuntimeError("Invalid transport launch record")
     if record["boot_id"] != Path("/proc/sys/kernel/random/boot_id").read_text().strip():
         raise RuntimeError("Transport launch boot changed")
@@ -55,12 +56,23 @@ def supervise(marker: Path, control_fd: int, argv: list[str]) -> int:
     clients = []
     record.update(phase="supervising", supervisor=process_identity(os.getpid()))
     durable_json(marker, record)
+    # The inherited kernel handoff protects `starting` until supervising is
+    # durable; after this point recovery requires a real quiescence receipt.
+    os.close(handoff_fd)
     # A controller that died before spawn authorizes no new writer.
     if select.select([control_fd], [], [], 0)[0]:
         record.update(phase="quiescent", quiescence="no-writer")
         durable_json(marker, record)
         return 125
-    child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True)
+    try:
+        child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        # Popen did not return a writer; keep an explicit no-writer receipt so
+        # an exec failure cannot permanently fence this result destination.
+        record.update(phase="quiescent", quiescence="no-writer")
+        durable_json(marker, record)
+        control.close()
+        raise
     record["writer"] = process_identity(child.pid)
     durable_json(marker, record)
     interrupted = False
@@ -115,4 +127,4 @@ def supervise(marker: Path, control_fd: int, argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(supervise(Path(sys.argv[1]), int(sys.argv[2]), sys.argv[3:]))
+    sys.exit(supervise(Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4:]))

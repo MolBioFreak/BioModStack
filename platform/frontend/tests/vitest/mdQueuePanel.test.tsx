@@ -47,7 +47,8 @@ describe('MD queue integration in the dashboard job queue', () => {
             expect(container.textContent).toContain('Remote bundle preparation');
             expect(container.textContent).toContain(`Vast · ${phase}`);
             expect(container.textContent).toContain('0 run');
-            expect([...container.querySelectorAll('h4')].map(node => node.textContent?.trim())).toContain(phase === 'preparing' ? 'Preparing remote jobs' : 'Cancelling remote jobs');
+            expect(container.querySelector('[aria-label="Remote job phases"] h4')?.textContent).toBe('Remote jobs');
+            expect(container.querySelector('[aria-label="Remote job phases"]')?.textContent).toContain(`Vast · ${phase}`);
             expect(container.querySelector('button[title="Pause"]')).toBeNull();
             expect(container.querySelector('button[title="Force Launch"]')).toBeNull();
             expect(container.querySelector('button[title="Pin to GPU"]')).toBeNull();

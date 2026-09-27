@@ -18,16 +18,14 @@ export const launcherWorkflowTemplates = [
 
         {
             id: 'antibody_denovo',
-            name: 'De Novo Nanobody Toolkit',
-            description: 'Generate, refine, validate, and review nanobody candidates.',
+            name: 'De Novo Binder Design',
+            description: 'Choose BC2, BoltzGen, PPIFlow or RFantibody with model-native inputs and settings, then review candidates for optional selected refinement or GROMACS MD.',
             icon: 'flask',
             color: '#14B8A6',
             stages: [
-                { tool: 'RFantibody / BoltzGen / PPIFlow' },
-                { tool: 'FAMPNN' },
-                { tool: 'PPIFlow (Opt.)' },
-                { tool: 'Protenix / Boltz2 / ESMFold2' },
-                { tool: 'Review + QC' }
+                { tool: 'BindCraft2 / BoltzGen / PPIFlow / RFantibody' },
+                { tool: 'Candidate review' },
+                { tool: 'Compatible refinement (optional)' }
             ],
         },
 
@@ -44,15 +42,15 @@ export const launcherExperimentalTemplates = [
         {
             id: 'protein_modification_experimental',
             name: 'De Novo Design',
-            description: 'Generate new proteins with native RFD3, iterate an existing structure, or generate into a shape blueprint.',
+            description: 'Generate new proteins, redesign an existing structure, or work from a shape. RFD3 leads; complementary engines support their own design goals.',
             icon: 'cube',
             color: '#22C55E',
             experimental: true,
             stages: [
-                { tool: 'RFD3 (Preferred)' },
-                { tool: 'RFD3 Iteration' },
-                { tool: 'Shape Blueprint' },
-                { tool: 'DISCO / La-Proteina (Backup)' },
+                { tool: 'Generate · RFD3' },
+                { tool: 'Redesign structure' },
+                { tool: 'Shape' },
+                { tool: 'DISCO · La-Proteina' },
             ],
         },
 

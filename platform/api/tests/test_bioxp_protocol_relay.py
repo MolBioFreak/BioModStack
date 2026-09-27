@@ -71,7 +71,7 @@ def test_submit_relays_original_input_no_local_job(monkeypatch, state, http_stat
     route, kwargs = runtime.connection.client.calls[0]
     assert route == 'protocol_execute'
     assert kwargs['json_data'] == {k: v for k, v in body.items() if k != 'expected_connection_generation'}
-    assert runtime.connection.active_request_calls[0]['require_fresh'] is True
+    assert runtime.connection.active_request_calls[0]['require_fresh'] is False
     assert not hasattr(runtime, 'jobs')  # no local create/transition authority
 
 
@@ -149,6 +149,15 @@ def test_review_is_separate_bound_request(monkeypatch):
     response = client.post(BASE + f'/jobs/{JOB}/review', json=body)
     assert response.status_code == 200, response.text
     assert runtime.connection.client.calls[0][0] == 'protocol_review'
+    assert runtime.connection.active_request_calls[0]['require_fresh'] is True
+
+
+def test_control_retains_its_existing_freshness_policy(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses['protocol_control'] = control_receipt()
+    response = client.post(BASE + f'/jobs/{JOB}/control', json=control_body(action='abort'))
+    assert response.status_code == 200, response.text
+    assert runtime.connection.active_request_calls[0]['require_fresh'] is True
 
 
 def test_timeout_has_one_attempt_and_preserves_uncertainty(monkeypatch):
@@ -165,14 +174,25 @@ def test_timeout_has_one_attempt_and_preserves_uncertainty(monkeypatch):
     assert calls[0][1]['json_data']['idempotency_key'] == KEY
 
 
-def test_robot_refusal_not_local_blocked_success(monkeypatch):
+@pytest.mark.parametrize('reason', ['workflow_busy', 'door_interlock', 'axis_not_referenced', 'custody_conflict'])
+def test_robot_refusal_not_local_blocked_success(monkeypatch, reason):
     client, runtime = make_client(monkeypatch)
+    calls = []
     async def refusal(*args, **kwargs):
-        raise RobotResponseError(409, {'detail': {'error': 'workflow_busy'}})
+        calls.append((args, kwargs))
+        raise RobotResponseError(409, {'detail': {'error': reason}})
     monkeypatch.setattr(runtime.connection.client, 'request', refusal)
     response = client.post(BASE + '/submit', json=submit_body())
     assert response.status_code == 409
-    assert response.json()['detail'] == {'error': 'workflow_busy'}
+    assert response.json()['detail'] == {'error': reason}
+    assert len(calls) == 1
+
+
+def test_submit_connection_generation_fence_precedes_robot_dispatch(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    response = client.post(BASE + '/submit', json={**submit_body(), 'expected_connection_generation': 76})
+    assert response.status_code == 409
+    assert not runtime.connection.client.calls
 
 
 def test_mutation_guard_stays_closed(monkeypatch):
@@ -188,7 +208,8 @@ def test_strict_generations(bad):
         ProtocolSubmission.model_validate({**submit_body(), 'expected_connection_generation': bad})
 
 
-def test_live_workflow_reads_use_actual_passive_connection(tmp_path):
+@pytest.mark.parametrize('observation', ['aged', 'failed'])
+def test_live_workflow_reads_and_execute_use_active_connection(tmp_path, observation):
     from test_bioxp_connection import _load, _service
     _, Profile, _, _ = _load()
     clients = []
@@ -196,8 +217,11 @@ def test_live_workflow_reads_use_actual_passive_connection(tmp_path):
     async def scenario():
         await service.save_profile(Profile(api_url='http://robot:8123'))
         generation = (await service.connect()).generation
-        service._last_reachable = False
-        service._observed_at = None
+        if observation == 'aged':
+            service._observed_at = None
+        else:
+            service._record_probe_failure(RuntimeError('status probe failed'))
+        assert service.snapshot().reachable is not True
         try:
             for route in ('protocol_jobs', 'protocol_job'):
                 result = await service.request_active_v2_query(route, expected_generation=generation)
@@ -206,6 +230,18 @@ def test_live_workflow_reads_use_actual_passive_connection(tmp_path):
                     await service.request_active_v2_query(route, expected_generation=generation + 1)
             with pytest.raises(ConnectionStateError):
                 await service.request_active('protocol_control', expected_generation=generation, json_data={})
+            result = await service.request_active('protocol_execute', expected_generation=generation,
+                                                  require_fresh=False, json_data={'idempotency_key': KEY})
+            assert result['kwargs']['json_data'] == {'idempotency_key': KEY}
+            with pytest.raises(ConnectionStateError):
+                await service.request_active('protocol_execute', expected_generation=generation + 1,
+                                             require_fresh=False, json_data={})
+            assert len(clients[0].request_calls) == 3
+            await service.disconnect()
+            with pytest.raises(ConnectionStateError):
+                await service.request_active('protocol_execute', expected_generation=service.snapshot().generation,
+                                             require_fresh=False, json_data={})
+            assert len(clients[0].request_calls) == 3
         finally:
             await service.close()
     asyncio.run(scenario())

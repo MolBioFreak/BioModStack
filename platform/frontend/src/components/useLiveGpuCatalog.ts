@@ -67,10 +67,24 @@ export function useLiveGpuCatalog(options: UseLiveGpuCatalogOptions = {}) {
     );
     const gpuOptions = useMemo(() => listGpuCatalogEntries(gpuCatalog), [gpuCatalog]);
 
+    const telemetryRefusal = executionTargetId
+        ? remoteQuery.isError || remoteQuery.isRefetchError
+            ? 'Worker GPU telemetry refresh failed. Refresh GPU telemetry before launching Fold-CP.'
+            : remoteStale
+                ? 'Worker GPU telemetry is stale or unavailable. Refresh GPU telemetry before launching Fold-CP.'
+                : !remote?.available || remote.target?.id !== executionTargetId || !remote.target.active || remote.target.state !== 'ready'
+                    ? 'Selected worker is not ready for GPU placement. Refresh GPU telemetry before launching Fold-CP.'
+                    : null
+        : requireFresh && (isError || isStale || !hasAuthoritativeCatalog)
+            ? 'Local GPU telemetry is stale or unavailable. Refresh GPU telemetry before launching Fold-CP.'
+            : null;
+
     return {
         gpuCatalog,
         gpuOptions,
         executionTargetId,
+        telemetryRefusal,
+        refreshGpuTelemetry: () => executionTargetId ? remoteQuery.refetch() : systemQuery.refetch(),
         isLoading: executionTargetId ? remoteQuery.isPending : requireFresh ? systemQuery.isPending : systemQuery.isLoading,
         isError: executionTargetId ? !remoteReady : isError || (requireFresh && Boolean(systemQuery.data?.data.gpu_error)),
         isStale: executionTargetId ? remoteStale : isStale,

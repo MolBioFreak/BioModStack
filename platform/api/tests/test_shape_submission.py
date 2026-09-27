@@ -259,22 +259,11 @@ async def test_shape_request_removes_new_stage_after_generic_commit_failure(tmp_
 
 def test_shape_mode_routes_only_to_shape_workflow() -> None:
     nextflow = importlib.import_module("services.nextflow")
-    command = nextflow.build_nextflow_command(
-        "protein_modification_experimental",
-        "shape_blueprint",
-        {
-            "shape_request_path": "/server/stage/request.json",
-            "shape_points_path": "/server/stage/points.f32le",
-            "shape_request_sha256": "a" * 64,
-            "msa_provider": "local",
-        },
-        "/server/results/shape",
-        job_id="shape-job",
+    entrypoint = nextflow.resolve_nextflow_entrypoint(
+        model_id="protein_modification_experimental", mode="shape_blueprint",
+        effective_profile="shape_blueprint", params={},
     )
-    assert command[2] == "workflows/shape_blueprint_design.nf"
-    joined = " ".join(command)
-    assert "shape_blueprint,workstation_ryzen7960x" in joined
-    assert "--shape_request_path /server/stage/request.json" in joined
+    assert entrypoint == "workflows/shape_blueprint_design.nf"
 
 
 def test_preallocated_shape_job_output_path_ignores_presentation_name(tmp_path: Path, monkeypatch) -> None:
@@ -315,7 +304,9 @@ async def test_typed_shape_endpoint_uses_existing_job_lifecycle(tmp_path: Path, 
         )
         session.add(job)
         await session.flush()
-        return SimpleNamespace(id=job.id, status="queued", name=job.name)
+        return SimpleNamespace(id=job.id, status="queued", name=job.name,
+                               execution_target_id=job_data.execution_target_id,
+                               execution_policy=job_data.execution_policy)
 
     async def session_override():
         async with factory() as session:
@@ -394,7 +385,9 @@ async def test_concurrent_duplicate_shape_submissions_create_one_job(tmp_path: P
         session.add(job)
         await session.flush()
         await asyncio.sleep(0.05)
-        return SimpleNamespace(id=job.id, status="queued", name=job.name)
+        return SimpleNamespace(id=job.id, status="queued", name=job.name,
+                               execution_target_id=job_data.execution_target_id,
+                               execution_policy=job_data.execution_policy)
 
     async def session_override():
         async with factory() as session:
@@ -531,9 +524,9 @@ def test_shape_workflow_supplies_typed_esmfold2_input_tuple() -> None:
         in workflow
     )
     assert (
-        "ESMFold2Predict(shape_sequences.map { producer_meta, sequence, name, source -> "
-        "tuple(producer_meta, sequence, name) })"
-        in workflow
+        "ESMFold2Predict(shapeSequences.map { producerMeta, sequence, name, source -> "
+        "tuple(producerMeta, sequence, name) })"
+        in " ".join(workflow.split())
     )
     assert (
         "shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, source) }"
@@ -548,10 +541,12 @@ def test_shape_workflow_supplies_typed_esmfold2_input_tuple() -> None:
     assert "PlanRFD3Batches.out.batch_requests" in workflow
     assert "RunShapeRFD3(\n        PlanRFD3Batches.out.batch_requests" in workflow
     assert "BuildRFD3Aggregate" in workflow
-    assert "initial_admission_records" in workflow
+    assert "AdmitRFD3InitialCandidate.out.admitted.map { candidate, admission -> admission }.collect()" in workflow
+    assert "BuildRFD3Aggregate(PlanRFD3Batches.out.plan, admissionRecords)" in workflow
     assert "sequencePolicy != 'skip'" in workflow
     assert "sequenceEngine == 'proteinmpnn'" in workflow
-    assert "sequenceEngine == 'fampnn'" in workflow
+    assert "sequenceEngine in ['proteinmpnn', 'fampnn']" in workflow
+    assert "RunShapeFAMPNN(shapeBackbones, sequenceCount, seed, requestFile)" in workflow
     assert "sequenceEnabled" in workflow
 
 

@@ -210,7 +210,7 @@ def acquire_lease(root, digests, *, owner):
         return _acquire_lease_locked(root, state, digests, owner)
 
 
-def ensure_lease(root, digests, *, owner):
+def ensure_lease(root, digests, *, owner, expected_sizes=None):
     """Idempotently pin an exact durable owner; never extend/change its identity.
 
     Existing owners are reverified, including inode identity. No expiry or
@@ -222,10 +222,11 @@ def ensure_lease(root, digests, *, owner):
     if not digests:
         raise ValueError("lease requires image digests")
     with transaction(root) as root:
-        return _ensure_lease_locked(root, load_state(root), digests, owner)
+        return _ensure_lease_locked(root, load_state(root), digests, owner,
+                                    expected_sizes=expected_sizes)
 
 
-def _ensure_lease_locked(root, state, digests, owner, *, identities=None):
+def _ensure_lease_locked(root, state, digests, owner, *, identities=None, expected_sizes=None):
     matches = [(token, row) for token, row in state['leases'].items() if row['owner'] == owner]
     if len(matches) > 1 or (matches and set(matches[0][1]['identities']) != set(digests)):
         raise Error('lease owner identity mismatch')
@@ -233,6 +234,8 @@ def _ensure_lease_locked(root, state, digests, owner, *, identities=None):
         identities = {d: verify_image(object_path(root, d), d) for d in digests}
     if set(identities) != set(digests):
         raise Error('lease identity set mismatch')
+    if expected_sizes is not None and any(identities[d]['size'] != expected_sizes[d] for d in digests):
+        raise ValueError('runtime_image_size_mismatch')
     if matches:
         token, row = matches[0]
         if row['identities'] != identities:

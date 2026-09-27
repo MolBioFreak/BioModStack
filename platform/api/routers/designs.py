@@ -24,10 +24,10 @@ from database import get_session, Design, Job
 from services.analysis_registry import scientific_contract_revision, unavailable_scientific_identity
 from services.scientific_viewer_contract import ScientificViewerMetric, ScientificResidueMetric, ScientificAtomMetric, ScientificChainMetric, ViewerDocument
 from paths import resolve_runtime_data_path, to_allowed_relative
-from services.analysis_runs import get_matching_design_analysis_run, load_analysis_result
+from services.analysis_runs import get_matching_design_analysis_run, load_analysis_result, validate_owned_design_analysis_request
 from services.cdr_annotator import extract_sequence_from_pdb
 from services.stage_review import REVIEWABLE_STAGES, load_review_gate_snapshot
-from services.result_contracts import REVIEW_CONTRACT_VERSION, build_review_artifact_manifest, resolve_result_contract, validate_design_analysis_request
+from services.result_contracts import REVIEW_CONTRACT_VERSION, build_review_artifact_manifest, resolve_result_contract
 from services.design_metrics import build_design_metric_completeness, build_design_metric_provenance
 from antibody_pipeline_contract import infer_antibody_artifact_class_from_stage, normalize_antibody_artifact_class
 
@@ -2189,7 +2189,7 @@ async def _get_cached_design_analysis_payload(
     analysis_type: str,
     raw_params: Optional[dict[str, Any]] = None,
 ) -> Any:
-    contract_error = validate_design_analysis_request(design, analysis_type)
+    contract_error = await validate_owned_design_analysis_request(design, analysis_type, session)
     if contract_error:
         raise HTTPException(status_code=409, detail=contract_error)
     try:
@@ -3039,6 +3039,21 @@ async def update_notes(
     await session.commit()
     
     return {"message": "Notes updated", "notes": design.notes}
+
+
+@router.get("/by-job/{job_id}/binder-evidence")
+async def get_binder_evidence(
+    job_id: str,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    session: AsyncSession = Depends(get_session),
+):
+    from services.binder_evidence import binder_evidence
+
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return await binder_evidence(session, job, offset=offset, limit=limit)
 
 
 @router.get("/by-job/{job_id}", response_model=DesignList)

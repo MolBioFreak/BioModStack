@@ -263,4 +263,43 @@ describe('mounted BioXP four-channel pipette panel', () => {
             { actionId: 'oem.z.lift_pipette', inputs: { location_id: 'LOC_TC' } },
         ]);
     });
+
+    it('selects only the advertised software tip type action and displays cached software readback', async () => {
+        const calls: Array<{ actionId: string; inputs: Record<string, unknown> }> = [];
+        const tipAction = {
+            action_id: 'route.liquid_pipette_tip_type_liquid_pipette_tip_type_post.example',
+            informational_method: 'POST', informational_path: '/liquid/pipette/tip-type',
+            enabled: true, disabled_reason: null, unavailable_reason: null,
+        } as never;
+        const render = async (actions: typeof tipAction[], pipettes: unknown, invokePending = false) => {
+            await act(async () => {
+                root.render(<BioXpPipetteControlPanel generation={77} connected pipettes={pipettes as never}
+                    actions={actions} invokePending={invokePending}
+                    invokeAction={(actionId, inputs) => calls.push({ actionId, inputs })} />);
+                await Promise.resolve();
+            });
+        };
+        const button = () => container.querySelector<HTMLButtonElement>('[data-software-tip-type-control] button')!;
+        await render([], { tip_type: 201, channels: [] });
+        expect(button().disabled).toBe(true);
+        expect(container.querySelector('[data-software-tip-type-control]')?.textContent).toContain('Selected in robot software: 201');
+        await render([tipAction], { tip_type: 201, channels: [] });
+        expect(button().disabled).toBe(false);
+        const select = container.querySelector<HTMLSelectElement>('select[aria-label="Software tip type"]')!;
+        expect([...select.options].map(option => Number(option.value))).toEqual([50, 200, 201]);
+        await act(async () => {
+            select.value = '50';
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await act(async () => button().click());
+        expect(calls).toEqual([{ actionId: tipAction.action_id, inputs: { tip_type: 50 } }]);
+        expect(container.querySelector('[data-software-tip-type-control]')?.textContent).toContain('Selected in robot software: 201');
+        await render([tipAction], { tip_type: 50, channels: [] }, true);
+        expect(button().disabled).toBe(true);
+        expect(container.querySelector('[data-software-tip-type-control]')?.textContent).toContain('Selected in robot software: 50');
+        await render([{ ...tipAction, enabled: false, disabled_reason: 'Robot unavailable' }], { tip_type: 50, channels: [] });
+        expect(button().disabled).toBe(true);
+        expect(button().title).toBe('Robot unavailable');
+        expect(calls).toHaveLength(1);
+    });
 });

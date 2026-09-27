@@ -316,13 +316,35 @@ def test_same_boot_owner_loss_retains_uncertain_writers(tmp_path):
     assert value["state"] == "lost" and value["quiescent"] is False
 
 
-def test_ambiguous_launch_claim_is_never_replayed(tmp_path, monkeypatch):
-    envelope = {"job_id": "job", "attempt_id": "attempt", "output_directory": str(tmp_path / "results")}
+def test_abandoned_launch_claim_fails_without_replay(tmp_path, monkeypatch):
+    import fcntl
+    envelope = {"schema": "bms.remote-execution.v1", "job_id": "job", "attempt_id": "attempt",
+                "source_revision": "a" * 40, "source_tree": "b" * 40,
+                "working_directory": str(Path(__file__).resolve().parents[3]),
+                "output_directory": str(tmp_path / "results")}
+    (tmp_path / "results").mkdir()
     worker.atomic_json(tmp_path / worker.ENVELOPE_FILE, envelope)
     worker.atomic_json(tmp_path / worker.STATUS_FILE, worker.base_status(envelope, "prepared"))
     worker.atomic_json(tmp_path / "launch-claim.json", {"attempt_id": "attempt", "boot_id": worker.boot_id()})
     monkeypatch.setattr(worker.subprocess, "Popen", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("replayed")))
-    assert worker.start(tmp_path)["state"] == "prepared"
+    with (tmp_path / "start.lock").open("a+b") as active_handoff:
+        fcntl.flock(active_handoff.fileno(), fcntl.LOCK_EX)
+        assert worker.status(tmp_path)["state"] == "prepared"
+    value = worker.status(tmp_path)
+    assert value["state"] == "failed" and value["quiescent"] is True
+    assert value["result_manifest_sha256"] == worker.sha256_file(tmp_path / "results" / worker.RESULT_MANIFEST_FILE)
+    assert worker.start(tmp_path)["state"] == "failed"
+
+
+def test_prestart_diagnostic_failure_does_not_pin_dead_attempt(tmp_path, monkeypatch):
+    envelope = {"job_id": "job", "attempt_id": "attempt", "output_directory": str(tmp_path / "results")}
+    worker.atomic_json(tmp_path / worker.ENVELOPE_FILE, envelope)
+    worker.atomic_json(tmp_path / worker.STATUS_FILE, dict(
+        worker.base_status(envelope, "failed"), quiescent=True, exit_code=1))
+    monkeypatch.setattr(worker, "_recover_terminal_manifest", lambda *_: (_ for _ in ()).throw(
+        RuntimeError("diagnostics unavailable")))
+    assert worker.status(tmp_path)["state"] == "failed"
+    assert worker.status(tmp_path)["quiescent"] is True
 
 
 def test_supervisor_joins_detached_grandchild_before_terminal(tmp_path):

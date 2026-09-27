@@ -128,6 +128,13 @@ def native_reference_fields(document, format):
         closure = inp.get("topology_closure", {})
         for i, item in enumerate(closure.get("files", [])):
             yield ("input", "topology_closure", "files", i, "path"), str(Path(closure["root"]) / item["path"]), "topology-include"
+    elif format == 'bc2-compilation':
+        # Only executable source reads, not requested_settings provenance or
+        # project_folder (a native output destination), belong to input closure.
+        request = document.get('native_request', {})
+        for i, target in enumerate(request.get('targets', [])):
+            yield from field(target, 'target_path', ('native_request', 'targets', i), 'target')
+        yield from field(request, 'binder_scaffold', ('native_request',), 'scaffold')
     elif format == "boltz-authority":
         for source in document.get("input_files", {}):
             yield ("input_files", source), source, "input"
@@ -145,11 +152,11 @@ def native_reference_fields(document, format):
                 yield from field(entry, key, ("templates", i), "template")
     elif format == "protein-cad":
         for section, fields in {"laproteina": ("motif_pdb", "checkpoint_dir", "data_path"),
-                                "disco": ("input_json_path", "compiled_input_json", "ligand_sdf", "checkpoint_path", "cutlass_path")}.items():
+                                "disco": ("input_json_path", "compiled_input_json", "ligand_sdf", "checkpoint_path", "hf_cache_path", "cutlass_path")}.items():
             if document.get("backend") and section != document["backend"]:
                 continue
             for key in fields:
-                role = "runtime" if key in {"checkpoint_dir", "data_path", "checkpoint_path", "cutlass_path"} else "disco-json" if "json" in key else "input"
+                role = "runtime" if key in {"checkpoint_dir", "data_path", "checkpoint_path", "hf_cache_path", "cutlass_path"} else "disco-json" if "json" in key else "input"
                 yield from field(document.get(section, {}), key, (section,), role)
     elif format == "disco-json":
         for i, job in enumerate(document):
@@ -186,6 +193,8 @@ def bind_native_document(document, format, *, owner=None):
 
 def _format(document, path):
     if isinstance(document, dict):
+        if document.get('schema_version') == 1 and 'native_request' in document and 'upstream_commit' in document:
+            return 'bc2-compilation'
         if str(document.get("schema", "")).startswith("bms.md.job."):
             return "md-job"
         if document.get("schema_name") == "cm_request" and "request_sha256" in document:
@@ -204,6 +213,29 @@ def _format(document, path):
         if isinstance(document[0], dict) and "sequences" in document[0]:
             return "disco-json"
     return "json"
+
+
+def prepared_generation_source_fields(model_id, mode, params):
+    """Original source settings are provenance once the native tree is prepared.
+
+    Do not reacquire controller sources on replay; only these model-owned input
+    slots are superseded. Other parameters retain existing discovery behavior.
+    """
+    if (model_id == 'ligandmpnn' and mode in {'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'}
+            and params.get('ligandmpnn_design_request') and params.get('ligandmpnn_design_input')):
+        return {'target_pdb', 'ligand_pdb'}
+    if (model_id == 'caliby_experimental' and mode in {'ensemble_design', 'sidechain_pack'}
+            and params.get('caliby_request_dir')):
+        return {'ensembles', 'structures'}
+    if (model_id == 'ppiflow' and mode in {'protein_binder', 'antibody_binder', 'nanobody_binder'}
+            and params.get('ppiflow_generation_request')):
+        return {'target_pdb', 'framework_pdb', 'input_csv'}
+    if (model_id == 'boltzgen' and mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}
+            and params.get('boltzgen_yaml_config')):
+        return {'target_pdb', 'input_pdb', 'ligand_pdb', 'dna_structure', 'scaffold_path',
+                'boltzgen_target_pdb_path', 'boltzgen_input_pdb', 'boltzgen_ligand_pdb',
+                'boltzgen_dna_structure', 'boltzgen_scaffold_path', 'boltzgen_nanobody_scaffold_specs'}
+    return set()
 
 
 def discover_native_input_references(model_id, mode, params, generated_inputs, *, output_dir, allowed_roots, yaml_loader=None, runtime_references=None, document_owners=None):
@@ -269,6 +301,17 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         if source_owner and not Path(value).is_absolute():
             record["reference_path"] = os.path.abspath(Path(owner).parent / value)
         records.append(record)
+        if role == 'ppiflow-csv' and path not in visited:
+            # Native CSV processed_path is a source read, unlike observational
+            # original paths archived inside the prepared request JSON.
+            import csv
+            visited.add(path)
+            with path.open(newline='') as handle:
+                for index, row in enumerate(csv.DictReader(handle)):
+                    if row.get('processed_path'):
+                        visit(row['processed_path'], path, ('processed_path', index),
+                              lineage=(*lineage, logical_id))
+            return
         if path in visited or role == "runtime" or path.suffix.lower() not in {".json", ".yaml", ".yml"}:
             return
         visited.add(path)
@@ -292,6 +335,11 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
             visit(path.parent / "cm_runtime_registry_v1.json", path, ("runtime_registry",), "runtime-config", (*lineage, logical_id))
             visit(path.parent / "cm_coordinate_plan_v1.json", path, ("coordinate_plan",), "coordinate-plan", (*lineage, logical_id))
     keys = {"complex_json_path", "sequence_batch_json_path", "msa_path", "bcp_input_path", "input_path", "cm_request_path", "cm_coordinate_plan_path", "md_job_config", "laproteina_motif_pdb", "disco_input_json_path", "disco_ligand_sdf", "protein_cad_request", "boltz_launch_authority_path", "boltz_prepared_msa_dir"}
+    # The CAD compiler consumes the public names and emits pcad_* slots.
+    # Discover the same immutable documents after compilation so nested FILE_
+    # references reach the existing portable binding owner, not a JSON rewrite.
+    keys.update({'pcad_laproteina_motif_pdb', 'pcad_disco_input_json_path',
+                 'pcad_disco_ligand_sdf'})
     if model_id in {'antibody_denovo', 'template_antibody_denovo'} and mode in {
             'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}:
         # Full-root preview and transport must bind the actual native biological
@@ -299,6 +347,42 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         keys.update({'target_pdb', 'selected_input_dir', 'selected_input_manifest',
                      'rfantibody_input_pdbs', 'fampnn_collected_pdbs',
                      'manual_mutation_fixed_positions_json'})
+    if (model_id, mode) in {('template_antibody_denovo', 'maturation_child'),
+                           ('binder_refinement', 'refine'), ('caliby_binder', 'design')}:
+        keys.add('source_identity_json')
+        for index, path in enumerate(str(params.get('pdb_paths') or '').split(',')):
+            if path.strip():
+                visit(path.strip(), None, ('pdb_paths', index))
+    if params.get('mpnn_bias_AA_jsonl'):
+        keys.add('mpnn_bias_AA_jsonl')
+    if model_id == 'ligandmpnn' and mode in {'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'}:
+        keys.update({'ligandmpnn_design_request', 'ligandmpnn_design_input'})
+        if not (params.get('ligandmpnn_design_request') and params.get('ligandmpnn_design_input')):
+            keys.update({'target_pdb', 'ligand_pdb'})
+    if model_id == 'caliby_experimental' and mode in {'ensemble_design', 'sidechain_pack'}:
+        keys.add('caliby_request_dir')
+        if not params.get('caliby_request_dir'):
+            if mode == 'ensemble_design':
+                for i, ensemble in enumerate(params.get('ensembles', [])):
+                    for j, state in enumerate(ensemble.get('states', [])):
+                        visit(state['path'], None, ('ensembles', i, 'states', j, 'path'))
+            else:
+                for i, state in enumerate(params.get('structures', [])):
+                    visit(state['path'], None, ('structures', i, 'path'))
+    if model_id == 'bindcraft2':
+        keys.add('bc2_compilation')
+    if model_id == 'ppiflow' and mode in {'protein_binder', 'antibody_binder', 'nanobody_binder'}:
+        keys.add('ppiflow_generation_request')
+        if not params.get('ppiflow_generation_request'):
+            keys.update({'target_pdb', 'framework_pdb'})
+            if params.get('input_csv'):
+                visit(params['input_csv'], None, ('input_csv',), 'ppiflow-csv')
+    if model_id in {'boltzgen', 'boltzgen_child'}:
+        keys.add('boltzgen_yaml_config')
+        if not params.get('boltzgen_yaml_config'):
+            keys.update({'boltzgen_target_pdb_path', 'boltzgen_scaffold_path',
+                         'boltzgen_input_pdb', 'boltzgen_ligand_pdb', 'boltzgen_dna_structure'})
+    keys.difference_update(prepared_generation_source_fields(model_id, mode, params))
     if model_id == "nanopore":
         keys.update({"fastq_path", "reference_fasta", "bam_path"})
     for key in sorted(keys & params.keys()):

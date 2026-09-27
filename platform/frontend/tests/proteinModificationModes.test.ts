@@ -11,11 +11,11 @@ test('De Novo Design prefers native RFD3 while preserving iteration and shape bl
 
     const deNovo = DE_NOVO_MODIFICATION_MODE_CARDS[0];
     assert.equal(deNovo?.id, 'de_novo_design');
-    assert.match(deNovo?.label ?? '', /RFD3/i);
-    assert.match(deNovo?.description ?? '', /unconditional monomer/i);
+    assert.equal(deNovo?.label, 'Generate');
+    assert.match(deNovo?.description ?? '', /native controls/i);
 
     const workbench = DE_NOVO_MODIFICATION_MODE_CARDS.find((card) => card.id === 'rfd3_iteration');
-    assert.equal(workbench?.label, 'RFD3 Iteration Workbench');
+    assert.equal(workbench?.label, 'Redesign structure');
     assert.match(workbench?.description ?? '', /Mol\*/i);
     assert.match(workbench?.description ?? '', /native RFD3 output or downstream sequence design and validation/i);
 });

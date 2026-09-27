@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({ submit: vi.fn(async (_body: any) => ({ data: {
 vi.mock('../../src/lib/api', async (original) => ({
     ...await original<typeof import('../../src/lib/api')>(),
     fetchModels: vi.fn(async () => ({ data: [{ id: 'fampnn', name: 'FA-MPNN', modes: [{ id: 'design', name: 'Design', params: ['input_pdb'] }], params: [{ name: 'input_pdb', type: 'string', default: 'source.pdb' }] }] })),
+    fetchModelById: vi.fn(async () => ({ data: { id: 'fampnn', name: 'FA-MPNN', modes: [{ id: 'design', name: 'Design', params: ['input_pdb'] }], params: [{ name: 'input_pdb', type: 'string', default: 'source.pdb' }] } })),
     fetchTemplates: vi.fn(async () => ({ data: [] })), fetchTemplateById: mocks.template,
     fetchInputPresets: vi.fn(async () => ({ data: [] })), fetchExecutionTargets: vi.fn(async () => ({ data: [] })),
     submitJob: mocks.submit,

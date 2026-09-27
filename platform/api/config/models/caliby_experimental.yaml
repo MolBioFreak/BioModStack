@@ -1,177 +1,178 @@
 id: caliby_experimental
-name: Caliby Experimental
-version: "0.1.0"
+name: Caliby Standalone
+version: 0.2.0
 category: generative_design
-description: >
-  Experimental structure-conditioned sequence design workflow using Caliby.
-  Supports single-structure design, ensemble-conditioned design, and sidechain
-  packing through one BMS launcher surface.
+description: Native ensemble-conditioned sequence design and fixed-sequence side-chain
+  packing. Historical design/task requests remain retired; caliby_binder is unchanged.
 container: caliby.sif
-
-ui_icon: sparkles
-ui_color: "#14B8A6"
-
 inputs:
-  - pdb
-  - cif
-  - csv
+- pdb
+- cif
 outputs:
-  - pdb
-  - json
-
+- cif
+- json
 modes:
-  - id: design
-    name: Experimental Sequence Design
-    description: Structure-conditioned sequence design and packing with Caliby
-    params:
-      - task
-      - input_pdb_dir
-      - conformer_dir
-      - pdb_name_list
-      - pos_constraint_csv
-      - model_name
-      - packer_model_name
-      - num_seqs_per_pdb
-      - batch_size
-      - num_workers
-      - clean_num_workers
-      - temperature
-      - omit_aas
-      - run_self_consistency_eval
-      - self_consistency_num_models
-      - self_consistency_num_recycles
-      - self_consistency_use_multimer
-      - sampling_overrides_json
-
+- id: ensemble_design
+  name: Ensemble Sequence Design
+  description: Ordered conformers condition one ensemble; first state is primary.
+  params:
+  - batch_size
+  - num_workers
+  - scn_num_steps
+  - scn_step_scale
+  - ensembles
+  - model_name
+  - num_seqs_per_pdb
+  - temperature
+  - omit_aas
+  - verbose
+  - use_primary_res_type
+  - ensemble_ignore_res_idx_mismatch
+  - gaussian_n_conformers
+  - gaussian_noise_std
+  - potts_regularization
+  - potts_sweeps
+  - potts_proposal
+  - potts_rejection_step
+  - potts_only_cond
+- id: sidechain_pack
+  name: Fixed-sequence Side-chain Packing
+  description: Pack the native input sequence without amino-acid redesign.
+  params:
+  - batch_size
+  - num_workers
+  - scn_num_steps
+  - scn_step_scale
+  - structures
+  - packer_model_name
 params:
-  - name: task
-    type: string
-    description: Caliby task to run
-    required: true
-    default: sequence_design
-    enum:
-      - sequence_design
-      - ensemble_design
-      - sidechain_pack
-
-  - name: input_pdb_dir
-    type: directory
-    description: Directory of input PDB/mmCIF structures for sequence design or packing
-    required: false
-
-  - name: conformer_dir
-    type: directory
-    description: Directory containing ensemble conformers grouped by structure
-    required: false
-
-  - name: pdb_name_list
-    type: file
-    description: Optional newline-delimited subset of structure IDs to process
-    required: false
-
-  - name: pos_constraint_csv
-    type: file
-    description: Optional Caliby positional-constraint CSV
-    required: false
-
-  - name: model_name
-    type: string
-    description: Caliby checkpoint name or .ckpt path
-    required: false
-    default: soluble_caliby_v1
-    enum:
-      - caliby
-      - soluble_caliby
-      - soluble_caliby_v1
-
-  - name: packer_model_name
-    type: string
-    description: Sidechain packer checkpoint name used for sidechain_pack tasks
-    required: false
-    default: caliby_packer_010
-    enum:
-      - caliby_packer_000
-      - caliby_packer_010
-      - caliby_packer_030
-
-  - name: num_seqs_per_pdb
-    type: integer
-    description: Number of sequences to sample per structure
-    required: false
-    default: 4
-    minimum: 1
-    maximum: 64
-
-  - name: batch_size
-    type: integer
-    description: Batch size for Caliby inference
-    required: false
-    default: 4
-    minimum: 1
-    maximum: 64
-
-  - name: num_workers
-    type: integer
-    description: Number of Caliby dataloader workers
-    required: false
-    default: 8
-    minimum: 1
-    maximum: 64
-
-  - name: clean_num_workers
-    type: integer
-    description: Number of workers used to clean input structures before design
-    required: false
-    default: 2
-    minimum: 1
-    maximum: 32
-
-  - name: temperature
-    type: number
-    description: Final Potts sampling temperature
-    required: false
-    default: 0.1
-    minimum: 0.001
-    maximum: 1.0
-
-  - name: omit_aas
-    type: string
-    description: Comma-separated amino acids to omit globally during design
-    required: false
-    default: C
-
-  - name: run_self_consistency_eval
-    type: boolean
-    description: Run AlphaFold2 self-consistency evaluation on designed outputs
-    required: false
-    default: false
-
-  - name: self_consistency_num_models
-    type: integer
-    description: Number of AF2 models to sample during self-consistency evaluation
-    required: false
-    default: 5
-    minimum: 1
-    maximum: 5
-
-  - name: self_consistency_num_recycles
-    type: integer
-    description: AF2 recycle count during self-consistency evaluation
-    required: false
-    default: 3
-    minimum: 1
-    maximum: 12
-
-  - name: self_consistency_use_multimer
-    type: boolean
-    description: Use AF2-Multimer for self-consistency evaluation
-    required: false
-    default: false
-
-  - name: sampling_overrides_json
-    type: text
-    description: Optional JSON merged into Caliby sampling_overrides
-    required: false
-
-enabled: false
+- name: batch_size
+  type: integer
+  description: 'Batch Size. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: 4
+  minimum: 1
+- name: num_workers
+  type: integer
+  description: 'Num Workers. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: 8
+  minimum: 0
+- name: scn_num_steps
+  type: integer
+  description: 'Scn Num Steps. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: 50
+  minimum: 1
+- name: scn_step_scale
+  type: number
+  description: 'Scn Step Scale. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: 1.5
+- name: ensembles
+  type: array
+  description: Ordered ensembles with ensemble_id and ordered states. Each state has
+    state_id, structure path, and typed native positional constraints; first state
+    is primary.
+  required: true
+- name: model_name
+  type: string
+  description: 'Model Name. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: soluble_caliby_v1
+  enum:
+  - caliby
+  - soluble_caliby
+  - soluble_caliby_v1
+- name: num_seqs_per_pdb
+  type: integer
+  description: 'Num Seqs Per Pdb. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: 4
+  minimum: 1
+- name: temperature
+  type: number
+  description: 'Temperature. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: 0.1
+- name: omit_aas
+  type: string_list
+  description: 'Omit Aas. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default:
+  - C
+- name: verbose
+  type: boolean
+  description: 'Verbose. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: true
+- name: use_primary_res_type
+  type: boolean
+  description: 'Use Primary Res Type. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: true
+- name: ensemble_ignore_res_idx_mismatch
+  type: boolean
+  description: 'Ensemble Ignore Res Idx Mismatch. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: false
+- name: gaussian_n_conformers
+  type: integer
+  description: 'Gaussian N Conformers. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: 0
+  minimum: 0
+- name: gaussian_noise_std
+  type: number
+  description: 'Gaussian Noise Std. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: 0.0
+  minimum: 0
+- name: potts_regularization
+  type: string
+  description: 'Potts Regularization. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: LCP
+  enum:
+  - LCP
+  - none
+- name: potts_sweeps
+  type: integer
+  description: 'Potts Sweeps. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: 500
+  minimum: 1
+- name: potts_proposal
+  type: string
+  description: 'Potts Proposal. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: dlmc
+  enum:
+  - dlmc
+  - chromatic
+- name: potts_rejection_step
+  type: boolean
+  description: 'Potts Rejection Step. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: false
+- name: potts_only_cond
+  type: boolean
+  description: 'Potts Only Cond. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: false
+- name: structures
+  type: array
+  description: Input structures with distinct state_id and structure path; sequence
+    identities stay fixed.
+  required: true
+- name: packer_model_name
+  type: string
+  description: 'Packer Model Name. Native typed contract: services.caliby_native.REQUEST.'
+  required: false
+  default: caliby_packer_010
+  enum:
+  - caliby_packer_000
+  - caliby_packer_010
+  - caliby_packer_030
+enabled: true
 experimental: true

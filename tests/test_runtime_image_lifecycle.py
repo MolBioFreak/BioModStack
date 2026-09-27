@@ -47,6 +47,31 @@ def test_exact_owner_lease_reuses_token_and_rejects_changed_set(setup):
     assert lifecycle.load_state(store)['leases'][token]['identities'] == identity
 
 
+def test_expected_size_rejected_before_new_lease_and_preserves_existing_owner(setup, monkeypatch):
+    _, store, digest, _ = setup
+    publish(setup)
+    real = lifecycle.verify_image
+    hashes = []
+    def counted(*args):
+        hashes.append(1)
+        return real(*args)
+    monkeypatch.setattr(lifecycle, 'verify_image', counted)
+    wrong = {digest: 1}
+    owner = 'attempt:durable'
+    with pytest.raises(ValueError, match='runtime_image_size_mismatch'):
+        lifecycle.ensure_lease(store, [digest], owner=owner, expected_sizes=wrong)
+    assert not lifecycle.load_state(store)['leases']
+    token, receipt = lifecycle.ensure_lease(store, [digest], owner=owner,
+                                             expected_sizes={digest: len(b'synthetic image one')})
+    generation = lifecycle.load_state(store)['generation']
+    with pytest.raises(ValueError, match='runtime_image_size_mismatch'):
+        lifecycle.ensure_lease(store, [digest], owner=owner, expected_sizes=wrong)
+    state = lifecycle.load_state(store)
+    assert state['generation'] == generation
+    assert state['leases'][token]['identities'] == receipt
+    assert len(hashes) == 3  # one authoritative verification per request
+
+
 def test_publish_and_pin_share_fence_and_publisher_verification(setup, monkeypatch):
     source, store, digest, _ = setup
     original = lifecycle._ensure_lease_locked

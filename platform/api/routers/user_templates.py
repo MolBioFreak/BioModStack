@@ -61,10 +61,13 @@ def _is_antibody_template(template: UserTemplate) -> bool:
     model_id = (template.model_id or "").strip().lower()
     base_template_id = (template.base_template_id or "").strip().lower()
     mode = (template.mode or "").strip().lower()
-    return (
-        model_id == "template_antibody_denovo"
-        or base_template_id == "antibody_denovo"
-        or is_antibody_pipeline_mode(mode)
+    # The display launcher can contain several distinct native generators.
+    # A shared card/mode label is not authority to coerce their saved settings
+    # into RFantibody/VHH framework and epitope defaults.
+    return model_id == "template_antibody_denovo" or (
+        not model_id
+        and base_template_id == "antibody_denovo"
+        and is_antibody_pipeline_mode(mode)
     )
 
 
@@ -182,10 +185,6 @@ async def create_user_template(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail=f"Template with name '{data.name}' already exists")
     
-    params = data.params
-    if data.model_id == "template_antibody_denovo" or data.base_template_id == "antibody_denovo" or is_antibody_pipeline_mode(data.mode):
-        params, _ = _normalize_antibody_template_params(params)
-
     template = UserTemplate(
         id=str(uuid.uuid4()),
         name=data.name,
@@ -195,8 +194,10 @@ async def create_user_template(
         base_template_id=data.base_template_id,
         model_id=data.model_id,
         mode=data.mode,
-        params=params,
+        params=data.params,
     )
+    if _is_antibody_template(template):
+        template.params, _ = _normalize_antibody_template_params(data.params)
     
     session.add(template)
     await session.commit()

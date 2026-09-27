@@ -545,7 +545,8 @@ def _trusted_producer_review_fields(job: Optional[Job], payload: Any) -> Dict[st
     if generator_family == "caliby":
         if model_id == "binder_design" and job_mode == "rfd3_caliby":
             allowed_profiles = {"binder_design_v1"}
-
+        elif model_id == "caliby_binder" and job_mode == "design":
+            allowed_profiles = {"sequence_design_v1"}
         else:
             return {}
     elif generator_family == "protein_hunter":
@@ -924,6 +925,7 @@ _SOURCE_LINEAGE_LOAD_ONLY_COLUMNS = (
     Design.name,
     Design.pdb_path,
     Design.origin_design_id,
+    Design.origin_job_id,
     Design.origin_backbone_design_id,
     Design.stage_family,
     Design.stage_mode,
@@ -992,15 +994,18 @@ def _parse_source_pdb_paths(raw_value: Any) -> List[Path]:
     return paths
 
 
-def _build_source_design_index(params: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    index: Dict[str, Dict[str, Any]] = {}
+def _build_source_design_index(params: Dict[str, Any]) -> Dict[str, Optional[Dict[str, Any]]]:
+    index: Dict[str, Optional[Dict[str, Any]]] = {}
     for pdb_path in _parse_source_pdb_paths(params.get("pdb_paths")):
         payload = {
             "source_pdb_path": str(pdb_path),
             "source_design_name": pdb_path.stem,
         }
         for key in _candidate_source_design_names(pdb_path.stem):
-            index.setdefault(key, payload)
+            if key not in index:
+                index[key] = payload
+            elif index[key] != payload:
+                index[key] = None  # Ambiguous legacy alias, not a source identity.
     return index
 
 
@@ -1135,6 +1140,9 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
     params = _parse_job_params(job.params if job else None)
     model_id = str(job.model_id or "").strip().lower() if job else ""
     mode = str(job.mode or "").strip().lower() if job else ""
+    raw_round_step = (getattr(job, "provenance", None) or {}).get("binder_round_step")
+    round_step = (dict(raw_round_step) if isinstance(raw_round_step, dict)
+                  and raw_round_step.get("schema_version") == 1 else None)
     # Applicability selectors come only from persisted server-owned Job fields.
     # Request params may carry workflow inputs, but cannot mint review authority.
     stage_family = str(getattr(job, "stage_family", None) or "").strip().lower() or None
@@ -1177,7 +1185,8 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
                 break
 
     lineage_root_job_id = (
-        params.get("lineage_root_job_id")
+        (round_step or {}).get("root_job_id")
+        or params.get("lineage_root_job_id")
         or params.get("iteration_source_root_job_id")
         or params.get("resume_root_job_id")
         or getattr(job, "parent_job_id", None)
@@ -1210,7 +1219,7 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         except Exception:
             selection_manifest = None
 
-    selection_index: Dict[str, Dict[str, Any]] = {}
+    selection_index: Dict[str, Optional[Dict[str, Any]]] = {}
     if selection_manifest and isinstance(selection_manifest.get("designs"), list):
         for item in selection_manifest["designs"]:
             if not isinstance(item, dict):
@@ -1222,13 +1231,17 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
                 str(item.get("design_name") or "").strip(),
             ):
                 if key:
-                    selection_index.setdefault(key, item)
+                    if key not in selection_index:
+                        selection_index[key] = item
+                    elif selection_index[key] != item:
+                        selection_index[key] = None
 
     source_design_index = _build_source_design_index(params)
     stage_settings = _extract_stage_settings(params, stage_family, stage_mode)
 
     source_stage_job_id = (
-        params.get("source_stage_job_id")
+        (round_step or {}).get("source_job_id")
+        or params.get("source_stage_job_id")
         or params.get("selected_input_source_job_id")
         or getattr(job, "source_stage_job_id", None)
     )
@@ -1318,8 +1331,13 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         "stage_settings": stage_settings,
         "selection_manifest": selection_manifest,
     }
+    if round_step is not None:
+        # The server-owned handoff is an identity link, not inherited numerical
+        # evidence. Output chain roles remain with the native producer adapter.
+        provenance["binder_round_step"] = round_step
     return {
         "params": params,
+        "binder_round_step": round_step,
         "stage_family": stage_family,
         "stage_mode": stage_mode,
         "lineage_root_job_id": lineage_root_job_id,
@@ -1386,17 +1404,55 @@ async def _resolve_parent_design_lineage(
     design_name: str,
     *,
     cache: Optional[Dict[str, Optional[Design]]] = None,
+    structure_path: Optional[Path] = None,
+    source_identity: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Optional[str]]:
-    cache = cache or {}
+    if cache is None:
+        cache = {}
     selection_index = context.get("selection_index") or {}
-    candidate_source_ids = _candidate_source_design_ids(design_name)
-    manifest_item = selection_index.get(design_name)
-    if manifest_item is None:
+    round_step = context.get("binder_round_step")
+    candidate_source_ids = [] if round_step is not None else _candidate_source_design_ids(design_name)
+    if structure_path is not None:
+        sample_identity = _load_json_payload(structure_path.with_name(
+            f"{structure_path.stem}_sample_identity.json"))
+        source = (sample_identity or {}).get("source") or {}
+        meta = (source.get("source_meta") or {}) if isinstance(source, dict) else {}
+        if isinstance(meta, dict) and (meta.get("source_design_id") or meta.get("design_id")):
+            source_identity = {
+                **meta,
+                "source_design_id": meta.get("source_design_id") or meta.get("design_id"),
+                "source_job_id": meta.get("source_job_id") or meta.get("design_job_id"),
+                "source_pdb_path": source.get("source_path"),
+            }
+    if round_step is not None:
+        # One round step owns one exact input candidate, including every native
+        # sample it emits. Never reconstruct that parent from an output name.
+        step_source = round_step.get("source_design_id")
+        if source_identity and source_identity.get("source_design_id") and step_source:
+            if str(source_identity["source_design_id"]) != str(step_source):
+                raise ValueError("native sample source differs from its binder round input")
+        source_identity = ({"source_design_id": step_source,
+                            "source_job_id": round_step.get("source_job_id")}
+                           if step_source else None)
+    manifest_item = None
+    if source_identity and source_identity.get("source_design_id"):
+        manifest_item = {
+            **source_identity,
+            "design_id": source_identity["source_design_id"],
+            "design_job_id": source_identity.get("source_job_id") or context.get("source_stage_job_id"),
+        }
+    if round_step is None and manifest_item is None and structure_path is not None:
+        manifest_item = selection_index.get(str(structure_path))
+    if round_step is None and manifest_item is None:
+        manifest_item = selection_index.get(design_name)
+    if round_step is None and manifest_item is None:
         stem = Path(design_name).stem
         manifest_item = selection_index.get(stem)
-    if manifest_item is None:
+    if round_step is None and manifest_item is None:
         for key in _candidate_source_design_names(design_name):
-            match = (context.get("source_design_index") or {}).get(key)
+            match = selection_index.get(key)
+            if key not in selection_index:
+                match = (context.get("source_design_index") or {}).get(key)
             if match:
                 manifest_item = match
                 break
@@ -1438,6 +1494,8 @@ async def _resolve_parent_design_lineage(
             )
             parent_design = result.scalar_one_or_none()
             cache[parent_design_id] = parent_design
+        if parent_design is None or (source_stage_job_id and parent_design.job_id != source_stage_job_id):
+            raise ValueError("selected parent Design is missing or belongs to a different source job")
     if parent_design is None and candidate_source_ids:
         for candidate_id in _ordered_unique(candidate_source_ids):
             parent_design = cache.get(candidate_id)
@@ -1449,31 +1507,26 @@ async def _resolve_parent_design_lineage(
                 )
                 parent_design = result.scalar_one_or_none()
                 cache[candidate_id] = parent_design
+            if parent_design is not None and source_stage_job_id and parent_design.job_id != source_stage_job_id:
+                raise ValueError("inferred parent Design belongs to a different source job")
             if parent_design is not None:
                 parent_design_id = parent_design.id
                 break
-    if parent_design is None and source_pdb_path:
-        cache_key = f"pdb::{source_pdb_path}"
+    if parent_design is None and source_pdb_path and source_stage_job_id:
+        cache_key = f"pdb::{source_stage_job_id}::{source_pdb_path}"
         parent_design = cache.get(cache_key)
         if parent_design is None and cache_key not in cache:
             result = await session.execute(
                 select(Design).options(
                     load_only(*_SOURCE_LINEAGE_LOAD_ONLY_COLUMNS)
-                ).where(Design.pdb_path == source_pdb_path)
+                ).where(Design.pdb_path == source_pdb_path,
+                        Design.job_id == source_stage_job_id)
             )
-            parent_design = result.scalars().first()
+            matches = result.scalars().all()
+            if len(matches) > 1:
+                raise ValueError("selected source structure matches multiple Designs")
+            parent_design = matches[0] if matches else None
             cache[cache_key] = parent_design
-        if parent_design is None and source_design_name:
-            cache_key = f"name::{source_design_name}"
-            parent_design = cache.get(cache_key)
-            if parent_design is None and cache_key not in cache:
-                result = await session.execute(
-                    select(Design).options(
-                        load_only(*_SOURCE_LINEAGE_LOAD_ONLY_COLUMNS)
-                    ).where(Design.name == source_design_name)
-                )
-                parent_design = result.scalars().first()
-                cache[cache_key] = parent_design
         if parent_design is not None:
             parent_design_id = parent_design.id
 
@@ -1489,6 +1542,12 @@ async def _resolve_parent_design_lineage(
         origin_design_id = parent_design.origin_design_id or parent_design.id
         origin_backbone_design_id = parent_design.origin_backbone_design_id or parent_design.id
         origin_job_id = parent_design.job_id
+        if parent_design.origin_design_id:
+            # Historical rows can carry the immediate parent's Job beside an
+            # ancestral Design. Resolve the pair from that Design, not the round.
+            origin_owner = await session.scalar(select(Design.job_id).where(
+                Design.id == parent_design.origin_design_id))
+            origin_job_id = origin_owner or parent_design.origin_job_id
     elif parent_design_id:
         origin_design_id = parent_design_id
         origin_backbone_design_id = parent_design_id
@@ -3053,7 +3112,10 @@ def _local_redesign_validate_artifact(
             raise RuntimeError("RFD3 local-redesign source artifact path does not match the request")
     else:
         resolved = _local_redesign_safe_job_artifact(output_root, relative)
-        if resolved != Path(storage).expanduser().resolve():
+        # New producer descriptors use the existing job-relative artifact name.
+        # Historical absolute descriptors still require exact local placement;
+        # never treat an arbitrary absolute worker path as relocatable.
+        if storage != relative and resolved != Path(storage).expanduser().resolve():
             raise RuntimeError(f"RFD3 local-redesign artifact storage path mismatch: {role}")
     content = _local_redesign_read_bytes(resolved)
     actual_sha = hashlib.sha256(content).hexdigest()
@@ -3401,7 +3463,13 @@ async def _ingest_rfd3_local_redesign_manifest(
             "candidate_id": candidate_id,
             "role": descriptor["role"],
             "relative_path": relative_path,
-            "storage_path": descriptor["storage_path"],
+            # Persist controller placement without changing the sealed descriptor
+            # (and therefore without changing candidate or manifest identity).
+            "storage_path": (
+                str((output_root / relative_path).resolve())
+                if descriptor["role"] != "source_structure" and descriptor["storage_path"] == relative_path
+                else descriptor["storage_path"]
+            ),
             "content_sha256": descriptor["sha256"],
             "size_bytes": descriptor["bytes"],
             "media_type": descriptor.get("media_type") or "application/octet-stream",
@@ -4321,31 +4389,27 @@ async def _ingest_explicit_frustrampnn_results(
             _assert_protein_design_metadata_replay(design, metadata_row)
 
     created = 0
-    try:
-        for candidate_id, row in protein_metadata.items():
-            _enrich_protein_design_from_metadata(primary_designs[candidate_id], row)
-        for root, terminal, bundle in validated_candidates:
-            invocation_id = bundle.manifest["invocation_id"]
-            await ingest_frustrampnn_result_bundle(
-                session,
-                root,
-                parent_job_id=str(current_job.id),
-                terminal_envelope=terminal,
-                commit=False,
-                validated_bundle=bundle,
-                parent_metadata_snapshot=(
-                    protein_metadata[str(bundle.manifest["candidate_id"])]
-                    if bundle.request["parent_workflow_id"] == "protein_design"
-                    else None
-                ),
-            )
-            if existing_results[invocation_id] is None:
-                created += 1
-        if commit:
-            await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
+    for candidate_id, row in protein_metadata.items():
+        _enrich_protein_design_from_metadata(primary_designs[candidate_id], row)
+    for root, terminal, bundle in validated_candidates:
+        invocation_id = bundle.manifest["invocation_id"]
+        await ingest_frustrampnn_result_bundle(
+            session,
+            root,
+            parent_job_id=str(current_job.id),
+            terminal_envelope=terminal,
+            commit=False,
+            validated_bundle=bundle,
+            parent_metadata_snapshot=(
+                protein_metadata[str(bundle.manifest["candidate_id"])]
+                if bundle.request["parent_workflow_id"] == "protein_design"
+                else None
+            ),
+        )
+        if existing_results[invocation_id] is None:
+            created += 1
+    if commit:
+        await session.commit()
     return created
 
 
@@ -4925,10 +4989,12 @@ async def ingest_job_results(
     *,
     commit: bool = True,
 ) -> int:
-    """Import native results atomically, or join a caller-owned transaction.
+    """Import native results, or join a caller-owned transaction.
 
     With commit=False the caller owns both commit and rollback, including after
-    partial writes. Native prevalidation failures must not discard its pending work.
+    partial writes. With commit=True, verified primary publication is durable
+    before an optional FrustraMPNN attachment is attempted; attachment failure
+    still raises and never certifies an invalid component.
     """
     session.info.setdefault("protein_design_primary_prevalidated", set()).discard(job_id)
     current_job = None
@@ -4950,22 +5016,32 @@ async def ingest_job_results(
         count = 0 if model_id == "frustrampnn" else await _ingest_job_results(
             job_id, output_dir, session, epitope_residues,
         )
+        output_path = Path(output_dir)
+        output_path = (resolve_runtime_data_path(output_path) if output_path.is_absolute()
+                       else get_data_root() / output_dir)
+        if model_id == "protenix" and current_job is not None:
+            await _ingest_protenix_primary_publications(current_job, output_path, session)
         await session.flush()
+        if closeout is not None and current_job is not None:
+            current_job.provenance = {**(current_job.provenance or {}),
+                                      "antibody_pipeline_result": closeout}
+        # The primary owner has finished verification and publication. Commit
+        # before the optional component only when it was selected: its native
+        # validation may fail without revoking an already verified generator.
+        optional_outputs = current_job.stage_outputs if current_job is not None else None
+        has_optional_stage = isinstance(optional_outputs, dict) and any(
+            str(stage).strip().lower() in _FRUSTRAMPNN_TERMINAL_STAGES
+            for stage in optional_outputs
+        )
+        if commit and has_optional_stage and model_id != "frustrampnn":
+            await session.commit()
         # CM owns its exact reference-set join inside its native bundle transaction.
         if model_id != "conformational_mapping":
-            output_path = Path(output_dir)
-            output_path = (resolve_runtime_data_path(output_path) if output_path.is_absolute()
-                           else get_data_root() / output_dir)
-            if model_id == "protenix":
-                await _ingest_protenix_primary_publications(current_job, output_path, session)
             component_count = await _ingest_explicit_frustrampnn_results(
                 current_job, output_path, session, commit=False,
             )
             if model_id == "frustrampnn":
                 count = component_count or 0
-        if closeout is not None and current_job is not None:
-            current_job.provenance = {**(current_job.provenance or {}),
-                                      "antibody_pipeline_result": closeout}
         if commit:
             await session.commit()
         else:
@@ -5007,6 +5083,31 @@ async def _ingest_job_results(
     with session.no_autoflush:
         job_result = await session.execute(select(Job).where(Job.id == job_id))
         current_job = job_result.scalar_one_or_none()
+    if current_job is not None:
+        from services.result_state_integrity import _sequence_native_publication_owner
+        native_owner = _sequence_native_publication_owner(current_job)
+        if native_owner is not None:
+            return await native_owner.publish_native_results(current_job, output_path, session)
+    if current_job is not None and current_job.model_id in {"binder_refinement", "caliby_binder"}:
+        # These leaves publish generator sidecars in their collected terminal root,
+        # not an all_designs.csv. Never import their inputs or intermediate stages.
+        return await ingest_loose_files(job_id, output_path, session, current_job, commit=False)
+    if current_job is not None and current_job.model_id == "ppiflow":
+        from services.ppiflow_generation import MODES, publish_generation_results
+        if current_job.mode in MODES:
+            return await publish_generation_results(current_job, output_path, session, commit=False)
+    if current_job is not None and current_job.model_id == "bindcraft2":
+        from services.bindcraft2_publication import publish_native_results
+        return await publish_native_results(current_job, output_path, session, commit=False)
+    if current_job is not None and current_job.model_id == "esmfold2" and current_job.mode == "blind_pose":
+        from services.binder_blind_pose_selected import publish_selected, read_selected
+        await publish_selected(current_job, output_path, session)
+        await read_selected(current_job, session)
+        return 0
+    if current_job is not None and current_job.model_id == 'ligandmpnn' and current_job.mode == 'interface_context':
+        from services.ligandmpnn_interface_publication import publish_selected
+        await publish_selected(current_job, output_path, session)
+        return 0
     if current_job is not None:
         from services.rf_filter_stage_accounting import prepare_filter_stages, retain_filter_stages
         retain_filter_stages(current_job, prepare_filter_stages(current_job, output_path))
@@ -5451,6 +5552,8 @@ async def _ingest_job_results(
                         job_context,
                         design_name,
                         cache=lineage_cache,
+                        structure_path=structure_path,
+                        source_identity=row,
                     )
                     design_provenance = {
                         **job_context.get("provenance", {}),
@@ -6017,7 +6120,16 @@ def _inherit_source_design_metrics(
 ) -> bool:
     changed = False
 
-    if source_design is not None:
+    same_structure = False
+    if source_design is not None and structure_path and getattr(source_design, "pdb_path", None):
+        try:
+            same_structure = file_sha256(structure_path) == file_sha256(Path(source_design.pdb_path))
+        except OSError:
+            pass
+    # Lineage is not fresh evidence for modified coordinates or sequence. Keep
+    # the parent's measurements on the parent; never turn missing evidence into
+    # an admission condition for publishing the descendant.
+    if source_design is not None and same_structure:
         scalar_fields = (
             "binder_length",
             "antibody_type",
@@ -6076,7 +6188,7 @@ def _inherit_source_design_metrics(
 
     if getattr(design, "rog", None) is None:
         computed_rog = compute_gyration_radius(structure_path) if structure_path else None
-        fallback_rog = computed_rog if computed_rog is not None else (getattr(source_design, "rog", None) if source_design is not None else None)
+        fallback_rog = computed_rog if computed_rog is not None else (getattr(source_design, "rog", None) if same_structure else None)
         if fallback_rog is not None:
             design.rog = fallback_rog
             changed = True
@@ -6531,37 +6643,29 @@ async def ingest_published_maturation_structures(
     if published_results_dir is None:
         return 0
 
-    existing_names = set(
-        (
+    existing_documents = {
+        str(Path(path).resolve()) for path in (
             await session.execute(
-                select(Design.name).where(Design.job_id == job_id)
+                select(Design.pdb_path).where(Design.job_id == job_id, Design.source_stage.is_(None))
             )
-        ).scalars().all()
-    )
+        ).scalars().all() if path
+    }
 
     approved_names = {
         report.stem.replace("_maturation_filter", "")
         for report in published_results_dir.glob("*_maturation_filter.json")
     }
 
-    structure_paths: list[Path] = []
-    if approved_names:
-        for name in sorted(approved_names):
-            for ext in ("pdb", "cif", "mmcif"):
-                candidate = published_results_dir / f"{name}.{ext}"
-                if candidate.exists():
-                    structure_paths.append(candidate)
-                    break
-    else:
-        for ext in ("*.pdb", "*.cif", "*.mmcif"):
-            structure_paths.extend(sorted(published_results_dir.glob(ext)))
+    structure_paths = sorted(path for path in published_results_dir.rglob("*")
+                             if path.is_file() and path.suffix.lower() in {".pdb", ".cif", ".mmcif"}
+                             and (not approved_names or path.stem in approved_names))
 
     created = 0
     job_context = _job_stage_context(current_job)
     lineage_cache: Dict[str, Optional[Design]] = {}
     for structure_path in structure_paths:
         design_name = structure_path.stem
-        if design_name in existing_names:
+        if str(structure_path.resolve()) in existing_documents:
             continue
 
         fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path)
@@ -6573,6 +6677,8 @@ async def ingest_published_maturation_structures(
             job_context,
             design_name,
             cache=lineage_cache,
+            structure_path=structure_path,
+            source_identity=fam_payload,
         )
         structure_cdr_lengths = _coalesce_cdr_lengths(
             _parse_hlt_cdr_lengths(structure_path),
@@ -6649,7 +6755,7 @@ async def ingest_published_maturation_structures(
             is_favorite=False,
             created_at=datetime.utcnow(),
         ))
-        existing_names.add(design_name)
+        existing_documents.add(str(structure_path.resolve()))
         created += 1
 
     if created > 0 and commit:
@@ -6661,19 +6767,20 @@ async def ingest_published_maturation_structures(
 
 def _discover_collected_ppiflow_structures(output_path: Path) -> list[tuple[str, Path]]:
     discovered: list[tuple[str, Path]] = []
-    seen_design_names: set[str] = set()
+    seen_documents: set[tuple[str, str]] = set()
     for stage_name in ("backbone_refine", "maturation", "ppiflow_generator_filtered", "ppiflow_generator_raw"):
         stage_dir = output_path / "collected" / stage_name
         if not stage_dir.exists():
             continue
-        for ext in ("*.pdb", "*.cif", "*.mmcif"):
-            for structure_path in sorted(stage_dir.glob(ext)):
+        for ext in (".pdb", ".cif", ".mmcif"):
+            for structure_path in sorted(path for path in stage_dir.rglob("*")
+                                         if path.is_file() and path.suffix.lower() == ext):
                 if not _is_final_ppiflow_structure_path(structure_path):
                     continue
-                design_name = structure_path.stem
-                if design_name in seen_design_names:
+                document = (stage_name, str(structure_path.resolve()))
+                if document in seen_documents:
                     continue
-                seen_design_names.add(design_name)
+                seen_documents.add(document)
                 discovered.append((stage_name, structure_path))
     return discovered
 
@@ -6697,13 +6804,13 @@ async def ingest_collected_ppiflow_structures(
     if not structure_entries:
         return 0
 
-    existing_names = set(
-        (
+    existing_documents = {
+        str(Path(path).resolve()) for path in (
             await session.execute(
-                select(Design.name).where(Design.job_id == job_id)
+                select(Design.pdb_path).where(Design.job_id == job_id, Design.source_stage.is_(None))
             )
-        ).scalars().all()
-    )
+        ).scalars().all() if path
+    }
 
     job_context = _job_stage_context(current_job)
     lineage_cache: Dict[str, Optional[Design]] = {}
@@ -6711,7 +6818,7 @@ async def ingest_collected_ppiflow_structures(
 
     for stage_name, structure_path in structure_entries:
         design_name = structure_path.stem
-        if design_name in existing_names:
+        if str(structure_path.resolve()) in existing_documents:
             continue
 
         ingested_stage_mode = stage_name
@@ -6727,6 +6834,8 @@ async def ingest_collected_ppiflow_structures(
             job_context,
             design_name,
             cache=lineage_cache,
+            structure_path=structure_path,
+            source_identity=fam_payload,
         )
         structure_cdr_lengths = _coalesce_cdr_lengths(
             _parse_hlt_cdr_lengths(structure_path),
@@ -6811,7 +6920,7 @@ async def ingest_collected_ppiflow_structures(
             is_favorite=False,
             created_at=datetime.utcnow(),
         ))
-        existing_names.add(design_name)
+        existing_documents.add(str(structure_path.resolve()))
         created += 1
 
     if created > 0 and commit:
@@ -6820,6 +6929,32 @@ async def ingest_collected_ppiflow_structures(
 
     return created
 
+
+
+def _relocate_caliby_native_output(payload: Dict[str, Any], metadata_path: Path) -> Dict[str, Any]:
+    """Reopen the producer-declared native document after return/publication.
+
+    This is optional provenance, not a new condition for publishing the designed
+    candidate. Missing or changed native bytes remain unavailable evidence.
+    """
+    identity = payload.get("native_output_structure")
+    if not isinstance(identity, dict) or not identity.get("relative_path"):
+        return payload
+    native = {**identity, "path": None, "state": "unavailable"}
+    root = metadata_path.parent.resolve()
+    try:
+        relative = Path(identity["relative_path"])
+        path = (root / relative).resolve()
+        if relative.is_absolute() or not path.is_relative_to(root):
+            raise ValueError("native document is outside its publication")
+        if not path.is_file():
+            raise ValueError("native document is not present in this publication")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != identity.get("sha256"):
+            raise ValueError("native document differs from the producer identity")
+        native.update(path=str(path), state="ready")
+    except (OSError, TypeError, ValueError) as exc:
+        native["reason"] = str(exc)
+    return {**payload, "native_output_structure": native}
 
 
 async def ingest_loose_files(
@@ -6855,6 +6990,91 @@ async def ingest_loose_files(
     plr_final_path = None
     current_model_id = str(getattr(current_job, "model_id", "") or "").strip().lower() if current_job is not None else ""
     current_mode = str(getattr(current_job, "mode", "") or "").strip().lower() if current_job is not None else ""
+    if current_model_id in {"binder_refinement", "caliby_binder"}:
+        terminal_root = output_path / "collected" / (
+            "binder_refinement" if current_model_id == "binder_refinement" else "binder_generation/caliby"
+        )
+        existing_documents = {
+            str(Path(path).resolve()) for path in (await session.scalars(
+                select(Design.pdb_path).where(Design.job_id == job_id, Design.source_stage.is_(None))
+            )).all() if path
+        }
+        created = 0
+        for json_path in sorted(terminal_root.rglob("generator_*.json")):
+            payload = _load_json_payload(json_path)
+            if not payload:
+                continue
+            # Both publishers pair a generator_<stem>.json with a sibling PDB.
+            # Native worker-absolute manifest paths are not controller paths.
+            structure_path = json_path.with_name(json_path.stem.removeprefix("generator_") + ".pdb")
+            if not structure_path.is_file() or str(structure_path.resolve()) in existing_documents:
+                continue
+            if current_model_id == "caliby_binder":
+                payload = _relocate_caliby_native_output(payload, json_path)
+            sample_identity = _load_json_payload(structure_path.with_name(
+                f"{structure_path.stem}_sample_identity.json")) or {}
+            source = payload.get("selected_source") or sample_identity.get("source") or {}
+            source_meta = payload.get("source_meta") or source.get("source_meta") or {}
+            source_id = (source_meta.get("design_id") or source_meta.get("source_design_id")
+                         or payload.get("source_document_id") or source_meta.get("id"))
+            # Resolve through C's lineage owner with explicit document identity,
+            # never the generated name or its resemblance to a parent basename.
+            manifest_item = (job_context.get("selection_index") or {}).get(str(source_id)) or {}
+            source_identity = {
+                **manifest_item, **source_meta,
+                "source_design_id": source_id,
+                "source_job_id": (source_meta.get("design_job_id") or source_meta.get("source_job_id")
+                                  or manifest_item.get("design_job_id")),
+            }
+            lineage = await _resolve_parent_design_lineage(
+                session, job_context, "", cache=lineage_cache, source_identity=source_identity,
+            )
+            producer = payload.get("terminal_producer") or payload.get("source")
+            state = (payload.get("source_structure_state") or source_meta.get("structure_state")
+                     or source_meta.get("target_state") or source_meta.get("primary_target_state"))
+            fields = _design_lineage_fields(
+                job_context, lineage, producer_job=current_job, producer_payload=payload,
+            )
+            # Generation is not validation. Keep confidence in the native record;
+            # neither PDB B factors nor source metrics establish fresh evidence.
+            fields["artifact_class"] = (
+                "sequence_designed_complex" if current_model_id == "caliby_binder" else None
+            )
+            fields["artifact_schema_version"] = 1 if fields["artifact_class"] else None
+            session.add(Design(
+                id=str(uuid.uuid4()), job_id=job_id, name=structure_path.stem,
+                pdb_path=str(structure_path), json_path=str(json_path),
+                producer_model_id=producer,
+                stage_family=producer or current_model_id,
+                stage_mode=payload.get("stage_mode") or current_mode,
+                **fields,
+                provenance={
+                    **job_context.get("provenance", {}),
+                    "producer_model_id": producer,
+                    "generator": payload,
+                    "sample_identity": sample_identity or None,
+                    "source_design_id": lineage.get("parent_design_id"),
+                    "source_job_id": lineage.get("source_stage_job_id"),
+                    "source_structure_state": state,
+                    "structure_state": state,
+                    "validation_status": payload.get("validation_status"),
+                },
+                confidence_metrics={str(producer or current_model_id): payload},
+                plddt_overall=None, residue_plddt=None,
+                is_favorite=False, created_at=datetime.utcnow(),
+            ))
+            existing_documents.add(str(structure_path.resolve()))
+            created += 1
+        if created and commit:
+            await session.commit()
+        return created
+
+    is_fold_cp = (
+        current_model_id == "boltz_cp_experimental"
+        or str(job_params.get("pred_method") or "").lower() == "fold_cp"
+        or str(job_params.get("structure_launch_variant") or "").lower() == "boltz_cp_experimental"
+        or str(job_params.get("rfd_mode") or "").lower() == "boltz_cp_experimental"
+    )
     if current_job is not None and (
         current_model_id == "protein_local_redesign"
         or (
@@ -6880,12 +7100,17 @@ async def ingest_loose_files(
     # Locations to search for confidence/metrics JSONs
     # Boltz outputs often in pdb_files/predictions/
     # RF3 outputs in pdb_files/rf3/output/*/
-    if plr_final_path is not None:
+    if is_fold_cp:
+        search_paths = [output_path / "json_files" / "predictions"]
+    elif plr_final_path is not None:
         search_paths = [plr_final_path]
     elif boltzgen_filtered_path is not None:
         search_paths = [boltzgen_filtered_path]
     else:
         search_paths = [
+            # Fold-CP publishes confidence and structures into separate trees.
+            # Scope this to Fold-CP so unrelated engines cannot cross-pair names.
+            *([output_path / "json_files" / "predictions"] if is_fold_cp else []),
             output_path / "pdb_files" / "predictions",
             output_path / "pdb_files" / "validated_designs",
             output_path / "pdb_files",
@@ -6919,10 +7144,23 @@ async def ingest_loose_files(
     
     designs_created = 0
     
-    # Replay uses the same job/name identity as discovery within one import.
-    ingested_names = set((await session.execute(
-        select(Design.name).where(Design.job_id == job_id, Design.source_stage.is_(None))
-    )).scalars())
+    existing_designs = (await session.execute(
+        select(Design).where(Design.job_id == job_id, Design.source_stage.is_(None))
+    )).scalars().all()
+    ingested_names = {row.name for row in existing_designs}
+    fold_cp_by_path = {row.pdb_path: row for row in existing_designs if row.pdb_path} if is_fold_cp else {}
+    fold_cp_by_name = {row.name: row for row in existing_designs} if is_fold_cp else {}
+    designs_enriched = 0
+
+    def fold_cp_name(structure: Path, root: Path) -> str:
+        relative = structure.relative_to(root)
+        if relative.parent == Path('.'):
+            return structure.stem
+        import hashlib
+        import re
+        sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", relative.with_suffix('').as_posix())[:100]
+        digest = hashlib.sha256(relative.as_posix().encode()).hexdigest()[:12]
+        return f"foldcp_{sanitized}_{digest}"
     metric_results_found = False
     
     print(f"[Ingester DEBUG] Search paths: {[str(p) for p in search_paths]}")
@@ -6931,7 +7169,7 @@ async def ingest_loose_files(
         if not search_dir.exists():
             continue
         
-        recursive_scan = search_dir.name in {"pdb_files", "validated_designs", "collected"} or "collected" in search_dir.parts
+        recursive_scan = search_dir.name in {"pdb_files", "validated_designs", "collected"} or "collected" in search_dir.parts or (is_fold_cp and search_dir == output_path / "json_files" / "predictions")
         json_files = set(list(search_dir.rglob("confidence_*.json")) if recursive_scan else list(search_dir.glob("confidence_*.json")))
         boltz_aligned_jsons = list(search_dir.rglob("*_boltzpred.json")) if recursive_scan else list(search_dir.glob("*_boltzpred.json"))
         json_files.update(boltz_aligned_jsons)
@@ -6959,11 +7197,41 @@ async def ingest_loose_files(
                 if not re.search(r'_\d+$', design_name):
                     print(f"[Ingester] Skipping input template: {design_name}")
                     continue
-                
-                if design_name in ingested_names:
+
+                # Fold-CP publishes confidence and structures into separate trees.
+                # Restrict native nested matches to the corresponding DP shard.
+                fold_cp_structure = None
+                if is_fold_cp and search_dir == output_path / "json_files" / "predictions":
+                    relative_parent = json_file.parent.relative_to(search_dir)
+                    for structure_root in (output_path / "cif_files" / "predictions", output_path / "pdb_files" / "predictions"):
+                        scope = structure_root / relative_parent
+                        if not scope.is_dir():
+                            continue
+                        direct = [scope / f"{artifact_name}.cif", scope / f"{artifact_name}.pdb"]
+                        matches = [candidate for candidate in direct if candidate.is_file()]
+                        if not matches and relative_parent != Path('.'):
+                            matches = sorted(scope.rglob(f"{artifact_name}.cif")) + sorted(scope.rglob(f"{artifact_name}.pdb"))
+                        if len(matches) > 1:
+                            raise ValueError(f"Ambiguous Fold-CP structures for {json_file}: {matches}")
+                        if matches:
+                            fold_cp_structure = matches[0]
+                            design_name = fold_cp_name(fold_cp_structure, structure_root)
+                            break
+                    if fold_cp_structure is None:
+                        continue
+
+                existing_fold_cp = fold_cp_by_path.get(str(fold_cp_structure)) if fold_cp_structure else None
+                if fold_cp_structure and not existing_fold_cp:
+                    named_row = fold_cp_by_name.get(design_name)
+                    if named_row and named_row.pdb_path == str(fold_cp_structure):
+                        existing_fold_cp = named_row
+                if design_name in ingested_names and not existing_fold_cp:
                     metric_results_found = True
                     continue
-                
+                if existing_fold_cp and existing_fold_cp.json_path == str(json_file):
+                    metric_results_found = True
+                    continue
+
                 # Look for corresponding Structure (CIF preferred for complexes, PDB fallback)
                 structure_candidates = [
                     search_dir / f"{design_name}.cif",
@@ -6982,7 +7250,7 @@ async def ingest_loose_files(
                     output_path / "pdb_files" / "predictions" / f"{design_name}_boltzpred.pdb",
                     output_path / "pdb_files" / "predictions" / f"{design_name}.pdb",
                 ]
-                structure_path = next((candidate for candidate in structure_candidates if candidate.exists()), None)
+                structure_path = fold_cp_structure or next((candidate for candidate in structure_candidates if candidate.exists()), None)
 
                 if structure_path is None:
                     continue
@@ -6992,11 +7260,11 @@ async def ingest_loose_files(
                     metrics = json.load(f)
 
                 aligned_pdb_name = str(metrics.get('aligned_pdb') or '').strip()
-                if aligned_pdb_name:
+                if aligned_pdb_name and not is_fold_cp:
                     aligned_candidate = json_file.parent / aligned_pdb_name
                     if aligned_candidate.exists():
                         structure_path = aligned_candidate
-                
+
                 # Boltz2 format: complex_plddt, ptm, iptm, confidence_score, complex_pde
                 plddt = metrics.get('complex_plddt') or metrics.get('plddt')
                 if plddt is not None and plddt <= 1.0:
@@ -7111,7 +7379,7 @@ async def ingest_loose_files(
                     name=design_name,
                     pdb_path=str(structure_path),
                     json_path=str(json_file) if json_file else (str(fam_json_path) if fam_json_path.exists() else None),
-                    producer_model_id="boltz2",
+                    producer_model_id="boltz_cp_experimental" if is_fold_cp else "boltz2",
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
@@ -7169,10 +7437,36 @@ async def ingest_loose_files(
                     created_at=datetime.utcnow()
                 )
                 
-                session.add(design)
-                designs_created += 1
+                if existing_fold_cp:
+                    # Project native metrics onto the retained structure without replacing
+                    # its identity, annotations, or unrelated lineage.
+                    for field in (
+                        "json_path", "producer_model_id",
+                        "plddt_overall", "pae_overall", "ptm", "conf_score", "ligand_iptm",
+                        "rmsd_overall", "rmsd_binder", "rmsd_target", "affinity_score",
+                        "binder_probability", "residue_plddt", "iptm", "protein_iptm",
+                        "complex_iplddt", "complex_ipde", "chains_ptm", "pair_chains_iptm",
+                        "disorder", "num_recycles", "has_clash", "binder_length",
+                        "cdr_h1_length", "cdr_h2_length", "cdr_h3_length",
+                        "cdr_l1_length", "cdr_l2_length", "cdr_l3_length",
+                        *aligned_error_fields.keys(), *_geometry_design_fields(geometry_fields).keys(),
+                    ):
+                        value = getattr(design, field)
+                        if value is not None:
+                            setattr(existing_fold_cp, field, value)
+                    existing_fold_cp.confidence_metrics = {
+                        **(existing_fold_cp.confidence_metrics or {}), **(design.confidence_metrics or {})
+                    }
+                    existing_fold_cp.provenance = {**fam_provenance, **(existing_fold_cp.provenance or {})}
+                    designs_enriched += 1
+                else:
+                    session.add(design)
+                    designs_created += 1
+                    if is_fold_cp:
+                        fold_cp_by_path[str(structure_path)] = design
+                        fold_cp_by_name[design_name] = design
                 ingested_names.add(design_name)
-                
+
             except Exception as e:
                 print(f"[Ingester] Error parsing Boltz2 file {json_file}: {e}")
         
@@ -7517,7 +7811,7 @@ async def ingest_loose_files(
                 print(f"[Ingester] Error parsing Protenix file {json_file}: {e}")
                 
     # If still no designs, try just finding raw structures (e.g. valid job but missing metadata)
-    if designs_created == 0 and not metric_results_found:
+    if is_fold_cp or (designs_created == 0 and not metric_results_found):
         print("[Ingester] No JSON metrics found. Scanning for raw structure files...")
 
         # Determine job type for model-specific ingestion logic
@@ -7630,6 +7924,12 @@ async def ingest_loose_files(
         # --- Standard (non-oligo) ingestion ---
         else:
             structure_paths = []
+            existing_documents = {
+                str(Path(path).resolve()) for path in (await session.scalars(
+                    select(Design.pdb_path).where(Design.job_id == job_id,
+                                                  Design.source_stage.is_(None))
+                )).all() if path
+            }
 
             if is_maturation_child:
                 published_results_dir = output_path / "run" / "ppiflow" / "results"
@@ -7664,8 +7964,14 @@ async def ingest_loose_files(
                 structure_paths.extend(sorted(plr_final_path.glob("*.cif")))
                 structure_paths.extend(sorted(plr_final_path.glob("*.mmcif")))
 
+            if is_fold_cp:
+                for root in (output_path / "cif_files" / "predictions", output_path / "pdb_files" / "predictions"):
+                    if root.is_dir():
+                        structure_paths.extend(sorted(root.rglob("*.cif")))
+                        structure_paths.extend(sorted(root.rglob("*.pdb")))
+
             # For non-oligo jobs: prefer run/rebuilt/ over raw structures
-            if not is_maturation_child and plr_final_path is None:
+            if not is_fold_cp and not is_maturation_child and plr_final_path is None:
                 rebuilt_dir = output_path / "run" / "rebuilt"
                 if rebuilt_dir.exists():
                     structure_paths.extend(list(rebuilt_dir.glob("*.pdb")))
@@ -7688,32 +7994,29 @@ async def ingest_loose_files(
                             return False
                         return True
 
-                    structure_paths.extend(
-                        [path for path in output_path.rglob("*.pdb") if _is_ingestable_raw_structure(path)]
-                    )
-                    structure_paths.extend(
-                        [path for path in output_path.rglob("*.cif") if _is_ingestable_raw_structure(path)]
-                    )
-                    structure_paths.extend(
-                        [path for path in output_path.rglob("*.mmcif") if _is_ingestable_raw_structure(path)]
-                    )
+                    structure_paths.extend(path for path in output_path.rglob("*")
+                        if path.is_file() and path.suffix.lower() in {".pdb", ".cif", ".mmcif"}
+                        and _is_ingestable_raw_structure(path))
 
             if not structure_paths:
                 print(f"[Ingester] No raw structures found under {output_path}")
 
             for structure_path in structure_paths:
-                design_name = structure_path.stem
-                if design_name in ingested_names:
+                structure_root = output_path / structure_path.relative_to(output_path).parts[0] / "predictions" if is_fold_cp else None
+                design_name = fold_cp_name(structure_path, structure_root) if is_fold_cp else structure_path.stem
+                if (is_fold_cp and (str(structure_path) in fold_cp_by_path or design_name in fold_cp_by_name)) or (not is_fold_cp and str(structure_path.resolve()) in existing_documents):
                     continue
 
+                fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path)
+                fam_payload = _load_json_payload(fam_json_path)
                 lineage = await _resolve_parent_design_lineage(
                     session,
                     job_context,
                     design_name,
                     cache=lineage_cache,
+                    structure_path=structure_path,
+                    source_identity=fam_payload,
                 )
-                fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path)
-                fam_payload = _load_json_payload(fam_json_path)
                 fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path)
                 fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
                     
@@ -7775,7 +8078,7 @@ async def ingest_loose_files(
                     stage_mode=((fam_payload or {}).get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=design_provenance or None,
-                    producer_model_id=_fampnn_producer_identity(fam_payload, structure_path),
+                    producer_model_id="boltz_cp_experimental" if is_fold_cp else _fampnn_producer_identity(fam_payload, structure_path),
                     epitope_contact_count=epitope_contact_count,
                     epitope_min_distance=epitope_min_distance,
                     
@@ -7818,8 +8121,12 @@ async def ingest_loose_files(
                 session.add(design)
                 designs_created += 1
                 ingested_names.add(design_name)
+                if is_fold_cp:
+                    fold_cp_by_path[str(structure_path)] = design
+                    fold_cp_by_name[design_name] = design
+                existing_documents.add(str(structure_path.resolve()))
 
-    if designs_created > 0 and commit:
+    if (designs_created > 0 or designs_enriched > 0) and commit:
         try:
             await session.commit()
             print(f"[Ingester] Ingested {designs_created} designs from loose files for job {job_id}")

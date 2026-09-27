@@ -84,6 +84,22 @@ def test_result_contract_registry_maps_known_result_sets_to_analyzers_and_capabi
     assert resolve_result_contract(result_set="ppiflow_passed").analysis_contract_id == "ppiflow_maturation_v1"
 
 
+def test_cad_family_reuses_generation_contract_without_granting_other_parent_tasks():
+    for contract in (
+            resolve_result_contract(model_type='protein_cad_experimental'),
+            resolve_result_contract(stage_family='protein_cad_experimental')):
+        assert contract.analysis_contract_id == 'de_novo_generation_v1'
+        assert contract.required_artifacts == ['structure']
+        assert 'pae_matrix' not in contract.supported_analyzers
+        assert 'structure_confidence_metrics' not in contract.viewer_capabilities
+    assert resolve_result_contract(model_type='protein_modification_experimental',
+        stage_mode='de_novo_design').analysis_contract_id is None
+    assert resolve_result_contract(model_type='protein_modification_experimental',
+        stage_mode='shape_blueprint').analysis_contract_id == 'shape_blueprint'
+    assert resolve_result_contract(model_type='protein_modification_experimental',
+        stage_mode='region_redesign').analysis_contract_id == 'protein_local_redesign_validation_v1'
+
+
 def test_result_contract_registry_fails_closed_for_unknown_model_with_metric_shaped_payload() -> None:
     contract = resolve_result_contract(
         stage_family="new_public_model",

@@ -302,7 +302,7 @@ def test_format_detection_rejects_suffix_mismatch_ambiguity_and_archives(tmp_pat
     assert archived.value.code == "MD_STARTING_STRUCTURE_FORMAT_UNSUPPORTED"
 
 
-def test_exact_profile_admission_is_digest_bound() -> None:
+def test_profile_accepts_selected_structure_not_only_its_evidence_fixture() -> None:
     starting_structures = importlib.import_module("services.md.starting_structures")
     source_ref = starting_structures.StartingStructureSourceRef(
         kind="managed_fixture", id="1aki-admitted-v1"
@@ -322,15 +322,20 @@ def test_exact_profile_admission_is_digest_bound() -> None:
         "state": "admitted",
         "profile_id": "profile-v1",
         "code": None,
-        "message": "The exact starting-structure bytes are admitted by the selected chemistry profile.",
+        "message": "The selected chemistry profile is available for this starting structure.",
     }
 
-    blocked_profile = {**profile, "launch_constraints": {"structure_sha256": hashlib.sha256(b"other").hexdigest()}}
+    other_fixture = {**profile, "launch_constraints": {"structure_sha256": hashlib.sha256(b"other").hexdigest()}}
+    other = starting_structures.inspect_resolved_structure(
+        resolved, chemistry_profile_id="profile-v1", profile=other_fixture
+    )
+    assert other.admission.state == "admitted"
+    assert other.identity.sha256 == admitted.identity.sha256
     blocked = starting_structures.inspect_resolved_structure(
-        resolved, chemistry_profile_id="profile-v1", profile=blocked_profile
+        resolved, chemistry_profile_id="profile-v1", profile={**profile, "states": {"selectable": False}}
     )
     assert blocked.admission.state == "blocked"
-    assert blocked.admission.code == "MD_STARTING_STRUCTURE_NOT_ADMITTED"
+    assert blocked.admission.code == "MD_CHEMISTRY_PROFILE_UNAVAILABLE"
 
 
 def test_server_file_inventory_is_metadata_only_incremental_and_bounded(

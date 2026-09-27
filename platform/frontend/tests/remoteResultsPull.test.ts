@@ -9,7 +9,7 @@ const ready: RemoteResultsJob = {
 };
 
 test('ready prompt derives from persisted state, including a fresh reload', () => {
-    assert.deepEqual(remoteResultsState(ready), { busy: false, failed: false, label: 'Pull results' });
+    assert.deepEqual(remoteResultsState(ready), { busy: false, failed: false, received: false, label: 'Pull results' });
     assert.deepEqual(remoteResultsState(JSON.parse(JSON.stringify(ready))), remoteResultsState(ready));
     assert.equal(remoteResultsState({ ...ready, status: undefined }), null);
 });
@@ -24,9 +24,9 @@ test('local, terminal, unrelated awaiting gates and remote execution never offer
 
 test('returning disables the pull and persistent failure offers only explicit retry', () => {
     assert.deepEqual(remoteResultsState({ ...ready, status: 'running', queue_status: 'running', remote_state: 'returning' }),
-        { busy: true, failed: false, label: 'Pulling results…' });
+        { busy: true, failed: false, received: false, label: 'Pulling results…' });
     assert.deepEqual(remoteResultsState({ ...ready, remote_state: 'result_pull_failed', error_message: 'Checksum mismatch' }),
-        { busy: false, failed: true, label: 'Retry pull' });
+        { busy: false, failed: true, received: false, label: 'Retry pull' });
     assert.equal(remotePullError({ response: { data: { detail: 'Worker identity changed' } } }), 'Worker identity changed');
     assert.equal(remotePullError({ response: { data: { detail: { message: 'Attempt mismatch' } } } }), 'Attempt mismatch');
     assert.equal(remotePullError(new Error('Network unavailable')), 'Network unavailable');
@@ -54,7 +54,7 @@ test('POST is wired only to explicit click, with no mutation retries or duplicat
     const effect = source.slice(source.indexOf('useEffect(() =>'), source.indexOf('const mutation ='));
     assert.doesNotMatch(effect, /mutate\(|pullRemoteJobResults\(/u);
     assert.match(effect, /job\.status === 'completed'/u);
-    assert.match(source, /Results ready on worker/u);
+    assert.match(source, /Results reported ready on worker/u);
     assert.match(source, /job\.error_message \|\| job\.remote_waiting_reason/u);
     assert.match(source, /role="alert"/u);
     assert.match(source, /onSettled: async[\s\S]*invalidateQueries/u);
@@ -74,6 +74,6 @@ test('normal queue and details retain the prompt and poll only server job metada
     const table = readFileSync('src/components/dashboard/JobQueueTable.tsx', 'utf8');
     assert.match(table, /job\.status === 'awaiting_input' && !\(job\.execution_target_id && job\.awaiting_stage === 'remote_results'\)/u);
     assert.match(table, /<RemoteResultsPrompt job=\{job\} \/>/u);
-    assert.match(readFileSync('src/components/RemoteResultsPrompt.tsx', 'utf8'), /Execution finished; results remain on worker/u);
+    assert.match(readFileSync('src/components/RemoteResultsPrompt.tsx', 'utf8'), /Execution finished; worker availability is checked when you pull/u);
     assert.match(detail, /remoteResultsState\(job\)\) \? jobPollingInterval/u);
 });

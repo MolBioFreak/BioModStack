@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from database import ShapeDesignGeometry, ShapeDesignRequest
-from schemas import ExecutionPolicy
+from schemas import ExecutionPolicy, JobCreate
 from services.shape_resources import _publish
 
 
@@ -162,6 +162,7 @@ class SubmittedShapeRequest(BaseModel):
 
     execution_target_id: str | None = Field(default=None, min_length=1, max_length=160)
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+    execution_plan_approval: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     client_request_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
     name: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._-]*$")
@@ -228,6 +229,20 @@ class StagedShapeRequest:
     name: str
     stage_dir: str
     launch_params: dict[str, object]
+
+
+def shape_job_request(staged: StagedShapeRequest, submitted: SubmittedShapeRequest) -> JobCreate:
+    """One projection for native submission, review and configured preparation."""
+    return JobCreate(
+        name=staged.name, model_id=staged.model_id, mode=staged.mode,
+        params=staged.launch_params,
+        execution_target_id=submitted.execution_target_id,
+        execution_policy=submitted.execution_policy,
+        execution_plan_approval=submitted.execution_plan_approval,
+        pinned_gpu=None, parent_job_id=None, child_stage=None,
+        batch_id=None, batch_name=None,
+        sequence_length=int(str(staged.launch_params["shape_target_length"])),
+    )
 
 
 def _checked_artifact(root: Path, relative: str, expected_sha256: str) -> tuple[Path, bytes]:
@@ -448,7 +463,6 @@ def _staged(row: ShapeDesignRequest, *, data_root: Path, name: str) -> StagedSha
         "shape_predictor": "esmfold2",
         "shape_guidance_profile": row.request_spec["guidance_profile"]["id"],
         "shape_guidance_profile_registry_sha256": row.request_spec["guidance_profile_registry_sha256"],
-        "msa_provider": "local",
     }
     return StagedShapeRequest(
         request_id=row.request_id,

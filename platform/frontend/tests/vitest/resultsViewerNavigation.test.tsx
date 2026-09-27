@@ -5,11 +5,16 @@ import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { afterEach, expect, test, vi } from 'vitest';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
 import StructureViewerPane from '../../src/components/StructureViewerPane';
+import { DesignComparePane } from '../../src/components/DesignComparePane';
 // GPU canvas is outside this routing test; actual StructureViewerPane remains mounted.
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-test-gpu-canvas /> }));
 import { ResultsViewer } from '../../src/components/ResultsViewer';
+import BlindPoseSelectedControls from '../../src/components/BlindPoseSelectedControls';
 import { ProjectReturnBanner } from '../../src/components/project-manager/ProjectReturnBanner';
 import { api } from '../../src/lib/api';
+import BinderSelectedControls from '../../src/components/BinderSelectedControls';
+import { BindCraft2NativeActions } from '../../src/components/BindCraft2JobResults';
+import { parseMolecularDynamicsHandoffRoute, buildMolecularDynamicsHandoffInitialValues } from '../../src/components/gen2StartingStructureState';
 
 const text = (node: ReactTestInstance): string => node.children.map(child => typeof child === 'string' ? child : text(child)).join('');
 const flush = async () => { for (let i = 0; i < 12; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
@@ -22,6 +27,126 @@ const calls: Array<{ url: string; params: Record<string, any> }> = [];
 let renderer: ReactTestRenderer | undefined;
 let client: QueryClient;
 const original = api.defaults.adapter;
+
+test('ResultsViewer mounts both optional selected actions without a selection', async () => {
+    await setup('/designs/parent');
+    const actions = renderer!.root.findByType(BlindPoseSelectedControls);
+    expect(actions.props.sourceJobId).toBe('parent');
+    expect(actions.props.selectedDesignIds).toEqual([]);
+    expect(text(actions)).toContain('Blind pose (experimental)');
+    expect(text(actions)).toContain('LigandMPNN interface context (experimental)');
+    const tableTab = renderer!.root.findAllByType('button').find(button => text(button).includes('Data Table'))!;
+    await act(async () => tableTab.props.onClick()); await flush();
+    const row = renderer!.root.findAllByType('tr').find(candidate => text(candidate).includes('a-0'))!;
+    await act(async () => row.findByType('input').props.onChange({ target: { checked: true } }));
+    expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['a-0']);
+});
+
+test('BC2 native records supplement the mounted Design selection and comparison workbench', async () => {
+    const paths: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        paths.push(url);
+        if (url.endsWith('/settings')) return { ok: true, json: async () => ({ requested_settings: {}, effective_settings: {} }) };
+        if (!url.includes('/bindcraft2-results?')) throw new Error(`Unexpected native request ${url}`);
+        return { ok: true, json: async () => ({ schema: 'bindcraft2.native-readback.v1', arm: 'arm-A',
+            stage: new URL(url, 'http://test').searchParams.get('stage'), offset: 0, limit: 25, total: 1,
+            arms: [{ name: 'arm-A', accounting: {} }], accounting: {}, metadata: null,
+            rows: [{ design: 'native-evidence', native_score: 0 }],
+        }) };
+    }));
+    try {
+        await setup('/designs/parent?launch_context_id=context', false, [design('bc2-1', 'bindcraft2'), design('bc2-2', 'bindcraft2')], { ...job, model_id: 'bindcraft2', mode: 'campaign', design_count: 2 });
+        expect(renderer!.root.findByType(BindCraft2NativeActions).props.launchContextId).toBe('context');
+        expect(text(renderer!.root)).toContain('native-evidence');
+        expect(paths).toContain('/api/models/bindcraft2/campaign/jobs/parent/settings');
+        await act(async () => renderer!.root.findByProps({ 'aria-label': 'Native records' }).props.onChange({ target: { value: 'retained' } }));
+        await flush();
+        expect(paths.some(path => path.includes('stage=retained'))).toBe(true);
+        const button = (label: string) => renderer!.root.findAllByType('button').find(node => text(node).includes(label))!;
+        await act(async () => button('Data Table').props.onClick()); await flush();
+        const row = renderer!.root.findAllByType('tr').find(node => text(node).includes('bc2-1'))!;
+        await act(async () => row.findByType('input').props.onChange({ target: { checked: true } }));
+        expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['bc2-1']);
+        expect(button('Compare Designs')).toBeDefined();
+        expect(button('Compare Jobs')).toBeDefined();
+        await act(async () => button('Compare Designs').props.onClick()); await flush();
+        expect(renderer!.root.findByType(DesignComparePane).props.designs.map((row: { id: string }) => row.id)).toEqual(['bc2-1', 'bc2-2']);
+        expect(text(renderer!.root)).toContain('native-evidence');
+        await act(async () => button('Data Table').props.onClick()); await flush();
+        expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['bc2-1']);
+        expect(calls.some(call => call.url === '/api/designs' && call.params.job_id === 'parent')).toBe(true);
+    } finally { vi.unstubAllGlobals(); }
+});
+
+test('mounted selected actions submit exact independent subsets and read native result', async () => {
+    const requests: Array<{ url: string; body: any }> = [];
+    api.defaults.adapter = async config => {
+        const url = String(config.url);
+        requests.push({ url, body: typeof config.data === 'string' ? JSON.parse(config.data) : config.data });
+        const data = url.endsWith('/result') ? { records: [{ design_id: 'd-2', classification: 'unclassified', raw_metrics: { native: 0.4 } }] }
+            : url.includes('ligandmpnn') ? { job: { id: 'ligand-child' } } : { id: 'blind-child' };
+        return { data, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    const opened: string[] = [];
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => { renderer = create(<BlindPoseSelectedControls sourceJobId="source" sourceModelId="bindcraft2"
+        sourceParams={{ bindcraft2_settings: { targets: [{ name: 'target-1' }, { name: 'target-2' }] } }}
+        selectedDesignIds={['d-2', 'd-1']} onOpenJob={id => opened.push(id)} />); });
+    const control = () => renderer!.root;
+    const change = async (label: string, value: string) => {
+        await act(async () => control().findByProps({ 'aria-label': label }).props.onChange({ target: { value } }));
+    };
+    await change('Declared target', 'target-2');
+    await change('Blind pose target chains', 'T');
+    await change('Binder chains for d-2', 'B,C');
+    await change('Binder chains for d-1', 'D');
+    await change('Blind pose model variant', 'full');
+    await change('Blind pose model ID or path', 'checkpoint');
+    await change('Inference loops', '4');
+    await change('Diffusion steps', '83');
+    await change('Diffusion samples', '2');
+    await change('Blind pose seed', '17');
+    await act(async () => control().findAllByType('button').find(b => text(b) === 'Run selected blind pose')!.props.onClick());
+    expect(requests[0]).toEqual({ url: '/api/blind-pose/selected', body: {
+        source_job_id: 'source', target_name: 'target-2', design_ids: ['d-2', 'd-1'],
+        binder_chains: { 'd-2': ['B', 'C'], 'd-1': ['D'] }, target_chains: ['T'],
+        settings: { model_variant: 'full', model_id_or_path: 'checkpoint', num_loops: 4, num_sampling_steps: 83, num_diffusion_samples: 2, seed: 17 },
+    } });
+    await act(async () => control().findAllByType('button').find(b => text(b) === 'Open result Job')!.props.onClick());
+    expect(opened).toEqual(['blind-child']);
+    await change('Fixed binder chain', 'B');
+    await change('Target chain', 'T');
+    await change('Target patch residue IDs', 'T12,T13A');
+    await change('Seed', '21');
+    await change('Samples', '3');
+    await change('Temperature', '0.5');
+    await act(async () => control().findAllByType('button').find(b => text(b) === 'Run selected interface context')!.props.onClick());
+    expect(requests[1]).toEqual({ url: '/api/ligandmpnn/interface-context/selected', body: {
+        action: 'ligandmpnn_interface_context', source_job_id: 'source', round_id: 'source',
+        candidate_ids: ['d-2', 'd-1'], settings: { binder_chain: 'B', target_chain: 'T', target_patch: ['T12', 'T13A'], seed: 21, samples: 3, temperature: 0.5 },
+    } });
+    await act(async () => renderer!.update(<BlindPoseSelectedControls sourceJobId="blind-child" sourceModelId="esmfold2"
+        sourceParams={{}} selectedDesignIds={[]} resultJob={{ id: 'blind-child', model_id: 'esmfold2', mode: 'blind_pose', status: 'completed' }} onOpenJob={() => undefined} />));
+    await flush();
+    expect(requests[2].url).toBe('/api/blind-pose/blind-child/result');
+    expect(text(control())).toContain('unclassified');
+    expect(text(control())).toContain('native');
+    await act(async () => renderer!.update(<BlindPoseSelectedControls sourceJobId="ligand-child" sourceModelId="ligandmpnn"
+        sourceParams={{}} selectedDesignIds={[]} resultJob={{ id: 'ligand-child', model_id: 'ligandmpnn', mode: 'interface_context', status: 'completed' }} onOpenJob={() => undefined} />));
+    await flush();
+    expect(requests[3].url).toBe('/api/ligandmpnn/interface-context/ligand-child/result');
+    expect(text(control())).toContain('unclassified');
+});
+
+test('mounted selected action shows server rejection without suppressing experimental operation', async () => {
+    api.defaults.adapter = async config => { throw new Error(`Selected route unavailable: ${config.url}`); };
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => { renderer = create(<BlindPoseSelectedControls sourceJobId="source" sourceModelId="other" sourceParams={{}}
+        selectedDesignIds={['d-1']} onOpenJob={() => undefined} />); });
+    await act(async () => renderer!.root.findAllByType('button').find(b => text(b) === 'Run selected interface context')!.props.onClick());
+    expect(text(renderer!.root)).toContain('Selected route unavailable: /api/ligandmpnn/interface-context/selected');
+    expect(text(renderer!.root)).toContain('Blind pose (experimental)');
+});
 
 test('bound native document reads direct PAE without saved-analysis GET or queued-action exposure in ResultsViewer', async()=>{
     const native:any={...design('native','protenix'),core_protein_scientific_contract:1,
@@ -38,6 +163,25 @@ test('bound native document reads direct PAE without saved-analysis GET or queue
         expect(fetcher.mock.calls.some(call=>String(call[0]).includes('/pae?max_size=1024'))).toBe(true);
     } finally {vi.unstubAllGlobals();}
 });
+test.each([null, 'context'])('Results MD handoff preserves explicit destination %s through the real receiving parser', async destination => {
+    const sourceId = '11111111-1111-4111-8111-111111111111';
+    const designId = '22222222-2222-4222-8222-222222222222';
+    const source = { ...job, id: sourceId, params: { launch_context_id: 'source-not-destination' } };
+    const candidate = { ...design(designId, 'boltz2'), job_id: sourceId };
+    await setup(`/designs/${sourceId}?design_id=${designId}${destination ? `&launch_context_id=${destination}` : ''}`, false, [candidate], source);
+    await act(async () => renderer!.root.findByType(BinderSelectedControls).props.onStartMD(designId));
+    await flush();
+    const location = renderer!.root.findAllByType('span').find(node => node.props['data-location'])!.props['data-location'];
+    const url = new URL(location, 'http://test');
+    expect(url.pathname).toBe('/submit');
+    expect(url.searchParams.get('launch_context_id')).toBe(destination);
+    const received = buildMolecularDynamicsHandoffInitialValues(parseMolecularDynamicsHandoffRoute(url.search), null);
+    expect(received.source_prediction_job_id).toBe(sourceId);
+    expect(received.source_design_id).toBe(designId);
+    expect(received).not.toHaveProperty('launch_context_id');
+    expect(url.searchParams.has('artifact_id')).toBe(false); // Existing MD seam explicitly uses Design primary.
+});
+
 const returnUri = '/projects/p/experiments/g/domains/d?workspace=protein&section=results';
 const setup = async (entry: string, children = false, suppliedRows = rows, selectedJob = job, extraJobs: typeof job[] = []) => {
     calls.length = 0;

@@ -258,6 +258,9 @@ def test_camera_surface_rejects_raw_camera_parameters_and_has_finite_allowlist(m
     schema = client.get("/openapi.json").json()
     camera_paths = {path for path in schema["paths"] if "/camera/" in path}
     assert camera_paths == {
+        "/api/bioxp/camera/illumination",
+        "/api/bioxp/camera/illumination/state",
+        "/api/bioxp/camera/rgb",
         "/api/bioxp/camera/status",
         "/api/bioxp/camera/frame/latest",
         "/api/bioxp/camera/snapshot",

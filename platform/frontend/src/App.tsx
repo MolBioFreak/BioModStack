@@ -58,7 +58,7 @@ function HistoricalDomainExperimentReopenRoute() {
 }
 
 function App() {
-  const { features: bmsFeatures, resolved: bmsFeaturesResolved } = useResolvedBmsFeatures();
+  const { features: bmsFeatures, resolved: bmsFeaturesResolved, known: bmsFeaturesKnown } = useResolvedBmsFeatures();
 
   return (
     <HotkeysProvider>
@@ -110,7 +110,7 @@ function App() {
               path="/bioxp"
               element={!bmsFeaturesResolved
                 ? <RouteLoadingFallback />
-                : bmsFeatures.bioxp
+                : bmsFeatures.bioxp || !bmsFeaturesKnown
                   ? <BioXpCockpit />
                   : <Navigate replace to="/" />}
             />

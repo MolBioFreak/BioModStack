@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import async_session, ExecutionTarget, Job, MdRun
+from database import async_session, Job, MdRun
 from schemas import JobStatus
 from services.execution_ownership import release_scheduler_gpu_assignment
 from services.nextflow import cancel_nextflow_job
@@ -202,23 +202,15 @@ async def cancel_job_lineage(
     remote_fences = {}
     for job in [*cancellable, *already_cancelled]:
         if job.execution_target_id:
-            target = await session.get(ExecutionTarget, job.execution_target_id, populate_existing=True)
             fields = ("execution_target_id", "remote_attempt_id", "nextflow_run_id",
                       "execution_source_revision", "execution_source_tree",
                       "execution_bundle_sha256", "provenance")
-            remote_fences[str(job.id)] = (
-                {field: getattr(job, field) for field in fields},
-                target.lease_acquired_at if target else None,
-                bool(target and target.leased_job_id == job.id),
-            )
+            remote_fences[str(job.id)] = {field: getattr(job, field) for field in fields}
 
-    # Operator cancellation is terminal on request. The owned unit is stopped
-    # best-effort here, but an unverified stop never holds the job open: the job
-    # is terminalized immediately, its lease is released, and the reconciler
-    # reaps any surviving writer. Waiting on remote quiescence meant a single
-    # unit that refused to report empty left the cancellation permanently
-    # pending with no supported recovery.
+    # Operator cancellation is terminal on request, but terminal UI state is
+    # not writer quiescence. Retain remote leases for the existing reconciler.
     remote_stop_unverified: list[str] = []
+    stopped_run_ids: set[str] = set()
     for job in cancellable:
         if not job.nextflow_run_id:
             continue
@@ -229,6 +221,8 @@ async def cancel_job_lineage(
             stopped_and_empty = False
         if not stopped_and_empty:
             remote_stop_unverified.append(str(job.id))
+        else:
+            stopped_run_ids.add(str(job.id))
     if remote_stop_unverified:
         logger.warning(
             "[CANCEL] Terminalizing with unverified remote stop; reconciler owns remote cleanup: %s",
@@ -256,7 +250,11 @@ async def cancel_job_lineage(
                 # Whether the owned unit reported inactive-and-empty before the
                 # terminal publication. False means the reconciler still owns
                 # remote cleanup for this job.
-                "remote_stop_verified": str(job.id) not in remote_stop_unverified,
+                "remote_stop_verified": (
+                    str(job.id) in stopped_run_ids
+                    or (str(job.id) not in cancellable_ids and
+                        receipt.get("remote_stop_verified") is True)
+                ),
             }
         )
         params["cancellation_receipt"] = receipt
@@ -272,25 +270,9 @@ async def cancel_job_lineage(
                 )
             )
         remote_fence = remote_fences.get(str(job.id))
-        release_remote = False
-        lease_epoch = None
         if remote_fence:
-            authority, lease_epoch, lease_owned = remote_fence
-            predicates.extend(getattr(Job, field) == value for field, value in authority.items())
-            # Already terminal legacy rows have not stopped a writer in this
-            # invocation. Let the remote reconciler obtain quiescence evidence.
-            release_remote = (str(job.id) in cancellable_ids and
-                              (not authority["remote_attempt_id"] or bool(authority["nextflow_run_id"])))
-            if authority["remote_attempt_id"] and str(job.id) in cancellable_ids and not release_remote:
-                terminal_conflicts.append(str(job.id))
-                continue
-            release_remote = release_remote and lease_owned
-            if release_remote:
-                predicates.append(select(ExecutionTarget.id).where(
-                    ExecutionTarget.id == authority["execution_target_id"],
-                    ExecutionTarget.leased_job_id == str(job.id),
-                    ExecutionTarget.lease_acquired_at == lease_epoch,
-                ).exists())
+            # Terminal UI publication cannot acquire a changed attempt.
+            predicates.extend(getattr(Job, field) == value for field, value in remote_fence.items())
         terminalized = await session.execute(
             update(Job)
             .where(*predicates)
@@ -313,21 +295,6 @@ async def cancel_job_lineage(
         )
         if terminalized.rowcount != 1:
             terminal_conflicts.append(str(job.id))
-        elif release_remote:
-            await session.execute(
-                update(ExecutionTarget)
-                .where(
-                    ExecutionTarget.id == str(job.execution_target_id),
-                    ExecutionTarget.leased_job_id == str(job.id),
-                    ExecutionTarget.lease_acquired_at == lease_epoch,
-                )
-                .values(
-                    leased_job_id=None,
-                    lease_acquired_at=None,
-                    updated_at=completed_at,
-                )
-                .execution_options(synchronize_session=False)
-            )
 
     if terminal_conflicts:
         await session.rollback()

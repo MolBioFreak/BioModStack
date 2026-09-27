@@ -11,6 +11,7 @@ import json
 import csv
 import re
 import uuid
+import os
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -44,7 +45,7 @@ from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.structure_utils import load_structure
 
 REVIEWABLE_STAGES = {"post_rfantibody", "post_boltzgen", "post_ppiflow_generator", "post_fampnn", "post_caliby", "post_structure_validation"}
-STRUCTURE_PATTERNS = ("*.pdb", "*.cif")
+STRUCTURE_PATTERNS = ("*.pdb", "*.cif", "*.mmcif")
 METRIC_PATTERNS = ("*.json", "*.csv", "*.tsv")
 NEXTFLOW_JOB_ID_RE = re.compile(r"--job_id\s+([0-9a-fA-F-]{36})")
 
@@ -217,8 +218,13 @@ def _iter_matching_files(directory: Path, patterns: Iterable[str]) -> list[Path]
     files: set[Path] = set()
     if not directory.exists():
         return []
-    for pattern in patterns:
-        files.update(path.resolve() for path in directory.glob(pattern))
+    patterns = tuple(patterns)
+    for path in directory.rglob("*"):
+        if path.is_file() and any(
+            path.suffix.lower() == pattern[1:] if pattern in STRUCTURE_PATTERNS
+            else path.match(pattern) for pattern in patterns
+        ):
+            files.add(path.resolve())
     return sorted(files)
 
 
@@ -239,7 +245,7 @@ def _review_structure_priority(path: Path) -> tuple[int, str]:
 def _dedupe_review_structures(expected_files: Iterable[tuple[str, Path]]) -> list[tuple[str, Path]]:
     deduped: dict[tuple[str, str], tuple[str, Path]] = {}
     for artifact_group, structure_path in expected_files:
-        key = (artifact_group, structure_path.stem)
+        key = (artifact_group, str(structure_path.resolve()))
         current = deduped.get(key)
         if current is None or _review_structure_priority(structure_path) < _review_structure_priority(current[1]):
             deduped[key] = (artifact_group, structure_path)
@@ -1056,6 +1062,14 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
 
     expected_files = _dedupe_review_structures(expected_files)
     candidate_count = len(expected_files)
+    # Retain historical IDs for the exact same document when rebuilding review
+    # rows, so existing child lineage does not change with the identity repair.
+    existing_document_ids = {
+        (group, path): identity for identity, group, path in (await session.execute(
+            select(Design.id, Design.artifact_group, Design.pdb_path).where(
+                Design.job_id == job.id, Design.source_stage == stage)
+        )).all()
+    }
 
     existing_count = (
         await session.execute(
@@ -1077,6 +1091,10 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
     ).scalar() or 0
     if legacy_malformed_count > 0:
         force = True
+
+    if existing_count == candidate_count and candidate_count > 0:
+        if set(existing_document_ids) != {(group, str(path)) for group, path in expected_files}:
+            force = True
 
     if existing_count == candidate_count and candidate_count > 0 and not force:
         if uses_rfantibody_review:
@@ -1275,11 +1293,17 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
             job_context,
             design_name,
             cache=lineage_cache,
+            structure_path=structure_path,
+            source_identity=_read_json(structure_path.with_suffix(".json")),
         )
         rfa_trb = load_rfantibody_trb_summary(structure_path) if uses_rfantibody_review else {}
         if uses_rfantibody_review:
             avg_plddt = safe_float(rfa_trb.get("plddt_overall"))
             residue_plddt = rfa_trb.get("residue_plddt")
+        elif stage in {"post_fampnn", "post_caliby", "post_ppiflow_generator"}:
+            # Refinement can retain the input's B-factor column. It does not
+            # constitute fresh predictor confidence for this descendant.
+            avg_plddt, residue_plddt = None, None
         else:
             avg_plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
             avg_plddt = safe_float(avg_plddt)
@@ -1348,7 +1372,10 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
             ppiflow_metrics = {}
 
         review_row = Design(
-                id=_review_design_id(job.id, stage, artifact_group, design_name),
+                id=existing_document_ids.get((artifact_group, str(structure_path))) or
+                   _review_design_id(job.id, stage, artifact_group,
+                                    os.path.relpath(structure_path,
+                                        resolve_output_dir(job.output_dir) or structure_path.parent)),
                 job_id=job.id,
                 name=design_name,
                 pdb_path=str(structure_path),

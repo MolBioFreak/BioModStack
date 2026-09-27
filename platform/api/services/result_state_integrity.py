@@ -80,9 +80,46 @@ def _integrity_provenance(job: Job, payload: dict[str, Any]) -> dict[str, Any]:
     return provenance
 
 
+def _native_binder_generation_key(job: Job) -> str | None:
+    """Select existing model-owned publication, including its valid zero yield."""
+    if job.model_id == 'ppiflow':
+        from services.ppiflow_generation import MODES, PUBLICATION_KEY
+        if job.mode in MODES:
+            return PUBLICATION_KEY
+    elif job.model_id == 'boltzgen':
+        from services.boltzgen_request_compatibility import BOLTZGEN_GENERATION_PROTOCOLS
+        if job.mode in BOLTZGEN_GENERATION_PROTOCOLS:
+            return 'boltzgen_generation_publication'
+    return None
+
+
+def _sequence_native_publication_owner(job: Job):
+    if job.model_id == "caliby_experimental":
+        from services.caliby_native import SUPPORTED_MODES
+        if job.mode in SUPPORTED_MODES:
+            from services import caliby_native_publication
+            return caliby_native_publication
+    if job.model_id == "ligandmpnn":
+        from services.ligandmpnn_design import MODES
+        if job.mode in MODES:
+            from services import ligandmpnn_design_publication
+            return ligandmpnn_design_publication
+    return None
+
+
 def job_expects_design_results(job: Job) -> bool:
-    """Return whether a successful workflow is expected to publish Design rows."""
+    """Return whether a successful workflow requires positive Design yield."""
+    if _sequence_native_publication_owner(job) is not None:
+        return False
+    if _native_binder_generation_key(job):
+        # The native publication owner validates projected rows. A zero-yield
+        # receipt is still a completed campaign, including on administrative repair.
+        return False
     params = job.params if isinstance(job.params, dict) else {}
+    if job.model_id == 'esmfold2' and job.mode == 'blind_pose':
+        return False
+    if job.model_id == 'ligandmpnn' and job.mode == 'interface_context':
+        return False
     if (job.model_id in {'antibody_denovo', 'template_antibody_denovo'}
             and job.mode in {'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}):
         return True
@@ -276,6 +313,12 @@ async def _rfd3_candidates_are_usable(session: AsyncSession, job_id: str, output
 
 
 async def _authoritative_result_count(session: AsyncSession, job: Job) -> int:
+    if _native_binder_generation_key(job):
+        # Child rounds have independent publications; they are not this native
+        # campaign's yield even when a parent page displays their Designs too.
+        return int(await session.scalar(select(func.count(Design.id)).where(
+            Design.job_id == job.id, Design.source_stage.is_(None),
+        )) or 0)
     if job_expects_rfd3_local_redesign_candidates(job):
         return await _rfd3_candidate_count(session, str(job.id))
     return await _design_count(session, str(job.id))
@@ -442,6 +485,7 @@ async def finalize_successful_job(
          ).exists()])]
         if job.execution_target_id else []
     )
+    default_ingester = ingest_fn is None
     if ingest_fn is None:
         from services.result_ingester import ingest_job_results
 
@@ -475,6 +519,27 @@ async def finalize_successful_job(
     from services.core_protein_scientific_contract import revision_for_job
 
     strict_revision = None
+    sequence_owner = _sequence_native_publication_owner(job) if default_ingester else None
+    sequence_prior_publication = False
+    if sequence_owner is not None:
+        from database import JobArtifact
+        sequence_prior_publication = bool(await session.scalar(select(JobArtifact.id).where(
+            JobArtifact.owner_job_id == job.id, JobArtifact.attempt == (job.retry_count or 0),
+            JobArtifact.logical_path.startswith(sequence_owner.DIRECTORY + "/")).limit(1)))
+    bc2_native = default_ingester and str(job.model_id or '').strip().lower() == 'bindcraft2'
+    bc2_prior_publication = bool((job.provenance or {}).get('bindcraft2_native_publication')) if bc2_native else False
+    generation_key = _native_binder_generation_key(job) if default_ingester else None
+    generation_prior_publication = bool((job.provenance or {}).get(generation_key)) if generation_key else False
+    if generation_key == 'boltzgen_generation_publication':
+        generation_prior_publication = generation_prior_publication or bool(
+            (job.provenance or {}).get('core_protein_candidate_publication'))
+    optional_attachment = (
+        default_ingester
+        and str(job.model_id or '').strip().lower() not in {'frustrampnn', 'conformational_mapping'}
+        and isinstance(job.stage_outputs, dict)
+        and any(str(stage).strip().lower() in {'frustrampnn', 'canonical_frustrampnn'}
+                for stage in job.stage_outputs)
+    )
     try:
         strict_revision = revision_for_job(job)
         # Interactive gates returned above. A terminal full antibody root must
@@ -493,13 +558,31 @@ async def finalize_successful_job(
             from services.result_ingester import ingest_component_projection
             await ingest_component_projection(job, output_dir, session)
         session.info.setdefault("protein_design_primary_prevalidated", set()).discard(job_id)
-        ingested_count = await ingest_fn(
-            job_id,
-            output_dir,
-            session,
-            epitope_residues=epitope_residues,
-            commit=False,
-        )
+        if optional_attachment:
+            # The public ingester's commit=False contract includes the optional
+            # attachment in the caller's transaction. Run its same primary owner
+            # first, so no optional failure can decide primary publication.
+            from services.result_ingester import (
+                _ingest_job_results, _ingest_protenix_primary_publications,
+            )
+            from paths import resolve_runtime_data_path, get_data_root
+
+            ingested_count = await _ingest_job_results(
+                job_id, output_dir, session, epitope_residues,
+            )
+            if str(job.model_id or '').strip().lower() == 'protenix':
+                root = Path(output_dir)
+                root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
+                await _ingest_protenix_primary_publications(job, root, session)
+            await session.flush()
+            if antibody_closeout is not None:
+                job.provenance = {**(job.provenance or {}),
+                                  'antibody_pipeline_result': antibody_closeout}
+        else:
+            ingested_count = await ingest_fn(
+                job_id, output_dir, session,
+                epitope_residues=epitope_residues, commit=False,
+            )
         from services.core_protein_execution_settings import persist_openmm_receipts
         await persist_openmm_receipts(job, output_dir, session)
         if antibody_closeout is not None:
@@ -511,7 +594,41 @@ async def finalize_successful_job(
         count = await _authoritative_result_count(session, job)
         idempotent_prior_results = False
         result_kind = "design"
-        if job_expects_rfd3_local_redesign_candidates(job):
+        if sequence_owner is not None:
+            await sequence_owner.read_published_native_results(job, session)
+            result_kind = sequence_owner.DIRECTORY + "_native"
+            idempotent_prior_results = sequence_prior_publication
+        elif bc2_native:
+            # Zero yield and unjoined native rows remain valid. Verify every
+            # projected Design against its registered CIF before completion.
+            from services.bindcraft2_publication import read_published_native_results
+            _, native_receipt = await read_published_native_results(job, session)
+            if count != len(native_receipt['candidates']) or int(ingested_count or 0) != count:
+                raise RuntimeError('BC2 projected Design count differs from native publication')
+            result_kind = 'bindcraft2_native_publication'
+            idempotent_prior_results = bc2_prior_publication
+        elif generation_key:
+            # Use the model's existing artifact/Design custody and native
+            # accounting, not the generic positive-yield/score contract.
+            if generation_key == 'ppiflow_generation_publication':
+                from services.ppiflow_generation import read_published_generation_results
+            else:
+                from services.boltzgen_candidate_publication import read_published_generation_results
+            native_result = await read_published_generation_results(job, session)
+            count = len(native_result['publication']['candidates'])
+            result_kind = generation_key
+            idempotent_prior_results = generation_prior_publication
+        elif default_ingester and job.model_id == 'ligandmpnn' and job.mode == 'interface_context':
+            from services.ligandmpnn_interface_publication import read_selected
+            await read_selected(job, session)
+            result_kind = 'ligandmpnn_interface_context_native'
+            idempotent_prior_results = True
+        elif default_ingester and job.model_id == 'esmfold2' and job.mode == 'blind_pose':
+            from services.binder_blind_pose_selected import read_selected
+            await read_selected(job, session)
+            result_kind = 'blind_pose_native_evidence'
+            idempotent_prior_results = True
+        elif job_expects_rfd3_local_redesign_candidates(job):
             result_kind = "rfd3_local_redesign_candidate"
             if count == 0:
                 raise RuntimeError("workflow completed but result ingestion produced no typed RFD3 candidates")
@@ -663,6 +780,57 @@ async def finalize_successful_job(
         await session.commit()
         await session.refresh(job)
         return FinalizationResult(False, count, "no_candidates" if no_candidates else "ingestion_failed")
+
+    if optional_attachment:
+        from services.result_ingester import _ingest_explicit_frustrampnn_results
+        from paths import resolve_runtime_data_path, get_data_root
+
+        root = Path(output_dir)
+        root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
+        try:
+            # A savepoint contains partial component writes. Primary rows remain
+            # pending until the terminal failure CAS succeeds in the same commit.
+            async with session.begin_nested():
+                await _ingest_explicit_frustrampnn_results(job, root, session, commit=False)
+        except Exception as exc:
+            session.info.setdefault('component_projection_verified', {}).pop(job_id, None)
+            session.info.setdefault('protein_design_primary_prevalidated', set()).discard(job_id)
+            # Manual return has the same primary publication boundary as local
+            # completion. The savepoint already removed the invalid attachment;
+            # retain verified primary rows with the explicit partial failure.
+            await session.refresh(job)
+            message = str(exc) or exc.__class__.__name__
+            count = await _authoritative_result_count(session, job)
+            provenance = _integrity_provenance(job, {
+                'state': 'ingestion_failed', 'partial': True,
+                'design_count': count, 'result_count': count,
+                'result_kind': result_kind, 'error': message,
+                'primary_validated': True, 'failed_stage': 'frustrampnn',
+                'idempotent_prior_results': idempotent_prior_results,
+            })
+            failure = await session.execute(update(Job).where(
+                Job.id == job_id, *remote_authority,
+                Job.status == 'running', Job.queue_status == 'running',
+                Job.awaiting_input.is_(False),
+            ).values(
+                status='failed', queue_status='failed', paused=False,
+                assigned_gpu=None, current_stage='FrustraMPNN Result Ingestion Failed',
+                stage_progress=None, completed_at=datetime.utcnow(),
+                error_message=f'FrustraMPNN result ingestion failed: {message}',
+                provenance=provenance,
+                **({'remote_state': 'returned_ingestion_failed'} if remote_authority else {}),
+            ))
+            if failure.rowcount != 1:
+                await session.rollback()
+                job = await session.get(Job, job_id)
+                state = 'cancelled' if job is not None and job.status == 'cancelled' else 'awaiting_input'
+                return FinalizationResult(False, await _authoritative_result_count(session, job), state)
+            if job.execution_target_id:
+                from services.remote_execution.executor import _release_remote_target_lease
+                await _release_remote_target_lease(session, job)
+            await session.commit()
+            await session.refresh(job)
+            return FinalizationResult(False, count, 'ingestion_failed')
 
     # Ingesters may commit internally.  Publish completion with a conditional DB
     # update: a cancellation or review gate committed after ingestion wins.

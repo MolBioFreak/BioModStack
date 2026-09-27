@@ -8,6 +8,44 @@ import { BioXpCameraPanel } from '../../src/components/BioXpCameraPanel';
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
+it('mounted camera controls use the real typed illumination and RGB HTTP clients only', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const channels = [1, 2, 3].map(channel => ({ channel, on: null as boolean | null }));
+    const state = () => ({ schema_version: 'bioxp.camera_illumination.v1', provider_generation: 1,
+        channels: channels.map(row => ({ ...row })), state_source: 'last_successful_command',
+        physical_effect_verified: false, connection_generation: 77 });
+    vi.mocked(api.get).mockReset().mockImplementation((url) => {
+        if (String(url).endsWith('/illumination/state')) return Promise.resolve({ data: state() }) as never;
+        return Promise.reject(new Error('passive camera unavailable'));
+    });
+    vi.mocked(api.post).mockReset().mockImplementation((url, body) => {
+        const request = body as { channel: number; on: boolean; r: number; g: number; b: number };
+        if (String(url).endsWith('/illumination')) {
+            channels[request.channel - 1].on = request.on;
+            return Promise.resolve({ data: { ...state(), ok: true, channel: request.channel, on: request.on, delivery_attempted: true } }) as never;
+        }
+        if (String(url).endsWith('/camera/rgb')) return Promise.resolve({ data: { ok: true, rgb: [request.r, request.g, request.b], tmcl: [0, 0, 0], acks: { r: null, g: null, b: null }, sent: 3, elapsed_ms: 1, connection_generation: 77 } }) as never;
+        throw new Error(`Unexpected mutation ${url}`);
+    });
+    try {
+        await act(async () => root.render(<QueryClientProvider client={client}><BioXpCameraPanel connected connectionGeneration={77} mutationEnabled /></QueryClientProvider>));
+        for (const channel of [1, 2, 3]) for (const on of [true, false]) {
+            await act(async () => container.querySelector<HTMLButtonElement>(`button[aria-label="LED${channel} ${on ? 'On' : 'Off'}"]`)!.click());
+            expect(container.textContent).toContain(`LED${channel}: ${on ? 'On' : 'Off'}`);
+        }
+        for (const label of ['White', 'Red', 'Green', 'Blue', 'Off']) {
+            await act(async () => container.querySelector<HTMLButtonElement>(`button[aria-label="RGB ${label}"]`)!.click());
+        }
+        expect(vi.mocked(api.post).mock.calls).toEqual([
+            ...[1, 2, 3].flatMap(channel => [true, false].map(on => ['/api/bioxp/camera/illumination', { expected_generation: 77, channel, on }])),
+            ...[[255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [0, 0, 0]].map(([r, g, b]) => ['/api/bioxp/camera/rgb', { expected_connection_generation: 77, r, g, b }]),
+        ]);
+        expect(api.get).toHaveBeenCalledWith('/api/bioxp/camera/illumination/state', { params: { expected_generation: 77 } });
+    } finally { await act(async () => root.unmount()); client.clear(); }
+});
+
 it('actual camera fetch preserves upstream identity and age, adds browser monotonic elapsed once despite backward wallclock', async () => {
     vi.useFakeTimers();
     const data = { state: 'live', available: true, frame_sequence: 7, frame_age_seconds: 3, provider_generation: 9, freshness_budget_seconds: 30 };
@@ -37,7 +75,11 @@ it('actual camera hook and panel reject delayed advancing and repeated frames an
     const pending: Array<(value: unknown) => void> = [];
     vi.mocked(api.get).mockImplementation((url) => String(url).endsWith('/camera/status')
         ? new Promise(resolve => pending.push(resolve)) as never
-        : Promise.resolve({ data: { active: false, state: 'off', connection_generation: 1 } }) as never);
+        : String(url).endsWith('/illumination/state')
+            ? Promise.resolve({ data: { schema_version: 'bioxp.camera_illumination.v1', provider_generation: 1,
+                channels: [1, 2, 3].map(channel => ({ channel, on: null })), state_source: 'last_successful_command',
+                physical_effect_verified: false, connection_generation: 1 } }) as never
+            : Promise.resolve({ data: { active: false, state: 'off', connection_generation: 1 } }) as never);
     const render = (generation: number) => act(async () => { root.render(<QueryClientProvider client={client}><Mounted generation={generation} /></QueryClientProvider>); });
     const resolve = async (sequence: number, delay: number) => {
         await act(async () => {

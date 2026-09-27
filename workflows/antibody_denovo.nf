@@ -1,6 +1,8 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
+include { PublishIgGMMaturedCandidates } from './maturation_child_core.nf'
+
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.util.Arrays
@@ -88,41 +90,17 @@ def requestedFrustraMPNNSettingsHashPayload(value, String settingsValueOrigin) {
 
 
 def extractSequenceFromPDB(pdb_file) {
-    def aa_codes = [
-        'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
-        'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
-        'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
-        'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V'
-    ]
-    
-    def chain_sequences = [:] as LinkedHashMap  // Preserve chain order
-    def seen_residues = [:] as Map  // Per-chain residue tracking
-    
-    try {
-        pdb_file.eachLine { line ->
-            if (line.startsWith('ATOM') && line.length() >= 26 && line.substring(12, 16).trim() == 'CA') {
-                def resName = line.substring(17, 20).trim()
-                def resNum = line.substring(22, 26).trim()
-                def chain = line.substring(21, 22)
-                def key = "${chain}_${resNum}"
-                
-                if (!seen_residues.containsKey(chain)) {
-                    seen_residues[chain] = [] as Set
-                    chain_sequences[chain] = []
-                }
-                
-                if (!seen_residues[chain].contains(key) && aa_codes.containsKey(resName)) {
-                    seen_residues[chain].add(key)
-                    chain_sequences[chain] << aa_codes[resName]
-                }
-            }
-        }
-    } catch (Exception e) {
-        return "AAAA"
+    def command = ['python3', "${params.code_root}/scripts/extract_antibody_pdb_sequence.py", pdb_file.toString()]
+    def process = new ProcessBuilder(command).redirectErrorStream(true).start()
+    def output = process.inputStream.getText('UTF-8')
+    if (process.waitFor() != 0) {
+        throw new IllegalArgumentException("Invalid validation structure ${pdb_file}: ${output.trim()}")
     }
-    
-    def result = chain_sequences.values().collect { it.join('') }.join(':')
-    return result ?: "AAAA"
+    def chains = new JsonSlurper().parseText(output).chains
+    if (!chains || chains.any { !it.chain || !it.sequence }) {
+        throw new IllegalArgumentException("Invalid validation structure ${pdb_file}: no chain sequence")
+    }
+    return chains.collect { it.sequence }.join(':')
 }
 
 def parseFastaRecords(fasta_file) {
@@ -1327,18 +1305,21 @@ process CollectMaturationOutputs {
 process StageValidatedMaturationInputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'copy', pattern: "*.pdb"
+    publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'copy', pattern: "input_pdbs/*.pdb", saveAs: { fn -> fn.replace('input_pdbs/', '') }
+    publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'copy', pattern: "input_pdbs/source_identity.json", saveAs: { fn -> fn.replace('input_pdbs/', '') }
 
     input:
-    path pdbs
+    tuple val(identity_json), path(pdbs)
 
     output:
     path "input_pdbs", emit: pdb_dir
 
     script:
+    def encodedIdentity = identity_json.bytes.encodeBase64().toString()
     """
-    mkdir -p input_pdbs
-    cp ${pdbs} input_pdbs/ 2>/dev/null || true
+    set -euo pipefail
+    printf '%s' '${encodedIdentity}' | base64 --decode > selected_source_identity.json
+    python3 ${params.code_root}/scripts/maturation_identity.py stage selected_source_identity.json input_pdbs
     """
 }
 
@@ -2005,26 +1986,18 @@ PY
     """
 }
 
-workflow ANTIBODY_DENOVO {
-take:
-target_pdb_ch // Channel: [meta, target_pdb]
-epitope_residues // Value: epitope residues string (e.g., "A45,A46,A52")
-framework_pdb_ch // Channel: [meta, framework_pdb] (optional)
+// Keep RFantibody generation and coarse screening in a separate DSL2 workflow.
+// This is an orchestration boundary; candidate channels and gates retain their original order.
+workflow ANTIBODY_BACKBONE_PREPARATION {
+    take:
+    target_pdb_ch
+    epitope_residues
+    framework_pdb_ch
+    selectedInputDir
+    shouldScreenRFantibody
+    orchestrator_batch_name
 
-main:
-def workflowContext = initializeAntibodyDenovoParams(params)
-def ppiflowBackboneLoopScope = workflowContext.ppiflowBackboneLoopScope
-def ppiflowMaturationLoopScope = workflowContext.ppiflowMaturationLoopScope
-def ppiflowBackboneRegionMode = workflowContext.ppiflowBackboneRegionMode
-def ppiflowMaturationRegionMode = workflowContext.ppiflowMaturationRegionMode
-def selectedInputDir = workflowContext.selectedInputDir
-def selectedInputIsSequenceConditioned = workflowContext.selectedInputIsSequenceConditioned
-
-if (params.run_affinity_maturation == true && params.run_frustrampnn == true) {
-    error('antibody_denovo:frustrampnn_stale_post_iggm_structure: IgGM changes sequence, but no producer-bound post-IgGM structure revalidation is wired')
-}
-
-
+    main:
 log.info("Step 1: Generating CDR backbones with RFantibody...")
 
 def framework_path = params.framework_pdb ? file(params.framework_pdb) : file("${params.code_root}/lib/NO_FRAMEWORK")
@@ -2053,14 +2026,10 @@ def designs_per_gpu = (total_designs / num_gpus).intValue()
 def remainder = total_designs % num_gpus
 def designs_per_job = params.designs_per_job ?: 5
 def planned_child_jobs = Math.ceil(total_designs / designs_per_job.toDouble()).intValue()
-def orchestrator_batch_name = params.batch_name
-    ?: (params.job_id
-        ? "${params.job_name ?: 'antibody_batch'}_${params.job_id}"
-        : "${params.job_name ?: 'antibody_batch'}_${workflow.runName}")
-
+def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
+def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
 def skip_rfantibody = params.skip_rfantibody == true || selectedInputDir != null
 def skip_rfantibody_input_dir = selectedInputDir
-
 if (skip_rfantibody && skip_rfantibody_input_dir) {
     log.info("  SKIP: Loading pre-existing backbone PDBs from ${skip_rfantibody_input_dir}")
 
@@ -2163,24 +2132,6 @@ if (use_orchestrator) {
     }
 } // End of else block (standard mode)
 } // End of skip_rfantibody else block
-
-def interactiveGateEnabled = params.interactive_gating == true || params.interactive_swa == true
-def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
-def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
-def rfantibodyScreenEnabled = params.enable_rfantibody_filter == true
-def shouldPauseAfterRFantibody = !params.skip_rfantibody && interactiveGateEnabled &&
-    (params.interactive_gate_stage ?: 'post_fampnn') == 'post_rfantibody' &&
-    params.interactive_gate_continue != true
-def shouldScreenRFantibody = !selectedInputIsSequenceConditioned && (
-    shouldPauseAfterRFantibody ||
-    rfantibodyScreenEnabled ||
-    params.rfantibody_min_epitope_contacts != null ||
-    params.rfantibody_max_epitope_distance != null ||
-    params.rfantibody_min_target_contacts != null ||
-    params.rfantibody_max_target_distance != null ||
-    params.rfantibody_max_epitope_centroid_distance != null
-)
-
 staged_rfantibody_pdbs = backbone_designs
     .map { meta, files -> files }
     .flatten()
@@ -2216,6 +2167,70 @@ reviewed_backbone_designs = rfantibody_ready_dir.map { dir ->
     def meta = [id: params.name ?: "antibody"]
     [meta, pdbs]
 }
+    emit:
+    backbones = backbone_designs
+    reviewed = reviewed_backbone_designs
+    candidate_count = rfantibody_candidate_count
+    ready_dir = rfantibody_ready_dir
+}
+
+workflow ANTIBODY_DENOVO {
+take:
+target_pdb_ch // Channel: [meta, target_pdb]
+epitope_residues // Value: epitope residues string (e.g., "A45,A46,A52")
+framework_pdb_ch // Channel: [meta, framework_pdb] (optional)
+
+main:
+def workflowContext = initializeAntibodyDenovoParams(params)
+def ppiflowBackboneLoopScope = workflowContext.ppiflowBackboneLoopScope
+def ppiflowMaturationLoopScope = workflowContext.ppiflowMaturationLoopScope
+def ppiflowBackboneRegionMode = workflowContext.ppiflowBackboneRegionMode
+def ppiflowMaturationRegionMode = workflowContext.ppiflowMaturationRegionMode
+def selectedInputDir = workflowContext.selectedInputDir
+def selectedInputIsSequenceConditioned = workflowContext.selectedInputIsSequenceConditioned
+
+if (params.run_affinity_maturation == true && params.run_frustrampnn == true) {
+    error('antibody_denovo:frustrampnn_stale_post_iggm_structure: IgGM changes sequence, but no producer-bound post-IgGM structure revalidation is wired')
+}
+
+
+def orchestrator_batch_name = params.batch_name
+    ?: (params.job_id
+        ? "${params.job_name ?: 'antibody_batch'}_${params.job_id}"
+        : "${params.job_name ?: 'antibody_batch'}_${workflow.runName}")
+def interactiveGateEnabled = params.interactive_gating == true || params.interactive_swa == true
+def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
+def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
+def rfantibodyScreenEnabled = params.enable_rfantibody_filter == true
+def shouldPauseAfterRFantibody = !params.skip_rfantibody && interactiveGateEnabled &&
+    (params.interactive_gate_stage ?: 'post_fampnn') == 'post_rfantibody' &&
+    params.interactive_gate_continue != true
+def shouldScreenRFantibody = !selectedInputIsSequenceConditioned && (
+    shouldPauseAfterRFantibody ||
+    rfantibodyScreenEnabled ||
+    params.rfantibody_min_epitope_contacts != null ||
+    params.rfantibody_max_epitope_distance != null ||
+    params.rfantibody_min_target_contacts != null ||
+    params.rfantibody_max_target_distance != null ||
+    params.rfantibody_max_epitope_centroid_distance != null
+)
+
+ANTIBODY_BACKBONE_PREPARATION(
+    target_pdb_ch,
+    epitope_residues,
+    framework_pdb_ch,
+    selectedInputDir ?: '',
+    shouldScreenRFantibody,
+    orchestrator_batch_name
+)
+backbone_designs = ANTIBODY_BACKBONE_PREPARATION.out.backbones
+reviewed_backbone_designs = ANTIBODY_BACKBONE_PREPARATION.out.reviewed
+rfantibody_candidate_count = ANTIBODY_BACKBONE_PREPARATION.out.candidate_count
+rfantibody_ready_dir = ANTIBODY_BACKBONE_PREPARATION.out.ready_dir
+
+rfantibodyCandidateDir = shouldScreenRFantibody
+    ? (rfantibodyFilteredDir ?: rfantibodyRawDir)
+    : rfantibodyRawDir
 
 if (shouldPauseAfterRFantibody) {
     log.info("Interactive SWA gate: pausing after RFantibody backbone generation at ${rfantibodyCandidateDir}")
@@ -2746,9 +2761,9 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 }
             }
 
-            def thermompnn_with_pdb = THERMOMPNN.out.stability
-                .join(thermompnn_input.map { meta, pdb -> tuple(meta, pdb) })
-                .map { meta, csv, pdb ->
+            def thermompnn_with_pdb = thermompnn_input
+                .join(THERMOMPNN.out.stability, remainder: true)
+                .map { meta, pdb, csv ->
                     tuple(meta, pdb, csv)
                 }
 
@@ -2756,6 +2771,7 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 log.info("  Filtering by ThermoMPNN ddG <= ${params.thermompnn_max_ddg}...")
 
                 stable_pdb_designs = thermompnn_with_pdb.filter { meta, pdb, csv ->
+                    if (csv == null) return true
                     try {
                         def lines = csv.text.split('\n')
                         if (lines.size() > 1) {
@@ -3219,9 +3235,14 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
             }
 
             validated_maturation_inputs = validated_structures
-                .map { meta, pdb -> pdb }
+                .map { meta, pdb -> [meta: meta, path: pdb.toString(), pdb: pdb] }
                 .collect()
-                .filter { pdbs -> pdbs && pdbs.size() > 0 }
+                .filter { items -> items && items.size() > 0 }
+                .map { items ->
+                    tuple(groovy.json.JsonOutput.toJson(items.collect { item ->
+                        [meta: item.meta, path: item.path]
+                    }), items.collect { item -> item.pdb })
+                }
 
             StageValidatedMaturationInputs(validated_maturation_inputs)
 
@@ -3262,11 +3283,26 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 }
             }
 
-            validated_structures = CollectValidatedMaturationOutputs.out.pdbs
-                .flatten()
-                .map { pdb ->
-                    def meta = [id: pdb.baseName]
-                    [meta, pdb]
+            // Native sidecars carry exact child sample/source identity. A missing
+            // historical association stays unknown; never infer validation or
+            // ancestry from a copied filename.
+            validated_structures = CollectValidatedMaturationOutputs.out.manifest
+                .flatMap { manifest_file ->
+                    def report = new groovy.json.JsonSlurper().parse(manifest_file)
+                    (report.samples ?: []).collect { sample ->
+                        def evidence = sample.identity instanceof Map ? sample.identity : [:]
+                        def sampleMeta = evidence.sample_meta instanceof Map ? evidence.sample_meta : [:]
+                        def source = evidence.source instanceof Map ? evidence.source : [:]
+                        def sourceMeta = source.source_meta instanceof Map ? source.source_meta : [:]
+                        def meta = new LinkedHashMap(sampleMeta)
+                        meta.id = sampleMeta.id ?: sample.pdb.toString().replace('.pdb', '')
+                        meta.source_document_id = sourceMeta.id ?: null
+                        meta.source_structure_state = sourceMeta.structure_state ?: sourceMeta.target_state ?: null
+                        meta.source_meta = sourceMeta
+                        meta.validation_status = 'unvalidated'
+                        meta.terminal_producer = 'ppiflow_maturation_post_validation'
+                        tuple(meta, file("${manifest_file.parent}/${sample.pdb}"))
+                    }
                 }
         }
     }
@@ -3321,14 +3357,34 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
         if (params.run_structure_validation != false) {
             log.warn("IgGM affinity maturation completed, but a full post-IgGM Boltz revalidation loop is not yet wired in this workflow.")
         }
-        final_designs = matured_designs
+        // IgGM changes the candidate, not its parent's validation evidence.
+        // Preserve that evidence only under source_meta; no revalidation gate.
+        final_designs = matured_designs.flatMap { meta, pdbs ->
+            def outputs = pdbs instanceof List ? pdbs : [pdbs]
+            outputs.collect { pdb ->
+                def childMeta = [
+                    id: pdb.baseName,
+                    parent_id: meta.id,
+                    source_document_id: meta.id,
+                    source_meta: new LinkedHashMap(meta),
+                    source_structure_state: meta.structure_state ?: meta.target_state,
+                    validation_status: 'unvalidated',
+                    terminal_producer: 'iggm_affinity_maturation'
+                ]
+                tuple(childMeta, pdb)
+            }
+        }
+        PublishIgGMMaturedCandidates(final_designs)
+        final_designs = PublishIgGMMaturedCandidates.out.candidates
     }
     else {
         final_designs = stable_designs
         mutations = Channel.empty()
     }
 
-    def terminalStage = params.openmm_enabled == true
+    def terminalStage = params.run_affinity_maturation == true
+        ? 'iggm_affinity_maturation'
+        : params.openmm_enabled == true
         ? 'openmm_relaxation'
         : params.run_post_validation_maturation == true
             ? 'maturation_post_validation'
@@ -3337,7 +3393,9 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 : params.run_ppiflow_maturation == true || params.run_maturation == true
                     ? 'ppiflow_maturation'
                     : 'sequence_design_terminal'
-    def terminalMethod = params.openmm_enabled == true
+    def terminalMethod = params.run_affinity_maturation == true
+        ? 'iggm'
+        : params.openmm_enabled == true
         ? 'openmm'
         : params.run_post_validation_maturation == true || params.run_ppiflow_maturation == true || params.run_maturation == true
             ? 'ppiflow'

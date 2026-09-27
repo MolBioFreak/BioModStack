@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 from schemas import JobCreate
+from services.shape_requests import SubmittedShapeRequest
 
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -94,6 +95,15 @@ class PreloadRequest(StrictModel):
     job_id: str = Field(min_length=1, max_length=64)
 
 
+class WorkflowPackSelection(StrictModel):
+    kind: Literal["workflow_pack"]
+    workflow_id: Literal["structure_prediction"]
+
+
+class WorkflowPackRequest(WorkflowPackSelection):
+    preview_sha256: str = Field(pattern=SHA256_PATTERN)
+
+
 class ProvisionSelection(StrictModel):
     kind: Literal["model", "image"]
     model_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
@@ -121,9 +131,14 @@ class MolecularDynamicsProvisionWorkflow(StrictModel):
     request: MdLaunchPreviewRequest
 
 
+class ShapeProvisionWorkflow(StrictModel):
+    workflow_type: Literal["shape_blueprint"]
+    request: SubmittedShapeRequest
+
+
 class WorkflowProvisionSelection(StrictModel):
     kind: Literal["workflow"]
-    workflow_request: JobCreate | ConformationalMappingProvisionWorkflow | MolecularDynamicsProvisionWorkflow
+    workflow_request: JobCreate | ConformationalMappingProvisionWorkflow | MolecularDynamicsProvisionWorkflow | ShapeProvisionWorkflow
 
     @field_validator("workflow_request", mode="before")
     @classmethod
@@ -132,6 +147,7 @@ class WorkflowProvisionSelection(StrictModel):
             native_type = {
                 "conformational_mapping": ConformationalMappingProvisionWorkflow,
                 "molecular_dynamics": MolecularDynamicsProvisionWorkflow,
+                "shape_blueprint": ShapeProvisionWorkflow,
             }.get(value["workflow_type"])
             if native_type is None:
                 raise ValueError("Unsupported native workflow type")
@@ -201,7 +217,7 @@ class ProvisionDependency(StrictModel):
 class ProvisionPreview(StrictModel):
     dependencies: list[ProvisionDependency] = Field(default_factory=list)
     estimates_complete: bool = True
-    selection: ProvisionSelection | WorkflowProvisionSelection
+    selection: ProvisionSelection | WorkflowProvisionSelection | WorkflowPackSelection
     preview_sha256: str = Field(pattern=SHA256_PATTERN)
     artifacts: list[CachedArtifactReceipt]
     total_bytes: int = Field(ge=0)
@@ -220,7 +236,7 @@ class ProvisionPreview(StrictModel):
 class PreloadProgress(StrictModel):
     operation_id: str
     job_id: str | None = None
-    selection: ProvisionSelection | WorkflowProvisionSelection | None = None
+    selection: ProvisionSelection | WorkflowProvisionSelection | WorkflowPackSelection | None = None
     artifact_progress: list[ProvisionArtifactProgress] = Field(default_factory=list)
     sequence: int = Field(default=0, ge=0)
     endpoint_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
@@ -239,7 +255,7 @@ class PreloadProgress(StrictModel):
 
 class ObservedArtifactInventory(StrictModel):
     operation_id: str
-    selection: ProvisionSelection | WorkflowProvisionSelection
+    selection: ProvisionSelection | WorkflowProvisionSelection | WorkflowPackSelection
     observed_at: datetime
     artifacts: list[CachedArtifactReceipt]
     scope: Literal["last_independent_provision"] = "last_independent_provision"

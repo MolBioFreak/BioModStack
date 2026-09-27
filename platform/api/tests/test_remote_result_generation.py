@@ -42,6 +42,34 @@ def package(job, *, state="succeeded"):
     return manifest, incoming, status.model_copy(update={"result_manifest_sha256": digest})
 
 
+@pytest.mark.asyncio
+async def test_automatic_returning_recovers_once_after_controller_death(store, monkeypatch):
+    await ready(store)
+    async with store() as session:
+        job = await session.get(Job, 'job')
+        job.params = dict(job.params or {}, remote_result_policy='automatic')
+        job.status = job.queue_status = 'running'
+        job.remote_state = 'returning'
+        await session.commit()
+    called = []
+    async def resumed(job_id, identity, guard):
+        called.append((job_id, identity))
+        guard.__exit__(None, None, None)
+    monkeypatch.setattr(ex, '_run_requested_pull', resumed)
+    tasks = BackgroundTasks()
+    async with store() as session:
+        job = await session.get(Job, 'job')
+        assert await ex.reconcile_remote_job(session, job, background_tasks=tasks)
+        assert job.provenance['remote_result_resume_attempted'] == ex._pull_identity(job)
+    await tasks()
+    assert len(called) == 1 and called[0][0] == 'job'
+    # Another crash does not start an unbounded automatic transfer loop.
+    async with store() as session:
+        job = await session.get(Job, 'job')
+        assert await ex.reconcile_remote_job(session, job, background_tasks=BackgroundTasks())
+        assert job.remote_state == 'result_pull_failed'
+
+
 @pytest.mark.parametrize("point", ["prepared", "prior_moved", "new_moved"])
 @pytest.mark.parametrize("prior", [False, True])
 def test_process_death_at_each_publication_boundary(tmp_path, point, prior):
@@ -154,7 +182,8 @@ async def test_transport_disconnect_reclaims_partial_and_reuses_verified_bytes(s
         assert returned == manifest and staged == incoming and len(calls) == 2
         await ex.collect_remote_results(session, job, status)
     assert len(calls) == 2
-    assert list(incoming.parent.iterdir()) == [incoming]
+    assert set(incoming.parent.iterdir()) == {
+        incoming, gen.transfer_marker(incoming).with_suffix('.json.lock')}
 
 
 @pytest.mark.asyncio
@@ -301,7 +330,50 @@ async def test_process_death_before_and_after_database_commit(store, tmp_path, c
             assert (incoming / "first.txt").read_text() == "first"
 
 
-def test_api_death_during_transport_cannot_reuse_possible_live_writer(tmp_path):
+@pytest.mark.asyncio
+async def test_cancellation_recovers_uncommitted_visible_generation(store, tmp_path, monkeypatch):
+    from services import job_control
+
+    async with store() as session:
+        job = await session.get(Job, "job")
+        job.output_dir = str(tmp_path / "output")
+        job.status = job.queue_status = "running"
+        job.remote_state = "returning"
+        output = Path(job.output_dir)
+        output.mkdir()
+        (output / "old.txt").write_text("good")
+        _, incoming, _ = package(job)
+        await session.commit()
+        snapshot = job_at(tmp_path)
+    pid = os.fork()
+    if pid == 0:
+        gen._checkpoint = lambda name: os._exit(73) if name == "new_moved" else None
+        gen.publish(snapshot, incoming)
+        os._exit(74)
+    assert os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]) == 73
+    assert (output / "first.txt").read_text() == "first"
+    async def unavailable_stop(*_):
+        return False
+    monkeypatch.setattr(job_control, "cancel_nextflow_job", unavailable_stop)
+    async with store() as session:
+        await job_control.cancel_job_lineage("job", session)
+        assert (await session.get(Job, "job")).status == "cancelled"
+    assert (output / "first.txt").read_text() == "first"
+    async with store() as session:
+        job = await session.get(Job, "job")
+        # Compute has released its lease; cancellation still owns local return.
+        target = await session.get(ex.ExecutionTarget, "target")
+        target.leased_job_id = "successor"
+        await session.commit()
+        await ex.reconcile_remote_job(session, job)
+        assert job.status == "cancelled"
+    assert (output / "old.txt").read_text() == "good"
+    assert not (output / "first.txt").exists()
+    assert (incoming / "first.txt").read_text() == "first"
+    assert not gen.journal_path(snapshot).exists()
+
+
+def test_api_death_before_transport_spawn_recovers_but_legacy_retains_fence(tmp_path):
     job = job_at(tmp_path)
     _, incoming, _ = package(job)
     pid = os.fork()
@@ -310,12 +382,15 @@ def test_api_death_during_transport_cannot_reuse_possible_live_writer(tmp_path):
         os._exit(73)
     _, code = os.waitpid(pid, 0)
     assert os.waitstatus_to_exitcode(code) == 73
-    with pytest.raises(gen.GenerationError, match="writer-quiescence"):
-        gen.prepare_transfer(incoming)
-    # A different kernel boot proves that local predecessor writers are gone.
-    gen.durable_json(gen.transfer_marker(incoming), {"boot_id": "00000000-0000-0000-0000-000000000000"})
     gen.prepare_transfer(incoming)
     assert not gen.transfer_marker(incoming).exists()
+    # An older unprotected boot fence cannot make the same-boot claim.
+    gen.durable_json(gen.transfer_marker(incoming), {
+        'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip()})
+    with pytest.raises(gen.GenerationError, match='writer-quiescence'):
+        gen.prepare_transfer(incoming)
+    gen.durable_json(gen.transfer_marker(incoming), {"boot_id": "00000000-0000-0000-0000-000000000000"})
+    gen.prepare_transfer(incoming)
 
 
 @pytest.mark.asyncio

@@ -196,6 +196,18 @@
                     "description": "Design mode for maturation redesign constraints. Use 'inherit' to follow antibody_design_mode.",
                     "hidden": true
                 },
+                "maturation_repack_enabled": {
+                    "type": "boolean",
+                    "description": "Run selected side-chain repacking independently of partial flow."
+                },
+                "maturation_anchors_enabled": {
+                    "type": "boolean",
+                    "description": "Run selected anchor analysis independently of partial flow."
+                },
+                "maturation_flow_enabled": {
+                    "type": "boolean",
+                    "description": "Run partial flow only when selected."
+                },
                 "maturation_redesign_enabled": {
                     "type": "boolean",
                     "default": true,
@@ -825,6 +837,51 @@
                 }
             }
         },
+        "bindcraft2_campaign_parameters": {
+            "title": "BindCraft2 Native Campaign Handoff",
+            "type": "object",
+            "properties": {
+                "bc2_compilation": {"type": "string", "description": "Job-owned pinned native compilation receipt", "hidden": true},
+                "bc2_campaign_dir": {"type": "string", "description": "Job-owned campaign directory", "hidden": true},
+                "bc2_gpu_ids": {"type": "string", "description": "Scheduler-assigned devices", "hidden": true}
+            }
+        },
+        "ligandmpnn_interface_context_parameters": {
+            "title": "Selected LigandMPNN Interface Context Inputs",
+            "type": "object",
+            "properties": {
+                "interface_context_manifest": {"type": "string", "description": "Selected, materialized invocation manifest", "hidden": true}
+            }
+        },
+        "blind_pose_parameters": {
+            "title": "Selected Blind Pose Inputs",
+            "type": "object",
+            "properties": {
+                "blind_pose_selection_manifest": {"type": "string"},
+                "blind_pose_candidate_pdbs": {"type": "string"},
+                "esmfold2_validation_variant": {"type": "string"},
+                "esmfold2_validation_num_loops": {"type": "integer"},
+                "esmfold2_validation_num_sampling_steps": {"type": "integer"},
+                "esmfold2_validation_num_diffusion_samples": {"type": "integer"}
+            }
+        },
+        "binder_generation_parameters": {
+            "title": "Model-owned Initial Binder Generation",
+            "type": "object",
+            "properties": {
+                "ppiflow_generation_request": {"type": "string", "format": "directory-path", "hidden": true, "description": "Owned PPIFlow request directory; preserves the model-native settings and source snapshots."},
+                "caliby_request_dir": {"type": "string", "format": "directory-path", "hidden": true, "description": "Owned Caliby request directory with typed settings and retained structure snapshots."},
+                "ligandmpnn_design_request": {"type": "string", "format": "file-path", "hidden": true, "description": "Owned ordinary LigandMPNN native request document."},
+                "ligandmpnn_design_input": {"type": "string", "format": "file-path", "hidden": true, "description": "Owned LigandMPNN input complex snapshot."},
+                "boltzgen_generation_mode": {"type": "string", "enum": ["protein_binder", "peptide_binder", "nanobody_binder"]},
+                "boltzgen_target_chains": {"type": ["string", "null"]},
+                "boltzgen_target_binding_positions": {"type": ["string", "null"]},
+                "boltzgen_binder_sequence": {"type": ["string", "null"]},
+                "boltzgen_scaffold_path": {"type": ["string", "null"]},
+                "boltzgen_scaffold_chain": {"type": ["string", "null"]},
+                "boltzgen_scaffold_design_ranges": {"type": ["string", "null"]}
+            }
+        },
         "scheduler_assignment_parameters": {
             "title": "Scheduler Assignment Parameters",
             "type": "object",
@@ -870,6 +927,18 @@
         },
         {
             "$ref": "#/definitions/protenix_parameters"
+        },
+        {
+            "$ref": "#/definitions/bindcraft2_campaign_parameters"
+        },
+        {
+            "$ref": "#/definitions/ligandmpnn_interface_context_parameters"
+        },
+        {
+            "$ref": "#/definitions/blind_pose_parameters"
+        },
+        {
+            "$ref": "#/definitions/binder_generation_parameters"
         },
         {
             "$ref": "#/definitions/scheduler_assignment_parameters"

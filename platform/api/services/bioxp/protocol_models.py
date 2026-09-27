@@ -22,6 +22,10 @@ class ProtocolSubmission(ProtocolWireModel):
     source_type: Literal["native", "oem_xml"] = "native"
     # Native authoring/prepared inputs are owned and validated by the robot
     # compiler, not translated into the historical BMS lifecycle-step language.
+    # This includes pipette_position (move/lower/lift), pipette_aspirate and
+    # pipette_dispense. Keep their params lossless (notably null/zero lift height
+    # and explicit plunger channels); action-kind validation belongs to the
+    # native owner, not a second BMS enum or receipt-based admission check.
     document: dict[str, JsonValue] | None = None
     xml_path: str | None = None
     dry_run: StrictBool = True

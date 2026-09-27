@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Design, FrustraMPNNResult, Job
 from paths import get_results_dir
+from services.binder_diagnostic_selection import CandidateDocument, selected_document
 
 from .configuration import execution_configuration
 from .contracts import canonical_json_bytes, validate_schema
@@ -140,12 +141,16 @@ async def design_selections(
     source_parent: Job,
     design_ids: Sequence[str],
     expected_sha256: dict[str, str] | None = None,
+    candidate_documents: dict[str, CandidateDocument] | None = None,
 ) -> list[SourceSelection]:
     """Resolve ordered Design authority and read each exact no-follow generation."""
 
     if not design_ids or len(set(design_ids)) != len(design_ids):
         raise FrustraMPNNChildError("design_ids must be a non-empty ordered set")
     expected_sha256 = expected_sha256 or {}
+    candidate_documents = candidate_documents or {}
+    if set(candidate_documents) - set(design_ids):
+        raise FrustraMPNNChildError("candidate_documents contains an unselected Design")
     result = await session.execute(select(Design).where(Design.id.in_(list(design_ids))))
     by_id = {str(item.id): item for item in result.scalars().all()}
     if set(by_id) != set(design_ids):
@@ -172,6 +177,11 @@ async def design_selections(
         if not allowed:
             raise FrustraMPNNChildError("selected Design crosses the source-parent authority boundary")
         source_path = str(design.pdb_path or "")
+        document_identity = None
+        selector = candidate_documents.get(design_id)
+        if selector and (selector.artifact_id is not None or selector.target_state is not None):
+            path, document_identity = await selected_document(owner, design, selector, session)
+            source_path = str(path)
         owner_root = str(owner.child_output_dir or owner.output_dir or "")
         if not source_path or not owner_root or not _path_within(source_path, owner_root):
             raise FrustraMPNNChildError("selected Design path is outside its owning Job root")
@@ -180,6 +190,8 @@ async def design_selections(
         )
         digest = hashlib.sha256(payload).hexdigest()
         supplied = expected_sha256.get(design_id)
+        if document_identity is not None and digest != document_identity["artifact_sha256"]:
+            raise FrustraMPNNChildError("selected document source SHA-256 does not match authority")
         if supplied is not None and supplied != digest:
             raise FrustraMPNNChildError("selected Design source SHA-256 does not match authority")
         source_format, media_type, _ = _format_for_name(source_path)
@@ -199,6 +211,10 @@ async def design_selections(
                 "source_stage_family": design.source_stage_family,
                 "source_stage_mode": design.source_stage_mode,
                 "artifact_class": design.artifact_class,
+                **({
+                    "selected_document": copy.deepcopy(document_identity),
+                    "target_state": document_identity.get("target_state"),
+                } if document_identity is not None else {}),
             },
         ))
     return selections
@@ -340,6 +356,8 @@ async def create_child_job(
     triggered_marker_key: str | None = None,
     preallocated_job_id: str | None = None,
     commit: bool = True,
+    prepare_only: bool = False,
+    execution_target_id: str | None = None,
 ) -> Job:
     """Atomically publish immutable launch authority and persist one queued child."""
 
@@ -680,6 +698,14 @@ async def create_child_job(
             assigned_gpu=None,
             provenance={"frustrampnn_child": envelope},
         )
+        if prepare_only:
+            job.execution_target_id = execution_target_id
+            # Retain the model-owned Job construction, not a second receipt or
+            # approval. A fresh approved HTTP request reuses these exact bytes.
+            values = {column.key: getattr(job, column.key) for column in Job.__table__.columns
+                      if getattr(job, column.key) is not None}
+            _immutable_write(root / "inputs" / "frustrampnn_job.json", canonical_json_bytes(values))
+            return job
         session.add(job)
         await session.flush()
         if idempotency_owner is not None and idempotency_marker_key is not None:
@@ -706,6 +732,85 @@ async def create_child_job(
             await session.rollback()
             shutil.rmtree(root, ignore_errors=True)
         raise
+
+
+async def submit_selected_analysis(session, experiment_session, background_tasks, *,
+                                   selections, source_parent, requested_settings,
+                                   execution_target_id, destination_launch_context_id,
+                                   idempotency_key, response_context):
+    from component_runtime import partition_ordered
+    from experiment_services import new_id, scheduler_job_id_for_attempt
+    from routers.jobs import submit_selected_child_jobs
+    from fastapi import HTTPException
+
+    batches = partition_ordered(selections, batching_enabled=requested_settings.batching_enabled,
+                                structures_per_job=requested_settings.structures_per_job)
+    children = []
+    attempts = []
+    try:
+        for batch in batches:
+            attempt_id = new_id("run_attempt") if destination_launch_context_id else None
+            job_id = scheduler_job_id_for_attempt(attempt_id) if attempt_id else str(uuid.uuid4())
+            if attempt_id:
+                attempts.append(attempt_id)
+            children.append(await create_child_job(session, selections=batch,
+                source_parent=source_parent, trigger="binder_selected",
+                requested_settings=requested_settings, preallocated_job_id=job_id,
+                prepare_only=True, execution_target_id=execution_target_id))
+        return await submit_selected_child_jobs(
+            [prepared_child_request(child) for child in children], background_tasks,
+            session, experiment_session,
+            destination_launch_context_id=destination_launch_context_id,
+            preallocated_attempt_ids=attempts if destination_launch_context_id else None,
+            idempotency_key=idempotency_key or str(children[0].id), response_context=response_context)
+    except HTTPException as exc:
+        if (exc.status_code == 409 and isinstance(exc.detail, dict)
+                and exc.detail.get("code") == "remote_prepared_job_review_required"):
+            raise  # Approval owns these retained snapshots now.
+        for child in children:
+            if await session.get(Job, child.id) is None:
+                discard_uncommitted_child_artifacts(child)
+        raise
+    except Exception:
+        for child in children:
+            if await session.get(Job, child.id) is None:
+                discard_uncommitted_child_artifacts(child)
+        raise
+
+
+def prepared_child_request(child: Job):
+    from schemas import JobCreate
+    # Scientific ancestry is retained in the child envelope/Job, not used for
+    # placement inheritance by the generic submission owner.
+    return JobCreate(name=child.name, model_id=MODEL_ID, mode=MODE,
+                     params=copy.deepcopy(child.params), sequence_length=child.sequence_length,
+                     execution_target_id=child.execution_target_id)
+
+
+def load_prepared_child(request) -> Job:
+    envelope = request.params.get(ENVELOPE_KEY)
+    if not isinstance(envelope, dict):
+        raise FrustraMPNNChildError("FrustraMPNN jobs require a typed prepared analysis request")
+    job_id = envelope.get("execution_owner_job_id")
+    try:
+        if str(uuid.UUID(job_id)) != job_id:
+            raise ValueError("noncanonical identity")
+        root = _snapshot_root(job_id)
+        path = root / "inputs" / "frustrampnn_job.json"
+        if path.is_symlink() or root.is_symlink():
+            raise ValueError("unsafe prepared request")
+        child = Job(**json.loads(path.read_bytes()))
+    except (TypeError, ValueError, OSError) as exc:
+        raise FrustraMPNNChildError("FrustraMPNN prepared request is unavailable") from exc
+    actual = request.model_copy(deep=True)
+    actual.launch_context_id = None
+    actual.execution_plan_approval = None
+    for key in ("workflow_adapter", "_global_resource_admission", "_global_dispatch_authority"):
+        actual.params.pop(key, None)
+    if (child.id != job_id or Path(child.output_dir) != root.absolute()
+            or actual.model_dump(mode="json") != prepared_child_request(child).model_dump(mode="json")):
+        raise FrustraMPNNChildError("FrustraMPNN request differs from its retained analysis")
+    return child
 
 
 def discard_uncommitted_child_artifacts(child: Job) -> None:

@@ -14,7 +14,7 @@ from services.bioxp.protocol_models import (
 from services.bioxp.runtime import BioXpRuntime
 
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
-from .operator_controls import _translate_robot_error
+from .operator_controls import _normalize_interrupt_evidence, _translate_robot_error
 
 router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
 
@@ -33,7 +33,9 @@ async def _mutate(runtime, route, request, *, job_id=None):
         return await runtime.connection.request_active(
             route,
             expected_generation=request.expected_connection_generation,
-            require_fresh=True,
+            # Execution is admitted by the robot, not process-local status.
+            # Leave control/review and uncached preflight on their existing path.
+            require_fresh=route != "protocol_execute",
             json_data=request.model_dump(mode="json", exclude_unset=True, exclude={"expected_connection_generation"}),
             path_params={"job_id": job_id} if job_id is not None else None,
         )
@@ -61,6 +63,33 @@ def _job(payload, *, job_id=None, live=False):
     if (job_id is not None and job.job_id != job_id) or (live and job.command is None):
         raise HTTPException(status_code=502, detail="BioXP robot returned a different or noncanonical job")
     return job
+
+
+@router.get("/protocols/transfer-preflight")
+async def get_transfer_preflight(
+    expected_connection_generation: int = Query(ge=0),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> dict[str, Any]:
+    from services.bioxp.transfer_preflight import transfer_preflight
+    generation = expected_connection_generation
+    try:
+        # Uncached, fresh connection reads. Neither read performs motion.
+        reference = await runtime.connection.request_active(
+            "reference_status", expected_generation=generation, require_fresh=True)
+        catalog = await runtime.connection.request_active(
+            "operator_control_catalog_v2", expected_generation=generation, require_fresh=True,
+            params={"schema_version": "bioxp.operator_control_catalog.v2"})
+        if runtime.connection.snapshot().generation != generation:
+            raise HTTPException(status_code=409, detail="Connection changed during transfer preflight")
+        return transfer_preflight(reference, _normalize_interrupt_evidence(catalog), generation)
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+    except ValidationError as exc:
+        reasons = "; ".join(f"{'.'.join(str(part) for part in item['loc']) or 'authority'}: {item['msg']}"
+                            for item in exc.errors(include_input=False)[:3])
+        raise HTTPException(status_code=502, detail=f"Transfer preflight unavailable: {reasons}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=f"Transfer preflight unavailable: {exc}") from exc
 
 
 @router.post("/protocols/compile")

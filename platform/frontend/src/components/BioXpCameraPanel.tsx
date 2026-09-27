@@ -5,6 +5,11 @@ import {
     buildBioXpCameraMjpegUrl,
     captureBioXpCameraSnapshot,
     fetchBioXpCameraFrame,
+    getBioXpCameraIllumination,
+    setBioXpCameraIllumination,
+    setBioXpCameraRgb,
+    type BioXpCameraIllumination,
+    type BioXpIlluminationChannel,
     startBioXpCameraStream,
     stopBioXpCameraStream,
     useBioXpCameraStatus,
@@ -21,6 +26,14 @@ interface BioXpCameraPanelProps {
     connectionGeneration: number | null;
     mutationEnabled: boolean;
 }
+
+const RGB_PRESETS = [
+    { label: 'White', rgb: [255, 255, 255] },
+    { label: 'Red', rgb: [255, 0, 0] },
+    { label: 'Green', rgb: [0, 255, 0] },
+    { label: 'Blue', rgb: [0, 0, 255] },
+    { label: 'Off', rgb: [0, 0, 0] },
+] as const;
 
 export function BioXpCameraPanel({
     connected,
@@ -52,6 +65,78 @@ export function BioXpCameraPanel({
     const [pendingAction, setPendingAction] = useState<'latest' | 'snapshot' | 'stream' | null>(null);
     const [presentationNowMs, setPresentationNowMs] = useState(() => performance.now());
     const [, bumpPresentationRevision] = useState(0);
+    const illuminationReadRef = useRef(0);
+    const illuminationPendingRef = useRef(new Set<BioXpIlluminationChannel>());
+    const [illuminationPending, setIlluminationPending] = useState(new Set<BioXpIlluminationChannel>());
+    const [illumination, setIllumination] = useState<{ session: typeof sessionRef.current; data: BioXpCameraIllumination } | null>(null);
+    const [illuminationError, setIlluminationError] = useState<string | null>(null);
+    const rgbPendingRef = useRef(false);
+    const [rgbPending, setRgbPending] = useState(false);
+    const [rgbLastCommand, setRgbLastCommand] = useState<{ session: typeof sessionRef.current; label: string } | null>(null);
+    const [rgbError, setRgbError] = useState<string | null>(null);
+
+    const commandRgb = useCallback(async (preset: typeof RGB_PRESETS[number]) => {
+        const session = sessionRef.current;
+        if (!session.connected || session.generation === null || !mutationEnabled || rgbPendingRef.current) return;
+        const isCurrent = () => mountedRef.current && sessionRef.current === session;
+        rgbPendingRef.current = true;
+        setRgbPending(true);
+        setRgbError(null);
+        try {
+            const result = await setBioXpCameraRgb(session.generation, preset.rgb);
+            if (!isCurrent()) return;
+            if (result.connection_generation !== session.generation) throw new Error('RGB response belongs to a previous connection');
+            if (!result.ok) throw new Error('RGB light command failed: robot did not acknowledge all channels');
+            setRgbLastCommand({ session, label: preset.label });
+        } catch (error) {
+            if (isCurrent()) setRgbError(bioXpErrorText(error));
+        } finally {
+            if (isCurrent()) {
+                rgbPendingRef.current = false;
+                setRgbPending(false);
+            }
+        }
+    }, [mutationEnabled]);
+
+    const refreshIllumination = useCallback(async () => {
+        const session = sessionRef.current;
+        const token = ++illuminationReadRef.current;
+        setIllumination(null);
+        if (!session.connected || session.generation === null) return;
+        const isCurrent = () => mountedRef.current && sessionRef.current === session && token === illuminationReadRef.current;
+        try {
+            const data = await getBioXpCameraIllumination(session.generation);
+            if (!isCurrent()) return;
+            if (data.connection_generation !== session.generation) throw new Error('Illumination belongs to a previous connection');
+            setIllumination({ session, data });
+        } catch (error) {
+            if (isCurrent()) setIlluminationError(bioXpErrorText(error));
+        }
+    }, []);
+
+    const commandIllumination = useCallback(async (channel: BioXpIlluminationChannel, on: boolean) => {
+        const session = sessionRef.current;
+        if (!session.connected || session.generation === null || !mutationEnabled || illuminationPendingRef.current.has(channel)) return;
+        const isCurrent = () => mountedRef.current && sessionRef.current === session;
+        illuminationPendingRef.current.add(channel);
+        setIlluminationPending(new Set(illuminationPendingRef.current));
+        ++illuminationReadRef.current;
+        setIllumination(null);
+        setIlluminationError(null);
+        try {
+            const data = await setBioXpCameraIllumination(session.generation, channel, on);
+            if (!isCurrent()) return;
+            if (data.connection_generation !== session.generation) throw new Error('Illumination belongs to a previous connection');
+        } catch (error) {
+            if (isCurrent()) setIlluminationError(bioXpErrorText(error));
+        } finally {
+            if (isCurrent()) {
+                illuminationPendingRef.current.delete(channel);
+                setIlluminationPending(new Set(illuminationPendingRef.current));
+                void refreshIllumination();
+            }
+        }
+    }, [mutationEnabled, refreshIllumination]);
 
     useEffect(() => {
         mountedRef.current = true;
@@ -72,6 +157,13 @@ export function BioXpCameraPanel({
         streamRequestRef.current += 1;
         requestPendingRef.current = false;
         setPendingAction(null);
+        illuminationPendingRef.current = new Set();
+        setIlluminationPending(new Set());
+        setIlluminationError(null);
+        rgbPendingRef.current = false;
+        setRgbPending(false);
+        setRgbLastCommand(null);
+        setRgbError(null);
         const now = performance.now();
         statusReceivedAtRef.current = now;
         lastSequenceRef.current = null;
@@ -163,6 +255,13 @@ export function BioXpCameraPanel({
         ? `${connectionGeneration}:${effectiveStream?.camera_ownership_epoch}:${effectiveStream?.stream_id}`
         : imageUrl;
 
+    // Read cached evidence on actual preview ownership transitions, not poll churn.
+    const illuminationOwner = effectiveStream?.connection_generation === connectionGeneration
+        ? `${effectiveStreamActive}:${effectiveStream?.camera_ownership_epoch}:${effectiveStream?.stream_id}` : null;
+    useEffect(() => {
+        void refreshIllumination();
+    }, [connected, connectionGeneration, illuminationOwner, refreshIllumination]);
+
     const toggleStream = useCallback(async () => {
         if (connectionGeneration === null || !connected || !mutationEnabled || requestPendingRef.current) return;
         const session = sessionRef.current;
@@ -248,7 +347,7 @@ export function BioXpCameraPanel({
         : imageSessionRef.current === sessionRef.current ? imageUrl : null;
 
     return (
-        <section className="rounded-xl border border-sky-800/70 bg-sky-950/20 p-3">
+        <section aria-label="Camera" className="rounded-xl border border-sky-800/70 bg-sky-950/20 p-3">
             <div className="flex items-center justify-between gap-3">
                 <h2 className="text-lg font-semibold">Camera</h2>
                 <span className="text-sm text-slate-400">{cameraState}</span>
@@ -282,6 +381,36 @@ export function BioXpCameraPanel({
             </div>
 
             {effectiveStreamActive && presentation.label === 'STALE' && <p className="mt-2 text-xs text-amber-300">Video frames are stale.</p>}
+            <div role="group" aria-label="Camera illumination" className="mt-3 border-t border-slate-800 pt-2">
+                <p className="text-xs text-slate-400">Camera lights · Last command (not optical readback)</p>
+                <div className="mt-2 flex flex-wrap gap-3">
+                    {([1, 2, 3] as const).map((channel) => {
+                        const on = illumination?.session === sessionRef.current
+                            ? illumination.data.channels.find((row) => row.channel === channel)?.on : null;
+                        return <div key={channel} role="group" aria-label={`LED${channel}`} className="flex min-w-0 flex-wrap items-center gap-2">
+                            <span className="text-sm">LED{channel}: {on == null ? 'Unknown' : on ? 'On' : 'Off'}</span>
+                            {([true, false] as const).map((value) => <button
+                                key={String(value)} type="button" aria-label={`LED${channel} ${value ? 'On' : 'Off'}`}
+                                disabled={!connected || !mutationEnabled || connectionGeneration === null || illuminationPending.has(channel)}
+                                onClick={() => void commandIllumination(channel, value)}
+                                className="rounded bg-sky-700 px-3 py-2 text-sm font-semibold disabled:opacity-35"
+                            >{value ? 'On' : 'Off'}</button>)}
+                        </div>;
+                    })}
+                </div>
+                {illuminationError && <p role="alert" className="mt-2 text-sm text-red-300">{illuminationError}</p>}
+            </div>
+            <div role="group" aria-label="RGB deck/ring light" className="mt-3 border-t border-slate-800 pt-2">
+                <p className="text-xs text-slate-400">RGB deck/ring light · Last successful command: {rgbLastCommand?.session === sessionRef.current ? rgbLastCommand.label : 'Unknown'} (not optical readback)</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                    {RGB_PRESETS.map((preset) => <button key={preset.label} type="button" aria-label={`RGB ${preset.label}`}
+                        disabled={!connected || !mutationEnabled || connectionGeneration === null || rgbPending}
+                        onClick={() => void commandRgb(preset)}
+                        className="rounded bg-sky-700 px-3 py-2 text-sm font-semibold disabled:opacity-35"
+                    >{preset.label}</button>)}
+                </div>
+                {rgbError && <p role="alert" className="mt-2 text-sm text-red-300">{rgbError}</p>}
+            </div>
             {streamQuery.data?.state === 'error' && streamQuery.data.last_error && <p role="alert" className="mt-2 text-sm text-red-300">{streamQuery.data.last_error}</p>}
             {statusQuery.isError && pendingAction !== 'snapshot' && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpErrorText(statusQuery.error)}</p>}
             {streamQuery.isError && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpErrorText(streamQuery.error)}</p>}

@@ -45,6 +45,7 @@ process PrepProteinCadRequest {
         --disco-ligand-name "${params.pcad_disco_ligand_name ?: params.disco_ligand_name ?: ''}" \\
         --disco-na-sequence "${params.pcad_disco_na_sequence ?: params.disco_na_sequence ?: ''}" \\
         --disco-checkpoint-path "${discoCheckpoint}" \\
+        --disco-hf-cache-path "${params.weights_root}/disco/huggingface" \\
         --disco-use-deepspeed-evo-attention "${params.pcad_disco_use_deepspeed_evo_attention ?: params.disco_use_deepspeed_evo_attention ?: false}" \\
         --disco-cutlass-path "${params.pcad_disco_cutlass_path ?: params.disco_cutlass_path ?: ''}" \\
         --output protein_cad_request.json \\

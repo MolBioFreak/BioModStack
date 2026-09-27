@@ -1,0 +1,41 @@
+data_model
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_seq_id
+_atom_site.auth_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.label_asym_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.label_entity_id
+_atom_site.auth_asym_id
+_atom_site.auth_comp_id
+_atom_site.B_iso_or_equiv
+_atom_site.pdbx_PDB_model_num
+ATOM 1 N N . MET 1 1 ? A -18.45470 10.78124 -2.79987 1 1 A MET 39.076 1
+ATOM 2 C CA . MET 1 1 ? A -19.62222 9.94486 -2.48779 1 1 A MET 39.076 1
+ATOM 3 C C . MET 1 1 ? A -19.77696 9.77832 -0.98241 1 1 A MET 39.076 1
+ATOM 4 O O . MET 1 1 ? A -18.79957 9.54414 -0.28253 1 1 A MET 39.076 1
+ATOM 5 C CB . MET 1 1 ? A -19.49422 8.57066 -3.14860 1 1 A MET 39.076 1
+ATOM 6 C CG . MET 1 1 ? A -20.64878 7.64255 -2.86603 1 1 A MET 39.076 1
+ATOM 7 S SD . MET 1 1 ? A -20.49625 6.05757 -3.71420 1 1 A MET 39.076 1
+ATOM 8 C CE . MET 1 1 ? A -21.92777 5.21604 -3.05587 1 1 A MET 39.076 1
+ATOM 9 N N . VAL 2 2 ? A -20.99942 9.85961 -0.48974 1 1 A VAL 45.853 1
+ATOM 10 C CA . VAL 2 2 ? A -21.29148 9.73473 0.93003 1 1 A VAL 45.853 1
+ATOM 11 C C . VAL 2 2 ? A -21.72669 8.30447 1.22406 1 1 A VAL 45.853 1
+ATOM 12 O O . VAL 2 2 ? A -22.64308 7.78011 0.59012 1 1 A VAL 45.853 1
+ATOM 13 C CB . VAL 2 2 ? A -22.38868 10.71976 1.38375 1 1 A VAL 45.853 1
+ATOM 14 C CG1 . VAL 2 2 ? A -22.66714 10.56466 2.86837 1 1 A VAL 45.853 1
+ATOM 15 C CG2 . VAL 2 2 ? A -21.97040 12.15112 1.05561 1 1 A VAL 45.853 1
+ATOM 16 N N . ILE 3 3 ? A -21.05512 7.67311 2.17957 1 1 A ILE 52.554 1
+ATOM 17 C CA . ILE 3 3 ? A -21.35977 6.30718 2.58474 1 1 A ILE 52.554 1
+ATOM 18 C C . ILE 3 3 ? A -21.76057 6.32147 4.05219 1 1 A ILE 52.554 1
+#

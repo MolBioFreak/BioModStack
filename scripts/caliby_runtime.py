@@ -287,17 +287,64 @@ def remap_position_like_spec(spec: str | None, chain_map: dict[str, str]) -> str
     return _POSITION_TOKEN_RE.sub(lambda match: f"{chain_map.get(match.group(1), match.group(1))}{match.group(2)}", text)
 
 
+def remap_observed_position_spec(spec, mapping):
+    """Transport native selectors by observed residues, never chain-set/order guesses.
+
+    Ranges select surviving source residues, not a range between remapped endpoints.
+    Leave unavailable/unsupported evidence to the historical native behavior.
+    """
+    if not isinstance(spec, str) or not mapping:
+        return spec
+    def selector(text):
+        match = re.fullmatch(r"([A-Za-z])(?:(\d+)(?:-(\d+))?)?", text.strip())
+        if not match:
+            return None
+        chain, start, end = match.groups()
+        if not any(pair['source']['chain_id'] == chain for pair in mapping):
+            return None  # preserve the native unknown-chain check
+        selected = []
+        for pair in mapping:
+            source, output = pair['source'], pair['output']
+            if source['chain_id'] != chain or source.get('insertion_code', ''):
+                continue
+            if start is not None and not int(start) <= int(source['auth_seq_id']) <= int(end or start):
+                continue
+            if output.get('insertion_code', ''):
+                return None
+            selected.append(f"{output['chain_id']}{output['auth_seq_id']}")
+        return list(dict.fromkeys(selected))
+    try:
+        groups = []
+        for group in spec.split('|'):
+            tokens = []
+            for token in group.split(','):
+                if not token.strip():
+                    continue
+                position, colon, suffix = token.partition(':')
+                translated = selector(position)
+                if translated is None:
+                    return spec
+                tokens.extend(p + colon + suffix for p in translated)
+            groups.append(','.join(tokens))
+        return '|'.join(groups)
+    except (KeyError, TypeError, ValueError):
+        return spec
+
+
 def remap_constraint_dataframe_to_cleaned_paths(
     pos_constraint_df,
     *,
     original_paths: list[str],
     cleaned_paths: list[str],
+    sources: dict | None = None,
 ):
     if pos_constraint_df is None or pd is None:
         return pos_constraint_df
 
     original_by_key = {Path(path).stem: Path(path) for path in original_paths}
     cleaned_by_key = {Path(path).stem: Path(path) for path in cleaned_paths}
+    if len(original_by_key) != len(original_paths) or len(cleaned_by_key) != len(cleaned_paths):
+        raise ValueError("Caliby input structure stems must be unique")
     remapped = pos_constraint_df.copy()
 
     for index, row in remapped.iterrows():
@@ -307,29 +354,23 @@ def remap_constraint_dataframe_to_cleaned_paths(
         original_path = original_by_key.get(pdb_key)
         cleaned_path = cleaned_by_key.get(pdb_key)
         if original_path is None or cleaned_path is None:
+            raise ValueError(f"Caliby constraint key {pdb_key!r} has no paired original/cleaned structure")
+        mapping = (sources or {}).get(pdb_key, {}).get('source_residue_mapping')
+        if mapping:
+            for column in ('fixed_pos_seq', 'fixed_pos_scn', 'fixed_pos_override_seq',
+                           'pos_restrict_aatype', 'symmetry_pos'):
+                if column in remapped.columns:
+                    remapped.at[index, column] = remap_observed_position_spec(row[column], mapping)
             continue
         original_chain_order = parse_chain_order(original_path)
         cleaned_chain_order = parse_chain_order(cleaned_path)
-        if not original_chain_order or not cleaned_chain_order:
+        if not original_chain_order or not cleaned_chain_order or len(original_chain_order) != len(cleaned_chain_order):
+            raise ValueError(f"Caliby constraint key {pdb_key!r} has unresolvable chain identity")
+        if set(original_chain_order) == set(cleaned_chain_order):
             continue
-        if original_chain_order == cleaned_chain_order:
-            continue
-
-        chain_map = {
-            original_chain: cleaned_chain
-            for original_chain, cleaned_chain in zip(original_chain_order, cleaned_chain_order)
-        }
-        if not chain_map:
-            continue
-        for column_name in (
-            "fixed_pos_seq",
-            "fixed_pos_scn",
-            "fixed_pos_override_seq",
-            "pos_restrict_aatype",
-            "symmetry_pos",
-        ):
-            if column_name in remapped.columns:
-                remapped.at[index, column_name] = remap_position_like_spec(row.get(column_name), chain_map)
+        # Positional zipping is not chain-role evidence. A cleaner that renames
+        # chains needs an explicit verified mapping, not guessed binder identity.
+        raise ValueError(f"Caliby cleaned structure changed chain IDs for {pdb_key!r}")
 
     return remapped
 
@@ -417,6 +458,17 @@ def normalize_sampling_results(
     sequences = list(results.get("seq", []))
     energies = list(results.get("U", []))
     input_sequences = list(results.get("input_seq", []))
+    if not example_ids or len(output_paths) != len(example_ids):
+        raise ValueError("Caliby returned no paired example_id/out_pdb records")
+    for field, values in (("seq", sequences), ("U", energies), ("input_seq", input_sequences)):
+        if values and len(values) != len(example_ids):
+            raise ValueError(f"Caliby {field} cardinality does not match structures")
+    if any(not path for path in output_paths):
+        raise ValueError("Caliby returned an empty output structure path")
+    if any(not Path(str(path)).is_file() for path in output_paths):
+        raise ValueError("Caliby returned a missing output structure")
+    if len(set(map(str, output_paths))) != len(output_paths):
+        raise ValueError("Caliby reused an output structure for multiple native samples")
 
     manifest: list[dict[str, Any]] = []
     sc_metrics = self_consistency or {}
@@ -426,10 +478,22 @@ def normalize_sampling_results(
         design_id = f"{prefix}_{index:04d}"
         structure_source = Path(str(output_paths[index - 1])).resolve()
         published_pdb = publish_structure(structure_source, output_pdb_dir, design_id)
+        # Keep exact native bytes beside the metadata, outside candidate PDBs.
+        # A per-sample directory preserves native filenames without collisions.
+        native_relative = Path("native_outputs") / design_id / structure_source.name
+        native_path = output_meta_dir / native_relative
+        native_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(structure_source, native_path)
 
         metadata = {
             "design_id": design_id,
             "example_id": example_id,
+            "native_output": {
+                "producer": "caliby",
+                "example_id": example_id,
+                "filename": structure_source.name,
+                "path": native_relative.as_posix(),
+            },
             "source_backbone_id": example_id,
             "source": source,
             "source_model": source,

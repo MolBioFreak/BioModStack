@@ -638,6 +638,10 @@ function nextWorkspaceId(): string {
     return `workspace_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function isEmptyWorkspace(tab: WorkspaceTab): boolean {
+    return !tab.sequenceId && !tab.dirty && !tab.historyState.present.sequence;
+}
+
 function WorkspaceTabs({
     tabs,
     activeId,
@@ -649,12 +653,29 @@ function WorkspaceTabs({
     onActivate: (id: string) => void;
     onClose: (id: string) => void;
 }) {
+    const railRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        const rail = railRef.current;
+        const active = Array.from(rail?.children || []).find(
+            (element) => element.getAttribute('data-workspace-id') === activeId,
+        ) as HTMLElement | undefined;
+        if (rail && active) {
+            const railBox = rail.getBoundingClientRect();
+            const activeBox = active.getBoundingClientRect();
+            if (activeBox.left < railBox.left) {
+                rail.scrollLeft += activeBox.left - railBox.left;
+            } else if (activeBox.right > railBox.right) {
+                rail.scrollLeft += activeBox.right - railBox.right;
+            }
+        }
+    }, [activeId, tabs]);
     return (
         <div className="border-b border-slate-700 bg-slate-900/80 px-2 py-1">
-            <div className="flex gap-2 overflow-x-auto pb-1">
+            <div ref={railRef} className="flex gap-2 overflow-x-auto pb-1">
                 {tabs.map((tab) => (
                     <div
                         key={tab.id}
+                        data-workspace-id={tab.id}
                         className={`group flex min-w-[12rem] items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
                             tab.id === activeId
                                 ? 'border-cyan-500/50 bg-slate-800 text-slate-100'
@@ -727,6 +748,9 @@ export function MolBioToolkitV2() {
     const molecularOpenRequest = useMemo(() => resolveMolecularOpenRequest(queryParams), [queryParams]);
     const molecularOpenRequestKey = useMemo(() => JSON.stringify(molecularOpenRequest), [molecularOpenRequest]);
     const [approvedMolecularOpenRequestKey, setApprovedMolecularOpenRequestKey] = useState<string | null>(null);
+    // Local tab changes update the URL asynchronously. Until it catches up, the
+    // previous URL must not be treated as a new external open request.
+    const localMolecularNavigationRef = useRef<string | null>(null);
     const molecularOpenRequestApproved = approvedMolecularOpenRequestKey === molecularOpenRequestKey;
     const requestedMolecularSequenceId = molecularOpenRequest.kind === 'current' || molecularOpenRequest.kind === 'exact'
         ? molecularOpenRequest.sequenceId
@@ -1112,6 +1136,13 @@ export function MolBioToolkitV2() {
     }, []);
 
     const setMolecularQueryForWorkspace = useCallback((workspace: WorkspaceTab | null) => {
+        const nextRequestKey = JSON.stringify(workspace?.exactMolecularRevision
+            ? { kind: 'exact', sequenceId: workspace.exactMolecularRevision.sequence_id,
+                revisionId: workspace.exactMolecularRevision.revision_id }
+            : workspace?.sequenceId
+                ? { kind: 'current', sequenceId: workspace.sequenceId }
+                : { kind: 'none' });
+        localMolecularNavigationRef.current = nextRequestKey === molecularOpenRequestKey ? null : nextRequestKey;
         if (workspace?.exactMolecularRevision) {
             approveMolecularOpenRequest({
                 kind: 'exact',
@@ -1134,13 +1165,14 @@ export function MolBioToolkitV2() {
         }
         approveMolecularOpenRequest({ kind: 'none' });
         updateQueryParams({ molbio_sequence_id: null, molbio_revision_id: null });
-    }, [approveMolecularOpenRequest, updateQueryParams]);
+    }, [approveMolecularOpenRequest, molecularOpenRequestKey, updateQueryParams]);
 
     const activateWorkspaceImmediately = useCallback((workspaceId: string) => {
         const workspace = workspaceTabs.find((tab) => tab.id === workspaceId);
         if (!workspace) {
             return;
         }
+        sequenceLoadControllerRef.current.begin();
         setMolecularQueryForWorkspace(workspace);
         setActiveWorkspaceId(workspaceId);
         setActiveDisplayStrand(sourceDisplayStrandForSequenceData(workspace.historyState.present));
@@ -1173,9 +1205,14 @@ export function MolBioToolkitV2() {
             sequenceType: nextSequence.sequenceType,
             exactMolecularRevision: null,
         };
-        setWorkspaceTabs((current) => sequenceId
-            ? upsertStableMolecularWorkspace(current, nextTab)
-            : [...current, nextTab]);
+        sequenceLoadControllerRef.current.begin();
+        setMolecularQueryForWorkspace(nextTab);
+        setWorkspaceTabs((current) => {
+            const visible = current.filter((tab) => !isEmptyWorkspace(tab));
+            return sequenceId
+                ? upsertStableMolecularWorkspace(visible, nextTab)
+                : [...visible, nextTab];
+        });
         setActiveWorkspaceId(tabId);
         setActiveDisplayStrand(sourceDisplayStrandForSequenceData(nextSequence));
         hydrate(nextHistory);
@@ -1185,7 +1222,7 @@ export function MolBioToolkitV2() {
         setHighlightedRegions([]);
         setRnaStructureResult(null);
         setSelectedRnaTrackId(nextSequence.analysisTracks?.[0]?.id || null);
-    }, [hydrate]);
+    }, [hydrate, setMolecularQueryForWorkspace]);
 
     const openExactMolecularWorkspace = useCallback((revision: MolecularRevision, nextSequence: SequenceData) => {
         const tabId = molecularWorkspaceId(revision.sequence_id);
@@ -1193,7 +1230,7 @@ export function MolBioToolkitV2() {
             nextSequence,
             `Open immutable revision ${revision.revision_number}`,
         );
-        setWorkspaceTabs((current) => upsertStableMolecularWorkspace(current, {
+        setWorkspaceTabs((current) => upsertStableMolecularWorkspace(current.filter((tab) => !isEmptyWorkspace(tab)), {
             id: tabId,
             title: `${nextSequence.name} · r${revision.revision_number} (read-only)`,
             sequenceId: revision.sequence_id,
@@ -1274,6 +1311,7 @@ export function MolBioToolkitV2() {
     ]);
 
     const closeWorkspaceImmediately = useCallback((workspaceId: string) => {
+        sequenceLoadControllerRef.current.begin();
         if (workspaceTabs.length === 1) {
             const emptyHistory = createHistoryState(EMPTY_SEQUENCE, 'Reset workspace');
             const emptyWorkspaceId = nextWorkspaceId();
@@ -1362,6 +1400,7 @@ export function MolBioToolkitV2() {
         invalidateGetSequence();
         const shouldUpdateRequest = requestedMolecularRevisionId || requestedMolecularSequenceId !== id;
         if (shouldUpdateRequest) {
+            localMolecularNavigationRef.current = JSON.stringify({ kind: 'current', sequenceId: id });
             approveMolecularOpenRequest({ kind: 'current', sequenceId: id });
             updateQueryParams({
                 molbio_sequence_id: id,
@@ -1795,7 +1834,14 @@ export function MolBioToolkitV2() {
     }, [activeWorkspaceId, discardActiveWorkspace, isDirty, loadDemo, requestWorkspaceTransition]);
 
     useEffect(() => {
+        if (localMolecularNavigationRef.current === molecularOpenRequestKey) {
+            localMolecularNavigationRef.current = null;
+        }
+    }, [molecularOpenRequestKey]);
+
+    useEffect(() => {
         if (!workspaceRestoreComplete || molecularOpenRequestApproved) return;
+        if (localMolecularNavigationRef.current) return;
         if (molecularOpenRequest.kind === 'none' || molecularOpenRequest.kind === 'invalid') {
             setApprovedMolecularOpenRequestKey(molecularOpenRequestKey);
             return;
@@ -3377,9 +3423,9 @@ export function MolBioToolkitV2() {
                         </section>
                     )}
 
-                    {!isViewerFullscreen && (
+                    {!isViewerFullscreen && workspaceTabs.some((tab) => !isEmptyWorkspace(tab)) && (
                         <WorkspaceTabs
-                            tabs={workspaceTabs}
+                            tabs={workspaceTabs.filter((tab) => !isEmptyWorkspace(tab))}
                             activeId={activeWorkspaceId}
                             onActivate={activateWorkspace}
                             onClose={closeWorkspace}

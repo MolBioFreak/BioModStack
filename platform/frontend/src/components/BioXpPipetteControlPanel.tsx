@@ -117,6 +117,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
     const [tipTray, setTipTray] = useState('');
     const [tipWell, setTipWell] = useState('');
     const [tipType, setTipType] = useState(201);
+    const [selectedSoftwareTipType, setSelectedSoftwareTipType] = useState<50 | 200 | 201>(201);
     const [tipLocation, setTipLocation] = useState<0 | 1 | 2 | 3>(0);
     const [homeZAfter, setHomeZAfter] = useState(true);
     const [fluidClass, setFluidClass] = useState<'TC' | 'MS' | 'OC' | 'RC' | 'STRIP'>('TC');
@@ -124,6 +125,8 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
     const [localError, setLocalError] = useState<string | null>(null);
 
     const actionById = (actionId: string) => actions.find((action) => action.action_id === actionId);
+    const softwareTipAction = actions.find((action) => action.informational_method === 'POST'
+        && action.informational_path === '/liquid/pipette/tip-type');
     const physicalActionEnabled = (actionId: string) => actionById(actionId)?.enabled === true;
     const physicalActionReason = (actionId: string, fallback: string) => (
         actionById(actionId)?.disabled_reason ?? actionById(actionId)?.unavailable_reason ?? fallback
@@ -311,6 +314,23 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                 </button>
                 <DirectLiquidEvidence owner={planner} />
                 {planner.submission && <button type="button" disabled={!connected || planner.isPending} onClick={() => submitPlan(true)}>New operation — build plan</button>}
+            </div>
+
+            <div className="mt-3 rounded border border-slate-700 bg-slate-950/40 p-3 text-xs text-slate-300" data-software-tip-type-control>
+                <h4 className="font-semibold text-slate-200">Software tip type selection</h4>
+                <p className="mt-1">Selected in robot software: {pipettes?.tip_type ?? 'unavailable'} (cached projection). This does not pick up or verify a physical tip.</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <label>Tip type
+                        <select aria-label="Software tip type" value={selectedSoftwareTipType} onChange={(event) => setSelectedSoftwareTipType(Number(event.target.value) as 50 | 200 | 201)} className="ml-2 rounded bg-slate-900 px-2 py-1">
+                            {[50, 200, 201].map((value) => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                    </label>
+                    <button type="button" disabled={!connected || catalogLoading || invokePending || !softwareTipAction?.enabled || !invokeAction}
+                        title={softwareTipAction?.disabled_reason ?? softwareTipAction?.unavailable_reason ?? undefined}
+                        onClick={() => { if (softwareTipAction?.enabled && invokeAction) invokeAction(softwareTipAction.action_id, { tip_type: selectedSoftwareTipType }); }}
+                        className="rounded bg-cyan-800 px-3 py-1 text-white disabled:opacity-50">Select tip type in software</button>
+                </div>
+                <p className="mt-1 text-slate-500">Separate from the no-motion load-tip planner above.</p>
             </div>
 
             {localError && <p className="mt-2 text-xs text-red-300">{localError}</p>}

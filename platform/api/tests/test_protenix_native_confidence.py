@@ -47,6 +47,25 @@ def mixed_bytes():
     return out.getvalue().encode(), json.dumps(full).encode(), json.dumps(summary).encode()
 
 
+def protein_bytes():
+    """Synthetic two single-residue proteins; no real biological sequence."""
+    source, _, _ = mixed_bytes()
+    cif = MMCIF2Dict(StringIO(source.decode()))
+    for key, value in list(cif.items()):
+        if key.startswith('_atom_site.'):
+            cif[key] = value[:5]
+    cif['_entity_poly.type'] = ['polypeptide(L)', 'polypeptide(L)']
+    cif['_atom_site.label_comp_id'] = cif['_atom_site.auth_comp_id'] = ['GLY'] * 5
+    cif['_atom_site.label_atom_id'] = cif['_atom_site.auth_atom_id'] = ['N', 'CA', 'C', 'N', 'CA']
+    cif['_atom_site.label_asym_id'] = ['R'] * 3 + ['S'] * 2
+    cif['_atom_site.auth_asym_id'] = ['X'] * 3 + ['Y'] * 2
+    out = StringIO(); writer = MMCIFIO(); writer.set_dict(cif); writer.save(out)
+    full = dict(atom_plddt=[(80+i)/100 for i in range(5)], atom_to_token_idx=[0,0,0,1,1],
+                token_asym_id=[0,1], token_pair_pae=[[0., 2.], [8., 0.]])
+    summary = dict(chain_ptm=[.9,.7], chain_pair_iptm=[[0., .3], [.8, 0.]])
+    return out.getvalue().encode(), json.dumps(full).encode(), json.dumps(summary).encode()
+
+
 def make_publication(tmp_path, *, custody='local'):
     source, full, summary = mixed_bytes()
     native=tmp_path/'native'; source_path=native/'complex/seed_42/predictions/complex_sample_0.cif'
@@ -101,6 +120,107 @@ async def store(tmp_path, job, design, *, ingest=True):
             await _ingest_protenix_primary_publications(job,Path(job.output_dir),session)
             await session.commit()
     return engine, factory
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fault', [None, 'roles', 'sequence', 'copies', 'inferred'])
+async def test_native_ipsae_projected_roles_persisted(tmp_path, monkeypatch, fault):
+    from services import analysis_subprocess as worker
+    from test_core_protein_analysis_dispatch import cache, snapshot
+    from routers.analyses import trigger_design_analysis, get_design_analysis, AnalysisRunRequest
+    from services.analysis_registry import build_analysis_input_signature, get_analysis_definition
+    data = protein_bytes()
+    monkeypatch.setattr(__import__(__name__), 'mixed_bytes', lambda: data)
+    job, design, _ = make_publication(tmp_path)
+    job.params = {'complex_components': [dict(id='original_binder', type='protein', sequence='G'),
+                                         dict(id='original_target', type='protein', sequence='G')]}
+    job.provenance = dict(job.provenance, binder_round_step=dict(stage='prediction',
+        binder_chains=['original_binder'], target_chains=['original_target'],
+        input_components=[dict(index=0, id='original_binder', source_chain='original_binder', role='binder', sequence='G'),
+                          dict(index=1, id='original_target', source_chain='original_target', role='target', sequence='G')]))
+    if fault == 'roles': job.provenance['binder_round_step']['binder_chains'] = ['unknown']
+    if fault == 'sequence': job.params['complex_components'][0]['sequence'] = 'A'
+    if fault == 'copies': job.params['complex_components'][0]['count'] = 2
+    if fault == 'inferred': job.provenance.pop('binder_round_step')
+    engine, factory = await store(tmp_path, job, design)
+    cache(monkeypatch, tmp_path, factory)
+    try:
+        async with factory() as session:
+            row = await session.get(Design, 'candidate')
+            row.review_profile_id = 'binder_design_v1'
+            row.review_role_map = {}
+            row.detected_antibody_chains = 'R'
+            await session.commit(); await session.refresh(row)
+            before = snapshot(row)
+            selected = await consumer.verified_native_design(row, session)
+            unchanged = deepcopy(selected)
+            artifact = consumer.native_ipsae_artifact(selected)
+            assert artifact.matrix.tolist() == [[0., 2.], [8., 0.]]
+            assert selected == unchanged
+            dispatched, _, _, updates = await worker._dispatch_ipsae_interface(row, {}, session, selected=selected)
+            assert dispatched['status'] == ('ok' if fault is None else 'unavailable'), dispatched
+            assert updates == {}
+            if fault is None:
+                zero, _, _, _ = await worker._dispatch_ipsae_interface(row, {'pae_cutoff': 0., 'dist_cutoff': 0.}, session, selected=selected)
+                assert zero['ipsae'] == 0. and zero['pae_cutoff'] == 0. and zero['dist_cutoff'] == 0.
+            signature = await build_analysis_input_signature(get_analysis_definition('ipsae_interface'), row, {}, session)
+            queued = await trigger_design_analysis(row.id, 'ipsae_interface', AnalysisRunRequest(), session)
+        assert await worker._run_analysis(queued.run_id) == 0
+        async with factory() as session:
+            response = await get_design_analysis('candidate', 'ipsae_interface', None, session)
+            result = response.result
+            assert result['status'] == ('ok' if fault is None else 'unavailable')
+            row = await session.get(Design, 'candidate')
+            assert snapshot(row) == before
+            if fault is None:
+                assert result['binder_chains'] == ['R'] and result['target_chains'] == ['S']
+                assert result['ipsae_binder_to_target'] != result['ipsae_target_to_binder']
+                assert len(result['pair_scores']) == 2
+                assert result['identity_evidence']['native_token_positions'] == [0, 1]
+                metric = await consumer.compute_persisted_native_metric(row, 'chain_metrics', session)
+                assert metric.pair_chains_iptm == {'0': {'0': 0., '1': .3}, '1': {'0': .8, '1': 0.}}
+                owner = await session.get(Job, job.id)
+                owner.provenance = dict(owner.provenance, binder_round_step=dict(stage='prediction', binder_chains=['original_target'], target_chains=['original_binder']))
+                assert await build_analysis_input_signature(get_analysis_definition('ipsae_interface'), row, {}, session) != signature
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize('fault', [None, 'source_role', 'input_index', 'input_sequence', 'native_entity', 'label_position'])
+def test_exact_input_roles_are_projected_not_guessed(fault):
+    from types import SimpleNamespace
+    source, full, summary = protein_bytes()
+    selected = {'native': consumer.derive_native_identity(source, full, summary, dict(candidate_id='c', document_id='c'))}
+    owner = SimpleNamespace(params={'complex_components': [dict(id='I', type='protein', sequence='G'), dict(id='J', type='protein', sequence='G')]},
+        provenance={'binder_round_step': dict(binder_chains=['B'], target_chains=['T'], input_components=[
+            dict(index=0, id='I', source_chain='B', role='binder', sequence='G'),
+            dict(index=1, id='J', source_chain='T', role='target', sequence='G')])})
+    row = owner.provenance['binder_round_step']['input_components'][0]
+    if fault == 'source_role': row['source_chain'] = 'T'
+    if fault == 'input_index': row['index'] = 1
+    if fault == 'input_sequence': row['sequence'] = 'A'
+    if fault == 'native_entity': selected['native']['token_axis']['residues'][0]['source_entity_id'] = '2'
+    if fault == 'label_position': selected['native']['token_axis']['residues'][0]['label_seq_id'] = 3
+    if fault:
+        with pytest.raises(ValueError): consumer.project_round_roles(selected, owner)
+    else:
+        roles, evidence = consumer.project_round_roles(selected, owner)
+        assert roles == {'binder_chains': ['R'], 'target_chains': ['S']}
+        assert evidence['input_to_output_chain'] == {'I': 'R', 'J': 'S'}
+
+
+def test_native_ipsae_mixed_tokens_exact_projection():
+    source, full, summary = mixed_bytes()
+    native = consumer.derive_native_identity(source, full, summary, dict(candidate_id='fixture', document_id='fixture'))
+    selected = dict(native=native, snapshots={'structure': source}, artifacts={'pae': {'path': 'fixture.json', 'sha256': hashlib.sha256(full).hexdigest()}})
+    artifact = consumer.native_ipsae_artifact(selected)
+    assert artifact.identity_evidence['native_token_positions'] == [0, 1]
+    assert artifact.identity_evidence['excluded_atom_token_count'] == 4
+    assert artifact.matrix.tolist() == [[native['pae'][i][j] for j in [0, 1]] for i in [0, 1]]
+    assert len(native['pae']) == 6
+    selected['native']['token_axis']['residues'][0]['auth_seq_id'] = 99
+    with pytest.raises(ValueError, match='missing native residue coordinates'):
+        consumer.native_ipsae_artifact(selected)
 
 
 def app_for(session):
@@ -303,7 +423,7 @@ async def test_selected_snapshot_and_atom_wire_refuse_foreign_identity(tmp_path)
             assert (await consumer.compute_persisted_native_metric(row,'residue_plddt',session,selected=foreign)).status=='unavailable'
             assert (await consumer.compute_persisted_pae(row,{},session,selected=foreign))[0]['status']=='unavailable'
             from services.analysis_subprocess import _dispatch_ipsae_interface
-            assert (await _dispatch_ipsae_interface(row,{},session,selected=selected))[0]['reason']=='unsupported_model_native_spatial_metric'
+            assert (await _dispatch_ipsae_interface(row,{},session,selected=selected))[0]['reason']=='missing_or_invalid_producer_identity_or_roles'
     finally:await engine.dispose()
 
 

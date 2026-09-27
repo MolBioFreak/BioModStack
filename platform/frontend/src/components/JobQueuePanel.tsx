@@ -340,17 +340,17 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     }, []);
 
     // Fetch queue data
-    const { data: queueData, isLoading } = useQuery({
+    const { data: queueData, isLoading, isError, dataUpdatedAt, refetch } = useQuery({
         queryKey: ['queue'],
-        queryFn: () => fetchQueue(),
+        queryFn: ({ signal }) => fetchQueue(undefined, signal),
         refetchInterval: (query) => jobPollingInterval(2000, query),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
 
-    const { data: cancelledData } = useQuery({
+    const { data: cancelledData, isLoading: cancelledLoading, isError: cancelledError, dataUpdatedAt: cancelledUpdatedAt, refetch: retryCancelled } = useQuery({
         queryKey: ['cancelledJobs'],
-        queryFn: () => fetchCancelledJobs(20),
+        queryFn: ({ signal }) => fetchCancelledJobs(20, signal),
         refetchInterval: (query) => jobPollingInterval(10000, query),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
@@ -466,8 +466,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     // Separate running, paused, queued, and pending_msa jobs
     const runningJobs = visibleQueue.filter(j => j.queue_status === 'running' && !remoteResultsState(j));
     const remoteTransitions = [
-        { phase: 'preparing', label: 'Preparing remote jobs' },
-        { phase: 'cancelling', label: 'Cancelling remote jobs' },
+        { phase: 'preparing' },
+        { phase: 'cancelling' },
     ].map(group => ({ ...group, jobs: visibleQueue.filter(j => j.execution_target_id && j.queue_status === group.phase) }));
     const pausedJobs = visibleQueue.filter(j => j.queue_status === 'paused' || j.paused);
     const queuedJobs = visibleQueue.filter(j => j.queue_status === 'queued' && !j.paused);
@@ -502,6 +502,10 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
 
     return (
         <div className={`${BMS_PANEL_OVERFLOW} ${className}`.trim()}>
+            {isError && <p role="alert" className="px-4 py-2 text-sm text-amber-300">
+                {queueData ? `Queue refresh failed. Showing last successful read from ${new Date(dataUpdatedAt).toLocaleTimeString()}.` : 'Queue unavailable. The queue could not be read.'}
+                {' '}<button type="button" onClick={() => void refetch()}>Retry queue</button>
+            </p>}
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50 hover:bg-slate-700/20">
                 <button
@@ -512,7 +516,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                     aria-controls="bms-gpu-queue-content"
                 >
                     <span className="text-sm font-semibold text-slate-200">GPU Queue</span>
-                    {stats && (
+                    {queueData && (
                         <div className="flex gap-2">
                             <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400">
                                 {stats.running} run
@@ -578,7 +582,11 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                             <h4 className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">
                                 Cancelled Jobs (click to requeue)
                             </h4>
-                            {cancelledJobs.length === 0 ? (
+                            {cancelledError && <p role="alert" className="text-amber-300">
+                                {cancelledData ? `Cancelled jobs refresh failed. Showing last successful read from ${new Date(cancelledUpdatedAt).toLocaleTimeString()}.` : 'Cancelled jobs unavailable.'}
+                                {' '}<button type="button" onClick={() => void retryCancelled()}>Retry cancelled jobs</button>
+                            </p>}
+                            {cancelledLoading ? <p role="status">Loading cancelled jobs…</p> : cancelledError && !cancelledData ? null : cancelledJobs.length === 0 ? (
                                 <div className="text-center py-4 text-slate-500 text-sm">
                                     No cancelled jobs
                                 </div>
@@ -610,16 +618,21 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                         <div className="flex justify-center py-4">
                             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent" />
                         </div>
-                    ) : visibleQueue.length === 0 ? (
+                    ) : isError && !queueData ? null : visibleQueue.length === 0 ? (
                         <div className="text-center py-4 text-slate-500 text-sm">
                             No jobs in queue
                         </div>
                     ) : (
                         <div className="space-y-3">
-                            {awaitingJobs.length > 0 && (
-                                <div>
-                                    <h4 className="text-xs font-semibold text-emerald-300 mb-1 uppercase tracking-wide">Remote results</h4>
+                            {(awaitingJobs.length > 0 || remoteTransitions.some(group => group.jobs.length > 0)) && (
+                                <div aria-label="Remote job phases">
+                                    <h4 className="text-xs font-semibold text-emerald-300 mb-1 uppercase tracking-wide">Remote jobs</h4>
                                     <div className="space-y-1">
+                                        {remoteTransitions.flatMap(group => group.jobs.map(job => (
+                                            <JobRow key={job.id} job={job} onCancel={() => cancelMutation.mutate(job.id)}
+                                                isPending={isPending || group.phase === 'cancelling'}
+                                                elapsedNowMs={elapsedNowMs} gpuCatalog={gpuCatalog} liveGpuOptions={liveGpuOptions} />
+                                        )))}
                                         {awaitingJobs.map(job => (
                                             <div key={job.id} className="bg-slate-700/30 rounded-lg p-3">
                                                 <Link to={`/jobs/${job.id}`} className="text-sm font-medium text-white hover:underline">{getDisplayJobName(job)}</Link>
@@ -629,19 +642,6 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                                     </div>
                                 </div>
                             )}
-                            {remoteTransitions.filter(group => group.jobs.length > 0).map(group => (
-                                <div key={group.phase}>
-                                    <h4 className="text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wide">{group.label}</h4>
-                                    <div className="space-y-1">
-                                        {group.jobs.map(job => (
-                                            <JobRow key={job.id} job={job}
-                                                onCancel={() => cancelMutation.mutate(job.id)}
-                                                isPending={isPending || group.phase === 'cancelling'}
-                                                elapsedNowMs={elapsedNowMs} gpuCatalog={gpuCatalog} liveGpuOptions={liveGpuOptions} />
-                                        ))}
-                                    </div>
-                                </div>
-                            ))}
                             {/* Running Jobs */}
                             {runningJobs.length > 0 && (
                                 <div>

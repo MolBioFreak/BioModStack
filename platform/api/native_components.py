@@ -35,16 +35,20 @@ PROCESS_CONTRACTS = {
     'modules/boltz.nf:AlignBoltz': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'path designs', 'val design_type'), ('tuple path("aligned/*.pdb"), path("aligned/*.json"), emit: pdbs_jsons', 'path "alignment_*.log"', 'path ("boltz_metadata_*.jsonl"), topic: metadata_ch_fold_seq'), (), ()),
     'modules/boltz.nf:FilterBoltz': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("output/*.pdb"), emit: pdbs, optional: true', 'path ("filter_boltz_${task.index}.log"), emit: log', 'path ("filtered.jsonl"), emit: jsonl, optional: true'), (), ()),
     'modules/boltz_cp_experimental.nf:RunBoltzCPExperimental': (('BoltzCP', 'gpu'), ('path input_config',), ("path 'cp_results', emit: results_dir, optional: true", "path 'cp_results/processed', emit: processed_dir, optional: true", "path '*.log'"), (), ()),
-    'modules/boltz_cp_experimental.nf:FinalizeBoltzCPExperimental': (('process_low',), ('path results_dir',), ("path 'published/*.pdb', emit: pdbs, optional: true", "path 'published/*.cif', emit: cifs, optional: true", "path 'published/*.json', emit: jsons, optional: true", "path 'published/*.npz', emit: npzs, optional: true"), (), ()),
-    'modules/boltzgen.nf:PrepBoltzGenInput': (('pyrosetta_tools',), ('val ligand_smiles', 'val ntp_type', 'val scaffold_length', 'val num_designs', 'val binding_site_residues', 'val catalytic_site', 'val protein_sequence', 'val dna_template_seq', 'val dna_primer_seq', 'val secondary_structure', 'val protocol', 'val covalent_bonds', 'val nanobody_framework', 'val cdr_h1_length', 'val cdr_h2_length', 'val cdr_h3_length', 'path input_pdb', 'path ligand_pdb', 'path dna_structure', 'path target_pdb'), ('path "boltzgen_prepared", emit: yaml',), ('scripts/prep_boltzgen.py', 'scripts/lib/boltzgen_inputs.py'), ()),
-    'modules/boltzgen.nf:RunBoltzGen': (('BoltzGen', 'gpu'), ('path yaml_configs',), ('path "output/designs/*.pdb", emit: pdbs, optional: true', 'path "output/designs/*.{json,npz,csv}", emit: jsons, optional: true', 'path "*.log"'), ('scripts/lib/boltzgen_inputs.py',), ()),
+    'modules/bindcraft2.nf:RunBindCraft2': (('gpu',), ('path compilation', 'val campaign_dir'), ("path 'bc2_complete.json', emit: completion",), ('scripts/run_bindcraft2_campaign.py', 'scripts/bindcraft2_native_adapter/sitecustomize.py'), ('container "${params.container_dir}/bindcraft2.sif"',)),
+    'modules/binder_blind_pose.nf:BinderBlindPoseESMFold2': (('ESMFold2', 'gpu'), ('path selection_manifest', 'path candidate_pdbs', 'path target_pdb'), ("path 'blind_pose_results', emit: results",), ('scripts/run_binder_blind_pose.py',), ('container "${params.container_dir}/esmfold2.sif"',)),
+    'modules/boltz_cp_experimental.nf:FinalizeBoltzCPExperimental': (('process_low',), ('path results_dir',), ("path 'published/**/*.pdb', emit: pdbs, optional: true", "path 'published/**/*.cif', emit: cifs, optional: true", "path 'published/**/*.json', emit: jsons, optional: true", "path 'published/**/*.npz', emit: npzs, optional: true"), (), ()),
+    'modules/boltzgen.nf:PrepBoltzGenInput': (('pyrosetta_tools',), ('val ligand_smiles', 'val ntp_type', 'val scaffold_length', 'val num_designs', 'val binding_site_residues', 'val catalytic_site', 'val protein_sequence', 'val dna_template_seq', 'val dna_primer_seq', 'val secondary_structure', 'val protocol', 'val covalent_bonds', 'val nanobody_framework', 'val cdr_h1_length', 'val cdr_h2_length', 'val cdr_h3_length', "path input_pdb, stageAs: 'backbone/*'", "path ligand_pdb, stageAs: 'ligand/*'", "path dna_structure, stageAs: 'dna/*'", "path target_pdb, stageAs: 'target/*'"), ('path "boltzgen_prepared", emit: yaml',), ('scripts/prep_boltzgen.py', 'scripts/lib/boltzgen_inputs.py'), ()),
+    'modules/boltzgen.nf:RunBoltzGen': (('BoltzGen', 'gpu'), ('path yaml_configs',), ('path "output/designs/*.pdb", emit: pdbs, optional: true', 'path "output/designs/*.{json,npz,csv}", emit: jsons, optional: true', 'path "*.log"'), ('scripts/lib/boltzgen_inputs.py', 'scripts/run_boltzgen_wrapper.py', 'scripts/boltzgen_source_correspondence.py', 'scripts/lib/boltzgen_native_source.json'), ()),
     'modules/boltzgen.nf:FilterBoltzGen': (('pyrosetta_tools',), ('path pdbs', 'path jsons'), ('path "filtered/*.pdb", emit: pdbs, optional: params.get(\'core_protein_scientific_contract\') == 1', 'path "filtered/*.json", emit: jsons, optional: true', 'path "filtered/filter_summary.json", emit: summary, optional: true', 'path "filtered/*.{npz,csv}", emit: native_artifacts, optional: true', 'path "*.log"'), ('scripts/filter_boltzgen.py',), ()),
     'modules/boltzgen.nf:SpawnBoltzGenJobs': (('process_low',), ('val parent_job_id', 'val total_designs', 'val designs_per_job', 'path yaml_config', 'path target_pdb', 'val mode', 'val batch_name'), ('path "spawn_boltzgen_result.json", emit: result', 'path "spawn_boltzgen.log"'), ('scripts/spawn_boltzgen_children.py',), ()),
     'modules/boltzgen.nf:WaitForBoltzGenChildren': (('process_low',), ('val parent_job_id', 'path spawn_result', 'val batch_name'), ('path "boltzgen_child_outputs.json", emit: result', 'path "wait_boltzgen.log"'), ('scripts/wait_for_children.py',), ()),
     'modules/boltzgen.nf:CollectBoltzGenOutputs': (('process_low',), ('path child_outputs_json',), ('path "collected/*.pdb", emit: pdbs, optional: true', 'path "collected/*.{json,npz,csv}", emit: jsons, optional: true', 'path "collection_manifest.json", emit: manifest'), ('scripts/child_job_utils.py',), ()),
     'modules/boltzgen.nf:AggregateBoltzGenResults': (('process_low',), ('val parent_job_id', 'path collected_pdbs', 'path collected_jsons', 'path manifest'), ('path "aggregation_report.json", emit: report',), (), ()),
-    'modules/caliby.nf:RunCaliby': (('Caliby', 'gpu'), ('tuple val(meta), path(pdb_files)',), ('tuple path("results/*.pdb"), path("results/generator_*.json"), emit: pdbs_jsons', 'path("caliby_metadata_${task.index}.jsonl"), emit: metadata', 'path "*.log"'), ('scripts/prep_caliby_antibody_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
-    'modules/caliby.nf:RunCalibyBinder': (('Caliby', 'gpu'), ('path(pdb_files)',), ('path("results/*.pdb"), emit: pdbs', 'path("results/generator_*.json"), emit: jsons', 'path("caliby_metadata.jsonl"), emit: metadata', 'path("caliby_binder.log"), emit: log'), ('scripts/prep_caliby_binder_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
+    'modules/caliby.nf:RunCaliby': (('Caliby', 'gpu'), ('tuple val(meta), path(pdb_files)',), ('tuple path("results/*.pdb"), path("results/generator_*.json"), emit: pdbs_jsons', 'path("results/native_outputs/**/*"), emit: native_outputs, optional: true', 'path("caliby_metadata_${task.index}.jsonl"), emit: metadata', 'path "*.log"'), ('scripts/prep_caliby_antibody_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
+    'modules/caliby.nf:RunCalibyBinder': (('Caliby', 'gpu'), ('tuple path(pdb_files), path(source_identity)',), ('path("results/*.pdb"), emit: pdbs', 'path("results/generator_*.json"), emit: jsons', 'path("results/native_outputs/**/*"), emit: native_outputs, optional: true', 'path("caliby_metadata.jsonl"), emit: metadata', 'path("caliby_constraints.csv"), emit: constraints', 'path("caliby_selection.json"), emit: selection, optional: true', 'path("caliby_binder.log"), emit: log', 'path("results/native_outputs/*"), emit: native_structures, optional: true'), ('scripts/prep_caliby_binder_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
+    'modules/ligandmpnn_design.nf:RunLigandMPNNDesign': (('gpu',), ("path request, stageAs: 'prepared_request.json'", "path source, stageAs: 'source/*'"), ("path 'ligandmpnn_design', emit: native_outputs",), ('scripts/run_ligandmpnn_design.py',), ()),
+    'modules/caliby_native.nf:RunCalibyNative': (('Caliby', 'gpu'), ('path request_dir',), ("path 'caliby_native', emit: native_results",), ('scripts/run_caliby_experimental.py',), ()),
     'modules/caliby.nf:FilterCaliby': (('Caliby',), ('tuple path(pdb_files), path(json_files)',), ('path("filtered_output/*.pdb"), emit: pdbs, optional: true', 'path("filtered_output/generator_*.json"), emit: jsons, optional: true', 'path("filter_caliby_${task.index}.log"), emit: logs'), ('scripts/filter_caliby.py',), ()),
     'modules/combine_metadata.nf:CombineMetadata': (('pyrosetta_tools',), ('path metadata_fold', 'path metadata_fold_seq'), ('path ("combined_metadata.csv"), emit: csv', 'path "combined_metadata.log"'), (), ()),
     'modules/compress.nf:Compress': (('pyrosetta_tools',), ('val program', 'path files'), ('path "*.tar.gz"',), (), ()),
@@ -69,9 +73,10 @@ PROCESS_CONTRACTS = {
     'modules/experimental/molecular_dynamics/openmm_replica.nf:MD_OPENMM_REPLICA': (('MolecularDynamicsOpenMM',), ('tuple val(replica_index), path(normalized_config), path(preparation_bundle)',), ('path "openmm_replica_${replica_index}_manifest.json", emit: manifest', 'path "replica_${replica_index}", emit: artifacts'), (), ()),
     'modules/experimental/molecular_dynamics/prepare.nf:MD_PREPARE_CONFIG': (('MolecularDynamicsPreparation',), ('path source_config', 'val config_base_dir'), ("path 'normalized_config.json', emit: normalized_config", "path 'md_metadata.json', emit: metadata", "path 'preparation_bundle', emit: preparation_bundle"), (), ()),
     'modules/fampnn.nf:PrepFAMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("fampnn_input/*.pdb"), emit: pdbs', 'path ("fampnn_input/*.fampnn_prep.json"), emit: provenance, optional: true', 'path ("*.csv"), emit: csv'), (), ()),
-    'modules/fampnn.nf:RunFAMPNN': (('FAMPNN', 'gpu_light'), ('tuple val(batch_id), path(pdbs), path(csv), val(gpu_id)', 'val analysis_chain_id', 'val analysis_contract // Trusted workflow-owned envelope, independent of pSCE.'), ('tuple path("results/*.pdb"), path("results/*.json"), emit: pdbs_jsons', 'path "fampnn_output", emit: raw', 'path ("fampnn_metadata_${batch_id}.jsonl"), topic: metadata_ch_fold_seq', 'path ("fampnn_seq_prob_metrics_${batch_id}.jsonl"), emit: seq_prob_metrics, optional: true', 'path "*.log"'), (), ()),
+    'modules/fampnn.nf:RunFAMPNN': (('FAMPNN', 'gpu_light'), ('tuple val(batch_id), path(pdbs), path(csv), val(gpu_id)', 'val analysis_chain_id', 'val analysis_contract // Trusted workflow-owned envelope, independent of pSCE.'), ('tuple path("results/*.pdb"), path("results/*.json"), emit: pdbs_jsons', 'path "fampnn_output", emit: raw', 'path ("fampnn_metadata_${batch_id}.jsonl"), topic: metadata_ch_fold_seq', 'path ("fampnn_seq_prob_metrics_${batch_id}.jsonl"), emit: seq_prob_metrics, optional: true', 'path "*.log"'), ('scripts/prep_fampnn_constraints_generic.py', 'scripts/fampnn_native_binding.py', 'scripts/maturation_native_adapter.py', 'scripts/maturation_correspondence.py'), ()),
     'modules/fampnn.nf:FilterFAMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("filtered_output/*.pdb"), emit: pdbs, optional: true', 'path ("filtered_output/*.json"), emit: jsons, optional: true', 'path ("filter_fampnn_${task.index}.log"), emit: logs'), (), ()),
     'modules/frustrampnn.nf:CanonicalFrustraMPNNTask': (('frustrampnn_gpu',), ('tuple val(component_request_meta), path(source_structure)',), ("tuple path('candidate_bundle/workflow_component_result_v1.json'), \\", "path('candidate_bundle'), \\", "path('candidate_bundle/frustrampnn_result_manifest_v1.json'), emit: result"), ('scripts/run_frustrampnn_component.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
+    'modules/ligandmpnn_interface_context.nf:RunLigandMPNNInterfaceContext': (('gpu',), ('tuple val(invocation_id), path(request_snapshot), path(source_snapshot)',), ("tuple val(invocation_id), path('context_result'), emit: evidence",), ('scripts/stage_ligandmpnn_interface_context.py', 'scripts/run_ligandmpnn_interface_context.py', 'platform/api/services/ligandmpnn_interface_context.py'), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn.nf:CanonicalFrustraMPNNV2Task': (('frustrampnn_gpu',), ('tuple path(component_request), path(source_structure), path(structure_map)',), ("tuple path('candidate_bundle/workflow_component_result_v3.json'), \\", "path('candidate_bundle'), \\", "path('candidate_bundle/frustrampnn_result_manifest_v3.json'), emit: result"), ('scripts/run_frustrampnn_component.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn_parent_fanout.nf:StageFrustraMPNNParentCandidate': (('CPU',), ('tuple val(candidate_meta), path(terminal_structure)',), ("path 'candidate_*', emit: candidate",), ('scripts/stage_frustrampnn_parent_candidate.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn_parent_fanout.nf:SpawnWaitFrustraMPNNParentChildren': (('CPU',), ('val parent_job_id', 'val parent_workflow_id', 'val settings_json', 'val settings_value_origin', 'path candidate_dirs'), ("path 'frustrampnn_parent_terminal_v1.json', emit: receipt", "path 'frustrampnn_child_bundles', emit: bundles"), ('scripts/run_frustrampnn_parent_fanout.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
@@ -106,7 +111,7 @@ PROCESS_CONTRACTS = {
     'modules/openmm.nf:OpenMMScore': (('OpenMM', 'gpu'), ('tuple val(batch_id), path(pdbs)', 'val scoring_mode', 'val binder_chains', 'val target_chains', 'val force_field'), ('path "scores/*.json", emit: scores_json, optional: true', 'path "*.log", emit: logs', 'path "mmgbsa_metadata_${batch_id}.jsonl", emit: metadata, optional: true, topic: metadata_ch_mmgbsa'), (), ()),
     'modules/openmm.nf:OpenMMDeltaDeltaG': (('OpenMM', 'gpu'), ('tuple val(design_name), path(mutant_pdb), path(wildtype_pdb)', 'val binder_chains', 'val target_chains', 'val force_field'), ('path "${design_name}_ddg.json", emit: ddg_json', 'path "*.log", emit: logs'), (), ()),
     'modules/ppiflow.nf:IdentifyAnchorResidues': (('pyrosetta_tools',), ('tuple val(meta), path(complex_pdb)',), ('tuple val(meta), path(complex_pdb), path("${meta.id}_enriched_complex.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), path("${meta.id}_cdr_positions_by_loop.json"), emit: anchor_inputs', 'tuple val(meta), path("${meta.id}_interface_score.json"), emit: interface_scores', 'tuple val(meta), path("${meta.id}_rotamer_enrichment.json"), emit: rotamer_enrichment'), ('scripts/prepare_ppiflow_maturation.py',), ()),
-    'modules/ppiflow.nf:RunPartialFlow': (('gpu', 'PPIFlow'), ('tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)',), ('tuple val(meta), path("ppiflow_backbones"), path("ppiflow_backbones_manifest.json"), emit: backbones',), ('scripts/anchors_to_ppiflow_positions.py', 'scripts/maturation_native_adapter.py', 'scripts/validate_ppiflow_masks.py'), ()),
+    'modules/ppiflow.nf:RunPartialFlow': (('gpu', 'PPIFlow'), ('tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)',), ('tuple val(meta), path("ppiflow_backbones"), path("ppiflow_backbones_manifest.json"), emit: backbones', 'tuple val(meta), path("${meta.id}_ppiflow_accounting.json"), emit: accounting'), ('scripts/anchors_to_ppiflow_positions.py', 'scripts/maturation_native_adapter.py', 'scripts/ppiflow_sample_identity.py', 'scripts/validate_ppiflow_masks.py', 'scripts/validate_ppiflow_roles.py'), ()),
     'modules/ppiflow.nf:PrepMaturationRedesign': (('pyrosetta_tools',), ('tuple val(meta), path(backbone_pdbs), path(anchors_json), path(cdr_positions), path(cdr_positions_by_loop), path(comparison_requests)',), ('tuple val(meta), path("fampnn_input/*.pdb"), path("fampnn.csv"), path("fampnn_transport"), emit: prep',), ('scripts/anchors_to_ppiflow_positions.py', 'scripts/prep_antibody_constraints.py', 'scripts/prep_fampnn_designs.py'), ()),
     'modules/ppiflow.nf:RunMaturationFAMPNN': (('FAMPNN', 'gpu_light'), ('tuple val(meta), path(pdbs), path(csv), path(transport_dir)',), ('tuple val(meta), path("matured_pdbs/*.pdb"), path("matured_jsons/*.json"), emit: redesigned',), ('scripts/analyse_fampnn.py', 'scripts/maturation_native_adapter.py'), ()),
     'modules/ppiflow.nf:ScoreMaturationImprovement': (('pyrosetta_tools',), ('tuple val(meta), path(original_pdb), path(matured_pdbs), path(ppiflow_positions), path(cdr_positions_by_loop_json)',), ('tuple val(meta), path("scores/*_maturation_score.json"), emit: scores',), ('scripts/score_maturation.py',), ()),
@@ -117,13 +122,13 @@ PROCESS_CONTRACTS = {
     'modules/protein_cad_experimental.nf:RunLaProteina': (('LaProteina', 'gpu'), ('path request_json', 'path input_dir'), ("path 'raw/pdbs/*.pdb', emit: pdbs", "path 'raw/metadata/*.json', emit: jsons", "path 'design_manifest.json', emit: manifest", "path '*.log'"), ('scripts/run_laproteina_inference.py',), ()),
     'modules/protein_cad_experimental.nf:RunDISCO': (('DISCO', 'gpu'), ('path request_json', 'path input_dir'), ("path 'raw/pdbs/*.pdb', emit: pdbs", "path 'raw/metadata/*.json', emit: jsons", "path 'design_manifest.json', emit: manifest", "path '*.log'"), ('scripts/run_disco_inference.py',), ()),
     'modules/protein_cad_experimental.nf:FinalizeProteinCadOutputs': (('process_low',), ('path pdb_files', 'path metadata_jsons', 'path design_manifest'), ("path 'published/*.pdb', emit: pdbs", "path 'published/confidence_*.json', emit: jsons", "path 'published/design_manifest.json', emit: manifest"), (), ()),
-    'modules/proteinmpnn.nf:PrepMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("mpnn_fixed/*.pdb"), emit: pdbs', 'path ("mpnn_prep_*.log")'), (), ()),
-    'modules/proteinmpnn.nf:RunMPNN': (('MPNN', 'gpu_light'), ('path pdbs',), ('tuple path("${params.get(\'sequence_design_engine\') == \'proteinmpnn\' ? \'mpnn_canonical\' : \'results\'}/*.pdb"), path("${params.get(\'sequence_design_engine\') == \'proteinmpnn\' ? \'mpnn_canonical\' : \'results\'}/*.json"), emit: pdbs_jsons', 'path "mpnn_native_output", emit: raw', 'path ("mpnn_metadata_${task.index}.jsonl"), topic: metadata_ch_fold_seq', 'path "*.log"'), (), ("errorStrategy { params.allow_retries && task.exitStatus in [137, 139] ? 'retry' : 'terminate' }", 'maxRetries { params.allow_retries ? 2 : 0 }')),
+    'modules/proteinmpnn.nf:PrepMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("mpnn_fixed/*.pdb"), emit: pdbs', 'path ("mpnn_prep_*.log")'), ('scripts/prep_mpnn_designs.py', 'scripts/add_fixed_labels.py', 'scripts/prep_fampnn_constraints_generic.py', 'scripts/proteinmpnn_binder_roles.py', 'scripts/proteinmpnn_native_binding.py'), ()),
+    'modules/proteinmpnn.nf:RunMPNN': (('MPNN', 'gpu_light'), ('path pdbs',), ('tuple path("${params.get(\'sequence_design_engine\') == \'proteinmpnn\' ? \'mpnn_canonical\' : \'results\'}/*.pdb"), path("${params.get(\'sequence_design_engine\') == \'proteinmpnn\' ? \'mpnn_canonical\' : \'results\'}/*.json"), emit: pdbs_jsons', 'path "mpnn_native_output", emit: raw', 'path ("mpnn_metadata_${task.index}.jsonl"), topic: metadata_ch_fold_seq', 'path "*.log"'), ('scripts/proteinmpnn_binder_roles.py', 'scripts/proteinmpnn_native_binding.py'), ("errorStrategy { params.allow_retries && task.exitStatus in [137, 139] ? 'retry' : 'terminate' }", 'maxRetries { params.allow_retries ? 2 : 0 }')),
     'modules/proteinmpnn.nf:FilterMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("filtered_output/*.pdb"), emit: pdbs, optional: true', 'path ("filtered_output/*.json"), emit: jsons, optional: true', 'path ("filter_mpnn_${task.index}.log"), emit: logs'), (), ()),
     'workflows/protein_sequence_design.nf:PublishSequenceDesign': (('pyrosetta_tools',), ("path source_pdb, stageAs: 'source/*'", "path settings_json, stageAs: 'settings/*'", "tuple path(native_pdbs, stageAs: 'unfiltered/*'), path(native_jsons, stageAs: 'unfiltered/*')", "tuple path(selected_pdbs, stageAs: 'filtered/*'), path(selected_jsons, stageAs: 'filtered/*'), path(filter_logs, stageAs: 'filter_logs/*')"), ("path 'sequence_design_results.json', emit: index",), ('scripts/sequence_design_results.py',), ()),
-    'modules/protenix.nf:ProtenixPredict': (('Protenix', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name), path(prepared_msa)',), ('tuple val(producer_meta), path("predictions/**/*.cif"), emit: typed_cifs, optional: true', 'path "producer_publication/**/*.json", emit: producer_publication', 'path "predictions/**/*confidence*.json", emit: confidence, optional: true', 'path "predictions/**/*full_data*.json", emit: full_confidence, optional: true', 'path "msa_prepared/msa_report.json", emit: msa_report, optional: true', 'path "*.log", emit: logs, optional: true'), ('scripts/prepare_protenix_msa.py', 'scripts/run_protenix_inference.py', 'scripts/write_structure_producer_manifest.py'), ()),
+    'modules/protenix.nf:ProtenixPredict': (('Protenix', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name), path(prepared_msa)',), ('tuple val(producer_meta), path("producer_candidates.json"), path("predictions/**/*.cif"), emit: typed_cifs', 'path "producer_publication/**/*.json", emit: producer_publication', 'path "predictions/**/*confidence*.json", emit: confidence, optional: true', 'path "predictions/**/*full_data*.json", emit: full_confidence, optional: true', 'path "msa_prepared/msa_report.json", emit: msa_report, optional: true', 'path "*.log", emit: logs, optional: true'), ('scripts/prepare_protenix_msa.py', 'scripts/run_protenix_inference.py', 'scripts/write_structure_producer_manifest.py'), ()),
     'modules/protenix.nf:PrepProtenixComplex': (('CPU',), ('tuple val(name), path(complex_json), path(msa_file), path(prepared_msa)',), ('tuple val(name), path("protenix_input.json"), path(prepared_msa), emit: protenix_json',), (), ()),
-    'modules/protenix.nf:ProtenixFromComplex': (('Protenix', 'gpu'), ('tuple val(input_sample), path(complex_json), path(prepared_msa)',), ('tuple val(input_sample), path("producer_candidates.json"), path("predictions/**/*.${protenixComplexFinalizesGeometry(params) ? \'pdb\' : \'cif\'}"), emit: canonical_structures, optional: true', 'path "producer_publication/**/*.json", emit: producer_publication', 'path "predictions/**/*.cif", emit: raw_structures', 'path "predictions/**/*confidence*.json", emit: confidence, optional: true', 'path "predictions/**/*full_data*.json", emit: full_confidence, optional: true', 'path "msa_prepared/msa_report.json", emit: msa_report, optional: true', 'path "*.log", emit: logs, optional: true'), ('scripts/extract_target_templates.py', 'scripts/finalize_target_geometry.py', 'scripts/prepare_protenix_constraints.py', 'scripts/prepare_protenix_exact_templates.py', 'scripts/prepare_protenix_msa.py', 'scripts/run_protenix_inference.py', 'scripts/write_structure_producer_manifest.py'), ("errorStrategy { params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'ignore' : 'terminate' }",)),
+    'modules/protenix.nf:ProtenixFromComplex': (('Protenix', 'gpu'), ('tuple val(input_sample), path(complex_json), path(prepared_msa)',), ('tuple val(input_sample), path("producer_candidates.json"), path("predictions/**/*.${protenixComplexFinalizesGeometry(params) ? \'pdb\' : \'cif\'}"), emit: canonical_structures', 'path "producer_publication/**/*.json", emit: producer_publication', 'path "predictions/**/*.cif", emit: raw_structures', 'path "predictions/**/*confidence*.json", emit: confidence, optional: true', 'path "predictions/**/*full_data*.json", emit: full_confidence, optional: true', 'path "msa_prepared/msa_report.json", emit: msa_report, optional: true', 'path "*.log", emit: logs, optional: true'), ('scripts/extract_target_templates.py', 'scripts/finalize_target_geometry.py', 'scripts/prepare_protenix_constraints.py', 'scripts/prepare_protenix_exact_templates.py', 'scripts/prepare_protenix_msa.py', 'scripts/run_protenix_inference.py', 'scripts/write_structure_producer_manifest.py'), ("errorStrategy { params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'ignore' : 'terminate' }",)),
     'modules/publish.nf:PublishResults': (('pyrosetta_tools',), ('path final_pdbs', 'path csv_scores', 'val rfd_count', 'val filter_rfd_count', 'val seq_count', 'val filter_seq_count', 'val filter_pred_count'), ('path "all_designs.csv"', 'path ("best_designs*"), optional: true', 'path "filter_best_designs.log"', 'path "success_metrics.json"'), (), ()),
     'modules/rf3.nf:RunRF3': (('Foundry', 'gpu'), ('tuple val(batch_id), path(pdbs)',), ('tuple path("rf3_results/*.cif.gz"), path("rf3_results/*.json"), emit: structures_metadata', 'path ("rf3_metadata_${batch_id}.jsonl"), emit: jsonl, topic: metadata_ch_fold_seq', 'path "rf3_${batch_id}.log"'), (), ('beforeScript """\n        mkdir -p rf3_results\n    """',)),
     'modules/rf3.nf:FilterRF3': (('Foundry',), ('tuple path(cif_files), path(json_files)',), ('path ("output/*.pdb"), emit: structures, optional: true', 'path "rf3_filter_*", emit: stage_receipt, optional: true', 'path "filter_rf3_${task.index}.log"', 'path (params.get(\'core_protein_scientific_contract\') == 1 ? "rf3_data_*.jsonl" : "output/filtered.jsonl"), emit: jsonl, optional: true'), (), ()),
@@ -159,7 +164,7 @@ PROCESS_CONTRACTS = {
     'modules/structure_prediction.nf:BoltzFromSequenceWithMSATask': (('Boltz', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name), path(msa_file)',), ("path 'boltz_task_binding.json'", 'tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: native_identity_artifacts, optional: true', 'path "*.log"'), (), ()),
     'modules/structure_prediction.nf:PrepareComplexWithMSA': (('CPU',), ('tuple val(complex_name), path(complex_json), path(msa_files)',), ('tuple val(complex_name), path("yamls/${complex_name}.yaml"), path("msa"), emit: prepared', 'path "msa/*.a3m", emit: msa, optional: true', 'path "msa/*_msa_quality.json", emit: quality_report, optional: true', 'path "msa/complex_msa_manifest.json", emit: msa_manifest, optional: true', 'path "*.log"'), ('scripts/extract_target_templates.py', 'scripts/run_local_msa.py'), ()),
     'modules/structure_prediction.nf:BoltzFromComplex': (('Boltz', 'gpu'), ('tuple val(complex_name), path(complex_yaml), path(msa_dir)',), ("path 'boltz_task_binding.json'", 'tuple val(complex_name), path("producer_candidates.json"), path("predictions/*.pdb"), emit: canonical_pdbs, optional: true', 'path "predictions/*.cif", emit: cifs, optional: true', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: npz, optional: true', 'path "*.log"'), ('scripts/finalize_target_geometry.py', 'scripts/write_structure_producer_manifest.py'), ()),
-    'modules/thermompnn.nf:THERMOMPNN': (('process_gpu',), ('tuple val(meta), path(pdb)',), ('tuple val(meta), path("*_stability.csv"), emit: stability', 'path "thermompnn.log"'), (), ('container "${params.container_dir}/stability_tools.sif"',)),
+    'modules/thermompnn.nf:THERMOMPNN': (('process_gpu',), ('tuple val(meta), path(pdb)',), ('tuple val(meta), path("*_stability.csv"), optional: true, emit: stability', 'path "thermompnn.log"'), (), ('container "${params.container_dir}/stability_tools.sif"',)),
     'modules/utils/anarci.nf:ANARCII': (('process_low',), ('tuple val(meta), path(pdb)',), ('tuple val(meta), path("*_imgt.pdb"), emit: pdb_imgt', 'tuple val(meta), path("*_cdrs.json"), emit: cdrs', 'tuple val(meta), path("*_cdr_positions.json"), emit: cdr_positions', 'path "anarci.log"'), (), ('container "${params.container_dir}/antibody_tools.sif"',)),
     'workflows/antibody_denovo.nf:SpawnRFantibodyJobs': (('process_low',), ('path target_pdb', 'val epitope_residues', 'val framework_type', 'val total_designs', 'val designs_per_job', 'val parent_job_id', 'val batch_name'), ('path "spawn_rfa_result.json", emit: result',), ('scripts/spawn_rfantibody_children.py',), ()),
     'workflows/antibody_denovo.nf:NormalizeTargetPDB': (('process_low',), ('tuple val(meta), path(target_pdb)',), ('tuple val(meta), path("normalized_target.pdb"), emit: normalized',), ('scripts/normalize_target_pdb.py',), ()),
@@ -236,6 +241,33 @@ PROCESS_CONTRACTS = {
 }
 
 
+# Binder selected leaves reuse these exact native process declarations.
+PROCESS_CONTRACTS.update({
+    'modules/ppiflow.nf:RunPPIFlowGeneration': (
+        ('gpu', 'PPIFlow'), ("path generation_request, stageAs: 'generation_request'",),
+        ("path 'ppiflow_generation', emit: native_results",),
+        ('scripts/run_ppiflow_generation.py',), ()),
+    'modules/bindcraft2.nf:PostprocessBindCraft2': (
+        ('cpu',), ('path compilation', 'val campaign_dir'),
+        ("path 'bc2_complete.json', emit: completion",),
+        ('scripts/run_bindcraft2_campaign.py', 'scripts/bindcraft2_native_adapter/sitecustomize.py'), ('container "${params.container_dir}/bindcraft2.sif"',)),
+    'workflows/binder_refinement.nf:PrepareBinderRefinementRegions': (
+        ('CPU',), ('tuple val(meta), path(pdb)',),
+        ('tuple val(meta), path(pdb), path("${meta.id}_seed.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), path("${meta.id}_cdr_positions_by_loop.json"), emit: regions',),
+        ('scripts/prepare_maturation_regions.py',), ()),
+    'workflows/binder_refinement.nf:PrepareBinderRedesign': (
+        ('pyrosetta_tools',), ('tuple val(meta), path(pdb), path(anchors)',),
+        ("tuple val(meta), path('fampnn_input/*.pdb'), path('fampnn.csv'), path('transport'), emit: prep",),
+        ('scripts/prep_fampnn_designs.py', 'scripts/prep_binder_fampnn_constraints.py'), ()),
+    'workflows/binder_refinement.nf:PublishBinderRefinement': (
+        ('CPU',), ('tuple val(meta), path(pdb)',),
+        ("tuple val(meta), path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: metadata"),
+        ('scripts/publish_binder_refinement.py',), ()),
+    'workflows/maturation_child_core.nf:PublishMaturationSampleIdentity': (
+        ('process_low',), ('tuple val(meta), path(sample_pdb)',),
+        ("path '*_sample_identity.json', emit: sidecar",), ('scripts/maturation_identity.py',), ()),
+})
+
 # Images are the existing nextflow.config labels, not top-level model guesses.
 LABEL_ASSETS = {
     'AF2': ('af2.sif', None, 'alphafold', 'af2_models'),
@@ -250,6 +282,7 @@ LABEL_ASSETS = {
     'MolecularDynamicsOpenMM': ('openmm-md-8.5.2.sif', 'md_openmm_container', None, None),
     'MolecularDynamicsCpu': ('gromacs-md-2025.3.sif', 'md_gromacs_container', None, None),
     'ESMFold2': ('esmfold2.sif', 'esmf_container_path', 'esmfold2', None),
+    'Caliby': ('caliby.sif', None, None, None),
     'FAMPNN': ('fampnn.sif', None, None, None),
     'MPNN': ('dl_binder_design.sif', None, None, None),
     'pyrosetta_tools': ('pyrosetta_tools.sif', None, None, None),
@@ -259,8 +292,8 @@ LABEL_ASSETS = {
     'ShapeRFD3': ('shape_rfd3.sif', None, None, None),
     'ShapeEvaluate': ('shape_rfd3.sif', None, None, None),
     'BoltzGen': ('boltzgen.sif', None, None, None),
-    'LaProteina': ('laproteina.sif', None, 'laproteina', 'pcad_laproteina_checkpoint_dir'),
-    'DISCO': ('disco.sif', None, 'disco', 'pcad_disco_checkpoint_path'),
+    'LaProteina': ('laproteina.sif', None, None, None),
+    'DISCO': ('disco.sif', None, None, None),
     'Antiberty': ('antibody_tools.sif', None, None, None),
     'ThermoMPNN': ('stability_tools.sif', None, 'thermompnn', None),
     'OpenMM': ('openmm.sif', None, None, None),
@@ -430,7 +463,7 @@ class _NativeAnnotations:
             if label in LABEL_ASSETS:
                 image, selector, weights, weight_selector = LABEL_ASSETS[label]
                 deps.append(self.asset('image', image, 'nextflow.config:process.withLabel.' + label, selector))
-                if weights:
+                if weights and native_name not in {'RunPPIFlowGeneration', 'RunBoltz', 'RunShapeBoltzValidator'}:
                     deps.append(self.asset('weights', weights, authority, weight_selector))
         for helper in helpers:
             deps.append(self.asset('support_tool', helper, authority))
@@ -675,6 +708,28 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         a.stage('PublishSequenceDesign', after, source='workflows/protein_sequence_design.nf')
         return True
 
+    if workflow == 'ppiflow_generation':
+        from component_runtime import SelectedDependency
+        from services.ppiflow_generation import selected_assets
+        assets = selected_assets(mode)
+        owner = 'platform/api/services/ppiflow_generation.py:selected_assets'
+        selected = []
+        for member in assets['weights']:
+            key = 'weights:' + member
+            dependencies[key] = SelectedDependency(key, 'weights', member, owner,
+                selector='ppiflow_weights_dir', selector_subpath=PurePosixPath(member).name)
+            selected.append(key)
+        a.stage(assets['process'], extra=tuple(selected))
+        return True
+
+    if workflow == 'boltzgen_generation':
+        after = ()
+        if not p.get('boltzgen_yaml_config'):
+            after = (a.stage('PrepBoltzGenInput'),)
+        run = a.stage('RunBoltzGen', after)
+        a.stage('FilterBoltzGen', (run,), condition='RunBoltzGen.out.pdbs is nonempty')
+        return True
+
     if workflow == 'boltzgen_child':
         # Prepared input and generation only; global selection belongs to parent.
         a.stage('RunBoltzGen')
@@ -807,8 +862,13 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
     if workflow == 'protein_cad_experimental':
         backend = p.get('pcad_backend') or 'disco'
         after = a.chain(['PrepProteinCadRequest', 'RunLaProteina' if backend == 'laproteina' else 'RunDISCO', 'FinalizeProteinCadOutputs'])
-        if backend == 'laproteina':
-            a.asset('runtime_data', 'laproteina', 'modules/protein_cad_experimental.nf:PrepProteinCadRequest', 'pcad_laproteina_data_path')
+        if backend == 'disco':
+            selector = ('pcad_disco_cutlass_path' if p.get('pcad_disco_cutlass_path')
+                        else 'disco_cutlass_path')
+            if p.get(selector):
+                a.asset('runtime_data', None,
+                    'modules/protein_cad_experimental.nf:PrepProteinCadRequest', selector,
+                    condition='explicit DISCO CUTLASS path')
         return True
 
     if workflow == 'confornets_experimental':
@@ -818,6 +878,36 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             if p.get(selector):a.asset('runtime_data', None, entrypoint, selector)
         if not yes('cn_skip_msa'):
             a.msa('protenix', ('PrepConforNetsRequest',), consumer='modules/confornets_experimental.nf:RunConforNets')
+        return True
+
+    if workflow == 'bindcraft2' and model_id == 'bindcraft2':
+        if mode in {'rank', 'filter', 'campaign_output', 'archive', 'unarchive', 'score'}:
+            a.stage('PostprocessBindCraft2')
+            return True
+        # The installed image ships MPNN weights; only AF2 params are external.
+        # Model launch availability remains separate from selected asset closure.
+        weights = a.asset('weights', 'alphafold/params',
+            'modules/bindcraft2.nf:RunBindCraft2:BINDCRAFT_AF2_PARAMS')
+        a.stage('RunBindCraft2', extra=(weights,))
+        return True
+
+    if workflow == 'binder_blind_pose' and (model_id, mode) == ('esmfold2', 'blind_pose'):
+        a.stage('BinderBlindPoseESMFold2')
+        return True
+
+    if workflow == 'ligandmpnn_design' and model_id == 'ligandmpnn':
+        from services.ligandmpnn_design import selected_assets
+        assets = tuple(a.asset(item['kind'], item['relative_path'],
+                       'services.ligandmpnn_design:selected_assets') for item in selected_assets())
+        a.stage('RunLigandMPNNDesign', extra=assets)
+        return True
+
+    if workflow == 'ligandmpnn_interface_context' and (model_id, mode) == ('ligandmpnn', 'interface_context'):
+        # The leaf invokes Apptainer explicitly rather than via a process
+        # container directive; its exact image still belongs in the closure.
+        image = a.asset('image', 'foundry.sif',
+                        'modules/ligandmpnn_interface_context.nf:RunLigandMPNNInterfaceContext:apptainer exec')
+        a.stage('RunLigandMPNNInterfaceContext', extra=(image,))
         return True
 
     if workflow == 'boltz_cp_experimental':
@@ -909,11 +999,39 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             a.callback('OpenInteractiveGate', 'scripts/open_stage_gate.py')
         return True
 
+    if (workflow == 'caliby_native' and model_id == 'caliby_experimental'
+            and mode in {'ensemble_design', 'sidechain_pack'}):
+        a.p.setdefault('task', mode)
+        a.stage('RunCalibyNative')
+        return True
+
+    if workflow == 'caliby_binder' and (model_id, mode) == ('caliby_binder', 'design'):
+        a.stage('RunCalibyBinder')
+        return True
+
+    if workflow == 'binder_refinement' and (model_id, mode) == ('binder_refinement', 'refine'):
+        repack, anchors, flow, redesign = (yes(key) for key in (
+            'maturation_repack_enabled', 'maturation_anchors_enabled',
+            'maturation_flow_enabled', 'maturation_redesign_enabled'))
+        prepared = ()
+        if repack or anchors:
+            prepared = a.chain(['IdentifyAnchorResidues'])
+        elif flow or redesign:
+            prepared = a.chain(['PrepareBinderRefinementRegions'])
+        after = prepared if repack else ()
+        if flow:
+            after = a.chain(['RunPartialFlow'], prepared)
+        if redesign:
+            after = a.chain(['PrepareBinderRedesign', 'RunMaturationFAMPNN'],
+                            tuple(dict.fromkeys((*after, *prepared))))
+        a.stage('PublishBinderRefinement', after)
+        return True
+
     if workflow in {'ppiflow_generator_design', 'maturation_child'}:
         after = a.chain(['IdentifyAnchorResidues', 'RunPartialFlow', 'ScorePartialFlowImprovement'])
         if workflow == 'maturation_child':
             # Preserve the native redesign predicate and top-N ranking authority.
-            redesign = p.get('maturation_redesign_enabled') is not False and p.get('ppiflow_mode') != 'backbone_refine'
+            redesign = p.get('maturation_redesign_enabled') is True and p.get('ppiflow_mode') != 'backbone_refine'
             if redesign:
                 after = a.chain(['ANARCII', 'PrepMaturationRedesign', 'RunMaturationFAMPNN', 'ScoreMaturationImprovement'], after,
                                 condition='maturation_child_core.runRedesign && redesign_enabled')
@@ -987,9 +1105,15 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             branches.extend(fampnn_after)
         if yes('seq_design_antifold', True):branches.extend(a.chain(['ANARCII', 'ANTIFOLD'], after))
         if yes('seq_design_proteinmpnn', True):branches.extend(a.chain(['PrepMPNN', 'RunMPNN'], after))
-        if yes('seq_design_caliby'):
-            unresolved('caliby', 'availability', 'platform/api/config/models/caliby_experimental.yaml',
-                       'Disabled native model is not enabled by workflow descriptor')
+        caliby_precollected = ((yes('interactive_gate_continue') or p.get('resume_job_id') is not None)
+            and conditioned and bool(p.get('selected_input_dir') or p.get('rfantibody_input_pdbs')
+                                     or p.get('fampnn_collected_pdbs')) and stage_family == 'caliby')
+        if yes('seq_design_caliby') and not caliby_precollected:
+            caliby_after = a.chain(['RunCaliby'], after)
+            if p.get('enable_caliby_filter') is not False and any(p.get(key) is not None for key in (
+                    'caliby_max_potts_energy', 'caliby_min_sc_plddt', 'caliby_max_sc_rmsd')):
+                caliby_after = a.chain(['FilterCaliby'], caliby_after)
+            branches.extend(caliby_after)
         after = tuple(branches) or after
         if yes('run_ppiflow_maturation', yes('run_maturation')):
             a.callback('maturation', entrypoint + ':SpawnMaturationJobs')

@@ -261,6 +261,102 @@ def derive_native_identity(source, full_raw, summary_raw, binding):
                                   for i, row in enumerate(summary['chain_pair_iptm'])})
 
 
+def native_ipsae_artifact(selected):
+    """Project proven residue tokens, never collapse ligand atom tokens or PAE.
+
+    Coordinates come from the exact selected CIF bytes. The derived submatrix's
+    native positions are explicit; raw full_data and its token axis stay intact.
+    """
+    from dataclasses import replace
+    import numpy as np
+    from services.aligned_error_utils import AlignedErrorArtifact, _strict_structure_records
+    records, _ = _strict_structure_records(selected['snapshots']['structure'], True, 1, '')
+    fields = ('residue_name', 'insertion_code', 'selected_model', 'selected_altloc',
+              'auth_asym_id', 'auth_seq_id', 'label_asym_id', 'label_seq_id', 'source_entity_id')
+    lookup = {}
+    for record in records:
+        key = tuple(getattr(record, field) for field in fields)
+        if key in lookup:
+            raise ValueError('ambiguous native coordinate mapping')
+        lookup[key] = record
+    native = selected['native']
+    residues, positions = [], []
+    for token in native['token_axis']['residues']:
+        if 'label_atom_id' in token:
+            continue  # Atom-token ligands have no residue ipSAE interpretation.
+        record = lookup.get(tuple(token[field] for field in fields))
+        if record is None or not np.isfinite([record.ca_coord, record.cb_coord]).all():
+            raise ValueError('missing native residue coordinates')
+        residues.append(replace(record, index=len(residues), chain_id=token['chain_id'],
+                                entity_instance_id=token['entity_instance_id']))
+        positions.append(token['index'])
+    if not residues or len(set(positions)) != len(positions):
+        raise ValueError('unsupported native residue token mapping')
+    evidence = dict(artifact_sha256=selected['artifacts']['pae']['sha256'],
+        matrix_key='token_pair_pae', row_axis=native['token_axis'], column_axis=native['token_axis'],
+        native_token_positions=positions, excluded_atom_token_count=len(native['pae']) - len(positions))
+    return AlignedErrorArtifact(path=Path(selected['artifacts']['pae']['path']),
+        format='protenix_full_json', matrix_key='token_pair_pae',
+        matrix=np.asarray(native['pae'], dtype=float)[np.ix_(positions, positions)],
+        residues=residues, row_positions=tuple(range(len(residues))),
+        column_positions=tuple(range(len(residues))), identity_evidence=evidence, contract_revision=1)
+
+
+def project_round_roles(selected, job):
+    """Bind explicit request component roles to validated native output chains.
+
+    Only the ordinary ordered, single-copy protein complex adapter is supported
+    here. Sequence equality verifies that explicit positional binding; it never
+    searches sequences to infer ancestry or chooses between equivalent chains.
+    """
+    from Bio.SeqUtils import seq1
+    if job is None:
+        raise ValueError('missing request owner')
+    step = (job.provenance or {}).get('binder_round_step') or {}
+    if not isinstance(step, dict):
+        raise ValueError('invalid request step')
+    components = (job.params or {}).get('complex_components')
+    if not isinstance(components, list) or not components:
+        raise ValueError('missing request component mapping')
+    chains = selected['native']['chain_index_map']
+    if len(chains) != len(components):
+        raise ValueError('unsupported request component copies')
+    mapping = {}
+    for index, (component, chain) in enumerate(zip(components, chains, strict=True)):
+        if not isinstance(component, dict):
+            raise ValueError('invalid request component')
+        identifier = component.get('id')
+        if (not isinstance(identifier, str) or not identifier or identifier in mapping
+                or component.get('type', 'protein') not in ('protein', 'peptide')
+                or component.get('count', 1) != 1 or component.get('modifications')
+                or chain['native_asym_id'] != index):
+            raise ValueError('unsupported request component mapping')
+        tokens = [t for t in selected['native']['token_axis']['residues'] if t['chain_id'] == chain['chain_id']]
+        sequence = component.get('sequence')
+        if (not isinstance(sequence, str) or len(tokens) != len(sequence)
+                or any('label_atom_id' in t or t['source_entity_id'] != str(index + 1)
+                       or t['label_seq_id'] != position + 1 for position, t in enumerate(tokens))
+                or ''.join(seq1(t['residue_name']) for t in tokens) != sequence):
+            raise ValueError('request component/native residue disagreement')
+        mapping[identifier] = chain['chain_id']
+    submitted = step.get('input_components')
+    if not isinstance(submitted, list) or len(submitted) != len(components):
+        raise ValueError('missing explicit input component roles')
+    roles = {'binder_chains': [], 'target_chains': []}
+    for index, (bound, component) in enumerate(zip(submitted, components, strict=True)):
+        if not isinstance(bound, dict) or type(bound.get('index')) is not int:
+            raise ValueError('invalid input component binding')
+        role = bound.get('role')
+        if (bound.get('index') != index or bound.get('id') != component['id']
+                or bound.get('sequence') != component['sequence'] or role not in ('binder', 'target')
+                or bound.get('source_chain') not in step.get(role + '_chains', [])):
+            raise ValueError('inconsistent explicit input component roles')
+        roles[role + '_chains'].append(mapping[bound['id']])
+    if not all(roles.values()) or set(roles['binder_chains']) & set(roles['target_chains']):
+        raise ValueError('missing or overlapping explicit input roles')
+    return roles, dict(source='binder_round_step.input_components', input_to_output_chain=mapping)
+
+
 async def verified_native_design(design, session, *, structure_only=False):
     from paths import get_data_root, resolve_runtime_data_path
     with session.no_autoflush:

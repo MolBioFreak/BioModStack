@@ -638,7 +638,7 @@ def test_stale_hardware_cache_does_not_relabel_live_runtime_probe_as_stale(tmp_p
     assert "stale" in snapshot.hardware_evidence_error.lower()
 
 
-def test_connection_and_active_monitor_are_status_only_while_snapshot_refresh_runs_and_both_stop_on_disconnect(
+def test_connection_and_active_monitor_are_status_only_and_stop_on_disconnect(
     tmp_path: Path,
 ) -> None:
     _, BioXpProfile, _, _ = _load()
@@ -658,9 +658,7 @@ def test_connection_and_active_monitor_are_status_only_while_snapshot_refresh_ru
         assert service.snapshot().observation_fresh is True
         assert clients[0].status_only_probes >= 3
         assert clients[0].probes == 0  # connect/initial status monitor never collect
-        assert service.snapshot_refresh_interval_seconds == 1.0
-        await service._snapshot_refresh_once()
-        assert clients[0].probes == 1
+        assert not hasattr(service, "_snapshot_refresh_task")
 
         await service.disconnect()
         stopped_status = clients[0].status_only_probes

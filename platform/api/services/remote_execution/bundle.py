@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 
 import json
 import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import tarfile
 import uuid
@@ -182,6 +184,19 @@ def current_source_identity(source_root: Path | None = None) -> tuple[str, str]:
 
 def resolve_job_result_contract(job: Any) -> dict[str, Any]:
     """Resolve the exact local ingestion contract bound into a remote attempt."""
+    if job.model_id == 'caliby_experimental':
+        from services.caliby_native import SUPPORTED_MODES, result_contract
+        if job.mode in SUPPORTED_MODES:
+            return result_contract(job.mode)
+    if job.model_id == 'ligandmpnn':
+        from services.ligandmpnn_design import MODES, result_contract
+        if job.mode in MODES:
+            return result_contract(job.mode)
+    if job.model_id == 'ppiflow':
+        from services.ppiflow_generation import generation_result_contract
+        native = generation_result_contract(job.mode)
+        if native is not None:
+            return native
     if job.model_id == 'protein_modification_experimental' and job.mode == 'de_novo_design':
         from services.rfd3_generation import generation_result_contract
         params = job.params if isinstance(job.params, dict) else json.loads(job.params or '{}')
@@ -513,6 +528,8 @@ def _input_assets(
     output_dir: Path,
     references: list[dict[str, Any]] | None = None,
     runtime_references: dict[str, dict[str, Any]] | None = None,
+    selected_staging: Path | None = None,
+    selected_remote_attempt: str | None = None,
 ) -> list[tuple[Path, str]]:
     selected: dict[Path, str] = {}
     input_roots = (get_data_root().resolve(), get_inputs_dir().resolve(), get_results_dir().resolve())
@@ -523,7 +540,14 @@ def _input_assets(
         system_roots.add(Path(params["runtime_image_store"]).resolve())
     destinations = {"work_dir", "out_dir", "out", "data_root", "code_root",
                     "weights_root", "container_dir", "msa_cache_dir", "cm_api_runtime_dir",
-                    "runtime_image_store"}
+                    "runtime_image_store", *(flag for flag, _ in IMAGE_SELECTORS.values())}
+    if native_invocation.model_id == 'bindcraft2':
+        # The prepared tree is one native input. Its campaign destination is
+        # writable output, never the read-only transported compilation folder.
+        destinations.add('bc2_campaign_dir')
+    from scripts.lib.portable_inputs import prepared_generation_source_fields
+    destinations.update(prepared_generation_source_fields(
+        native_invocation.model_id, native_invocation.mode, params))
     runtime_fields = {"laproteina_checkpoint_dir", "laproteina_data_path",
                       "disco_checkpoint_path", "disco_cutlass_path"}
     for key in runtime_fields:
@@ -534,8 +558,21 @@ def _input_assets(
             continue
         if str(Path(value).resolve()) not in (runtime_references or {}):
             raise RemoteBundleError(f"Native runtime field has no selected dependency binding: {key}")
-    candidates = _flatten_strings({key: value for key, value in params.items()
-                                   if key not in destinations and key not in runtime_fields})
+    selected_pdb_list = (native_invocation.model_id, native_invocation.mode) in {
+        ('template_antibody_denovo', 'maturation_child'),
+        ('binder_refinement', 'refine'), ('caliby_binder', 'design')}
+    candidates = list(_flatten_strings({key: value for key, value in params.items()
+                                   if key not in destinations and key not in runtime_fields
+                                   and not (key == 'ligandmpnn_interface_selection'
+                                            and native_invocation.model_id == 'ligandmpnn'
+                                            and native_invocation.mode == 'interface_context')
+                                   and not (key == 'blind_pose_selected'
+                                            and (native_invocation.model_id, native_invocation.mode)
+                                            == ('esmfold2', 'blind_pose'))
+                                   and not (key == 'pdb_paths' and selected_pdb_list)}))
+    if selected_pdb_list and params.get('pdb_paths'):
+        # Native child syntax is a comma-separated list, not one filesystem path.
+        candidates.extend(part.strip() for part in str(params['pdb_paths']).split(',') if part.strip())
     for raw in candidates:
         if not raw.startswith("/"):
             continue
@@ -642,11 +679,88 @@ def _input_assets(
         for path in selected:
             if _under(path, root):
                 selected[path] = "trusted-results/" + path.relative_to(trusted).as_posix()
+    # Selection is one immutable directory contract: manifest basenames must
+    # resolve beside candidate and independent-target snapshots on the worker.
+    if (native_invocation.model_id, native_invocation.mode) == ('esmfold2', 'blind_pose'):
+        from services.binder_blind_pose_selected import KEY, _verify_request_snapshots
+        from types import SimpleNamespace
+        binding = json.loads(native_invocation.requested_json).get(KEY)
+        if not isinstance(binding, dict):
+            raise RemoteBundleError('Selected blind pose has no request binding')
+        _verify_request_snapshots(SimpleNamespace(params=params), binding)
+        root = Path(params['blind_pose_selection_manifest']).parent.resolve()
+        if not any(_under(root, allowed) and root != allowed for allowed in input_roots):
+            raise RemoteBundleError('Selected blind pose directory is outside managed inputs')
+        selected[root] = f"blind-pose/{hashlib.sha256(str(root).encode()).hexdigest()[:16]}"
+    if (native_invocation.model_id, native_invocation.mode) == ('ligandmpnn', 'interface_context'):
+        from services.ligandmpnn_interface_publication import KEY, verify_binding
+        binding = json.loads(native_invocation.requested_json).get(KEY)
+        if not isinstance(binding, dict) or binding.get('manifest') != params.get('interface_context_manifest'):
+            raise RemoteBundleError('Selected interface-context manifest differs from request')
+        verify_binding(binding)
+        root = Path(binding['manifest']).parent
+        if not any(_under(root, allowed) and root != allowed for allowed in input_roots):
+            raise RemoteBundleError('Selected interface-context directory is outside managed inputs')
+        if selected_staging is None or selected_remote_attempt is None:
+            raise RemoteBundleError('Selected interface-context staging directory is missing')
+        relative = f"ligandmpnn-selection/{hashlib.sha256(str(root).encode()).hexdigest()[:16]}"
+        remote_dir = f"{selected_remote_attempt}/bundle/inputs/{relative}"
+        staged = _stage_ligandmpnn_selection(binding, selected_staging, remote_dir)
+        selected = {path: value for path, value in selected.items()
+                    if path != root and not _under(path, root)}
+        selected[staged] = relative
+        for reference in discovered:
+            path = Path(reference['source_path'])
+            if path == root or _under(path, root):
+                replacement = staged / path.relative_to(root)
+                reference['source_path'] = str(replacement)
+                reference['sha256'] = _sha256_file(replacement)
+                reference['size_bytes'] = replacement.stat().st_size
+    if native_invocation.model_id == 'bindcraft2' and params.get('bc2_compilation'):
+        # Compiler/runtime own this exact layout, including copied resume state.
+        # Inventory it once with the normal no-follow input owner; neither scan
+        # arbitrary historical campaigns nor rewrite sealed compilation bytes.
+        root = Path(params['bc2_compilation']).parent
+        selected[root] = 'bindcraft2'
     # A selected input directory already owns its contained generated files.
     # Do not transfer/hash the same bytes again as standalone child inputs.
     selected = {path: relative for path, relative in selected.items()
                 if not any(parent in selected for parent in path.parents)}
     return [(path, relative) for path, relative in sorted(selected.items(), key=lambda item: str(item[0]))]
+
+def _stage_ligandmpnn_selection(binding: dict, staging: Path, remote_dir: str) -> Path:
+    """Relocate both documents, retaining original source and request identities."""
+    from services.ligandmpnn_interface_publication import verify_binding
+    verify_binding(binding)
+    root = Path(binding['manifest']).parent
+    expected = {Path(binding['manifest'])}
+    for row in binding['sources'].values():
+        expected.update((Path(row['path']), Path(row['request'])))
+        original_snapshot = (row.get('original') or {}).get('snapshot_path')
+        if original_snapshot:
+            expected.add(Path(original_snapshot))
+    if {path for path in root.rglob('*') if not path.is_dir()} != expected or any(
+        path.is_symlink() for path in root.rglob('*')):
+        raise RemoteBundleError('Selected interface-context directory changed')
+    staged = staging / 'ligandmpnn-selection'
+    shutil.copytree(root, staged, symlinks=False)
+    records = []
+    for index, candidate in enumerate(binding['candidate_ids']):
+        original = binding['sources'][candidate]
+        source = staged / Path(original['path']).relative_to(root)
+        request = staged / Path(original['request']).relative_to(root)
+        if _sha256_file(source) != original['sha256'] or _sha256_file(request) != original['request_sha256']:
+            raise RemoteBundleError('Selected interface-context source changed during staging')
+        source_remote = remote_dir + '/' + source.relative_to(staged).as_posix()
+        request_remote = remote_dir + '/' + request.relative_to(staged).as_posix()
+        data = json.loads(request.read_bytes())
+        data['structure_path'] = source_remote
+        request.write_bytes((json.dumps(data, sort_keys=True, allow_nan=False) + '\n').encode())
+        records.append({'invocation_id': f'{index:03d}', 'request_path': request_remote,
+                        'source_path': source_remote})
+    manifest = staged / Path(binding['manifest']).relative_to(root)
+    manifest.write_bytes((json.dumps(records, sort_keys=True) + '\n').encode())
+    return staged
 
 
 def _rewrite(value: str, path_map: dict[str, str]) -> str:
@@ -660,6 +774,11 @@ def _rewrite(value: str, path_map: dict[str, str]) -> str:
             continue
         return str(PurePosixPath(remote) / relative)
     return value
+
+
+def _rewrite_maturation_pdb_paths(value: str, path_map: dict[str, str]) -> str:
+    """Place each native comma-delimited child input without changing its order."""
+    return ','.join(_rewrite(part.strip(), path_map) for part in value.split(','))
 
 
 def compile_remote_dependencies(
@@ -722,11 +841,11 @@ def compile_remote_dependencies(
     params = {key: value for key, value in params.items() if key not in omitted}
     # Resolve before inventory AND argv translation. This also covers saved-job
     # prewarm, whose argv is rebuilt by the ordinary Job command compiler.
-    names = {name for name, (flag, _) in IMAGE_SELECTORS.items() if flag in params}
-    if model_id.lower() == 'protenix':
-        names.add('protenix.sif')
-    if model_id.lower() == 'frustrampnn' or params.get('run_frustrampnn') is True:
-        names.add('frustrampnn.sif')
+    # A native request can retain settings for disabled optional operations.
+    # Only the selected plan owns image closure; neither a saved selector nor a
+    # top-level model name may turn an off-stage image into a launch requirement.
+    names = {row.relative_path for row in dependencies
+             if row.kind == 'image' and row.relative_path in IMAGE_SELECTORS}
     for name in sorted(names):
         flag, selector = IMAGE_SELECTORS[name]
         if name == 'frustrampnn.sif' and flag not in params and not os.environ.get(selector):
@@ -897,6 +1016,83 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
     return destination
 
 
+_SOURCE_ARCHIVE_DIGESTS: dict[str, str] = {}
+
+
+def _prune_source_archives(cache_root: Path) -> None:
+    # Keep the current and one preceding revision. A different process may be
+    # copying an older archive; its per-revision lock makes that one ineligible.
+    archives = []
+    for path in cache_root.glob('*.tar.gz'):
+        if not _SOURCE_IDENTITY_RE.fullmatch(path.name.removesuffix('.tar.gz')):
+            continue
+        try:
+            identity = path.lstat()
+        except FileNotFoundError:  # Another controller just pruned it.
+            continue
+        if stat.S_ISREG(identity.st_mode):
+            archives.append((identity.st_mtime_ns, path))
+    for _, path in sorted(archives, reverse=True)[2:]:
+        lock_path = cache_root / (path.name.removesuffix('.tar.gz') + '.lock')
+        with lock_path.open('a+b') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                continue
+            path.unlink(missing_ok=True)
+            _SOURCE_ARCHIVE_DIGESTS.pop(str(path), None)
+
+
+def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
+                           source_root: Path, *, extract: bool = True) -> str:
+    """Reuse a verified revision-keyed archive; stage privately, optionally extract."""
+    cache_root = data_root / 'remote-execution' / 'source-archives'
+    cache_root.mkdir(parents=True, exist_ok=True)
+    archive = cache_root / (revision + '.tar.gz')
+    key = str(archive)
+    with (cache_root / (revision + '.lock')).open('a+b') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # The expected digest is held by this process, not loaded from a
+        # writable sidecar. After a restart regenerate from the Git object.
+        expected = _SOURCE_ARCHIVE_DIGESTS.get(key)
+        if archive.is_symlink() or (archive.exists() and not archive.is_file()):
+            raise RemoteBundleError('Unsafe cached source archive')
+        if not archive.exists() or not expected or _sha256_file(archive) != expected:
+            temporary = cache_root / ('.archive-' + uuid.uuid4().hex)
+            try:
+                with temporary.open('xb') as output:
+                    subprocess.run(['git', 'archive', '--format=tar.gz', '-6', revision],
+                                   cwd=repo_root, check=True, stdout=output,
+                                   stderr=subprocess.PIPE, timeout=300)
+                    output.flush()
+                    os.fsync(output.fileno())
+                expected = _sha256_file(temporary)
+                os.replace(temporary, archive)
+                _SOURCE_ARCHIVE_DIGESTS[key] = expected
+            finally:
+                temporary.unlink(missing_ok=True)
+        # Each attempt owns its archive as well as its writable extracted tree.
+        staged = source_root / '.bms-source.tar.gz'
+        source_root.mkdir(parents=True, exist_ok=False)
+        # Hash the bytes as they enter this private attempt; rereading the
+        # staged copy after copyfile adds a full archive pass to every warm run.
+        staged_digest = hashlib.sha256()
+        with archive.open('rb') as source, staged.open('xb') as destination:
+            for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                destination.write(chunk)
+                staged_digest.update(chunk)
+        if staged_digest.hexdigest() != expected:
+            raise RemoteBundleError('Cached source archive changed during staging')
+        os.utime(archive, None, follow_symlinks=False)
+        _prune_source_archives(cache_root)
+    # Only the shared archive/copy needs serialization. Extraction writes into
+    # this attempt's private tree; holding the revision lock here stalls every
+    # other warm launch on an unrelated attempt's extraction.
+    if extract:
+        _safe_extract(staged, source_root)
+    return expected
+
+
 def prepare_remote_bundle(
     *,
     job: Any,
@@ -944,7 +1140,6 @@ def prepare_remote_bundle(
     staging_root = data_root / "remote-execution" / "staging" / attempt_id
     staging_root.mkdir(parents=True, exist_ok=False)
     source_root = staging_root / "source"
-    archive_path = staging_root / "source.tar.gz"
     revision = str(job.execution_source_revision or "").strip()
     inherited_tree = str(job.execution_source_tree or "").strip()
     if not _SOURCE_IDENTITY_RE.fullmatch(revision) or not _SOURCE_IDENTITY_RE.fullmatch(
@@ -961,23 +1156,8 @@ def prepare_remote_bundle(
     tree = _git(repo_root, "rev-parse", f"{revision}^{{tree}}")
     if inherited_tree != tree:
         raise RemoteBundleError("Inherited source tree does not match the inherited revision")
-    # Git emits deterministic gzip bytes for this revision; hash the transported
-    # archive, retaining the complete tree and the same format used by prewarm.
-    with archive_path.open("wb") as archive_handle:
-        completed = subprocess.run(
-            ["git", "archive", "--format=tar.gz", "-6", revision],
-            cwd=repo_root,
-            check=True,
-            stdout=archive_handle,
-            stderr=subprocess.PIPE,
-            timeout=300,
-        )
-        if completed.returncode != 0:
-            raise RemoteBundleError("Unable to archive the committed BMS source")
-    source_archive_sha256 = _sha256_file(archive_path)
-    _safe_extract(archive_path, source_root)
-    archive_copy = source_root / ".bms-source.tar.gz"
-    archive_path.replace(archive_copy)
+    source_archive_sha256 = _staged_source_archive(repo_root, data_root, revision, source_root)
+    archive_copy = source_root / '.bms-source.tar.gz'
 
     # Byte-addressed cache objects are shared; runnable trees never are.
     remote_source = f"{remote_attempt}/materialized/source"
@@ -1162,6 +1342,7 @@ def prepare_remote_bundle(
         runtime_paths=runtime_paths,
         output_dir=local_output,
         references=native_references, runtime_references=runtime_references,
+        selected_staging=staging_root, selected_remote_attempt=remote_attempt,
     )
     input_records: list[RemoteFileRecord] = []
     input_transfers: list[TransferPlan] = []
@@ -1188,6 +1369,9 @@ def prepare_remote_bundle(
         remote_destination = f"{remote_attempt}/bundle/{prefix}"
         input_transfers.append(TransferPlan(path, remote_destination))
         input_path_map[str(path.resolve())] = remote_destination
+        if (job.model_id, job.mode) == ('ligandmpnn', 'interface_context') and path.name == 'ligandmpnn-selection':
+            original_root = Path(effective_params['interface_context_manifest']).parent
+            input_path_map[str(original_root)] = remote_destination
 
     verify_approved_native_inputs(job, runtime_references, input_hashes)
     verify_selected_preparation_inputs(native_invocation.execution_plan, input_hashes)
@@ -1217,6 +1401,18 @@ def prepare_remote_bundle(
             path_map[command[command.index(flag) + 1]] = destination
     nextflow_executable = str(command[0]) if command else ""
     translated_command = [_rewrite(str(value), path_map) for value in command]
+    if job.model_id == 'bindcraft2' and '--bc2_campaign_dir' in command:
+        # The same local prefix names both prepared inputs and native output.
+        # Only the compilation argument follows the transported input mapping.
+        position = command.index('--bc2_campaign_dir') + 1
+        translated_command[position] = f'{remote_results}/bindcraft2'
+    if (job.mode == 'maturation_child' or job.model_id in {'binder_refinement', 'caliby_binder'}) and '--pdb_paths' in command:
+        position = command.index('--pdb_paths') + 1
+        translated_command[position] = _rewrite_maturation_pdb_paths(
+            str(command[position]), path_map)
+    if job.mode == 'blind_pose' and job.model_id == 'esmfold2' and '--blind_pose_candidate_pdbs' in command:
+        position = command.index('--blind_pose_candidate_pdbs') + 1
+        translated_command[position] = _rewrite_maturation_pdb_paths(str(command[position]), path_map)
     if translated_command and Path(nextflow_executable).name == "nextflow":
         translated_command[0] = binding["paths"]["nextflow"] if binding else f"{remote_root}/runner/nextflow"
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:

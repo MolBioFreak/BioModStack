@@ -741,11 +741,30 @@ async def launch_typed_md_job(
 
         from routers.jobs import TypedMdProjectLaunch, create_job
 
+        source_provenance = {
+            **copy.deepcopy(resolved.source_provenance or {}),
+            "source_ref": preview.source.source_ref.model_dump(mode="json"),
+            "source_sha256": expected_sha256,
+        }
+        params = {"md_job_spec": md_job_spec, "md_source_provenance": source_provenance}
+        if resolved.design_id is not None:
+            params.update({
+                "source_design_id": resolved.design_id,
+                "lineage_root_job_id": source_provenance.get("lineage_root_job_id"),
+                "selection_source_job_id": resolved.producer_job_id,
+                "selection_source_type": "design",
+                "source_stage_job_id": resolved.producer_job_id,
+                "source_stage_family": source_provenance.get("source_stage_family"),
+                "source_stage_mode": source_provenance.get("source_stage_mode"),
+                "source_selection_count": 1,
+            })
         job_data = JobCreate(
             name=request.intent.name,
             model_id="molecular_dynamics",
             mode="simulate",
-            params={"md_job_spec": md_job_spec},
+            # Keep coordinator/replica topology separate from scientific ancestry.
+            parent_job_id=None,
+            params=params,
             launch_context_id=request.intent.launch_context_id,
             execution_target_id=request.intent.execution_target_id,
             execution_policy=request.intent.execution_policy,
@@ -776,6 +795,7 @@ async def launch_typed_md_job(
             preview_digest=request.preview_digest,
             md_job_spec=copy.deepcopy(md_job_spec),
             source_token=source_token,
+            source_params=copy.deepcopy({key: value for key, value in params.items() if key != "md_job_spec"}),
         )
         async with experiment_session_factory() as experiment_session:
             return await create_job(

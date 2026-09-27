@@ -9,7 +9,7 @@ const resultsViewerSource = readFileSync('src/components/ResultsViewer.tsx', 'ut
 
 test('mobile/recent job list calls use lightweight summaries instead of full job payloads', () => {
   assert.match(apiSource, /summary\?: boolean;/u);
-  assert.match(dashboardSource, /fetchJobs\(\{ limit: 100, summary: true \}, queryClient\.getQueryData/u);
+  assert.match(dashboardSource, /fetchJobs\(\{ limit: 100, offset,[\s\S]*?summary: true \},\s*queryClient\.getQueryData/u);
   assert.match(quickViewerSource, /fetchJobs\(\{ status: 'completed', limit: 100, summary: true \}, queryClient\.getQueryData/u);
   assert.match(resultsViewerSource, /fetchJobs\(\{\s*include_children: true,\s*limit: 100,\s*summary: true,\s*q: debouncedJobSelectorSearch \|\| undefined,/u);
 });
@@ -20,6 +20,7 @@ test('summary lists hydrate full job detail before using params-heavy dashboard 
   assert.match(dashboardSource, /const handleResume = async \(job: Job\) =>/u);
   assert.match(dashboardSource, /const detailedJob = await hydrateJobForDetail\(job\);/u);
   assert.match(dashboardSource, /const handleClone = async \(job: Job\) =>/u);
+  assert.match(dashboardSource, /binder_round: detailedJob\.binder_round,/u);
   assert.match(resultsViewerSource, /enabled: Boolean\(jobId\)/u);
   assert.match(resultsViewerSource, /baseJobs\.map\(\(job: Job\) => job\.id === routedJob\.id \? routedJob : job\)/u);
 });

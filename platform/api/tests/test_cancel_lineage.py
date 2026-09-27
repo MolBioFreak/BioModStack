@@ -232,7 +232,7 @@ async def test_terminal_cancel_requires_owned_unit_stop_and_empty_proof(
 
 
 @pytest.mark.asyncio
-async def test_remote_terminal_cancel_releases_exclusive_target_lease_idempotently(
+async def test_remote_terminal_cancel_retains_lease_until_local_reconciliation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -277,8 +277,9 @@ async def test_remote_terminal_cancel_releases_exclusive_target_lease_idempotent
         await cancel_job_lineage("remote-cancel", session)
         target = await session.get(ExecutionTarget, "vast:123")
         assert target is not None
-        assert target.leased_job_id is None
-        assert target.lease_acquired_at is None
+        assert target.leased_job_id == "remote-cancel"
+        assert target.lease_acquired_at is not None
+        assert (await session.get(Job, "remote-cancel")).params["cancellation_receipt"]["remote_stop_verified"] is True
 
     await engine.dispose()
 

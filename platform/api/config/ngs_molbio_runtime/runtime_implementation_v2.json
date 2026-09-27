@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "f003f3a5c38565eb19c0538fcaa0468f11e909e7574b50d04e6e1199c911cbf0",
+  "content_sha256": "48d91636008e462166bbe979be806443cfefdccae50d0fba2b8972b9b6dca9a2",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -189,8 +189,8 @@
     },
     {
       "path": "nextflow.config",
-      "sha256": "ebbb4241d431a2c37ffc7e04a17ac7be0b5c5b7853026b1dabefed1574a5ce55",
-      "size_bytes": 101198
+      "sha256": "adc01128cfd23e28d76a1d27dec6cd621002c8d02f799ebfbbbd943a4b04eff0",
+      "size_bytes": 101612
     },
     {
       "path": "packages/sequence-utils/src/index.js",
@@ -314,13 +314,13 @@
     },
     {
       "path": "platform/api/experiment_services.py",
-      "sha256": "0b9c4f685bf5db76fbc84aa1c16bf72afa27ec90ec291204bbc09fe52328f222",
-      "size_bytes": 270472
+      "sha256": "e49bcd3d5682d442abf6bf3427647be0e340e8945974e05f98a5f97445c7b383",
+      "size_bytes": 277164
     },
     {
       "path": "platform/api/main.py",
-      "sha256": "b4a7c1acada9fb147caa0239ad4d07b3674347306ac1ef9a0fdf471c4710c7c0",
-      "size_bytes": 20270
+      "sha256": "f0d515e6e3b08960979096818e5dbaf1d538e48bbb50d46560f936ee659253ee",
+      "size_bytes": 20747
     },
     {
       "path": "platform/api/migrations/add_ont_external_move_bam_receipts.py",
@@ -389,8 +389,8 @@
     },
     {
       "path": "platform/api/model_registry.py",
-      "sha256": "57c2384caab995312ff6ec77affeea8b22445059ada665dbafd77fd871c6982a",
-      "size_bytes": 62974
+      "sha256": "9a15a00904613330540517c3dc20dc7afbf5397f673a9870723fdc9ffa23d9ab",
+      "size_bytes": 77883
     },
     {
       "path": "platform/api/molbio_database.py",
@@ -434,8 +434,8 @@
     },
     {
       "path": "platform/api/pyproject.toml",
-      "sha256": "5371f6d05f4c4d471faf3571b775e58dc35431dc7eeb19358b3a980343861b66",
-      "size_bytes": 1611
+      "sha256": "dc6b2d81a1abee37ae4693cea988c499adfebde1f0ba9b18ebe6760f9c90d1b3",
+      "size_bytes": 1631
     },
     {
       "path": "platform/api/readiness.py",
@@ -454,8 +454,8 @@
     },
     {
       "path": "platform/api/routers/files.py",
-      "sha256": "c5db9a80be69699bfa942fb39466b53cc9601f7b10758786b4b5f52e5a570aa3",
-      "size_bytes": 25397
+      "sha256": "762e710af6e41e7ee124eea22f43408667017ed86ea6dcdc068b9a551ae80a8f",
+      "size_bytes": 29402
     },
     {
       "path": "platform/api/routers/gpu.py",
@@ -464,8 +464,8 @@
     },
     {
       "path": "platform/api/routers/jobs.py",
-      "sha256": "133ea7955e521716e5c38021e3c77e1d354502a3c2892809ee276a96e7e50606",
-      "size_bytes": 485550
+      "sha256": "36f64f3b1d0871ad8a1b455ee335ee9bac5cde6c8bf88c90b1c3ddcf1fedb077",
+      "size_bytes": 537323
     },
     {
       "path": "platform/api/routers/molbio_ngs_experiments.py",
@@ -514,8 +514,8 @@
     },
     {
       "path": "platform/api/routers/project_manager.py",
-      "sha256": "acf9423da40294a5d402569944273dbed9faa26186728eca0b9c38c20b62b0bc",
-      "size_bytes": 141269
+      "sha256": "eef3e921cded190a0f7e968fec8059b13ba555574ebd7577b0204fabcca594cf",
+      "size_bytes": 141962
     },
     {
       "path": "platform/api/routers/projects.py",
@@ -544,13 +544,13 @@
     },
     {
       "path": "platform/api/schemas.py",
-      "sha256": "ebe115e6bea9bcbe93cf4538f121a3532960b35aafbd55d128549f509a8ba3af",
-      "size_bytes": 21136
+      "sha256": "473cbf3b9f2e4c44662d74ce2bc8b43608f0e9aca3ac459954c3e1ccb58a5693",
+      "size_bytes": 24655
     },
     {
       "path": "platform/api/services/analysis_autorun.py",
-      "sha256": "1af034c320bb45d9b0ce6d52c12a750c3f6ba5de0e45a5fcdd349e9bb1b57de3",
-      "size_bytes": 6114
+      "sha256": "9a952709422f82c69ef43a9d7724e13138c59db905648ab0f1f4e75983f0bc46",
+      "size_bytes": 8357
     },
     {
       "path": "platform/api/services/assembly/common.py",
@@ -584,13 +584,13 @@
     },
     {
       "path": "platform/api/services/global_experiments/adapters.py",
-      "sha256": "39ea7f8acc808a8c436efb9072253cf51baabc4be4b442329f2462846f2d17b6",
-      "size_bytes": 162727
+      "sha256": "7136c58531e58435cbd665dc88418115de5f234578d6bc142482b3132f792b81",
+      "size_bytes": 167331
     },
     {
       "path": "platform/api/services/global_experiments/launch_contexts.py",
-      "sha256": "20bc8de1aa3a03944d4af09011d74dd45fbc27e2d5c1391f43ed3c34d61e96ca",
-      "size_bytes": 73467
+      "sha256": "ddffafb61c62a1f228e982995322fdd47819292c8f9095effb7867eddbbc88f4",
+      "size_bytes": 90137
     },
     {
       "path": "platform/api/services/global_experiments/read_models.py",
@@ -604,8 +604,8 @@
     },
     {
       "path": "platform/api/services/global_experiments/result_surfaces.py",
-      "sha256": "21c186a4150c6bd2cd8e0c4c44036fcd816de18a422c83b5e76c89883927d85e",
-      "size_bytes": 21631
+      "sha256": "56b083066814790098b2d221a6ea2cb26fc6a32a081328558bff5816038a22c3",
+      "size_bytes": 21795
     },
     {
       "path": "platform/api/services/global_experiments/worker.py",
@@ -614,13 +614,13 @@
     },
     {
       "path": "platform/api/services/gpu_orchestrator.py",
-      "sha256": "2817d2fd9db05be2204d3f04876e3611a6e0a36defcbd31d4ee038bcf32cceba",
-      "size_bytes": 185439
+      "sha256": "c080171065ae1124ea38433061955450e33b373a4a083914497cebd97b984801",
+      "size_bytes": 185657
     },
     {
       "path": "platform/api/services/job_control.py",
-      "sha256": "40bffda1f64763431c880d76c67003aeec809362d693d181876a7896fdbe4026",
-      "size_bytes": 16771
+      "sha256": "02e343f9abd679f2d2c9f6289c178d908071fb2405fa3630e003d6cf2744056b",
+      "size_bytes": 14913
     },
     {
       "path": "platform/api/services/molbio_ngs_evidence.py",
@@ -654,8 +654,8 @@
     },
     {
       "path": "platform/api/services/nextflow.py",
-      "sha256": "317df0f70e40cd4ca847ab4ae415759d8aa662dea1e1a07957c116f4c0f4cfb0",
-      "size_bytes": 329642
+      "sha256": "d112c38e096a837af077bd9c2cc6cf46d5c3303854eeb8cd2bc10469a40da302",
+      "size_bytes": 349514
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
@@ -759,23 +759,23 @@
     },
     {
       "path": "platform/api/services/protein_project_capabilities.py",
-      "sha256": "acea1194a06816673bb2259facf99888198fa25bd1bca6a78c157452cb4eb89c",
-      "size_bytes": 61292
+      "sha256": "3150008c1b3aee7ed3330f2c0d94c8d97ac481b82c0e779ae9ce710e0f3d72ea",
+      "size_bytes": 66963
     },
     {
       "path": "platform/api/services/remote_execution/bundle.py",
-      "sha256": "0be75135b9019cfa4799aca347913d50eb4a54cb57cc8797f6b1a298e3285472",
-      "size_bytes": 76741
+      "sha256": "992a44b87bd8e7a376e2867abae6929570d89135e3626eb85e1a8073c2c1966c",
+      "size_bytes": 89103
     },
     {
       "path": "platform/api/services/remote_execution/cache.py",
-      "sha256": "2dea6f118f7ba0104795b856caa61320687f9d56bcd18f9b6a4651d4009b1e6b",
-      "size_bytes": 43983
+      "sha256": "589a3b85669695480208143f0c7b5e8894a7be9806ff8e6be31440dda7288b4c",
+      "size_bytes": 56528
     },
     {
       "path": "platform/api/services/remote_execution/managed_inventory.py",
-      "sha256": "7d7787d3e21f5b56c6510bfa4b6d58f51f6e7cdf07b37090e8c8b9911db51a57",
-      "size_bytes": 26008
+      "sha256": "b9c6b97cdcf51ceef6b2a809263c5f90483e97d39f74b2f6366af5a2921e21ff",
+      "size_bytes": 26027
     },
     {
       "path": "platform/api/services/resource_usage_evidence.py",
@@ -914,8 +914,8 @@
     },
     {
       "path": "platform/api/tools/bms_artifact_cache.py",
-      "sha256": "81f3d2b242017fd0dcf97296d0f045dee0d68bcf880a61b63e2abacfae58e01f",
-      "size_bytes": 56221
+      "sha256": "b7e057820fa669bd5ae2a1b3c27a1a9f8b295da5aa11af69c13a9f4cfb37e701",
+      "size_bytes": 59398
     },
     {
       "path": "platform/api/tools/bms_managed_runtime.py",
@@ -924,8 +924,8 @@
     },
     {
       "path": "platform/api/uv.lock",
-      "sha256": "4c9257b52a21337accd53c3f0565ed435a6382943ef0c71ee839b5272621f7f5",
-      "size_bytes": 1190197
+      "sha256": "28240d4a78906401739e39c7d0561936c4c76f445537e6366bc482de905ad666",
+      "size_bytes": 1203388
     },
     {
       "path": "platform/api/workflow_job_runner.py",
@@ -934,8 +934,8 @@
     },
     {
       "path": "platform/frontend/src/App.tsx",
-      "sha256": "385c487854fdc5f5067401f98307e188779d44fda4bca5a68f540a9f80016af7",
-      "size_bytes": 6045
+      "sha256": "610441b189331766f5cc9b4c516165c9a168e43f37c022bce38d77c0ca97c466",
+      "size_bytes": 6091
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/GCContentTrack.tsx",
@@ -944,8 +944,8 @@
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx",
-      "sha256": "79f2ba72f62f6ec570738fe542df62c056d3bf660c5c2e85e675fec9285f03dd",
-      "size_bytes": 192742
+      "sha256": "f486c1ec9aa325e58f41e37a8bf56face1578dd448a0415a020e59d3e977dc03",
+      "size_bytes": 195282
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/SequenceViewer.tsx",
@@ -1014,8 +1014,8 @@
     },
     {
       "path": "platform/frontend/src/components/NGSToolkit.tsx",
-      "sha256": "428341756fdf9f9732f9c4535257bd6d9af52193f00908d9272bc52e505fbed4",
-      "size_bytes": 328785
+      "sha256": "7012a33b45921cb7b9299ad30998c867643465d257d846b51f7ecb1d5f96f16c",
+      "size_bytes": 326565
     },
     {
       "path": "platform/frontend/src/components/NanoporeTemplate.tsx",
@@ -1114,8 +1114,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "98d7f8085d0c49e423eeb640f28dbfab4f11ace015874b4b4dd5fa2dd3865dda",
-      "size_bytes": 222778
+      "sha256": "03b5ae9b10dcca0626b834c31ed81cf067bcde3703dba8633e18ca54c76262fc",
+      "size_bytes": 230057
     },
     {
       "path": "platform/frontend/src/lib/goldenGateAuthority.ts",
@@ -1204,8 +1204,8 @@
     },
     {
       "path": "platform/frontend/vitest.md.config.ts",
-      "sha256": "63de2c35a84009576b54e0318bc32995fd3d5f5740568edce27187311bf7474a",
-      "size_bytes": 7499
+      "sha256": "0f37044104bb420aa408bb3d8b2117cc392ea56b7186011cf6152e0096bd6013",
+      "size_bytes": 10018
     },
     {
       "path": "schemas/molbio/restriction_enzyme_catalog_v1.schema.json",
@@ -1314,8 +1314,8 @@
     },
     {
       "path": "scripts/lib/runtime_image_lifecycle.py",
-      "sha256": "3bd48e0998011a672d48f9282c12ac31c0a1a0195723edaa0c5c533461b61abe",
-      "size_bytes": 33201
+      "sha256": "548713e460d88d94b077c3cc85ae1c8203a22b8e0d1402c5c17fb53a1794e62e",
+      "size_bytes": 33470
     },
     {
       "path": "scripts/lib/shared_runtime_images.py",
@@ -1432,8 +1432,8 @@
     "content_sha256": "46e82fdb7f6d526dd02c231efb6675a4f47c5709284a9cafd1e8758cf30a924f",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "345313fa8cddcaabaeaebd382898e03113f0c260",
-  "successor_source_tree": "89e022c95099e9d60f52293aac59356602ea826d",
+  "successor_source_commit": "0adf22f4ca8c02fc2ae8147e161785b1a7a20ec1",
+  "successor_source_tree": "68199f810e43f907eba96107d37749cb07c96f20",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

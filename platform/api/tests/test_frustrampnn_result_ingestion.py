@@ -79,6 +79,46 @@ def _terminal_outputs(root: Path) -> dict[str, list[str]]:
     }
 
 
+def _publish_primary_pdb(job_root: Path, design_name: str) -> Path:
+    """Publish a real primary structure at the protein_design output path."""
+    published = job_root / "results" / "best_designs" / f"{design_name}.pdb"
+    published.parent.mkdir(parents=True, exist_ok=True)
+    published.write_bytes(MANIFEST_FIXTURE._pdb())
+    return published
+
+
+def _bind_primary_csv_to_bundles(csv_path: Path, bundles: list[Path]) -> None:
+    """Carry the workflow's declared deterministic identity into primary rows."""
+    identities = {}
+    for bundle in bundles:
+        request = json.loads((bundle / "workflow_component_request_v1.json").read_text())
+        source = request["source_artifact"]
+        identities[source["artifact_id"]] = {
+            "parent_job_id": request["parent_job_id"],
+            "parent_workflow_id": request["parent_workflow_id"],
+            "producer_stage": source["producer_stage"],
+            "producer_candidate_key": source["relative_path"],
+            "producer_method": "boltz" if "boltz" in source["producer_stage"] else "af2",
+            "producer_output_key": source["relative_path"],
+            "producer_identity_sha256": hashlib.sha256(
+                canonical_json_bytes(request)
+            ).hexdigest(),
+            "producer_artifact_sha256": source["sha256"],
+            "source_format": "pdb",
+        }
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        columns = list(reader.fieldnames or [])
+        rows = list(reader)
+    for row in rows:
+        row.update(identities[row["candidate_id"]])
+    columns.extend(identities[next(iter(identities))])
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def _replace_identity(value, replacements: dict[str, str]):
     if isinstance(value, dict):
         return {key: _replace_identity(item, replacements) for key, item in value.items()}
@@ -213,7 +253,7 @@ async def _seed_numeric_metadata_case(
         for index, bundle in enumerate(bundles)
     ]
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     with (results / "all_designs.csv").open(
         "w", encoding="utf-8", newline=""
     ) as handle:
@@ -388,10 +428,10 @@ async def test_protein_design_typed_metadata_accepts_zero_and_allowed_negative_w
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:af2_terminal",
-        producer_candidate_key="frustrampnn/sources/af2/fold-0/sample-0/canonical.pdb",
+        producer_candidate_key="results/best_designs/  exact design string  .pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "candidate_id",
         "description",
@@ -447,6 +487,8 @@ async def test_protein_design_typed_metadata_accepts_zero_and_allowed_negative_w
                 "ptm": "0",
             }
         )
+    _publish_primary_pdb(job_root, "  exact design string  ")
+    _bind_primary_csv_to_bundles(results / "all_designs.csv", [bundle])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -505,6 +547,101 @@ async def db(tmp_path: Path):
         yield sessions
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_optional_component_cannot_rollback_fresh_primary_and_retry_identity(
+    tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verified primary row is durable before optional terminal validation."""
+    root = tmp_path / "primary"
+    root.mkdir()
+    structure = root / "candidate.pdb"
+    structure.write_bytes(MANIFEST_FIXTURE._pdb())
+    async with db() as session:
+        session.add(Job(
+            id="job-primary", name="primary", model_id="boltz2", mode="predict", params={},
+            status="running", queue_status="running", output_dir=str(root),
+            stage_outputs={"frustrampnn": [str(root / "missing-terminal.json")]},
+            provenance={"stage_terminal_states": {"frustrampnn": {"status": "failed", "outputs": []}}},
+        ))
+        await session.commit()
+
+    async def verified_primary(job_id, output_dir, session, epitope_residues):
+        assert job_id == "job-primary"
+        if await session.get(Design, "primary-candidate") is None:
+            session.add(Design(id="primary-candidate", job_id=job_id,
+                               name="candidate", pdb_path=str(structure),
+                               provenance={"producer_candidate_id": "primary-candidate"}))
+            return 1
+        return 0
+
+    monkeypatch.setattr(result_ingester, "_ingest_job_results", verified_primary)
+    for _attempt in range(2):
+        async with db() as session:
+            with pytest.raises(FrustraMPNNPersistenceError, match="missing, unsafe"):
+                await ingest_job_results("job-primary", str(root), session)
+        async with db() as session:
+            candidates = (await session.execute(select(Design).where(
+                Design.job_id == "job-primary"))).scalars().all()
+            assert [row.id for row in candidates] == ["primary-candidate"]
+            owner = await session.get(Job, "job-primary")
+            assert owner.provenance["stage_terminal_states"]["frustrampnn"]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_caller_owned_optional_failure_never_rolls_back_pending_primary(
+    tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "caller"
+    root.mkdir()
+    async with db() as session:
+        session.add(Job(id="caller", name="caller", model_id="boltz2", mode="predict", params={},
+                        status="running", queue_status="running", output_dir=str(root),
+                        stage_outputs={"frustrampnn": []}))
+        await session.commit()
+
+    async def primary(job_id, output_dir, session, epitope_residues):
+        session.add(Design(id="caller-candidate", job_id=job_id,
+                           name="candidate", pdb_path=str(root / "candidate.pdb")))
+        return 1
+
+    monkeypatch.setattr(result_ingester, "_ingest_job_results", primary)
+    async with db() as session:
+        with pytest.raises(FrustraMPNNPersistenceError, match="no explicit terminal result"):
+            await ingest_job_results("caller", str(root), session, commit=False)
+        assert await session.get(Design, "caller-candidate") is not None
+        await session.rollback()
+    async with db() as session:
+        assert await session.get(Design, "caller-candidate") is None
+
+
+@pytest.mark.asyncio
+async def test_lineage_requires_exact_owned_parent_not_foreign_name_or_path(
+    tmp_path: Path, db
+) -> None:
+    shared = str(tmp_path / "same.pdb")
+    async with db() as session:
+        for job_id in ("source-a", "source-b"):
+            session.add(Job(id=job_id, name=job_id, model_id="boltz2",
+                            mode="predict", params={}, status="completed"))
+            session.add(Design(id=f"design-{job_id}", job_id=job_id,
+                               name="same", pdb_path=shared))
+        await session.commit()
+
+    resolve = result_ingester._resolve_parent_design_lineage
+    context = {"source_stage_job_id": "source-a", "selection_index": {
+        "selected": {"source_design_id": "design-source-b", "design_job_id": "source-a"}}}
+    async with db() as session:
+        with pytest.raises(ValueError, match="different source job"):
+            await resolve(session, context, "selected")
+        context["selection_index"]["selected"] = {
+            "source_pdb_path": shared, "source_design_name": "same", "design_job_id": "source-a"}
+        lineage = await resolve(session, context, "selected")
+        assert lineage["parent_design_id"] == "design-source-a"
+        context["selection_index"]["selected"] = {
+            "source_design_name": "same", "design_job_id": "source-a"}
+        assert (await resolve(session, context, "selected"))["parent_design_id"] is None
 
 
 async def _seed_job(
@@ -977,7 +1114,7 @@ async def test_finalizer_owns_manifest_transaction_and_marks_replay_idempotent(
         assert job is not None
         first = await finalize_successful_job(job, str(tmp_path), session)
         assert first.completed is True
-        assert first.design_count == 1
+        assert first.design_count == 2  # native loose-file import plus seeded Design
         assert job.provenance["result_integrity"]["idempotent_prior_results"] is False
 
     async with db() as session:
@@ -989,12 +1126,12 @@ async def test_finalizer_owns_manifest_transaction_and_marks_replay_idempotent(
         await session.commit()
         replay = await finalize_successful_job(job, str(tmp_path), session)
         assert replay.completed is True
-        assert replay.design_count == 1
+        assert replay.design_count == 2
         assert job.provenance["result_integrity"]["idempotent_prior_results"] is True
 
 
 @pytest.mark.asyncio
-async def test_parent_manifest_creates_deterministic_design_before_canonical_ingestion(
+async def test_parent_manifest_requires_native_design_before_canonical_ingestion(
     tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     job_id = "job-parent-identity"
@@ -1015,6 +1152,11 @@ async def test_parent_manifest_creates_deterministic_design_before_canonical_ing
         manifests=[bundle / MANIFEST_PATH],
     )
 
+    # Simulate the native producer publication; the optional stage cannot mint it.
+    async with db() as session:
+        session.add(Design(id=candidate_id, job_id=job_id, name="rank_0", pdb_path=str(source)))
+        await session.commit()
+
     from services import result_ingester
 
     real_ingest = result_ingester.ingest_frustrampnn_result_bundle
@@ -1030,7 +1172,7 @@ async def test_parent_manifest_creates_deterministic_design_before_canonical_ing
 
     monkeypatch.setattr(result_ingester, "ingest_frustrampnn_result_bundle", assert_design_first)
     async with db() as session:
-        assert await ingest_job_results(job_id, str(job_root), session, commit=False) == 1
+        await ingest_job_results(job_id, str(job_root), session, commit=False)
         design = await session.get(Design, candidate_id)
         assert design is not None
         assert design.id == candidate_id
@@ -1041,12 +1183,12 @@ async def test_parent_manifest_creates_deterministic_design_before_canonical_ing
         await session.rollback()
 
     async with db() as verification:
-        assert await verification.get(Design, candidate_id) is None
+        assert await verification.get(Design, candidate_id) is not None
         assert await verification.get(FrustraMPNNResult, (job_id, invocation_id)) is None
 
 
 @pytest.mark.asyncio
-async def test_complex_parent_manifest_creates_exact_frustrampnn_source_design(
+async def test_complex_parent_manifest_attaches_to_exact_native_source_design(
     tmp_path: Path, db
 ) -> None:
     job_id = "job-complex-parent-identity"
@@ -1069,7 +1211,17 @@ async def test_complex_parent_manifest_creates_exact_frustrampnn_source_design(
     )
 
     async with db() as session:
-        assert await ingest_job_results(job_id, str(job_root), session, commit=False) == 1
+        session.add(Design(id=candidate_id, job_id=job_id, name="complex", pdb_path=str(source),
+                           artifact_class="predicted_structure", source_stage_family="complex_prediction",
+                           source_stage_mode="complex_prediction:boltz:protein_only"))
+        await session.commit()
+
+    # Isolate the component join from the generic legacy loose-file scanner;
+    # the producer's exact native Design was committed above.
+    async with db() as session:
+        from services.result_ingester import _ingest_explicit_frustrampnn_results
+        job = await session.get(Job, job_id)
+        assert await _ingest_explicit_frustrampnn_results(job, job_root, session, commit=False) == 1
         design = await session.get(Design, candidate_id)
         assert design is not None
         assert design.job_id == job_id
@@ -1081,12 +1233,12 @@ async def test_complex_parent_manifest_creates_exact_frustrampnn_source_design(
         await session.rollback()
 
     async with db() as verification:
-        assert await verification.get(Design, candidate_id) is None
+        assert await verification.get(Design, candidate_id) is not None
         assert await verification.get(FrustraMPNNResult, (job_id, invocation_id)) is None
 
 
 @pytest.mark.asyncio
-async def test_parent_candidate_set_rolls_back_designs_and_results_on_late_bundle_failure(
+async def test_parent_candidate_set_preserves_primary_designs_on_late_bundle_failure(
     tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     job_id = "job-parent-rollback"
@@ -1099,7 +1251,7 @@ async def test_parent_candidate_set_rolls_back_designs_and_results_on_late_bundl
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:af2_terminal",
-        producer_candidate_key="frustrampnn/sources/af2/rank_0.pdb",
+        producer_candidate_key="results/best_designs/candidate-a.pdb",
     )
     candidate_b, invocation_b, _ = _parent_bundle(
         bundle_b,
@@ -1107,16 +1259,19 @@ async def test_parent_candidate_set_rolls_back_designs_and_results_on_late_bundl
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:af2_terminal",
-        producer_candidate_key="frustrampnn/sources/af2/rank_1.pdb",
+        producer_candidate_key="results/best_designs/candidate-b.pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     (results / "all_designs.csv").write_text(
         "candidate_id,description\n"
         f"{candidate_a},candidate-a\n"
         f"{candidate_b},candidate-b\n",
         encoding="utf-8",
     )
+    for name in ("candidate-a", "candidate-b"):
+        _publish_primary_pdb(job_root, name)
+    _bind_primary_csv_to_bundles(results / "all_designs.csv", [bundle_a, bundle_b])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1143,7 +1298,7 @@ async def test_parent_candidate_set_rolls_back_designs_and_results_on_late_bundl
 
     async with db() as verification:
         for candidate_id in (candidate_a, candidate_b):
-            assert await verification.get(Design, candidate_id) is None
+            assert await verification.get(Design, candidate_id) is not None
         for invocation_id in (invocation_a, invocation_b):
             assert await verification.get(FrustraMPNNResult, (job_id, invocation_id)) is None
 
@@ -1193,7 +1348,7 @@ async def test_protein_design_canonical_ingestion_precreates_identity_and_enrich
 ) -> None:
     job_id = "job-protein-design"
     job_root = tmp_path / "job-root"
-    candidate_key = "frustrampnn/sources/af2/fold-a/sample-0/canonical.pdb"
+    candidate_key = "results/best_designs/duplicate-basename.pdb"
     bundle = job_root / "frustrampnn" / "results" / "candidate"
     candidate_id, invocation_id, source = _parent_bundle(
         bundle,
@@ -1204,12 +1359,14 @@ async def test_protein_design_canonical_ingestion_precreates_identity_and_enrich
         producer_candidate_key=candidate_key,
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     (results / "all_designs.csv").write_text(
         "candidate_id,description,pr_plddt,seq_mpnn_score\n"
         f"{candidate_id},duplicate-basename,91.25,-1.75\n",
         encoding="utf-8",
     )
+    _publish_primary_pdb(job_root, "duplicate-basename")
+    _bind_primary_csv_to_bundles(results / "all_designs.csv", [bundle])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1228,9 +1385,9 @@ async def test_protein_design_canonical_ingestion_precreates_identity_and_enrich
         assert design.name == "duplicate-basename"
         assert design.plddt_overall == pytest.approx(91.25)
         assert design.mpnn_score == pytest.approx(-1.75)
-        assert design.source_stage == "frustrampnn_candidate"
-        assert design.source_stage_family == "protein_design"
-        assert design.source_stage_mode == "protein_design:af2_terminal"
+        assert design.source_stage is None  # native primary, not optional analysis
+        assert design.provenance["all_designs_metadata"]["producer_stage"] == "protein_design:af2_terminal"
+        assert design.provenance["all_designs_metadata"]["producer_candidate_key"] == candidate_key
         assert await session.get(FrustraMPNNResult, (job_id, invocation_id)) is not None
         count = (
             await session.execute(
@@ -1272,12 +1429,15 @@ async def test_protein_design_metadata_set_is_prevalidated_before_any_write(
     )
     if metadata_rows is not None:
         results = job_root / "results"
-        results.mkdir(parents=True)
+        results.mkdir(parents=True, exist_ok=True)
         rendered = [row.format(candidate_id=candidate_id) for row in metadata_rows]
         (results / "all_designs.csv").write_text(
             "candidate_id,description\n" + "\n".join(rendered) + ("\n" if rendered else ""),
             encoding="utf-8",
         )
+        if len(metadata_rows) > 1:
+            for name in ("first", "second", "candidate", "other"):
+                _publish_primary_pdb(job_root, name)
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1307,15 +1467,17 @@ async def test_protein_design_replay_is_idempotent_and_keeps_exact_identity(
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:boltz_terminal",
-        producer_candidate_key="frustrampnn/sources/boltz/fold-a/sample-0/canonical.pdb",
+        producer_candidate_key="results/best_designs/stable-design.pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     (results / "all_designs.csv").write_text(
         "candidate_id,description,pr_plddt\n"
         f"{candidate_id},stable-design,88.5\n",
         encoding="utf-8",
     )
+    _publish_primary_pdb(job_root, "stable-design")
+    _bind_primary_csv_to_bundles(results / "all_designs.csv", [bundle])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1369,10 +1531,10 @@ async def test_protein_design_replay_distinguishes_signed_zero_in_immutable_snap
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:boltz_terminal",
-        producer_candidate_key="frustrampnn/sources/boltz/fold-a/sample-0/canonical.pdb",
+        producer_candidate_key="results/best_designs/signed-zero-design.pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     csv_path = results / "all_designs.csv"
 
     def publish(value: str) -> None:
@@ -1381,8 +1543,10 @@ async def test_protein_design_replay_distinguishes_signed_zero_in_immutable_snap
             f"{candidate_id},signed-zero-design,{value}\n",
             encoding="utf-8",
         )
+        _bind_primary_csv_to_bundles(csv_path, [bundle])
 
     publish(initial)
+    _publish_primary_pdb(job_root, "signed-zero-design")
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1437,15 +1601,17 @@ async def test_protein_design_replay_fails_closed_without_legacy_metadata_snapsh
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:af2_terminal",
-        producer_candidate_key="frustrampnn/sources/af2/fold-a/sample-0/canonical.pdb",
+        producer_candidate_key="results/best_designs/legacy-snapshot.pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     (results / "all_designs.csv").write_text(
         "candidate_id,description,pr_plddt\n"
         f"{candidate_id},legacy-snapshot,88.5\n",
         encoding="utf-8",
     )
+    _publish_primary_pdb(job_root, "legacy-snapshot")
+    _bind_primary_csv_to_bundles(results / "all_designs.csv", [bundle])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1477,16 +1643,18 @@ async def test_protein_design_replay_rejects_mutated_metadata_without_any_row_ch
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:af2_terminal",
-        producer_candidate_key="frustrampnn/sources/af2/fold-a/sample-0/canonical.pdb",
+        producer_candidate_key="results/best_designs/original-name.pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     csv_path = results / "all_designs.csv"
     csv_path.write_text(
         "candidate_id,description,pr_plddt,fold_id,seq_id\n"
         f"{candidate_id},original-name,88.5,7,3\n",
         encoding="utf-8",
     )
+    _publish_primary_pdb(job_root, "original-name")
+    _bind_primary_csv_to_bundles(csv_path, [bundle])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1548,14 +1716,12 @@ async def test_protein_design_multi_candidate_replay_metadata_conflict_rolls_bac
             job_id=job_id,
             parent_workflow_id="protein_design",
             producer_stage="protein_design:boltz_terminal",
-            producer_candidate_key=(
-                f"frustrampnn/sources/boltz/fold-{index}/sample-0/canonical.pdb"
-            ),
+            producer_candidate_key=f"results/best_designs/stable-{index}.pdb",
         )
         for index, bundle in enumerate(bundles)
     ]
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     csv_path = results / "all_designs.csv"
     csv_path.write_text(
         "candidate_id,description,pr_plddt\n"
@@ -1565,6 +1731,9 @@ async def test_protein_design_multi_candidate_replay_metadata_conflict_rolls_bac
         ),
         encoding="utf-8",
     )
+    for index in range(len(candidates)):
+        _publish_primary_pdb(job_root, f"stable-{index}")
+    _bind_primary_csv_to_bundles(csv_path, bundles)
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1626,7 +1795,7 @@ async def test_disabled_frustrampnn_ordinary_protein_design_uses_published_candi
     )
     job_root = tmp_path / "job-root"
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     payload = MANIFEST_FIXTURE._pdb()
     artifact_sha256 = hashlib.sha256(payload).hexdigest()
     producer_identity_sha256 = hashlib.sha256(b"ordinary-producer-identity").hexdigest()
@@ -1992,7 +2161,7 @@ async def test_disabled_protein_design_rejects_unsafe_or_ambiguous_published_str
         artifact_sha256 = "0" * 64
     job_root = tmp_path / "job-root"
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     (results / "all_designs.csv").write_text(
         "candidate_id,description,parent_job_id,parent_workflow_id,producer_stage,"
         "producer_candidate_key,producer_method,producer_output_key,producer_identity_sha256,"

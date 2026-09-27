@@ -115,6 +115,41 @@ def resolveMaturationRankingScore(parsed, boolean strict) {
          (parsed.delta_interface_score ?: 0.0))
 }
 
+process PublishIgGMMaturedCandidates {
+    label 'CPU'
+    publishDir "${params.out_dir}/collected/iggm_maturation", mode: 'copy'
+    input:
+    tuple val(meta), path(pdb)
+    output:
+    tuple val(meta), path('published/*.pdb'), emit: candidates
+    path('published/*.json'), emit: metadata
+    script:
+    def encoded = groovy.json.JsonOutput.toJson(meta).bytes.encodeBase64().toString()
+    """
+    python3 '${params.code_root}/scripts/publish_binder_refinement.py' \\
+        --pdb '${pdb}' --meta-base64 '${encoded}' --output-dir published
+    """
+}
+
+process PublishMaturationSampleIdentity {
+    label 'process_low'
+    publishDir "${params.out_dir}/run/ppiflow/sample_identity", mode: 'copy', pattern: '*_sample_identity.json'
+
+    input:
+    tuple val(meta), path(sample_pdb)
+
+    output:
+    path '*_sample_identity.json', emit: sidecar
+
+    script:
+    def encodedMeta = groovy.json.JsonOutput.toJson(meta)
+    def sourceManifest = params.get('source_identity_json') ?: ''
+    """
+    python3 ${params.code_root}/scripts/maturation_identity.py sample \\
+        "${sourceManifest}" '${encodedMeta}' "${sample_pdb}" "${sample_pdb.baseName}_sample_identity.json"
+    """
+}
+
 workflow MATURATION_CHILD_CORE {
     take:
     pdb_list
@@ -136,12 +171,24 @@ workflow MATURATION_CHILD_CORE {
         ? selectedLoopsSpec.split(',')*.trim().findAll { it }.collect { it.toUpperCase() } as Set
         : [] as Set
     def ppiflowMode = (params.ppiflow_mode ?: params.maturation_stage_name ?: 'maturation').toString().toLowerCase()
-    def runRedesign = (params.maturation_redesign_enabled != false) && ppiflowMode != 'backbone_refine'
+    // A missing redesign request is not consent to mutate the flow backbone.
+    def runRedesign = (params.maturation_redesign_enabled == true) && ppiflowMode != 'backbone_refine'
 
+    def sourceIdentityFile = params.get('source_identity_json')
+    def sourceRows = sourceIdentityFile ? new groovy.json.JsonSlurper().parse(new File(sourceIdentityFile.toString())) : []
+    def sourceByName = sourceRows.collectEntries { row -> [(row.staged_name.toString()): row] }
     def anchor_inputs = Channel
         .from(pdb_list)
         .map { pdb ->
-            def meta = [id: pdb.baseName]
+            def source = sourceByName[pdb.name]
+            def sourceMeta = source?.source_meta instanceof Map ? source.source_meta : [:]
+            // Source evidence belongs to the original document, not its descendants.
+            // Keep only the explicit source join keys visible in transport metadata.
+            def meta = [source_meta: sourceMeta]
+            meta.id = pdb.baseName
+            meta.source_staged_name = source?.staged_name ?: pdb.name
+            meta.source_document_id = sourceMeta.id ?: null
+            meta.source_structure_state = sourceMeta.structure_state ?: sourceMeta.target_state ?: null
             tuple(meta, pdb)
         }
 
@@ -171,6 +218,8 @@ workflow MATURATION_CHILD_CORE {
             def sampleMeta = new LinkedHashMap(meta)
             sampleMeta.parent_id = meta.id
             sampleMeta.id = backbone_pdb.baseName
+            sampleMeta.validation_status = 'unvalidated'
+            sampleMeta.terminal_producer = 'ppiflow_maturation_post_validation'
             sampleMeta.sample_index = manifestEntry.sample_index
             if (strictScientificContract) {
                 if (!manifestEntry.comparison_path) throw new IllegalArgumentException('Missing native comparison publication')
@@ -231,7 +280,7 @@ workflow MATURATION_CHILD_CORE {
         }
         .filter { _meta, _backbone, _scoreJson, score -> !strictScientificContract || score != null }
 
-    def redesign_enabled = params.maturation_redesign_enabled != false
+    def redesign_enabled = params.maturation_redesign_enabled == true
     def redesign_top_n = params.maturation_redesign_top_n ?: 0
     def partial_selected = partial_scored
     if (redesign_enabled && runRedesign && redesign_top_n > 0) {
@@ -312,9 +361,11 @@ workflow MATURATION_CHILD_CORE {
             tuple(representativeMeta, maturedPdbList, scoreJsonList)
         }
 
+    PublishMaturationSampleIdentity(final_matured)
     FilterByMaturation(filter_inputs)
 
     emit:
     matured_pdbs = FilterByMaturation.out.pdbs
     scores = FilterByMaturation.out.filter_reports
+    sample_identity = PublishMaturationSampleIdentity.out.sidecar
 }

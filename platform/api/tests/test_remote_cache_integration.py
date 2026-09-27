@@ -212,10 +212,13 @@ def test_prewarm_plan_pins_source_and_excludes_support(tmp_path, monkeypatch, id
     monkeypatch.setattr(cache, '_runtime_assets', lambda *args, **kwargs: [(tmp_path / 'weights', 'weights'),
                                                               (tmp_path / 'missing-support', 'support-python')])
     calls = []
-    def archive(argv, **kwargs):
-        calls.append(argv)
-        kwargs['stdout'].write((bundle.source_transfer.source / '.bms-source.tar').read_bytes())
-    monkeypatch.setattr(cache.subprocess, 'run', archive)
+    def archive(repo, data_root, selected_revision, source, *, extract=True):
+        calls.append((repo, selected_revision, extract))
+        source.mkdir(parents=True)
+        payload = (bundle.source_transfer.source / '.bms-source.tar').read_bytes()
+        (source / '.bms-source.tar.gz').write_bytes(payload)
+        return hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(cache, '_staged_source_archive', archive)
     directory = tmp_path / 'prewarm'
     directory.mkdir()
     job = SimpleNamespace(model_id='example', mode='predict')
@@ -228,7 +231,7 @@ def test_prewarm_plan_pins_source_and_excludes_support(tmp_path, monkeypatch, id
         return
     planned = cache._prewarm_plan(job, list(invocation.command), revision, tree, directory,
                                 native_invocation=invocation)
-    assert calls == [['git', 'archive', '--format=tar.gz', '-6', revision]]
+    assert calls == [(tmp_path, revision, False)]
     launched = cache_transfer_artifacts(bundle)
     assert {(a.sha256, a.size_bytes) for a in planned} == {(a.sha256, a.size_bytes) for a in launched}
     assert all('support-python' not in a.remote_destination for a in planned)

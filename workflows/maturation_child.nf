@@ -16,7 +16,7 @@ nextflow.enable.dsl = 2
 // Workflow-specific param defaults
 params.pdb_paths = null
 params.framework_type = 'standard-fv'
-params.maturation_redesign_enabled = true
+params.maturation_redesign_enabled = false
 params.maturation_redesign_top_n = 0
 params.ppiflow_require_anchors = true
 params.ppiflow_selected_loops = null
@@ -41,6 +41,7 @@ workflow MATURATION_CHILD {
     emit:
     matured_pdbs = MATURATION_CHILD_IMPL.out.matured_pdbs
     scores = MATURATION_CHILD_IMPL.out.scores
+    sample_identity = MATURATION_CHILD_IMPL.out.sample_identity
 }
 
 // Entry point for direct invocation

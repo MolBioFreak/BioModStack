@@ -8,7 +8,7 @@ import { MSA_POLICY } from '../lib/msaPolicy';
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
-import { completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchMsaCacheInfo, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type MsaCacheInfo } from '../lib/api';
+import { api, completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parseMolecularDynamicsHandoffUserSequence } from './gen2StartingStructureState';
 import { SequenceManager } from './SequenceManager';
@@ -153,7 +153,7 @@ const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
 export function StructurePredictionTemplate({ onBack, initialValues, onDraftChange, onOpenTemplateManager, sourceSequenceId = null, mdDraftId = null, returnTemplate = null }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const { gpuOptions, executionTargetId } = useLiveGpuCatalog({ followExecutionTarget: true });
+    const { gpuOptions, executionTargetId, telemetryRefusal, refreshGpuTelemetry } = useLiveGpuCatalog({ followExecutionTarget: true, requireFresh: true });
     const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn', fetchFrustraMpnnIntegration);
     const normalizeProtenixModel = (_model?: string) => 'protenix-v2';
     const initialPrimaryProteinComponent = resolveInitialPrimaryProteinComponent(initialValues);
@@ -211,6 +211,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         setPinnedGpus([]);
         setLockGpus(false);
     };
+    // The chain chooser retains its candidate identity even when its active
+    // selection is cleared. Only continuationSource is sent on submission.
+    const continuationCandidateSource = initialValues?._continuation_source ?? initialValues?.source_structure;
+    const [continuationSource, setContinuationSource] = useState(initialValues?.source_structure);
+    const [continuationChain, setContinuationChain] = useState(initialValues?._continuation_chain ?? '');
+    const continuationChains = initialValues?._continuation_chains as Array<{ model_number: number; id: string; sequence: string }> | undefined;
     const [sequence, setSequence] = useState(initialPrimarySequence);
     const [sequenceName, setSequenceName] = useState(initialPrimaryName);
     const [sequenceHandoffError, setSequenceHandoffError] = useState('');
@@ -320,9 +326,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const [msaForceRefresh, setMsaForceRefresh] = useState(false);  // Purge cache for this sequence
     const [msaCacheOnly, setMsaCacheOnly] = useState(initialValues?.msa_cache_only ?? false);  // Skip generation, require cache hit
     const [msaAllowEmptyFallback, setMsaAllowEmptyFallback] = useState(initialValues?.msa_allow_empty_fallback ?? false);
-    const [msaCacheInfo, setMsaCacheInfo] = useState<MsaCacheInfo | null>(null);
-    const [msaCacheLoading, setMsaCacheLoading] = useState(false);
-    const [msaCacheError, setMsaCacheError] = useState<string | null>(null);
+    const [msaCacheResult, setMsaCacheResult] = useState<{
+        key: string; state: string; error: string | null;
+    } | null>(null);
     // NEW: Expansion, EnvDB, and Iterations controls
     const [msaUseExpand, setMsaUseExpand] = useState<boolean | undefined>(initialValues?.msa_use_expand);
     const [msaUseEnv, setMsaUseEnv] = useState<boolean | undefined>(initialValues?.msa_use_env);
@@ -716,10 +722,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         fallbackGpuIds: boltzCpFallbackGpuIds,
     });
     const boltzCpPlacementError = isBoltzCpLaunch ? (
-        executionTargetId && (!gpuOptions.length || boltzCpGpuSettings.gpuIds.split(',')
+        telemetryRefusal || (executionTargetId && (!gpuOptions.length || boltzCpGpuSettings.gpuIds.split(',')
             .some(id => !gpuOptions.some(gpu => gpu.index === Number(id))))
-            ? 'Selected worker GPU telemetry is unavailable or does not contain the selected GPUs. Refresh or select compatible GPUs.'
-            : boltzCpGpuSettings.error
+            ? 'Selected worker GPU telemetry does not contain the selected GPUs. Refresh GPU telemetry or select compatible GPUs.'
+            : boltzCpGpuSettings.error)
     ) : undefined;
     const boltzQualityState = getBoltzQualitySliderState({
         samplingSteps: boltzSamplingSteps,
@@ -729,6 +735,11 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         const params: Record<string, UntypedApiValue> = {
             name: jobName,
             job_name: jobName,
+            source_structure: continuationSource,
+            _source_prepared: initialValues?._source_prepared,
+            _continuation_source: continuationCandidateSource,
+            _continuation_chains: continuationChains, _continuation_chain: continuationChain,
+            primary_chain_id: continuationChain ? primaryChainId : undefined,
             execution_target_id: executionTargetId ?? null,
             sequence: sequence.trim(),
             sequence_name: sequenceName,
@@ -860,7 +871,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [continuationSource, continuationChain, initialValues, executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     // Project drafts reuse the saved-template scientific projection, not a second serializer.
     const projectDraftJson = JSON.stringify(currentTemplateParams);
     useEffect(() => {
@@ -943,57 +954,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         setParsedChains(activeModel?.chains ?? modalParsedStructure.chains ?? []);
     }, [modalParsedStructure, modalSelectedModel]);
 
-    useEffect(() => {
-        const normalizedSequence = sequence.replace(/\s+/g, '').trim();
-
-        if (!msaNeeded || !normalizedSequence) {
-            setMsaCacheInfo(null);
-            setMsaCacheError(null);
-            setMsaCacheLoading(false);
-            return;
-        }
-
-        let active = true;
-        setMsaCacheLoading(true);
-        setMsaCacheError(null);
-
-        const timer = setTimeout(() => {
-            fetchMsaCacheInfo(normalizedSequence)
-                .then((resp) => {
-                    if (!active) return;
-                    setMsaCacheInfo(resp.data);
-
-                })
-                .catch((err: UntypedApiValue) => {
-                    if (!active) return;
-                    setMsaCacheInfo(null);
-                    setMsaCacheError(err?.response?.data?.detail || err?.message || 'Failed to read MSA cache');
-
-                })
-                .finally(() => {
-                    if (active) {
-                        setMsaCacheLoading(false);
-                    }
-                });
-        }, 300);
-
-        return () => {
-            active = false;
-            clearTimeout(timer);
-        };
-    }, [sequence, msaNeeded, msaCacheOnly]);
-
-    const msaCacheSummary = msaCacheLoading
-        ? 'Cache: checking...'
-        : msaCacheError
-            ? 'Cache: unavailable'
-            : (msaCacheInfo && msaCacheInfo.cache_entries > 0)
-                ? `Cache: ${msaCacheInfo.cache_entries} entr${msaCacheInfo.cache_entries === 1 ? 'y' : 'ies'}`
-                : 'Cache: none';
-
-    const buildSubmission = (resolvedSourcePath: string | null, requireSource = true) => {
-        if (placementOwner.current !== executionTargetId) throw new Error('Execution target changed; GPU placement is being refreshed.');
-        if (boltzCpPlacementError) throw new Error(boltzCpPlacementError);
+    const buildSubmission = (resolvedSourcePath: string | null, requireSource = true, launchOnly = false) => {
+        if (launchOnly && placementOwner.current !== executionTargetId) throw new Error('Execution target changed; GPU placement is being refreshed.');
+        if (launchOnly && boltzCpPlacementError) throw new Error(boltzCpPlacementError);
         if (sequenceHandoffLoading || sequenceHandoffError) {
             throw new Error(sequenceHandoffError || 'The selected saved sequence is still loading.');
         }
@@ -1070,16 +1033,14 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             params.protenix_target_geometry_mode = protenixTargetGeometryMode;
         }
 
-        if (msaProvider === 'local') {
+        if (msaNeeded && msaProvider === 'local') {
             throw new Error(MSA_POLICY.local_disabled);
         }
         if (msaNeeded && msaProvider === 'colabfold_api' && numParallelJobs > 1) {
             throw new Error('ColabFold API MSA provider currently supports only single-job submissions (num_parallel_jobs=1).');
         }
 
-        if (msaNeeded && msaCacheOnly && (!msaCacheInfo || msaCacheInfo.cache_entries < 1)) {
-            throw new Error('Use Cache Only is enabled, but no cached MSA exists for this sequence.');
-        }
+
 
         // MSA Quality parameters (when MSA is enabled for unknown predictor)
         if (msaNeeded) {
@@ -1171,6 +1132,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         const pinnedIncludesLockGpus = Object.prototype.hasOwnProperty.call(initialValues || {}, 'lock_gpus');
         const pinnedIncludesAllowRetries = Object.prototype.hasOwnProperty.call(initialValues || {}, 'allow_retries');
         const jobRequest = {
+            source_structure: continuationSource,
             name: jobName,
             // The same placement owns GPU selection, preview and submission.
             // Do not re-read ambient session storage in submitJob for this form.
@@ -1193,14 +1155,43 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         try { return buildSubmission(targetSourcePath || targetSource?.path || null).jobRequest; }
         catch { return null; }
     })();
+    const msaCacheKey = JSON.stringify(msaNeeded && workflowRequest ? {
+        model_id: workflowRequest.model_id, params: workflowRequest.params,
+    } : null);
+    const msaCacheLoading = msaNeeded && workflowRequest && msaCacheResult?.key !== msaCacheKey;
+    const msaCacheError = msaCacheResult?.key === msaCacheKey ? msaCacheResult.error : null;
+    const msaCacheReady = msaCacheResult?.key === msaCacheKey && msaCacheResult.state === 'ready';
+    const msaCacheSummary = msaCacheLoading ? 'Cache: checking native request...'
+        : msaCacheError ? 'Cache: unavailable'
+        : msaCacheReady ? 'Cache: native request ready'
+        : `Cache: ${msaCacheResult?.key === msaCacheKey ? msaCacheResult.state : 'unresolved'}`;
+    useEffect(() => {
+        if (!msaNeeded || !workflowRequest) return;
+        let active = true;
+        const timer = setTimeout(() => {
+            api.post('/api/msa/provider-cache/inspect', {
+                model_id: workflowRequest.model_id, params: workflowRequest.params,
+            }).then(({ data }) => {
+                if (active) setMsaCacheResult({ key: msaCacheKey, state: data.state, error: null });
+            }).catch((err: UntypedApiValue) => {
+                if (active) setMsaCacheResult({ key: msaCacheKey, state: 'unresolved', error: err?.response?.data?.detail || err?.message || 'Cache inspection failed' });
+            });
+        }, 300);
+        return () => { active = false; clearTimeout(timer); };
+    }, [msaCacheKey, msaNeeded]);
     const handleSubmit = async () => {
         let submission;
         try {
-            submission = buildSubmission(null, false);
+            // Authoring-time batches are compiled into native tasks at launch;
+            // inspection cannot certify their placeholder roster.
+            if (msaNeeded && msaCacheOnly && !hasBatchEntries && !msaCacheReady) {
+                throw new Error(msaCacheError || 'Use Cache Only requires a verified native request cache replay.');
+            }
+            submission = buildSubmission(null, false, true);
             if (submission.targetConditioningRequested && complexMode) {
                 const source = await resolveTargetStructurePath();
                 if (!source) { alert('Failed to stage the fixed target structure for anchored prediction.'); return; }
-                submission = buildSubmission(source);
+                submission = buildSubmission(source, true, true);
             }
         } catch (error: UntypedApiValue) {
             alert(error?.message || 'Failed to stage the fixed target structure.');
@@ -1281,6 +1272,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             } else {
                 clearModalPreview();
             }
+            setContinuationSource(undefined);
+            setContinuationChain('');
             setModalTargetSource(target);
             setModalParsedStructure(parsed);
             setModalSelectedModel(defaultModelNumber);
@@ -1398,6 +1391,24 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <ExecutionTargetPicker workflowRequest={workflowRequest} />
+            {continuationChains && <section className="mb-4 space-y-2 rounded-lg border border-slate-600 p-3">
+                <label className="block text-sm">Protein chain from selected candidate
+                    <select aria-label="Selected candidate protein chain" className="ml-3 rounded bg-slate-900 p-2" value={continuationChain} onChange={event => {
+                        const key = event.target.value; setContinuationChain(key);
+                        const chain = continuationChains.find(item => `${item.model_number}:${item.id}` === key);
+                        setSequence(chain?.sequence ?? '');
+                        if (chain) {
+                            setPrimaryChainId(chain.id);
+                            setContinuationSource(continuationCandidateSource ? { ...continuationCandidateSource, model_number: chain.model_number } : undefined);
+                        } else setContinuationSource(undefined);
+                    }}>
+                        <option value="">Select a protein chain…</option>
+                        {continuationChains.map(chain => <option key={`${chain.model_number}:${chain.id}`} value={`${chain.model_number}:${chain.id}`}>Model {chain.model_number} · author chain {chain.id}</option>)}
+                    </select>
+                </label>
+                <p className="text-sm text-slate-300">These are the published residue sequences. Generated backbones may contain placeholder sequences; prediction does not validate a designed sequence. Edit the sequence below if needed. The generated pose is not used as conditioning.</p>
+                <button type="button" onClick={() => { setContinuationSource(undefined); setContinuationChain(''); setSequence(''); }}>Clear selected source</button>
+            </section>}
             {/* Header */}
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
@@ -1504,6 +1515,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                             </label>
                         )}
                         {boltzCpPlacementError && <p role="alert" className="mt-2 text-xs text-amber-200">{boltzCpPlacementError}</p>}
+                        {isBoltzCpLaunch && <button type="button" onClick={() => { void refreshGpuTelemetry(); }} className="mt-2 rounded border border-slate-600 px-2 py-1 text-xs text-slate-200">Refresh GPU telemetry</button>}
                     </div>
                     )}
                 </div>
@@ -2578,20 +2590,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                 </fieldset>
                                 <div className="p-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)]">
                                     {msaCacheLoading ? (
-                                        <p className="text-xs text-[var(--text-muted)]">Checking local MSA cache...</p>
+                                        <p className="text-xs text-[var(--text-muted)]">Checking native provider cache...</p>
                                     ) : msaCacheError ? (
                                         <p className="text-xs text-[var(--error)]">{msaCacheError}</p>
-                                    ) : msaCacheInfo && msaCacheInfo.cache_entries > 0 ? (
-                                        <div className="space-y-1">
-                                            <p className="text-sm text-[var(--text-primary)] font-medium">
-                                                Cached MSA found: {msaCacheInfo.cache_entries} entr{msaCacheInfo.cache_entries === 1 ? 'y' : 'ies'}
-                                            </p>
-                                            <p className="text-xs text-[var(--text-muted)]">
-                                                Canonical cache: {msaCacheInfo.canonical_exists ? 'yes' : 'no'} | Best depth: {msaCacheInfo.best_depth ?? 'unknown'}
-                                            </p>
-                                        </div>
+                                    ) : msaCacheReady ? (
+                                        <p className="text-sm text-[var(--text-primary)] font-medium">Native request cache replay verified.</p>
                                     ) : (
-                                        <p className="text-xs text-[var(--text-muted)]">No cached MSA found for this sequence.</p>
+                                        <p className="text-xs text-[var(--text-muted)]">{msaCacheSummary}. Launch preparation remains authoritative.</p>
                                     )}
                                 </div>
                                 <label className="flex items-center gap-3 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg cursor-pointer hover:bg-emerald-500/20 transition-colors">
@@ -2605,7 +2610,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                                 setMsaForceRefresh(false);
                                             }
                                         }}
-                                        disabled={!msaCacheLoading && (!msaCacheInfo || msaCacheInfo.cache_entries < 1)}
+
                                         className="w-4 h-4 rounded bg-[var(--bg-primary)] border-emerald-500 text-emerald-400 focus:ring-emerald-500 disabled:opacity-50"
                                     />
                                     <div>

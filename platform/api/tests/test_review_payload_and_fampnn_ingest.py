@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -524,7 +525,7 @@ async def test_hydrate_review_job_is_read_only_and_uses_child_root(monkeypatch: 
     assert job.awaiting_input is True
 
 
-def test_dedupe_review_structures_prefers_pdb_for_same_design() -> None:
+def test_dedupe_review_structures_preserves_same_stem_documents() -> None:
     files = [
         ("candidate", Path("/tmp/demo_design.cif")),
         ("candidate", Path("/tmp/demo_design.pdb")),
@@ -537,8 +538,10 @@ def test_dedupe_review_structures_prefers_pdb_for_same_design() -> None:
 
     assert deduped == [
         ("candidate", Path("/tmp/demo_design.pdb")),
+        ("candidate", Path("/tmp/demo_design.cif")),
         ("candidate", Path("/tmp/other_design.cif")),
         ("filtered", Path("/tmp/demo_design.pdb")),
+        ("filtered", Path("/tmp/demo_design.cif")),
     ]
 
 
@@ -576,7 +579,10 @@ def test_discover_collected_ppiflow_structures_includes_generator_outputs(tmp_pa
 
     discovered = _discover_collected_ppiflow_structures(tmp_path)
 
-    assert discovered == [("ppiflow_generator_filtered", filtered_dir / "seedA_ppiflow_sample0.pdb")]
+    assert discovered == [
+        ("ppiflow_generator_filtered", filtered_dir / "seedA_ppiflow_sample0.pdb"),
+        ("ppiflow_generator_raw", raw_dir / "seedA_ppiflow_sample0.pdb"),
+    ]
 
 
 def test_parse_ppiflow_sample_index_supports_redesign_names() -> None:
@@ -726,6 +732,7 @@ def test_inherit_source_design_metrics_copies_geometry_and_cdr_lengths(tmp_path:
         rog=None,
     )
     source_design = SimpleNamespace(
+        pdb_path=str(pdb_path),
         binder_length=159,
         antibody_type="vhh",
         humanness_score=0.81,
@@ -1001,6 +1008,34 @@ def test_normalize_antibody_job_params_applies_stage_optimized_ppiflow_defaults_
     assert normalized["ppiflow_require_anchors"] is True
     assert normalized["ppiflow_objective_mode"] == "balanced"
     assert normalized["ppiflow_objective_threshold"] == 0.0
+
+
+def test_normalize_antibody_job_params_preserves_explicit_stage_values() -> None:
+    normalized = _normalize_antibody_job_params({
+        "run_ppiflow_maturation": True,
+        "ppiflow_stage_mode": "post_fampnn",
+        "ppiflow_tuning_profile": "stage_optimized",
+        "ppiflow_start_t": 0.45,
+        "ppiflow_samples_per_target": 2,
+        "ppiflow_require_anchors": False,
+        "ppiflow_objective_threshold": 0.0,
+    })
+
+    assert normalized["ppiflow_start_t"] == 0.45
+    assert normalized["ppiflow_samples_per_target"] == 2
+    assert normalized["ppiflow_require_anchors"] is False
+    assert normalized["ppiflow_objective_threshold"] == 0.0
+
+
+@pytest.mark.parametrize("field,value", [
+    ("structure_validator", "unknown_predictor"),
+    ("interactive_gate_stage", "unknown_gate"),
+])
+def test_normalize_antibody_job_params_rejects_unknown_scientific_choices(field: str, value: str) -> None:
+    with pytest.raises(HTTPException) as exc:
+        _normalize_antibody_job_params({field: value})
+    assert exc.value.status_code == 422
+    assert value in str(exc.value.detail)
 
 
 def test_normalize_antibody_job_params_disables_stage_optimized_profile_for_both_mode() -> None:

@@ -8,7 +8,7 @@
  * - Visual icon/color customization
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     fetchUserTemplates,
@@ -111,15 +111,18 @@ export function TemplateManagerModal({
         setEditingTemplate(null);
     };
 
-    // Initialize form when saving current config
+    // Choose the initial view once per opening, not whenever the list is shown.
+    // Late draft updates remain available via Save Current Config without taking
+    // the operator away from browsing, cancelling, or a successful save.
+    const wasOpen = useRef(false);
     useEffect(() => {
-        if (isOpen && currentParams && !editingTemplate && mode === 'list') {
-            // Auto-switch to edit mode if we have params to save
-            if (Object.keys(currentParams).length > 0) {
-                setMode('edit');
-            }
+        const opening = isOpen && !wasOpen.current;
+        wasOpen.current = isOpen;
+        if (opening) {
+            resetForm();
+            setMode(currentParams && Object.keys(currentParams).length > 0 ? 'edit' : 'list');
         }
-    }, [isOpen, currentParams, editingTemplate, mode]);
+    }, [isOpen, currentParams]);
 
     // Populate form when editing
     useEffect(() => {

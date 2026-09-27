@@ -1,0 +1,213 @@
+id: binder_refinement
+name: Selected binder refinement
+version: 1.0.0
+category: sequence_design
+description: Independent selected repack, anchor analysis, native antibody/nanobody
+  partial flow and explicit FA-MPNN redesign. Native limitations remain; unselected
+  operations do not run.
+container: pyrosetta_tools.sif
+inputs:
+- pdb
+outputs:
+- pdb
+- json
+modes:
+- id: refine
+  name: Selected binder refinement
+  description: Independent selected repack, anchor analysis, native antibody/nanobody
+    partial flow and explicit FA-MPNN redesign. Native limitations remain; unselected
+    operations do not run.
+  params:
+  - pdb_paths
+  - source_identity_json
+  - binder_chains
+  - target_chains
+  - maturation_repack_enabled
+  - maturation_anchors_enabled
+  - maturation_flow_enabled
+  - maturation_redesign_enabled
+  - framework_type
+  - ppiflow_region_mode
+  - ppiflow_selected_loops
+  - maturation_anchor_threshold
+  - maturation_anchor_distance_cutoff
+  - ppiflow_rotamer_shell_distance
+  - ppiflow_relax_antibody_backbone_shell
+  - ppiflow_start_t
+  - ppiflow_samples_per_target
+  - ppiflow_retry_limit
+  - ppiflow_checkpoint
+  - ppiflow_heavy_chain
+  - ppiflow_light_chain
+  - ppiflow_antigen_chain
+  - epitope_residues
+  - fampnn_temperature
+  - fampnn_num_steps
+  - fampnn_checkpoint
+  - fampnn_exclude_cys
+  - fampnn_psce_threshold
+  - fampnn_seq_only
+  - fampnn_repack_last
+  - analysis_chain_id
+  - cdr_positions_by_loop
+  - manual_cdr_definitions
+  - fixed_positions
+  - fampnn_fix_target_sidechains
+  - fampnn_batch_size
+  - seqs_per_design
+params:
+- name: pdb_paths
+  type: string
+  description: Immutable selected PDB snapshots supplied by selection owner.
+  required: true
+- name: source_identity_json
+  type: file
+  description: Selected source identity document supplied by selection owner.
+  required: false
+- name: binder_chains
+  type: string
+  description: Exact comma-separated binder PDB chain IDs.
+  required: true
+- name: target_chains
+  type: string
+  description: Exact comma-separated target PDB chain IDs.
+  required: true
+- name: maturation_repack_enabled
+  type: boolean
+  description: Run existing Rosetta interface-shell repacking.
+  default: false
+- name: maturation_anchors_enabled
+  type: boolean
+  description: Run existing interface anchor analysis.
+  default: false
+- name: maturation_flow_enabled
+  type: boolean
+  description: Run native antibody/nanobody PPIFlow partial flow.
+  default: false
+- name: maturation_redesign_enabled
+  type: boolean
+  description: Explicitly run existing FA-MPNN sequence redesign.
+  default: false
+- name: framework_type
+  type: string
+  description: Native antibody format for PPIFlow checkpoint selection.
+  default: standard-fv
+- name: ppiflow_region_mode
+  type: string
+  description: Native movable-region mode.
+  default: all_antibody
+  enum:
+  - selected_cdrs
+  - all_cdrs
+  - framework_only
+  - all_antibody
+- name: ppiflow_selected_loops
+  type: string
+  description: Selected native CDR loops, where applicable.
+  default: ''
+- name: maturation_anchor_threshold
+  type: number
+  description: Existing anchor energy threshold (REU).
+  default: -5.0
+- name: maturation_anchor_distance_cutoff
+  type: number
+  description: Existing interface distance cutoff (angstrom).
+  default: 12.0
+- name: ppiflow_rotamer_shell_distance
+  type: number
+  description: Existing repack shell distance (angstrom).
+  default: 20.0
+- name: ppiflow_relax_antibody_backbone_shell
+  type: boolean
+  description: Explicitly allow native backbone movement during shell relaxation.
+  default: false
+- name: ppiflow_start_t
+  type: number
+  description: Native partial-flow start t.
+  default: 0.8
+- name: ppiflow_samples_per_target
+  type: integer
+  description: Native samples per selected complex.
+  default: 1
+- name: ppiflow_retry_limit
+  type: integer
+  description: Native sampling retry limit.
+  default: 10
+- name: ppiflow_checkpoint
+  type: string
+  description: Native checkpoint selection.
+  default: antibody
+- name: ppiflow_heavy_chain
+  type: string
+  description: Explicit native heavy chain; omitted uses first selected binder chain.
+- name: ppiflow_light_chain
+  type: string
+  description: Explicit native light chain; omitted uses second selected binder chain
+    if present.
+- name: ppiflow_antigen_chain
+  type: string
+  description: Explicit native antigen chain; must agree with selected target role.
+- name: epitope_residues
+  type: string
+  description: Explicit native hotspot residues.
+- name: fampnn_temperature
+  type: number
+  description: Native FA-MPNN sampling temperature.
+  default: 0.1
+- name: fampnn_num_steps
+  type: integer
+  description: Native FA-MPNN denoising steps.
+  default: 100
+- name: fampnn_checkpoint
+  type: string
+  description: Native FA-MPNN checkpoint.
+  default: fampnn_0_0.pt
+- name: fampnn_exclude_cys
+  type: boolean
+  description: Native cysteine exclusion.
+  default: true
+- name: fampnn_psce_threshold
+  type: number
+  description: Native PSCE threshold.
+  default: 0.3
+- name: fampnn_seq_only
+  type: boolean
+  description: Native sequence-only sampling.
+  default: false
+- name: fampnn_repack_last
+  type: boolean
+  description: Native FA-MPNN final sidechain packing, distinct from optional Rosetta
+    pre-repack.
+  default: true
+- name: analysis_chain_id
+  type: string
+  description: Chains for existing FA-MPNN output analysis.
+  default: all_chains
+- name: cdr_positions_by_loop
+  type: object
+  description: Explicit loop-to-position mapping for native mask preparation.
+  default: {}
+- name: manual_cdr_definitions
+  type: array
+  description: Explicit native manual CDR definitions.
+  default: []
+- name: fixed_positions
+  type: string
+  description: Existing generic author-residue sequence mask, e.g. A:1-10,A:50.
+- name: fampnn_fix_target_sidechains
+  type: boolean
+  description: Existing native generic binder-design target sidechain constraint.
+  default: false
+- name: fampnn_batch_size
+  type: integer
+  description: Existing native FA-MPNN batch size.
+  minimum: 1
+  default: 16
+- name: seqs_per_design
+  type: integer
+  description: Number of native FA-MPNN sequences per selected structure.
+  minimum: 1
+  default: 1
+enabled: true
+experimental: true
+public_launch: true

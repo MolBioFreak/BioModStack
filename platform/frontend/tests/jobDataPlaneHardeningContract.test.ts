@@ -5,12 +5,12 @@ import test from 'node:test';
 const read = (path: string) => readFileSync(path, 'utf8');
 
 const consumers: Record<string, RegExp> = {
-  'JobBrowser.tsx': /fetchJobs\(\{[\s\S]*?limit: PAGE_SIZE,[\s\S]*?summary: true[\s\S]*?\}\)/u,
-  'ReferenceSelector.tsx': /fetchJobs\(\{ limit: 500, summary: true \}\)/u,
-  'BatchComparePane.tsx': /fetchJobs\(\{ limit: 500, summary: true \}\)/u,
-  'Dashboard.tsx': /fetchJobs\(\{ limit: 100, summary: true \}, queryClient\.getQueryData/u,
+  'JobBrowser.tsx': /fetchJobs\(\{[\s\S]*?limit: PAGE_SIZE,[\s\S]*?summary: true[\s\S]*?\}, undefined, signal\)/u,
+  'ReferenceSelector.tsx': /fetchJobs\(\{ limit: 500, summary: true \}, undefined, signal\)/u,
+  'BatchComparePane.tsx': /fetchJobs\(\{ limit: 500, summary: true \}, undefined, signal\)/u,
+  'Dashboard.tsx': /fetchJobs\(\{ limit: 100, offset,[\s\S]*?summary: true \},\s*queryClient\.getQueryData/u,
   'LigandSelector.tsx': /fetchJobs\(\{ status: 'completed', limit: 50, summary: true \}\)/u,
-  'DesignBrowser.tsx': /fetchJobs\(\{ limit: 500, summary: true \}\)/u,
+  'DesignBrowser.tsx': /fetchJobs\(\{ limit: 500, summary: true \}, undefined, signal\)/u,
   'QuickViewer.tsx': /fetchJobs\(\{ status: 'completed', limit: 100, summary: true \}, queryClient\.getQueryData/u,
   'ResultsViewer.tsx': /fetchJobs\(\{\s*include_children: true,\s*limit: 100,\s*summary: true,\s*q: debouncedJobSelectorSearch \|\| undefined,/u,
   'NGSToolkit.tsx': /fetchJobs\(\{[\s\S]*?include_children: true,[\s\S]*?model_id,[\s\S]*?limit: 500,[\s\S]*?offset,[\s\S]*?summary: true,[\s\S]*?\}\)/u,
@@ -34,9 +34,12 @@ test('job polling is centralized with bounded failure backoff and browser-manage
   assert.match(polling, /MAX_POLL_BACKOFF_MULTIPLIER/u);
   assert.doesNotMatch(polling, /return false/u);
 
-  for (const filename of ['Dashboard.tsx', 'QuickViewer.tsx', 'NGSToolkit.tsx']) {
+  for (const filename of ['Dashboard.tsx', 'NGSToolkit.tsx']) {
     const source = read(`src/components/${filename}`);
     assert.match(source, /jobPollingInterval\(/u, `${filename} must use centralized job polling`);
     assert.doesNotMatch(source, /refetchInterval:\s*(3000|5000)/u);
   }
+  const quickViewer = read('src/components/QuickViewer.tsx');
+  assert.doesNotMatch(quickViewer, /refetchInterval:/u);
+  assert.match(quickViewer, /enabled: chooserOpen/u);
 });

@@ -116,6 +116,22 @@ def test_general_rfd3_skips_unrelated_antibody_parameter_normalization() -> None
     ) is True
 
 
+def test_native_binder_model_requests_do_not_acquire_antibody_defaults() -> None:
+    for model_id in ("bindcraft2", "ligandmpnn"):
+        params = {
+            "generator": "native",
+            "target_chain": "T",
+            "binder_chain": "B",
+            "selected_input_dir": "/owned/input",
+        }
+        assert jobs_router._should_normalize_antibody_job_params(
+            model_id, "design", params,
+        ) is False
+        assert jobs_router._should_normalize_antibody_job_params(
+            model_id, "analyze", params,
+        ) is False
+
+
 def test_general_rfd3_request_rejects_invalid_ranges_and_unknown_fields() -> None:
     with pytest.raises(GenerationContractError, match="min_length"):
         normalize_generation_params(

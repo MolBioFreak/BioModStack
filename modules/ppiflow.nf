@@ -9,6 +9,31 @@ def paramValueOrDefault(params, String key, defaultValue) {
     return value
 }
 
+// Native INITIAL generation. Do not route this through RunPartialFlow.
+process RunPPIFlowGeneration {
+    label 'gpu'
+    label 'PPIFlow'
+    publishDir "${params.out_dir}", mode: 'copy'
+
+    input:
+    path generation_request, stageAs: 'generation_request'
+
+    output:
+    path 'ppiflow_generation', emit: native_results
+
+    script:
+    def codeRoot = params.code_root.toString().replace("'", "'\\''")
+    """
+    set -euo pipefail
+    export HOME="\$PWD"
+    export XDG_CACHE_HOME="\$PWD/.cache"
+    export TORCH_EXTENSIONS_DIR="\${XDG_CACHE_HOME}/torch_extensions"
+    export TRITON_CACHE_DIR="\${XDG_CACHE_HOME}/triton"
+    python '${codeRoot}/scripts/run_ppiflow_generation.py' \\
+        --request generation_request --output ppiflow_generation
+    """
+}
+
 process IdentifyAnchorResidues {
     label 'pyrosetta_tools'
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_anchors.json"
@@ -30,18 +55,29 @@ process IdentifyAnchorResidues {
     script:
     def frameworkType = params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
-    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
-    def antigenChains = params.antigen_chains ?: ''
+    def antibodyChains = params.get('binder_chains') ?: params.antibody_chains ?: defaultAntibodyChains
+    def antigenChains = params.get('target_chains') ?: params.antigen_chains ?: ''
     def energyThreshold = paramValueOrDefault(params, 'maturation_anchor_threshold', -5.0)
     def distanceCutoff = paramValueOrDefault(params, 'maturation_anchor_distance_cutoff', 12.0)
-    def enrichmentEnabled = params.ppiflow_rotamer_enrichment_enabled != null ? params.ppiflow_rotamer_enrichment_enabled : true
+    def enrichmentEnabled = params.get('maturation_repack_enabled') != null ? params.maturation_repack_enabled : (params.ppiflow_rotamer_enrichment_enabled != null ? params.ppiflow_rotamer_enrichment_enabled : true)
+    def skipAnchors = params.get('maturation_anchors_enabled') == false ? '--skip_anchor_analysis' : ''
+    // Without a selected flow operation there is no movable backbone region to
+    // exclude from generic anchor analysis. Legacy antibody preparation retains
+    // its original region semantics.
+    def skipRegions = ((params.get('binder_chains') != null && params.get('maturation_flow_enabled') != true) || (params.get('maturation_flow_enabled') == false && params.get('maturation_redesign_enabled') != true && params.get('maturation_anchors_enabled') == false)) ? '--skip_region_resolution' : ''
     def requireAnchors = params.ppiflow_require_anchors != null ? params.ppiflow_require_anchors : true
     def rotamerShellDistance = paramValueOrDefault(params, 'ppiflow_rotamer_shell_distance', paramValueOrDefault(params, 'ppiflow_rotamer_shell_cutoff', 20.0))
     def relaxAntibodyBackboneShell = paramValueOrDefault(params, 'ppiflow_relax_antibody_backbone_shell', false)
     def regionMode = params.ppiflow_region_mode ?: 'selected_cdrs'
     def selectedLoopsSpec = params.ppiflow_selected_loops ?: ''
-    def cdrPositionsByLoopJson = groovy.json.JsonOutput.toJson(params.get('cdr_positions_by_loop') ?: [:])
-    def manualCdrDefinitionsJson = groovy.json.JsonOutput.toJson(params.get('manual_cdr_definitions') ?: [])
+    // DSL2 modules retain include-time params; decode typed CLI JSON here,
+    // not through assignments in the calling workflow's parameter scope.
+    def loopValue = params.get('cdr_positions_by_loop') ?: [:]
+    def manualValue = params.get('manual_cdr_definitions') ?: []
+    if (loopValue instanceof CharSequence) loopValue = new groovy.json.JsonSlurper().parseText(loopValue.toString())
+    if (manualValue instanceof CharSequence) manualValue = new groovy.json.JsonSlurper().parseText(manualValue.toString())
+    def cdrPositionsByLoopJson = groovy.json.JsonOutput.toJson(loopValue)
+    def manualCdrDefinitionsJson = groovy.json.JsonOutput.toJson(manualValue)
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
@@ -80,7 +116,7 @@ JSON
         --output_positions "${meta.id}_ppiflow_positions.txt" \\
         --output_cdr_positions "${meta.id}_cdr_positions.txt" \\
         --output_cdr_positions_by_loop "${meta.id}_cdr_positions_by_loop.json" \\
-        \${enrichmentArgs}
+        \${enrichmentArgs} ${skipAnchors} ${skipRegions}
 
     anchorCount=\$("\${PYTHON_BIN}" - <<'PY'
 import json
@@ -103,21 +139,31 @@ process RunPartialFlow {
     label 'PPIFlow'
     publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "fixed_positions.txt"
     publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "ppiflow_mask_validation.json"
+    publishDir "${params.out_dir}/run/ppiflow/sample_identity", mode: 'copy', pattern: '*_ppiflow_accounting.json'
 
     input:
     tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)
 
     output:
     tuple val(meta), path("ppiflow_backbones"), path("ppiflow_backbones_manifest.json"), emit: backbones
+    tuple val(meta), path("${meta.id}_ppiflow_accounting.json"), emit: accounting
 
     script:
     def frameworkType = params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
-    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
+    def antibodyChains = params.get('binder_chains') ?: params.antibody_chains ?: defaultAntibodyChains
     def antibodyList = antibodyChains.toString().split(',')*.trim().findAll { it }
     def heavyChain = params.ppiflow_heavy_chain ?: (antibodyList ? antibodyList[0] : 'H')
     def lightChain = params.ppiflow_light_chain ?: (antibodyList.size() > 1 ? antibodyList[1] : '')
-    def antigenChain = params.ppiflow_antigen_chain ?: (params.antigen_chains ? params.antigen_chains.toString().replace(',', '') : '')
+    if (antibodyList != ([heavyChain, lightChain].findAll { it })) {
+        throw new IllegalArgumentException("PPIFlow chain roles disagree with requested antibody_chains: ${antibodyChains}")
+    }
+    def requestedAntigenChains = params.get('target_chains') ?: params.antigen_chains
+    def antigenChain = params.ppiflow_antigen_chain ?: (requestedAntigenChains ?: '')
+    if (params.ppiflow_antigen_chain && requestedAntigenChains &&
+        params.ppiflow_antigen_chain.toString() != requestedAntigenChains.toString()) {
+        throw new IllegalArgumentException('PPIFlow antigen chain disagrees with requested antigen_chains')
+    }
     def startT = paramValueOrDefault(params, 'ppiflow_start_t', 0.8)
     def samplesPerTarget = paramValueOrDefault(params, 'ppiflow_samples_per_target', 1)
     def retryLimit = paramValueOrDefault(params, 'ppiflow_retry_limit', 10)
@@ -126,6 +172,7 @@ process RunPartialFlow {
     def checkpointName = params.ppiflow_checkpoint ?: defaultCheckpoint
     def checkpointPath = params.ppiflow_checkpoint_path ?: (params.ppiflow_weights_dir ? "/opt/ppiflow/ckpt/${checkpointName}.ckpt" : "")
     """
+    set -euo pipefail
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
 
@@ -151,164 +198,18 @@ process RunPartialFlow {
     lightChain="${lightChain}"
     antigenChainBash="${antigenChain}"
 
-    detectedChains=\$("\${PYTHON_BIN}" - <<'PY'
-from pathlib import Path
-
-chains = []
-with open(Path("${complex_pdb}")) as handle:
-    for line in handle:
-        if line.startswith("ATOM"):
-            chain = line[21].strip()
-            if chain and chain not in chains:
-                chains.append(chain)
-print("".join(chains))
-PY
-    )
-
-    cdrChains=\$("\${PYTHON_BIN}" - <<'PY'
-from pathlib import Path
-import re
-
-chains = []
-for token in Path("${ppiflow_positions}").read_text().strip().split(","):
-    token = token.strip()
-    if not token:
-        continue
-    match = re.match(r"([A-Za-z])", token)
-    if match:
-        chain = match.group(1)
-        if chain not in chains:
-            chains.append(chain)
-print("".join(chains))
-PY
-    )
-
-    if ! printf '%s' "\${detectedChains}" | grep -qF "\${heavyChain}"; then
-        inferredHeavy=\$(printf '%s' "\${cdrChains}" | cut -c1)
-        if [ -z "\${inferredHeavy}" ] || ! printf '%s' "\${detectedChains}" | grep -qF "\${inferredHeavy}"; then
-            inferredHeavy=\$("\${PYTHON_BIN}" - <<'PY'
-from pathlib import Path
-
-chains = []
-with open(Path("${complex_pdb}")) as handle:
-    for line in handle:
-        if line.startswith("ATOM"):
-            chain = line[21].strip()
-            if chain and chain not in chains:
-                chains.append(chain)
-print(chains[0] if chains else "")
-PY
-            )
-        fi
-        if [ -n "\${inferredHeavy}" ]; then
-            echo "[PPIFlow] Warning: heavy chain '${heavyChain}' not found in ${complex_pdb}; using detected chain '\${inferredHeavy}' instead" >&2
-            heavyChain="\${inferredHeavy}"
-        else
-            echo "[PPIFlow] ERROR: heavy chain '${heavyChain}' not found in ${complex_pdb}; detected chains: \${detectedChains}" >&2
-            exit 1
-        fi
-    fi
-
-    if [ -z "\${lightChain}" ] || ! printf '%s' "\${detectedChains}" | grep -qF "\${lightChain}"; then
-        inferredLight=\$(printf '%s' "\${cdrChains}" | cut -c2)
-        if [ -n "\${inferredLight}" ] && [ "\${inferredLight}" != "\${heavyChain}" ] && printf '%s' "\${detectedChains}" | grep -qF "\${inferredLight}"; then
-            if [ -n "\${lightChain}" ]; then
-                echo "[PPIFlow] Warning: light chain '\${lightChain}' not found in ${complex_pdb}; using CDR-derived chain '\${inferredLight}' instead" >&2
-            fi
-            lightChain="\${inferredLight}"
-        elif [ -n "\${lightChain}" ]; then
-            echo "[PPIFlow] Warning: light chain '\${lightChain}' not found in ${complex_pdb}; continuing in single-chain mode" >&2
-            lightChain=""
-        fi
-    fi
-
-    if [ -n "\${antigenChainBash}" ] && [ "\${antigenChainBash}" = "\${heavyChain}" ]; then
-        echo "[PPIFlow] Warning: antigen chain '\${antigenChainBash}' overlaps inferred heavy chain; re-inferring antigen chain" >&2
-        antigenChainBash=""
-    fi
-
-    if [ -z "\${antigenChainBash}" ] || ! printf '%s' "\${detectedChains}" | grep -qF "\${antigenChainBash}"; then
-        antigenChainBash=\$(PPI_HEAVY_CHAIN="\${heavyChain}" PPI_LIGHT_CHAIN="\${lightChain}" "\${PYTHON_BIN}" - <<'PY'
-import os
-from pathlib import Path
-
-pdb_path = Path("${complex_pdb}")
-chains = []
-with open(pdb_path) as f:
-    for line in f:
-        if line.startswith("ATOM"):
-            chain = line[21].strip()
-            if chain and chain not in chains:
-                chains.append(chain)
-
-heavy = os.environ.get("PPI_HEAVY_CHAIN", "")
-light = os.environ.get("PPI_LIGHT_CHAIN", "")
-ab = {c for c in (heavy, light) if c}
-chains = [c for c in chains if c not in ab]
-print("".join(chains))
-PY
-        )
-    fi
-
-    if [ -z "\${antigenChainBash}" ]; then
-        echo "[PPIFlow] ERROR: unable to infer antigen chain for ${complex_pdb}; detected chains: \${detectedChains}, antibody chains: \${heavyChain}\${lightChain}" >&2
-        exit 1
-    fi
-
-    hotspotsSpec=\$(PPI_HOTSPOTS_SPEC="\${hotspotsSpec}" PPI_ANTIGEN_CHAIN="\${antigenChainBash}" PPI_HEAVY_CHAIN="\${heavyChain}" PPI_LIGHT_CHAIN="\${lightChain}" "\${PYTHON_BIN}" - <<'PY'
-import os
-import re
-
-hotspots = os.environ.get("PPI_HOTSPOTS_SPEC", "").strip()
-antigen = os.environ.get("PPI_ANTIGEN_CHAIN", "").strip()
-heavy = os.environ.get("PPI_HEAVY_CHAIN", "").strip()
-light = os.environ.get("PPI_LIGHT_CHAIN", "").strip()
-
-if not hotspots:
-    print("")
-    raise SystemExit(0)
-
-tokens = [token.strip() for token in hotspots.split(",") if token.strip()]
-chains = []
-for token in tokens:
-    match = re.match(r"([A-Za-z])", token)
-    if not match:
-        print("")
-        raise SystemExit(0)
-    chain = match.group(1)
-    if chain not in chains:
-        chains.append(chain)
-
-antigen_set = set(antigen)
-antibody_set = {c for c in (heavy, light) if c}
-
-if set(chains).issubset(antigen_set):
-    print(",".join(tokens))
-    raise SystemExit(0)
-
-if len(chains) == 1 and len(antigen) == 1:
-    old_chain = chains[0]
-    new_chain = antigen
-    remapped = [re.sub(r"^[A-Za-z]", new_chain, token, count=1) for token in tokens]
-    print(",".join(remapped))
-    raise SystemExit(0)
-
-if set(chains).issubset(antibody_set):
-    print("")
-    raise SystemExit(0)
-
-print("")
-PY
-    )
-
+    # Do not infer a missing binder role or rewrite a requested epitope.
+    # Native PPIFlow accepts one antigen chain; ambiguous multi-chain targets
+    # require an explicit selection rather than concatenating chain IDs.
+    antigenChainBash=\$("\${PYTHON_BIN}" "${params.code_root}/scripts/validate_ppiflow_roles.py" \\
+        --pdb "${complex_pdb}" \\
+        --heavy "\${heavyChain}" \\
+        --light "\${lightChain}" \\
+        --antigen "\${antigenChainBash}" \\
+        --hotspots "\${hotspotsSpec}")
     hotspotArg=""
     if [ -n "\${hotspotsSpec}" ]; then
-        if [ "${params.epitope_residues ?: ''}" != "\${hotspotsSpec}" ]; then
-            echo "[PPIFlow] Warning: remapped hotspot residues from '${params.epitope_residues ?: ''}' to '\${hotspotsSpec}' to match antigen chain '\${antigenChainBash}'" >&2
-        fi
         hotspotArg="--specified_hotspots \${hotspotsSpec}"
-    elif [ -n "${params.epitope_residues ?: ''}" ]; then
-        echo "[PPIFlow] Warning: dropping hotspot residues '${params.epitope_residues ?: ''}' because they do not match inferred antigen chain '\${antigenChainBash}'" >&2
     fi
 
     if [ -z "${checkpointPath}" ]; then
@@ -347,11 +248,11 @@ PY
         lightChainArg="--light_chain \${lightChain}"
     fi
 
-    nativeCommand=("\${PYTHON_BIN}" "\${ppiflow_script}")
+    nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/ppiflow_sample_identity.py" "\${ppiflow_script}")
     if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
         nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/maturation_native_adapter.py"
             --producer ppiflow --root /app/ppiflow --reference "${original_complex_pdb}"
-            --binder "\${heavyChain},\${lightChain}" --target "${params.antigen_chains ?: antigenChain}"
+            --binder "\${heavyChain},\${lightChain}" --target "${requestedAntigenChains ?: antigenChain}"
             --selected "${ppiflow_positions}" --loops "${cdr_positions_by_loop_json}" --epitope "${params.epitope_residues ?: ''}" -- "\${ppiflow_script}")
     fi
     "\${nativeCommand[@]}" \\
@@ -371,36 +272,12 @@ PY
         --name "${meta.id}"
 
 "\${PYTHON_BIN}" - <<'PY'
-from pathlib import Path
-import json
-import shutil
-
-pdbs = sorted(Path("ppiflow_out").rglob("*.pdb"))
-if not pdbs:
-    raise SystemExit("No PPIFlow PDB outputs found")
-expected = int("${samplesPerTarget}")
-if len(pdbs) != expected:
-    raise SystemExit(f"[PPIFlow] ERROR: expected {expected} output PDBs but found {len(pdbs)} in ppiflow_out")
-out_dir = Path("ppiflow_backbones")
-out_dir.mkdir(exist_ok=True)
-manifest = []
-for i, pdb in enumerate(pdbs):
-    out_name = f"${meta.id}_ppiflow_sample{i}.pdb"
-    shutil.copy2(pdb, out_dir / out_name)
-    comparison_path = None
-    if "${params.get('core_protein_scientific_contract') ?: ''}" == "1":
-        comparison = Path(str(pdb) + '.comparison.json')
-        if not comparison.is_file():
-            raise ValueError('native comparison publication missing')
-        comparison_path = str((out_dir / (out_name + '.comparison.json')).resolve())
-        shutil.copy2(comparison, comparison_path)
-    manifest.append({
-        "comparison_path": comparison_path,
-        "sample_index": i,
-        "name": out_name,
-        "path": str((out_dir / out_name).resolve()),
-    })
-Path("ppiflow_backbones_manifest.json").write_text(json.dumps(manifest, indent=2))
+import sys
+sys.path.insert(0, "${params.code_root}/scripts")
+from ppiflow_sample_identity import collect
+collect("ppiflow_out", "ppiflow_backbones", "${meta.id}", "ppiflow_backbones_manifest.json",
+        comparison="${params.get('core_protein_scientific_contract') ?: ''}" == "1",
+        requested_count=int("${samplesPerTarget}"), accounting_path="${meta.id}_ppiflow_accounting.json")
 PY
     """
 }
@@ -420,7 +297,7 @@ process PrepMaturationRedesign {
     script:
     def frameworkType = params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
-    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
+    def antibodyChains = params.get('binder_chains') ?: params.antibody_chains ?: defaultAntibodyChains
     def designModeRaw = params.maturation_design_mode ?: 'inherit'
     def designMode = designModeRaw == 'inherit' ? (params.antibody_design_mode ?: 'cdr_only') : designModeRaw
     def selectedLoopsSpec = (params.ppiflow_region_mode ?: 'selected_cdrs').toString() == 'selected_cdrs'
@@ -489,8 +366,11 @@ process RunMaturationFAMPNN {
 
     script:
     def analysisChain = params.analysis_chain_id ?: 'all_chains'
-    def temperature = paramValueOrDefault(params, 'maturation_redesign_temp', paramValueOrDefault(params, 'fampnn_temperature', 0.1))
-    def numSteps = paramValueOrDefault(params, 'maturation_redesign_steps', paramValueOrDefault(params, 'fampnn_num_steps', 100))
+    def genericBinder = params.get('binder_chains') != null
+    def temperature = genericBinder ? paramValueOrDefault(params, 'fampnn_temperature', 0.1) : paramValueOrDefault(params, 'maturation_redesign_temp', paramValueOrDefault(params, 'fampnn_temperature', 0.1))
+    def numSteps = genericBinder ? paramValueOrDefault(params, 'fampnn_num_steps', 100) : paramValueOrDefault(params, 'maturation_redesign_steps', paramValueOrDefault(params, 'fampnn_num_steps', 100))
+    def batchSize = genericBinder ? paramValueOrDefault(params, 'fampnn_batch_size', 16) : 1
+    def sequenceCount = genericBinder ? paramValueOrDefault(params, 'seqs_per_design', 1) : 1
     def checkpointPreset = (params.fampnn_checkpoint ?: 'fampnn_0_0.pt').toString().trim()
     def checkpointOverride = (params.fampnn_checkpoint_path ?: '').toString().trim()
     def checkpointMap = [
@@ -516,11 +396,11 @@ process RunMaturationFAMPNN {
             --producer fampnn --root /app/fampnn -- /app/fampnn/fampnn/inference/seq_design.py)
     fi
     TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 "\${nativeCommand[@]}" \\
-        batch_size=1 \\
+        batch_size=${batchSize} \\
         checkpoint_path=${checkpointPath} \\
         exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \\
         fixed_pos_csv=${csv} \\
-        num_seqs_per_pdb=1 \\
+        num_seqs_per_pdb=${sequenceCount} \\
         pdb_dir="./" \\
         presort_by_length=true \\
         psce_threshold=${paramValueOrDefault(params, 'fampnn_psce_threshold', 0.3)} \\

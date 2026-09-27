@@ -109,7 +109,7 @@ def saved_manifests(target):
 def manifest_for(selection, entries, source) -> dict[str, Any]:
     # Never transfer the scientific request, sequences, paths or generated inputs.
     wire_selection = selection.model_dump(mode="json")
-    if selection.kind == "workflow":
+    if selection.kind in {"workflow", "workflow_pack"}:
         wire_selection = dict(kind="workflow", model_id=hashlib.sha256(json.dumps(
             wire_selection, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
     return dict(selection=wire_selection, source_revision=source[0], source_tree=source[1],

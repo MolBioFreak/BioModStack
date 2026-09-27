@@ -72,7 +72,7 @@ export function DesignBrowser() {
     // Fetch jobs for filter dropdown
     const { data: jobsData } = useQuery({
         queryKey: ['jobs'],
-        queryFn: () => fetchJobs({ limit: 500, summary: true }),
+        queryFn: ({ signal }) => fetchJobs({ limit: 500, summary: true }, undefined, signal),
     });
 
     // Favorite mutation

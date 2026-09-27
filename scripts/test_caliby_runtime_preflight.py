@@ -84,4 +84,28 @@ def test_all_caliby_entrypoints_call_preflight_before_any_caliby_import_or_model
         source = (SCRIPTS_ROOT / script_name).read_text(encoding="utf-8")
         assert "preflight_caliby_runtime(" in source
         assert source.index("preflight_caliby_runtime(") < source.index("load_caliby_model(")
-        assert source.index("preflight_caliby_runtime(") < source.index("maybe_clean_inputs(")
+        if "maybe_clean_inputs(" in source:
+            assert source.index("preflight_caliby_runtime(") < source.index("maybe_clean_inputs(")
+        if "from caliby." in source:
+            assert source.index("preflight_caliby_runtime(") < source.index("from caliby.")
+
+
+def test_recipe_pins_installed_native_runtime_and_existing_bind_transport() -> None:
+    root = SCRIPTS_ROOT.parent
+    recipe = (root / "apptainer/caliby.def").read_text()
+    assert "git checkout --detach ddb368cbe239ddc2bd731a963f10ffe81452bb1f" in recipe
+    assert "uv/0.11.7/install.sh" in recipe
+    lock = recipe.split("<<'CALIBY_RUNTIME_LOCK'\n", 1)[1].split("\nCALIBY_RUNTIME_LOCK", 1)[0]
+    assert "torch==2.8.0+cu128" in lock
+    assert "gemmi==0.7.5" in lock
+    assert "atomworks-caliby.git@ea2c998a593af05a47dd972ad6e72b89f87d4e14" in lock
+    assert "protpardelle-1c.git@7962da091a335251fa8e5ddef5d2c937fbd9d9ae" in lock
+    assert all("==" in line or " @ git+" in line or line == "-e file:///opt/caliby"
+               for line in lock.splitlines())
+    assert "uv pip install --no-deps -r /opt/caliby/runtime.lock" in recipe
+    config = (root / "nextflow.config").read_text().split("withLabel: Caliby {", 1)[1].split("withLabel:", 1)[0]
+    assert '--env MODEL_PARAMS_DIR=/weights/caliby/model_params' in config
+    assert '--bind ${params.cache_root}:/cache' in config
+    assert 'weightBind(params.weights_root, "/weights")' in config
+    for name in ("HF_HOME=/cache/huggingface", "XDG_CACHE_HOME=/cache/general", "TRITON_CACHE_DIR=/cache/triton"):
+        assert name in config

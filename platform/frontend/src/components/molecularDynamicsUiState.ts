@@ -702,7 +702,7 @@ export const parseMolecularDynamicsLaunchPreview = (
 ): MolecularDynamicsLaunchPreview => {
     const contract = 'launch preview';
     const root = wireRecord(value, contract);
-    exactWireKeys(root, ['schema_version', 'execution_target_id', 'execution_policy', 'source', 'chemistry', 'requested_settings', 'effective_request', 'warnings', 'blockers', 'preview_digest'], contract);
+    exactWireKeys(root, ['schema_version', 'execution_target_id', 'execution_policy', 'source', 'chemistry', 'requested_settings', 'effective_request', 'warnings', 'blockers', 'preview_digest', ...('execution_plan' in root ? ['execution_plan'] : [])], contract);
     if (root.execution_target_id !== null && (typeof root.execution_target_id !== 'string' || !root.execution_target_id.trim())) throw new Error(`Invalid ${contract} placement.`);
     const policy = wireRecord(root.execution_policy, contract);
     exactWireKeys(policy, ['remote_result_policy'], contract);

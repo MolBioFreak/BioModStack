@@ -146,6 +146,9 @@ const launchPreviewResponse = (body: Record<string, unknown>, digest = hash('d')
     const launchIntent = body.intent as Record<string, unknown>;
     return response({
     schema_version: 'bms.md.launch-preview.v1',
+    execution_plan: null,
+    execution_target_id: launchIntent.execution_target_id ?? null,
+    execution_policy: launchIntent.execution_policy ?? { remote_result_policy: 'manual' },
     source: { source_ref: inspection.source_ref, ...inspection.identity },
     chemistry: {
         profile_id: launchIntent.chemistry_profile_id,
@@ -199,6 +202,9 @@ beforeEach(() => {
         if (url === '/api/molecular-dynamics/launch-preview') {
             return response({
                 schema_version: 'bms.md.launch-preview.v1',
+                execution_plan: null,
+                execution_target_id: (body.intent as Record<string, unknown>).execution_target_id ?? null,
+                execution_policy: (body.intent as Record<string, unknown>).execution_policy ?? { remote_result_policy: 'manual' },
                 source: { source_ref: inspection.source_ref, ...inspection.identity },
                 chemistry: {
                     profile_id: profile.id,
@@ -349,6 +355,55 @@ const mountPredictionCandidateRace = async () => {
 };
 
 describe('mounted Molecular Dynamics Gen 2 launcher', () => {
+    it.each(['generic binder', 'BindCraft2'])('launches the exact %s Design via the existing typed handoff', async (producer) => {
+        const jobId = '66666666-6666-4666-8666-666666666666';
+        const designId = '77777777-7777-4777-8777-777777777777';
+        const selected = {
+            ...inspection,
+            source_ref: { kind: 'design', id: designId },
+            identity: { ...inspection.identity, label: `${producer} selected`, sha256: hash('e'), pdb_id: null, producer_job_id: jobId, design_id: designId },
+            viewer: { ...inspection.viewer, url: `/api/molecular-dynamics/starting-structures/design/${designId}/content?expected_sha256=${hash('e')}`, sha256: hash('e') },
+        };
+        apiMocks.post.mockImplementation(async (url: string, body: Record<string, unknown>) => {
+            if (url === '/api/molecular-dynamics/starting-structures/inspect') {
+                expect(body.source_ref).toEqual(selected.source_ref);
+                return response({ ...selected, admission: body.chemistry_profile_id ? selected.admission : {
+                    state: 'profile_required', profile_id: null, code: 'MD_CHEMISTRY_PROFILE_REQUIRED', message: 'Select chemistry.',
+                } });
+            }
+            if (url === '/api/molecular-dynamics/launch-preview') {
+                const preview = launchPreviewResponse(body);
+                return { ...preview, data: { ...preview.data, source: { source_ref: selected.source_ref, ...selected.identity } } };
+            }
+            if (url === '/api/molecular-dynamics/launch') return response({ id: 'md-job-1' });
+            throw new Error(`unexpected POST ${url}`);
+        });
+        await act(async () => {
+            root.render(<QueryClientProvider client={client}><MemoryRouter>
+                <MolecularDynamicsTemplate onBack={() => undefined} initialValues={{ source_prediction_job_id: jobId, source_design_id: designId }} />
+            </MemoryRouter></QueryClientProvider>);
+        });
+        await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(`${producer} selected`)); });
+        await act(async () => viewerLoadCallbacks.get(selected.viewer.url)?.('loaded'));
+        await click('Use this structure');
+        const select = container.querySelector<HTMLSelectElement>('[data-md-chemistry-profile]');
+        await act(async () => {
+            Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, profile.id);
+            select?.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await act(async () => { await vi.waitFor(() => expect([...container.querySelectorAll<HTMLButtonElement>('button')]
+            .find((button) => button.textContent?.includes('Preview effective request'))?.disabled).toBe(false)); });
+        await click('Preview effective request');
+        await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Effective request digest')); });
+        await click('Launch typed MD job');
+        const launch = apiMocks.post.mock.calls.find(([url]) => url === '/api/molecular-dynamics/launch');
+        expect(launch?.[1].intent.source_ref).toEqual(selected.source_ref);
+        expect(launch?.[1].intent.expected_source_sha256).toBe(hash('e'));
+        expect(launch?.[1].preview_digest).toBe(hash('d'));
+        expect(apiMocks.get.mock.calls.some(([url]) => String(url).includes('source-candidates'))).toBe(false);
+        expect(navigate).toHaveBeenCalledWith('/designs/md-job-1');
+    });
+
     it('asks for a first chemistry selection without falsely calling the profile stale', async () => {
         await act(async () => {
             root.render(
@@ -1163,7 +1218,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         await click('Vast · Worker');
         const beforeProvision = apiMocks.post.mock.calls.length;
         await click('Preview artifact downloads');
-        await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Managed asset activation — not scientific Ready')); });
+        await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Scientific launch restrictions remain separate.')); });
         expect(apiMocks.post.mock.calls.length).toBe(beforeProvision + 1);
         const provisionCall = apiMocks.post.mock.calls.at(-1);
         await click('Local');
@@ -1171,7 +1226,12 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         await click('Preview effective request');
         await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Effective request digest')); });
         const previewCall = apiMocks.post.mock.calls.find(([url]) => url === '/api/molecular-dynamics/launch-preview');
-        expect(provisionCall?.[1]).toEqual({ kind: 'workflow', workflow_request: { workflow_type: 'molecular_dynamics', request: previewCall?.[1] } });
+        expect(provisionCall?.[1]).toEqual({ kind: 'workflow', workflow_request: {
+            workflow_type: 'molecular_dynamics', request: {
+                ...previewCall?.[1], intent: { ...previewCall?.[1].intent, execution_target_id: 'vast:123' },
+            },
+        } });
+        expect(previewCall?.[1].intent.execution_target_id).toBeNull();
         expect(previewCall?.[1]).toMatchObject({
             schema_version: 'bms.md.launch-preview-request.v1',
             intent: {

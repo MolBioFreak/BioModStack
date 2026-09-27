@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import requests
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -293,7 +294,7 @@ def test_stage_reporter_main_sends_job_root_relative_output_unchanged(
 
     setattr(reporter, "API_BASE_URL", "http://localhost:8000")
     setattr(reporter, "STAGE_REPORT_TOKEN", "launch-scoped-test-token")
-    monkeypatch.setattr(reporter.requests, "post", fake_post)
+    monkeypatch.setattr(requests, "post", fake_post)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -392,7 +393,7 @@ def test_stage_reporter_routes_non_success_terminal_states(
 
     setattr(reporter, "API_BASE_URL", "http://localhost:8000")
     setattr(reporter, "STAGE_REPORT_TOKEN", "launch-scoped-test-token")
-    monkeypatch.setattr(reporter.requests, "post", fake_post)
+    monkeypatch.setattr(requests, "post", fake_post)
     monkeypatch.setattr(sys, "argv", [str(reporter_path), "job-1", "frustrampnn", status])
     reporter.main()
     assert calls == [

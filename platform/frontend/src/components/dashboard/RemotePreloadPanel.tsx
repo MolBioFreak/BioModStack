@@ -13,6 +13,9 @@ interface Props {
 /** Cache preparation is operator initiated; polling never sends a POST. */
 export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
   const [jobId, setJobId] = useState('');
+  // A closed optional menu must not fetch catalogs/inventory for every worker.
+  // Retain the chooser after first opening so collapsing preserves its draft.
+  const [preparationOpened, setPreparationOpened] = useState(false);
   const queryClient = useQueryClient();
   const mutationKey = ['remote-preload', target.id];
   const activePreloads = useIsMutating({ mutationKey });
@@ -34,12 +37,12 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
     mutation.mutate(jobId);
   }
   return <section aria-label="Remote preload and activity" className="space-y-3 rounded-lg border border-[var(--border-primary)] p-3">
-    <details>
+    <details onToggle={event => { if (event.currentTarget.open) setPreparationOpened(true); }}>
       <summary className="cursor-pointer rounded py-1 text-sm font-medium focus-visible:outline focus-visible:outline-2">
         Prepare worker <span className="font-normal text-[var(--text-muted)]">— optional dependency downloads{preload ? ` · ${preload.phase}` : ''}</span>
       </summary>
       <div className="mt-3 space-y-3">
-    <IndependentProvisionPanel target={target} onChanged={onChanged} />
+    {preparationOpened && <IndependentProvisionPanel target={target} onChanged={onChanged} />}
     <h4 className="font-medium">Preload source and runtime files</h4>
     <p className="text-xs text-[var(--text-muted)]">Use a saved Job as the exact dependency recipe. This does not submit a Job or transfer biological inputs, results, or secrets. Downloads ready does not mean scientific Ready.</p>
     <label className="block text-sm">Saved Job recipe
@@ -51,6 +54,8 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
     <button type="button" disabled={!canPreload || !validRecipe} onClick={() => void submit()} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-sm disabled:opacity-50">
       {busy ? 'Preloading…' : preload?.phase === 'failed' ? 'Retry preload' : 'Preload selected worker'}
     </button>
+      </div>
+    </details>
     {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
     {preload && <div role="status" aria-label="Preload progress" className="text-sm">
       {preload.phase === 'source_download_ready' && <p>Source/download ready — not scientific Ready</p>}
@@ -64,7 +69,5 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
       {progress.activity && <p>{progress.activity.stage}: {progress.activity.state}</p>}
       <p className="text-xs text-[var(--text-muted)]">Job {progress.job_id} · Updated {progress.updated_at}</p>
     </div>}
-      </div>
-    </details>
   </section>;
 }

@@ -40,6 +40,7 @@ class OperatorInputSpec(BaseModel):
     exclusive_minimum: StrictFloat | StrictInt | None = None
     exclusive_maximum: StrictFloat | StrictInt | None = None
     default: Any = None
+    json_schema: dict[str, Any] | None = None
 
 
 class OperatorDependency(BaseModel):
@@ -3421,7 +3422,12 @@ class OperatorDashboardPipetteTransportDetails(BaseModel):
 
 
 class OperatorDashboardPipetteHardwareEvidence(BaseModel):
-    """Closed, typed readback evidence exactly matching the BioXP producer envelope."""
+    """Closed, typed readback evidence exactly matching the BioXP producer envelope.
+
+    The ``source_*`` trio carries the source-declared tip query outcome
+    (``ClassPipette.QueryTipStatus``): existence decided by the source, the raw
+    source return code, and whether the source call completed.
+    """
 
     model_config = ConfigDict(extra="forbid", strict=True)
     ok: StrictBool
@@ -3429,6 +3435,9 @@ class OperatorDashboardPipetteHardwareEvidence(BaseModel):
     reply_received: StrictBool | None = None
     semantic_ok: StrictBool | None = None
     tip_loaded: StrictBool | None = None
+    source_tip_loaded: StrictBool | None = None
+    source_return: StrictInt | None = None
+    source_return_completed: StrictBool | None = None
     pressure: StrictFloat | StrictInt | None = None
     error: str | None = Field(default=None, max_length=2000)
     delivery_verified: StrictBool | None = None
@@ -3636,8 +3645,37 @@ class PipetteReadbackChannel(BaseModel):
     data: dict[str, JsonValue] | None
 
 
+class PipetteCollectionChannelStamp(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    actor: str | None
+    revision: StrictInt | None
+    reader: StrictInt
+    reader_generation: StrictInt | None
+
+
+class PipetteCollectionIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    owner: str
+    interrupt_epoch: StrictInt
+    channels: list[PipetteCollectionChannelStamp] = Field(min_length=4, max_length=4)
+
+
+class PipetteCollectionChannelObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    tip_loaded: StrictBool | None
+    verified: StrictBool
+
+
+class PipetteCollectionSource(BaseModel):
+    """Producer observation provenance, not an admission or physical-proof gate."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    identity: PipetteCollectionIdentity
+    channels: list[PipetteCollectionChannelObservation] = Field(min_length=4, max_length=4)
+
+
 class PipetteReadbackResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    collection_source: PipetteCollectionSource | None = None
     hardware_truth_level: Literal["hardware_query"]
     ok: StrictBool
     semantic_ok: StrictBool
@@ -5421,9 +5459,17 @@ class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
                 if self.status == "completed" or self.physical_effect_verified:
                     raise ValueError("completed deck movement requires typed deck evidence")
                 return self
+            # The plan-bound check runs when the producer supplies the canonical
+            # plan target. Deck-command receipts produced by the current robot
+            # carry canonical_inputs = {} (the plan target lives in the typed
+            # deck evidence), and an absent plan target must not turn a valid
+            # completed move into an invalid contract. A supplied target still
+            # must match the deck evidence exactly.
+            plan_target = self.canonical_inputs.get("target")
             if (
                 self.action_id == "oem.deck.move_to_location"
-                and self.deck_movement.target != self.canonical_inputs.get("target")
+                and plan_target is not None
+                and self.deck_movement.target != plan_target
             ):
                 raise ValueError("deck receipt target must match canonical inputs")
             deck = self.deck_movement
@@ -5916,6 +5962,9 @@ class OperatorReportListenerV1(BaseModel):
 
     host: str | None
     port: StrictInt | None
+    owner_pid: StrictInt | None = None
+    owner_cgroup_sha256: str | None = None
+    socket_inode: StrictInt | None = None
 
 
 class OperatorReportReleaseBindingV1(BaseModel):

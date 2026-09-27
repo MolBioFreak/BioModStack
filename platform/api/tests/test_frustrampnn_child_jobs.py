@@ -138,6 +138,79 @@ async def child_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
+async def test_prepared_remote_child_preview_and_fresh_http_approval(child_db, monkeypatch):
+    from datetime import datetime
+    from database import ExecutionTarget
+    from routers import jobs as jobs_route
+    from experiment_database import get_experiment_session
+    import paths
+    sessions, results = child_db
+    monkeypatch.setattr(paths, 'get_results_dir', lambda: results)
+    async with sessions() as session:
+        target = ExecutionTarget(id='vast:fixture', provider='vast', provider_instance_id='fixture',
+            active=True, state='ready', provider_metadata={'inventory': {
+                'status': 'complete', 'present': True, 'running': True,
+                'checked_at': datetime.utcnow().isoformat()}})
+        session.add(target)
+        await session.commit()
+        child = await child_jobs.create_child_job(session,
+            selections=[child_jobs.upload_selection(filename='candidate.pdb', payload=_pdb(),
+                expected_sha256=hashlib.sha256(_pdb()).hexdigest())],
+            source_parent=None, trigger='binder_selected', requested_settings=default_settings(),
+            prepare_only=True, execution_target_id=target.id)
+        payload = child_jobs.prepared_child_request(child).model_dump(mode='json')
+        retained = {str(path): path.read_bytes() for path in Path(child.output_dir).rglob('*') if path.is_file()}
+        app = FastAPI()
+        app.include_router(jobs_route.router, prefix='/api/jobs')
+        async def dependency():
+            yield session
+        app.dependency_overrides[get_session] = dependency
+        app.dependency_overrides[get_experiment_session] = dependency
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            preview = await client.post('/api/jobs/execution-plan/preview', json=payload)
+            assert preview.status_code == 200, preview.text
+            assert preview.json()['admissible'], preview.text
+            payload['execution_plan_approval'] = preview.json()['approval_digest']
+            approved = await client.post('/api/jobs', json=payload)
+            assert approved.status_code == 201, approved.text
+            assert approved.json()['id'] == child.id
+        stored = await session.get(Job, child.id)
+        assert stored.execution_target_id == target.id
+        assert {name: Path(name).read_bytes() for name in retained} == retained
+
+
+@pytest.mark.asyncio
+async def test_prepared_child_fresh_jobs_request_inserts_without_rematerializing(child_db):
+    from fastapi import BackgroundTasks
+    from routers.jobs import create_job
+    from schemas import JobCreate
+    sessions, _ = child_db
+    selection = child_jobs.upload_selection(filename="candidate.pdb", payload=_pdb(),
+        expected_sha256=hashlib.sha256(_pdb()).hexdigest())
+    async with sessions() as session:
+        child = await child_jobs.create_child_job(session, selections=[selection], source_parent=None,
+            trigger="binder_selected", requested_settings=default_settings(), prepare_only=True)
+        request = child_jobs.prepared_child_request(child)
+        assert await session.get(Job, child.id) is None
+        paths = sorted(Path(child.output_dir).rglob("*.json"))
+        before = {str(path): path.read_bytes() for path in paths}
+        fresh = JobCreate.model_validate_json(request.model_dump_json())
+        response = await create_job(fresh, BackgroundTasks(), session)
+        assert response.id == child.id
+        assert {str(path): path.read_bytes() for path in paths} == before
+    async with sessions() as session:
+        stored = await session.get(Job, child.id)
+        assert stored.status == "queued"
+        assert stored.params == child.params
+        replay = await create_job(JobCreate.model_validate_json(request.model_dump_json()), BackgroundTasks(), session)
+        assert replay.id == stored.id
+        forged = request.model_copy(deep=True)
+        forged.params[child_jobs.ENVELOPE_KEY]["source_parent_job_id"] = "foreign"
+        with pytest.raises(Exception, match="retained analysis"):
+            await create_job(forged, BackgroundTasks(), session)
+
+
+@pytest.mark.asyncio
 async def test_child_creation_commits_immutable_authority_and_builds_scheduler_handoff(
     child_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -22,6 +22,7 @@ it.each(['ready', 'unavailable'])('requires fleet selection and isolates telemet
     api.defaults.adapter = async config => {
         let data: unknown;
         if (config.method === 'get' && config.url === '/api/execution-targets/provision/catalog') data = [];
+        else if (config.method === 'get' && ['/api/models', '/api/templates'].includes(config.url ?? '')) data = [];
         else if (config.method === 'get' && /\/vast%3A[12]\/runtime-inventory$/.test(config.url ?? '')) {
             inventory.push(config.url!); data = null;
         } else if (config.method === 'get' && config.url === '/api/execution-targets/active/telemetry') {
@@ -41,14 +42,24 @@ it.each(['ready', 'unavailable'])('requires fleet selection and isolates telemet
     const tab = async (label: string) => { await act(async () => {
         [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(b => b.textContent?.startsWith(label))!.click(); await flush();
     }); };
+    const openPreparation = async () => {
+        await act(async () => {
+            const details = container.querySelector<HTMLDetailsElement>('[aria-label="Remote preload and activity"] > details')!;
+            details.open = true; details.dispatchEvent(new Event('toggle'));
+        });
+        await act(async () => { await flush(); });
+    };
     try {
         await act(async () => { root.render(<QueryClientProvider client={client}><DashboardTelemetry /></QueryClientProvider>); await flush(); });
         expect(container.querySelector<HTMLSelectElement>('[aria-label="Telemetry worker"]')!.value).toBe('');
         expect(container.querySelectorAll('[role="tab"]')).toHaveLength(1);
         expect(reads).toEqual([]); expect(inventory).toEqual([]);
         await select('vast:1'); await tab('Vast');
+        expect(inventory).toEqual([]);
+        await openPreparation();
         expect(reads).toEqual([{ id: 'vast:1', since: undefined }]);
         await select('vast:2');
+        await openPreparation();
         expect(reads.at(-1)).toEqual({ id: 'vast:2', since: undefined });
         await act(async () => { pending.get('vast:1')!(payload('vast:1')); await flush(); });
         expect(container.textContent).not.toContain('Vast instance 1');

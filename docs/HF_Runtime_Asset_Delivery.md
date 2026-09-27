@@ -57,7 +57,15 @@ verified. Rows the archive does not carry (the large checkpoints) keep the
 per-file route, which consults HF first for objects at or above the floor.
 
 Small support files retain the existing efficient batched SSH transport rather
-than incur thousands of cloud requests. Biological inputs, prepared input data,
+than incur thousands of cloud requests. Download ranges use a bounded rolling
+window: writing the next contiguous range replenishes its slot instead of
+waiting for an entire group to finish. Writes remain contiguous and the full downloaded
+object is hashed once before acquisition succeeds. Cloud hits do not take the
+publisher lock; missing-object publication still serializes quota/presence
+rechecks and pins the upload inode. The broker hashes that inode before upload
+and checks its generation afterward without a second full-file read.
+
+Biological inputs, prepared input data,
 user results, credentials and relocated support-python are not HF mirrors.
 This route does not make the worker join the controller Tailnet or require a
 callback listener. It is provider-neutral; Vast remains the current provider.
@@ -86,6 +94,19 @@ BMS_HF_WEIGHT_ARCHIVE=<selected-sha256>:<size-in-bytes>
   does not change readiness; unset (or with HF unconfigured) the shared weight
   tree keeps the existing per-file route unchanged. A malformed value fails
   visibly, like every other HF setting.
+
+  An optional local packing catalog at
+  `<data_root>/remote-execution/hf-archives/<archive-sha256>/index.json` avoids
+  downloading an unrelated archive. It contains
+  `{"archive":{"sha256":"<digest>","size_bytes":123},"digest_sizes":{"<member-digest>":456}}`.
+  Generate it from the actual verified archive bytes during publication. When
+  present, no matching selected members means the ordinary selected-object route
+  is used. A selection that fits one normal batch also uses that route if its
+  covered bytes are smaller than the archive. Large many-small-file selections
+  retain packed delivery. The catalog is a transfer-cost hint, not integrity or
+  launch authority: missing, unreadable or stale catalogs preserve the original
+  configured route, and every received member still passes the existing worker
+  hash/layout checks. No input/result files belong in this catalog.
 
 - `BMS_HF_TOKEN_FILE`: current controller UID, regular file, no symlink in any
   path component, one hard link, mode `0600` or `0400`, bounded nonempty HF token.

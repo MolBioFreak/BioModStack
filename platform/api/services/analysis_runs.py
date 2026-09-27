@@ -211,6 +211,17 @@ async def request_analysis(
     return run, False
 
 
+async def validate_owned_design_analysis_request(design: Design, analysis_type: str, session: AsyncSession) -> str | None:
+    from services.analysis_registry import scientific_contract_revision
+    if (analysis_type in {"pae_matrix", "chain_metrics", "ipsae_interface"}
+            and await scientific_contract_revision(design, session) == 1):
+        # Native publication owns these artifacts, not legacy Design path slots.
+        # The native signature/compute owner verifies bytes and preserves absent
+        # mappings as unavailable evidence without inventing legacy artifacts.
+        return None
+    return validate_design_analysis_request(design, analysis_type)
+
+
 async def request_design_analysis(
     session: AsyncSession,
     design: Design,
@@ -220,7 +231,7 @@ async def request_design_analysis(
     force_refresh: bool = False,
     requested_by: str = "ui",
 ) -> tuple[AnalysisRun, bool]:
-    contract_error = validate_design_analysis_request(design, analysis_type)
+    contract_error = await validate_owned_design_analysis_request(design, analysis_type, session)
     if contract_error:
         raise ValueError(contract_error)
     return await request_analysis(

@@ -37,8 +37,12 @@ import { BioXpCameraPanel } from './BioXpCameraPanel';
 import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination } from './BioXpHistoryReceiptCard';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
+import { BioXpCalibrationSettings } from './BioXpCalibrationSettings';
+import { BioXpPipetteSettings } from './BioXpPipetteSettings';
+import { BioXpWellPipettingPanel } from './BioXpWellPipettingPanel';
 import { BioXpQuickDashboard } from './BioXpQuickDashboard';
 import { BioXpWorkflowControls } from './BioXpWorkflowControls';
+import { BioXpTransferControls } from './BioXpTransferControls';
 import { BioXpOperatorReports } from './BioXpOperatorReports';
 
 
@@ -1195,7 +1199,7 @@ export function BioXpCockpit() {
 
             <section data-testid="oem-deck-movement" className="rounded-xl border border-teal-700/60 bg-teal-950/20 p-4">
                 <h2 className="text-lg font-semibold">Deck Movement</h2>
-                <p className="mt-1 text-sm text-slate-300">Choose a destination. The robot selects the movement sequence.</p>
+                <p className="mt-1 text-sm text-slate-300">Travel only: moves the tool to a destination. It does not pick up or transfer a plate or cover.</p>
                 <div className="mt-3 grid gap-3">
                     <label className="text-sm text-slate-300">
                         Robot destination
@@ -1282,6 +1286,7 @@ export function BioXpCockpit() {
                 <YOperatorError label="Deck enqueue" error={currentDeckInvokeError} />
                 {deckResolution && <p className="text-sm text-slate-300">Earlier move reconciled. Historical outcome remains {deckReceipt?.status}; this does not retry the command. {deckRecoveryResolved ? 'New movement still requires fresh robot authority.' : 'Awaiting current robot authority at or after the recovery revision.'}</p>}
                 <YOperatorError label="Deck receipt" error={deckReceiptQuery.error} />
+                <BioXpTransferControls key={`${generation}:${active}`} generation={generation} connected={linkConnected} />
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
@@ -1624,6 +1629,11 @@ export function BioXpCockpit() {
                         </article>
                     ))}
                 </div>
+                <BioXpWellPipettingPanel key={`well:${generation}:${active}`} generation={generation} connected={linkConnected}
+                    destinations={selectionAction?.destination_options ?? []}
+                    positionTableRevision={selectionAction?.position_table_revision} />
+                <BioXpCalibrationSettings key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
+                <BioXpPipetteSettings key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
                 <details className="mt-4 rounded border border-slate-800 bg-slate-950/60 p-3" open={pipettesOpen} onToggle={(event) => setPipettesOpen(event.currentTarget.open)}>
                     <summary className="cursor-pointer text-sm font-semibold">Pipette controls</summary>
                     {pipettesOpen && <BioXpPipetteControlPanel

@@ -16,6 +16,7 @@ import os
 import posixpath
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import stat
 import sys
 import time
@@ -80,6 +81,18 @@ def directory(path, *, create=False):
         yield fd
     finally:
         os.close(fd)
+
+
+def remove_partial_weight_tree(path):
+    # Only unpublished stages are disposable; leave CAS objects and published
+    # generations alone, including hardlinks into a failed stage.
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError('unsafe_partial_weight_tree')
+    if path.exists():
+        for current, _, _ in os.walk(path, followlinks=False):
+            os.chmod(current, 0o700)
+        shutil.rmtree(path)
 
 
 def artifact(value):
@@ -251,6 +264,33 @@ class Cache:
             raise ValueError('runtime_image_size_mismatch')
         return self.image_path(item)
 
+    def prepare_runtime_image(self, value, backend, operation_id):
+        """Warm the backend's shared image representation, never execute it.
+
+        Invoked inside the controller's existing owned preload operation; its
+        process group and cancellation fence also own the extractor children.
+        """
+        item = artifact(value)
+        if item.get('kind') != 'runtime_image':
+            raise ValueError('runtime_image_required')
+        if backend not in {'udocker', 'apptainer'}:
+            raise ValueError('unsupported_container_backend')
+        if str(uuid.UUID(operation_id)) != operation_id:
+            raise ValueError('invalid_operation_identity')
+        if backend == 'apptainer':
+            # Apptainer consumes the canonical SIF directly: no rootfs tooling,
+            # extraction, workspace or CoW filesystem requirement.
+            self.verify_runtime(item)
+            return {**item, 'state': 'ready', 'backend': backend, 'rootfs': None}
+        import importlib
+        authority = runtime_lifecycle()
+        views = importlib.import_module('.runtime_image_views', package=authority.__package__)
+        prepared = views.prepare_image(self.image_store, item['sha256'],
+            owner='preload:' + operation_id + ':image:' + item['sha256'],
+            expected_size=item['size_bytes'])
+        return {**item, 'state': 'ready', 'backend': backend,
+                'rootfs': str(prepared['rootfs'])}
+
     def probe_runtime(self, item):
         # Only absence of the digest DIRECTORY means missing. Incomplete/corrupt
         # published objects must fail, never trigger replacement of runnable bytes.
@@ -264,9 +304,22 @@ class Cache:
         return {**item, 'state': 'cache_hit'}
 
     def ingest_runtime(self, item, source):
-        if self.probe_runtime(item)['state'] == 'cache_hit':
+        # A warm ingest needs one authoritative hash under the lifecycle lock,
+        # not probe_runtime's full hash followed by ensure_lease's full hash.
+        # Presence is determined by the digest directory, never by a missing
+        # runtime.sif inside a damaged published generation.
+        parent = self.image_path(item).parent
+        with directory(parent.parent, create=True) as fd:
+            try:
+                os.stat(parent.name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                present = False
+            else:
+                present = True
+        if present:
             runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
-                owner='cache-artifact:' + item['sha256'])
+                owner='cache-artifact:' + item['sha256'],
+                expected_sizes={item['sha256']: item['size_bytes']})
             return {**item, 'state': 'ready', 'cache_hit': True}
         # One private upload -> one independently copied immutable object. Never
         # retain another artifact-CAS SIF or adopt/hardlink a mutable incoming file.
@@ -292,10 +345,9 @@ class Cache:
                 or '..' in destination.parts or destination == root
                 or not destination.is_relative_to(root)):
             raise ValueError('unsafe_runtime_alias')
-        _, identities = runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
-            owner='attempt:' + relative.parts[0] + ':image:' + item['sha256'])
-        if identities[item['sha256']]['size'] != item['size_bytes']:
-            raise ValueError('runtime_image_size_mismatch')
+        runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
+            owner='attempt:' + relative.parts[0] + ':image:' + item['sha256'],
+            expected_sizes={item['sha256']: item['size_bytes']})
         target = self.image_path(item)
         with directory(destination.parent, create=not check) as parent:
             # Exact, controller-derived target only, not arbitrary external links.
@@ -403,53 +455,58 @@ class Cache:
                     raise ValueError('damaged_weight_layout')
                 if not install:
                     return dict(state='missing', root=str(root), sha256=digest)
-                stage = self.root / 'weights' / ('.partial-' + uuid.uuid4().hex)
-                with directory(stage, create=True):
-                    pass
-                for row in sorted(rows, key=lambda r: 'target' in r):
-                    destination = stage / row['name']
-                    if 'target' in row:
-                        with directory(destination.parent, create=True) as out:
-                            os.symlink(row['target'], destination.name, dir_fd=out)
-                            os.fsync(out)
-                        continue
-                    with self.locked(row), self.objects(row) as objects, directory(destination.parent, create=True) as out:
-                        source = os.open(row['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=objects)
-                        try:
-                            info = regular(source)
-                            if stat.S_IMODE(info.st_mode) != 0o444 or not verified(source, row):
-                                raise ValueError('corrupt_weight_object')
-                            if row['mode'] == 0o444:
-                                os.link(row['sha256'], destination.name, src_dir_fd=objects,
-                                        dst_dir_fd=out, follow_symlinks=False)
-                                linked = os.stat(destination.name, dir_fd=out, follow_symlinks=False)
-                                if (linked.st_dev, linked.st_ino) != (info.st_dev, info.st_ino):
-                                    raise ValueError('weight_object_changed')
+                for stale in (Path(self.root) / 'weights').glob('.partial-' + digest + '-*'):
+                    remove_partial_weight_tree(stale)
+                stage = self.root / 'weights' / ('.partial-' + digest + '-' + uuid.uuid4().hex)
+                try:
+                    with directory(stage, create=True):
+                        pass
+                    for row in sorted(rows, key=lambda r: 'target' in r):
+                        destination = stage / row['name']
+                        if 'target' in row:
+                            with directory(destination.parent, create=True) as out:
+                                os.symlink(row['target'], destination.name, dir_fd=out)
                                 os.fsync(out)
-                            else:
-                                # An executable permission projection cannot chmod
-                                # other aliases of an immutable content object.
-                                self._publish_copy(source, out, destination.name, row, row['mode'])
-                        finally:
-                            os.close(source)
-                with directory(stage) as parent:
-                    fd = os.open('.bms-weights.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
-                    with os.fdopen(fd, 'wb') as stream:
-                        stream.write(payload)
-                        stream.flush()
-                        os.fchmod(stream.fileno(), 0o444)
-                        os.fsync(stream.fileno())
-                for name in sorted(dirs, key=lambda n: len(PurePosixPath(n).parts), reverse=True):
-                    with directory(stage / name) as fd:
+                            continue
+                        with self.locked(row), self.objects(row) as objects, directory(destination.parent, create=True) as out:
+                            source = os.open(row['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=objects)
+                            try:
+                                info = regular(source)
+                                if stat.S_IMODE(info.st_mode) != 0o444 or not verified(source, row):
+                                    raise ValueError('corrupt_weight_object')
+                                if row['mode'] == 0o444:
+                                    os.link(row['sha256'], destination.name, src_dir_fd=objects,
+                                            dst_dir_fd=out, follow_symlinks=False)
+                                    linked = os.stat(destination.name, dir_fd=out, follow_symlinks=False)
+                                    if (linked.st_dev, linked.st_ino) != (info.st_dev, info.st_ino):
+                                        raise ValueError('weight_object_changed')
+                                    os.fsync(out)
+                                else:
+                                    # An executable permission projection cannot chmod
+                                    # other aliases of an immutable content object.
+                                    self._publish_copy(source, out, destination.name, row, row['mode'])
+                            finally:
+                                os.close(source)
+                    with directory(stage) as parent:
+                        fd = os.open('.bms-weights.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+                        with os.fdopen(fd, 'wb') as stream:
+                            stream.write(payload)
+                            stream.flush()
+                            os.fchmod(stream.fileno(), 0o444)
+                            os.fsync(stream.fileno())
+                    for name in sorted(dirs, key=lambda n: len(PurePosixPath(n).parts), reverse=True):
+                        with directory(stage / name) as fd:
+                            os.fchmod(fd, 0o555)
+                            os.fsync(fd)
+                    with directory(stage) as fd:
                         os.fchmod(fd, 0o555)
                         os.fsync(fd)
-                with directory(stage) as fd:
-                    os.fchmod(fd, 0o555)
-                    os.fsync(fd)
-                check(stage)
-                with directory(root.parent) as parent:
-                    os.rename(stage.name, root.name, src_dir_fd=parent, dst_dir_fd=parent)
-                    os.fsync(parent)
+                    check(stage)
+                    with directory(root.parent) as parent:
+                        os.rename(stage.name, root.name, src_dir_fd=parent, dst_dir_fd=parent)
+                        os.fsync(parent)
+                finally:
+                    remove_partial_weight_tree(stage)
         return dict(state='ready', root=str(root), sha256=digest)
 
     def archive_root(self, archive):
@@ -988,8 +1045,10 @@ class Cache:
         with self.locked(item), self.objects(item) as objects:
             fd = os.open(item['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=objects)
             try:
-                if not verified(fd, item, lambda **kw: self.emit(item, **kw)):
-                    raise ValueError('corrupt_object')
+                regular(fd)
+                # _publish_copy hashes the exact bytes it copies before atomic
+                # publication. A separate pre-read only hashes the same object
+                # twice and does not strengthen the use-boundary check.
                 self.emit(item, 'materializing')
                 with directory(destination.parent, create=True) as parent:
                     self._publish_copy(fd, parent, destination.name, item, mode)
@@ -1064,6 +1123,8 @@ def main():
         result = {'state': 'ready', 'schema': 'bms.artifact-cache.v1'}
     elif action == 'probe':
         result = {'artifacts': [cache.probe(a) for a in request['artifacts']]}
+    elif action == 'prepare_runtime_image':
+        result = cache.prepare_runtime_image(request['artifact'], request['backend'], request['operation_id'])
     elif action == 'prepare_incoming':
         result = {'source': str(cache.incoming_batch(request['operation_id'], request['batch_id'], create=True))}
     elif action == 'acquire_hf':

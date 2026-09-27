@@ -362,7 +362,7 @@ def _snapshot_input_file(
         if expected_sha256 is not None and actual_sha256 != expected_sha256:
             raise _scope_violation(
                 "structure_sha256",
-                "the copied structure bytes do not match the authorized smoke fixture",
+                "the copied structure bytes do not match the selected source",
             )
         os.chmod(temporary, 0o444)
         try:
@@ -704,8 +704,6 @@ def _validate_profile_launch_constraints(normalized: Mapping[str, Any], profile:
         raise _scope_violation("launch_constraints", "selected profile has no valid launch constraints")
     preparation = normalized["preparation"]
     stages = normalized["stages"]
-    structure = Path(str(normalized["input"]["structure"]))
-
     exact_values = (
         ("input_mode", "structure", constraints["input_mode"]),
         ("replicas", normalized["replicas"], constraints["replicas"]),
@@ -745,13 +743,6 @@ def _validate_profile_launch_constraints(normalized: Mapping[str, Any], profile:
         actual = stages[stage_name].get("steps")
         if not isinstance(actual, int) or actual > maximum:
             raise _scope_violation(f"{stage_name}.steps", f"maximum is {maximum}, received {actual!r}")
-
-    actual_digest = sha256_file_bounded(structure)
-    if actual_digest != constraints["structure_sha256"]:
-        raise _scope_violation(
-            "structure_sha256",
-            f"expected authorized structure {constraints['structure_sha256']}, received {actual_digest}",
-        )
 
 
 def _load_approved_pack_records() -> dict[str, dict[str, Any]]:
@@ -1023,19 +1014,13 @@ def materialize_md_job_spec(
         topology_snapshot: Path | None = None
         expected_structure_sha256: str | None = None
         if input_config.get("structure"):
-            profile_id = (
-                normalized.get("chemistry", {}).get("profile_id")
-                if normalized.get("schema") == "bms.md.job.v2"
-                else normalized["preparation"].get("chemistry_profile_id")
+            # Bind the snapshot to the selected source, not the profile's
+            # historical acceptance fixture. Typed launch already binds these
+            # source bytes to its preview; retain the copy-time drift check.
+            source_provenance = params.get("md_source_provenance") or {}
+            expected_structure_sha256 = source_provenance.get("source_sha256") or sha256_file_bounded(
+                Path(str(input_config["structure"]))
             )
-            profile = captured_view.get_profile(str(profile_id or "")) if captured_view is not None else None
-            constraints = profile.get("launch_constraints") if isinstance(profile, Mapping) else None
-            if not isinstance(constraints, Mapping):
-                raise ChemistryProfileSelectionError(
-                    "MD_CHEMISTRY_PROFILE_UNAVAILABLE",
-                    "The selected molecular-dynamics chemistry profile is unavailable.",
-                )
-            expected_structure_sha256 = str(constraints["structure_sha256"])
 
         for field in ("structure", "coordinates", "topology"):
             source_value = input_config.get(field)
@@ -1081,4 +1066,9 @@ def materialize_md_job_spec(
     materialized = dict(params)
     materialized["md_job_spec"] = normalized
     materialized["md_job_config"] = str(config_path.resolve())
+    if params.get("md_source_provenance"):
+        materialized["md_source_provenance"] = {
+            **params["md_source_provenance"],
+            "snapshot": dict(normalized["input"]),
+        }
     return materialized

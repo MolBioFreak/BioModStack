@@ -55,6 +55,27 @@ test('overview preserves chain boundaries, insertion codes, backend classes, sco
     assert.equal(model.cells[20].reason, 'unsupported_residue');
 });
 
+test('overview pairs substitutions only with their own native source residue, without a contact-energy claim', () => {
+    const binder = residue(1, 'B');
+    binder.source_entity_id = 'binder-entity';
+    binder.entity_instance_id = 'binder:chain-B';
+    const other = residue(1, 'T');
+    other.source_entity_id = 'target-entity';
+    other.entity_instance_id = 'target:chain-T';
+    const nativeAa = binder.wt;
+    const nativeIndex = CANONICAL_AMINO_ACIDS.indexOf(nativeAa as typeof CANONICAL_AMINO_ACIDS[number]);
+    binder.slots[nativeIndex] = { ...binder.slots[nativeIndex], score: 0.25 };
+    binder.slots[0] = { ...binder.slots[0], score: -0.75 };
+    other.slots[nativeIndex] = { ...other.slots[nativeIndex], score: 50 };
+    const model = buildFrustraMpnnOverviewModel([binder, other]);
+    assert.equal(model.cells[0].nativeScore, 0.25);
+    assert.equal(model.cells[0].predictedDeltaFromNative, -1);
+    assert.equal(model.cells[nativeIndex].predictedDeltaFromNative, 0);
+    assert.equal(model.cells[0].residue.source_entity_id, 'binder-entity');
+    binder.slots[nativeIndex] = { ...binder.slots[nativeIndex], score: null, status: 'missing' };
+    assert.equal(buildFrustraMpnnOverviewModel([binder]).cells[0].predictedDeltaFromNative, null);
+});
+
 test('overview fails closed when an exact-20 substitution slot is absent', () => {
     const incomplete = residue(1);
     incomplete.slots.pop();

@@ -8,15 +8,14 @@ import os
 import shutil
 import stat
 from pathlib import Path
-import subprocess
 import tempfile
 from types import SimpleNamespace
 import uuid
 
-from paths import get_code_root
+from paths import get_code_root, get_data_root
 from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, current_source_identity,
                      compile_remote_dependencies, _runtime_assets, _records_for_source,
-                     _safe_extract, _is_runtime_image, verify_selected_runtime_hashes, verify_selected_preparation_inputs)
+                     _staged_source_archive, _is_runtime_image, verify_selected_runtime_hashes, verify_selected_preparation_inputs)
 from .transport import run_remote, rsync_to_remote
 from .images import resolve_image
 from . import hf_assets
@@ -92,7 +91,38 @@ async def _install_helper(connection, check_fence, helper_name='bms_artifact_cac
         payloads['bms_hf_transfer.py'] = (Path(__file__).parents[2] / 'tools/bms_hf_transfer.py').read_bytes()
     generation = hashlib.sha256(b''.join(payloads.values())).hexdigest()
     destination = f'{connection.remote_root}/runner/cache-{generation}/{helper_name}'
-    # Small source modules: stdin transfers, each verified before atomic publication.
+    # A generation is content-addressed, but the remote directory is not a
+    # trust boundary: check all installed bytes on every call, then transfer
+    # only missing/mismatched modules. This avoids repeated stdin uploads and
+    # atomic replaces of an already warm helper without trusting a local flag.
+    digests = {name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()}
+    probe = """import hashlib,os,pathlib,stat,sys
+root=pathlib.Path(sys.argv[1]);names=sys.argv[2:];valid=[]
+q=pathlib.Path('/')
+for part in root.parts[1:]:
+ q=q/part
+ if q.is_symlink(): raise RuntimeError('unsafe helper path')
+for pair in names:
+ name,expected=pair.split(':',1)
+ try:
+  fd=os.open(root/name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+  try:
+   if not stat.S_ISREG(os.fstat(fd).st_mode): continue
+   h=hashlib.sha256()
+   while chunk:=os.read(fd,1048576): h.update(chunk)
+   if h.hexdigest()==expected: valid.append(name)
+  finally: os.close(fd)
+ except (OSError,ValueError): pass
+print(' '.join(valid))
+"""
+    await check_fence()
+    result = await run_remote(connection, ['python3', '-c', probe, str(Path(destination).parent),
+                                           *[f'{name}:{digest}' for name, digest in digests.items()]])
+    await check_fence()
+    output = result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout
+    valid = set(output.strip().split())
+    if not valid <= payloads.keys():
+        raise ValueError('Unexpected helper probe response')
 
     script = """import hashlib,os,pathlib,sys,tempfile
 p=pathlib.Path(sys.argv[1]);expected=sys.argv[2];data=sys.stdin.buffer.read()
@@ -110,6 +140,8 @@ finally:
  if os.path.exists(t): os.unlink(t)
 """
     for name, payload in payloads.items():
+        if name in valid:
+            continue
         await check_fence()
         path = str(Path(destination).with_name(name))
         await run_remote(connection, ['python3', '-c', script, path,
@@ -219,17 +251,35 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
             with tempfile.TemporaryDirectory(prefix='bms-cache-batch-') as temporary:
                 staging = Path(temporary)
                 await check_fence()
-                for entry in batch:
-                    info = entry.source.lstat()
-                    if not stat.S_ISREG(info.st_mode) or info.st_size != entry.size_bytes:
-                        raise ValueError('Cache source size or type changed')
-                    destination = staging / entry.sha256
-                    try:
-                        os.link(entry.source, destination, follow_symlinks=False)
-                    except OSError:
-                        shutil.copyfile(entry.source, destination, follow_symlinks=False)
-                    if destination.is_symlink() or not destination.is_file():
-                        raise ValueError('Cache source is not a regular file')
+                def stage_files():
+                    for entry in batch:
+                        info = entry.source.lstat()
+                        if not stat.S_ISREG(info.st_mode) or info.st_size != entry.size_bytes:
+                            raise ValueError('Cache source size or type changed')
+                        destination = staging / entry.sha256
+                        try:
+                            os.link(entry.source, destination, follow_symlinks=False)
+                        except OSError:
+                            shutil.copyfile(entry.source, destination, follow_symlinks=False)
+                        if destination.is_symlink() or not destination.is_file():
+                            raise ValueError('Cache source is not a regular file')
+
+                staging_task = asyncio.create_task(asyncio.to_thread(stage_files))
+                try:
+                    await asyncio.shield(staging_task)
+                except asyncio.CancelledError:
+                    # A thread cannot be cancelled: retain ownership until it
+                    # stops writing, even if cancellation is requested again.
+                    while not staging_task.done():
+                        try:
+                            await asyncio.shield(staging_task)
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            break
+                    if not staging_task.cancelled():
+                        staging_task.exception()
+                    raise
                 await check_fence()
                 await rsync_to_remote(connection, staging, incoming + '/', delete=False)
                 await check_fence()
@@ -316,7 +366,7 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     return receipts
 
 
-def _weights_archive_artifact():
+def _weights_archive_artifact(artifacts=None):
     """The declared packed shared weight tree, or None when none is configured.
 
     It is published out of band, so there is no local source to publish from: an
@@ -326,11 +376,26 @@ def _weights_archive_artifact():
     if identity is None:
         return None
     digest, size = identity
+    if artifacts is not None:
+        # Advisory packing catalog only: it can avoid an irrelevant/oversized
+        # archive, never authenticate bytes or refuse a launch. Absent or stale
+        # catalogs preserve the existing configured archive route.
+        catalog = get_data_root() / 'remote-execution' / 'hf-archives' / digest / 'index.json'
+        try:
+            index = json.loads(catalog.read_bytes())
+            if index['archive'] == {'sha256': digest, 'size_bytes': size}:
+                sizes = index['digest_sizes']
+                matched = {e.sha256: e.size_bytes for e in artifacts
+                           if sizes.get(e.sha256) == e.size_bytes}
+                if not matched or (len(matched) <= BATCH_COUNT and sum(matched.values()) < size):
+                    return None  # The ordinary selected-object route is smaller.
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
     return SimpleNamespace(source=Path('/nonexistent-bms-weight-archive'), role='weights',
                            sha256=digest, size_bytes=size)
 
 
-async def _install_weight_archive(*, connection, helper, layout, operation_id, progress, check_fence):
+async def _install_weight_archive(*, connection, helper, layout, operation_id, progress, check_fence, artifacts=None):
     """Obtain the shared weight tree as one object, then unpack it on the worker.
 
     Returns the digests the archive delivered into the worker content store, or
@@ -338,7 +403,7 @@ async def _install_weight_archive(*, connection, helper, layout, operation_id, p
     the controller: the worker verifies every member against the bundle's own
     authenticated weight layout, and only then publishes the shared view.
     """
-    archive = _weights_archive_artifact()
+    archive = _weights_archive_artifact(artifacts)
     if archive is None or hf_assets.configuration() is None:
         return None
     detail = {'sha256': archive.sha256, 'size_bytes': archive.size_bytes}
@@ -462,7 +527,8 @@ p.mkdir(mode=0o700,exist_ok=False)
             # The packed shared tree is one object the worker unpacks itself;
             # only the rows it does not carry keep the per-file relay path.
             delivered = await _install_weight_archive(connection=connection, helper=helper,
-                layout=layout, operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence)
+                layout=layout, operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence,
+                artifacts=bundle.runtime_weights)
             pending = [entry for entry in bundle.runtime_weights
                        if delivered is None or entry.sha256 not in delivered]
             if pending:
@@ -495,13 +561,8 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory, *, nati
         raise ValueError('Prewarm source identity does not match current committed source')
     _, effective = compile_remote_dependencies(str(job.model_id), str(job.mode), command,
                                                 native_invocation=native_invocation)
-    archive = directory / 'source.tar.gz'
-    with archive.open('wb') as stream:
-        subprocess.run(['git', 'archive', '--format=tar.gz', '-6', source_revision], cwd=repo,
-                       stdout=stream, stderr=subprocess.PIPE, check=True, timeout=300)
     source = directory / 'source'
-    _safe_extract(archive, source)
-    archive.replace(source / '.bms-source.tar.gz')
+    _staged_source_archive(repo, get_data_root().resolve(), source_revision, source, extract=False)
 
     entries = []
     assets = [(source / '.bms-source.tar.gz', 'source/.bms-source.tar.gz')]
@@ -527,14 +588,36 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory, *, nati
     return entries
 
 
+def _independent_dependencies(selection):
+    from model_registry import (model_runtime_dependencies, model_image_dependencies,
+                                workflow_pack_dependencies)
+    if selection.kind == 'workflow_pack':
+        return workflow_pack_dependencies(selection.workflow_id)
+    return (model_image_dependencies(selection.model_id) if selection.kind == 'image'
+            else model_runtime_dependencies(selection.model_id))
+
+
+def workflow_pack_weight_layouts(selection, entries):
+    """Project consumer subsets from already inventoried bytes; never rescan.
+
+    Returns group name -> tuple[CacheTransferArtifact, ...]. Destinations retain
+    weights/ prefixes; the shared weight-layout owner removes that prefix and
+    canonicalizes/deduplicates layout identities as it does for normal launch.
+    """
+    from model_registry import workflow_pack_weight_groups
+    groups = workflow_pack_weight_groups(selection.workflow_id)
+    return {name: tuple(entry for entry in entries if any(
+        entry.remote_destination == 'weights/' + member or
+        entry.remote_destination.startswith('weights/' + member + '/')
+        for member in members)) for name, members in groups.items()}
+
+
 def independent_plan(selection):
     """Resolve only reviewed registry dependencies; no Job or biological inputs."""
-    from model_registry import model_runtime_dependencies, model_image_dependencies
     from paths import get_container_dir, get_weights_root
     entries = []
-    refs = (model_image_dependencies(selection.model_id) if selection.kind == "image"
-            else model_runtime_dependencies(selection.model_id))
-    for ref in refs:
+    refs = _independent_dependencies(selection)
+    for ref in {(r.kind, r.relative_path): r for r in refs}.values():
         if selection.kind == 'image' and ref.kind != 'image':
             continue
         root = (get_container_dir() if ref.kind == 'image' else get_weights_root()).resolve()
@@ -617,7 +700,6 @@ def workflow_plan(selection, *, compiled_plan=None):
 
 def independent_preview(selection, target, *, compiled_plan=None):
     from .contracts import ProvisionPreview, CachedArtifactReceipt
-    from model_registry import model_runtime_dependencies, model_image_dependencies
     from .bundle import RemoteBundleError
     plan = compiled_plan
     invocation = None
@@ -638,8 +720,7 @@ def independent_preview(selection, target, *, compiled_plan=None):
                         for d in plan.dependencies]
     else:
         try:
-            refs = (model_image_dependencies(selection.model_id) if selection.kind == 'image'
-                    else model_runtime_dependencies(selection.model_id))
+            refs = _independent_dependencies(selection)
             dependencies = [dict(name=('containers/' if r.kind == 'image' else 'weights/') + r.relative_path,
                                  kind=r.kind) for r in refs]
         except ValueError:
@@ -679,8 +760,8 @@ def independent_preview(selection, target, *, compiled_plan=None):
     unique = {}
     for entry in entries:
         previous = unique.setdefault(entry.remote_destination, entry)
-        if (previous.sha256, previous.size_bytes, previous.mode, previous.role) != (
-                entry.sha256, entry.size_bytes, entry.mode, entry.role):
+        if (previous.sha256, previous.size_bytes, previous.mode, previous.role, previous.link_target) != (
+                entry.sha256, entry.size_bytes, entry.mode, entry.role, entry.link_target):
             raise ValueError('Conflicting managed dependency destinations')
     entries = list(unique.values())
     artifacts = [dict(name=e.remote_destination, sha256=e.sha256, size_bytes=e.size_bytes) for e in entries]
@@ -729,7 +810,160 @@ def independent_preview(selection, target, *, compiled_plan=None):
         storage_bytes=sum(size for _, _, size in objects) + sum(e.size_bytes for e in entries if e.role != 'image' and e.link_target is None)), entries
 
 
-async def provision_cache(*, connection, entries, operation_id, progress, check_fence):
+def _workflow_source_archive(directory, source_identity):
+    """Use the job archive owner, without extracting or compiling a job."""
+    repo = get_code_root().resolve()
+    current = current_source_identity(repo)
+    if source_identity is not None and tuple(source_identity) != current:
+        raise ValueError('Workflow provision source identity changed')
+    source = directory / 'source'
+    digest = _staged_source_archive(repo, get_data_root().resolve(), current[0], source, extract=False)
+    path = source / '.bms-source.tar.gz'
+    info = path.stat()
+    return CacheTransferArtifact(path, 'source/.bms-source.tar.gz', digest,
+                                 info.st_size, stat.S_IMODE(info.st_mode), 'source')
+
+
+async def _prepare_workflow_runtime(*, connection, entries, operation_id, progress,
+                                    check_fence, selection, backend, source_identity):
+    """Warm consumer layouts and shared image derivations, never private views.
+
+    An archive union is only an unpacking manifest, not a published union view.
+    Returned evidence is bounded preparation evidence, not scientific readiness.
+    Unknown attachment backend metadata leaves image preparation deferred.
+    """
+    from dataclasses import replace
+    from tools.bms_artifact_cache import weight_layout, LAYOUT_SCHEMA, LAYOUT_DOCUMENT
+    from .managed_inventory import request_document_reference, _REQUEST_DOCUMENT_WRITER
+
+    operation_id = str(uuid.UUID(operation_id))
+    await check_fence()
+    helper = await _install_helper(connection, check_fence)
+    root = connection.remote_root.rstrip('/') + '/cache/artifacts/v1'
+
+    async def call(request):
+        await check_fence()
+        result = await run_remote(connection, ['python3', helper, '--root', root],
+                                 input_bytes=json.dumps(request).encode(), timeout=3600)
+        await check_fence()
+        return json.loads(result.stdout)
+
+    def layout_for(group):
+        return weight_layout([dict(name=e.remote_destination.removeprefix('weights/'),
+            sha256=e.sha256, size_bytes=e.size_bytes,
+            mode=0o777 if e.link_target is not None else e.mode,
+            **({'target': e.link_target} if e.link_target is not None else {})) for e in group])
+
+    async def reference(digest, rows):
+        runtime_root = f'{root}/incoming/{operation_id}/layouts/{digest}'
+        ref, payload = request_document_reference(dict(schema=LAYOUT_SCHEMA,
+            runtime_root=runtime_root, images=[], weights=rows))
+        path = runtime_root + '/' + LAYOUT_DOCUMENT
+        await check_fence()
+        await run_remote(connection, ['python3', '-c', _REQUEST_DOCUMENT_WRITER,
+            path, ref['sha256']], input_bytes=payload, timeout=3600)
+        await check_fence()
+        return dict(path=path, sha256=ref['sha256'])
+
+    groups = workflow_pack_weight_layouts(selection, entries)
+    layouts = {}
+    for group in groups.values():
+        if group:
+            digest, rows, _ = layout_for(group)
+            layouts.setdefault(digest, rows)
+    limit = asyncio.Semaphore(MATERIALIZE_CONCURRENCY)
+
+    async def probe_layout(item):
+        digest, rows = item
+        async with limit:
+            ref = await reference(digest, rows)
+            response = await call(dict(action='weights_probe', layout=ref))
+            if response.get('root') != f'{root}/weights/{digest}':
+                raise ValueError('Shared weight placement identity mismatch')
+            if response.get('state') not in {'missing', 'ready'}:
+                raise ValueError('Shared model weights are damaged')
+            return digest, ref, response['state']
+
+    observed = await _bounded_group(list(layouts.items()), probe_layout)
+    missing = [(digest, ref) for digest, ref, state in observed if state == 'missing']
+    # Bind role semantics without changing reviewed entry identities or rescanning.
+    weights = tuple(replace(e, role='weights') for e in entries
+                    if e.remote_destination.startswith('weights/'))
+    delivered = set()
+    if missing and weights:
+        digest, rows, _ = layout_for(weights)
+        ref = await reference(digest, rows)
+        delivered = await _install_weight_archive(connection=connection, helper=helper,
+            layout=ref, operation_id=operation_id, progress=progress,
+            check_fence=check_fence, artifacts=weights) or set()
+    warm_weights = {row['sha256'] for digest, _, state in observed if state == 'ready'
+                    for row in layouts[digest] if 'target' not in row}
+    pending = [e for e in entries if e.link_target is None and not (
+        e.remote_destination.startswith('weights/') and
+        (e.sha256 in delivered or e.sha256 in warm_weights))]
+    with tempfile.TemporaryDirectory(prefix='bms-workflow-prewarm-') as temporary:
+        await check_fence()
+        task = asyncio.create_task(asyncio.to_thread(_workflow_source_archive,
+                                                     Path(temporary), source_identity))
+        try:
+            source = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Retain the scratch tree through repeated cancellation until its
+            # non-cancellable archive writer has stopped touching it.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not task.cancelled():
+                task.exception()
+            raise
+        await check_fence()
+        await _cache_artifacts(connection=connection, artifacts=(*pending, source),
+            operation_id=operation_id, progress=progress, check_fence=check_fence,
+            helper=helper, track_artifacts=True)
+
+    async def install_layout(item):
+        digest, ref = item
+        async with limit:
+            response = await call(dict(action='weights_install', layout=ref))
+            if (response.get('state') != 'ready'
+                    or response.get('root') != f'{root}/weights/{digest}'):
+                raise ValueError('Shared model weights were not installed')
+    await _bounded_group(missing, install_layout)
+    images = tuple({e.sha256: e for e in entries if e.role == 'image'}.values())
+    image_evidence = 'deferred_backend_unknown'
+    if backend in {'udocker', 'apptainer'}:
+        # Extraction is disk/memory heavy. Serialize shared derivations rather
+        # than borrowing the latency-oriented file-transfer concurrency limit.
+        for entry in images:
+            identity = dict(kind='runtime_image', sha256=entry.sha256, size_bytes=entry.size_bytes)
+            response = await call(dict(action='prepare_runtime_image', artifact=identity,
+                                      backend=backend, operation_id=operation_id))
+            if (response.get('state') != 'ready' or response.get('backend') != backend
+                    or any(response.get(k) != v for k, v in identity.items())
+                    or (backend == 'apptainer' and response.get('rootfs') is not None)
+                    or (backend == 'udocker' and not isinstance(response.get('rootfs'), str))):
+                raise ValueError('Shared runtime image preparation identity mismatch')
+        image_evidence = 'ready'
+    else:
+        await progress(dict(phase='verifying', artifact=None,
+            message='Assets installed; shared image preparation deferred: attached backend is unknown'))
+    await check_fence()
+    return dict(artifacts=[dict(name=e.remote_destination, sha256=e.sha256,
+                               size_bytes=e.size_bytes) for e in entries],
+                preparation=dict(source='cached', weight_layouts=len(layouts),
+                                 images=image_evidence, backend=backend))
+
+
+async def provision_cache(*, connection, entries, operation_id, progress, check_fence,
+                          selection=None, backend=None, source_identity=None):
+    if getattr(selection, 'kind', None) == 'workflow_pack':
+        return await _prepare_workflow_runtime(connection=connection, entries=tuple(entries),
+            operation_id=operation_id, progress=progress, check_fence=check_fence,
+            selection=selection, backend=backend, source_identity=source_identity)
     # Alias identities are carried by the release manifest, not byte objects.
     # Its existing authenticated link publisher runs after verified leaves.
     entries = tuple(e for e in entries if e.link_target is None)
@@ -739,21 +973,27 @@ async def provision_cache(*, connection, entries, operation_id, progress, check_
     # is download evidence, NOT a materialized runtime or scientific acceptance.
     tool = await _install_helper(connection, check_fence)
     objects = tuple({(e.role == 'image', e.sha256): e for e in entries}.values())
-    for offset in range(0, len(objects), BATCH_COUNT):
-        batch = objects[offset:offset + BATCH_COUNT]
-        await check_fence()
-        response = await run_remote(connection, ['python3', tool, '--root',
-            f'{connection.remote_root}/cache/artifacts/v1'], input_bytes=json.dumps({
-                'action': 'probe', 'artifacts': [dict(sha256=e.sha256, size_bytes=e.size_bytes,
-                    **({'kind': 'runtime_image'} if e.role == 'image' else {})) for e in batch]
-            }).encode(), timeout=3600)
-        await check_fence()
-        rows = json.loads(response.stdout)['artifacts']
-        expected = {(e.role == 'image', e.sha256, e.size_bytes) for e in batch}
-        observed = {(r.get('kind') == 'runtime_image', r['sha256'], r['size_bytes'])
-                    for r in rows if r['state'] == 'cache_hit'}
-        if expected != observed or any(r['state'] != 'cache_hit' for r in rows):
-            raise ValueError('Cache source verification failed')
+    pages = [objects[offset:offset + BATCH_COUNT]
+             for offset in range(0, len(objects), BATCH_COUNT)]
+    probe_limit = asyncio.Semaphore(PROBE_CONCURRENCY)
+
+    async def verify_page(batch):
+        async with probe_limit:
+            await check_fence()
+            response = await run_remote(connection, ['python3', tool, '--root',
+                f'{connection.remote_root}/cache/artifacts/v1'], input_bytes=json.dumps({
+                    'action': 'probe', 'artifacts': [dict(sha256=e.sha256, size_bytes=e.size_bytes,
+                        **({'kind': 'runtime_image'} if e.role == 'image' else {})) for e in batch]
+                }).encode(), timeout=3600)
+            await check_fence()
+            rows = json.loads(response.stdout)['artifacts']
+            expected = {(e.role == 'image', e.sha256, e.size_bytes) for e in batch}
+            observed = {(r.get('kind') == 'runtime_image', r['sha256'], r['size_bytes'])
+                        for r in rows if r['state'] == 'cache_hit'}
+            if expected != observed or any(r['state'] != 'cache_hit' for r in rows):
+                raise ValueError('Cache source verification failed')
+
+    await _bounded_group(pages, verify_page)
     await check_fence()
     return receipts
 

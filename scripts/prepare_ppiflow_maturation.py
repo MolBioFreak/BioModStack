@@ -23,6 +23,8 @@ from typing import Dict, Iterable, List, Sequence, Set, Tuple
 import pyrosetta
 from pyrosetta import rosetta
 
+from ppiflow_coordinate_changes import changed_residues
+
 from identify_anchors import (
     build_ppiflow_region_spec,
     build_loop_residue_map,
@@ -45,6 +47,21 @@ def _residue_key(pose, resi: int) -> ResidueKey:
         int(pdb_info.number(resi)),
         (pdb_info.icode(resi) or "").strip(),
     )
+
+
+def _pose_atom_coordinates(pose):
+    atoms = {}
+    info = pose.pdb_info()
+    for resi in range(1, pose.total_residue() + 1):
+        residue = pose.residue(resi)
+        identity = (info.chain(resi), int(info.number(resi)),
+                    (info.icode(resi) or "").strip(), residue.name3())
+        for atom_index in range(1, residue.natoms() + 1):
+            xyz = residue.xyz(atom_index)
+            atoms[(*identity, residue.atom_name(atom_index).strip())] = (
+                float(xyz.x), float(xyz.y), float(xyz.z)
+            )
+    return atoms
 
 
 def _interface_pairs_within_distance(
@@ -162,32 +179,29 @@ def _compute_interface_pair_energy_breakdown(
     return total_score, interface_residues, binder_residue_scores, pair_payload
 
 
-def _parse_position_spec(position_spec: str) -> Set[Tuple[str, int]]:
-    residues: Set[Tuple[str, int]] = set()
+def _parse_position_spec(position_spec: str) -> Set[ResidueKey]:
+    """Read emitted masks as exact author identities, never number-only membership."""
+    import re
+
+    residues: Set[ResidueKey] = set()
     for token in (position_spec or "").split(","):
         token = token.strip()
         if not token:
             continue
-        chain_id = token[0]
-        raw = token[1:]
-        if "-" in raw:
-            start_text, end_text = raw.split("-", 1)
-            try:
-                start = int(start_text)
-                end = int(end_text)
-            except ValueError:
-                continue
-            for resnum in range(min(start, end), max(start, end) + 1):
-                residues.add((chain_id, int(resnum)))
+        # PDB chain is exactly one character, including numeric chains.
+        # Keep the author insertion code in the same key used by anchors.
+        match = re.fullmatch(r"([A-Za-z0-9])(-?\d+)([A-Za-z]?)", token)
+        if match:
+            chain, number, icode = match.groups()
+            residues.add((chain, int(number), icode))
             continue
-        number = ""
-        for char in raw:
-            if char.isdigit() or (char == "-" and not number):
-                number += char
-            else:
-                break
-        if number:
-            residues.add((chain_id, int(number)))
+        interval = re.fullmatch(r"([A-Za-z0-9])(-?\d+)-(-?\d+)", token)
+        if interval:
+            start, end = int(interval.group(2)), int(interval.group(3))
+            for resnum in range(min(start, end), max(start, end) + 1):
+                residues.add((interval.group(1), resnum, ""))
+            continue
+        raise ValueError(f"Invalid PPIFlow residue identity: {token!r}")
     return residues
 
 
@@ -196,7 +210,7 @@ def _build_anchor_payload(
     interface_residues: Sequence[int],
     binder_residue_scores: Dict[ResidueKey, float],
     energy_threshold: float,
-    movable_positions: Set[Tuple[str, int]],
+    movable_positions: Set[ResidueKey],
     antibody_chains: Sequence[str],
     antigen_chains: Sequence[str],
     region_mode: str,
@@ -222,7 +236,7 @@ def _build_anchor_payload(
             "aa": pose.residue(resi).name1(),
             "interface_contribution": contribution,
             "chain_role": "antibody",
-            "movable_region_member": (chain_id, resnum) in movable_positions,
+            "movable_region_member": key in movable_positions,
         }
         anchor_candidates.append(record)
         if record["movable_region_member"]:
@@ -289,6 +303,8 @@ def main() -> None:
         help="Allow FastRelax backbone movement for antibody residues in the enrichment shell. Default is side-chain-only enrichment.",
     )
     parser.add_argument("--require_anchors", action="store_true", help="Fail if no non-movable anchors are found")
+    parser.add_argument("--skip_anchor_analysis", action="store_true")
+    parser.add_argument("--skip_region_resolution", action="store_true")
     args = parser.parse_args()
 
     antibody_chains = parse_chain_list(args.antibody_chains)
@@ -302,19 +318,20 @@ def main() -> None:
     scorefxn(input_pose)
 
     detected_chains = get_chain_ids(input_pose)
-    antibody_chains = [chain for chain in antibody_chains if chain in detected_chains]
-    if not antibody_chains:
-        if not detected_chains:
-            raise SystemExit("[PPIFlow] No chains detected in pose")
-        antibody_chains = [detected_chains[0]]
-
-    antigen_chains = [chain for chain in antigen_chains if chain in detected_chains and chain not in antibody_chains]
+    if not antibody_chains or len(set(antibody_chains)) != len(antibody_chains):
+        raise SystemExit("[PPIFlow] Antibody chain roles must be explicit and distinct")
+    missing = set(antibody_chains + antigen_chains) - set(detected_chains)
+    if missing:
+        raise SystemExit(f"[PPIFlow] Requested chains absent from pose: {sorted(missing)}")
+    if set(antibody_chains) & set(antigen_chains):
+        raise SystemExit("[PPIFlow] Antibody and antigen chain roles overlap")
     if not antigen_chains:
-        antigen_chains = [chain for chain in detected_chains if chain not in antibody_chains]
-        if not antigen_chains:
-            raise SystemExit("[PPIFlow] No antigen chains detected in pose")
+        candidates = set(detected_chains) - set(antibody_chains)
+        if len(candidates) != 1:
+            raise SystemExit(f"[PPIFlow] Antigen chain role ambiguous: {sorted(candidates)}")
+        antigen_chains = sorted(candidates)
 
-    ppiflow_positions, all_cdr_positions, err = build_ppiflow_region_spec(
+    ppiflow_positions, all_cdr_positions, err = ("", "", None) if args.skip_region_resolution else build_ppiflow_region_spec(
         args.pdb,
         antibody_chains,
         region_mode,
@@ -324,11 +341,11 @@ def main() -> None:
     )
     if err:
         print(f"[PPIFlow] {err}", file=sys.stderr)
-    if not ppiflow_positions:
+    if not ppiflow_positions and not args.skip_region_resolution:
         raise SystemExit(f"[PPIFlow] No movable residues resolved for region_mode={region_mode}")
     Path(args.output_positions).write_text(ppiflow_positions + "\n")
     Path(args.output_cdr_positions).write_text((all_cdr_positions or ppiflow_positions) + "\n")
-    loop_residue_map, _ = build_loop_residue_map(
+    loop_residue_map, _ = ({}, None) if args.skip_region_resolution else build_loop_residue_map(
         args.pdb,
         antibody_chains,
         cdr_positions_by_loop_path=args.cdr_positions_by_loop_json,
@@ -346,7 +363,8 @@ def main() -> None:
 
     enriched_pose = rosetta.core.pose.Pose()
     enriched_pose.assign(input_pose)
-    repack_shell_residues = _detect_shell_residues(enriched_pose, original_interface_residues, args.rotamer_shell_distance)
+    repack_shell_residues = _detect_shell_residues(enriched_pose, original_interface_residues, args.rotamer_shell_distance) if args.rotamer_enrichment else []
+    original_coordinates = _pose_atom_coordinates(enriched_pose)
     if args.rotamer_enrichment and repack_shell_residues:
         _run_interface_rotamer_enrichment(
             enriched_pose,
@@ -355,15 +373,21 @@ def main() -> None:
             relax_antibody_backbone_shell=bool(args.relax_antibody_backbone_shell),
         )
 
+    actual_changes = changed_residues(original_coordinates, _pose_atom_coordinates(enriched_pose))
     enriched_interface_score, enriched_interface_residues, enriched_binder_scores, enriched_pair_scores = _compute_interface_pair_energy_breakdown(
         enriched_pose,
         antibody_chains,
         antigen_chains,
         args.distance_cutoff,
     )
-    enriched_pose.dump_pdb(args.output_enriched_pdb)
+    if args.rotamer_enrichment:
+        enriched_pose.dump_pdb(args.output_enriched_pdb)
+    else:
+        import shutil
+        shutil.copyfile(args.pdb, args.output_enriched_pdb)
 
-    anchor_payload = _build_anchor_payload(
+    anchor_payload = {"anchors": [], "anchor_count": 0, "anchor_candidate_count": 0,
+                      "anchor_selection_method": "not_run", "analysis_status": "not_run"} if args.skip_anchor_analysis else _build_anchor_payload(
         enriched_pose,
         enriched_interface_residues,
         enriched_binder_scores,
@@ -396,8 +420,10 @@ def main() -> None:
         "backbone_movement_allowed": bool(args.relax_antibody_backbone_shell),
         "anchor_selection_method": anchor_payload["anchor_selection_method"],
         "repack_shell_distance": float(args.rotamer_shell_distance),
-        "repacked_residue_count": len(repack_shell_residues),
-        "repacked_residues": [residue_id(enriched_pose, resi) for resi in repack_shell_residues],
+        "repack_shell_residue_count": len(repack_shell_residues),
+        "repack_shell_residues": [residue_id(enriched_pose, resi) for resi in repack_shell_residues],
+        "repacked_residue_count": len(actual_changes),
+        "repacked_residues": actual_changes,
         "interface_residue_count_original": len(original_interface_residues),
         "interface_residue_count_enriched": len(enriched_interface_residues),
         "interface_residues_original": _interface_residue_payload(input_pose, original_interface_residues, original_binder_scores),

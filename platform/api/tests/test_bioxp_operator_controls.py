@@ -1572,6 +1572,9 @@ def _real_hardware_tip_evidence() -> dict:
         "reply_received": True,
         "semantic_ok": True,
         "tip_loaded": False,
+        "source_tip_loaded": False,
+        "source_return": 2,
+        "source_return_completed": True,
         "pressure": None,
         "error": None,
         "delivery_verified": True,
@@ -1605,6 +1608,9 @@ def test_pipette_dashboard_hardware_evidence_closed_model_accepts_exact_producer
     assert parsed.ok is True
     assert parsed.reader_generation == 1
     assert parsed.tip_loaded is False
+    assert parsed.source_tip_loaded is False
+    assert parsed.source_return == 2
+    assert parsed.source_return_completed is True
 
 
 def test_pipette_dashboard_hardware_evidence_closed_model_rejects_unknown_keys():

@@ -575,13 +575,14 @@ ATOM 1 C CA . GLY A 1 1 ? 0.0 0.0 0.0 1.0 10.0 ? 7 GLY A CA 1
 
 def test_protein_local_redesign_is_first_class_native_model() -> None:
     frontend_text = (REPO_ROOT / "platform" / "frontend" / "src" / "components" / "JobSubmission.tsx").read_text(encoding="utf-8")
+    launcher_text = (REPO_ROOT / "platform" / "frontend" / "src" / "lib" / "launcherCatalog.ts").read_text(encoding="utf-8")
     modification_modes_text = (REPO_ROOT / "platform" / "frontend" / "src" / "components" / "proteinModificationModes.ts").read_text(encoding="utf-8")
     results_text = (REPO_ROOT / "platform" / "frontend" / "src" / "components" / "ResultsViewer.tsx").read_text(encoding="utf-8")
     workflow_text = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
     model_text = (REPO_ROOT / "platform" / "api" / "config" / "models" / "protein_local_redesign.yaml").read_text(encoding="utf-8")
 
-    assert "id: 'protein_modification_experimental'" in frontend_text
-    assert "id: 'protein_local_redesign'" in frontend_text
+    assert "id: 'protein_modification_experimental'" in launcher_text
+    assert "template_model_id: 'protein_local_redesign'" in frontend_text
     assert "label: 'RFD3 Iteration Workbench'" in modification_modes_text
     assert "ProteinLocalRedesignResultsPane" in results_text
     assert "isProteinLocalRedesignResultJob" in results_text

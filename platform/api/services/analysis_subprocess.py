@@ -20,6 +20,7 @@ from services.analysis_registry import (
     FAMPNN_PSCE_PROFILE_ANALYSIS,
     JOB_AA_COMPOSITION_ANALYSIS,
     IPSAE_INTERFACE_ANALYSIS,
+    BINDER_POSE_COMPARISON_ANALYSIS,
     JOB_CDR_LOGO_PACK_ANALYSIS,
     JOB_CORRELATION_MATRIX_ANALYSIS,
     PAE_MATRIX_ANALYSIS,
@@ -28,8 +29,7 @@ from services.analysis_registry import (
     build_analysis_input_signature,
     get_analysis_definition,
 )
-from services.analysis_runs import build_artifact_manifest_for_run, validate_job_analysis_request
-from services.result_contracts import validate_design_analysis_request
+from services.analysis_runs import build_artifact_manifest_for_run, validate_job_analysis_request, validate_owned_design_analysis_request
 from services.aligned_error_utils import load_aligned_error_artifact
 from services.ipsae import compute_ipsae_interface
 from services.cdr_annotator import annotate_pdb, extract_sequence_from_pdb, identify_binder_chains
@@ -354,6 +354,32 @@ async def _dispatch_ipsae_interface(design, params, session, *, selected=None):
         selected = selected or await verified_native_spatial_design(design, session)
         if selected["design_id"] != design.id:
             raise ValueError("foreign selected snapshot")
+        if 'token_axis' in selected['native'] and 'pae' in selected['native']:
+            from services.protenix_scientific_consumer import native_ipsae_artifact, project_round_roles, _document
+            artifact = native_ipsae_artifact(selected)
+            binder, target = _design_chain_lists(design, allow_detected=False)
+            role_evidence = {'source': 'review_role_map'}
+            if not binder or not target:
+                job = await session.scalar(select(Job).where(Job.id == design.job_id))
+                roles, role_evidence = project_round_roles(selected, job)
+                binder, target = roles['binder_chains'], roles['target_chains']
+            available = {r.chain_id for r in artifact.residues}
+            if (not binder or not target or set(binder) & set(target)
+                    or not set(binder + target) <= available):
+                raise ValueError('missing_or_invalid_producer_roles')
+            result = compute_ipsae_interface(artifact,
+                pae_cutoff=float(params.get('pae_cutoff', 10.0)),
+                dist_cutoff=float(params.get('dist_cutoff', 10.0)),
+                binder_chains=binder, target_chains=target)
+            result.update(design_id=design.id, design_name=design.name, contract_revision=1,
+                status='ok', reason=None, metric_authority='derived_ipSAE',
+                document=_document(design, selected).model_dump(mode='json'),
+                producer_binding=selected['block'], identity_evidence=artifact.identity_evidence,
+                binder_chains=binder, target_chains=target, role_assignment=role_evidence,
+                native_chain_iptm_authority='separate_native_chain_metrics')
+            summary = {k: result[k] for k in ('ipsae', 'pae_cutoff', 'dist_cutoff', 'status', 'reason')}
+            summary['pair_count'] = len(result['pair_scores'])
+            return result, summary, result, {}
         if 'aligned_error' not in selected['native']:
             raise ValueError('unsupported_model_native_spatial_metric')
         native = selected["native"]
@@ -836,7 +862,7 @@ async def _run_analysis(run_id: str) -> int:
             design = design_result.scalar_one_or_none()
             if design is None:
                 raise ValueError(f"Design {run.subject_id} not found")
-            contract_error = validate_design_analysis_request(design, run.analysis_type)
+            contract_error = await validate_owned_design_analysis_request(design, run.analysis_type, session)
             if contract_error:
                 raise ValueError(f"Design analysis authority changed after queueing: {contract_error}")
             definition = get_analysis_definition(run.analysis_type)
@@ -883,6 +909,9 @@ async def _run_analysis(run_id: str) -> int:
                     result_payload, summary_payload, inline_payload = await compute_persisted_pae(design, params, session, selected=native_selection)
                 else:
                     result_payload, summary_payload, inline_payload = _compute_pae_matrix(design, params)
+            elif run.analysis_type == BINDER_POSE_COMPARISON_ANALYSIS:
+                from services.binder_pose_comparison import compute_comparison
+                result_payload, summary_payload, inline_payload = await compute_comparison(design, params, session)
             elif run.analysis_type == IPSAE_INTERFACE_ANALYSIS:
                 result_payload, summary_payload, inline_payload, design_updates = await _dispatch_ipsae_interface(design, params, session, selected=native_selection)
             elif run.analysis_type == ANTIBODY_ANNOTATION_PACK_ANALYSIS:

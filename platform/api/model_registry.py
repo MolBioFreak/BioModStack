@@ -12,7 +12,7 @@ import math
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from functools import lru_cache
 
 from services.md.feature_gate import MD_MODEL_ID, molecular_dynamics_feature_enabled
@@ -53,6 +53,7 @@ class ModelMode(BaseModel):
     name: str
     description: str
     params: List[str] = []  # Parameter names required for this mode
+    selected_only: bool = False  # Launched from an owned Design selection, not a manual Job draft.
 
 
 class NTPTemplate(BaseModel):
@@ -83,7 +84,16 @@ class RuntimeDependencyRef(BaseModel):
     """Trusted managed-storage binding, never an operator path or download URL."""
     model_config = {"extra": "forbid", "frozen": True}
     kind: str = Field(pattern=r"^(image|weights)$")
-    relative_path: str = Field(pattern=r"^[A-Za-z0-9_.-]+$")
+    # Nested managed members are resolved by the existing contained-root owner.
+    # Reject empty/dot/traversal segments rather than normalizing their spelling.
+    relative_path: str = Field(pattern=r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")
+
+    @field_validator('relative_path')
+    @classmethod
+    def managed_relative_member(cls, value: str) -> str:
+        if any(part in {'.', '..'} for part in value.split('/')):
+            raise ValueError('Managed runtime members cannot contain dot segments')
+        return value
 
 
 # Managed scientific assets shared by independent provisioning and selected
@@ -91,7 +101,8 @@ class RuntimeDependencyRef(BaseModel):
 # owners bind immutable bytes. A model's composed workflow may select more.
 INDEPENDENT_RUNTIME_MODELS = frozenset({
     "protenix", "esmfold2", "esmfold2_experimental", "fampnn", "frustrampnn",
-    "boltz2", "af2", "proteinmpnn", "unidock",
+    "boltz2", "af2", "proteinmpnn", "unidock", "protein_modification_experimental",
+    "caliby_binder", "caliby_experimental", "ligandmpnn",
 })
 
 
@@ -123,7 +134,24 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
     known = INDEPENDENT_RUNTIME_MODELS | ({'diffdock', 'boltzgen'} if internal else set())
     if model is None or not model.enabled or model_id not in known:
         raise ValueError("Independent runtime closure is not available for this model")
+    if model_id == 'protein_modification_experimental':
+        return _denovo_runtime_dependencies()
     refs = [RuntimeDependencyRef(kind="image", relative_path=model.container)]
+    if model_id == 'caliby_experimental':
+        from services.caliby_native import SUPPORTED_MODES, selected_assets
+        # Union of the two public native tasks' declared default checkpoints;
+        # a configured request still selects only its chosen checkpoint.
+        for mode in sorted(SUPPORTED_MODES):
+            selected = selected_assets(mode, {})
+            refs.append(RuntimeDependencyRef(kind='weights',
+                relative_path=selected['model_params_subdir'] + '/' + selected['checkpoint']))
+    if model_id == 'caliby_binder':
+        # Independent model preparation uses the same declared default as launch.
+        # Exact nondefault requests use the existing configured-workflow preview.
+        defaults = {field.name: field.default for field in model.params if field.default is not None}
+        selected, _ = native_checkpoint_dependencies('RunCalibyBinder', defaults)
+        refs.extend(RuntimeDependencyRef(kind=item.kind, relative_path=item.relative_path)
+                    for item in selected)
     weights = {"protenix": "protenix", "esmfold2": "esmfold2", "esmfold2_experimental": "esmfold2",
                "boltz2": "boltz", "af2": "alphafold"}
     if model_id in weights:
@@ -133,6 +161,83 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
     if model_id in {"fampnn", "proteinmpnn", "diffdock", "af2", "boltzgen"}:
         refs.append(RuntimeDependencyRef(kind="image", relative_path="pyrosetta_tools.sif"))
     return tuple(refs)
+
+
+def _denovo_runtime_dependencies() -> tuple[RuntimeDependencyRef, ...]:
+    """Built-in family preload only, never a selected scientific launch recipe.
+
+    Reuse native asset owners without manufacturing requests. Operator runtime
+    overrides belong to selected-request preparation, not these defaults.
+    """
+    from native_components import LABEL_ASSETS
+
+    refs = []
+    for label in ('Foundry', 'ShapeRFD3', 'DISCO', 'LaProteina'):
+        image, _, weights, _ = LABEL_ASSETS[label]
+        refs.append(RuntimeDependencyRef(kind='image', relative_path=image))
+        if weights:
+            refs.append(RuntimeDependencyRef(kind='weights', relative_path=weights))
+    # Family preload retains the complete managed DISCO tree.
+    refs.append(RuntimeDependencyRef(kind='weights', relative_path='disco'))
+    # Both designers ship their default checkpoints inside their images.
+    for peer in ('fampnn', 'proteinmpnn', 'esmfold2'):
+        refs.extend(model_runtime_dependencies(peer))
+    refs.extend(model_image_dependencies('protenix'))
+    refs.extend(model_image_dependencies('boltz2'))
+    for process in ('RunRFD3', 'RunShapeRFD3', 'RunLaProteina',
+                    'RunShapeBoltzValidator', 'RunShapeProtenixValidator'):
+        dependencies, _ = native_checkpoint_dependencies(process, {})
+        refs.extend(RuntimeDependencyRef(kind=dep.kind, relative_path=dep.relative_path)
+                    for dep in dependencies)
+    return tuple(dict.fromkeys(refs))
+
+
+def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
+    """Input-free consumer layouts; preparation never selects scientific settings.
+
+    ESMFold fast/full share the managed tree (including its HF assets). Protenix
+    uses native member metadata for ordinary, anchored and template consumers.
+    FrustraMPNN checkpoints are image-owned and add no shared weight members.
+    """
+    if workflow_id != 'structure_prediction':
+        raise ValueError('Workflow pack binding is not available')
+    boltz, _ = native_checkpoint_dependencies('RunBoltz', {})
+    native_boltz = tuple(d.relative_path for d in boltz)
+    groups = {'boltz': ('boltz',), 'fold_cp': ('boltz',),
+              'boltz_native': native_boltz,
+              'esmfold2_fast': ('esmfold2',), 'esmfold2_full': ('esmfold2',)}
+    for name, process, settings in (
+        ('protenix', 'ProtenixPredict', {}),
+        ('protenix_anchored', 'ProtenixFromComplex', {'protenix_anchor_target': True}),
+        ('protenix_templates', 'ProtenixPredict', {'protenix_use_template': True}),
+    ):
+        dependencies, _ = native_checkpoint_dependencies(process, settings)
+        members = tuple(d.relative_path for d in dependencies)
+        groups[name] = members
+        groups['boltz_' + name] = ('boltz', *members)
+        groups['boltz_native_' + name] = (*native_boltz, *members)
+    return groups
+
+
+def workflow_pack_dependencies(workflow_id: str):
+    """All supported Structure assets, not a synthetic scientific request.
+
+    Reuse public predictor/image bindings and the trusted embedded FrustraMPNN
+    binding. Boltz API is an external service: no image, credentials or MSA
+    acquisition belongs to this pack. Shared references are deduplicated before
+    filesystem inventory, not after hashing the same tree for each predictor.
+    """
+    workflow_pack_weight_groups(workflow_id)  # closed supported workflow identity
+    refs = []
+    for model_id in ('boltz2', 'protenix', 'esmfold2'):
+        refs.extend(ref for ref in model_runtime_dependencies(model_id)
+                    if not (model_id == 'protenix' and ref.kind == 'weights'))
+    refs.extend(model_image_dependencies('boltz_cp_experimental'))
+    refs.extend(model_runtime_dependencies('frustrampnn', internal=True))
+    # The template-capable set contains the ordinary and anchored members.
+    members, _ = native_checkpoint_dependencies('ProtenixPredict', {'protenix_use_template': True})
+    refs.extend(members)
+    return tuple({(ref.kind, ref.relative_path): ref for ref in refs}.values())
 
 
 def _native_metadata_bytes(root, relative):
@@ -183,7 +288,25 @@ def native_checkpoint_dependencies(process: str, params: dict):
             compatibility_authority='model_acquisition_plan; scripts/lib/pinned_weight_layout.py'))
         blockers.append(UnresolvedField(key, 'dependency_closure', authority, reason))
 
-    if process in {'ProtenixPredict', 'ProtenixFromComplex', 'BatchProtenixValidation',
+    if process in {'RunCaliby', 'RunCalibyBinder'}:
+        from scripts.caliby_runtime import resolve_expected_caliby_checkpoint
+        root = Path('/weights/caliby/model_params')
+        selected = resolve_expected_caliby_checkpoint(
+            params.get('caliby_model_name') or 'soluble_caliby_v1', root)
+        members = [selected.relative_to(root).as_posix()]
+        if params.get('caliby_run_self_consistency_eval') in (True, 'true'):
+            members.append('af2')
+        for member in members:
+            relative = 'caliby/model_params/' + member
+            dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
+                'scripts/caliby_runtime.py:resolve_expected_caliby_checkpoint; MODEL_PARAMS_DIR'))
+    elif process == 'RunCalibyNative':
+        from services.caliby_native import selected_assets
+        assets = selected_assets(params['task'], params)
+        relative = assets['model_params_subdir'] + '/' + assets['checkpoint']
+        dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
+            'services.caliby_native:selected_assets; MODEL_PARAMS_DIR'))
+    elif process in {'ProtenixPredict', 'ProtenixFromComplex', 'BatchProtenixValidation',
                    'CanonicalProtenixEnsemble', 'RunShapeProtenixValidator'}:
         # Installed Protenix bd54a05d047b8925a241056f36d619700604068a:
         # runner/inference.py:download_inference_cache,load_checkpoint and
@@ -206,6 +329,50 @@ def native_checkpoint_dependencies(process: str, params: dict):
         for member in members:
             dependencies.append(SelectedDependency('weights:protenix:' + member, 'weights',
                 'protenix/' + member, owner, selector='protenix_weights', selector_subpath=member))
+    elif process in {'RunBoltz', 'RunShapeBoltzValidator'}:
+        owner = 'boltz/main.py:download_boltz2'
+        # RunBoltz accepts opaque native CLI overrides (including --model).
+        # Keep that historical closure rather than guessing their asset needs.
+        if process == 'RunBoltz' and params.get('boltz_extra_config'):
+            dependencies.append(SelectedDependency('weights:boltz', 'weights',
+                'boltz', owner, selector='boltz_models'))
+        else:
+            # Native initialization checks both checkpoints even without affinity
+            # prediction. Existing mols/ bypasses the download-only mols.tar.
+            for member in ('boltz2_conf.ckpt', 'boltz2_aff.ckpt', 'mols'):
+                dependencies.append(SelectedDependency('weights:boltz:' + member,
+                    'weights', 'boltz/' + member, owner,
+                    selector='boltz_models', selector_subpath=member))
+    elif process == 'RunDISCO':
+        owner = 'modules/protein_cad_experimental.nf:PrepProteinCadRequest'
+        selector = ('pcad_disco_checkpoint_path' if params.get('pcad_disco_checkpoint_path')
+                    else 'disco_checkpoint_path')
+        selected = params.get(selector)
+        dependencies.append(SelectedDependency('weights:disco:checkpoint', 'weights',
+            'disco/DISCO.pt', owner, selector=selector if selected else 'weights_root',
+            selector_subpath=None if selected else 'disco/DISCO.pt'))
+        dependencies.append(SelectedDependency('weights:disco:huggingface', 'weights',
+            'disco/huggingface', owner, selector='weights_root',
+            selector_subpath='disco/huggingface'))
+    elif process == 'RunLaProteina':
+        from paths import get_weights_root
+
+        owner = 'modules/protein_cad_experimental.nf:PrepProteinCadRequest'
+        default = Path(params.get('weights_root') or get_weights_root()) / 'laproteina'
+        seen = set()
+        for name in ('checkpoint_dir', 'data_path'):
+            selector = ('pcad_laproteina_' + name if params.get('pcad_laproteina_' + name)
+                        else 'laproteina_' + name)
+            selected = params.get(selector)
+            path = Path(str(selected)).expanduser() if selected else default
+            # DATA_PATH defaults to weights/laproteina independently of the
+            # checkpoint override. The bundle owner still checks containment.
+            if path.resolve() in seen:
+                continue
+            seen.add(path.resolve())
+            dependencies.append(SelectedDependency('weights:laproteina:' + name, 'weights',
+                None if selected else 'laproteina', owner,
+                selector=selector if selected else None))
     elif process == 'RunRF3':
         owner = 'scripts/run_rf3.py:main overrides; modules/rf3.nf:RunRF3'
         if params.get('rf3_extra_config'):
@@ -455,6 +622,15 @@ class ModelRegistry:
                         loaded_models[model.id] = model
             except Exception as e:
                 raise ValueError(f"Failed to load model registry entry {yaml_file}: {e}") from e
+        # The embedded Caliby sampler consumes the selected model's native
+        # settings. Keep parent constraints/count/defaults at their existing owner.
+        parent, caliby = loaded_models.get('antibody_denovo'), loaded_models.get('caliby_binder')
+        if parent is not None and caliby is not None:
+            existing = {field.name for field in parent.params}
+            for field in caliby.params:
+                if (field.name.startswith('caliby_') and field.name not in existing
+                        and field.name not in {'caliby_design_positions', 'caliby_num_seqs_per_pdb'}):
+                    parent.params.append(field.model_copy(deep=True))
         self._models = loaded_models
 
     @staticmethod
@@ -563,6 +739,9 @@ class ModelRegistry:
                 # it is not the generic launcher's unmaterialized parameter DTO.
                 model = raw
                 native_required = ('cm_request_path',)
+            elif (model_id, mode_id) == ('frustrampnn', 'analyze'):
+                model = raw
+                native_required = ('frustrampnn_batch_manifest_path', '_frustrampnn_child_v1')
             elif raw is not None:
                 model = raw
         if not model:
@@ -575,6 +754,25 @@ class ModelRegistry:
             errors.append(f"Unknown mode '{mode_id}' for model '{model_id}'")
             return errors
         
+        if model_id == 'ligandmpnn':
+            from services.ligandmpnn_design import MODES, science_params
+            if mode_id in MODES:
+                # Native nullable fields and ranges belong to the ordinary
+                # operation, not the diagnostic's shared scalar definitions.
+                try:
+                    science_params(mode_id, params)
+                except (TypeError, ValueError) as exc:
+                    errors.append(str(exc))
+                return errors
+
+        # A saved launcher selector is descriptive, not authority to switch the
+        # native mode. Reject contradictory identities at the request boundary.
+        if model_id == 'antibody_denovo' and mode_id in {'nanobody_binder', 'generator_backbone_refine'}:
+            selected = 'boltzgen' if mode_id == 'nanobody_binder' else 'ppiflow'
+            for selector in ('denovo_generator', 'generator'):
+                if params.get(selector) not in (None, '', selected):
+                    errors.append(f"{selector} conflicts with selected {mode_id} mode")
+
         # These are generator modes of the supported antibody workflow, not
         # standalone models or the RFantibody pipeline's target/epitope contract.
         if model_id == 'antibody_denovo' and mode_id == 'nanobody_binder':
@@ -614,7 +812,9 @@ class ModelRegistry:
                 # JSON booleans are not integer/number settings. Validate the
                 # declared wire type before range/enum checks, without coercing
                 # strings or silently letting invalid values reach native argv.
-                if value is None and not param_def.required and param_def.default is None:
+                if value is None and (
+                        not param_def.required and param_def.default is None
+                        or model_id == 'fampnn' and param_name == 'fampnn_psce_threshold'):
                     continue
                 wire_type = param_def.type
                 valid_type = {
@@ -628,6 +828,7 @@ class ModelRegistry:
                     "file": isinstance(value, str),
                     "directory": isinstance(value, str),
                     "object": isinstance(value, dict),
+                    "array": isinstance(value, list),
                     "string_list": isinstance(value, list) and all(isinstance(item, str) for item in value),
                 }.get(wire_type, False)
                 if not valid_type:
@@ -1042,6 +1243,10 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     generator_family = ({'nanobody_binder': 'boltzgen',
                          'generator_backbone_refine': 'ppiflow'}.get(mode)
                         if model_id == 'antibody_denovo' else None)
+    if workflow == 'protein_cad_experimental':
+        # Both native CAD producers publish this generator_family. Do not grant
+        # the parent model's other tasks a generation result contract.
+        generator_family = 'protein_cad_experimental'
     result = resolve_result_contract(model_type=model_id, stage_mode=mode,
                                      stage_family=generator_family)
     result_payload = result.model_dump()
@@ -1054,6 +1259,19 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     if native_generation is not None:
         result_payload = native_generation
         retrieval_authority = native_generation['native_contract_authority']
+    elif reviewed and model_id == 'ligandmpnn' and workflow == 'ligandmpnn_design':
+        from services.ligandmpnn_design import result_contract
+        result_payload = result_contract(mode)
+        retrieval_authority = result_payload['native_contract_authority']
+    elif reviewed and model_id == 'caliby_experimental' and workflow == 'caliby_native':
+        from services.caliby_native import result_contract
+        result_payload = result_contract(mode)
+        retrieval_authority = result_payload['native_contract_authority']
+    elif reviewed and model_id == 'ppiflow' and workflow == 'ppiflow_generation':
+        # Initial native producer records are not partial-flow maturation scores.
+        from services.ppiflow_generation import generation_result_contract as ppiflow_result_contract
+        result_payload = ppiflow_result_contract(mode)
+        retrieval_authority = result_payload['native_contract_authority']
     elif model_id == 'molecular_dynamics' and mode == 'simulate' and reviewed:
         # MD owns native aggregate/mandatory-analysis completion, not Design
         # analysis rows. Bind that existing authority instead of demanding a
@@ -1062,14 +1280,41 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
         result_payload = {'native_contract_authority': retrieval_authority,
             'aggregate_schema': 'bms.md.aggregate.v1',
             'completion_authority': 'platform/api/services/md/results.py:completion_barrier'}
+    elif reviewed and (model_id, mode) in {
+            ('ligandmpnn', 'interface_context'), ('esmfold2', 'blind_pose')}:
+        selected_ligand = model_id == 'ligandmpnn'
+        retrieval_authority = ('platform/api/services/ligandmpnn_interface_publication.py:read_selected'
+            if selected_ligand else 'platform/api/services/binder_blind_pose_selected.py:read_selected')
+        result_payload = {
+            'native_contract_authority': retrieval_authority,
+            'publication_authority': retrieval_authority.replace(':read_selected', ':publish_selected'),
+            'selected_schema': ('bms.ligandmpnn.interface-context.experimental.v1' if selected_ligand
+                                else 'bms.blind-pose.selected.v1'),
+            'qualification': 'unclassified',
+            'design_count': 0,
+        }
+    elif reviewed and model_id == 'bindcraft2':
+        retrieval_authority = 'platform/api/services/bindcraft2_publication.py:read_published_native_results'
+        result_payload = {
+            'native_contract_authority': retrieval_authority,
+            'publication_authority': 'platform/api/services/bindcraft2_publication.py:publish_native_results',
+            'publication_schema': 'bindcraft2.native-publication.v1',
+        }
     elif result.analysis_contract_id is None:
         unresolved(model_id, 'result_contract', retrieval_authority,
                    'Native result resolver does not establish a contract for selected identity')
-    if availability != 'public':
+    # Selected Frustra analysis is admitted by its retained model-owned request,
+    # not the generic public launcher. Its compiler verifies that immutable batch.
+    selected_analysis = (reviewed and availability == 'internal'
+        and (model_id, mode, entrypoint) == ('frustrampnn', 'analyze', 'workflows/frustrampnn_analysis.nf')
+        and bool(p.get('_frustrampnn_child_v1')) and bool(p.get('frustrampnn_batch_manifest_path')))
+    if selected_analysis:
+        admission_authority = 'platform/api/services/frustrampnn/jobs.py:load_prepared_child'
+    if availability != 'public' and not selected_analysis:
         unresolved(model_id, 'availability', authority, f'Declaration availability is {availability}; not public admission',
             blocks=('preview_acceptance', 'launch') if availability == 'internal' else
                    ('preview_acceptance', 'provision', 'launch'))
-    if model is not None and mode not in {item.id for item in model.modes}:
+    if model is not None and mode not in {item.id for item in model.modes} and not selected_analysis:
         unresolved(f'{model_id}/{mode}', 'mode_descriptor', entrypoint,
                    'Compiler/internal mode is not a declared public mode; native descriptor needs review')
     # Every selected process carries lifecycle and configured resource semantics;

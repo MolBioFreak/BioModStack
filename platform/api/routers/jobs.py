@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, B
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, or_, and_
 from sqlalchemy.exc import OperationalError
 from typing import Optional, List, Dict, Any, Callable, Mapping, NoReturn, Literal, cast
 from dataclasses import dataclass
@@ -54,6 +54,7 @@ from database import (
 )
 from experiment_database import get_experiment_session
 from experiment_models import ExperimentRunAttempt
+from services.job_stage_progress import project_execution_stages
 from services.result_contracts import build_review_artifact_manifest, resolve_result_contract
 from paths import (
     get_code_root,
@@ -115,6 +116,7 @@ from services.frustrampnn.settings import (
 )
 
 from model_registry import get_registry
+from services.ligandmpnn_design import MODES as LIGANDMPNN_DESIGN_MODES
 from services.stage_review import (
     REVIEWABLE_STAGES,
     gate_file_for_stage,
@@ -1325,6 +1327,11 @@ def _should_normalize_antibody_job_params(
 ) -> bool:
     normalized_model_id = str(model_id or "").strip().lower()
     normalized_mode = str(mode or "").strip().lower()
+    # A model-owned native request is never an antibody-pipeline parameter bag.
+    # In particular these distinct model routes must not acquire implicit
+    # validator, chain, gate, or PPIFlow defaults during shared job admission.
+    if normalized_model_id in {"bindcraft2", "ligandmpnn"}:
+        return False
     if (
         normalized_model_id == "protein_local_redesign"
         and normalized_mode == "local_redesign"
@@ -1363,7 +1370,7 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
     if structure_validator == "boltz":
         structure_validator = "boltz2"
     if structure_validator not in {"boltz2", "protenix", "esmfold2"}:
-        structure_validator = "boltz2"
+        raise HTTPException(status_code=422, detail=f"Unsupported structure validator: {structure_validator}")
     normalized["structure_validator"] = structure_validator
 
     canonical_post_validation = normalized.get("run_post_validation_maturation")
@@ -1399,7 +1406,7 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
         if normalized_gate_stage == "post_boltz_validation":
             normalized_gate_stage = "post_structure_validation"
         if normalized_gate_stage not in {"post_rfantibody", "post_boltzgen", "post_ppiflow_generator", "post_fampnn", "post_caliby", "post_structure_validation"}:
-            normalized_gate_stage = "post_fampnn"
+            raise HTTPException(status_code=422, detail=f"Unsupported interactive gate stage: {normalized_gate_stage}")
         normalized["interactive_gate_stage"] = normalized_gate_stage
 
     if "rfantibody_screen_reference_scope" in normalized:
@@ -1432,7 +1439,8 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
             ppiflow_tuning_profile = "manual"
         normalized["ppiflow_tuning_profile"] = ppiflow_tuning_profile
         if ppiflow_tuning_profile == "stage_optimized":
-            normalized.update(_stage_optimized_ppiflow_defaults(inferred_ppiflow_stage_mode))
+            for key, value in _stage_optimized_ppiflow_defaults(inferred_ppiflow_stage_mode).items():
+                normalized.setdefault(key, value)
     if "ppiflow_stage_target" in normalized:
         normalized["ppiflow_stage_target"] = str(normalized.get("ppiflow_stage_target") or "").strip().lower() or None
     ppiflow_objective_mode = str(normalized.get("ppiflow_objective_mode") or "").strip().lower() or None
@@ -1564,7 +1572,8 @@ def _normalize_structure_runtime_paths(model_id: str, params: dict) -> dict:
         return params
 
     normalized = dict(params)
-    keys = ("input_pdb",) if model_id in {"fampnn", "proteinmpnn"} else ("target_pdb", "fixed_target_source_path")
+    keys = (("input_pdb", "mpnn_bias_AA_jsonl") if model_id == "proteinmpnn" else
+            ("input_pdb", "fampnn_checkpoint_path") if model_id == "fampnn" else ("target_pdb", "fixed_target_source_path"))
     for key in keys:
         value = normalized.get(key)
         if isinstance(value, str):
@@ -1572,7 +1581,7 @@ def _normalize_structure_runtime_paths(model_id: str, params: dict) -> dict:
     if model_id == 'proteinmpnn':
         from scripts.prep_mpnn_designs import validate_generic_input
         try:
-            validate_generic_input(normalized.get('input_pdb') or '')
+            validate_generic_input(normalized.get('input_pdb') or '', normalized)
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=422, detail={'validation_errors': [str(exc)]}) from exc
     return normalized
@@ -2702,6 +2711,50 @@ async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) 
     return source_job, root_job
 
 
+async def _validate_selected_design_owners(
+    session: AsyncSession,
+    source_job: Job,
+    root_job: Optional[Job],
+    designs: List[Design],
+    *,
+    root_resolver=None,
+) -> None:
+    """Refuse a foreign Design before copying or linking any selected input."""
+    resolve_root = root_resolver or _resolve_antibody_root_job
+    owner_roots: Dict[str, str] = {}
+    for design in designs:
+        owner_id = str(getattr(design, "job_id", "") or "").strip()
+        if not owner_id:
+            raise HTTPException(status_code=422, detail="Selected design has no source job owner.")
+        if root_job is not None:
+            claimed_root = str(getattr(design, "lineage_root_job_id", "") or "").strip()
+            if claimed_root and claimed_root != root_job.id:
+                raise HTTPException(status_code=422, detail="Selected design belongs to another lineage root.")
+        if owner_id in owner_roots:
+            continue
+        owner = await session.get(Job, owner_id)
+        if owner is None:
+            raise HTTPException(status_code=422, detail="Selected design source job is missing.")
+        if owner_id == source_job.id or (root_job is not None and owner_id == root_job.id):
+            if owner.model_id == 'bindcraft2':
+                from services.bindcraft2_publication import read_published_native_results
+                await read_published_native_results(owner, session)
+            owner_roots[owner_id] = root_job.id if root_job is not None else source_job.id
+            continue
+        if root_job is None:
+            raise HTTPException(status_code=422, detail="Selected design belongs to another job.")
+        try:
+            _, owner_root = await resolve_root(session, owner_id)
+        except HTTPException as exc:
+            raise HTTPException(status_code=422, detail="Selected design has no compatible source lineage.") from exc
+        if owner_root.id != root_job.id:
+            raise HTTPException(status_code=422, detail="Selected design belongs to another lineage root.")
+        if owner.model_id == 'bindcraft2':
+            from services.bindcraft2_publication import read_published_native_results
+            await read_published_native_results(owner, session)
+        owner_roots[owner_id] = owner_root.id
+
+
 def _normalize_design_ids(values: List[str]) -> List[str]:
     normalized: List[str] = []
     seen: set[str] = set()
@@ -2976,6 +3029,83 @@ def _extract_chain_records_from_pdb(pdb_path: Path) -> Dict[str, List[Dict[str, 
     return chain_records
 
 
+def _extract_chain_records_from_structure(path: Path) -> Dict[str, List[Dict[str, Any]]]:
+    if path.suffix.lower() not in {'.cif', '.mmcif'}:
+        return _extract_chain_records_from_pdb(path)
+    from Bio.PDB.MMCIF2Dict import MMCIF2Dict
+
+    data = MMCIF2Dict(str(path))
+    def column(*names: str) -> list[str]:
+        for name in names:
+            if name in data:
+                return data[name]
+        return []
+    atoms = column('_atom_site.auth_atom_id', '_atom_site.label_atom_id')
+    residues = column('_atom_site.auth_comp_id', '_atom_site.label_comp_id')
+    chains = column('_atom_site.auth_asym_id', '_atom_site.label_asym_id')
+    numbers = column('_atom_site.auth_seq_id', '_atom_site.label_seq_id')
+    insertions = column('_atom_site.pdbx_PDB_ins_code')
+    groups = column('_atom_site.group_PDB')
+    if not (len(atoms) == len(residues) == len(chains) == len(numbers) == len(groups)):
+        return {}
+    if not insertions:
+        insertions = ['?'] * len(atoms)
+    if len(insertions) != len(atoms):
+        return {}
+    records: Dict[str, List[Dict[str, Any]]] = {}
+    seen: Dict[str, set[tuple[int, str]]] = {}
+    for group, atom, residue, chain, number, insertion in zip(
+            groups, atoms, residues, chains, numbers, insertions):
+        if group != 'ATOM' or atom != 'CA' or residue not in AA_CODES:
+            continue
+        try:
+            resseq = int(number)
+        except ValueError:
+            continue
+        chain_id = chain.upper()
+        icode = '' if insertion in {'.', '?'} else insertion
+        key = (resseq, icode)
+        if key in seen.setdefault(chain_id, set()):
+            continue
+        seen[chain_id].add(key)
+        records.setdefault(chain_id, []).append({'resseq': resseq, 'icode': icode,
+                                                  'aa': AA_CODES[residue]})
+    return records
+
+
+def _cif_selection_pdb(source: Path, destination: Path) -> Path:
+    """Materialize only representable CIF coordinates for a PDB-only consumer."""
+    from Bio.PDB import MMCIFParser, PDBIO
+    from Bio.PDB.PDBParser import PDBParser
+    structure = MMCIFParser(QUIET=True).get_structure('selected', str(source))
+    def identity(model):
+        return [(chain.id, residue.id, residue.resname,
+                 tuple((atom.id, atom.coord.tolist()) for atom in residue))
+                for chain in model for residue in chain]
+    models = list(structure)
+    if len(models) != 1:
+        raise ValueError('Selected CIF has no single PDB-representable model')
+    original = identity(models[0])
+    if not original or any(len(chain) != 1 or not (-999 <= residue_id[1] <= 9999)
+                           or len(residue_id[2]) > 1
+                           for chain, residue_id, _, _ in original):
+        raise ValueError('Selected CIF chain/residue identifiers cannot be represented in PDB')
+    io = PDBIO()
+    io.set_structure(structure)
+    io.save(str(destination))
+    converted = PDBParser(QUIET=True).get_structure('selected', str(destination))
+    after = identity(next(iter(converted)))
+    if len(after) != len(original) or any(
+            (a[0], a[1], a[2], [atom[0] for atom in a[3]]) !=
+            (b[0], b[1], b[2], [atom[0] for atom in b[3]]) or
+            any(any(abs(x - y) > 0.0011 for x, y in zip(atom_a[1], atom_b[1]))
+                for atom_a, atom_b in zip(a[3], b[3]))
+            for a, b in zip(original, after)):
+        destination.unlink(missing_ok=True)
+        raise ValueError('Selected CIF to PDB conversion lost chain, residue or atom mapping')
+    return destination
+
+
 def _resolve_loop_region_map(root_job: Job) -> Dict[str, tuple[int, int]]:
     params = root_job.params if isinstance(root_job.params, dict) else {}
     region_map: Dict[str, tuple[int, int]] = {}
@@ -3196,7 +3326,7 @@ def _generate_manual_mutagenesis_variants(
 
     for design in designs:
         design_path = _resolve_design_structure_path(design.pdb_path)
-        chain_records = _extract_chain_records_from_pdb(design_path)
+        chain_records = _extract_chain_records_from_structure(design_path)
         if not chain_records:
             raise HTTPException(status_code=422, detail=f"Could not extract protein chains from '{design.name}'.")
 
@@ -3421,6 +3551,10 @@ def _build_selection_manifest_item(
         "parent_design_id": design.parent_design_id,
         "origin_design_id": design.origin_design_id,
         "origin_backbone_design_id": design.origin_backbone_design_id,
+        "origin_job_id": getattr(design, "origin_job_id", None),
+        "source_design_provenance": getattr(design, "provenance", None),
+        "source_review_role_map": getattr(design, "review_role_map", None),
+        "source_review_artifact_manifest": getattr(design, "review_artifact_manifest", None),
         "source_design_name": design.name,
         "source_pdb_path": str(source_path),
         "selection_pdb_path": str(selection_path),
@@ -3689,7 +3823,19 @@ def _materialize_seed_selection_from_completed_designs(
     for idx, design in enumerate(designs, start=1):
         source_path = _resolve_design_structure_path(design.pdb_path)
         dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
-        if root_job.execution_target_id:
+        if source_path.suffix.lower() in {'.cif', '.mmcif'}:
+            if dest_path.exists() or dest_path.is_symlink():
+                if dest_path.is_symlink() or not dest_path.is_file():
+                    raise ValueError('Unsafe retained CIF-derived seed')
+                import tempfile
+                with tempfile.TemporaryDirectory(dir=selection_dir.parent) as temporary:
+                    comparison = _cif_selection_pdb(source_path, Path(temporary) / dest_path.name)
+                    if dest_path.read_bytes() != comparison.read_bytes():
+                        raise ValueError('Retained seed differs from native CIF conversion')
+            else:
+                _cif_selection_pdb(source_path, dest_path)
+            link_mode = 'converted_verified_copy'
+        elif root_job.execution_target_id:
             # Remote input authority requires a regular immutable snapshot,
             # not a mutable reference into an imported result generation.
             if dest_path.exists() or dest_path.is_symlink():
@@ -4001,7 +4147,7 @@ def _build_cdr_indel_iteration_job(
 
     for design in designs:
         design_path = _resolve_design_structure_path(design.pdb_path)
-        chain_records = _extract_chain_records_from_pdb(design_path)
+        chain_records = _extract_chain_records_from_structure(design_path)
         if not chain_records:
             raise HTTPException(status_code=422, detail=f"Could not extract chain sequences from '{design.name}'.")
 
@@ -4178,8 +4324,10 @@ def _materialize_antibody_selection(
     source_job: Job,
     designs: List[Design],
     action: str,
+    *,
+    namespace: str = "antibody",
 ) -> Path:
-    selection_root = get_inputs_dir() / "design_selections" / "antibody"
+    selection_root = get_inputs_dir() / "design_selections" / namespace
     selection_root.mkdir(parents=True, exist_ok=True)
 
     selection_dir = selection_root / (
@@ -4196,29 +4344,35 @@ def _materialize_antibody_selection(
             )
 
         source_path = _resolve_design_structure_path(design.pdb_path)
-        if source_path.suffix.lower() != ".pdb":
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"Design '{design.name}' is backed by '{source_path.name}', not a PDB file. "
-                    "Antibody iteration actions currently require PDB-backed selections."
-                ),
-            )
-
         dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
-        if root_job.execution_target_id:
-            # Remote preview binds one retained snapshot. Reference-only local
-            # links are not immutable portable inputs and cannot be approved.
+        native_snapshot = None
+        if source_path.suffix.lower() in {'.cif', '.mmcif'}:
+            native_dir = selection_dir / 'native'
+            native_dir.mkdir(exist_ok=True)
+            native_snapshot = native_dir / f"{idx:03d}_{design.id}{source_path.suffix.lower()}"
+            shutil.copyfile(source_path, native_snapshot)
+            _cif_selection_pdb(native_snapshot, dest_path)
+            link_mode = 'converted_verified_copy'
+        elif source_path.suffix.lower() != '.pdb':
+            raise HTTPException(status_code=422, detail=f"Unsupported selected structure format: {source_path.suffix}")
+        else:
+            # Local and remote continuations both consume retained snapshots.
+            # Linking a mutable publication would change a queued child's input.
             shutil.copyfile(source_path, dest_path)
             link_mode = "copy"
-        else:
-            link_mode = _link_selection_input(source_path, dest_path)
 
         manifest_items.append(_build_selection_manifest_item(
             design,
-            source_path=source_path,
+            source_path=dest_path if source_path.suffix.lower() in {'.cif', '.mmcif'} else source_path,
             selection_path=dest_path,
             selection_entry_mode=link_mode,
+            extra={
+                "source_structure_path": str(source_path),
+                "selection_structure_sha256": hashlib.sha256(dest_path.read_bytes()).hexdigest(),
+                **({"native_source_structure_path": str(native_snapshot),
+                    "native_source_structure_sha256": hashlib.sha256(native_snapshot.read_bytes()).hexdigest(),
+                    "native_source_format": "mmcif"} if native_snapshot else {}),
+            },
         ))
 
     _write_selection_manifest(
@@ -4278,13 +4432,14 @@ def _materialize_protein_local_selection(
         dest_path = selection_dir / dest_name
         if dest_path.exists():
             dest_path = selection_dir / f"{idx:03d}_{dest_name}"
-        link_mode = _link_selection_input(source_path, dest_path)
+        shutil.copyfile(source_path, dest_path)
+        link_mode = "copy"
 
         for sidecar in _candidate_sidecar_paths(design, source_path):
             sidecar_dest = selection_dir / sidecar.name
             if sidecar_dest.exists():
                 sidecar_dest = selection_dir / f"{idx:03d}_{sidecar.name}"
-            _link_selection_input(sidecar, sidecar_dest)
+            shutil.copyfile(sidecar, sidecar_dest)
 
         manifest_items.append(_build_selection_manifest_item(
             design,
@@ -4970,10 +5125,8 @@ def _resolve_stage_state_for_response(job: Job) -> tuple[List[str], Dict[str, Li
             else:
                 merged = outputs
             stage_outputs[stage] = merged
-            if merged and stage not in completed:
-                completed.append(stage)
 
-    completed, stage_outputs = infer_antibody_stage_state(job, completed, stage_outputs)
+    _inferred_completed, stage_outputs = infer_antibody_stage_state(job, list(completed), stage_outputs)
 
     return completed, stage_outputs
 
@@ -5218,6 +5371,7 @@ async def list_jobs(
     mode: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    exclude_ngs: bool = False,  # Dashboard Show NGS Jobs filter, before paging/count
     include_children: bool = False,  # New param: show child jobs if True
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
     session: AsyncSession = Depends(get_session),
@@ -5274,6 +5428,9 @@ async def list_jobs(
         Job.awaiting_stage,
         # Keep summary rows lightweight while preserving execution-policy parity.
         Job.params["remote_result_policy"].as_string().label("remote_result_policy"),
+        Job.provenance[("execution_plan_approval", "plan", "metadata", "static_components")].label("stage_plan_components"),
+        Job.provenance[("remote_execution_assignment", "resources", "components")].label("stage_assigned_components"),
+        Job.provenance["stage_terminal_states"].label("stage_terminal_states"),
     )
     selected_entities = summary_columns if summary else (Job,)
     design_counts = (
@@ -5293,22 +5450,45 @@ async def list_jobs(
         .order_by(Job.created_at.desc())
     )
     
-    # Filter out child jobs by default (show only parent/top-level jobs)
+    # Use identical predicates for the bounded page and its total. These are
+    # presentation filters, not changes to execution/status authority.
+    filters = []
     if not include_children:
-        query = query.where(Job.parent_job_id == None)
-    
+        filters.append(Job.parent_job_id.is_(None))
     if status:
-        query = query.where(Job.status == status.value)
-
+        status_filter = Job.status == status.value
+        if status.value == "awaiting_input":
+            status_filter = or_(status_filter, Job.awaiting_input.is_(True))
+        filters.append(status_filter)
     if model_id:
-        query = query.where(Job.model_id == model_id)
-
+        filters.append(Job.model_id == model_id)
     if mode:
-        query = query.where(Job.mode == mode)
-    
+        filters.append(Job.mode == mode)
     if q:
-        query = query.where(Job.name.ilike(f"%{q}%"))
-    
+        # Dashboard search was a literal substring, not a SQL wildcard pattern.
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        filters.append(or_(Job.name.ilike(f"%{escaped}%", escape="\\"), func.instr(Job.id, q) > 0))
+    if exclude_ngs:
+        # Match ngsResultRouting.isNgsJob, including legacy missing-model rows.
+        ngs_models = ("nanopore", "ont_basecall_dna", "ont_basecall_rna", "ont_plasmid_qc",
+                      "ont_construct_screening", "ont_methylation_analysis", "ont_fastq_qc",
+                      "ont_pooled_reference_assignment", "wf_clone_validation")
+        ngs_workflows = (*ngs_models[1:], "basecall_dna", "basecall_rna", "plasmid_qc",
+                         "construct_screening", "methylation_analysis", "fastq_qc",
+                         "pooled_reference_assignment", "pooled-reference-assignment", "wf_clone", "clone_validation")
+        # JS routeIdentity trims ECMAScript whitespace. Preserve its truthy
+        # ont_workflow_id || workflow_id fallback for legacy JSON false/zero.
+        whitespace = " \t\n\v\f\r\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+        model_identity = func.lower(func.trim(func.coalesce(Job.model_id, ""), whitespace))
+        workflow_identity = func.lower(func.trim(func.coalesce(
+            func.nullif(func.nullif(Job.params["ont_workflow_id"].as_string(), ""), 0),
+            Job.params["workflow_id"].as_string(), ""), whitespace))
+        mode_identity = func.lower(func.trim(func.coalesce(Job.mode, ""), whitespace))
+        filters.append(~or_(model_identity.in_(ngs_models), and_(
+            model_identity == "", or_(workflow_identity.in_(ngs_workflows),
+                                      mode_identity.in_((*ngs_workflows, "nanopore_methylation"))))))
+    query = query.where(*filters)
+
     query = query.limit(limit).offset(offset)
     result = await session.execute(query)
     if summary:
@@ -5358,18 +5538,8 @@ async def list_jobs(
             if parent_job_id is not None
         }
     
-    # Get total count (for pagination) - also exclude children
-    count_query = select(func.count(Job.id))
-    if not include_children:
-        count_query = count_query.where(Job.parent_job_id == None)
-    if status:
-        count_query = count_query.where(Job.status == status.value)
-    if model_id:
-        count_query = count_query.where(Job.model_id == model_id)
-    if mode:
-        count_query = count_query.where(Job.mode == mode)
-    if q:
-        count_query = count_query.where(Job.name.ilike(f"%{q}%"))
+    # Count the same filtered scope, not just the current page.
+    count_query = select(func.count(Job.id)).where(*filters)
     total = (await session.execute(count_query)).scalar()
 
     
@@ -5431,6 +5601,7 @@ async def list_jobs(
             execution_bundle_sha256=job.execution_bundle_sha256,
             remote_attempt_id=job.remote_attempt_id,
             remote_state=job.remote_state,
+            execution_stages=project_execution_stages(job),
             current_stage=job.current_stage,
             completed_stages=completed_stages,
             stage_outputs={} if summary else stage_outputs,
@@ -5542,6 +5713,7 @@ async def import_proteinbase_bundle_job(
         execution_bundle_sha256=job.execution_bundle_sha256,
         remote_attempt_id=job.remote_attempt_id,
         remote_state=job.remote_state,
+        execution_stages=project_execution_stages(job),
         current_stage=job.current_stage,
         completed_stages=job.completed_stages,
         stage_outputs=job.stage_outputs,
@@ -5695,14 +5867,142 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     Runtime presence/readiness remains the materialization owner's concern.
     """
     job_data = job_data.model_copy(deep=True)
-    if str(job_data.model_id).strip().lower() in {'boltzgen', 'ppiflow'}:
-        raise HTTPException(status_code=422, detail=(
-            'This is an internal antibody generator; launch its supported antibody_denovo mode'
-        ))
     registry = registry or get_registry()
+    if job_data.sequence_design is not None:
+        from services.sequence_round_inputs import normalize_request as normalize_sequence_request
+        try:
+            job_data.sequence_design = normalize_sequence_request(job_data.sequence_design, registry)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    if job_data.binder_round is not None:
+        from services.binder_round_inputs import normalize_request
+        try:
+            job_data.binder_round = normalize_request(job_data.binder_round, registry)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     md_input_resolver = md_input_resolver or _resolve_md_input_path_for_runtime
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    from services.sequence_designer_settings import normalize_historical_sequence_settings
+    job_data.params = normalize_historical_sequence_settings(normalized_model_id, job_data.params)
+    if normalized_model_id == 'frustrampnn':
+        from services.frustrampnn.jobs import load_prepared_child
+        try:
+            load_prepared_child(job_data)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return job_data
+    if normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES:
+        from services.ligandmpnn_design import normalize_design_params
+        transport_keys = {'ligandmpnn_design_request', 'ligandmpnn_design_input',
+                          'num_parallel_jobs', 'job_name', 'workflow_adapter',
+                          '_global_resource_admission', '_global_dispatch_authority'}
+        transport = {key: value for key, value in job_data.params.items() if key in transport_keys}
+        values = {key: value for key, value in job_data.params.items() if key not in transport_keys}
+        try:
+            if not transport.get('ligandmpnn_design_request'):
+                for key in ('target_pdb', 'ligand_pdb'):
+                    if values.get(key):
+                        values[key] = _resolve_alias_path_for_runtime(values[key])
+            science = normalize_design_params(normalized_mode, values)
+            job_data.params = {**science, **transport}
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        errors = registry.validate_job_params(job_data.model_id, normalized_mode, science)
+        if errors:
+            raise HTTPException(422, detail={'validation_errors': errors})
+        return job_data
+    if normalized_model_id == 'caliby_experimental':
+        from services.caliby_native import SUPPORTED_MODES, normalize_request
+        if normalized_mode not in SUPPORTED_MODES:
+            raise HTTPException(410, 'Historical Caliby design mode remains retired')
+        transport_keys = {'caliby_request_dir', 'num_parallel_jobs', 'job_name',
+                          'workflow_adapter', '_global_resource_admission', '_global_dispatch_authority'}
+        transport = {key: value for key, value in job_data.params.items() if key in transport_keys}
+        try:
+            science = normalize_request(normalized_mode, {
+                key: value for key, value in job_data.params.items() if key not in transport_keys
+            })
+            if not transport.get('caliby_request_dir'):
+                states = (science['structures'] if normalized_mode == 'sidechain_pack' else
+                          [state for group in science['ensembles'] for state in group['states']])
+                for state in states:
+                    state['path'] = _resolve_alias_path_for_runtime(state['path'])
+            job_data.params = {**science, **transport}
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        errors = registry.validate_job_params(job_data.model_id, normalized_mode, science)
+        if errors:
+            raise HTTPException(422, detail={'validation_errors': errors})
+        # This model owns normalization; antibody/MSA defaults do not apply.
+        return job_data
+    if normalized_model_id == 'ppiflow':
+        from services.ppiflow_generation import normalize_ppiflow_generation_params
+        # Initial generation owns its native settings. The old antibody-parent
+        # partial-flow normalizer must not inject refinement defaults here.
+        transport_keys = {'ppiflow_generation_request', 'num_parallel_jobs', 'job_name',
+                          'workflow_adapter', '_global_resource_admission', '_global_dispatch_authority'}
+        transport = {key: value for key, value in job_data.params.items() if key in transport_keys}
+        try:
+            science = normalize_ppiflow_generation_params(normalized_mode, {
+                key: value for key, value in job_data.params.items() if key not in transport_keys
+            })
+            for key in ('target_pdb', 'framework_pdb', 'input_csv'):
+                if science.get(key):
+                    science[key] = _resolve_alias_path_for_runtime(science[key])
+            job_data.params = {**science, **transport}
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        errors = registry.validate_job_params(job_data.model_id, job_data.mode, science)
+        if errors:
+            raise HTTPException(status_code=422, detail={'validation_errors': errors})
+        return job_data
+    if normalized_model_id == 'boltzgen':
+        from services.boltzgen_request_compatibility import (
+            BOLTZGEN_GENERATION_PROTOCOLS, normalize_boltzgen_generation_request, parameter_contract,
+        )
+        if normalized_mode in BOLTZGEN_GENERATION_PROTOCOLS:
+            controller = {key: value for key, value in job_data.params.items()
+                          if key in {'num_parallel_jobs', 'job_name', 'workflow_adapter',
+                                     '_global_resource_admission', '_global_dispatch_authority'}}
+            try:
+                science = normalize_boltzgen_generation_request(normalized_mode, {
+                    key: value for key, value in job_data.params.items() if key not in controller
+                })
+                for field in parameter_contract(normalized_mode):
+                    key = field['name']
+                    if field['type'] == 'file' and science.get(key):
+                        science[key] = _resolve_alias_path_for_runtime(science[key])
+                job_data.params = {**science, **controller}
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            errors = registry.validate_job_params(job_data.model_id, job_data.mode, science)
+            if errors:
+                raise HTTPException(status_code=422, detail={'validation_errors': errors})
+            # The separate native contract already owns its complete defaults.
+            # Legacy structure/antibody normalization adds unrelated fields and
+            # makes a saved request fail its own closed native contract on replay.
+            return job_data
+    if normalized_model_id in {'binder_refinement', 'caliby_binder'}:
+        from copy import deepcopy
+        definition = registry.get_internal_model_definition(normalized_model_id)
+        if definition is not None:
+            for field in definition.params:
+                if field.default is not None:
+                    job_data.params.setdefault(field.name, deepcopy(field.default))
+    if (normalized_model_id, normalized_mode) == ('bindcraft2', 'campaign'):
+        from services.bindcraft2_typed import validate_request
+        try:
+            validate_request(job_data.params.get('bindcraft2_settings'))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if normalized_model_id == 'bindcraft2' and normalized_mode != 'campaign':
+        from services.bindcraft2_runtime import NATIVE_ACTIONS, validate_action_options
+        if normalized_mode in NATIVE_ACTIONS:
+            try:
+                validate_action_options(normalized_mode, job_data.params.get('bc2_action_options', {}))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
     if (normalized_model_id, normalized_mode) == ('conformational_mapping', 'map') and job_data.params.get('cm_request_path'):
         from services.nextflow import MODEL_MODE_WORKFLOW_ENTRYPOINTS
         native_entrypoint = native_entrypoint or MODEL_MODE_WORKFLOW_ENTRYPOINTS[(normalized_model_id, normalized_mode)]
@@ -5829,6 +6129,40 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     return job_data
 
 
+def _bc2_prepared_action_output(params: Mapping[str, Any], mode: str) -> tuple[str, Path]:
+    """Reopen a controller-allocated native snapshot, never a client output path.
+
+    The existing compilation receipt owns the prepared bytes. No pending Job,
+    process-local token, or separate request store is needed for review/restart.
+    """
+    from services.bindcraft2_launch import read_campaign_receipt
+
+    root = get_results_dir().resolve()
+    path = Path(str(params.get('bc2_compilation') or ''))
+    output = path.parent.parent
+    job_id = output.name
+    if (not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', job_id)
+            or output != root / job_id
+            or path != output / 'bindcraft2' / 'compilation.json'
+            or path.resolve() != path
+            or params.get('bc2_campaign_dir') != str(output / 'bindcraft2')):
+        raise ValueError('BC2 prepared compilation is not a controller-owned action output')
+    receipt = read_campaign_receipt(output)
+    if receipt.get('native_action') != {
+        'operation': mode, 'options': params.get('bc2_action_options', {}),
+        'source_job_id': params.get('bc2_source_job_id'),
+    }:
+        raise ValueError('BC2 prepared native action changed')
+    expected = {'bindcraft2_settings': receipt['requested_settings'],
+                'bc2_effective_settings': receipt['effective_settings'],
+                'bc2_effective_sha256': receipt['effective_sha256'],
+                'bc2_request_sha256': receipt['request_sha256'],
+                'bc2_sweep_budget': receipt['sweep_budget']}
+    if any(params.get(key) != value for key, value in expected.items()):
+        raise ValueError('BC2 prepared native settings changed')
+    return job_id, output
+
+
 class JobExecutionPlanPreview(BaseModel):
     """Read-only browser/agent approval authority; not an executable plan."""
     schema_name: Literal['bms.job.execution-preview.v1'] = Field(alias='schema')
@@ -5931,6 +6265,44 @@ def _execution_plan_preview(job_data: JobCreate, declared_expansions=None) -> di
         'blockers': replace(metadata, blockers=remaining).to_dict()['blockers']}
 
 
+async def _prepare_selected_structure(job_data: JobCreate, session):
+    """Retain source bytes independently of placement and scientific settings."""
+    if job_data.source_structure is None:
+        return None
+    from services.binder_source_materialization import resolve_structure_source
+    from routers.files import (materialize_structure, get_governed_ngs_result_roots,
+        _under_persisted_ngs_root, _reject_governed_ngs_artifact, _sha256_regular_file_nofollow)
+    source = job_data.source_structure
+    try:
+        path, identity = await resolve_structure_source(source, session)
+        governed_roots = await get_governed_ngs_result_roots(session)
+        if _under_persisted_ngs_root(path, governed_roots):
+            raise HTTPException(403, "Access denied to this structure")
+        _reject_governed_ngs_artifact(path)
+        if source.path is None or not (path.parent.name.startswith('structure-') and source.expected_sha256):
+            prepared = await materialize_structure(source, session, governed_roots=governed_roots)
+            old_path = str(path)
+            consumed = str(resolve_allowed_path(prepared['path']))
+            def retained(value):
+                if isinstance(value, dict):
+                    return {key: retained(item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [retained(item) for item in value]
+                return consumed if isinstance(value, str) and value in {old_path, source.path} else value
+            job_data.params = retained(job_data.params)
+            job_data.source_structure = type(source).model_validate(prepared['source_structure'])
+        else:
+            # Prepared originals remain producer-bound, including compressed
+            # native artifacts. No historical bytes are opened on replay.
+            digest, _ = _sha256_regular_file_nofollow(path)
+            for expected in (identity.get('artifact_sha256'), source.expected_sha256):
+                if expected is not None and digest != expected:
+                    raise ValueError('Selected source bytes differ from the exact document digest')
+        return identity
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.post('/execution-plan/preview', response_model=JobExecutionPlanPreview)
 async def preview_job_execution_plan(
     job_data: JobCreate, session: AsyncSession = Depends(get_session),
@@ -5939,15 +6311,19 @@ async def preview_job_execution_plan(
     """Browser and agent use the exact same typed, nonexecuting preview."""
     _managed_resume_output_dir(job_data.params.get("resume_source_dir"))
     job_data = job_data.model_copy(deep=True)
+    await _prepare_selected_structure(job_data, session)
     if job_data.launch_context_id:
         if current_launch_context_id.get() != job_data.launch_context_id:
             raise HTTPException(status_code=409, detail='Launch context header and body must match')
         try:
             context = await resolve_launch_context(experiment_session, job_data.launch_context_id)
+            from services.global_experiments.launch_contexts import validate_prepared_child_job_request
+            native_child = await validate_prepared_child_job_request(experiment_session, context, job_data)
             job_data.params = await validate_bound_job_request(
                 experiment_session, context, job_name=job_data.name,
                 model_id=job_data.model_id, mode=job_data.mode,
-                params=job_data.params, pinned_gpu=job_data.pinned_gpu)
+                params=job_data.params, pinned_gpu=job_data.pinned_gpu,
+                attach_resource_authority=not native_child)
         except LaunchContextError as exc:
             raise _launch_context_http_error(exc) from exc
     from services.remote_execution.targets import target_eligible
@@ -5973,8 +6349,26 @@ async def _create_job(
     _md_input_resolver: Any = Depends(lambda: None),
     _trusted_workflow_adapter: Any = Depends(lambda: False),
     _approved_execution_plan: Any = Depends(lambda: None),
+    _bound_launch_context_id: str | None = None,
 ):
     """Create and queue a new pipeline job."""
+    from services.binder_round import bind_step
+    round_step_metadata, _preallocated_job_id, round_existing = await bind_step(
+        session, job_data, _preallocated_job_id, project_bound=bool(_bound_launch_context_id))
+    if round_existing is not None:
+        return JobResponse.model_validate(round_existing)
+    if job_data.binder_round is not None:
+        from services.binder_round_inputs import normalize_request
+        try:
+            job_data.binder_round = normalize_request(job_data.binder_round)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    if job_data.sequence_design is not None:
+        from services.sequence_round_inputs import normalize_request as normalize_sequence_request
+        try:
+            job_data.sequence_design = normalize_sequence_request(job_data.sequence_design)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     # Reject stale/foreign resume paths before preview, job rows or output writes.
     _managed_resume_output_dir(job_data.params.get("resume_source_dir"))
     from services import core_protein_scientific_contract as scientific_contract
@@ -5985,6 +6379,7 @@ async def _create_job(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     from copy import deepcopy
+    selected_structure_identity = await _prepare_selected_structure(job_data, session)
     approval_request = job_data.model_copy(deep=True)
     execution_preview = None
     original_requested_params = deepcopy(job_data.params)
@@ -6011,6 +6406,16 @@ async def _create_job(
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
     inherited_source_revision: str | None = None
+    if (normalized_model_id, normalized_mode) == ('esmfold2', 'blind_pose'):
+        from services.binder_blind_pose_trust import is_selected_submission
+        from services.binder_blind_pose_selected import is_retained_selected_submission
+        if not is_selected_submission() and not await is_retained_selected_submission(job_data, session):
+            raise HTTPException(status_code=422, detail='Blind pose requires the selected Design route')
+    if (normalized_model_id, normalized_mode) == ('ligandmpnn', 'interface_context'):
+        from services.ligandmpnn_interface_selection import selected_submission
+        from services.ligandmpnn_interface_publication import is_retained_selected_submission
+        if not selected_submission.get() and not await is_retained_selected_submission(job_data, session):
+            raise HTTPException(status_code=403, detail='Use the selected interface-context route')
     inherited_source_tree: str | None = None
     selected_execution_target: ExecutionTarget | None = None
     execution_parent: Job | None = None
@@ -6056,6 +6461,129 @@ async def _create_job(
                     status_code=503,
                     detail="Committed BMS source identity is unavailable",
                 ) from exc
+    if (normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES
+            and selected_execution_target is not None
+            and not job_data.params.get('ligandmpnn_design_request')):
+        from services.ligandmpnn_design import prepare_for_job
+        job_data = normalize_job_request(job_data)
+        prepared = get_inputs_dir() / 'ligandmpnn-design' / str(uuid.uuid4())
+        try:
+            job_data.params.update(await asyncio.to_thread(
+                prepare_for_job, normalized_mode, job_data.params, prepared,
+                allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+            ))
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        job_data.execution_plan_approval = None
+        _require_prepared_remote_review(job_data, {'model_id': normalized_model_id, 'mode': normalized_mode})
+
+    if (normalized_model_id == 'caliby_experimental'
+            and normalized_mode in {'ensemble_design', 'sidechain_pack'}
+            and selected_execution_target is not None
+            and not job_data.params.get('caliby_request_dir')):
+        from services.caliby_native import prepare_for_job
+        job_data = normalize_job_request(job_data)
+        prepared = get_inputs_dir() / 'caliby-native' / str(uuid.uuid4())
+        try:
+            job_data.params.update(await asyncio.to_thread(
+                prepare_for_job, normalized_mode, job_data.params, prepared,
+                allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+            ))
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        job_data.execution_plan_approval = None
+        _require_prepared_remote_review(job_data, {'model_id': normalized_model_id, 'mode': normalized_mode})
+
+    if (normalized_model_id == 'ppiflow' and selected_execution_target is not None
+            and not job_data.params.get('ppiflow_generation_request')):
+        from services.ppiflow_generation import prepare_ppiflow_generation_request, parameter_contract
+        job_data = normalize_job_request(job_data)
+        names = {field['name'] for field in parameter_contract(normalized_mode)}
+        prepared = get_inputs_dir() / 'ppiflow-generation' / str(uuid.uuid4())
+        try:
+            job_data.params.update(await asyncio.to_thread(
+                prepare_ppiflow_generation_request, normalized_mode, job_data.params, prepared,
+                allowed_roots=tuple(get_allowed_roots().values()),
+                requested_settings={key: value for key, value in original_requested_params.items() if key in names},
+            ))
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # Reuse the existing remote prepared-request review. Only these retained
+        # bytes are approved; the selected endpoint is not replayed on approval.
+        job_data.execution_plan_approval = None
+        _require_prepared_remote_review(job_data, {'model_id': 'ppiflow', 'mode': normalized_mode})
+
+    if (normalized_model_id == 'boltzgen'
+            and normalized_mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}
+            and selected_execution_target is not None
+            and not (job_data.params.get('boltzgen_yaml_config') and job_data.params.get('boltzgen_prepared_sha256'))):
+        from services.boltzgen_scaffolding import prepare_boltzgen_generation_input
+        job_data = normalize_job_request(job_data)
+        prepared = get_inputs_dir() / 'boltzgen-generation' / str(uuid.uuid4())
+        try:
+            job_data.params = await prepare_boltzgen_generation_input(job_data.params, prepared,
+                allowed_input_roots=tuple(get_allowed_roots().values()))
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        job_data.execution_plan_approval = None
+        _require_prepared_remote_review(job_data, {'model_id': 'boltzgen', 'mode': normalized_mode})
+
+    bc2_action_source = None
+    bc2_action_prepared = False
+    if normalized_model_id == 'bindcraft2':
+        from services.bindcraft2_runtime import NATIVE_ACTIONS
+        if normalized_mode in NATIVE_ACTIONS:
+            # Resolve the source and native options before preparing review bytes.
+            # Scientific lineage does not imply placement inheritance.
+            job_data.params = normalize_job_request(job_data).params
+            source_id = job_data.params.get('bc2_source_job_id')
+            bc2_action_source = await session.get(Job, source_id) if source_id else None
+            if bc2_action_source is None:
+                raise HTTPException(status_code=404, detail='BC2 native action source Job not found')
+            if bc2_action_source.model_id != 'bindcraft2' or not bc2_action_source.output_dir:
+                raise HTTPException(status_code=422, detail='BC2 native actions require a BC2 source Job output')
+            if (job_data.params.get('resume_source_dir') or job_data.params.get('mutagenesis_variants')
+                    or job_data.params.get('num_parallel_jobs', 1) not in (None, 1)):
+                raise HTTPException(status_code=422, detail='BC2 native actions own one new Job output')
+            job_data.params['lineage_root_job_id'] = bc2_action_source.lineage_root_job_id or bc2_action_source.id
+            job_data.params['selection_source_job_id'] = bc2_action_source.id
+            job_data.params['selection_source_type'] = 'native_campaign'
+            if normalized_mode != 'resume':
+                job_data.pinned_gpu = None
+            if job_data.params.get('bc2_compilation'):
+                try:
+                    prepared_id, prepared_output = _bc2_prepared_action_output(job_data.params, normalized_mode)
+                except (OSError, ValueError, KeyError) as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                if isinstance(_preallocated_job_id, str) and _preallocated_job_id != prepared_id:
+                    raise HTTPException(status_code=409, detail='BC2 prepared Job identity changed')
+                existing_owner = await session.scalar(select(Job.id).where(
+                    (Job.id == prepared_id) | (Job.output_dir == str(prepared_output))).limit(1))
+                if existing_owner is not None:
+                    raise HTTPException(status_code=409, detail='BC2 prepared output already belongs to a Job')
+                _preallocated_job_id = prepared_id
+                bc2_action_prepared = True
+            elif selected_execution_target is not None:
+                # Allocate through the existing controller-only identity seam.
+                # The response contains a receipt reference, not a writable output
+                # override. Approval must bind these exact already-prepared bytes.
+                from services.bindcraft2_launch import materialize_native_action
+                if not isinstance(_preallocated_job_id, str):
+                    _preallocated_job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms-bc2-action:' + str(uuid.uuid4())))
+                output = _standard_job_output_dir(job_data.name, '', _preallocated_job_id).resolve()
+                try:
+                    job_data.params.update(await asyncio.to_thread(
+                        materialize_native_action, Path(bc2_action_source.output_dir), output,
+                        operation=normalized_mode, options=job_data.params.get('bc2_action_options', {}),
+                        source_job_id=bc2_action_source.id))
+                except (OSError, ValueError) as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                job_data.execution_plan_approval = None
+                _require_prepared_remote_review(job_data, {'source_job_id': bc2_action_source.id})
+            elif not isinstance(_preallocated_job_id, str):
+                # Same-name local actions must not share a timestamp output.
+                _preallocated_job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms-bc2-action:' + str(uuid.uuid4())))
+
     if selected_execution_target is not None:
         approval_request.execution_target_id = job_data.execution_target_id
         if isinstance(_approved_execution_plan, ApprovedExecutionPlan):
@@ -6156,10 +6684,43 @@ async def _create_job(
                 },
             )
     if normalized_model_id == "frustrampnn":
-        raise HTTPException(
-            status_code=422,
-            detail="FrustraMPNN jobs must use the typed server-owned analysis endpoints.",
-        )
+        from services.frustrampnn.jobs import load_prepared_child, child_receipt
+        try:
+            child = load_prepared_child(job_data)
+            if isinstance(_preallocated_job_id, str) and child.id != _preallocated_job_id:
+                raise ValueError("FrustraMPNN snapshot differs from its reserved Project Job identity")
+            await child_receipt(session, child=child)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        existing = await session.get(Job, child.id)
+        if existing is not None:
+            return JobResponse.model_validate(existing)
+        child.params = dict(job_data.params)
+        child.execution_source_revision = inherited_source_revision
+        child.execution_source_tree = inherited_source_tree
+        provenance = dict(child.provenance or {})
+        if _bound_launch_context_id:
+            provenance['launch_context_id'] = _bound_launch_context_id
+        if execution_preview is not None:
+            provenance['execution_plan_approval'] = {
+                'approval_digest': execution_preview['approval_digest'],
+                'plan_sha256': execution_preview['plan']['plan_sha256'],
+                'plan': execution_preview['plan'],
+                'source_identity': execution_preview['plan']['source_identity'],
+                'input_identities': execution_preview['input_identities'],
+                'input_request': {'model_id': job_data.model_id, 'mode': job_data.mode,
+                                  'params': execution_preview['request']['params'],
+                                  'output_dir': child.output_dir},
+                'deferred_preparation': execution_preview['deferred_preparation'],
+                'declared_expansions': execution_preview.get('declared_expansions', []),
+            }
+        child.provenance = provenance
+        session.add(child)
+        await session.flush()
+        if _commit is not False:
+            await session.commit()
+        await session.refresh(child)
+        return JobResponse.model_validate(child)
     if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze" and _md_analysis_gpu_requested(job_data):
         raise _md_analysis_error(
             "MD_ANALYSIS_GPU_FORBIDDEN",
@@ -6176,11 +6737,10 @@ async def _create_job(
         )
     if normalized_model_id in retired_model_ids or normalized_mode in retired_modes:
         raise HTTPException(status_code=410, detail="This retired workflow has been permanently removed.")
-    if str(job_data.model_id or "").strip().lower() == "caliby_experimental":
-        raise HTTPException(
-            status_code=410,
-            detail="Standalone Caliby is retired; select Caliby inside a supported parent design workflow.",
-        )
+    if normalized_model_id == "caliby_experimental":
+        from services.caliby_native import SUPPORTED_MODES
+        if normalized_mode not in SUPPORTED_MODES:
+            raise HTTPException(410, detail="Historical Caliby design mode remains retired")
     reserved_review_keys = {
         "review_profile_id",
         "review_contract_version",
@@ -6283,6 +6843,7 @@ async def _create_job(
             )
             return JobResponse(
                 id=existing_child.id,
+                execution_stages=project_execution_stages(existing_child),
                 name=existing_child.name,
                 status=existing_child.status,
                 model_id=existing_child.model_id,
@@ -6498,6 +7059,9 @@ async def _create_job(
         vram_estimate = 0
         job_data.pinned_gpu = None
         logger.info(f"[QUEUE] Orchestrator parent job '{job_data.name}': CPU-only launcher, vram_estimate=0")
+    if bc2_action_source is not None and normalized_mode != 'resume':
+        vram_estimate = 0
+        job_data.pinned_gpu = None
     if job_data.model_id == "molecular_dynamics" and job_data.mode in {"simulate", "analyze"}:
         vram_estimate = 0
         job_data.pinned_gpu = None
@@ -6618,6 +7182,83 @@ async def _create_job(
             job_name = job_data.name
             output_dir = base_output_dir
             job_params = dict(job_data.params)
+
+        if normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES:
+            from services.ligandmpnn_design import prepare_for_job
+            try:
+                job_params.update(await asyncio.to_thread(
+                    prepare_for_job, normalized_mode, job_params,
+                    Path(output_dir) / 'inputs' / 'ligandmpnn-design',
+                    allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+                    retain_prepared=execution_preview is not None,
+                ))
+            except (OSError, ValueError, KeyError) as exc:
+                raise HTTPException(422, detail=str(exc)) from exc
+
+        if (normalized_model_id == 'caliby_experimental'
+                and normalized_mode in {'ensemble_design', 'sidechain_pack'}):
+            from services.caliby_native import prepare_for_job
+            try:
+                job_params.update(await asyncio.to_thread(
+                    prepare_for_job, normalized_mode, job_params,
+                    Path(output_dir) / 'inputs' / 'caliby-native',
+                    allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+                    retain_prepared=execution_preview is not None,
+                ))
+            except (OSError, ValueError, KeyError) as exc:
+                raise HTTPException(422, detail=str(exc)) from exc
+
+        if normalized_model_id == 'ppiflow':
+            from services.ppiflow_generation import prepare_ppiflow_generation_request, parameter_contract
+            names = {field['name'] for field in parameter_contract(normalized_mode)}
+            try:
+                job_params.update(await asyncio.to_thread(
+                    prepare_ppiflow_generation_request, normalized_mode, job_params,
+                    Path(output_dir) / 'inputs' / 'ppiflow-generation',
+                    allowed_roots=tuple(get_allowed_roots().values()),
+                    source_identity={'job_id': job_id},
+                    retain_prepared=execution_preview is not None,
+                    requested_settings={key: value for key, value in original_requested_params.items() if key in names},
+                ))
+            except (OSError, ValueError, KeyError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if normalized_model_id == 'boltzgen' and normalized_mode in {
+                'protein_binder', 'peptide_binder', 'nanobody_binder'}:
+            from services.boltzgen_scaffolding import prepare_boltzgen_generation_input
+            try:
+                job_params = await prepare_boltzgen_generation_input(job_params,
+                    Path(output_dir) / 'inputs' / 'boltzgen-generation',
+                    allowed_input_roots=tuple(get_allowed_roots().values()),
+                    retain_prepared=execution_preview is not None)
+            except (OSError, ValueError, KeyError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if normalized_model_id == 'bindcraft2' and normalized_mode == 'campaign':
+            from services.bindcraft2_launch import materialize_campaign
+            try:
+                job_params = {
+                    **job_params,
+                    **await asyncio.to_thread(
+                        materialize_campaign,
+                        job_params['bindcraft2_settings'],
+                        Path(output_dir),
+                        preview_digest=job_params['bc2_preview_digest'],
+                    ),
+                }
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if bc2_action_source is not None and not bc2_action_prepared:
+            from services.bindcraft2_launch import materialize_native_action
+            try:
+                job_params = {**job_params, **await asyncio.to_thread(
+                    materialize_native_action, Path(bc2_action_source.output_dir), Path(output_dir),
+                    operation=normalized_mode, options=job_params.get('bc2_action_options', {}),
+                    source_job_id=bc2_action_source.id,
+                )}
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         if is_md_launch:
             try:
@@ -6751,6 +7392,12 @@ async def _create_job(
         provenance_selected_input_schema_version = normalize_antibody_pipeline_contract_version(
             job_params.get("selected_input_schema_version") if isinstance(job_params, dict) else None
         )
+        if selected_structure_identity and not job_data.parent_job_id:
+            provenance_lineage_root = selected_structure_identity.get('lineage_root_job_id') or provenance_lineage_root
+            provenance_selection_source_job_id = selected_structure_identity.get('owner_job_id')
+            provenance_source_stage_job_id = provenance_selection_source_job_id
+            provenance_selection_source_type = 'structure'
+            provenance_source_selection_count = 1
         provenance_payload = {
             "job_id": job_id,
             "job_name": job_name,
@@ -6828,6 +7475,24 @@ async def _create_job(
         # In particular MD materialization and NGS path normalization must not
         # replace the submitted settings with scheduler-effective values.
         provenance_payload['core_protein_requested_params'] = deepcopy(original_requested_params)
+        if job_data.source_structure is not None:
+            provenance_payload['source_structure'] = job_data.source_structure.model_dump(mode='json', exclude_none=True)
+            provenance_payload['source_structure_identity'] = selected_structure_identity
+        if job_data.binder_round is not None:
+            provenance_payload['binder_round_request'] = job_data.binder_round.model_dump(mode='json')
+        if job_data.sequence_design is not None:
+            provenance_payload['sequence_design_request'] = job_data.sequence_design.model_dump(mode='json')
+        if round_step_metadata is not None:
+            provenance_payload['binder_round_step'] = deepcopy(round_step_metadata)
+            if round_step_metadata.get('kind') == 'general_sequence_design':
+                # Server-bound retained step owns ancestry even for native models
+                # whose closed scientific request has no lineage parameters.
+                provenance_lineage_root = round_step_metadata['root_job_id']
+                provenance_source_stage_job_id = round_step_metadata['source_job_id']
+                provenance_selection_source_job_id = round_step_metadata['source_job_id']
+                provenance_selection_source_type = 'selected_designs'
+                provenance_source_selection_count = 1
+                provenance_source_selection_manifest_path = round_step_metadata['source_binding']['selection_manifest']
 
         if execution_preview is not None:
             if 'input_identities' not in execution_preview:
@@ -6892,7 +7557,8 @@ async def _create_job(
             selection_source_job_id=provenance_selection_source_job_id,
             selection_dataset_name=provenance_selection_dataset_name,
             selected_loop_scope=provenance_selection_scope,
-            provenance=provenance_payload,
+            provenance=({**(provenance_payload or {}), 'launch_context_id': _bound_launch_context_id}
+                        if _bound_launch_context_id else provenance_payload),
             execution_target_id=job_data.execution_target_id,
             execution_source_revision=inherited_source_revision,
             execution_source_tree=inherited_source_tree,
@@ -6995,6 +7661,7 @@ async def _create_job(
     
     return JobResponse(
         id=first_job.id,
+        execution_stages=project_execution_stages(first_job),
         name=first_job.name,
         status=first_job.status,
         model_id=first_job.model_id,
@@ -7063,6 +7730,7 @@ class TypedMdProjectLaunch:
     preview_digest: str
     md_job_spec: Mapping[str, Any]
     source_token: str
+    source_params: Mapping[str, Any] | None = None
 
 
 def _canonical_typed_md_document(value: Any) -> str:
@@ -7103,6 +7771,7 @@ async def _validated_typed_md_project_params(
     intent = deepcopy(dict(adapter.intent))
     preview = deepcopy(dict(adapter.preview))
     md_job_spec = deepcopy(dict(adapter.md_job_spec))
+    source_params = deepcopy(dict(adapter.source_params or {}))
     supplied_params = dict(job_data.params or {})
     if set(intent) != _TYPED_MD_INTENT_AUTHORITY_FIELDS | {
             "name", "launch_context_id", "execution_target_id", "execution_policy"}:
@@ -7117,9 +7786,8 @@ async def _validated_typed_md_project_params(
     if (
         intent.get("schema_version") != "bms.md.launch-intent.v1"
         or intent.get("launch_context_id") != context.launch_context_id
-        or set(supplied_params) != {"md_job_spec"}
-        or _canonical_typed_md_document(supplied_params["md_job_spec"])
-        != _canonical_typed_md_document(md_job_spec)
+        or _canonical_typed_md_document(supplied_params)
+        != _canonical_typed_md_document({**source_params, "md_job_spec": md_job_spec})
     ):
         raise _typed_md_adapter_error(
             "Typed MD request contains caller-owned or divergent server fields."
@@ -7328,7 +7996,7 @@ async def _validated_typed_md_project_params(
         params=deepcopy(expected_params),
         pinned_gpu=job_data.pinned_gpu,
     )
-    return {**canonical_params, "md_job_spec": md_job_spec}
+    return {**canonical_params, **source_params, "md_job_spec": md_job_spec}
 
 
 def _launch_context_http_error(exc: LaunchContextError) -> HTTPException:
@@ -7374,6 +8042,134 @@ async def pull_remote_job_results(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await session.refresh(job)
     return JobResponse.model_validate(job)
+
+
+async def _reserve_selected_run_group(experiment_session, *, group_id, domain_id):
+    from services.ngs_molbio_n5 import reserve_run_group, ResourceAdmissionDenied
+    try:
+        return await reserve_run_group(experiment_session, group_id=group_id,
+                                       domain_id=domain_id, actor='native-child-submission')
+    except ResourceAdmissionDenied as exc:
+        raise LaunchContextError(exc.code, exc.reason, status_code=409) from exc
+
+
+async def submit_selected_child_jobs(
+    requests: list[JobCreate], background_tasks: BackgroundTasks,
+    session: AsyncSession, experiment_session: AsyncSession, *,
+    destination_launch_context_id: str | None, idempotency_key: str,
+    response_context: dict[str, Any],
+    preallocated_attempt_ids: list[str] | None = None,
+) -> list[JobResponse]:
+    """Submit native selected requests with one destination attempt per child.
+
+    Preparation and publication reuse the Project transaction owners. Core Jobs
+    are inserted as one transaction, and no child is scheduler-visible until all
+    Project bindings have committed. This is the existing two-store handoff, not
+    a distributed transaction or a replacement scheduler.
+    """
+    from services.global_experiments.launch_contexts import prepare_child_launch_contexts
+    from services.nextflow import MODEL_MODE_WORKFLOW_ENTRYPOINTS
+
+    prepared = None
+    try:
+        if destination_launch_context_id:
+            prepared = await prepare_child_launch_contexts(
+                experiment_session, destination_launch_context_id=destination_launch_context_id,
+                job_requests=requests,
+                native_entrypoints=[MODEL_MODE_WORKFLOW_ENTRYPOINTS.get((r.model_id, r.mode)) for r in requests],
+                idempotency_key=idempotency_key, core_session=session,
+                preallocated_attempt_ids=preallocated_attempt_ids)
+            requests = [JobCreate.model_validate(child['job_request']) for child in prepared['children']]
+        remote = any(item.execution_target_id for item in requests)
+        if remote:
+            # Preserve the actual normalized child requests across review. Their
+            # source snapshots and destination attempts are not reacquired.
+            if prepared:
+                await experiment_session.commit()
+            if len(requests) == 1:
+                _require_prepared_remote_review(requests[0], response_context)
+            else:
+                raise HTTPException(409, {'code': 'remote_prepared_job_review_required',
+                    'job_requests': [item.model_dump(mode='json') for item in requests],
+                    'response_context': response_context})
+        if not prepared:
+            responses = [await create_job(item, background_tasks, session, _commit=False) for item in requests]
+            await session.commit()
+            return responses
+        destination = await resolve_launch_context_for_display(experiment_session, destination_launch_context_id)
+        await _reserve_selected_run_group(experiment_session, group_id=prepared['run_group_id'],
+                                          domain_id=destination.domain_experiment_id)
+        return await _create_prepared_child_batch(requests, background_tasks, session, experiment_session)
+    except LaunchContextError as exc:
+        await session.rollback()
+        await experiment_session.rollback()
+        raise _launch_context_http_error(exc) from exc
+    except HTTPException as exc:
+        if not (exc.status_code == 409 and isinstance(exc.detail, dict)
+                and exc.detail.get('code') == 'remote_prepared_job_review_required'):
+            await session.rollback()
+            if prepared:
+                await experiment_session.rollback()
+        raise
+    except Exception:
+        await session.rollback()
+        if destination_launch_context_id:
+            await experiment_session.rollback()
+        raise
+
+
+async def _create_prepared_child_batch(requests, background_tasks, session, experiment_session):
+    from services.global_experiments.launch_contexts import validate_prepared_child_job_request
+    from routers.project_manager import _project_bound_job
+    pending = []
+    # The incoming header describes the destination, not any child. Explicit
+    # server-owned provenance below replaces that transport-only inheritance;
+    # never manufacture a child HTTP header or modify the destination context.
+    transport_token = current_launch_context_id.set(None)
+    try:
+        for original in requests:
+            item = original.model_copy(deep=True)
+            context = await resolve_launch_context_for_display(experiment_session, item.launch_context_id)
+            attempt = await experiment_session.get(ExperimentRunAttempt, context.run_attempt_id)
+            await validate_prepared_child_job_request(experiment_session, context, item)
+            existing = await session.get(Job, attempt.scheduler_job_id)
+            if existing is not None:
+                await validate_bound_job(experiment_session, context, existing)
+                pending.append((context, context.claim_token, existing, JobResponse.model_validate(existing)))
+                continue
+            context, claim = await claim_launch_context(experiment_session, item.launch_context_id)
+            item.params = await validate_bound_job_request(experiment_session, context,
+                job_name=item.name, model_id=item.model_id, mode=item.mode,
+                params=dict(item.params), pinned_gpu=item.pinned_gpu)
+            response = await _create_job(item, background_tasks, session,
+                _preallocated_job_id=attempt.scheduler_job_id, _commit=False,
+                _trusted_workflow_adapter=True, _bound_launch_context_id=context.launch_context_id)
+            job = await session.get(Job, response.id)
+            await validate_bound_job(experiment_session, context, job)
+            pending.append((context, claim, job, response))
+        # No partial core Job set is committed if any later child fails. Durable
+        # claims precede the core commit just as on canonical single submission.
+        await experiment_session.commit()
+        await session.commit()
+        bindings = []
+        for context, claim, job, response in pending:
+            if context.canonical_job_id:
+                binding = json.loads(context.binding_receipt_json)
+            else:
+                context, binding = await consume_launch_context(experiment_session,
+                    launch_context_id=context.launch_context_id, claim_token=claim,
+                    canonical_job_id=job.id, canonical_batch_id=job.batch_id)
+            await _project_bound_job(experiment_session, session, context, job, binding)
+            bindings.append((context, job, response, binding))
+        await experiment_session.commit()
+        for context, job, response, binding in bindings:
+            await publish_launch_context_binding(session, context=context, job=job, binding=binding, commit=False)
+        await session.commit()
+        return [response.model_copy(update={'launch_context_id': context.launch_context_id,
+            'launch_context_binding': binding, 'return_uri': context.return_uri})
+            for context, job, response, binding in bindings]
+    finally:
+        current_launch_context_id.reset(transport_token)
 
 
 @router.post("", response_model=JobResponse, status_code=201)
@@ -7438,6 +8234,33 @@ async def create_job(
                 raise LaunchContextError("launch_context_binding_invalid", "Reserved attempt is unavailable.", status_code=409)
             _preallocated_job_id = prepared_attempt.scheduler_job_id
         if typed_md_project_launch is None:
+            from services.global_experiments.launch_contexts import validate_prepared_child_job_request
+            retained_preview = None
+            if await validate_prepared_child_job_request(experiment_session, preview_context, job_data):
+                if job_data.execution_target_id:
+                    # Review covers the immutable child request before the Project
+                    # owner adds reservation metadata. Reuse the same approved-plan
+                    # handoff as other native owners, without changing science.
+                    from component_runtime import canonical_bytes
+                    if isinstance(_approved_execution_plan, ApprovedExecutionPlan):
+                        if canonical_bytes(job_data.model_dump(mode='json')) != _approved_execution_plan.request_json:
+                            raise HTTPException(409, 'Trusted native preview request changed')
+                        retained_preview = json.loads(_approved_execution_plan.preview_json)
+                    else:
+                        from services.declared_job_expansion import declarations
+                        if not job_data.execution_plan_approval:
+                            raise HTTPException(409, 'Remote submission requires explicit execution-plan preview approval')
+                        try:
+                            expansions = await declarations(job_data, session, lock=True)
+                            retained_preview = await asyncio.to_thread(_execution_plan_preview, job_data, expansions)
+                        except (ValueError, OSError) as exc:
+                            raise HTTPException(422, str(exc)) from exc
+                        if retained_preview['approval_digest'] != job_data.execution_plan_approval:
+                            raise HTTPException(409, 'Execution plan approval is stale; preview and approve the current request')
+                from experiment_models import ExperimentWorkflowRun
+                run = await experiment_session.get(ExperimentWorkflowRun, prepared_attempt.workflow_run_id)
+                await _reserve_selected_run_group(experiment_session, group_id=run.run_group_id,
+                    domain_id=preview_context.domain_experiment_id)
             job_data.params = await validate_bound_job_request(
                 experiment_session,
                 preview_context,
@@ -7447,6 +8270,10 @@ async def create_job(
                 params=dict(job_data.params or {}),
                 pinned_gpu=job_data.pinned_gpu,
             )
+            if retained_preview is not None:
+                from component_runtime import canonical_bytes
+                _approved_execution_plan = ApprovedExecutionPlan(
+                    canonical_bytes(job_data.model_dump(mode='json')), canonical_bytes(retained_preview))
         else:
             from component_runtime import canonical_bytes
             if isinstance(_approved_execution_plan, ApprovedExecutionPlan):
@@ -7650,6 +8477,7 @@ async def launch_antibody_iteration_from_designs(
 
     action = request.action.strip().lower()
     ordered_designs = [design_by_id[design_id] for design_id in design_ids]
+    await _validate_selected_design_owners(session, source_job, root_job, ordered_designs)
     if action == "frustrampnn":
         if (
             request.param_overrides
@@ -7833,6 +8661,7 @@ async def launch_manual_mutagenesis_from_designs(
         )
 
     ordered_designs = [design_by_id[design_id] for design_id in design_ids]
+    await _validate_selected_design_owners(session, source_job, root_job, ordered_designs)
     launch_request, variant_count, variant_note = _build_manual_mutagenesis_iteration_job(
         source_job=source_job,
         designs=ordered_designs,
@@ -7987,6 +8816,8 @@ async def get_rfd3_generation_result(job_id: str, session: AsyncSession = Depend
         candidates.append(
             {
                 "candidate_id": design.name,
+                "design_id": design.id,
+                "source_structure": {"job_id": job.id, "design_id": design.id, "output_format": "native"},
                 "status": "accepted" if is_accepted else "generated",
                 "length": int(length),
                 "radius": radius,
@@ -8109,6 +8940,14 @@ async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = De
         for roles in trajectory_roles_by_candidate.values()
     )
     public_request = _rfd3_public_json(request.request_json)
+    source_by_candidate = {}
+    for artifact in artifacts:
+        if artifact.role == 'structure':
+            source_by_candidate.setdefault(artifact.candidate_id, {
+                'job_id': job.id, 'request_id': request.request_id,
+                'candidate_id': artifact.candidate_id,
+                'document': {'artifact_id': artifact.artifact_id}, 'output_format': 'native',
+            })
     return {
         "schema": "bms.rfd3.local-redesign.read-model.v1",
         "job_id": str(job.id),
@@ -8157,6 +8996,7 @@ async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = De
         "candidates": [
             {
                 "candidate_id": row.candidate_id,
+                "source_structure": source_by_candidate.get(row.candidate_id),
                 "result_set": row.result_set,
                 "stage": row.stage,
                 "status": row.status,
@@ -8327,6 +9167,7 @@ async def get_job(
         execution_bundle_sha256=job.execution_bundle_sha256,
         remote_attempt_id=job.remote_attempt_id,
         remote_state=job.remote_state,
+        execution_stages=project_execution_stages(job),
         current_stage=job.current_stage,
         completed_stages=completed_stages,
         stage_outputs=stage_outputs,
@@ -8461,6 +9302,58 @@ async def delete_job_permanently(
 
 
 from services.core_protein_execution_settings import ExecutionSettings
+
+
+@router.get("/{job_id}/generation-results")
+async def get_native_generation_results(
+    job_id: str,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    session: AsyncSession = Depends(get_session),
+):
+    """Read native generation accounting, including valid zero-yield runs."""
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.model_id == "boltzgen" and job.mode in {"protein_binder", "nanobody_binder", "peptide_binder"}:
+        from services.boltzgen_candidate_publication import read_published_generation_results
+    elif job.model_id == "ppiflow" and job.mode in {"protein_binder", "antibody_binder", "nanobody_binder"}:
+        from services.ppiflow_generation import read_published_generation_results
+    else:
+        raise HTTPException(status_code=400, detail="Job is not a supported native generation mode")
+    try:
+        return await read_published_generation_results(job, session, offset=offset, limit=limit)
+    except (ValueError, RuntimeError, OSError) as exc:
+        logger.warning("Native generation results unavailable for job %s: %s", job_id, exc)
+        raise HTTPException(status_code=409, detail="Native generation results unavailable") from exc
+
+
+@router.get("/{job_id}/bindcraft2-results")
+async def get_bindcraft2_native_results(
+    job_id: str,
+    stage: Literal["trajectory", "draw", "retained", "attempt", "document"] = "trajectory",
+    arm: Optional[str] = None,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+):
+    """Paginate verified, model-owned BC2 records; never project them as Designs."""
+    from services.bindcraft2_result_readback import read_bindcraft2_result_page
+    from services.bindcraft2_publication import PublicationError
+    from services.bindcraft2_native_results import NativeResultError
+
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.model_id != "bindcraft2":
+        raise HTTPException(status_code=400, detail="Job is not a BindCraft2 campaign")
+    try:
+        return await read_bindcraft2_result_page(
+            job, session, arm=arm, stage=stage, offset=offset, limit=limit,
+        )
+    except (PublicationError, NativeResultError, OSError) as exc:
+        logger.warning("BC2 native results unavailable for job %s: %s", job_id, exc)
+        raise HTTPException(status_code=409, detail="Verified native results unavailable") from exc
 
 
 @router.get("/{job_id}/execution-settings", response_model=ExecutionSettings)
@@ -8616,6 +9509,12 @@ async def resubmit_job(
         resubmit_params, resubmit_provenance = scientific_contract.admitted_payload(
             resubmit_params, {}, resubmit_revision,
         )
+        original_round = (original_job.provenance or {}).get('binder_round_request')
+        if original_round is not None:
+            resubmit_provenance['binder_round_request'] = deepcopy(original_round)
+        original_sequence = (original_job.provenance or {}).get('sequence_design_request')
+        if original_sequence is not None:
+            resubmit_provenance['sequence_design_request'] = deepcopy(original_sequence)
         original_request = (original_job.provenance or {}).get('core_protein_requested_params')
         if original_request is not None:
             resubmit_provenance['core_protein_requested_params'] = deepcopy(original_request)
@@ -9688,97 +10587,15 @@ async def get_job_stages(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    display_stages = []
-    
-    if job.mode in ["antibody_denovo"] or is_antibody_pipeline_mode(job.mode):
-        # Dynamic stage construction for antibody workflow
-        display_stages.append("rfantibody")
-        
-        # Check params for sequence design steps (default to true if not present, matching nextflow logic)
-        params = _normalize_antibody_job_params(_normalize_structure_geometry_params(job.params or {}))
-        
-        # Note: In nextflow 'null' means true for these flags due to how they are processed
-        run_fampnn = params.get("seq_design_fampnn")
-        if run_fampnn is None or run_fampnn is True:
-            display_stages.append("fampnn")
-            
-        run_antifold = params.get("seq_design_antifold")
-        if run_antifold is None or run_antifold is True:
-            display_stages.append("antifold")
-            
-        run_proteinmpnn = params.get("seq_design_proteinmpnn")
-        if run_proteinmpnn is None or run_proteinmpnn is True:
-            display_stages.append("proteinmpnn")
-
-        run_caliby = params.get("seq_design_caliby")
-        if run_caliby is True:
-            display_stages.append("caliby")
-
-        if params.get("run_maturation") is True:
-            display_stages.append("maturation")
-            ppiflow_mode = str(params.get("ppiflow_stage_mode") or "").strip().lower()
-            iteration_action = str(params.get("iteration_action") or "").strip().lower()
-            if ppiflow_mode == "backbone_refine" or iteration_action == "ppiflow_backbone_refine":
-                display_stages.append("ppiflow_backbone_refine")
-            if ppiflow_mode == "maturation" or iteration_action == "ppiflow_maturation":
-                display_stages.append("ppiflow_maturation")
-            
-        # Validation stages
-        if params.get("run_structure_validation") is not False:
-            display_stages.append("structure_validation")
-
-        if params.get("run_post_validation_maturation") is True:
-            display_stages.append("maturation_post_validation")
-            
-        if params.get("run_immunogenicity_scoring") is not False:
-             display_stages.append("antiberty")
-             
-        if params.get("run_thermompnn") is not False:
-             display_stages.append("thermompnn")
-             
-    else:
-        # Nanopore stage inventory is dynamic across every typed ONT mode.
-        if _uses_nanopore_stage_response(job):
-            display_stages = _planned_nanopore_stages(job.params, mode=job.mode)
-        else:
-            # Fallback for other modes
-            all_stages_map = {
-                "binder_denovo": ["rfdiffusion", "proteinmpnn", "boltz2"],
-                "monomer_denovo": ["rfdiffusion", "proteinmpnn", "af2"],
-                "oligo_design": ["rfdpoly", "nampnn"],
-            }
-            display_stages = all_stages_map.get(job.mode, [])
-
-    all_stages = _dedupe_preserve_order(display_stages)
-    completed = _dedupe_preserve_order(list(job.completed_stages or []))
-    stage_outputs = dict(job.stage_outputs or {})
-    if job.awaiting_input and job.awaiting_stage and job.awaiting_stage not in all_stages:
-        all_stages.append(job.awaiting_stage)
-
-    if _uses_nanopore_stage_response(job):
-        stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
-        # Merge filesystem-derived outputs so UI remains useful even when stage-report calls fail.
-        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params, mode=job.mode)
-        for stage, outputs in inferred_outputs.items():
-            existing = stage_outputs.get(stage)
-            if isinstance(existing, list):
-                merged = _dedupe_preserve_order([*existing, *outputs])
-            else:
-                merged = outputs
-            stage_outputs[stage] = merged
-            if merged and stage not in completed:
-                completed.append(stage)
-
-        # If pipeline exited successfully, remaining planned stages are considered complete.
-        if job.status == JobStatus.COMPLETED.value:
-            completed = _dedupe_preserve_order([*completed, *all_stages])
-
-    completed, stage_outputs = infer_antibody_stage_state(job, completed, stage_outputs)
+    execution_stages = project_execution_stages(job)
+    all_stages = [stage['id'] for stage in execution_stages]
+    completed, stage_outputs = _resolve_stage_state_for_response(job)
 
     return {
         "job_id": job_id,
         "mode": job.mode,
         "all_stages": all_stages,
+        "execution_stages": execution_stages,
         "current_stage": job.awaiting_stage if job.awaiting_input and job.awaiting_stage else job.current_stage,
         "completed_stages": completed,
         "stage_outputs": stage_outputs,

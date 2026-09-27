@@ -144,7 +144,7 @@ def test_generic_complex_jobs_infer_target_and_binder_chains() -> None:
 
 
 def test_viewer_minimum_bundle_includes_expected_complex_antibody_analyses() -> None:
-    job = SimpleNamespace(model_id="boltz2", mode="complex", name="TdT nanobody")
+    job = SimpleNamespace(model_id="boltz2", mode="complex", name="TdT nanobody", provenance=None)
     design = SimpleNamespace(
         aligned_error_path="/tmp/aligned_error.json",
         aligned_error_format="json",
@@ -161,7 +161,7 @@ def test_viewer_minimum_bundle_includes_expected_complex_antibody_analyses() -> 
 
 
 def test_viewer_minimum_bundle_for_plain_monomer_stays_small() -> None:
-    job = SimpleNamespace(model_id="boltz2", mode="single", name="structure_prediction")
+    job = SimpleNamespace(model_id="boltz2", mode="single", name="structure_prediction", provenance=None)
     design = SimpleNamespace(
         aligned_error_path=None,
         aligned_error_format=None,

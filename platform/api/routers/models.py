@@ -2,8 +2,10 @@
 Models API router - List available models and their configurations.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional, List
+from sqlalchemy.ext.asyncio import AsyncSession
+from database import get_session, Job
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from model_registry import get_registry, ModelDefinition
@@ -278,16 +280,31 @@ def _frustrampnn_discovery_metadata() -> dict:
     }
 
 
+def _native_parameter_schema(model_id: str, mode_id: str) -> dict | None:
+    """Discovery metadata only; scientific validation stays model-owned."""
+    if model_id == 'caliby_experimental':
+        from services.caliby_native import SUPPORTED_MODES, parameter_schema
+        if mode_id in SUPPORTED_MODES:
+            return parameter_schema(mode_id)
+    if model_id == 'ligandmpnn':
+        from services.ligandmpnn_design import MODES, parameter_schema
+        if mode_id in MODES:
+            return parameter_schema(mode_id)
+    return None
+
+
 @router.get("", response_model=List[dict])
 async def list_models(
     category: Optional[str] = None,
-    include_experimental: bool = False
+    include_experimental: bool = False,
+    compact: bool = False,
 ):
     """
     List all available models.
     
     - **category**: Filter by category (backbone_generation, sequence_design, etc.)
     - **include_experimental**: Include enabled models marked as experimental
+    - **compact**: Choice metadata only; full settings stay on the model-detail route
     """
     registry = get_registry()
     models = registry.list_models(
@@ -309,11 +326,14 @@ async def list_models(
                     "id": mode.id, 
                     "name": mode.name,
                     "description": mode.description,
-                    "params": mode.params
+                    **({} if compact else {
+                        "params": mode.params,
+                        "parameter_schema": _native_parameter_schema(m.id, mode.id),
+                    })
                 }
                 for mode in m.modes
             ],
-            "params": [
+            **({} if compact else {"params": [
                 {
                     "name": p.name,
                     "type": p.type,
@@ -328,7 +348,7 @@ async def list_models(
                     "file_type": getattr(p, 'file_type', None),
                 }
                 for p in m.params
-            ],
+            ]}),
             "enabled": m.enabled,
             "experimental": m.experimental,
             "ui_icon": m.ui_icon,
@@ -343,6 +363,82 @@ async def list_categories():
     """Get list of model categories."""
     registry = get_registry()
     return {"categories": registry.get_categories()}
+
+
+@router.get("/bindcraft2/native-settings")
+async def get_bindcraft2_native_settings():
+    """Discover pinned BC2 controls without granting launch authority.
+
+    The operator and agent adapters can read the same typed inventory while the
+    executable model is unavailable. Public launch remains registry-owned.
+    """
+    from services.bindcraft2_typed import schema
+
+    return {
+        "model_id": "bindcraft2",
+        "launch_available": get_registry().get_model("bindcraft2") is not None,
+        "settings": schema(),
+    }
+
+
+class BindCraft2CampaignPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    model_id: str
+    mode: str
+    params: dict
+
+
+@router.post('/bindcraft2/campaign/preview')
+async def preview_bindcraft2_campaign(request: BindCraft2CampaignPreviewRequest):
+    """Non-executing pinned native preview of the saved-draft request shape."""
+    if request.model_id != 'bindcraft2' or request.mode != 'campaign' or set(request.params) != {'bindcraft2_settings'}:
+        raise HTTPException(status_code=422, detail='Expected bindcraft2/campaign with only params.bindcraft2_settings')
+    from services.bindcraft2_launch import preview_campaign
+    try:
+        return await __import__('asyncio').to_thread(preview_campaign, request.params['bindcraft2_settings'])
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get('/bindcraft2/campaign/jobs/{job_id}/settings')
+async def read_bindcraft2_campaign_settings(job_id: str, session: AsyncSession = Depends(get_session)):
+    """Reopen the exact native effective settings bound to an owned campaign Job."""
+    job = await session.get(Job, job_id)
+    from services.bindcraft2_runtime import NATIVE_ACTIONS
+    if job is None or job.model_id != 'bindcraft2' or job.mode not in ('campaign', *NATIVE_ACTIONS):
+        raise HTTPException(status_code=404, detail='BindCraft2 campaign Job not found')
+    from services.bindcraft2_launch import read_campaign_receipt
+    try:
+        result = read_campaign_receipt(job.output_dir)
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=409, detail=f'Campaign receipt unavailable: {exc}') from exc
+    if job.mode == 'campaign' and result['requested_settings'] != job.params.get('bindcraft2_settings'):
+        raise HTTPException(status_code=409, detail='Campaign receipt differs from saved Job request')
+    if job.mode != 'campaign' and result.get('native_action') != {
+        'operation': job.mode, 'options': job.params.get('bc2_action_options', {}),
+        'source_job_id': job.params.get('bc2_source_job_id'),
+    }:
+        raise HTTPException(status_code=409, detail='Native action receipt differs from saved Job request')
+    return result
+
+
+@router.get('/{model_id}/generation-settings')
+async def get_generation_settings(model_id: str, mode: str):
+    """Model-owned initial-generation settings for browser and agent callers."""
+    registry = get_registry()
+    model = registry.get_model(model_id)
+    if model is None or mode not in {item.id for item in model.modes}:
+        raise HTTPException(status_code=404, detail='Initial-generation model/mode not found')
+    try:
+        if model_id == 'ppiflow':
+            from services.ppiflow_generation import ppiflow_generation_inventory
+            return ppiflow_generation_inventory(mode)
+        if model_id == 'boltzgen':
+            from services.boltzgen_request_compatibility import boltzgen_generation_inventory
+            return boltzgen_generation_inventory(mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    raise HTTPException(status_code=404, detail='Model has no initial-generation settings inventory')
 
 
 @router.get("/{model_id}")
@@ -371,6 +467,7 @@ async def get_model(model_id: str):
                 "name": mode.name,
                 "description": mode.description,
                 "params": mode.params,
+                "parameter_schema": _native_parameter_schema(model.id, mode.id),
             }
             for mode in model.modes
         ],
@@ -455,6 +552,7 @@ async def get_model_modes(model_id: str):
                 "name": mode.name,
                 "description": mode.description,
                 "params": mode.params,
+                "parameter_schema": _native_parameter_schema(model.id, mode.id),
             }
             for mode in model.modes
         ]

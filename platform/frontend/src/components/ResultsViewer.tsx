@@ -63,8 +63,16 @@ import { DataViewerLanding } from './DataViewerLanding';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
+import { BindCraft2JobResults } from './BindCraft2JobResults';
+import { BinderPredictionEvidence } from './BinderPredictionEvidence';
+import { CandidateRoundProgress } from './CandidateRoundProgress';
+import { ProteinDesignPanel } from './ProteinDesignWorkflow';
+import { NativeBinderGenerationResults } from './NativeBinderGenerationResults';
+import NativeSequenceResults, { nativeSequenceResultKind } from './NativeSequenceResults';
+import { isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
 import RFD3GenerationResultsPane from './RFD3GenerationResultsPane';
+import { fetchRFD3Generation, fetchRFD3LocalRedesign } from '../lib/api';
 import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
 import {
     getRFD3LocalRedesignCandidateLabel,
@@ -72,7 +80,9 @@ import {
 } from './rfd3LocalRedesignResultsView';
 import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from './ProteinLocalRedesignResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
-import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
+import BlindPoseSelectedControls from './BlindPoseSelectedControls';
+import BinderSelectedControls from './BinderSelectedControls';
+import { readBinderSelection, writeBinderSelection, readBinderCandidateDocuments, writeBinderCandidateDocuments } from '../lib/binderContinuation';
 import FrustraMpnnWorkbench from './frustrampnn/FrustraMpnnWorkbench';
 import {
     parseFrustraMpnnExperimentContext,
@@ -1689,14 +1699,48 @@ export function ResultsViewer() {
     const [expandedLineageGroups, setExpandedLineageGroups] = useState<Set<string>>(new Set());
     const [activeTab, setActiveTab] = useState<TabId>('overview');
     const requestedDesignId = new URLSearchParams(location.search).get('design_id')?.trim() ?? '';
+    const destinationLaunchContextId = new URLSearchParams(location.search).get('launch_context_id');
+    const exactArtifactId = new URLSearchParams(location.search).get('artifact_id');
+    const exactTargetState = new URLSearchParams(location.search).get('target_state');
     const [localDesignId, setSelectedDesignId] = useState<string>('');
     const selectedDesignId = requestedDesignId || localDesignId;
     const selectDesign = useCallback((id: string) => {
         const params = new URLSearchParams(location.search);
         params.set('design_id', id);
+        params.delete('artifact_id'); params.delete('target_state');
         navigate(`${location.pathname}?${params}`, { replace: true });
     }, [location.pathname, location.search, navigate]);
-    const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
+    const [designSelection, setDesignSelection] = useState(() => ({ jobId: selectedJobId, ids: readBinderSelection(selectedJobId) }));
+    const selectedDesignIds = designSelection.jobId === selectedJobId ? designSelection.ids : readBinderSelection(selectedJobId);
+    const setSelectedDesignIds = useCallback((value: string[] | ((current: string[]) => string[])) => {
+        setDesignSelection(current => {
+            const previous = current.jobId === selectedJobId ? current.ids : readBinderSelection(selectedJobId);
+            return { jobId: selectedJobId, ids: typeof value === 'function' ? value(previous) : value };
+        });
+    }, [selectedJobId]);
+    useEffect(() => { writeBinderSelection(designSelection.jobId, designSelection.ids); }, [designSelection]);
+    useEffect(() => {
+        if (!requestedDesignId || !exactArtifactId) return;
+        writeBinderCandidateDocuments(selectedJobId, { ...readBinderCandidateDocuments(selectedJobId), [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } });
+        setSelectedDesignIds(ids => ids.includes(requestedDesignId) ? ids : [...ids, requestedDesignId]);
+    }, [selectedJobId, requestedDesignId, exactArtifactId, exactTargetState, setSelectedDesignIds]);
+    useEffect(() => {
+        const syncDocumentRoute = (event: Event) => {
+            const { jobId: owner, documents } = (event as CustomEvent).detail;
+            if (owner !== selectedJobId || !requestedDesignId) return;
+            const selector = documents[requestedDesignId];
+            const params = new URLSearchParams(location.search);
+            if (selector?.artifact_id) params.set('artifact_id', selector.artifact_id); else params.delete('artifact_id');
+            if (selector?.target_state !== undefined) params.set('target_state', selector.target_state); else params.delete('target_state');
+            if (params.toString() !== new URLSearchParams(location.search).toString()) navigate(`${location.pathname}?${params}`, { replace: true });
+        };
+        window.addEventListener('bms:binder-documents', syncDocumentRoute);
+        return () => window.removeEventListener('bms:binder-documents', syncDocumentRoute);
+    }, [selectedJobId, requestedDesignId, location.pathname, location.search, navigate]);
+    const mdRoute = (source: string, design: string) => {
+        const route = buildResultsViewerMolecularDynamicsRoute(source, design);
+        return destinationLaunchContextId ? `${route}&launch_context_id=${encodeURIComponent(destinationLaunchContextId)}` : route;
+    };
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
     const [overviewAnalysisActionErrors, setOverviewAnalysisActionErrors] = useState<Record<string, string>>({});
     const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
@@ -1832,12 +1876,12 @@ export function ResultsViewer() {
         refetch: refetchJobs,
     } = useQuery({
         queryKey: ['jobs', 'include_children', 'summary', debouncedJobSelectorSearch],
-        queryFn: () => fetchJobs({
+        queryFn: ({ signal }) => fetchJobs({
             include_children: true,
             limit: 100,
             summary: true,
             q: debouncedJobSelectorSearch || undefined,
-        }),
+        }, undefined, signal),
     });
     const {
         data: routedJobData,
@@ -1850,6 +1894,14 @@ export function ResultsViewer() {
         queryFn: () => fetchJobById(jobId!),
         enabled: Boolean(jobId),
         retry: false,
+        refetchInterval: (query) => {
+            const job = query.state.data?.data;
+            if (nativeSequenceResultKind(job) || isNativeBinderGeneration(job) || (job?.model_id === 'esmfold2' && job.mode === 'blind_pose')
+                || (job?.model_id === 'ligandmpnn' && job.mode === 'interface_context')) {
+                return job?.status === 'queued' || job?.status === 'running' ? jobPollingInterval(1500, query) : false;
+            }
+            return false;
+        },
     });
     const routedJob = routedJobData?.data;
     const jobs = useMemo(() => {
@@ -2014,8 +2066,9 @@ export function ResultsViewer() {
             const batchData = job.batch_id ? batchMap.get(job.batch_id) : null;
             const hasChildren = Boolean(batchData && batchData.children.length > 0);
             const displayDesigns = (() => {
+                if (isRFD3GenerationResultJob(job)) return 'RFD3 generation';
                 const rfd3CandidateLabel = getRFD3LocalRedesignCandidateLabel(job);
-                if (rfd3CandidateLabel) return rfd3CandidateLabel;
+                if (rfd3CandidateLabel) return `Requested: ${rfd3CandidateLabel}`;
                 if (isPostRfantibodyStage(job)) {
                     const rawCount = Number(job.awaiting_payload?.raw_candidate_count || 0);
                     const screenedCount = Number(job.awaiting_payload?.filtered_candidate_count || 0);
@@ -2283,7 +2336,7 @@ export function ResultsViewer() {
         if (newId) {
             const params = new URLSearchParams(location.search);
             if (newId !== selectedJobId) {
-                ['design_id', 'result_model', 'candidate_id', 'invocation_id', 'frustrampnn_scope'].forEach(key => params.delete(key));
+                ['design_id', 'artifact_id', 'target_state', 'result_model', 'candidate_id', 'invocation_id', 'frustrampnn_scope'].forEach(key => params.delete(key));
             }
             const query = params.toString();
             navigate(`/designs/${newId}${query ? `?${query}` : ''}`, replace ? { replace: true } : undefined);
@@ -2303,6 +2356,7 @@ export function ResultsViewer() {
         setCurrentPage(1);
         const params = new URLSearchParams(location.search);
         params.delete('design_id');
+        params.delete('artifact_id'); params.delete('target_state');
         params.delete('result_model');
         const query = params.toString();
         navigate(`/designs/${activeLineageRootJob.id}${query ? `?${query}` : ''}`, { replace: true });
@@ -2470,6 +2524,7 @@ export function ResultsViewer() {
         // An explicit model choice supersedes the previous model's exact Design.
         // Unavailable bookmarked IDs remain pinned until such an operator action.
         if (model !== resultSurface) params.delete('design_id');
+        params.delete('artifact_id'); params.delete('target_state');
         navigate(`${location.pathname}${updateWorkflowResultViewSearch(params.toString(), { model, scope })}`, { replace: true });
     }, [frustraMpnnScope, location.pathname, location.search, navigate, resultSurface]);
     const setFrustraMpnnScope = useCallback((scope: FrustraMpnnResultScope) => {
@@ -3147,8 +3202,31 @@ export function ResultsViewer() {
             ? `${activeReviewSetLabel} set`
             : 'No review set selected';
     const activeResultSetLabel = RESULT_SET_BUTTON_LABELS.find(([value]) => value === resultSetFilter)?.[1] ?? 'All result sets';
-    const activeRFD3CandidateLabel = getRFD3LocalRedesignCandidateLabel(activeJob);
+    const nativeGenerationQuery = useQuery({
+        queryKey: ['rfd3-generation', activeJob?.id],
+        queryFn: () => fetchRFD3Generation(activeJob!.id),
+        enabled: isRFD3GenerationResultJob(activeJob),
+        retry: false,
+    });
+    const nativeGeneration = nativeGenerationQuery.data?.data;
+    const nativeGenerationCount = nativeGeneration?.schema === 'bms.rfd3.generation.read-model.v1'
+        && nativeGeneration.job_id === activeJob?.id ? nativeGeneration.counts.generated : undefined;
+    const isNativeGeneration = isRFD3GenerationResultJob(activeJob);
+    const nativeRedesignQuery = useQuery({
+        queryKey: ['rfd3-local-redesign', activeJob?.id],
+        queryFn: () => fetchRFD3LocalRedesign(activeJob!.id),
+        enabled: isRFD3LocalRedesignResultJob(activeJob),
+        retry: false,
+    });
+    const nativeRedesign = nativeRedesignQuery.data?.data;
+    const nativeRedesignCount = nativeRedesign?.schema === 'bms.rfd3.local-redesign.read-model.v1'
+        && nativeRedesign.job_id === activeJob?.id ? nativeRedesign.candidates.length : undefined;
+    const activeRFD3CandidateLabel = isRFD3LocalRedesignResultJob(activeJob)
+        ? nativeRedesignCount == null ? 'Candidate count unavailable' : `${nativeRedesignCount.toLocaleString()} published candidates`
+        : null;
     const activeBadgeLabel = useMemo(() => {
+        if (nativeSequenceResultKind(activeJob)) return 'Native sequence results';
+        if (isNativeGeneration) return nativeGenerationCount == null ? 'Generated count unavailable' : `${nativeGenerationCount.toLocaleString()} generated candidates`;
         if (activeRFD3CandidateLabel) return activeRFD3CandidateLabel;
         if (isPostRFantibodyReview && reviewSelectionRequired) {
             return 'Select a review source';
@@ -3160,7 +3238,7 @@ export function ResultsViewer() {
             return `${tableDesigns.length.toLocaleString()} visible`;
         }
         return `${totalDesigns.toLocaleString()} designs`;
-    }, [activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
+    }, [activeJob, isNativeGeneration, nativeGenerationCount, activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
     const paginationSubject = isPostRFantibodyReview
         ? reviewSelectionRequired
             ? 'outputs'
@@ -3246,10 +3324,9 @@ export function ResultsViewer() {
     }, [someVisibleSelected]);
 
     useEffect(() => {
-        setSelectedDesignIds([]);
         setIterationMessage(null);
         setSavedFilterSetName('');
-    }, [selectedJobId]);
+    }, [selectedJobId, setSelectedDesignIds]);
 
     useEffect(() => {
         setShowOverviewAnalysisMenu(false);
@@ -5108,9 +5185,6 @@ export function ResultsViewer() {
     const viewerShellClassName = showDataHubLanding
         ? 'mx-auto w-full max-w-[1180px]'
         : 'w-full';
-    const selectedFrustraMpnnDesigns = selectedDesignIds
-        .map((designId) => orderedDesigns.find((design) => design.id === designId))
-        .filter((design): design is Design => Boolean(design));
     const resultModelSelector = activeJob && resultModelHierarchy.length > 1 ? (
         <nav aria-label="Workflow model results" className="flex flex-wrap gap-2 text-xs">
             {resultModelHierarchy.map((item) => <button
@@ -5128,7 +5202,7 @@ export function ResultsViewer() {
         && !resultModelHierarchy.some(item => item.modelId === resultSurface)) {
         return <div role="alert">Requested model {resultSurface} is unavailable in this Job lineage. {resultModelSelector}</div>;
     }
-    if (requestedDesignId && (selectedDesignError || (!selectedDesignLoading && !selectedDesign)
+    if (requestedDesignId && !isNativeBinderGeneration(activeJob) && (selectedDesignError || (!selectedDesignLoading && !selectedDesign)
         || (scopedModelId && selectedDesign && selectedDesign.provenance?.producer_model_id !== scopedModelId))) {
         return <div role="alert">Requested Design {requestedDesignId} is unavailable in this Job lineage. No other candidate has been selected.</div>;
     }
@@ -5159,6 +5233,27 @@ export function ResultsViewer() {
         </div>;
     }
 
+    const selectedCandidateControls = activeJob && <>
+        <BinderSelectedControls key={`binder-${activeJob.id}`}
+            sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds}
+            launchContextId={destinationLaunchContextId}
+            candidateDocuments={{ ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } } : {}) }}
+            inspectDesignId={exactArtifactId ? requestedDesignId : undefined}
+            onOpenJob={handleSelectJob}
+            onStartMD={designId => navigate(mdRoute(activeJob.id, designId))} />
+        {!((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
+            || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) && <BlindPoseSelectedControls
+            key={activeJob.id}
+            sourceJobId={activeJob.id}
+            launchContextId={destinationLaunchContextId}
+            sourceModelId={activeJob.model_id}
+            sourceParams={activeJob.params}
+            selectedDesignIds={selectedDesignIds}
+            resultJob={activeJob}
+            onOpenJob={handleSelectJob}
+        />}
+    </>;
+
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">
             {/* Background */}
@@ -5178,10 +5273,10 @@ export function ResultsViewer() {
                         <div className="mt-3">{resultModelSelector}</div>
                         {activeJob && (
                             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
-                                {selectedDesign && activeJob.status === 'completed' && (
+                                {selectedDesign && activeJob.status === 'completed' && (!isNativeBinderGeneration(activeJob) || requestedDesignId === selectedDesign.id) && (
                                     <button
                                         type="button"
-                                        onClick={() => navigate(buildResultsViewerMolecularDynamicsRoute(activeJob.id, selectedDesign.id))}
+                                        onClick={() => navigate(mdRoute(activeJob.id, selectedDesign.id))}
                                         className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"
                                     >
                                         Use as MD starting structure
@@ -5212,8 +5307,8 @@ export function ResultsViewer() {
                     </div>
 
                     {/* Smart Job Selector */}
-                    <div className="flex w-full items-center gap-3 md:w-auto">
-                        <div className="relative w-full md:w-auto" ref={jobSelectorRef}>
+                    <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:flex-nowrap">
+                        <div className="relative min-w-0 w-full md:w-auto" ref={jobSelectorRef}>
                             <button
                                 type="button"
                                 onClick={() => setShowJobSelectorMenu((current) => !current)}
@@ -5346,8 +5441,45 @@ export function ResultsViewer() {
                 {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
                     <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                 )}
+
+                {activeJob?.sequence_design && (
+                    <ProteinDesignPanel title="Sequence design" description="Generation results remain unchanged. Each follow-on opens in its model’s native result view.">
+                        <CandidateRoundProgress key={`sequence-${activeJob.id}`} jobId={activeJob.id} kind="sequence" />
+                    </ProteinDesignPanel>
+                )}
+                {activeJob && ['rfantibody', 'template_antibody_denovo'].includes(activeJob.model_id) && (
+                    <BinderPredictionEvidence jobId={selectedJobId} sourceDesignId={selectedDesignId ?? undefined} launchContextId={destinationLaunchContextId} />
+                )}
+                {activeJob?.model_id === 'bindcraft2' && (
+                    <BindCraft2JobResults key={selectedJobId} jobId={selectedJobId} launchContextId={destinationLaunchContextId} />
+                )}
+                {activeJob && ((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
+                    || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) &&
+                    <BlindPoseSelectedControls key={activeJob.id} sourceJobId={activeJob.id}
+                        launchContextId={destinationLaunchContextId}
+                            sourceModelId={activeJob.model_id} sourceParams={activeJob.params}
+                        selectedDesignIds={selectedDesignIds} resultJob={activeJob} onOpenJob={handleSelectJob} />}
                 {activeJob && (
-                    isRFD3GenerationResultJob(activeJob) ? (
+                    nativeSequenceResultKind(activeJob) ? (
+                        <NativeSequenceResults key={activeJob.id} job={activeJob} />
+                    ) : isNativeBinderGeneration(activeJob) ? (
+                        <>
+                            <NativeBinderGenerationResults key={selectedJobId}
+                                jobId={selectedJobId} status={activeJob.status}
+                                launchContextId={destinationLaunchContextId}
+                                selectedDesignId={requestedDesignId}
+                                selectedDesignIds={selectedDesignIds}
+                                onSelectedDesignIdsChange={setSelectedDesignIds}
+                                artifactId={exactArtifactId} targetState={exactTargetState}
+                                onInspectDocument={(row, document) => {
+                                    if (row.design_id) navigate(nativeCandidateRoute(selectedJobId, row.design_id, document, destinationLaunchContextId), { replace: true });
+                                }} />
+                            <details className="my-4 rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                                <summary className="cursor-pointer text-sm font-semibold text-slate-200">Selected candidate operations ({selectedDesignIds.length})</summary>
+                                <div className="mt-4">{selectedCandidateControls}</div>
+                            </details>
+                        </>
+                    ) : isRFD3GenerationResultJob(activeJob) ? (
                         <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : isRFD3LocalRedesignResultJob(activeJob) ? (
                         <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
@@ -5513,13 +5645,7 @@ export function ResultsViewer() {
                             </div>
                         )}
 
-                        {activeJob && selectedFrustraMpnnDesigns.length > 0 && (
-                            <FrustraMpnnAnalysisControls
-                                parentJobId={activeJob.id}
-                                selectedDesigns={selectedFrustraMpnnDesigns}
-                                onOpenJob={handleSelectJob}
-                            />
-                        )}
+                        {selectedCandidateControls}
 
                         {/* Tabs */}
                         <div className="flex gap-1 mb-6 border-b border-slate-800 pb-px">
@@ -7055,7 +7181,8 @@ export function ResultsViewer() {
                                     )}
 
                                     {/* STRUCTURE TAB - Fullscreen-Aware with Overlays */}
-                                    {activeTab === 'structure' && selectedDesignSupportsStructureViewer && (
+                                    {activeTab === 'structure' && exactArtifactId && <p>Exact native document {exactArtifactId} is inspected in Selected candidate workspace → Sources. The Design primary structure is not substituted.</p>}
+                                    {activeTab === 'structure' && !exactArtifactId && selectedDesignSupportsStructureViewer && (
                                         <div className="p-4 space-y-3">
                                             <StructureViewerPane
                                                 selectedDesignId={selectedDesignId}

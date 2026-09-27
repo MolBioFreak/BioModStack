@@ -153,6 +153,31 @@ def _landscape(
     }
 
 
+def _native_v3_landscape():
+    """Binder chain with exact native and alternative predictions."""
+    landscape = _landscape()
+    for residue in landscape["residues"]:
+        residue["entity_instance_id"] = "binder:chain-B"
+        residue["source_entity_id"] = "binder-entity"
+        residue["label_asym_id"] = "B"
+        residue["auth_asym_id"] = "B"
+        residue["pdb_chain_id"] = "B"
+        native = residue["wt"]
+        residue["slots"] = [
+            {
+                "mutation_aa": aa,
+                "score": 0.25 if aa == native else -0.75,
+                "class": "neutral",
+                "scoreable": True,
+                "status": "ok",
+                "reason": None,
+                "native": aa == native,
+            }
+            for aa in "ACDEFGHIKLMNPQRSTVWY"
+        ]
+    return landscape
+
+
 def test_comparison_joins_residue_identity_and_separates_delta_transition_and_missingness():
     from services.frustrampnn.comparison import compare_landscapes
 
@@ -903,6 +928,7 @@ async def derived_session(tmp_path, monkeypatch: pytest.MonkeyPatch):
             ("invoke-derived", "candidate-derived", _landscape(), True),
             ("invoke-derived-2", "candidate-derived-2", _landscape(), True),
             ("invoke-derived-3", "candidate-derived-3", _landscape(), True),
+            ("invoke-native-v3", "binder-v3", _native_v3_landscape(), True),
             (
                 "invoke-incompatible",
                 "candidate-incompatible",
@@ -931,9 +957,10 @@ async def derived_session(tmp_path, monkeypatch: pytest.MonkeyPatch):
             summary = (
                 {
                     "schema_name": "frustrampnn_summary",
-                    "schema_version": 2,
+                    "schema_version": 3 if invocation_id == "invoke-native-v3" else 2,
                     "execution_configuration_id": (
-                        "frustrampnn_execution_configuration_v2"
+                        "frustrampnn_execution_configuration_v3"
+                        if invocation_id == "invoke-native-v3" else "frustrampnn_execution_configuration_v2"
                     ),
                     "execution_configuration_sha256": landscape[
                         "configuration_sha256"
@@ -1057,6 +1084,28 @@ async def derived_session(tmp_path, monkeypatch: pytest.MonkeyPatch):
         await session.commit()
         yield session
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_v3_binder_landscape_reopens_native_profile_and_source_identity(derived_session):
+    from services.frustrampnn.derived import load_persisted_landscape
+
+    result = await derived_session.get(FrustraMPNNResult, ("job-derived", "invoke-native-v3"))
+    reopened = await load_persisted_landscape(derived_session, result)
+    assert reopened["schema_version"] == 3
+    assert reopened["execution_configuration_id"] == "frustrampnn_execution_configuration_v3"
+    assert reopened["source_artifact_sha256"] == "2" * 64
+    assert reopened["candidate_id"] == "binder-v3"
+    assert reopened["landscape_sha256"] == "5" * 64
+    assert len(reopened["residues"]) == 2
+    for residue in reopened["residues"]:
+        assert residue["entity_instance_id"] == "binder:chain-B"
+        assert residue["source_entity_id"] == "binder-entity"
+        assert residue["auth_asym_id"] == "B"
+        assert len(residue["slots"]) == 20
+        native = next(slot for slot in residue["slots"] if slot["mutation_aa"] == residue["wt"])
+        assert native["score"] == 0.25
+        assert all(slot["score"] - native["score"] == -1.0 for slot in residue["slots"] if not slot["native"])
 
 
 @pytest.mark.asyncio

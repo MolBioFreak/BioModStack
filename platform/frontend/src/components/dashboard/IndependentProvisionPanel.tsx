@@ -7,7 +7,7 @@ import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/
 import {
   fetchModels, fetchTemplates, fetchProvisionCatalog, previewExecutionTargetProvision, provisionExecutionTarget,
   cancelExecutionTargetProvision, retryExecutionTargetProvision,
-  provisionSelectionLabel, type WorkflowProvisionRequest, type CatalogProvisionSelection,
+  provisionSelectionLabel, type WorkflowProvisionRequest, type CatalogProvisionSelection, type WorkflowPackSelection,
   type CachedArtifactReceipt, type ExecutionTarget, type ProvisionSelection,
 } from '../../lib/api';
 
@@ -88,12 +88,12 @@ export function IndependentProvisionPanel(props: Props) {
   return <ProvisionChooser key={binding} {...props} />;
 }
 function ProvisionChooser({ target, onChanged }: Props) {
-  const [kind, setKind] = useState<CatalogProvisionSelection['kind'] | 'workflow'>('model');
+  const [kind, setKind] = useState<CatalogProvisionSelection['kind'] | 'workflow'>('workflow');
   const [modelId, setModelId] = useState('');
   const catalog = useQuery({ queryKey: ['remote-provision-catalog'], queryFn: fetchProvisionCatalog, retry: false });
-  const models = useQuery({ queryKey: ['models'], queryFn: () => fetchModels(), retry: false });
+  const models = useQuery({ queryKey: ['models'], queryFn: ({ signal }) => fetchModels(undefined, signal), retry: false });
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => fetchTemplates(), retry: false });
-  const selections = catalog.isError ? [] : (catalog.data ?? []).filter(item => item.kind === kind);
+  const selections = catalog.isError ? [] : (catalog.data ?? []).filter((item): item is CatalogProvisionSelection => item.kind === kind);
   const modelEntries = models.isError ? [] : (models.data?.data ?? []);
   const workflows = [...new Map([
     ...visibleLauncherTemplates(templates.isError ? [] : templates.data?.data ?? [], Boolean((window as Window & { __DEBUG_MODE__?: boolean }).__DEBUG_MODE__)),
@@ -103,15 +103,19 @@ function ProvisionChooser({ target, onChanged }: Props) {
   const valid = kind !== 'workflow' && !models.isError && modelEntries.some(item => item.id === modelId)
     && selections.some(item => item.model_id === modelId);
   const selectedWorkflow = kind === 'workflow' ? workflows.find(item => item.id === modelId) : undefined;
+  const familySelection = !catalog.isError && selectedWorkflow?.id === DE_NOVO_PRELOAD_SELECTION.model_id
+    ? catalog.data?.find((item): item is CatalogProvisionSelection => item.kind === 'model' && item.model_id === selectedWorkflow.id) : undefined;
+  const pack = catalog.data?.find((item): item is WorkflowPackSelection =>
+    item.kind === 'workflow_pack' && item.workflow_id === modelId);
   const operation = target.preload;
   const live = Boolean(operation) && (ACTIVE_PHASES.includes(operation!.phase) || Boolean(operation!.recovery_required));
   return <section aria-label="Independent worker provisioning" className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-[var(--text-primary)]">
     <h4 className="font-medium">Worker preparation</h4>
-    <p className="text-xs text-[var(--text-muted)]">{PREPARATION_CAVEAT} Choose a model for its runtime assets or a workflow to derive exact dependencies.</p>
+    <p className="text-xs text-[var(--text-muted)]">{PREPARATION_CAVEAT} Prepare a whole workflow here, or use its configured form for only the selected dependencies. Model and image scopes remain separate.</p>
     {live && <PreparationStatus target={target} onChanged={onChanged} />}
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="text-sm">Provision scope<select aria-label="Provision scope" className={selectClass} value={kind} onChange={event => { setKind(event.target.value as CatalogProvisionSelection['kind'] | 'workflow'); setModelId(''); }}>
-        <option value="workflow">Workflow (exact dependencies)</option><option value="model">Model (runtime + scientific assets)</option><option value="image">Container image only</option>
+        <option value="workflow">Workflow</option><option value="model">Model (reviewed managed assets only)</option><option value="image">Container image only (not weights)</option>
       </select></label>
       <label className="text-sm">{kind === 'workflow' ? 'Preparation workflow' : 'Provision model'}<select aria-label={kind === 'workflow' ? 'Preparation workflow' : 'Provision model'} className={selectClass} value={modelId} onChange={event => setModelId(event.target.value)} disabled={kind !== 'workflow' && (models.isPending || models.isError)}>
         <option value="">Select a model or workflow</option>
@@ -128,8 +132,14 @@ function ProvisionChooser({ target, onChanged }: Props) {
     {kind !== 'workflow' && modelId && !valid && <p role="status">Model scope needs reviewed managed assets for this model in this deployment, and {modelId} has none. Use Container image only, or a configured workflow's dependency preview.</p>}
     {selectedWorkflow && <div className="space-y-2 text-sm">
       <p>{selectedWorkflow.description}</p>
-      <p>Open the existing workflow configuration to choose scientific settings and this worker. Unsaved preparation is available only where that form has “Preview artifact downloads”. Otherwise, the saved-Job preload below can use an existing job as its dependency recipe without rerunning it. Opening the launcher does not prepare assets or launch a Job.</p>
+      {pack ? <>
+        <p>Downloads and installs the workflow’s supported local predictors and shared assets, including optional analysis assets. Jobs keep their own settings; inputs and MSA requests stay with each job.</p>
+        <ProvisionActions key={JSON.stringify(pack)} target={target} onChanged={onChanged} selection={pack} prepareInOneClick />
+      </> : <>
+      {familySelection && <CatalogProvisionPanel target={target} onChanged={onChanged} selection={familySelection} showStatus={false} />}
+      <p>For current-request dependencies, open the existing workflow configuration to choose scientific settings and this worker. Unsaved preparation is available only where that form has “Preview artifact downloads”. Otherwise, the saved-Job preload below can use an existing job as its dependency recipe without rerunning it. Opening the launcher does not prepare assets or launch a Job.</p>
       <a className={buttonClass} href={`${import.meta.env.BASE_URL}submit?template=${encodeURIComponent(selectedWorkflow.id)}`}>Configure {selectedWorkflow.name}</a>
+      </>}
     </div>}
     {kind !== 'workflow' && <ProvisionActions key={JSON.stringify([kind, modelId, valid])} target={target} onChanged={onChanged} selection={valid ? { kind, model_id: modelId } : null} />}
     {!live && <PreparationStatus target={target} onChanged={onChanged} />}
@@ -161,13 +171,39 @@ export function WorkflowProvisionPanel({ target, onChanged, workflowRequest }: P
     <PreparationStatus target={target} onChanged={onChanged} />
   </section>;
 }
-function ProvisionActions({ target, onChanged, selection, retryOperationId }: Props & { selection: ProvisionSelection | null; retryOperationId?: string }) {
+export const DE_NOVO_PRELOAD_SELECTION: CatalogProvisionSelection = { kind: 'model', model_id: 'protein_modification_experimental' };
+
+type ProvisionActionsProps = Props & { selection: ProvisionSelection | null; retryOperationId?: string; prepareInOneClick?: boolean };
+
+// Keep invalidation at the shared action boundary, including for independent callers.
+export function ProvisionActions(props: ProvisionActionsProps) {
+  const { target, selection, retryOperationId } = props;
+  const binding = JSON.stringify([selection, retryOperationId, target.id, target.provider_instance_id,
+    target.host, target.port, target.username, target.remote_root, target.host_key_sha256,
+    target.active, target.state, target.activated_at, target.capabilities, target.preload?.operation_id,
+    target.preload?.source_revision, target.preload?.source_tree, target.preload?.phase,
+    target.preload?.recovery_required, target.progress?.operation_id]);
+  return <BoundProvisionActions key={binding} {...props} />;
+}
+
+export function CatalogProvisionPanel({ target, onChanged, selection, showStatus = true }: Props & { selection: CatalogProvisionSelection; showStatus?: boolean }) {
+  return <section aria-label="Independent dependency preparation" className="mt-3 space-y-3">
+    <h4>{selection.model_id === DE_NOVO_PRELOAD_SELECTION.model_id ? 'All De Novo dependencies' : 'Independent dependency preparation'}</h4>
+    <p className="text-xs">Prepare the catalog's full dependency set, independently of the current scientific draft. {PREPARATION_CAVEAT}</p>
+    <ProvisionActions target={target} onChanged={onChanged} selection={selection} />
+    {showStatus && <PreparationStatus target={target} onChanged={onChanged} />}
+  </section>;
+}
+
+function BoundProvisionActions({ target, onChanged, selection, retryOperationId, prepareInOneClick = false }: ProvisionActionsProps) {
   const client = useQueryClient();
   // Shared with saved-Job preloading: neither can enqueue over the other.
   const mutationKey = ['remote-preload', target.id];
   const active = useIsMutating({ mutationKey });
   const lock = useRef(false);
   const [consumed, setConsumed] = useState(false);
+  const current = useRef(true);
+  useEffect(() => { current.current = true; return () => { current.current = false; }; }, []);
   const preview = useMutation({ mutationFn: () => previewExecutionTargetProvision(target.id, selection!), retry: false });
   const provision = useMutation({
     mutationKey, mutationFn: (digest: string) => retryOperationId
@@ -179,9 +215,13 @@ function ProvisionActions({ target, onChanged, selection, retryOperationId }: Pr
   const allowed = target.active && target.state === 'ready' && !target.progress && !busy;
   // The keyed boundary binds the entire request, including every scientific setting.
   // Server-normalized workflow selections may contain additional schema defaults.
-  const matchesSelection = preview.data?.selection.kind === selection?.kind
-    && (selection?.kind === 'workflow' || (preview.data?.selection.kind !== 'workflow' && preview.data?.selection.model_id === selection?.model_id));
-  const data = !consumed && preview.data?.scope === 'managed_asset_activation' && matchesSelection ? preview.data : undefined;
+  function matchesSelection(observed?: ProvisionSelection) {
+    if (!selection || !observed || observed.kind !== selection.kind) return false;
+    if (selection.kind === 'workflow_pack') return observed.kind === 'workflow_pack' && observed.workflow_id === selection.workflow_id;
+    if (selection.kind === 'workflow') return true;
+    return 'model_id' in observed && observed.model_id === selection.model_id;
+  }
+  const data = !consumed && preview.data?.scope === 'managed_asset_activation' && matchesSelection(preview.data.selection) ? preview.data : undefined;
   async function requestPreview() {
     if (lock.current || !allowed || !selection || client.isMutating({ mutationKey }) > 0) return;
     lock.current = true;
@@ -189,6 +229,23 @@ function ProvisionActions({ target, onChanged, selection, retryOperationId }: Pr
     preview.reset();
     provision.reset();
     try { await preview.mutateAsync(); } catch { /* Render the API error; retry is explicit. */ }
+    finally { lock.current = false; }
+  }
+  async function prepareWorkflow() {
+    if (lock.current || !allowed || !selection || client.isMutating({ mutationKey }) > 0) return;
+    lock.current = true;
+    setConsumed(false);
+    preview.reset();
+    provision.reset();
+    try {
+      const fresh = await preview.mutateAsync();
+      // One explicit click keeps the existing preview-bound start. Switching
+      // worker/selection or beginning another operation must not start late.
+      if (!current.current || client.isMutating({ mutationKey }) > 0
+        || fresh.scope !== 'managed_asset_activation' || !matchesSelection(fresh.selection) || fresh.blockers?.length) return;
+      setConsumed(true);
+      await provision.mutateAsync(fresh.preview_sha256);
+    } catch { /* Existing error and dependency details remain visible. */ }
     finally { lock.current = false; }
   }
   async function start() {
@@ -200,8 +257,12 @@ function ProvisionActions({ target, onChanged, selection, retryOperationId }: Pr
   }
   return <div className="space-y-3">
     <div className="flex flex-wrap gap-2">
+      {prepareInOneClick ? <button type="button" className={buttonClass}
+        disabled={!allowed || !selection || preview.isPending || provision.isPending || (consumed && provision.isSuccess)}
+        onClick={() => void prepareWorkflow()}>{preview.isPending ? 'Checking workflow assets…' : provision.isPending ? 'Starting preparation…' : 'Prepare entire workflow'}</button> : <>
       <button type="button" className={buttonClass} disabled={!allowed || !selection || preview.isPending} onClick={() => void requestPreview()}>{preview.isPending ? 'Hashing preview…' : 'Preview artifact downloads'}</button>
       <button type="button" className={buttonClass} disabled={!allowed || !data || !!data.blockers?.length || preview.isPending} onClick={() => void start()}>{provision.isPending ? 'Starting provision…' : retryOperationId ? 'Retry provision with fresh preview' : 'Start provision'}</button>
+      </>}
     </div>
     {!allowed && <p className="text-xs text-[var(--text-muted)]">Provisioning requires an attached, ready, idle worker with no active preload.</p>}
     {(preview.error || provision.error) && <p role="alert" className="text-sm text-[var(--error)]">{errorText(preview.error || provision.error)}</p>}
@@ -245,11 +306,9 @@ function PreparationStatus({ target, onChanged }: Props) {
   const declared = artifacts.reduce((sum, artifact) => sum + (artifact.size_bytes || 0), 0);
   const verified = artifacts.filter(artifact => artifact.state === 'verified').reduce((sum, artifact) => sum + (artifact.size_bytes || 0), 0);
   const verifiedCount = artifacts.filter(artifact => artifact.state === 'verified').length;
-  const verifiedAll = artifacts.length > 0 && verifiedCount === artifacts.length;
-  const percent = declared > 0 ? Math.round((verified / declared) * 100) : null;
-  const elapsed = elapsedLabel(operation.started_at, operation.updated_at);
-  const rate = verified > 0 && operation.started_at && operation.updated_at && Date.parse(operation.updated_at) > Date.parse(operation.started_at)
-    ? verified / ((Date.parse(operation.updated_at) - Date.parse(operation.started_at)) / 1000) : null;
+  // Receipts only report completed objects, not live transfer bytes or throughput.
+  // Poll-driven rerenders advance active elapsed time; settled receipts end at their last update.
+  const elapsed = elapsedLabel(operation.started_at, ACTIVE_PHASES.includes(operation.phase) ? undefined : operation.updated_at);
   async function requestCancel() {
     if (lock.current || !cancellable || client.isMutating({ mutationKey }) > 0) return;
     lock.current = true;
@@ -261,10 +320,7 @@ function PreparationStatus({ target, onChanged }: Props) {
       <p className="font-medium">{PHASE_LABELS[operation.phase] ?? operation.phase}{operation.artifact ? ` — ${operation.artifact}` : ''}</p>
       <p className="text-xs text-[var(--text-muted)]">{ACTIVE_PHASES.includes(operation.phase) ? 'Running' : 'Last preparation'}{elapsed ? ` · ${elapsed} elapsed` : ''}</p>
     </div>
-    {declared > 0 && <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? 0} aria-label="Verified bytes" className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--bg-primary)]">
-      <div className={verifiedAll ? 'h-1.5 rounded-full bg-[var(--success)]' : 'h-1.5 rounded-full bg-[var(--accent-primary)]'} style={{ width: `${percent ?? 0}%` }} />
-    </div>}
-    <p>{verifiedCount} of {artifacts.length || 1} artifact{artifacts.length === 1 ? '' : 's'} verified{declared > 0 ? ` · ${bytes(verified)} of ${bytes(declared)}${percent != null ? ` (${percent}%)` : ''}` : ''}{rate ? ` · ${Math.max(1, Math.round(rate / 1024 / 1024))} MB/s average` : ''}</p>
+    <p>{verifiedCount} of {artifacts.length} artifacts verified{declared > 0 ? ` · ${bytes(verified)} verified of ${bytes(declared)} declared` : ''}. Transfer progress and rate are not reported.</p>
     <p className="text-xs text-[var(--text-muted)]">{operation.message}{operation.sequence != null ? ` · Sequence ${operation.sequence}` : ''} · Started {operation.started_at} · Last worker update {operation.updated_at}</p>
     {artifacts.length > 0 && <ArtifactDetails label="Artifact progress" count={artifacts.length}>{() => <ul aria-label="Artifact progress">{artifacts.map(artifact => <li key={artifact.name} className="break-all">{artifact.name} · {ARTIFACT_STATE_LABELS[artifact.state] ?? artifact.state} · {bytes(artifact.size_bytes)} declared · SHA256 {artifact.sha256}</li>)}</ul>}</ArtifactDetails>}
     <p className="text-xs text-[var(--text-muted)]">States are reported worker activity; completed verified objects are retained for retry.</p>

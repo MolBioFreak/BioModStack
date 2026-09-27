@@ -1,4 +1,5 @@
 import React, { act } from 'react';
+import { AxiosError } from 'axios';
 import { createRoot } from 'react-dom/client';
 import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +18,7 @@ import {
     submitJob,
     type ExecutionPlacement,
     type ShapeLaunchRequest,
+    type StructureSourceSelection,
 } from '../../src/lib/api';
 import { CANONICAL_CM_ANALYSIS_POLICY, submitCmRequest, type CmSubmitRequest } from '../../src/components/conformationalMapping/conformationalMappingApi';
 import { setDraftExecutionPolicy } from '../../src/lib/executionPolicy';
@@ -326,7 +328,7 @@ describe('remote execution operator surfaces', () => {
             await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === 'Attach worker')!.click());
             await flush();
             expect(container.querySelector('[role="alert"]')?.textContent).toContain('Attach request timed out');
-            target = { ...target, state: 'unavailable', setup: { phase: 'failed', message: 'Worker verification failed' }, last_error: 'Worker verification failed' };
+            target = { ...target, state: 'unavailable', active: true, setup: { phase: 'failed', message: 'Worker verification failed' }, last_error: 'Worker verification failed' };
             await flush(5_020);
             expect(container.textContent).toContain('Setup · failed: Worker verification failed');
             expect(container.textContent?.split('Worker verification failed')).toHaveLength(2);
@@ -374,7 +376,7 @@ describe('remote execution operator surfaces', () => {
             client.clear();
         }
     });
-    it.each([true, false])('shows current empty or unknown inventory and clears saved placement on Dashboard (available=%s)', async (available) => {
+    it.each([true, false])('shows current empty or unknown inventory without changing saved placement on Dashboard (available=%s)', async (available) => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, readyTarget.id);
         api.defaults.adapter = async (config) => {
@@ -399,7 +401,7 @@ describe('remote execution operator surfaces', () => {
             button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
             await new Promise((resolve) => setTimeout(resolve, 20));
         });
-        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe(readyTarget.id);
         expect(container.textContent).not.toContain('Remote 4090');
         expect(container.textContent).toContain(available ? 'No owned Vast instances' : 'Vast inventory unavailable');
         if (!available) {
@@ -586,6 +588,112 @@ describe('remote execution operator surfaces', () => {
                 ['/api/ont/ngs/wf-clone/submit', { ...ngs, ...expectedPlacement }],
             ]);
         }
+    });
+
+    it.each([true, false])('reviews the prepared Shape job and returns approval to its native owner (approve=%s)', async (approve) => {
+        // Load the real dialog before the async mutation starts, not a timing-sensitive mock.
+        await import('../../src/components/ExecutionPlanApproval');
+        const shape: ShapeLaunchRequest = {
+            client_request_id: 'shape-review-fixture', name: 'Shape review', geometry_id: 'geometry-fixture',
+            expected_geometry_sha256: 'a'.repeat(64), expected_geometry_manifest_sha256: 'b'.repeat(64),
+            expected_point_pool_sha256: 'c'.repeat(64), target_length: 100, num_backbones: 2,
+            sequences_per_backbone: 0, sequence_policy: 'skip', seed: 23,
+            guidance_profile: 'rfd3_ca_shape_transfer_control_v1', execution_target_id: 'vast:123',
+            execution_policy: { remote_result_policy: 'manual' },
+        };
+        const original = structuredClone(shape);
+        const prepared = { name: shape.name, model_id: 'protein_modification_experimental', mode: 'shape_blueprint',
+            params: { shape_request_path: '/retained/shape/request.json', shape_target_length: 100 },
+            execution_target_id: shape.execution_target_id, execution_policy: shape.execution_policy };
+        const calls: Array<{ url: string; data: unknown }> = [];
+        api.defaults.adapter = async config => {
+            const data = JSON.parse(config.data);
+            calls.push({ url: config.url!, data });
+            if (config.url === '/api/shape-blueprint/requests') {
+                if (!data.execution_plan_approval) throw new AxiosError('Prepared review', 'ERR_BAD_REQUEST', config, undefined, {
+                    ...response({ detail: { code: 'remote_prepared_job_review_required', job_request: prepared,
+                        response_context: { request_id: 'retained-shape', job_id: 'retained-job' } } }), status: 409, config,
+                });
+                return { ...response({ request_id: 'retained-shape', job_id: 'retained-job', reused: false }), config };
+            }
+            if (config.url === '/api/jobs/execution-plan/preview') return { ...response({
+                approval_digest: 'd'.repeat(64), admissible: true, request: prepared,
+                plan: { requested_json: prepared.params, effective_json: prepared.params,
+                    source_identity: { revision: 'fixture', tree: 'fixture' },
+                    metadata: { static_components: [], dynamic_templates: [], external_services: [] } },
+                deferred_preparation: [], blockers: [],
+            }), config };
+            throw new Error(`Unexpected mutation ${config.url}`);
+        };
+        const completed = submitShapeBlueprint(shape).then(value => ({ value }), error => ({ error }));
+        await vi.waitFor(async () => {
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+            expect(document.body.textContent).toContain('Review remote execution plan');
+        });
+        expect(calls).toEqual([
+            { url: '/api/shape-blueprint/requests', data: original },
+            { url: '/api/jobs/execution-plan/preview', data: prepared },
+        ]);
+        // Changes made while reviewing cannot alter the submitted snapshot or destination.
+        shape.seed = 99;
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:different');
+        const button = [...document.querySelectorAll('button')].find(item => item.textContent === (approve ? 'Approve and submit' : 'Cancel'))!;
+        await act(async () => { button.click(); await completed; });
+        const outcome = await completed;
+        if (approve) {
+            expect('value' in outcome && outcome.value.data.job_id).toBe('retained-job');
+            expect(calls[2]).toEqual({ url: '/api/shape-blueprint/requests', data: { ...original, execution_plan_approval: 'd'.repeat(64) } });
+            expect(calls).toHaveLength(3);
+        } else {
+            expect('error' in outcome && outcome.error.message).toBe('Execution-plan approval cancelled');
+            expect(calls).toHaveLength(2);
+        }
+        expect(calls.some(call => call.url === '/api/jobs')).toBe(false);
+    });
+
+    it.each([null, 'vast:new-worker'])('transports selected-source ancestry outside native params with explicit placement %s', async (target) => {
+        await import('../../src/components/ExecutionPlanApproval');
+        window.history.replaceState({}, '', '/submit?launch_context_id=other-context');
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:source-worker');
+        const source: StructureSourceSelection = { job_id: 'source-job', request_id: 'native-request',
+            candidate_id: 'candidate', document: { artifact_id: 'native-artifact' }, output_format: 'native', model_number: 2 };
+        const payload = { name: 'Follow-on', model_id: 'proteinmpnn', mode: 'design',
+            params: { pdb_paths: '/retained/source.pdb', temperature: 0.1 }, source_structure: source,
+            launch_context_id: 'destination-context', execution_target_id: target,
+            execution_plan_approval: null,
+            execution_policy: { remote_result_policy: 'manual' as const } };
+        const retained = { ...payload,
+            source_structure: { ...source, path: 'inputs/structure-fixture/original.cif', expected_sha256: 'a'.repeat(64) },
+            params: { ...payload.params, pdb_paths: '/retained/preview-source.pdb' } };
+        const calls: unknown[] = [];
+        api.defaults.adapter = async config => {
+            expect(config.headers.get('X-BMS-Launch-Context-ID')).toBe('destination-context');
+            if (config.url === '/api/jobs/execution-plan/preview') {
+                expect(JSON.parse(config.data)).toEqual(payload);
+                return { ...response({ approval_digest: 'e'.repeat(64), admissible: true, request: retained,
+                    plan: { requested_json: payload.params, effective_json: retained.params,
+                        source_identity: { revision: 'fixture', tree: 'fixture' },
+                        metadata: { static_components: [], dynamic_templates: [], external_services: [] } },
+                    deferred_preparation: [], blockers: [] }), config };
+            }
+            expect(config.url).toBe('/api/jobs'); calls.push(JSON.parse(config.data));
+            return { ...response({ id: 'follow-on' }), config };
+        };
+        const completed = submitJob(payload, { launchContext: false });
+        if (target) {
+            await vi.waitFor(async () => {
+                await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+                expect(document.body.textContent).toContain('Review remote execution plan');
+            });
+            expect(calls).toHaveLength(0);
+            await act(async () => {
+                [...document.querySelectorAll('button')].find(item => item.textContent === 'Approve and submit')!.click();
+                await completed;
+            });
+        } else await completed;
+        expect(calls).toEqual([target ? { ...retained, execution_plan_approval: 'e'.repeat(64) } : payload]);
+        expect(payload.params).not.toHaveProperty('source_structure');
+        expect(calls[0]).not.toHaveProperty('parent_job_id');
     });
 
     it('preserves retained Vast selection after refresh failure until an explicit Local choice', async () => {

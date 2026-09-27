@@ -43,6 +43,7 @@ CHAIN_METRICS_ANALYSIS = "chain_metrics"
 FAMPNN_PSCE_PROFILE_ANALYSIS = "fampnn_psce_profile"
 PAE_MATRIX_ANALYSIS = "pae_matrix"
 IPSAE_INTERFACE_ANALYSIS = "ipsae_interface"
+BINDER_POSE_COMPARISON_ANALYSIS = "binder_pose_comparison"
 ANTIBODY_ANNOTATION_PACK_ANALYSIS = "antibody_annotation_pack"
 JOB_CORRELATION_MATRIX_ANALYSIS = "job_correlation_matrix"
 JOB_AA_COMPOSITION_ANALYSIS = "job_aa_composition"
@@ -139,6 +140,10 @@ async def build_analysis_input_signature(
         identity = {"core_protein_scientific_contract":1, "viewer_identity_adapter":3,
             "design_id":subject.id, "analysis_type":definition.analysis_type, "params":params}
         if definition.analysis_type == IPSAE_INTERFACE_ANALYSIS:
+            owner = await session.scalar(select(Job).where(Job.id == subject.job_id))
+            identity.update(native_ipsae_adapter=1,
+                binder_round_step=(owner.provenance or {}).get('binder_round_step') if owner else None,
+                complex_components=(owner.params or {}).get('complex_components') if owner else None)
             identity.update(review_profile_id=subject.review_profile_id,
                 review_role_map=subject.review_role_map,
                 detected_antibody_chains=subject.detected_antibody_chains,
@@ -471,7 +476,16 @@ async def build_job_cdr_logo_signature(job: Job, params: dict[str, Any], session
     return _json_hash(payload)
 
 
+from services.binder_pose_comparison import normalize_params as normalize_pose_comparison_params, build_signature as build_pose_comparison_signature
+
+
 ANALYSIS_DEFINITIONS: Dict[str, AnalysisDefinition] = {
+    BINDER_POSE_COMPARISON_ANALYSIS: AnalysisDefinition(
+        analysis_type=BINDER_POSE_COMPARISON_ANALYSIS, subject_kind="design",
+        version="2026-09-25-v1", resource_class="cpu_light",
+        normalize_params=normalize_pose_comparison_params,
+        build_input_signature=build_pose_comparison_signature,
+    ),
     STRUCTURE_SUMMARY_ANALYSIS: AnalysisDefinition(
         analysis_type=STRUCTURE_SUMMARY_ANALYSIS,
         subject_kind="design",

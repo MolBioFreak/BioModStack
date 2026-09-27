@@ -1,5 +1,6 @@
 import React, { act } from 'react';
 import { readFileSync } from 'node:fs';
+import { webcrypto } from 'node:crypto';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,7 +16,7 @@ import actualY5Detail from '../fixtures/bioxp_xy_y5_detail.json';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { api } from '../../src/lib/api';
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
-const nativeMetadataMode = vi.hoisted(() => ({ enabled: false, receipts: false, mutations: false }));
+const nativeMetadataMode = vi.hoisted(() => ({ enabled: false, receipts: false, mutations: false, protocols: false }));
 import retainedHistory from '../fixtures/bioxp_retained_history.json';
 import manualCatalogProducer from '../fixtures/bioxpManualCatalogProducer.json';
 import zTargetProducer from '../fixtures/bioxp_z_target_producer.json';
@@ -423,6 +424,9 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
     const real = await importOriginal<typeof import('../../src/lib/bioxpClient')>();
     return ({
     bioXpDeckRecoveryResolution: real.bioXpDeckRecoveryResolution,
+    useBioXpWorkflowJobs: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
+    useBioXpWorkflowJob: () => ({ data: undefined, isError: false }),
+    useSubmitBioXpProtocol: () => nativeMetadataMode.protocols ? real.useSubmitBioXpProtocol() : ({ isPending: false, mutateAsync: vi.fn() }),
     BIOXP_Y_RELATIVE_MIN_STEPS: -2_147_483_648,
     BIOXP_Y_RELATIVE_MAX_STEPS: 2_147_483_647,
     BIOXP_Y_ABSOLUTE_MIN_STEPS: -2_147_483_648,
@@ -934,6 +938,7 @@ describe('primary cockpit query ownership', () => {
         vi.mocked(api.get).mockReset();
         vi.mocked(api.post).mockReset();
         vi.mocked(api.get).mockImplementation(async (url) => {
+            if (url === '/api/bioxp/calibration-settings') throw new Error('offline calibration fixture unavailable');
             expect(url).toBe('/api/bioxp/operator-controls/v2/catalog');
             return { data: structuredClone(bmsMetadata.catalog) };
         });
@@ -961,7 +966,8 @@ describe('primary cockpit query ownership', () => {
                 expect(button().disabled).toBe(false);
                 expect(state.xyReceipt.data).toEqual(bmsMetadata.compact);
             }
-            expect(api.get).toHaveBeenCalledTimes(3);
+            expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/operator-controls/v2/catalog')).toHaveLength(3);
+            expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/calibration-settings')).toHaveLength(1);
             await advance(6000);
             expect(button().disabled).toBe(true); // same old producer observation expires
             expect(panel().textContent).toContain('Move timeout reported');
@@ -3625,12 +3631,78 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 });
 
 
+describe('Well pipetting cockpit integration', () => {
+    it('uses catalog locationID rather than target ordinals and dispatches independently of projected availability', async () => {
+        nativeMetadataMode.protocols = true; vi.stubGlobal('crypto', webcrypto);
+        const action = state.v2Catalog.data.actions.find(a => a.action_id === 'oem.deck.move_to_location')!;
+        Object.assign(action, { destination_options: [{ target: 'not-a-plate-ordinal', label: 'Catalog pipetting block', location_id: 4,
+            enabled: false, disabled_reason: 'missing historical observation', aliases: [], branch_kind: 'ordinary', camera_offset_option: false, source_anchors: [] }] });
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+        vi.mocked(api.post).mockReset().mockRejectedValue(new Error('offline robot refusal'));
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            const panel = container.querySelector('[aria-label="Well pipetting"]')!;
+            expect(panel).not.toBeNull();
+            for (const [name, value] of [['Block', '4'], ['Move Z position', '1']]) {
+                await act(async () => {
+                    const select = panel.querySelector(`[aria-label="${name}"]`) as HTMLSelectElement;
+                    select.value = value; select.dispatchEvent(new Event('change', { bubbles: true }));
+                });
+            }
+            await act(async () => (panel.querySelector('[aria-label="Reference well D5"]') as HTMLButtonElement).click());
+            const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move now')!;
+            expect(move.disabled).toBe(false);
+            await act(async () => { move.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+            expect(api.post).toHaveBeenCalledTimes(1);
+            const [path, request] = vi.mocked(api.post).mock.calls[0] as [string, any];
+            expect(path).toBe('/api/bioxp/protocols/submit');
+            expect(request.document.stages[0].actions[0]).toMatchObject({ kind: 'pipette_position',
+                params: { operation: 'move', location_id: 4, well: 'D5', position_flag: 1 } });
+            expect(panel.textContent).toContain('offline robot refusal');
+            expect(move.disabled).toBe(false);
+        } finally {
+            await act(async () => root.render(null)); client.clear(); nativeMetadataMode.protocols = false; vi.unstubAllGlobals();
+        }
+    });
+});
+
 describe('OEM software Abort distinct from addressed Stops', () => {
     const render = () => act(async () => root.render(<BioXpCockpit />));
     const abort = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Software Abort (cancel waiters)')!;
     const stops = () => ['X Axis', 'Y Axis', 'Z Axis', 'Gripper'].map(label => {
         const panel = [...container.querySelectorAll('article')].find(p => p.querySelector('h3')?.textContent === label)!;
         return [...panel.querySelectorAll('button')].find(b => b.textContent === 'Stop')!;
+    });
+    it('keeps addressed Stops independent of a real pending protocol mutation', async () => {
+        nativeMetadataMode.protocols = true;
+        vi.stubGlobal('crypto', webcrypto);
+        state.catalog.data.actions.push({ ...xMoveAction(), action_id: 'component-stop', informational_path: '/motion/diagnostics/stop', safety_class: 'stop', enabled: true });
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+        let reject!: (reason: unknown) => void;
+        vi.mocked(api.post).mockReset().mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            const transfer = container.querySelector('[aria-label="Plate and cover transfer"]')!;
+            const move = [...transfer.querySelectorAll('button')].find(b => b.textContent === 'Pick up and move')!;
+            expect(move.disabled).toBe(false);
+            await act(async () => { move.click(); move.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+            expect(api.post).toHaveBeenCalledTimes(1);
+            expect(vi.mocked(api.post).mock.calls[0][0]).toBe('/api/bioxp/protocols/submit');
+            expect(move.disabled).toBe(true);
+            for (const stop of stops()) {
+                expect(stop.disabled).toBe(false);
+                await act(async () => stop.click());
+            }
+            expect(state.yInterruptCalls.map(v => v.actionId)).toEqual(['oem.x.stop', 'oem.y.stop', 'oem.z.stop']);
+            expect(state.componentStopCalls).toHaveLength(1);
+            await act(async () => reject(new Error('offline response lost')));
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+            expect(move.disabled).toBe(false);
+            expect(api.post).toHaveBeenCalledTimes(1);
+        } finally {
+            await act(async () => root.render(null));
+            client.clear(); nativeMetadataMode.protocols = false; vi.unstubAllGlobals();
+        }
     });
     it('sends exactly one software cancellation and no addressed fanout; independent XYZG Stops remain reachable while abort pending', async () => {
         state.catalog.data.actions.push({ ...xMoveAction(), action_id: 'component-stop', informational_path: '/motion/diagnostics/stop', safety_class: 'stop', enabled: true });

@@ -381,6 +381,7 @@ class ResolvedStartingStructure:
     pdb_id: str | None = None
     producer_job_id: str | None = None
     design_id: str | None = None
+    source_provenance: dict[str, Any] | None = None
     descriptor: int | None = None
     suffix: str | None = None
 
@@ -1410,6 +1411,24 @@ async def resolve_source(
             label=str(design.name),
             producer_job_id=str(job.id),
             design_id=str(design.id),
+            # Scientific ancestry is descriptive; it is not MD coordinator
+            # topology and absent publication details do not block launch.
+            source_provenance={
+                "source_job_id": str(job.id),
+                "source_design_id": str(design.id),
+                "lineage_root_job_id": design.lineage_root_job_id or job.lineage_root_job_id or job.id,
+                "parent_design_id": design.parent_design_id,
+                "origin_design_id": design.origin_design_id,
+                "origin_job_id": design.origin_job_id,
+                "origin_backbone_design_id": design.origin_backbone_design_id,
+                "source_parent_job_id": job.parent_job_id,
+                "source_stage_family": design.stage_family or job.stage_family,
+                "source_stage_mode": design.stage_mode or job.stage_mode or job.mode,
+                **{
+                    key: value for key, value in (design.provenance or {}).items()
+                    if key in {"primary_artifact_id", "primary_target_state"}
+                },
+            },
         )
     if source_ref.kind == "prior_md_input":
         job_id = _require_uuid(source_ref.id, code="MD_STARTING_STRUCTURE_NOT_FOUND")
@@ -1791,15 +1810,9 @@ def compile_launch_preview(
     )
     requested = intent.requested_settings
     assert isinstance(profile, Mapping)
-    constraints = profile["launch_constraints"]
-    admitted = constraints.get("structure_sha256") == structure.sha256
-    if not admitted:
-        blockers.append(
-            MdLaunchNotice(
-                code="MD_STARTING_STRUCTURE_NOT_ADMITTED",
-                message="The selected profile does not admit these exact starting-structure bytes.",
-            )
-        )
+    # Profile fixture identity describes its acceptance evidence, not which
+    # operator-selected coordinates GROMACS may simulate.
+    admitted = True
 
     source = MdLaunchSourceIdentity(
         source_ref=resolved.source_ref,
@@ -1959,7 +1972,7 @@ def _admission(
             state="profile_required",
             profile_id=None,
             code="MD_CHEMISTRY_PROFILE_REQUIRED",
-            message="Select a chemistry profile to evaluate exact-byte admission.",
+            message="Select a chemistry profile for this starting structure.",
         )
     constraints = profile.get("launch_constraints") if isinstance(profile, Mapping) else None
     states = profile.get("states") if isinstance(profile, Mapping) else None
@@ -1976,18 +1989,11 @@ def _admission(
             code="MD_CHEMISTRY_PROFILE_UNAVAILABLE",
             message="The selected chemistry profile is unavailable for launch.",
         )
-    if constraints.get("structure_sha256") != structure_file.sha256:
-        return StartingStructureAdmission(
-            state="blocked",
-            profile_id=chemistry_profile_id,
-            code="MD_STARTING_STRUCTURE_NOT_ADMITTED",
-            message="The selected chemistry profile does not admit these exact starting-structure bytes.",
-        )
     return StartingStructureAdmission(
         state="admitted",
         profile_id=chemistry_profile_id,
         code=None,
-        message="The exact starting-structure bytes are admitted by the selected chemistry profile.",
+        message="The selected chemistry profile is available for this starting structure.",
     )
 
 

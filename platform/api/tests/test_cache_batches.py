@@ -42,7 +42,8 @@ async def test_bounded_deduplicated_real_uploads(tmp_path, monkeypatch, local_tr
     assert len(receipts) == 10
     assert len(uploads) == 3
     assert [len(r['artifacts']) for r in calls if r['action'] == 'probe'] == ([2, 2, 1] if bound == 'count' else [5])
-    assert [len(r['artifacts']) for r in calls if r['action'] == 'ingest_many'] == [2, 2, 1]
+    # Local staging now yields to sibling batches; completion order is not authority.
+    assert sorted(len(r['artifacts']) for r in calls if r['action'] == 'ingest_many') == [1, 2, 2]
     assert not list((tmp_path / 'worker/cache/artifacts/v1/incoming').glob('*/*'))
     await stage(tmp_path, artifacts)
     assert len(uploads) == 3
@@ -67,7 +68,7 @@ async def test_production_count_bound(tmp_path, local_transport):
     calls, uploads = local_transport
     assert len(uploads) == 2
     assert [len(r['artifacts']) for r in calls if r['action'] == 'probe'] == [2048, 2]
-    assert [len(r['artifacts']) for r in calls if r['action'] == 'ingest_many'] == [2048, 2]
+    assert sorted(len(r['artifacts']) for r in calls if r['action'] == 'ingest_many') == [2, 2048]
     assert max(len(json.dumps(r).encode()) for r in calls) < 8 * 1024 * 1024
 
 

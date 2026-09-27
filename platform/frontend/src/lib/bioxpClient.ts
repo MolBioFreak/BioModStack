@@ -107,6 +107,52 @@ export interface BioXpCameraImage {
     connectionGeneration: number;
 }
 
+export type BioXpIlluminationChannel = 1 | 2 | 3;
+export interface BioXpCameraIllumination {
+    schema_version: 'bioxp.camera_illumination.v1';
+    provider_generation: number;
+    connection_generation: number;
+    channels: { channel: BioXpIlluminationChannel; on: boolean | null }[];
+    state_source: 'last_successful_command';
+    physical_effect_verified: false;
+}
+export interface BioXpCameraIlluminationCommand extends BioXpCameraIllumination {
+    ok: true;
+    channel: BioXpIlluminationChannel;
+    on: boolean;
+    delivery_attempted: true;
+}
+
+export interface BioXpCameraRgbResult {
+    ok: boolean;
+    rgb: [number, number, number];
+    tmcl: [number, number, number];
+    acks: Record<'r' | 'g' | 'b', Record<string, unknown> | null>;
+    sent: number;
+    elapsed_ms: number;
+    connection_generation: number;
+}
+
+export async function setBioXpCameraRgb(generation: number, rgb: readonly [number, number, number]): Promise<BioXpCameraRgbResult> {
+    return (await api.post<BioXpCameraRgbResult>('/api/bioxp/camera/rgb', {
+        expected_connection_generation: generation, r: rgb[0], g: rgb[1], b: rgb[2],
+    })).data;
+}
+
+export async function getBioXpCameraIllumination(generation: number): Promise<BioXpCameraIllumination> {
+    return (await api.get<BioXpCameraIllumination>('/api/bioxp/camera/illumination/state', {
+        params: { expected_generation: generation },
+    })).data;
+}
+
+export async function setBioXpCameraIllumination(
+    generation: number, channel: BioXpIlluminationChannel, on: boolean,
+): Promise<BioXpCameraIlluminationCommand> {
+    return (await api.post<BioXpCameraIlluminationCommand>('/api/bioxp/camera/illumination', {
+        expected_generation: generation, channel, on,
+    })).data;
+}
+
 export interface BioXpCameraStream {
     schema_version: 'bioxp.camera_stream.v1';
     state: 'off' | 'starting' | 'live' | 'error';
@@ -661,6 +707,8 @@ export interface BioXpPipettes {
     channels: BioXpPipetteChannel[];
     channel_count: 4;
     live_query_performed: false;
+    /** Software-selected group tip type, not evidence of a physically loaded tip. */
+    tip_type: number;
     allow_to_stop: boolean;
     last_error: { channel: 0 | 1 | 2 | 3; error_code: number; source: 'ClassPipetteCollection.handlePipetteMessage' } | null;
     last_group_transaction: Record<string, unknown> | null;
@@ -778,6 +826,34 @@ export interface BioXpOperatorAdmission {
     dependencies: BioXpOperatorDependency[];
 }
 
+/** Robot-published, locally resolved JSON Schema for structured input controls. */
+export interface BioXpOperatorJsonSchema {
+    $ref?: string;
+    $defs?: Record<string, BioXpOperatorJsonSchema>;
+    discriminator?: { propertyName: string; mapping?: Record<string, string> };
+    type?: string | string[];
+    title?: string;
+    description?: string;
+    default?: unknown;
+    enum?: unknown[];
+    const?: unknown;
+    properties?: Record<string, BioXpOperatorJsonSchema>;
+    required?: string[];
+    items?: BioXpOperatorJsonSchema;
+    additionalProperties?: boolean | BioXpOperatorJsonSchema;
+    anyOf?: BioXpOperatorJsonSchema[];
+    oneOf?: BioXpOperatorJsonSchema[];
+    minimum?: number;
+    maximum?: number;
+    exclusiveMinimum?: number;
+    exclusiveMaximum?: number;
+    minLength?: number;
+    maxLength?: number;
+    minItems?: number;
+    maxItems?: number;
+    [key: string]: unknown;
+}
+
 export interface BioXpOperatorInputSpec {
     name: string;
     wire_name: string | null;
@@ -793,6 +869,7 @@ export interface BioXpOperatorInputSpec {
     exclusive_minimum: number | null;
     exclusive_maximum: number | null;
     default: unknown;
+    json_schema?: BioXpOperatorJsonSchema | null;
 }
 
 export interface BioXpOperatorActionSpec {
@@ -1133,9 +1210,23 @@ export interface BioXpWorkflowJob {
             stage_states: Record<string, { current_action_id: string | null; pause_marker_action_id: string | null }>;
             workflow?: BioXpWorkflowState | null;
             source_model?: BioXpWorkflowSourceModel;
+            action_results?: Record<string, unknown>[];
         };
     };
 }
+export interface BioXpTransferPreflight {
+    connection_generation: number;
+    ownership_generation: number;
+    observed_deck: { position_table_revision: string; destination_catalog_revision: string; current_location: string | null; semantic_state_revision: number; ambiguity_state: string };
+    preflight: { reference_snapshot: { ok: boolean; persisted: boolean; verified: boolean; durable_clean: boolean; rows: Record<string, { axis: string; state: string; source: string; updated_at: string; state_version: number }> }; artifact_refs: string[] };
+}
+export async function getBioXpTransferPreflight(generation: number): Promise<BioXpTransferPreflight> {
+    const { data } = await api.get<BioXpTransferPreflight>('/api/bioxp/protocols/transfer-preflight', {
+        params: { expected_connection_generation: generation },
+    });
+    return data;
+}
+
 export interface BioXpWorkflowInput {
     source_type: 'native' | 'oem_xml';
     document?: Record<string, unknown> | null;

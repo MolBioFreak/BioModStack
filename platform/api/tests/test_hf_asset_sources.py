@@ -164,9 +164,16 @@ def test_existing_cloud_hit_needs_no_local_file(configured, artifact, capability
 def test_publish_pinned_inode_and_no_overwrite(configured, monkeypatch, artifact, capability):
     monkeypatch.setenv('BMS_HF_ASSET_ALLOW_PUBLISH','1')
     api, http = Api(artifact, False), Http(capability)
+    hashes = []
+    original_hash = worker._hash
+    def counted_hash(*args):
+        hashes.append(args[1])
+        return original_hash(*args)
+    monkeypatch.setattr(worker, '_hash', counted_hash)
     for _ in range(2):
         assert worker._prepare(request(artifact), broker.configuration(), api, http, 'token') == capability
     assert len(api.uploads) == 1
+    assert hashes == [artifact.size_bytes]  # One full pass on publish; none on a cloud hit.
     assert api.uploads[0][0][1] == f'sha256/{artifact.sha256}/image.sif'
 
 
@@ -363,6 +370,9 @@ async def test_cancel_during_real_spawn_reaps(monkeypatch):
 
 
 def test_actual_pinned_sdk_http_contract(configured, artifact, capability, monkeypatch):
+    def forbidden_lock(*args):
+        raise AssertionError('Cloud hits and connection checks must not take the publisher lock')
+    monkeypatch.setattr(worker.fcntl, 'flock', forbidden_lock)
     import httpx
     import huggingface_hub
     assert huggingface_hub.__version__ == '1.24.0'
@@ -398,6 +408,33 @@ def test_actual_pinned_sdk_http_contract(configured, artifact, capability, monke
         os.environ.clear(); os.environ.update(saved)
         huggingface_hub.set_client_factory(real_client)
     assert [item[0] for item in calls] == ['GET', 'POST', 'HEAD', 'GET']
+
+
+@pytest.mark.parametrize('after_lock', ['published', 'quota', 'missing'])
+def test_only_cloud_misses_lock_and_recheck(configured, monkeypatch, artifact, capability, after_lock):
+    monkeypatch.setenv('BMS_HF_ASSET_ALLOW_PUBLISH', '1')
+    api, http = Api(artifact, False), Http(capability)
+    config = broker.configuration()
+    assert config is not None
+    locks = []
+    def flock(fd, action):
+        assert fd == 123
+        locks.append(action)
+        if action == worker.fcntl.LOCK_EX:
+            if after_lock == 'published':
+                api.present = True
+                artifact.source.unlink()  # Cloud hit after wait does not touch local bytes.
+            elif after_lock == 'quota':
+                api.info.size = config.max_bytes
+    monkeypatch.setattr(worker.fcntl, 'flock', flock)
+    if after_lock == 'quota':
+        with pytest.raises(broker.HFAssetError, match='byte limit'):
+            worker._prepare(request(artifact), config, api, http, 'token', publisher_lock=123)
+        assert not http.calls
+    else:
+        assert worker._prepare(request(artifact), config, api, http, 'token', publisher_lock=123) == capability
+    assert locks == [worker.fcntl.LOCK_EX, worker.fcntl.LOCK_UN]
+    assert len(api.uploads) == int(after_lock == 'missing')
 
 
 @pytest.mark.asyncio

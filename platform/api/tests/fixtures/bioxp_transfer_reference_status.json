@@ -1,0 +1,65 @@
+{
+  "ok": true,
+  "persisted": true,
+  "verified": true,
+  "durable_clean": true,
+  "axes": [
+    "x",
+    "y",
+    "z",
+    "g",
+    "door"
+  ],
+  "rows": {
+    "x": {
+      "axis": "x",
+      "state": "referenced",
+      "origin_position_steps": 0,
+      "source": "serial206.xy.controller_verified_home",
+      "note": null,
+      "updated_at": "2026-09-23T01:37:49.871692+00:00",
+      "last_motion_kind": "move_xy",
+      "state_version": 206
+    },
+    "y": {
+      "axis": "y",
+      "state": "referenced",
+      "origin_position_steps": 0,
+      "source": "serial206.xy.controller_verified_home",
+      "note": null,
+      "updated_at": "2026-09-23T01:37:49.871781+00:00",
+      "last_motion_kind": "move_xy",
+      "state_version": 100
+    },
+    "z": {
+      "axis": "z",
+      "state": "referenced",
+      "origin_position_steps": 0,
+      "source": "serial206.initializeMotors.controller_verified_home",
+      "note": "Returned home/zero evidence plus separate current GAP1 at z-home; no physical observation.",
+      "updated_at": "2026-09-23T01:05:46.100257+00:00",
+      "last_motion_kind": "oem_initialize_motors_home",
+      "state_version": 192
+    },
+    "g": {
+      "axis": "g",
+      "state": "referenced",
+      "origin_position_steps": 0,
+      "source": "serial206.initializeMotors.controller_verified_home",
+      "note": "Returned home/zero evidence plus separate current GAP1 at gripper-home; no physical observation.",
+      "updated_at": "2026-09-23T01:05:49.022796+00:00",
+      "last_motion_kind": "oem_initialize_motors_home",
+      "state_version": 59
+    },
+    "door": {
+      "axis": "door",
+      "state": "referenced",
+      "origin_position_steps": 0,
+      "source": "ClassControlInterface.HomeAxis.D",
+      "note": null,
+      "updated_at": "2026-09-15T01:14:03.458084+00:00",
+      "last_motion_kind": "home_axis_board_test",
+      "state_version": 7
+    }
+  }
+}

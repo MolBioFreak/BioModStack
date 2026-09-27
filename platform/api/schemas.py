@@ -7,6 +7,7 @@ from typing import Optional, List, Any, Literal
 from datetime import datetime
 from enum import Enum
 from services.fampnn_policy_admission import FampnnAnalysisOverrides
+from services.binder_source_materialization import StructureSourceRequest
 
 
 def serialize_datetime(dt: datetime) -> str:
@@ -40,8 +41,51 @@ class ExecutionPolicy(BaseModel):
         return cls(remote_result_policy="automatic" if isinstance(params, dict) and params.get("remote_result_policy") == "automatic" else "manual")
 
 
+class SequenceDesignRequest(BaseModel):
+    """Optional general-generation follow-on; settings remain model-owned."""
+    model_config = ConfigDict(extra='forbid')
+    schema_version: Literal[1] = 1
+    enabled: bool = False
+    model_id: Literal['proteinmpnn', 'fampnn', 'caliby_experimental']
+    params: dict[str, Any] = Field(default_factory=dict)
+    input_settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class BinderRoundDesign(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    model_id: Literal['proteinmpnn', 'fampnn', 'caliby_binder']
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class BinderRoundPrediction(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    model_id: Literal['protenix', 'boltz2', 'esmfold2']
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class BinderRoundRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    schema_version: Literal[1] = 1
+    enabled: bool = True
+    sequence_design: BinderRoundDesign
+    prediction: BinderRoundPrediction
+    binder_chains: list[str] = Field(default_factory=list)
+    target_chains: list[str] = Field(default_factory=list)
+
+
+class BinderRoundStepReference(BaseModel):
+    """Opaque retained preparation, not caller-authored scientific lineage."""
+    model_config = ConfigDict(extra='forbid')
+    root_job_id: str
+    step_id: str
+
+
 class JobCreate(BaseModel):
     """Request schema for creating a new job."""
+    sequence_design: SequenceDesignRequest | None = None
+    binder_round: BinderRoundRequest | None = None
+    binder_round_step: BinderRoundStepReference | None = None
+    source_structure: StructureSourceRequest | None = None
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     execution_plan_approval: str | None = Field(
         None, pattern=r"^[0-9a-f]{64}$",
@@ -151,12 +195,50 @@ class CandidateResultSummary(BaseModel):
     dispositions: Optional[List[CandidateDisposition]] = None
 
 
+class ExecutionStageResponse(BaseModel):
+    """An observed or retained-plan stage, never inferred from job success."""
+
+    id: str
+    label: str
+    state: Literal['planned', 'running', 'completed', 'awaiting_input', 'failed', 'cancelled', 'unknown']
+    source: Literal['plan', 'recorded', 'model']
+
+
 class JobResponse(BaseModel):
     """Response schema for a job."""
+
+    source_structure: StructureSourceRequest | None = None
+    execution_stages: List[ExecutionStageResponse] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def project_stored_execution_stages(cls, value):
+        from services.job_stage_progress import project_execution_stages
+        if isinstance(value, dict):
+            if 'execution_stages' not in value:
+                value = {**value, 'execution_stages': project_execution_stages(value)}
+        else:
+            # ORM response paths retain evidence before public fields are trimmed.
+            value = {**{key: getattr(value, key) for key in cls.model_fields
+                        if hasattr(value, key)},
+                     'execution_stages': project_execution_stages(value)}
+        return value
+
+    sequence_design: SequenceDesignRequest | None = None
+    binder_round: BinderRoundRequest | None = None
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
 
     @model_validator(mode="after")
     def expose_orm_execution_policy(self):
+        saved_sequence = (self.provenance or {}).get('sequence_design_request')
+        if saved_sequence is not None:
+            self.sequence_design = SequenceDesignRequest.model_validate(saved_sequence)
+        self.source_structure = (self.provenance or {}).get('source_structure')
+        if self.source_structure is not None:
+            self.source_structure = StructureSourceRequest.model_validate(self.source_structure)
+        saved_round = (self.provenance or {}).get('binder_round_request')
+        if saved_round is not None:
+            self.binder_round = BinderRoundRequest.model_validate(saved_round)
         if "execution_policy" not in self.model_fields_set:
             self.execution_policy = ExecutionPolicy.from_params(self.params)
         self.params = {key: value for key, value in self.params.items() if key != "remote_result_policy"}

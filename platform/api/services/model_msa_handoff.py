@@ -215,6 +215,10 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path, *, native
             raise ValueError('RF3 has no executable prediction workflow in this source revision (structure_prediction rejects pred_method=rf3). Native RF3 accepts per-component msa_path A3M with TaxID= pairing, not separate paired A3M or Boltz CSV; see docs/Native_MSA_Consumer_Contracts.md')
         return effective
     is_boltz = model_id in {'boltz2', 'boltz_cp_experimental'}
+    if (model_id == 'boltz_cp_experimental'
+            and effective.get('bcp_input_format', 'config_files') == 'config_files'
+            and (effective.get('bcp_input_path') or effective.get('input_path'))):
+        fold_cp_config_proteins(Path(effective.get('bcp_input_path') or effective['input_path']))
     if is_boltz and not enabled(params.get('boltz_use_msa')):
         return effective
     if not is_boltz:
@@ -488,6 +492,35 @@ def fold_cp_msa_settings(params):
             if k.startswith(('msa_', 'colabfold_', 'boltz_'))
             and not k.endswith(('_path', '_dir')) and k not in _LAUNCH_BINDING_KEYS}
 
+def _fold_cp_native_config(source: Path) -> tuple[Path, Path]:
+    """Fold-CP executes exactly one top-level YAML, even for directory input."""
+    if source.is_dir():
+        files = sorted(p for p in source.rglob('*') if p.suffix in {'.yaml', '.yml'})
+        if len(files) != 1 or files[0].parent != source:
+            raise ValueError('Boltz-CP config_files requires exactly one top-level YAML config; multiple or nested configs cannot be executed')
+        return files[0], source
+    if not source.is_file() or source.suffix not in {'.yaml', '.yml'}:
+        raise ValueError('Boltz-CP config_files requires a native YAML config')
+    return source, source.parent
+
+def fold_cp_config_proteins(source: Path) -> tuple[Path, dict, list[dict]]:
+    """Inspect the one executable native config before any provider operation."""
+    import yaml
+    path, _ = _fold_cp_native_config(source)
+    payload = yaml.safe_load(path.read_text())
+    if not isinstance(payload, dict) or not isinstance(payload.get('sequences'), list):
+        raise ValueError('Invalid native Boltz-CP config')
+    proteins = []
+    for entry in payload['sequences']:
+        if not isinstance(entry, dict):
+            raise ValueError('Invalid native Boltz-CP sequence entry')
+        if 'protein' in entry:
+            protein = entry['protein']
+            if not isinstance(protein, dict) or not isinstance(protein.get('sequence'), str):
+                raise ValueError('Invalid native Boltz-CP protein entry')
+            proteins.append(protein)
+    return path, payload, proteins
+
 
 def fold_cp_msa_intent(params, input_roles):
     """Input preparation, not an MSA request for future prediction outputs."""
@@ -532,11 +565,13 @@ def bind_prepared_fold_cp_plan(invocation, supplied):
     records = manifest.get('configs', [])
     names = [r['path'] for r in records]
     actual = sorted(str(p.relative_to(root)) for p in root.rglob('*') if p.suffix in {'.yaml', '.yml'})
-    if not names or len(set(names)) != len(names) or sorted(names) != actual:
+    if (len(names) != 1 or Path(names[0]).parent != Path('.')
+            or sorted(names) != actual):
         raise ValueError('Prepared Fold-CP native config roster mismatch')
     if services[0].operation_identity is None:
         source = Path(native['bcp_input_path'])
-        files = sorted(source.rglob('*.yaml')) + sorted(source.rglob('*.yml')) if source.is_dir() else [source]
+        file, _ = _fold_cp_native_config(source)
+        files = [file]
         expected = {str(p.relative_to(source)) if source.is_dir() else p.name: digest(p.read_bytes()) for p in files}
         if {r['path']: r['source_sha256'] for r in records} != expected:
             raise ValueError('Prepared Fold-CP native source identity mismatch')
@@ -565,24 +600,20 @@ def bind_prepared_fold_cp_plan(invocation, supplied):
 
 
 def prepare_boltz_cp_bundle(params: dict, destination: Path) -> dict:
-    """Package every native config separately, retaining file and chain identity."""
+    """Package the single executable config, retaining file and chain identity."""
     import yaml
     if params.get('bcp_input_format', 'config_files') != 'config_files':
         return copy.deepcopy(params)
     source = Path(params.get('bcp_input_path') or params['input_path']).resolve()
-    files = sorted(source.rglob('*.yaml')) + sorted(source.rglob('*.yml')) if source.is_dir() else [source]
-    if not files or any(not p.is_file() or p.suffix not in {'.yaml', '.yml'} for p in files):
-        raise ValueError('Boltz-CP config_files requires native YAML configs')
-    base = source if source.is_dir() else source.parent
+    # Validate the complete roster before requesting even the first MSA.
+    file, base = _fold_cp_native_config(source)
+    files = [file]
     configs = []
     # Validate every declared config before any provider operation.
     for path in files:
         if not path.resolve().is_relative_to(base):
             raise ValueError('Boltz-CP config escapes input root')
-        payload = yaml.safe_load(path.read_text())
-        if not isinstance(payload, dict) or not isinstance(payload.get('sequences'), list):
-            raise ValueError('Invalid native Boltz-CP config')
-        proteins = [entry['protein'] for entry in payload['sequences'] if 'protein' in entry]
+        _, payload, proteins = fold_cp_config_proteins(path)
         configs.append((path, payload, proteins))
     records = []
     for index, (path, payload, proteins) in enumerate(configs):

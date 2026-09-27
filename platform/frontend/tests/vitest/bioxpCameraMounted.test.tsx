@@ -24,6 +24,9 @@ interface StreamState {
 }
 
 const camera = vi.hoisted(() => ({
+    readLights: vi.fn(),
+    writeLights: vi.fn(),
+    writeRgb: vi.fn(),
     pending: [] as PendingFrame[],
     status: {
         data: {
@@ -67,6 +70,9 @@ const camera = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/lib/bioxpClient', () => ({
+    getBioXpCameraIllumination: camera.readLights,
+    setBioXpCameraIllumination: camera.writeLights,
+    setBioXpCameraRgb: camera.writeRgb,
     useBioXpCameraStatus: () => camera.status,
     useBioXpCameraStreamState: () => camera.stream,
     startBioXpCameraStream: camera.startStream,
@@ -134,6 +140,11 @@ async function rejectNext(expectedGeneration: number, error: Error) {
 }
 
 beforeEach(() => {
+    camera.writeRgb.mockReset().mockImplementation(async (generation: number, rgb: number[]) => ({ ok: true, rgb, connection_generation: generation }));
+    camera.readLights.mockReset().mockImplementation(async (generation: number) => lightState(generation));
+    camera.writeLights.mockReset().mockImplementation(async (generation: number, channel: number, on: boolean) => ({
+        ...lightState(generation), ok: true, delivery_attempted: true, channel, on,
+    }));
     camera.pending.length = 0;
     camera.status.data = {
         state: 'live',
@@ -179,6 +190,157 @@ afterEach(async () => {
     Reflect.deleteProperty(URL, 'createObjectURL');
     Reflect.deleteProperty(URL, 'revokeObjectURL');
     vi.useRealTimers();
+});
+
+function lightState(generation: number, on: boolean | null = null) {
+    return { schema_version: 'bioxp.camera_illumination.v1', provider_generation: 1,
+        connection_generation: generation, channels: [1, 2, 3].map(channel => ({ channel, on })),
+        state_source: 'last_successful_command', physical_effect_verified: false };
+}
+const led = (channel: number, on: boolean) => container.querySelector<HTMLButtonElement>(`button[aria-label="LED${channel} ${on ? 'On' : 'Off'}"]`)!;
+
+describe('camera-box illumination', () => {
+    const streamLive = () => { camera.stream.data = { ...camera.stream.data, state: 'live', active: true }; };
+    const rgbButton = (label: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="RGB ${label}"]`)!;
+    it('sends RGB presets inside the camera box without restarting video or invoking motion', async () => {
+        streamLive();
+        camera.status.isError = true;
+        camera.status.error = new Error('passive status failed');
+        await renderPanel(1);
+        expect(container.querySelector('section[aria-label="Camera"] [aria-label="RGB deck/ring light"]')).not.toBeNull();
+        expect(container.textContent).toContain('Last successful command: Unknown');
+        for (const label of ['White', 'Red', 'Green', 'Blue', 'Off']) {
+            expect(rgbButton(label).disabled).toBe(false);
+            await act(async () => rgbButton(label).click());
+            expect(container.textContent).toContain(`Last successful command: ${label}`);
+        }
+        expect(camera.writeRgb.mock.calls).toEqual([[1, [255, 255, 255]], [1, [255, 0, 0]], [1, [0, 255, 0]], [1, [0, 0, 255]], [1, [0, 0, 0]]]);
+        expect(camera.startStream).not.toHaveBeenCalled();
+        expect(camera.stopStream).not.toHaveBeenCalled();
+        expect(camera.writeLights).not.toHaveBeenCalled();
+        expect(camera.pending).toEqual([]);
+    });
+    it('shows false-ok RGB errors, keeps last success and restores RGB controls', async () => {
+        await renderPanel(1);
+        await act(async () => rgbButton('Red').click());
+        camera.writeRgb.mockResolvedValueOnce({ ok: false, connection_generation: 1 });
+        await act(async () => rgbButton('Blue').click());
+        expect(container.textContent).toContain('Last successful command: Red');
+        expect(container.textContent).toContain('robot did not acknowledge all channels');
+        expect(rgbButton('Off').disabled).toBe(false);
+    });
+    it.each(['generation', 'disconnect'])('fences RGB pending results on %s and suppresses duplicates', async (change) => {
+        let finish!: (value: unknown) => void;
+        camera.writeRgb.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        await renderPanel(1);
+        await act(async () => { rgbButton('Red').click(); rgbButton('Red').click(); });
+        expect(camera.writeRgb).toHaveBeenCalledTimes(1);
+        expect(rgbButton('Blue').disabled).toBe(true);
+        expect(led(1, true).disabled).toBe(false);
+        await renderPanel(change === 'generation' ? 2 : 1, change !== 'disconnect');
+        await act(async () => finish({ ok: true, connection_generation: 1 }));
+        expect(container.textContent).toContain('Last successful command: Unknown');
+        expect(rgbButton('Off').disabled).toBe(change === 'disconnect');
+    });
+    it.each(['stopped', 'live', 'error'])('keeps all three On/Off controls usable with %s camera', async (state) => {
+        if (state === 'live') streamLive();
+        if (state === 'error') {
+            camera.status.isError = true;
+            camera.status.error = new Error('passive status failed');
+            camera.stream.isError = true;
+            camera.stream.error = new Error('passive stream status failed');
+        }
+        await renderPanel(1);
+        expect(container.querySelector('section[aria-label="Camera"] [aria-label="Camera illumination"]')).not.toBeNull();
+        expect(container.textContent).toContain('Last command (not optical readback)');
+        for (const channel of [1, 2, 3]) {
+            expect(container.textContent).toContain(`LED${channel}: Unknown`);
+            for (const on of [true, false]) {
+                expect(led(channel, on).disabled).toBe(false);
+                await act(async () => led(channel, on).click());
+            }
+        }
+        expect(camera.writeLights.mock.calls).toEqual([1, 2, 3].flatMap(channel => [[1, channel, true], [1, channel, false]]));
+        expect(camera.startStream).not.toHaveBeenCalled();
+        expect(camera.stopStream).not.toHaveBeenCalled();
+        expect(camera.pending).toEqual([]);
+        expect(camera.readLights).toHaveBeenCalledTimes(7);
+    });
+
+    it('suppresses same-channel duplicates only and restores buttons after refusal', async () => {
+        let reject!: (error: Error) => void;
+        camera.writeLights.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+        await renderPanel(1);
+        await act(async () => { led(1, true).click(); led(1, true).click(); led(1, false).click(); });
+        expect(camera.writeLights).toHaveBeenCalledTimes(1);
+        expect(led(1, false).disabled).toBe(true);
+        expect(led(2, true).disabled).toBe(false);
+        await act(async () => reject(new Error('OEM refused')));
+        expect(container.textContent).toContain('OEM refused');
+        expect(led(1, true).disabled).toBe(false);
+        await act(async () => led(1, false).click());
+        expect(camera.writeLights).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['generation', 'disconnect'])('discards late reads and command responses after %s change', async (change) => {
+        let resolveRead!: (value: ReturnType<typeof lightState>) => void;
+        let resolveWrite!: (value: ReturnType<typeof lightState>) => void;
+        camera.readLights.mockImplementationOnce(() => new Promise(resolve => { resolveRead = resolve; }));
+        camera.writeLights.mockImplementationOnce(() => new Promise(resolve => { resolveWrite = resolve; }));
+        await renderPanel(1);
+        await act(async () => led(1, true).click());
+        await renderPanel(change === 'generation' ? 2 : 1, change !== 'disconnect');
+        const reads = camera.readLights.mock.calls.length;
+        await act(async () => { resolveRead(lightState(1, true)); resolveWrite(lightState(1, true)); });
+        expect(container.textContent).toContain('LED1: Unknown');
+        expect(camera.readLights).toHaveBeenCalledTimes(reads);
+        expect(led(1, true).disabled).toBe(change === 'disconnect');
+    });
+
+    it('refreshes only on actual preview ownership changes, not status poll churn', async () => {
+        await renderPanel(1);
+        camera.readLights.mockResolvedValue(lightState(1, true));
+        streamLive();
+        camera.stream.data = { ...camera.stream.data, camera_ownership_epoch: 2, stream_id: 'new' };
+        await renderPanel(1);
+        expect(container.textContent).toContain('LED1: On');
+        expect(camera.readLights).toHaveBeenCalledTimes(2);
+        camera.stream.data = { ...camera.stream.data };
+        await renderPanel(1);
+        expect(camera.readLights).toHaveBeenCalledTimes(2);
+        camera.stream.data = { ...camera.stream.data, active: false, state: 'off', camera_ownership_epoch: 3 };
+        await renderPanel(1);
+        expect(camera.readLights).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not poll illumination and a failed cached read does not disable lights', async () => {
+        vi.useFakeTimers();
+        camera.readLights.mockRejectedValueOnce(new Error('cached lights unavailable'));
+        await renderPanel(1);
+        expect(container.textContent).toContain('LED1: Unknown');
+        expect(led(1, true).disabled).toBe(false);
+        await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+        expect(camera.readLights).toHaveBeenCalledTimes(1);
+        await act(async () => led(1, true).click());
+        expect(camera.writeLights).toHaveBeenCalledWith(1, 1, true);
+    });
+
+    it('discards an older cached read after a command and its refetch', async () => {
+        let finish!: (value: ReturnType<typeof lightState>) => void;
+        camera.readLights.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        await renderPanel(1);
+        camera.readLights.mockResolvedValue(lightState(1, true));
+        await act(async () => led(1, true).click());
+        expect(container.textContent).toContain('LED1: On');
+        await act(async () => finish(lightState(1, false)));
+        expect(container.textContent).toContain('LED1: On');
+    });
+
+    it('retains existing mutation permission', async () => {
+        await act(async () => root.render(<BioXpCameraPanel connected connectionGeneration={1} mutationEnabled={false} />));
+        for (const channel of [1, 2, 3]) expect(led(channel, true).disabled).toBe(true);
+        expect(camera.writeLights).not.toHaveBeenCalled();
+    });
 });
 
 describe('mounted BioXP camera URL ownership', () => {

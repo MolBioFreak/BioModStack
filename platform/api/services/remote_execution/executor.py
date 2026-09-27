@@ -63,6 +63,28 @@ class RemoteStagingIncomplete(RemoteExecutionError):
     pass
 
 
+async def _join_mutation(task: asyncio.Task) -> None:
+    """Do not leave a thread mutating after its guard/session/staging owner exits."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+        except Exception:
+            break
+    if not task.cancelled():
+        task.exception()  # Consume a failed writer only on the cancellation path.
+
+
+async def _joined_thread(fn, *args, **kwargs):
+    task = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await _join_mutation(task)
+        raise
+
+
 def is_remote_run_id(value: Any) -> bool:
     return isinstance(value, str) and value.startswith(REMOTE_RUN_PREFIX)
 
@@ -591,11 +613,18 @@ async def _launch_remote_job_owned(
                 raise RemoteExecutionError("Remote target attachment or lease changed during preparation")
 
         await _verify_launch_runner(session, job, connection, target)
-        bundle = await asyncio.to_thread(
+        preparation = asyncio.create_task(asyncio.to_thread(
             prepare_remote_bundle, job=job, target=target, command=command,
             native_invocation=native_invocation,
             environment=environment, attempt_id=requested_attempt_id,
-        )
+        ))
+        try:
+            bundle = await asyncio.shield(preparation)
+        except asyncio.CancelledError:
+            await _join_mutation(preparation)
+            if not preparation.cancelled() and preparation.exception() is None:
+                bundle = preparation.result()
+            raise
         await refresh_admission_target()
         from .targets import admit_target_resources
         from .bundle import bind_resource_admission
@@ -605,7 +634,7 @@ async def _launch_remote_job_owned(
             required_memory_bytes=required['memory_bytes'], required_scratch_bytes=required['scratch_bytes'],
             gpu_ids=resources['gpu_ids'], minimum_gpu_memory_mb=resources.get('minimum_gpu_memory_mb', 0))
         resource_monitor = _resource_monitor_contract(job, bundle, native_invocation, admission)
-        bundle = await asyncio.to_thread(bind_resource_admission, bundle, admission, resource_monitor=resource_monitor)
+        bundle = await _joined_thread(bind_resource_admission, bundle, admission, resource_monitor=resource_monitor)
         resources = json.loads(bundle.envelope.environment['BMS_TARGET_RESOURCES'])
         run_id = f"{REMOTE_RUN_PREFIX}{bundle.attempt_id}"
         provenance = dict(job.provenance or {})
@@ -621,7 +650,7 @@ async def _launch_remote_job_owned(
         }):
             fenced = True
             raise RemoteExecutionError("Remote preparing claim was superseded")
-        await asyncio.to_thread(_archive_envelope, bundle)
+        await _joined_thread(_archive_envelope, bundle)
         job_id, target_id, attempt_id = str(job.id), str(job.execution_target_id), bundle.attempt_id
         lease_epoch = target.lease_acquired_at
         assignment = dict((job.provenance or {}).get("remote_execution_assignment") or {})
@@ -710,9 +739,9 @@ async def _launch_remote_job_owned(
         raise RemoteExecutionError(str(exc)) from exc
     finally:
         if bundle is not None:
-            await asyncio.to_thread(_cleanup_local_bundle, bundle)
+            await _joined_thread(_cleanup_local_bundle, bundle)
         else:
-            await asyncio.to_thread(shutil.rmtree,
+            await _joined_thread(shutil.rmtree,
                 get_data_root() / "remote-execution" / "staging" / requested_attempt_id, True)
 
 
@@ -1333,9 +1362,13 @@ async def remote_status(session: AsyncSession, job: Job, *, recover_staging: boo
         raise RemoteExecutionError("Remote attempt status does not match the BMS Job")
     receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
     prior_boot = receipt.get("boot_id")
-    if status.generation != receipt.get("generation", 0):
+    cancelling = job.queue_status in {"cancelling", "cancelled"} or job.status == "cancelled"
+    # A checkpoint may have advanced while the controller was offline. Its
+    # generation cannot authorize science/replay, but stop owns the *entire*
+    # attempt and must still reach its newly running writer.
+    if not cancelling and status.generation != receipt.get("generation", 0):
         raise RemoteExecutionError("Component generation observation is stale; retain attempt ownership")
-    if receipt.get("continuation_lease_id") and status.continuation_lease_id != receipt["continuation_lease_id"]:
+    if not cancelling and receipt.get("continuation_lease_id") and status.continuation_lease_id != receipt["continuation_lease_id"]:
         raise RemoteExecutionError("Checkpoint generation observation is stale; retain lease")
     if prior_boot and status.boot_id != prior_boot and status.state not in TERMINAL_REMOTE_STATES:
         raise RemoteExecutionError("Attempt boot epoch changed without lost/terminal reconciliation")
@@ -1460,7 +1493,7 @@ async def _fetch_result_manifest(
     reader = (
         "import pathlib,sys; "
         "p=pathlib.Path(sys.argv[1]); n=int(sys.argv[2]); "
-        "b=p.read_bytes(); "
+        "f=p.open('rb'); b=f.read(n+1); f.close(); "
         "(_ for _ in ()).throw(RuntimeError('manifest too large')) if len(b)>n else None; "
         "sys.stdout.buffer.write(b)"
     )
@@ -1514,10 +1547,12 @@ async def _fetch_result_manifest(
                 # the final complete-package inventory/hash check.
                 import re
 
-                temporary_for = any(
-                    path.parent == incoming / Path(name).parent
-                    and re.fullmatch(r"\." + re.escape(Path(name).name) + r"\.[A-Za-z0-9]{6}", path.name)
-                    for name in declared
+                # Decode the exact rsync sibling once, then use the existing
+                # manifest index. Scanning every declared artifact for every
+                # interrupted temporary file made retry quadratic.
+                match = re.fullmatch(r"\.(.+)\.[A-Za-z0-9]{6}", path.name, re.DOTALL)
+                temporary_for = match is not None and (
+                    relative[:-len(path.name)] + match.group(1) in declared
                 )
                 if temporary_for:
                     path.unlink()
@@ -1642,13 +1677,16 @@ async def _recover_result_generation(session, job):
     if fence.rowcount != 1:
         await session.rollback()
         raise RemoteExecutionError("Result publication recovery lost current DB fence")
-    repaired = await asyncio.to_thread(recover, job)
+    repaired = await _joined_thread(recover, job)
     await session.commit()
     return repaired
 
 
 async def _finish_remote_cancellation(session: AsyncSession, job: Job, status=None) -> bool:
-    if job.remote_attempt_id and (status is None or not getattr(status, "quiescent", False)):
+    target = (await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
+              if job.execution_target_id else None)
+    leased = bool(target and target.leased_job_id == str(job.id))
+    if job.remote_attempt_id and leased and (status is None or not getattr(status, "quiescent", False)):
         return False
     if not await cancel_local_result_transfer(job, guard_owned=True):
         return False
@@ -1669,6 +1707,10 @@ async def _finish_remote_cancellation(session: AsyncSession, job: Job, status=No
             "state": "completed",
             "completed_at": datetime.utcnow().isoformat() + "Z",
             "run_identity": str(job.nextflow_run_id or ""),
+            "remote_stop_verified": bool(
+                (status is not None and status.state in TERMINAL_REMOTE_STATES and status.quiescent)
+                or cancellation_receipt.get("remote_stop_verified") is True
+            ),
         }
     )
     params["cancellation_receipt"] = cancellation_receipt
@@ -1679,7 +1721,7 @@ async def _finish_remote_cancellation(session: AsyncSession, job: Job, status=No
         "error_message": job.error_message or "Cancelled by user",
         "awaiting_input": False, "awaiting_stage": None, "awaiting_payload": {},
         "current_stage": None, "stage_progress": None, "retry_count": 0,
-    }, release_lease=True)
+    }, release_lease=leased, require_lease=leased)
 
 
 # Retain controller tasks independently of browser/HTTP request lifetime.
@@ -1705,7 +1747,8 @@ async def reconcile_remote_job(session: AsyncSession, job: Job, *, background_ta
     # Release the observation guard before entering the same reservation lane
     # used by manual pulls. Refresh persisted authority, including revocation.
     job = await session.get(Job, job_id, populate_existing=True)
-    if job is None or job.remote_state != "results_available" or not automatic_result_return_enabled(job):
+    if (job is None or job.remote_state not in {"results_available", "returning"}
+            or not automatic_result_return_enabled(job)):
         return changed
     from fastapi import BackgroundTasks
 
@@ -1838,11 +1881,13 @@ async def _service_remote_external_inputs(session, job, status) -> None:
 async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
     """Reconcile one running remote Job. Return true when local state changed."""
     job_id = str(job.id)
+    # A cancellation after the output rename but before its DB commit must
+    # restore the prior visible result, not leave an uncommitted generation.
     await _recover_result_generation(session, job)
-    if job.remote_state in {'checkpoint_resume_requested', 'checkpoint_resume_uncertain'}:
+    if job.queue_status not in {"cancelling", "cancelled"} and job.status != "cancelled" and job.remote_state in {'checkpoint_resume_requested', 'checkpoint_resume_uncertain'}:
         return await _recover_remote_checkpoint(session, job)
     pending = (job.provenance or {}).get('component_retry') or {}
-    if job.remote_state in {'component_retry_requested', 'component_retry_uncertain'}:
+    if job.queue_status not in {"cancelling", "cancelled"} and job.status != "cancelled" and job.remote_state in {'component_retry_requested', 'component_retry_uncertain'}:
         # Reconcile the durable operation BEFORE ordinary generation comparison.
         # Never auto-authorize a replacement or repeat a scientific start.
         _, _, _, _, edge, observed = await _observe_component_retry(session, job, pending)
@@ -1852,19 +1897,60 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
     if job.status in {"completed", "failed", "cancelled"}:
         changed = await _recover_diagnostic_return(session, job)
         target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
+        if job.status == "cancelled" and not job.remote_attempt_id:
+            if job.nextflow_run_id and (job.params or {}).get("cancellation_receipt", {}).get("remote_stop_verified") is not True:
+                # A run id without an attempt cannot be correlated to an
+                # observed remote shutdown; leave its worker excluded.
+                return changed
+            return await _finish_remote_cancellation(session, job) or changed
+        if job.status == "cancelled" and job.remote_attempt_id and (
+                target is None or target.leased_job_id != str(job.id)):
+            # Compute can release its lease before local result return finishes.
+            if job.remote_state == "cancelled":
+                return changed
+            return await _finish_remote_cancellation(session, job) or changed
         if target is None or target.leased_job_id != str(job.id) or not job.remote_attempt_id:
             return changed
-        observed = await remote_status(session, job)
+        identity = _pull_identity(job)
+        try:
+            observed = await remote_status(session, job)
+        except RemoteExecutionError:
+            if job.status != "cancelled":
+                raise
+            # Stale status is not shutdown proof; still request the owned stop.
+            await cancel_remote_job(job, guard_owned=True)
+            return changed
+        await session.rollback()
+        job = await session.get(Job, job_id, populate_existing=True)
+        target = await session.get(ExecutionTarget, str(identity["execution_target_id"]), populate_existing=True)
+        if (job is None or _pull_identity(job) != identity or
+                job.status not in {"completed", "failed", "cancelled"} or
+                target is None or target.leased_job_id != job_id):
+            return changed
+        if job.status == "cancelled":
+            if observed.state not in TERMINAL_REMOTE_STATES or not observed.quiescent:
+                # Retaining a lease is not cleanup: actively request stop.
+                await cancel_remote_job(job, guard_owned=True)
+                observed = await remote_status(session, job)
+            if observed.state in TERMINAL_REMOTE_STATES and observed.quiescent:
+                return await _finish_remote_cancellation(session, job, observed) or changed
+            return changed
         if observed.state in TERMINAL_REMOTE_STATES and observed.quiescent:
             released = await _publish_remote_transition(session, job,
                 {"remote_state": job.remote_state}, release_lease=True)
             return released or changed
         return changed
-    if job.remote_state == "returning":
-        if (job.status, job.queue_status) != ("running", "running"):
-            return False
-        return await _pull_failure(session, job, "Result pull interrupted; choose Retry pull")
-    if job.awaiting_stage == "remote_results":
+    if job.queue_status == "cancelling" and not job.remote_attempt_id and not job.nextflow_run_id:
+        return await _finish_remote_cancellation(session, job)
+    if job.remote_state == "returning" and job.queue_status != "cancelling":
+        if not automatic_result_return_enabled(job):
+            return await _pull_failure(session, job, "Result pull interrupted; choose Retry pull")
+        if (job.provenance or {}).get("remote_result_resume_attempted") == _pull_identity(job):
+            return await _pull_failure(session, job, "Automatic result pull recovery interrupted; choose Retry pull")
+        # The previous controller may have died mid-transfer. The same attempt
+        # guard and transfer journal resume it after the guard becomes free.
+        return False
+    if job.awaiting_stage == "remote_results" and job.queue_status != "cancelling":
         return False
     expected_run_id = str(job.nextflow_run_id or "")
     expected_attempt_id = str(job.remote_attempt_id or "")
@@ -1982,6 +2068,13 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
             raise RemoteExecutionError("Resumed remote attempt has no valid started receipt")
         return await _publish_started_receipt(session, job, status)
     if job.queue_status == "preparing":
+        if status.state in TERMINAL_REMOTE_STATES and status.quiescent and status.started_at is None:
+            return await _publish_remote_transition(session, job, {
+                "status": "failed", "queue_status": "failed", "remote_state": "launch_failed",
+                "error_message": status.error or "Remote attempt stopped before starting",
+                "completed_at": datetime.utcnow(), "assigned_gpu": None,
+                "params": release_scheduler_gpu_assignment(job.params),
+            }, release_lease=True)
         if status.started_at is None or status.state not in {"running", *TERMINAL_REMOTE_STATES}:
             return False
         return await _publish_started_receipt(session, job, status)
@@ -2074,6 +2167,8 @@ def _pull_identity(job):
 
 
 async def _pull_failure(session, job, message):
+    if (job.status, job.queue_status, job.remote_state) != ("running", "running", "returning"):
+        return False
     return await _publish_remote_transition(session, job, {
         "status": "awaiting_input", "queue_status": "completed",
         "awaiting_input": True, "awaiting_stage": "remote_results",
@@ -2084,7 +2179,8 @@ async def _pull_failure(session, job, message):
 
 async def request_remote_result_pull(session, job, background_tasks, *, automatic=False):
     """Reserve transfer before responding; keep the process lock through completion."""
-    if automatic and (job.remote_state != "results_available" or not automatic_result_return_enabled(job)):
+    if automatic and (job.remote_state not in {"results_available", "returning"}
+                      or not automatic_result_return_enabled(job)):
         return False
     if (not job.execution_target_id or not job.remote_attempt_id
             or not all(isinstance(value, str) and value.strip() and value != "None"
@@ -2109,19 +2205,39 @@ async def request_remote_result_pull(session, job, background_tasks, *, automati
             if automatic:
                 return False
             raise RemoteExecutionError("Remote result attempt changed; refresh the Job")
-        if automatic and (job.remote_state != "results_available"
-                          or not automatic_result_return_enabled(job)
-                          or (job.status, job.queue_status) != ("awaiting_input", "completed")):
+        resuming = automatic and job.remote_state == "returning"
+        if automatic and not automatic_result_return_enabled(job):
+            return False
+        if resuming:
+            # One durable recovery reservation only. A second controller crash
+            # leaves explicit Retry pull available instead of a blind loop.
+            if ((job.provenance or {}).get("remote_result_resume_attempted") == identity
+                    or (job.status, job.queue_status) != ("running", "running")):
+                return False
+            # A prior controller's transport may still own the incoming tree.
+            # Waiting for its supervisor receipt must not spend the sole retry.
+            from .result_generation import GenerationError, prepare_transfer, staging_path
+            digest = ((job.provenance or {}).get("remote_execution_receipt") or {}).get("result_manifest_sha256")
+            if digest:
+                try:
+                    prepare_transfer(staging_path(job, digest))
+                except GenerationError:
+                    return False
+        elif automatic and (job.remote_state != "results_available"
+                            or (job.status, job.queue_status) != ("awaiting_input", "completed")):
             return False
         if (job.status not in {"awaiting_input", "running"}
                 or job.remote_state not in {"results_available", "result_pull_failed", "returning"}
                 or job.awaiting_stage != "remote_results"
                 or not job.awaiting_input or job.awaiting_payload != _pull_identity(job)):
             raise RemoteExecutionError("Job is not awaiting an explicit result pull")
-        if not await _publish_remote_transition(session, job, {
+        changes = {
             "status": "running", "queue_status": "running", "remote_state": "returning",
             "error_message": None,
-        }, require_lease=False):
+        }
+        if resuming:
+            changes["provenance"] = dict(job.provenance or {}, remote_result_resume_attempted=identity)
+        if not await _publish_remote_transition(session, job, changes, require_lease=False):
             raise RemoteExecutionError("Remote result attempt changed; refresh the Job")
         background_tasks.add_task(_run_requested_pull, str(job.id), _pull_identity(job), guard)
         scheduled = True
@@ -2675,7 +2791,7 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
             validate_remote_stage_receipts(output_root=native_incoming, job_id=str(job.id),
                 attempt_id=expected_attempt_id, manifest=native_manifest)
         try:
-            local_artifact_root, previous_generation = await asyncio.to_thread(
+            local_artifact_root, previous_generation = await _joined_thread(
                 _publish_result_generation, job, incoming)
         except (OSError, RemoteExecutionError) as exc:
             raise RemoteCollectionPending(str(exc)) from exc

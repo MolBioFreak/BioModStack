@@ -77,8 +77,11 @@ export function isBmsFeatureEnabled(features: BmsFeatures, feature: BmsFeatureKe
     return features[feature];
 }
 
-export function isBmsFeatureVisible(state: BmsFeatureState, feature: BmsFeatureKey, showDevFeatures: boolean): boolean {
-    return state.features[feature] && (showDevFeatures || !state.devFeatures[feature]);
+export function isBmsFeatureVisible(state: BmsFeatureState, feature: BmsFeatureKey, showDevFeatures: boolean, known = true): boolean {
+    // A checked dev-tools control owns visibility while an install-status read is unavailable.
+    // A validated disable still hides the add-on.
+    return (state.features[feature] || (!known && showDevFeatures))
+        && (showDevFeatures || !state.devFeatures[feature]);
 }
 
 export function resolveShowDevFeaturesDefault(viteDev: boolean, storedValue: string | null): boolean {
@@ -120,7 +123,7 @@ export function useBmsFeatures(): BmsFeatures {
     return useBmsFeatureState().features;
 }
 
-export function useResolvedBmsFeatures(): { features: BmsFeatures; resolved: boolean } {
+export function useResolvedBmsFeatures(): { features: BmsFeatures; resolved: boolean; known: boolean } {
     const query = useQuery({
         queryKey: ['bms-install-features'],
         queryFn: fetchBmsFeatureState,
@@ -129,6 +132,7 @@ export function useResolvedBmsFeatures(): { features: BmsFeatures; resolved: boo
     return {
         features: resolveBmsFeatureQueryState(query.data, query.isError).features,
         resolved: query.isSuccess || query.isError,
+        known: query.data !== undefined,
     };
 }
 
@@ -146,11 +150,11 @@ export function resolveBmsFeatureQueryState(
     return data;
 }
 
-export function useBmsFeatureState(): BmsFeatureState {
+export function useBmsFeatureState(): BmsFeatureState & { known: boolean } {
     const query = useQuery({
         queryKey: ['bms-install-features'],
         queryFn: fetchBmsFeatureState,
         staleTime: 60_000,
     });
-    return resolveBmsFeatureQueryState(query.data, query.isError);
+    return { ...resolveBmsFeatureQueryState(query.data, query.isError), known: query.data !== undefined };
 }

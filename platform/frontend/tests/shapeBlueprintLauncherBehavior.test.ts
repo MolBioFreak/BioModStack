@@ -25,6 +25,11 @@ Object.defineProperty(globalThis, 'sessionStorage', {
     },
 });
 
+Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: Object.assign(new EventTarget(), { devicePixelRatio: 1, sessionStorage }),
+});
+
 const numberInput = (root: ReactTestInstance, min: number, max: number) => {
     const input = root.findAllByType('input').find((node) =>
         node.props.type === 'number' && node.props.min === min && node.props.max === max);
@@ -162,7 +167,7 @@ test('Shape Blueprint numeric state stays within the API integer contract', asyn
 
     const root = renderer!.root;
     const targetLength = numberInput(root, 40, 600);
-    const backbones = numberInput(root, 1, 32);
+    const backbones = numberInput(root, 1, 200);
     const sequences = numberInput(root, 1, 8);
     const seed = numberInput(root, 0, 2147483647);
 
@@ -174,7 +179,7 @@ test('Shape Blueprint numeric state stays within the API integer contract', asyn
     assert.equal(numberInput(root, 40, 600).props.value, 600);
 
     await act(async () => backbones.props.onChange({ target: { value: '0' } }));
-    assert.equal(numberInput(root, 1, 32).props.value, 1);
+    assert.equal(numberInput(root, 1, 200).props.value, 1);
     await act(async () => sequences.props.onChange({ target: { value: '9' } }));
     assert.equal(numberInput(root, 1, 8).props.value, 8);
     await act(async () => seed.props.onChange({ target: { value: '-1' } }));

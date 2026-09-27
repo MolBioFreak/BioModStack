@@ -84,12 +84,21 @@ def test_supported_generator_normalization_and_native_custody(mode, workflow, st
     assert not (tmp_path / 'not-materialized').exists()
 
 
-@pytest.mark.parametrize('model,mode', [('boltzgen', 'nanobody_binder'), ('ppiflow', 'generator_backbone_refine')])
-def test_standalone_engines_still_rejected(model, mode):
+def test_initial_boltzgen_is_public_and_distinct_from_historical_parent():
+    request = normalize_job_request(JobCreate(name='native', model_id='boltzgen',
+        mode='nanobody_binder', params={'target_pdb': '/fixture/target.pdb'}))
+    assert request.params['boltzgen_generation_mode'] == 'nanobody_binder'
+    assert resolve_nextflow_entrypoint(effective_profile='boltzgen', model_id='boltzgen',
+        mode=request.mode) == 'workflows/boltzgen_generation.nf'
+
+
+def test_standalone_partial_flow_is_not_reinterpreted_as_initial_generation():
     with pytest.raises(HTTPException):
-        normalize_job_request(JobCreate(name='unsupported', model_id=model, mode=mode, params={}))
-    with pytest.raises(ValueError, match='internal de-novo engine'):
-        resolve_nextflow_entrypoint(effective_profile=model, model_id=model, mode=mode)
+        normalize_job_request(JobCreate(name='unsupported', model_id='ppiflow',
+            mode='generator_backbone_refine', params={}))
+    with pytest.raises(ValueError, match='Unsupported generation mode'):
+        resolve_nextflow_entrypoint(effective_profile='ppiflow', model_id='ppiflow',
+            mode='generator_backbone_refine')
 
 
 @pytest.mark.parametrize('mode,params', [
@@ -410,6 +419,7 @@ else:
     deny.mkdir()
     (deny/'sitecustomize.py').write_text("import socket\ndef denied(*a,**k): raise RuntimeError('OUTBOUND_DENIED')\nsocket.socket.connect=denied\nsocket.socket.connect_ex=denied\nsocket.create_connection=denied\n")
     env = {**os.environ, 'PATH':str(shim)+':'+os.environ['PATH'], 'BMS_API_PYTHON':sys.executable,
+           'BMS_HOME': str(root),
            'BMS_COMPONENT_JOB_ID':'00000000-0000-0000-0000-000000000001', 'BMS_COMPONENT_OUTPUT_DIR':str(tmp_path/'parent-out'),
            'PYTHONPATH':str(deny)+':'+os.environ.get('PYTHONPATH',''),
            'JAVA_TOOL_OPTIONS':'--add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED',

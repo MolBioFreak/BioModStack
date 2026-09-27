@@ -21,10 +21,12 @@ describe('De Novo Design product boundary', () => {
         assert.match(template, /num_designs: numDesigns/);
         assert.match(template, /seed/);
         assert.match(template, /dump_trajectories: dumpTrajectories/);
-        assert.match(template, /<details[\s\S]*Experimental backup methods[\s\S]*DISCO[\s\S]*La-Proteina[\s\S]*<\/details>/);
+        assert.doesNotMatch(template, /Experimental backup methods/);
+        assert.match(template, /aria-label="Design task"/);
+        assert.match(template, /DISCO/);
+        assert.match(template, /La-Proteina/);
         assert.equal(template.includes("mode === 'rfd3_iteration'"), true);
-        assert.equal(template.includes("initialMode === 'rfd3_local_redesign' || initialMode === 'region_redesign'"), true);
-        assert.equal(template.includes("submissionModelId={reopenValidatedPipeline ? 'protein_modification_experimental' : 'protein_local_redesign'}"), true);
+        assert.match(template, /submissionModelId=\{validatedRedesign \? 'protein_modification_experimental' : 'protein_local_redesign'\}/);
         assert.equal(template.includes('submissionMode='), false);
         assert.equal(template.includes('Protein Hunter'), false);
         assert.equal(template.includes('Iterative Binder Design'), false);
@@ -37,11 +39,11 @@ describe('De Novo Design product boundary', () => {
         assert.equal(submission.includes("protein_cad_experimental: 'protein_modification_experimental'"), true);
         assert.equal(submission.includes("\n            id: 'protein_local_redesign'"), false);
         assert.equal(submission.includes("selectedTemplateId === 'protein_local_redesign'"), false);
-        assert.equal(submission.includes('!LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS.has(t.id)'), true);
-        assert.match(
-            submission,
-            /name: 'De Novo Design'[\s\S]*RFD3 \(Preferred\)[\s\S]*RFD3 Iteration[\s\S]*Shape Blueprint[\s\S]*DISCO \/ La-Proteina \(Backup\)/,
-        );
+        const catalog = src('lib/launcherCatalog.ts');
+        assert.match(submission, /visibleLauncherTemplates/);
+        assert.match(catalog, /name: 'De Novo Design'[\s\S]*Generate · RFD3[\s\S]*Redesign structure[\s\S]*Shape[\s\S]*DISCO · La-Proteina/);
+        assert.match(catalog, /'protein_cad_experimental', 'protein_local_redesign'/);
+        assert.match(submission, /isDeNovoModel\(data.model_id\)/);
     });
 
     it('documents all engines on the parent rather than separate product inventory entries', () => {

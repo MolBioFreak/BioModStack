@@ -126,17 +126,32 @@ def modify_pdb_file(input_pdb, output_pdb, fixed_residues):
     
     logger.info(f"Added {len(fixed_residues)} FIXED remarks to {os.path.basename(output_pdb)}")
 
-def validate_generic_input(pdb_path):
-    """The same native input rule is used at admission and preparation."""
+def validate_generic_input(pdb_path, request=None):
+    """Use the same explicit author-role contract at admission and preparation."""
     if __package__:
-        from .prep_fampnn_constraints_generic import pdb_domain
+        from .proteinmpnn_native_binding import role_contract, pdb_domain
     else:
-        from prep_fampnn_constraints_generic import pdb_domain
+        from proteinmpnn_native_binding import role_contract, pdb_domain
     pdb_path = Path(pdb_path)
-    domain = pdb_domain(pdb_path)
-    if len({chain for chain, _ in domain}) != 1:
+    if not (request and request.get('binder_chains')):
+        data = pdb_path.read_bytes()
+        role_contract(pdb_path, request, data=data)
+        return pdb_domain(pdb_path, text=data.decode())
+    if __package__:
+        from .prep_fampnn_constraints_generic import pdb_domain as legacy_domain
+    else:
+        from prep_fampnn_constraints_generic import pdb_domain as legacy_domain
+    domain = legacy_domain(pdb_path)
+    roles = bool(request and request.get('binder_chains'))
+    if roles:
+        if __package__:
+            from .proteinmpnn_binder_roles import role_selection
+        else:
+            from proteinmpnn_binder_roles import role_selection
+        role_selection(domain, request)
+    if not roles and len({chain for chain, _ in domain}) != 1:
         raise ValueError('generic ProteinMPNN multi-chain design requires an explicit native role contract; binder runner fixes the last chain')
-    numbers = {n for _, n in domain}
+    numbers = set(range(1, len(domain) + 1)) if roles else {n for _, n in domain}
     for line in pdb_path.read_text().splitlines():
         if 'PDBinfo-LABEL:' not in line or 'FIXED' not in line:
             continue
@@ -146,7 +161,7 @@ def validate_generic_input(pdb_path):
     return domain
 
 
-def process_files(input_dir, out_dir, generic=False):
+def process_files(input_dir, out_dir, generic=False, request=None):
     """Process all PDB files in the input directory"""
     logger = logging.getLogger()
     
@@ -160,10 +175,18 @@ def process_files(input_dir, out_dir, generic=False):
     total_fixed = 0
     for pdb_path in pdb_files:
         if generic:
-            # Native FIXED labels are the authority, not experimental B-factors
-            # or synthetic RFD inpaint metadata. Do not rewrite their dialect.
-            validate_generic_input(pdb_path)
-            (Path(out_dir) / pdb_path.name).write_bytes(pdb_path.read_bytes())
+            if request and request.get('binder_chains'):
+                # Native FIXED labels are the authority, not experimental B-factors
+                # or synthetic RFD inpaint metadata. Do not rewrite their dialect.
+                validate_generic_input(pdb_path, request)
+                (Path(out_dir) / pdb_path.name).write_bytes(pdb_path.read_bytes())
+            else:
+                # Explicit author roles, not experimental B-factors/CDR inference.
+                if __package__:
+                    from .proteinmpnn_native_binding import prepare
+                else:
+                    from proteinmpnn_native_binding import prepare
+                prepare(pdb_path, Path(out_dir) / pdb_path.name, request)
             continue
         # Look for corresponding JSON file
         json_path = pdb_path.with_suffix('.json')
@@ -220,6 +243,7 @@ def main():
     parser.add_argument('--input_dir', required=True, help='Directory containing PDB and JSON files')
     parser.add_argument('--canonical_results', action='store_true', help='Copy exact payload-bound native PDB/JSON candidate pairs')
     parser.add_argument('--generic', action='store_true', help='Preserve only explicit native FIXED authority and all input bytes')
+    parser.add_argument('--request_base64', help='Model-owned chain/residue role settings')
     parser.add_argument('--out_dir', default='mpnn_input', help='Output directory for modified PDB files')
     
     args = parser.parse_args()
@@ -231,7 +255,9 @@ def main():
     if args.canonical_results:
         canonical_results(args.input_dir, args.out_dir)
     else:
-        process_files(args.input_dir, args.out_dir, generic=args.generic)
+        import base64
+        request = json.loads(base64.b64decode(args.request_base64, validate=True)) if args.request_base64 is not None else None
+        process_files(args.input_dir, args.out_dir, generic=args.generic, request=request)
     
     logger.info("Script completed successfully")
 

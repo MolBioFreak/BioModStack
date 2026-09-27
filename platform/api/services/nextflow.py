@@ -502,8 +502,28 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
     "dual_docking": "workflows/docking.nf",
 }
 
+from services.bindcraft2_runtime import NATIVE_ACTIONS as BC2_NATIVE_ACTIONS
+from services.caliby_native import SUPPORTED_MODES as CALIBY_NATIVE_MODES
+from services.ligandmpnn_design import MODES as LIGANDMPNN_DESIGN_MODES
+
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
+    **{('bindcraft2', native_mode): 'workflows/bindcraft2.nf'
+       for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
+    ('binder_refinement', 'refine'): 'workflows/binder_refinement.nf',
+    ('caliby_binder', 'design'): 'workflows/caliby_binder.nf',
+    **{('caliby_experimental', native_mode): 'workflows/caliby_native.nf'
+       for native_mode in CALIBY_NATIVE_MODES},
+    **{('boltzgen', generation_mode): 'workflows/boltzgen_generation.nf'
+       for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder')},
+    **{('ppiflow', generation_mode): 'workflows/ppiflow_generation.nf'
+       for generation_mode in ('protein_binder', 'antibody_binder', 'nanobody_binder')},
     **{pair: 'workflows/protein_sequence_design.nf' for pair in PUBLIC_SEQUENCE_MODES},
+    # Selected post-round diagnostic only; not a sequence-design mode. The
+    # enabled LigandMPNN YAML must not advertise it before the parent submits
+    # its sealed, nonempty selection manifest through this exact route.
+    ('ligandmpnn', 'interface_context'): 'workflows/ligandmpnn_interface_context.nf',
+    **{('ligandmpnn', native_mode): 'workflows/ligandmpnn_design.nf'
+       for native_mode in LIGANDMPNN_DESIGN_MODES},
     ("antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", "default"): "workflows/antibody_denovo.nf",
@@ -517,6 +537,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("protenix", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("esmfold2", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("esmfold2", "complex"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("esmfold2", "blind_pose"): "workflows/binder_blind_pose.nf",
     ("esmfold2_experimental", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("esmfold2_experimental", "complex"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("boltz2", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
@@ -581,9 +602,17 @@ def resolve_nextflow_entrypoint(
         raise ValueError("This retired workflow has been permanently removed")
 
     if normalized_model_id in {"boltzgen", "ppiflow"}:
-        raise ValueError(
-            "This is an internal de-novo engine; launch the antibody_denovo workflow"
+        # Initial generation has its own typed native path. Historical seeded
+        # partial flow stays under its existing antibody parent identity; an
+        # unknown mode must not fall through to an unrelated protein workflow.
+        generation_entrypoint = MODEL_MODE_WORKFLOW_ENTRYPOINTS.get(
+            (normalized_model_id, normalized_mode)
         )
+        if generation_entrypoint is None:
+            raise ValueError(
+                f"Unsupported generation mode '{normalized_mode}' for '{normalized_model_id}'"
+            )
+        return generation_entrypoint
 
     if (
         normalized_model_id == "protein_modification_experimental"
@@ -617,6 +646,36 @@ def resolve_nextflow_entrypoint(
     return WORKFLOW_ENTRYPOINTS.get(normalized_profile, DEFAULT_WORKFLOW_ENTRYPOINT)
 
 
+def _read_recent_progress_lines(log_path: Path, max_lines: int = 200) -> str:
+    """Read the existing progress window without rescanning an entire native log.
+
+    Native tqdm output may use carriage returns rather than newline bytes. Keep
+    TextIO's universal-newline semantics, including CRLF split across chunks.
+    This is display-only progress parsing, never execution or completion truth.
+    """
+    import io
+
+    if max_lines <= 0:
+        return ""
+    chunks: list[bytes] = []
+    separators = 0
+    newer_first_byte = b""
+    with log_path.open("rb") as reader:
+        position = reader.seek(0, os.SEEK_END)
+        while position > 0 and separators <= max_lines:
+            size = min(position, 64 * 1024)
+            position -= size
+            reader.seek(position)
+            chunk = reader.read(size)
+            separators += chunk.count(b"\n") + chunk.count(b"\r") - chunk.count(b"\r\n")
+            if chunk.endswith(b"\r") and newer_first_byte == b"\n":
+                separators -= 1
+            newer_first_byte = chunk[:1]
+            chunks.append(chunk)
+    text = b"".join(reversed(chunks)).decode("utf-8", errors="replace")
+    return "".join(io.StringIO(text, newline=None).readlines()[-max_lines:])
+
+
 def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -> Optional[str]:
     """
     Parse progress from a Nextflow work directory's .command.log.
@@ -640,8 +699,7 @@ def parse_stage_progress(work_dir: str, stage: str, total_designs: int = None) -
             log_path = Path(work_dir) / candidate
             if not log_path.exists():
                 continue
-            with open(log_path, 'r', errors='replace') as f:
-                content_chunks.append(''.join(f.readlines()[-200:]))
+            content_chunks.append(_read_recent_progress_lines(log_path))
         if not content_chunks:
             return None
         content = '\n'.join(content_chunks)
@@ -2729,7 +2787,11 @@ async def launch_nextflow_job(
             launch_params = workflow_params(job, launch_params)
             component_retry = (job.provenance or {}).get('component_retry')
             checkpoint_resume = (job.provenance or {}).get('component_checkpoint_resume') or component_retry
-            if checkpoint_resume:
+            if checkpoint_resume or (
+                    model_id == 'boltzgen' and job.mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}
+                    and launch_params.get('boltzgen_yaml_config')):
+                # Public generation was already resolved and snapshotted by
+                # admission. Do not redownload/reannotate the original scaffold.
                 boltzgen_notes = []
             else:
                 launch_params, boltzgen_notes = await prepare_boltzgen_params_for_launch(launch_params)
@@ -4013,15 +4075,19 @@ def _native_plan_metadata_settings(model_id, params):
     from copy import deepcopy
     from paths import get_results_dir, get_inputs_dir, get_data_root
     settings = deepcopy(params)
-    key = 'cm_request' if model_id == 'conformational_mapping' else 'md_config' if model_id == 'molecular_dynamics' else None
+    key = ('cm_request' if model_id == 'conformational_mapping'
+           else 'md_config' if model_id == 'molecular_dynamics'
+           else 'shape_request' if model_id == 'protein_modification_experimental' and params.get('shape_request_path')
+           else None)
     if key is None:
         return settings
-    if key in settings:
+    if key in settings and key != 'shape_request':
         return settings
     if model_id == 'molecular_dynamics' and isinstance(params.get('md_job_spec'), dict):
         settings[key] = deepcopy(params['md_job_spec'])
         return settings
-    name = params.get('cm_request_path' if key == 'cm_request' else 'md_job_config')
+    name = params.get({'cm_request': 'cm_request_path', 'md_config': 'md_job_config',
+                       'shape_request': 'shape_request_path'}[key])
     if not name:
         return settings
     path = Path(str(name)).expanduser()
@@ -4033,6 +4099,12 @@ def _native_plan_metadata_settings(model_id, params):
     document = json.loads(path.read_bytes())
     if not isinstance(document, dict):
         raise ValueError('Selected native configuration must be an object')
+    if key == 'shape_request':
+        from scripts.shape_blueprint.plan_rfd3_batches import _validate_request_hash
+        _validate_request_hash(document)
+        if (document.get('request_id') != params.get('shape_request_id')
+                or document.get('request_sha256') != params.get('shape_request_sha256')):
+            raise ValueError('Shape request snapshot identity mismatch')
     settings[key] = document
     return settings
 
@@ -4139,6 +4211,21 @@ def compile_workflow_provision_request(request):
     typed = JobCreate.model_validate(payload)
     original = deepcopy(typed.params)
     registry = get_registry()
+    if (typed.model_id, typed.mode) == ('frustrampnn', 'analyze'):
+        from services.frustrampnn.jobs import load_prepared_child
+        errors = registry.validate_job_params(typed.model_id, typed.mode, typed.params,
+            native_entrypoint=MODEL_MODE_WORKFLOW_ENTRYPOINTS[(typed.model_id, typed.mode)])
+        if errors:
+            raise ValueError('; '.join(errors))
+        # The immutable batch embeds its retained Job ID and output root.
+        # Review reopens that construction; it must not invent a preview owner.
+        child = load_prepared_child(typed)
+        child.provenance = {**(child.provenance or {}), 'core_protein_requested_params': original}
+        invocation = compile_job_nextflow_invocation(
+            child, typed.params, child.output_dir, _preview_only=True)
+        if invocation.requested_json != canonical_bytes(original):
+            raise ValueError('Workflow provision changed requested scientific identity')
+        return invocation
     model = registry.get_model(typed.model_id)
     native_entrypoint = None
     if (typed.model_id == 'template_antibody_denovo'
@@ -4175,6 +4262,9 @@ def compile_workflow_provision_request(request):
     params['remote_result_policy'] = typed.execution_policy.remote_result_policy
     request_id = digest(typed.model_dump(mode='json'))
     output = get_results_dir() / '.provision-preview' / request_id
+    if typed.model_id == 'bindcraft2' and typed.mode != 'campaign' and params.get('bc2_compilation'):
+        from routers.jobs import _bc2_prepared_action_output
+        _, output = _bc2_prepared_action_output(params, typed.mode)
     snapshot = SimpleNamespace(
         id='provision-' + request_id[:32], model_id=typed.model_id, mode=typed.mode,
         params=params, provenance=provenance, pinned_gpu=typed.pinned_gpu,
@@ -4954,7 +5044,10 @@ def compile_nextflow_invocation(
     if str(model_id or "").strip() == "frustrampnn":
         if str(mode or "").strip() != "analyze":
             raise ValueError("frustrampnn supports only mode=analyze")
-        unknown = sorted(set(params) - {"frustrampnn_batch_manifest_path", "_frustrampnn_child_v1", "gpu_id"})
+        unknown = sorted(set(params) - {
+            "frustrampnn_batch_manifest_path", "_frustrampnn_child_v1", "gpu_id",
+            "workflow_adapter", "_global_resource_admission", "_global_dispatch_authority",
+        })
         if unknown:
             raise ValueError(
                 "scheduler-owned FrustraMPNN launch parameters fail closed: "
@@ -5039,7 +5132,7 @@ def compile_nextflow_invocation(
                 if hashlib.sha256(payload).hexdigest() != record.get(f"{kind}_sha256"):
                     raise ValueError(f"FrustraMPNN {kind} digest binding is invalid")
         gpu_id = params.get("gpu_id")
-        if isinstance(gpu_id, bool) or not isinstance(gpu_id, int) or gpu_id < 0:
+        if not _preview_only and (isinstance(gpu_id, bool) or not isinstance(gpu_id, int) or gpu_id < 0):
             raise ValueError("FrustraMPNN requires a non-negative scheduler-assigned gpu_id")
         workflow_entrypoint = resolve_nextflow_entrypoint(
             effective_profile="frustrampnn",
@@ -5059,14 +5152,14 @@ def compile_nextflow_invocation(
             str(output_dir),
             "--frustrampnn_batch_manifest_path",
             batch_manifest_path,
-            "--frustrampnn_physical_gpu_id",
-            str(gpu_id),
         ]
+        if not _preview_only:
+            command.extend(["--frustrampnn_physical_gpu_id", str(gpu_id)])
+            native_parameters['frustrampnn_physical_gpu_id'] = gpu_id
         if job_id:
             command.extend(["--job_id", str(job_id)])
         native_parameters.update(out_dir=str(output_dir), job_id=str(job_id),
-            frustrampnn_batch_manifest_path=batch_manifest_path,
-            frustrampnn_physical_gpu_id=gpu_id)
+            frustrampnn_batch_manifest_path=batch_manifest_path)
         return finish_command(command)
 
     if str(model_id or "").strip() == "conformational_mapping":
@@ -5158,10 +5251,8 @@ def compile_nextflow_invocation(
             raise ValueError("Molecular-dynamics analysis is CPU-only and rejects GPU assignment")
     if normalized_model_id == "bind" + "craft":
         raise ValueError("This retired workflow has been permanently removed")
-    if str(model_id or "").strip().lower() == "caliby_experimental":
-        raise ValueError(
-            "Standalone Caliby has been retired; select Caliby inside a supported parent design workflow"
-        )
+    if normalized_model_id == "caliby_experimental" and normalized_mode not in CALIBY_NATIVE_MODES:
+        raise ValueError("Historical Caliby design mode remains retired")
     normalized_model_id = str(model_id or "").strip().lower()
     normalized_mode = str(mode or "").strip().lower()
     if normalized_model_id == "protein_hunter_experimental" or (
@@ -5174,6 +5265,15 @@ def compile_nextflow_invocation(
 
     is_generic_sequence_command = (model_id, mode) in PUBLIC_SEQUENCE_MODES
     definition = None
+    if model_id in {'binder_refinement', 'caliby_binder'}:
+        from model_registry import get_registry
+        definition = get_registry().get_internal_model_definition(model_id)
+        if definition is not None:
+            # Selected wrappers must not inherit the legacy parent profile's
+            # active stages or defaults. Use their one model-owned definition.
+            for field in definition.params:
+                if field.default is not None:
+                    params.setdefault(field.name, deepcopy(field.default))
     if model_id in {'fampnn', 'proteinmpnn'} and not is_generic_sequence_command:
         raise ValueError('Unsupported public sequence-design model/mode')
     if is_generic_sequence_command:
@@ -5259,6 +5359,18 @@ def compile_nextflow_invocation(
         ('molecular_dynamics', 'simulate'): 'molecular_dynamics_coordinator',
         ('molecular_dynamics', 'replica'): 'molecular_dynamics',
         ('molecular_dynamics', 'analyze'): 'molecular_dynamics_analysis',
+        **{('bindcraft2', native_mode): 'bindcraft2'
+           for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
+        ('binder_refinement', 'refine'): 'maturation_child',
+        ('caliby_binder', 'design'): 'protein_sequence_design',
+        **{('caliby_experimental', native_mode): 'protein_sequence_design'
+           for native_mode in CALIBY_NATIVE_MODES},
+        **{('boltzgen', generation_mode): 'boltzgen'
+           for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder')},
+        **{('ppiflow', generation_mode): 'workstation_ryzen7960x'
+           for generation_mode in ('protein_binder', 'antibody_binder', 'nanobody_binder')},
+        ('ligandmpnn', 'interface_context'): 'ligandmpnn_interface_context',
+        ('esmfold2', 'blind_pose'): 'esmfold2',
         ('esmfold2', 'predict'): 'esmfold2',
         ('esmfold2', 'complex'): 'esmfold2',
         ('esmfold2_experimental', 'predict'): 'esmfold2',
@@ -5361,7 +5473,8 @@ def compile_nextflow_invocation(
     # Handle GPU priority forcing
     gpu_priority = params.get('gpu_priority', 'auto')
     
-    profile = f"{effective_profile},workstation_ryzen7960x"
+    profile = (effective_profile if effective_profile == 'workstation_ryzen7960x'
+               else f"{effective_profile},workstation_ryzen7960x")
 
     if model_id == 'molecular_dynamics':
         profile = {
@@ -5467,12 +5580,17 @@ def compile_nextflow_invocation(
         "boltz_models": explicit_boltz_models,
         "alphafold_params": explicit_alphafold_params,
     }
-    if is_generic_sequence_command:
+    if (is_generic_sequence_command or model_id in {'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen'}
+            or model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES):
         # No diffusion, prediction or hosted/local MSA stage is selected by the
         # sequence-only wrapper. Do not demand their unselected input stores.
         for key in ('rfd_models', 'af2_models', 'boltz_models', 'alphafold_params'):
             explicit_path_defaults.pop(key, None)
-    if not is_fastq_only_ont_command and not is_generic_sequence_command:
+    if (not is_fastq_only_ont_command and not is_generic_sequence_command
+            and model_id not in {'bindcraft2', 'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen'}
+            and not (model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES)
+            and (model_id, mode) not in {('ligandmpnn', 'interface_context'),
+                                         ('esmfold2', 'blind_pose')}):
         explicit_path_defaults.update({
             "msa_local_db": explicit_msa_db,
             "msa_cache_dir": explicit_msa_cache,
@@ -5481,6 +5599,180 @@ def compile_nextflow_invocation(
         if params.get(key) in (None, ""):
             cmd.extend([f"--{key}", str(value)])
             native_parameters[key] = str(value)
+
+    if model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES:
+        from services.ligandmpnn_design import science_params, prepare_design_request, read_prepared_request
+        science = science_params(mode, params)
+        params.update(science)
+        native_parameters.update(science)
+        request_path = params.get('ligandmpnn_design_request')
+        source_path = params.get('ligandmpnn_design_input')
+        if request_path:
+            from paths import get_inputs_dir, get_results_dir
+            read_prepared_request(mode, params,
+                allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()))
+            native_parameters.update(ligandmpnn_design_request=str(request_path),
+                                     ligandmpnn_design_input=str(source_path))
+        elif _preview_only:
+            request_path = Path(output_dir) / '.ligandmpnn-design-request.json'
+            plan_input(request_path, json.dumps(prepare_design_request(mode, science),
+                       sort_keys=True, allow_nan=False).encode('utf-8'))
+            source_path = science['target_pdb']
+        else:
+            raise ValueError('LigandMPNN requires its materialized native request')
+        cmd.extend(['--ligandmpnn_design_request', str(request_path),
+                    '--ligandmpnn_design_input', str(source_path)])
+        for key in (*explicit_path_defaults, 'gpu_id', 'cpus'):
+            if key in params and params[key] is not None:
+                cmd.extend(['--' + key, str(params[key])])
+                native_parameters[key] = params[key]
+        return finish_command(cmd)
+
+    if model_id == 'caliby_experimental' and mode in CALIBY_NATIVE_MODES:
+        from services.caliby_native import science_params
+        science = science_params(mode, params)
+        params.update(science)
+        native_parameters.update(science)
+        request_dir = params.get('caliby_request_dir')
+        if request_dir:
+            from paths import get_inputs_dir, get_results_dir
+            from services.caliby_native import read_prepared_request
+            read_prepared_request(mode, params, request_dir,
+                                  allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()))
+            native_parameters['caliby_request_dir'] = str(request_dir)
+        elif _preview_only:
+            # Preview observes source inputs; this not-yet-created destination
+            # is command metadata, never an input directory to rediscover.
+            request_dir = str(Path(output_dir) / 'inputs' / 'caliby-native')
+        else:
+            raise ValueError('Caliby requires its materialized native request')
+        cmd.extend(['--caliby_request_dir', str(request_dir)])
+        for key in (*explicit_path_defaults, 'gpu_id', 'cpus'):
+            if key in params and params[key] is not None:
+                cmd.extend(['--' + key, str(params[key])])
+                native_parameters[key] = params[key]
+        return finish_command(cmd)
+
+    if model_id == 'ppiflow':
+        from services.ppiflow_generation import (
+            normalize_ppiflow_generation_params, parameter_contract,
+            read_prepared_ppiflow_generation_request,
+        )
+        science_names = {field['name'] for field in parameter_contract(mode)}
+        params.update(normalize_ppiflow_generation_params(mode, {
+            key: value for key, value in params.items() if key in science_names
+        }))
+        request_dir = params.get('ppiflow_generation_request')
+        if request_dir:
+            from paths import get_inputs_dir, get_results_dir
+            read_prepared_ppiflow_generation_request(mode, params, request_dir,
+                allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()))
+        elif _preview_only:
+            # Logical transport destination only; pure preview writes no files.
+            request_dir = str(Path(output_dir) / 'inputs' / 'ppiflow-generation')
+        else:
+            raise ValueError('PPIFlow generation requires its materialized native request')
+        transport = {'ppiflow_generation_request': str(request_dir),
+                     'ppiflow_weights_dir': str(Path(explicit_weights_root) / 'ppiflow')}
+        params['ppiflow_generation_request'] = str(request_dir)
+        # Scientific settings live losslessly in request.json, not flattened
+        # argv where empty/null fields can be lost or turn into boolean flags.
+        for key in (*explicit_path_defaults, 'gpu_id', 'cpus'):
+            if key in params and params[key] is not None:
+                transport[key] = params[key]
+        for key, value in transport.items():
+            cmd.extend(['--' + key, str(value)])
+            native_parameters[key] = value
+        return finish_command(cmd)
+
+    if model_id == 'boltzgen' and mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}:
+        from services.boltzgen_request_compatibility import parameter_contract, normalize_boltzgen_generation_request
+        fields = parameter_contract(mode)
+        accepted = {field['name'] for field in fields}
+        accepted.update(alias for field in fields for alias in field.get('aliases', ()))
+        settings = normalize_boltzgen_generation_request(mode, {
+            key: value for key, value in params.items() if key in accepted
+        })
+        prepared = params.get('boltzgen_yaml_config')
+        if not prepared:
+            if not _preview_only:
+                raise ValueError('BoltzGen generation requires its materialized native input tree')
+            prepared = str(Path(output_dir) / 'inputs' / 'boltzgen-generation')
+        # Source files are already represented by the owned YAML tree. Retain
+        # their original names in the Job readback, not as new launch inputs.
+        science = {field['name']: settings[field['name']] for field in fields
+                   if field['type'] not in {'file', 'object'}}
+        science['boltzgen_mode'] = mode
+        science['boltzgen_generation_mode'] = mode
+        # Carry the existing producer contract and prepared-byte binding through
+        # this early return just as the historical BoltzGen compiler does.
+        for key in ('core_protein_scientific_contract', 'boltzgen_prepared_sha256'):
+            if key in params:
+                science[key] = params[key]
+        settings_path = str(Path(output_dir) / '.boltzgen-generation-settings.json')
+        plan_input(Path(settings_path), json.dumps(science, sort_keys=True, indent=2, allow_nan=False).encode('utf-8'))
+        cmd.extend(['-params-file', settings_path, '--boltzgen_yaml_config', str(prepared)])
+        native_parameters.update(science)
+        native_parameters['boltzgen_yaml_config'] = str(prepared)
+        native_parameters['boltzgen_generation_settings_path'] = settings_path
+        params.update(settings)
+        params['boltzgen_yaml_config'] = str(prepared)
+        for key in (*explicit_path_defaults, 'gpu_id', 'cpus'):
+            if key in params and params[key] is not None:
+                cmd.extend([f'--{key}', str(params[key])])
+                native_parameters[key] = params[key]
+        return finish_command(cmd)
+
+    if model_id == 'bindcraft2':
+        from services.bindcraft2_launch import read_campaign_receipt
+        from services.bindcraft2_runtime import validate_action_options
+        from services.bindcraft2_typed import validate_request
+        settings = params.get('bindcraft2_settings')
+        if mode == 'campaign':
+            validate_request(settings)
+            preview_digest = params.get('bc2_preview_digest')
+            if (not isinstance(preview_digest, str) or
+                    len(preview_digest) != 64 or
+                    any(char not in '0123456789abcdef' for char in preview_digest)):
+                raise ValueError('BC2 campaign requires its native preview digest')
+        else:
+            validate_action_options(mode, params.get('bc2_action_options', {}))
+        campaign = Path(output_dir).resolve() / 'bindcraft2'
+        expected = {'bc2_compilation': str(campaign / 'compilation.json'),
+                    'bc2_campaign_dir': str(campaign)}
+        if not _preview_only:
+            if any(params.get(key) != value for key, value in expected.items()):
+                raise ValueError('BC2 job-owned compilation paths changed')
+            receipt = read_campaign_receipt(Path(output_dir))
+            if (receipt['requested_settings'] != settings or
+                    receipt['effective_sha256'] != params.get('bc2_effective_sha256') or
+                    receipt['effective_settings'] != params.get('bc2_effective_settings')):
+                raise ValueError('BC2 compiled effective settings differ from saved Job')
+            if mode != 'campaign' and receipt.get('native_action') != {
+                'operation': mode, 'options': params.get('bc2_action_options', {}),
+                'source_job_id': params.get('bc2_source_job_id'),
+            }:
+                raise ValueError('BC2 native action differs from saved Job')
+        for key, value in expected.items():
+            cmd.extend([f'--{key}', value])
+            native_parameters[key] = value
+        return finish_command(cmd)
+
+    if (model_id, mode) == ('ligandmpnn', 'interface_context'):
+        from services.ligandmpnn_interface_publication import KEY, verify_binding
+        binding = params.get(KEY)
+        if not isinstance(binding, dict):
+            raise ValueError('Selected LigandMPNN request binding is absent')
+        verify_binding(binding)
+        manifest = params.get('interface_context_manifest')
+        if not isinstance(manifest, str) or manifest != binding['manifest']:
+            raise ValueError('Selected LigandMPNN manifest changed')
+        cmd.extend(['--interface_context_manifest', manifest])
+        native_parameters['interface_context_manifest'] = manifest
+        if params.get('gpu_id') is not None:
+            cmd.extend(['--gpu_id', str(params['gpu_id'])])
+            native_parameters['gpu_id'] = params['gpu_id']
+        return finish_command(cmd)
 
     if is_generic_sequence_command:
         assert definition is not None  # Resolved and checked above.
@@ -5493,8 +5785,13 @@ def compile_nextflow_invocation(
             'sequence_design_engine', 'sequence_design_mode', 'seqs_per_design',
             'enable_fampnn_filter', 'fampnn_max_psce', 'fampnn_max_residue_psce',
             'mpnn_max_score',
+            # Selected-source identity is an ordered list, not scalar argv.
+            'iteration_source_design_ids',
         }
-        settings = {key: value for key, value in params.items() if key in science_keys}
+        # Selected-source identity uses the same typed params document rather
+        # than falling through to the scalar-only runtime argv transport.
+        settings_keys = science_keys | {'iteration_source_design_ids'}
+        settings = {key: value for key, value in params.items() if key in settings_keys}
         settings_path = Path(output_dir) / '.sequence-design-settings.json'
         plan_input(settings_path, json.dumps(settings, allow_nan=False, sort_keys=True).encode('utf-8'))
         cmd.extend(['-params-file', str(settings_path),
@@ -5502,7 +5799,7 @@ def compile_nextflow_invocation(
         native_parameters.update(settings)
         native_parameters['sequence_design_settings_path'] = str(settings_path)
         for key, value in params.items():
-            if key in science_keys or value is None or value == '':
+            if key in settings_keys or value is None or value == '':
                 continue
             if key == 'fampnn_analysis_declaration' and isinstance(value, dict):
                 bind_fampnn_declaration(cmd, value)
@@ -6107,6 +6404,9 @@ def compile_nextflow_invocation(
         params['bcp_size_cp'] = derived_size_cp
 
         params.setdefault('bcp_input_format', 'config_files')
+        if params['bcp_input_format'] == 'config_files' and params.get('bcp_input_path'):
+            from services.model_msa_handoff import fold_cp_config_proteins
+            fold_cp_config_proteins(Path(params['bcp_input_path']))
         params.setdefault('bcp_output_format', 'mmcif')
         params.setdefault('bcp_write_full_pae', False)
         for retired_key in tuple(params):
@@ -6159,7 +6459,27 @@ def compile_nextflow_invocation(
 
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'boltz_cp_experimental'
-    elif model_id in {'esmfold2', 'esmfold2_experimental'}:
+    elif model_id == 'esmfold2' and mode == 'blind_pose':
+        from types import SimpleNamespace
+        from services.binder_blind_pose_selected import KEY, _verify_request_snapshots, BlindPoseError
+        binding = params.get(KEY)
+        if not isinstance(binding, dict):
+            raise ValueError('Selected blind pose requires its persisted request binding')
+        try:
+            _verify_request_snapshots(SimpleNamespace(params=params), binding)
+        except (BlindPoseError, KeyError, OSError) as exc:
+            raise ValueError('Selected blind pose request changed') from exc
+        # The leaf consumes only sealed staged inputs and explicitly typed sampling
+        # controls. Never compile these as a generic structure-prediction launch.
+        allowed = ('blind_pose_selection_manifest', 'blind_pose_candidate_pdbs', 'target_pdb',
+                   'esmfold2_validation_variant', 'esmf_model_id_or_path',
+                   'esmfold2_validation_num_loops', 'esmfold2_validation_num_sampling_steps',
+                   'esmfold2_validation_num_diffusion_samples', 'esmf_seed')
+        missing = [key for key in allowed[:-1] if key not in params]
+        if missing:
+            raise ValueError('Selected blind pose missing ' + ', '.join(missing))
+        params = {key: params[key] for key in allowed if key in params}
+    elif model_id in {'esmfold2', 'esmfold2_experimental'} and mode != 'blind_pose':
         if 'core_protein_scientific_contract' in params:
             # Validate typed values before stringifying them into Nextflow flags.
             # This import is route-free and never imports the scientific runtime.
@@ -6340,7 +6660,13 @@ def compile_nextflow_invocation(
             if key in ('sequence_name', 'job_name', 'name'):
                 value = sanitize_filename(str(value))
             
-            if isinstance(value, bool):
+            if ((model_id, mode) == ('binder_refinement', 'refine')
+                    and key in {'cdr_positions_by_loop', 'manual_cdr_definitions'}):
+                # The selected wrapper decodes these existing native mask
+                # settings; comma-joining objects or dropping maps loses science.
+                cmd.extend([f"--{nf_key}", json.dumps(value, separators=(',', ':'))])
+                native_parameters[nf_key] = value
+            elif isinstance(value, bool):
                 cmd.extend([f"--{nf_key}", str(value).lower()])
                 native_parameters[nf_key] = value
             elif isinstance(value, list):

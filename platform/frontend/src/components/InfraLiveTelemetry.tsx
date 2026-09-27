@@ -7,10 +7,7 @@ import {
     deactivateExecutionTarget,
     discoverHardware,
     EXECUTION_TARGET_STORAGE_KEY,
-    fetchFanControl,
     fetchExecutionTargets,
-    fetchPowerControl,
-    fetchSchedulerConfig,
     fetchSystemStatus,
     fetchTelemetryChartHistory,
     refreshVastExecutionTargets,
@@ -50,9 +47,8 @@ import type {
     WindowPreset,
 } from './infraTelemetryHistory';
 import { useSystemStatus } from '../lib/useSystemStatus';
-import { jobPollingInterval } from '../lib/queryPolling';
+import { usePowerControl, useFanControl, useSchedulerConfig } from '../lib/useControlState';
 
-const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
 const SHARED_SYSTEM_QUERY_KEY = ['system'];
 const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
 const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
@@ -1141,34 +1137,6 @@ function HistoricalTelemetryFallback({
 }
 
 
-export function InfraControlStateCollector() {
-    useQuery({
-        queryKey: SHARED_POWER_CONTROL_QUERY_KEY,
-        queryFn: fetchPowerControl,
-        refetchInterval: (query) => jobPollingInterval(SHARED_CONTROL_POLL_INTERVAL_MS, query),
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
-
-    useQuery({
-        queryKey: SHARED_FAN_CONTROL_QUERY_KEY,
-        queryFn: fetchFanControl,
-        refetchInterval: (query) => jobPollingInterval(SHARED_CONTROL_POLL_INTERVAL_MS, query),
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
-
-    useQuery({
-        queryKey: SHARED_SCHEDULER_CONFIG_QUERY_KEY,
-        queryFn: fetchSchedulerConfig,
-        refetchInterval: (query) => jobPollingInterval(SHARED_CONTROL_POLL_INTERVAL_MS, query),
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
-
-    return null;
-}
-
 function vastOperationErrorMessage(error: unknown): string {
     const detail = (error as { response?: { data?: { detail?: unknown } } } | null)?.response?.data?.detail;
     if (typeof detail === 'string' && detail.trim()) return detail;
@@ -1296,26 +1264,11 @@ export function InfraLiveTelemetry({
         bucketIntervalMs,
     );
 
-    const { data: powerControlData } = useQuery({
-        queryKey: SHARED_POWER_CONTROL_QUERY_KEY,
-        queryFn: fetchPowerControl,
-        enabled: false,
-        staleTime: Infinity,
-    });
+    const { data: powerControlData } = usePowerControl();
 
-    const { data: fanControlData } = useQuery({
-        queryKey: SHARED_FAN_CONTROL_QUERY_KEY,
-        queryFn: fetchFanControl,
-        enabled: false,
-        staleTime: Infinity,
-    });
+    const { data: fanControlData } = useFanControl();
 
-    const { data: schedulerConfigData } = useQuery({
-        queryKey: SHARED_SCHEDULER_CONFIG_QUERY_KEY,
-        queryFn: fetchSchedulerConfig,
-        enabled: false,
-        staleTime: Infinity,
-    });
+    const { data: schedulerConfigData } = useSchedulerConfig();
 
     const manualMutation = useMutation({
         mutationFn: ({ gpuIndex, limitWatts }: { gpuIndex: number; limitWatts: number }) =>
@@ -1385,7 +1338,8 @@ export function InfraLiveTelemetry({
         if (attachVastMutation.isError && !executionTargetsQuery.isError && executionTargetsQuery.data?.data.some(
             (target) => target.provider === 'vast'
                 && target.provider_instance_id === attachVastMutation.variables
-                && target.active,
+                && target.active && target.state === 'ready'
+                && target.setup?.phase === 'ready' && !target.last_error,
         )) {
             attachVastMutation.reset();
         }
@@ -1410,14 +1364,7 @@ export function InfraLiveTelemetry({
     const currentLimits = powerControlData?.data.limits ?? {};
     const currentFanControls = fanControlData?.data.gpus ?? {};
     const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};
-    useEffect(() => {
-        if (executionTargetsQuery.isPending) return;
-        const saved = window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY);
-        const ready = !executionTargetsQuery.isError && executionTargetsQuery.data?.data.some(
-            (target) => target.id === saved && target.active && target.state === 'ready',
-        );
-        if (saved && !ready) window.sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
-    }, [executionTargetsQuery.data, executionTargetsQuery.isError, executionTargetsQuery.isPending]);
+    // Inventory refresh never changes placement. The picker blocks an unavailable selection.
     const vastTargets = executionTargetsQuery.isError
         ? []
         : (executionTargetsQuery.data?.data ?? []).filter((target) => target.provider === 'vast');
@@ -1525,7 +1472,7 @@ export function InfraLiveTelemetry({
                 <div role="status" className="mb-3 text-sm text-[var(--text-muted)]">No owned Vast instances. Local execution is available.</div>
             )}
             {executionTargetsQuery.isError && (
-                <div role="alert" className="mb-3 text-sm text-amber-200">Vast inventory unavailable or expired. Discover again; Local remains available.</div>
+                <div role="alert" className="mb-3 text-sm text-amber-200">Vast inventory unavailable or expired. Discover again; any selected worker is retained, not switched to Local.</div>
             )}
             {vastTargets.length > 0 && (
                 <div className="mb-4 space-y-2" aria-label="Vast workers">

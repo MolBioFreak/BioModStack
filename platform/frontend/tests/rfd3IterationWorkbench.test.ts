@@ -40,7 +40,7 @@ test('RFD3 exposes one source-to-submit iteration workbench', () => {
     assert.match(template, /Execution Depth/);
     assert.match(template, /Native RFD3 only/);
     assert.match(template, /Continue through sequence design and validation/);
-    assert.match(modes, /RFD3 Iteration Workbench/);
+    assert.match(modes, /Redesign structure/);
     assert.doesNotMatch(modes, /RFD3 Native Local Edit/);
     assert.doesNotMatch(modes, /Validated Region Redesign/);
 });
@@ -93,9 +93,9 @@ test('RFD3 uses its bounded run and exact-context RCSB source picker', () => {
     assert.match(template, /pendingRoleHydration/);
     assert.match(template, /initialValues\.select_unfixed_sequence/);
     assert.match(template, /initialValues\.sequence_redesign_ranges/);
-    assert.match(template, /selectResidueKeysFromRanges/);
+    assert.match(template, /hydrateRoleResidues/);
     assert.match(template, /setSelectedSequenceRecallResidues\(recalled\)/);
-    assert.match(template, /setContextChains\(chainSummaries/);
+    assert.match(template, /setContextChains\(selectedTarget.contextChainIds \?\? chainSummaries/);
     assert.match(template, /The selected source must load successfully before submission/);
     assert.match(template, /setDesignChain\(''\)/);
     assert.match(template, /setContextChains\(\[\]\)/);

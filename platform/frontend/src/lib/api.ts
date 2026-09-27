@@ -16,6 +16,47 @@ export const api = axios.create({
     baseURL: API_BASE,
 });
 
+export interface BlindPoseSelectedRequest {
+    source_job_id: string;
+    execution_target_id?: string | null;
+    launch_context_id?: string | null;
+    candidate_documents?: import('./binderDiagnosticSelection').CandidateDocuments;
+    target_name?: string;
+    design_ids: string[];
+    binder_chains: Record<string, string[]>;
+    target_chains: string[];
+    settings: {
+        model_variant: 'fast' | 'full'; model_id_or_path: string;
+        num_loops: number; num_sampling_steps: number; num_diffusion_samples: number; seed?: number;
+    };
+}
+export const fetchCalibyNativeResults = async (jobId: string): Promise<import('../components/NativeSequenceResults').CalibyNativeResults> =>
+    (await api.get<import('../components/NativeSequenceResults').CalibyNativeResults>(`/api/jobs/${encodeURIComponent(jobId)}/caliby-native-results`)).data;
+export const fetchLigandMPNNDesignResults = async (jobId: string): Promise<import('../components/NativeSequenceResults').LigandMPNNDesignResults> =>
+    (await api.get<import('../components/NativeSequenceResults').LigandMPNNDesignResults>(`/api/jobs/${encodeURIComponent(jobId)}/ligandmpnn-design-results`)).data;
+
+export interface SelectedNativeResult {
+    records: Array<Record<string, unknown>>;
+    [key: string]: unknown;
+}
+export const submitBlindPoseSelected = async (request: BlindPoseSelectedRequest): Promise<Job> => {
+    const { data } = await submitPreparedJobAction(() =>
+        api.post<Job & { launched_job?: Job }>('/api/blind-pose/selected', request));
+    return data.launched_job ?? data;
+};
+export const fetchBlindPoseSelectedResult = async (jobId: string): Promise<SelectedNativeResult> =>
+    (await api.get<SelectedNativeResult>(`/api/blind-pose/${encodeURIComponent(jobId)}/result`)).data;
+export const submitLigandInterfaceContext = async (
+    request: import('../components/BindLigandMPNNInterfaceContext').BindInterfaceContextSelection,
+): Promise<{ job: Job; selection: import('../components/BindLigandMPNNInterfaceContext').BindInterfaceContextSelection }> => {
+    const { data } = await submitPreparedJobAction(() =>
+        api.post<{ job: Job; launched_job?: Job; selection: import('../components/BindLigandMPNNInterfaceContext').BindInterfaceContextSelection }>(
+            '/api/ligandmpnn/interface-context/selected', request));
+    return { job: data.launched_job ?? data.job, selection: data.selection };
+};
+export const fetchLigandInterfaceContextResult = async (jobId: string): Promise<SelectedNativeResult> =>
+    (await api.get<SelectedNativeResult>(`/api/ligandmpnn/interface-context/${encodeURIComponent(jobId)}/result`)).data;
+
 api.interceptors.request.use((config) => {
     if (config.headers.get('X-BMS-Skip-Launch-Context') === '1') {
         config.headers.delete('X-BMS-Skip-Launch-Context');
@@ -47,6 +88,9 @@ export interface CandidateResultSummary {
 }
 
 export interface Job {
+    sequence_design?: import('./generalSequenceDesign').GeneralSequenceDesignRequest | null;
+    source_structure?: StructureSourceSelection | null;
+    binder_round?: import('./binderRound').BinderRoundRequest | null;
     execution_plan_approval?: string | null;
     execution_policy?: ExecutionPolicy;
     result_summary?: CandidateResultSummary;
@@ -97,6 +141,7 @@ export interface Job {
     started_at?: string | null;
     completed_at?: string | null;
     vram_estimate_mb?: number | null;
+    execution_stages?: ExecutionStage[];
     // Stage tracking for multi-stage pipelines
     current_stage?: string | null;
     completed_stages?: string[] | null;
@@ -165,6 +210,7 @@ export interface RFD3LocalRedesignReadModel {
     };
     candidates: Array<{
         candidate_id: string;
+        source_structure?: StructureSourceSelection | null;
         result_set: string;
         stage: string;
         status: string;
@@ -208,6 +254,8 @@ export interface RFD3GenerationReadModel {
     };
     candidates: Array<{
         candidate_id: string;
+        design_id?: string;
+        source_structure?: StructureSourceSelection | null;
         status: string;
         length: number;
         radius: number;
@@ -429,6 +477,10 @@ export interface CatalogProvisionSelection {
     kind: 'model' | 'image';
     model_id: string;
 }
+export interface WorkflowPackSelection {
+    kind: 'workflow_pack';
+    workflow_id: 'structure_prediction';
+}
 export interface MdLaunchPreviewRequest {
     schema_version: 'bms.md.launch-preview-request.v1';
     intent: MolecularDynamicsLaunchIntent;
@@ -436,15 +488,16 @@ export interface MdLaunchPreviewRequest {
 // Reuse native scientific contracts, never translate them into synthetic Jobs.
 export type NativeWorkflowProvisionRequest =
     | { workflow_type: 'conformational_mapping'; request: CmSubmitRequest }
-    | { workflow_type: 'molecular_dynamics'; request: MdLaunchPreviewRequest };
+    | { workflow_type: 'molecular_dynamics'; request: MdLaunchPreviewRequest }
+    | { workflow_type: 'shape_blueprint'; request: ShapeLaunchRequest };
 export type WorkflowProvisionRequest = Partial<Job> | NativeWorkflowProvisionRequest;
-export type ProvisionSelection = CatalogProvisionSelection | { kind: 'workflow'; workflow_request: WorkflowProvisionRequest };
+export type ProvisionSelection = CatalogProvisionSelection | WorkflowPackSelection | { kind: 'workflow'; workflow_request: WorkflowProvisionRequest };
 export interface WorkflowRuntimeSelection { kind: 'workflow'; model_id: string; }
 export const provisionSelectionLabel = (selection: ProvisionSelection | CriticalRuntimeSelection | WorkflowRuntimeSelection): string =>
     'workflow_request' in selection
         ? 'workflow_type' in selection.workflow_request ? selection.workflow_request.workflow_type
             : `${selection.workflow_request.model_id} / ${selection.workflow_request.mode}`
-        : selection.model_id;
+        : 'workflow_id' in selection ? selection.workflow_id : selection.model_id;
 
 export interface CachedArtifactReceipt {
     name: string;
@@ -605,8 +658,8 @@ export const preloadExecutionTarget = async (targetId: string, jobId: string): P
     return response.data;
 };
 
-export const fetchProvisionCatalog = async (): Promise<CatalogProvisionSelection[]> =>
-    (await api.get<CatalogProvisionSelection[]>('/api/execution-targets/provision/catalog')).data;
+export const fetchProvisionCatalog = async (): Promise<Array<CatalogProvisionSelection | WorkflowPackSelection>> =>
+    (await api.get<Array<CatalogProvisionSelection | WorkflowPackSelection>>('/api/execution-targets/provision/catalog')).data;
 
 export const previewExecutionTargetProvision = async (targetId: string, selection: ProvisionSelection): Promise<ProvisionPreview> =>
     (await api.post<ProvisionPreview>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision/preview`, selection)).data;
@@ -828,9 +881,11 @@ export const fetchJobs = async (params?: {
     offset?: number;
     include_children?: boolean;
     summary?: boolean;
-}, previous?: { data: { jobs: Job[]; total: number }; headers: Record<string, unknown> }) => {
+    exclude_ngs?: boolean;
+}, previous?: { data: { jobs: Job[]; total: number }; headers: Record<string, unknown> }, signal?: AbortSignal) => {
     const etag = previous?.headers.etag;
     const response = await api.get<{ jobs: Job[]; total: number }>('/api/jobs', {
+        signal, timeout: 10_000,
         params: {
             ...params,
             limit: Math.min(500, Math.max(1, params?.limit ?? 100)),
@@ -993,6 +1048,36 @@ export const uploadImmutableFile = async (path: string, file: File, sha256: stri
     });
 };
 
+export interface StructureMaterialization {
+    source_structure?: StructureSourceSelection;
+    original_path?: string; original_sha256?: string;
+    path: string; format: 'pdb' | 'cif'; sha256: string;
+    native_path: string; native_format: 'pdb' | 'cif'; native_sha256: string;
+    model_number: number | null; model_numbers: number[];
+    author_residues: Array<{ model_number: number; auth_asym_id: string; auth_seq_id: number; insertion_code: string; residue_name: string }>;
+    source_identity: Record<string, unknown>; source_path: string;
+}
+export interface StructureSourceSelection {
+    path?: string; design_id?: string; job_id?: string;
+    request_id?: string; candidate_id?: string;
+    document?: { artifact_id?: string; target_state?: string };
+    output_format?: 'native' | 'pdb'; model_number?: number; expected_sha256?: string;
+}
+export const materializeExactStructure = async (source: StructureSourceSelection): Promise<StructureMaterialization> =>
+    (await api.post<StructureMaterialization>('/api/files/materialize-structure', source)).data;
+
+export interface ProjectStructureQuery {
+    project_id?: string; dataset_id?: string; revision_id?: string; receipt_id?: string; design_id?: string;
+    collection?: 'resources' | 'datasets'; offset?: number; limit?: number;
+}
+export interface ProjectStructureEntry extends ProjectStructureQuery {
+    kind: 'project' | 'dataset' | 'resource' | 'design' | 'document'; name: string;
+    job_id?: string; path?: string;
+    document?: { artifact_id?: string; target_state?: string; logical_path?: string; download_url?: string; sha256?: string; format?: string; primary?: boolean };
+}
+export const fetchProjectStructureSources = async (query: ProjectStructureQuery = {}) =>
+    (await api.get<{ items: ProjectStructureEntry[]; total: number; offset: number; limit: number }>('/api/files/structure-sources', { params: query })).data;
+
 /** Materialize a selected structure through the existing upload authority. */
 export const materializeStructureTarget = async (
     target: { path?: string; file?: File; url?: string; name: string },
@@ -1077,16 +1162,18 @@ export const prepareJobSubmission = (jobData: Partial<Job>, options: { launchCon
     return payload;
 };
 
-export const previewJobExecutionPlan = (jobData: Partial<Job>) =>
-    api.post<import('../components/ExecutionPlanApproval').ExecutionPlanPreview>(
-        '/api/jobs/execution-plan/preview', jobData);
+const jobLaunchContextConfig = (jobData: Partial<Job>, options: { launchContext?: boolean }) =>
+    jobData.launch_context_id
+        ? { headers: { 'X-BMS-Skip-Launch-Context': '1', 'X-BMS-Launch-Context-ID': jobData.launch_context_id } }
+        : options.launchContext === false ? { headers: { 'X-BMS-Skip-Launch-Context': '1' } } : undefined;
 
-export const submitJob = async (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
-    // Freeze the reviewed science and placement even if a form changes while the
-    // operator reads the preview. All existing browser launchers share this path.
-    const payload = structuredClone(prepareJobSubmission(jobData, options));
+export const previewJobExecutionPlan = (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) =>
+    api.post<import('../components/ExecutionPlanApproval').ExecutionPlanPreview>(
+        '/api/jobs/execution-plan/preview', jobData, jobLaunchContextConfig(jobData, options));
+
+async function approveJobExecutionPlan(payload: Partial<Job>, options: { launchContext?: boolean } = {}): Promise<Partial<Job>> {
     if (payload.execution_target_id && !payload.execution_plan_approval) {
-        const preview = (await previewJobExecutionPlan(payload)).data;
+        const preview = (await previewJobExecutionPlan(payload, options)).data;
         if (typeof preview?.approval_digest !== 'string' || !/^[0-9a-f]{64}$/.test(preview.approval_digest)
             || preview.request?.model_id !== payload.model_id || preview.request?.mode !== payload.mode
             || preview.request?.execution_target_id !== payload.execution_target_id) {
@@ -1094,11 +1181,19 @@ export const submitJob = async (jobData: Partial<Job>, options: { launchContext?
         }
         const { reviewExecutionPlan } = await import('../components/ExecutionPlanApproval');
         if (!await reviewExecutionPlan(preview)) throw new Error('Execution-plan approval cancelled');
-        payload.execution_plan_approval = preview.approval_digest;
+        // Selected-source preview retains the input. Submit that exact request,
+        // not the original source reference that would acquire it a second time.
+        return { ...payload, ...(payload.source_structure ? preview.request : {}),
+            execution_plan_approval: preview.approval_digest };
     }
-    return api.post('/api/jobs', payload, options.launchContext !== false
-        ? undefined
-        : { headers: { 'X-BMS-Skip-Launch-Context': '1' } });
+    return payload;
+}
+
+export const submitJob = async (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
+    // Freeze the reviewed science and placement even if a form changes while the
+    // operator reads the preview. All existing browser launchers share this path.
+    const payload = await approveJobExecutionPlan(structuredClone(prepareJobSubmission(jobData, options)), options);
+    return api.post('/api/jobs', payload, jobLaunchContextConfig(payload, options));
 };
 
 export const completeCurrentLaunchContext = async (responseData: unknown): Promise<string | null> => {
@@ -1183,6 +1278,7 @@ export const fetchShapeSequenceSettings = (engine: ShapeSequenceEngine, sequence
     });
 
 export interface ShapeLaunchRequest extends ExecutionPlacement {
+    execution_plan_approval?: string | null;
     client_request_id: string;
     name: string;
     geometry_id: string;
@@ -1212,9 +1308,13 @@ export const uploadShapeGeometry = (file: File, unit: string) => {
 };
 
 export const submitShapeBlueprint = (request: ShapeLaunchRequest) => {
-    return api.post<{ request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean } & Required<ExecutionPlacement>>(
-        '/api/shape-blueprint/requests',
-        prepareExecutionPlacement(request),
+    const payload = structuredClone(prepareExecutionPlacement(request));
+    type Response = { request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean } & Required<ExecutionPlacement>;
+    return submitPreparedJobAction(
+        () => api.post<Response>('/api/shape-blueprint/requests', payload),
+        approved => api.post<Response>('/api/shape-blueprint/requests', {
+            ...payload, execution_plan_approval: approved.execution_plan_approval,
+        }),
     );
 };
 
@@ -1565,7 +1665,10 @@ export interface LaunchAntibodyIterationResponse {
 }
 
 /** Prepared selections are an operator action, not execution approval. */
-async function submitPreparedJobAction<T>(action: () => Promise<import('axios').AxiosResponse<T>>) {
+async function submitPreparedJobAction<T>(
+    action: () => Promise<import('axios').AxiosResponse<T>>,
+    submitApproved?: (request: Partial<Job>) => Promise<import('axios').AxiosResponse<T>>,
+) {
     try {
         return await action();
     } catch (error) {
@@ -1573,6 +1676,8 @@ async function submitPreparedJobAction<T>(action: () => Promise<import('axios').
         const detail = error.response.data?.detail;
         if (detail?.code !== 'remote_prepared_job_review_required'
                 || !detail.job_request?.execution_target_id || detail.job_request.execution_plan_approval) throw error;
+        // Native request owners such as Shape must bind their own row during insertion.
+        if (submitApproved) return submitApproved(await approveJobExecutionPlan(structuredClone(detail.job_request)));
         // Never repeat the mutation endpoint: review and submit the exact
         // once-prepared request through the ordinary shared canonical path.
         const submitted = await submitJob(detail.job_request, { launchContext: false });
@@ -1810,11 +1915,19 @@ export const fetchJobLogs = (jobId: string): Promise<{ data: JobLogs }> => {
     return api.get<JobLogs>(`/api/jobs/${jobId}/logs`);
 };
 
+export interface ExecutionStage {
+    id: string;
+    label: string;
+    state: 'planned' | 'running' | 'completed' | 'awaiting_input' | 'failed' | 'cancelled' | 'unknown';
+    source: 'plan' | 'recorded' | 'model';
+}
+
 // Get job stages for progress display
 export const fetchJobStages = (jobId: string) => {
     return api.get<{
         job_id: string;
         mode: string;
+        execution_stages?: ExecutionStage[];
         all_stages: string[];
         current_stage: string | null;
         completed_stages: string[];
@@ -1894,11 +2007,11 @@ export interface ModelIntegrationConfig {
     workflows: Record<string, ModelWorkflowIntegration>;
 }
 
-export const fetchModels = (category?: string) =>
-    api.get<UntypedApiValue[]>('/api/models', { params: { category } });
+export const fetchModels = (category?: string, signal?: AbortSignal, compact = false) =>
+    api.get<UntypedApiValue[]>('/api/models', { params: { category, ...(compact ? { compact: true } : {}) }, signal, timeout: 10_000 });
 
-export const fetchModelById = (id: string) =>
-    api.get<UntypedApiValue>(`/api/models/${id}`);
+export const fetchModelById = (id: string, signal?: AbortSignal) =>
+    api.get<UntypedApiValue>(`/api/models/${id}`, { signal, timeout: 10_000 });
 
 export const fetchModelIntegration = (id: string) =>
     api.get<ModelIntegrationConfig>(`/api/models/${id}/integration`);
@@ -2937,8 +3050,8 @@ export interface RemoteDiagnosticsRecord {
 export const pullRemoteJobDiagnostics = (jobId: string) =>
     api.post<Job>(`/api/jobs/${encodeURIComponent(jobId)}/remote-diagnostics/pull`);
 
-export const fetchQueue = (status?: string) =>
-    api.get<QueuedJob[]>('/api/queue', { params: { status } });
+export const fetchQueue = (status?: string, signal?: AbortSignal) =>
+    api.get<QueuedJob[]>('/api/queue', { params: { status }, signal, timeout: 10_000 });
 
 export const fetchQueueStats = () =>
     api.get<QueueStats>('/api/queue/stats');
@@ -2964,8 +3077,8 @@ export const retryQueueJob = (jobId: string) =>
 export const cancelAllQueuedJobs = () =>
     api.delete('/api/queue/clear-all');
 
-export const fetchCancelledJobs = (limit: number = 20) =>
-    api.get<QueuedJob[]>('/api/queue/cancelled', { params: { limit } });
+export const fetchCancelledJobs = (limit: number = 20, signal?: AbortSignal) =>
+    api.get<QueuedJob[]>('/api/queue/cancelled', { params: { limit }, signal, timeout: 10_000 });
 
 export const killActiveNextflowJobs = () =>
     api.post('/api/queue/kill-active');
