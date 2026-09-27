@@ -23,7 +23,7 @@ def test_compact_choices_preserve_metadata_and_selected_detail():
         expected = []
         for model in full.json():
             choice = {key: value for key, value in model.items() if key != "params"}
-            choice["modes"] = [{key: value for key, value in mode.items() if key != "params"} for mode in model["modes"]]
+            choice["modes"] = [{key: value for key, value in mode.items() if key not in {"params", "parameter_schema"}} for mode in model["modes"]]
             expected.append(choice)
             detail = client.get(f"/api/models/{model['id']}")
             assert detail.status_code == 200
