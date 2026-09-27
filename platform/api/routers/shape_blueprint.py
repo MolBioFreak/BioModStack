@@ -307,10 +307,23 @@ async def submit_shape_request(
                 "client_request_id": submitted.client_request_id,
                 "launch_context_id": submitted.launch_context_id,
             })
+        approved_plan = None
+        if not reused and submitted.execution_target_id and submitted.execution_plan_approval:
+            # Review includes the Project owner's canonical defaults/adapter,
+            # not the raw staged projection. Reuse its public preview and the
+            # existing server-only handoff before reservation metadata is added.
+            from component_runtime import canonical_bytes
+            preview = await jobs_router.preview_job_execution_plan(
+                job_request, session=session, experiment_session=experiment_session)
+            if preview['approval_digest'] != submitted.execution_plan_approval:
+                raise HTTPException(409, 'Execution plan approval is stale; preview and approve the current request')
+            approved_plan = jobs_router.ApprovedExecutionPlan(
+                canonical_bytes(job_request.model_dump(mode='json')), canonical_bytes(preview))
         job_response = await jobs_router.create_job(
             job_request, background_tasks, session,
             _preallocated_job_id=None, _commit=True,
             experiment_session=experiment_session,
+            _approved_execution_plan=approved_plan,
         )
         request_row = await session.get(ShapeDesignRequest, staged.request_id)
         if request_row is None:

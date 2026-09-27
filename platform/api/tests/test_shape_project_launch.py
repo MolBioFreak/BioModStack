@@ -244,6 +244,12 @@ async def test_shape_project_prepared_remote_review_and_actual_approval(admissio
             await reserve(db, prepared)
             preview = await jobs.preview_job_execution_plan(retained, session=admission, experiment_session=db)
             assert preview['admissible'], preview['blockers']
+            stale = bound.model_copy(update={'execution_plan_approval': 'f' * 64})
+            with pytest.raises(HTTPException, match='approval is stale') as rejected:
+                await shape_blueprint.submit_shape_request(stale, BackgroundTasks(), admission, db)
+            assert rejected.value.status_code == 409
+            assert not list(await admission.scalars(select(Job)))
+            assert before == {p.name: p.read_bytes() for p in stage.iterdir()}
             approved = bound.model_copy(update={'execution_plan_approval': preview['approval_digest']})
             result = await shape_blueprint.submit_shape_request(approved, BackgroundTasks(), admission, db)
             assert result['job_id'] == prepared['scheduler_job_id']
