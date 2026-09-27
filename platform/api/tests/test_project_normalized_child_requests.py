@@ -104,22 +104,33 @@ async def test_bad_later_child_rolls_back_entire_fanout(setup_store):
 
 
 @pytest.mark.asyncio
-async def test_frustrampnn_project_identity_is_chosen_before_snapshots(setup_store, tmp_path, monkeypatch):
+@pytest.mark.parametrize('remote', [False, True], ids=['local', 'remote'])
+async def test_frustrampnn_project_identity_is_chosen_before_snapshots(setup_store, tmp_path, monkeypatch, remote):
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-    from database import Base, Job
+    from database import Base, Job, ExecutionTarget
     from experiment_models import ExperimentRunAttempt
     from experiment_services import new_id, scheduler_job_id_for_attempt
     from services.frustrampnn import jobs as frustra
     from services.frustrampnn.settings import default_settings
     from test_frustrampnn_child_jobs import _pdb
     import hashlib
+    import paths
     monkeypatch.setattr(frustra, 'get_results_dir', lambda: tmp_path / 'results')
+    monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'results')
     engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "frustra.db"}')
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     core_sessions = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with setup_store() as session, core_sessions() as core:
+            worker_id = 'vast:project-frustra' if remote else None
+            if remote:
+                from datetime import datetime
+                core.add(ExecutionTarget(id=worker_id, provider='vast', provider_instance_id='project-frustra',
+                    active=True, state='ready', provider_metadata={'inventory': {
+                        'status': 'complete', 'present': True, 'running': True,
+                        'checked_at': datetime.utcnow().isoformat()}}))
+                await core.commit()
             dest = await destination(session)
             attempts = [new_id('run_attempt'), new_id('run_attempt')]
             children = []
@@ -128,7 +139,8 @@ async def test_frustrampnn_project_identity_is_chosen_before_snapshots(setup_sto
                     selections=[frustra.upload_selection(filename='source.pdb', payload=_pdb(),
                         expected_sha256=hashlib.sha256(_pdb()).hexdigest())],
                     source_parent=None, trigger='binder_selected', requested_settings=default_settings(),
-                    preallocated_job_id=scheduler_job_id_for_attempt(attempt), prepare_only=True))
+                    preallocated_job_id=scheduler_job_id_for_attempt(attempt), prepare_only=True,
+                    execution_target_id=worker_id))
             requests_ = [frustra.prepared_child_request(child) for child in children]
             result = await prepare_child_launch_contexts(session,
                 destination_launch_context_id=dest['launch_context_id'], job_requests=requests_,
@@ -141,15 +153,38 @@ async def test_frustrampnn_project_identity_is_chosen_before_snapshots(setup_sto
                 assert frustra.load_prepared_child(JobCreate.model_validate(prepared['job_request'])).id == child.id
                 assert await core.get(Job, child.id) is None
             assert len({row['launch_context_id'] for row in result['children']}) == 2
-            from fastapi import BackgroundTasks
-            from routers.jobs import submit_selected_child_jobs
-            inserted = await submit_selected_child_jobs(requests_, BackgroundTasks(), core, session,
-                destination_launch_context_id=dest['launch_context_id'], idempotency_key='frustra',
-                preallocated_attempt_ids=attempts, response_context={})
+            from fastapi import BackgroundTasks, HTTPException
+            from routers import jobs
+            async def submit():
+                return await jobs.submit_selected_child_jobs(requests_, BackgroundTasks(), core, session,
+                    destination_launch_context_id=dest['launch_context_id'], idempotency_key='frustra',
+                    preallocated_attempt_ids=attempts, response_context={})
+            if remote:
+                with pytest.raises(HTTPException) as review:
+                    await submit()
+                assert review.value.detail['code'] == 'remote_prepared_job_review_required'
+                inserted = []
+                for payload in review.value.detail['job_requests']:
+                    request = JobCreate.model_validate(payload)
+                    token = jobs.current_launch_context_id.set(request.launch_context_id)
+                    try:
+                        preview = await jobs.preview_job_execution_plan(request, core, session)
+                        assert preview['admissible'], preview['blockers']
+                        request.execution_plan_approval = preview['approval_digest']
+                        child = await jobs.create_job(request.model_copy(deep=True), BackgroundTasks(), core, experiment_session=session)
+                        inserted.append(child)
+                        # A resumed partial batch reopens its already inserted child.
+                        replay = await jobs.create_job(request.model_copy(deep=True), BackgroundTasks(), core, experiment_session=session)
+                        assert replay.id == child.id
+                    finally:
+                        jobs.current_launch_context_id.reset(token)
+            else:
+                inserted = await submit()
             assert [row.id for row in inserted] == [child.id for child in children]
             for child in children:
                 stored = await core.get(Job, child.id)
                 assert stored.params[frustra.ENVELOPE_KEY]['execution_owner_job_id'] == stored.id
+                assert stored.execution_target_id == worker_id
             await session.commit()
         async with setup_store() as session:
             assert await prepare_child_launch_contexts(session,
