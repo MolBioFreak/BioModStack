@@ -18,9 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import Job, ShapeDesignGeometry, ShapeDesignRequest, get_session
 from paths import get_data_root
 from routers import jobs as jobs_router
-from schemas import ExecutionPolicy, JobCreate
+from schemas import ExecutionPolicy
 from services.shape_geometry import MAX_MESH_BYTES, ShapeGeometryError
-from services.shape_requests import ShapeRequestError, SubmittedShapeRequest, materialize_shape_request, sequence_settings_definition
+from services.shape_requests import ShapeRequestError, SubmittedShapeRequest, materialize_shape_request, sequence_settings_definition, shape_job_request
 from services.shape_resources import AdmittedGeometry, admit_mesh_geometry
 
 
@@ -278,22 +278,17 @@ async def submit_shape_request(
         }
 
     deterministic_job_id = str(uuid.uuid5(_SHAPE_JOB_NAMESPACE, staged.request_id))
+    job_request = shape_job_request(staged, submitted)
+    if submitted.execution_target_id and not submitted.execution_plan_approval:
+        jobs_router._require_prepared_remote_review(job_request, {
+            "request_id": staged.request_id,
+            "request_sha256": staged.request_sha256,
+            "client_request_id": submitted.client_request_id,
+            "job_id": deterministic_job_id,
+        })
     try:
         job_response = await jobs_router.create_job(
-            JobCreate(
-                name=staged.name,
-                model_id=staged.model_id,
-                mode=staged.mode,
-                params=staged.launch_params,
-                execution_target_id=submitted.execution_target_id,
-                execution_policy=submitted.execution_policy,
-                pinned_gpu=None,
-                parent_job_id=None,
-                child_stage=None,
-                batch_id=None,
-                batch_name=None,
-                sequence_length=int(str(staged.launch_params["shape_target_length"])),
-            ),
+            job_request,
             background_tasks,
             session,
             _preallocated_job_id=deterministic_job_id,

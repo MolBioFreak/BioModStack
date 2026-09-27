@@ -89,6 +89,7 @@ export interface CandidateResultSummary {
 
 export interface Job {
     sequence_design?: import('./generalSequenceDesign').GeneralSequenceDesignRequest | null;
+    source_structure?: StructureSourceSelection | null;
     binder_round?: import('./binderRound').BinderRoundRequest | null;
     execution_plan_approval?: string | null;
     execution_policy?: ExecutionPolicy;
@@ -209,6 +210,7 @@ export interface RFD3LocalRedesignReadModel {
     };
     candidates: Array<{
         candidate_id: string;
+        source_structure?: StructureSourceSelection | null;
         result_set: string;
         stage: string;
         status: string;
@@ -252,6 +254,8 @@ export interface RFD3GenerationReadModel {
     };
     candidates: Array<{
         candidate_id: string;
+        design_id?: string;
+        source_structure?: StructureSourceSelection | null;
         status: string;
         length: number;
         radius: number;
@@ -484,7 +488,8 @@ export interface MdLaunchPreviewRequest {
 // Reuse native scientific contracts, never translate them into synthetic Jobs.
 export type NativeWorkflowProvisionRequest =
     | { workflow_type: 'conformational_mapping'; request: CmSubmitRequest }
-    | { workflow_type: 'molecular_dynamics'; request: MdLaunchPreviewRequest };
+    | { workflow_type: 'molecular_dynamics'; request: MdLaunchPreviewRequest }
+    | { workflow_type: 'shape_blueprint'; request: ShapeLaunchRequest };
 export type WorkflowProvisionRequest = Partial<Job> | NativeWorkflowProvisionRequest;
 export type ProvisionSelection = CatalogProvisionSelection | WorkflowPackSelection | { kind: 'workflow'; workflow_request: WorkflowProvisionRequest };
 export interface WorkflowRuntimeSelection { kind: 'workflow'; model_id: string; }
@@ -1044,6 +1049,8 @@ export const uploadImmutableFile = async (path: string, file: File, sha256: stri
 };
 
 export interface StructureMaterialization {
+    source_structure?: StructureSourceSelection;
+    original_path?: string; original_sha256?: string;
     path: string; format: 'pdb' | 'cif'; sha256: string;
     native_path: string; native_format: 'pdb' | 'cif'; native_sha256: string;
     model_number: number | null; model_numbers: number[];
@@ -1052,6 +1059,7 @@ export interface StructureMaterialization {
 }
 export interface StructureSourceSelection {
     path?: string; design_id?: string; job_id?: string;
+    request_id?: string; candidate_id?: string;
     document?: { artifact_id?: string; target_state?: string };
     output_format?: 'native' | 'pdb'; model_number?: number; expected_sha256?: string;
 }
@@ -1154,16 +1162,18 @@ export const prepareJobSubmission = (jobData: Partial<Job>, options: { launchCon
     return payload;
 };
 
-export const previewJobExecutionPlan = (jobData: Partial<Job>) =>
-    api.post<import('../components/ExecutionPlanApproval').ExecutionPlanPreview>(
-        '/api/jobs/execution-plan/preview', jobData);
+const jobLaunchContextConfig = (jobData: Partial<Job>, options: { launchContext?: boolean }) =>
+    jobData.launch_context_id
+        ? { headers: { 'X-BMS-Skip-Launch-Context': '1', 'X-BMS-Launch-Context-ID': jobData.launch_context_id } }
+        : options.launchContext === false ? { headers: { 'X-BMS-Skip-Launch-Context': '1' } } : undefined;
 
-export const submitJob = async (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
-    // Freeze the reviewed science and placement even if a form changes while the
-    // operator reads the preview. All existing browser launchers share this path.
-    const payload = structuredClone(prepareJobSubmission(jobData, options));
+export const previewJobExecutionPlan = (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) =>
+    api.post<import('../components/ExecutionPlanApproval').ExecutionPlanPreview>(
+        '/api/jobs/execution-plan/preview', jobData, jobLaunchContextConfig(jobData, options));
+
+async function approveJobExecutionPlan(payload: Partial<Job>, options: { launchContext?: boolean } = {}): Promise<Partial<Job>> {
     if (payload.execution_target_id && !payload.execution_plan_approval) {
-        const preview = (await previewJobExecutionPlan(payload)).data;
+        const preview = (await previewJobExecutionPlan(payload, options)).data;
         if (typeof preview?.approval_digest !== 'string' || !/^[0-9a-f]{64}$/.test(preview.approval_digest)
             || preview.request?.model_id !== payload.model_id || preview.request?.mode !== payload.mode
             || preview.request?.execution_target_id !== payload.execution_target_id) {
@@ -1171,11 +1181,19 @@ export const submitJob = async (jobData: Partial<Job>, options: { launchContext?
         }
         const { reviewExecutionPlan } = await import('../components/ExecutionPlanApproval');
         if (!await reviewExecutionPlan(preview)) throw new Error('Execution-plan approval cancelled');
-        payload.execution_plan_approval = preview.approval_digest;
+        // Selected-source preview retains the input. Submit that exact request,
+        // not the original source reference that would acquire it a second time.
+        return { ...payload, ...(payload.source_structure ? preview.request : {}),
+            execution_plan_approval: preview.approval_digest };
     }
-    return api.post('/api/jobs', payload, options.launchContext !== false
-        ? undefined
-        : { headers: { 'X-BMS-Skip-Launch-Context': '1' } });
+    return payload;
+}
+
+export const submitJob = async (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
+    // Freeze the reviewed science and placement even if a form changes while the
+    // operator reads the preview. All existing browser launchers share this path.
+    const payload = await approveJobExecutionPlan(structuredClone(prepareJobSubmission(jobData, options)), options);
+    return api.post('/api/jobs', payload, jobLaunchContextConfig(payload, options));
 };
 
 export const completeCurrentLaunchContext = async (responseData: unknown): Promise<string | null> => {
@@ -1260,6 +1278,7 @@ export const fetchShapeSequenceSettings = (engine: ShapeSequenceEngine, sequence
     });
 
 export interface ShapeLaunchRequest extends ExecutionPlacement {
+    execution_plan_approval?: string | null;
     client_request_id: string;
     name: string;
     geometry_id: string;
@@ -1289,9 +1308,13 @@ export const uploadShapeGeometry = (file: File, unit: string) => {
 };
 
 export const submitShapeBlueprint = (request: ShapeLaunchRequest) => {
-    return api.post<{ request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean } & Required<ExecutionPlacement>>(
-        '/api/shape-blueprint/requests',
-        prepareExecutionPlacement(request),
+    const payload = structuredClone(prepareExecutionPlacement(request));
+    type Response = { request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean } & Required<ExecutionPlacement>;
+    return submitPreparedJobAction(
+        () => api.post<Response>('/api/shape-blueprint/requests', payload),
+        approved => api.post<Response>('/api/shape-blueprint/requests', {
+            ...payload, execution_plan_approval: approved.execution_plan_approval,
+        }),
     );
 };
 
@@ -1642,7 +1665,10 @@ export interface LaunchAntibodyIterationResponse {
 }
 
 /** Prepared selections are an operator action, not execution approval. */
-async function submitPreparedJobAction<T>(action: () => Promise<import('axios').AxiosResponse<T>>) {
+async function submitPreparedJobAction<T>(
+    action: () => Promise<import('axios').AxiosResponse<T>>,
+    submitApproved?: (request: Partial<Job>) => Promise<import('axios').AxiosResponse<T>>,
+) {
     try {
         return await action();
     } catch (error) {
@@ -1650,6 +1676,8 @@ async function submitPreparedJobAction<T>(action: () => Promise<import('axios').
         const detail = error.response.data?.detail;
         if (detail?.code !== 'remote_prepared_job_review_required'
                 || !detail.job_request?.execution_target_id || detail.job_request.execution_plan_approval) throw error;
+        // Native request owners such as Shape must bind their own row during insertion.
+        if (submitApproved) return submitApproved(await approveJobExecutionPlan(structuredClone(detail.job_request)));
         // Never repeat the mutation endpoint: review and submit the exact
         // once-prepared request through the ordinary shared canonical path.
         const submitted = await submitJob(detail.job_request, { launchContext: false });

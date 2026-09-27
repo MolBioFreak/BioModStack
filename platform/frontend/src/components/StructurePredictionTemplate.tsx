@@ -211,6 +211,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         setPinnedGpus([]);
         setLockGpus(false);
     };
+    // The chain chooser retains its candidate identity even when its active
+    // selection is cleared. Only continuationSource is sent on submission.
+    const continuationCandidateSource = initialValues?._continuation_source ?? initialValues?.source_structure;
+    const [continuationSource, setContinuationSource] = useState(initialValues?.source_structure);
+    const [continuationChain, setContinuationChain] = useState(initialValues?._continuation_chain ?? '');
+    const continuationChains = initialValues?._continuation_chains as Array<{ model_number: number; id: string; sequence: string }> | undefined;
     const [sequence, setSequence] = useState(initialPrimarySequence);
     const [sequenceName, setSequenceName] = useState(initialPrimaryName);
     const [sequenceHandoffError, setSequenceHandoffError] = useState('');
@@ -729,6 +735,11 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         const params: Record<string, UntypedApiValue> = {
             name: jobName,
             job_name: jobName,
+            source_structure: continuationSource,
+            _source_prepared: initialValues?._source_prepared,
+            _continuation_source: continuationCandidateSource,
+            _continuation_chains: continuationChains, _continuation_chain: continuationChain,
+            primary_chain_id: continuationChain ? primaryChainId : undefined,
             execution_target_id: executionTargetId ?? null,
             sequence: sequence.trim(),
             sequence_name: sequenceName,
@@ -860,7 +871,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [continuationSource, continuationChain, initialValues, executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     // Project drafts reuse the saved-template scientific projection, not a second serializer.
     const projectDraftJson = JSON.stringify(currentTemplateParams);
     useEffect(() => {
@@ -1121,6 +1132,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         const pinnedIncludesLockGpus = Object.prototype.hasOwnProperty.call(initialValues || {}, 'lock_gpus');
         const pinnedIncludesAllowRetries = Object.prototype.hasOwnProperty.call(initialValues || {}, 'allow_retries');
         const jobRequest = {
+            source_structure: continuationSource,
             name: jobName,
             // The same placement owns GPU selection, preview and submission.
             // Do not re-read ambient session storage in submitJob for this form.
@@ -1260,6 +1272,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             } else {
                 clearModalPreview();
             }
+            setContinuationSource(undefined);
+            setContinuationChain('');
             setModalTargetSource(target);
             setModalParsedStructure(parsed);
             setModalSelectedModel(defaultModelNumber);
@@ -1377,6 +1391,24 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <ExecutionTargetPicker workflowRequest={workflowRequest} />
+            {continuationChains && <section className="mb-4 space-y-2 rounded-lg border border-slate-600 p-3">
+                <label className="block text-sm">Protein chain from selected candidate
+                    <select aria-label="Selected candidate protein chain" className="ml-3 rounded bg-slate-900 p-2" value={continuationChain} onChange={event => {
+                        const key = event.target.value; setContinuationChain(key);
+                        const chain = continuationChains.find(item => `${item.model_number}:${item.id}` === key);
+                        setSequence(chain?.sequence ?? '');
+                        if (chain) {
+                            setPrimaryChainId(chain.id);
+                            setContinuationSource(continuationCandidateSource ? { ...continuationCandidateSource, model_number: chain.model_number } : undefined);
+                        } else setContinuationSource(undefined);
+                    }}>
+                        <option value="">Select a protein chain…</option>
+                        {continuationChains.map(chain => <option key={`${chain.model_number}:${chain.id}`} value={`${chain.model_number}:${chain.id}`}>Model {chain.model_number} · author chain {chain.id}</option>)}
+                    </select>
+                </label>
+                <p className="text-sm text-slate-300">These are the published residue sequences. Generated backbones may contain placeholder sequences; prediction does not validate a designed sequence. Edit the sequence below if needed. The generated pose is not used as conditioning.</p>
+                <button type="button" onClick={() => { setContinuationSource(undefined); setContinuationChain(''); setSequence(''); }}>Clear selected source</button>
+            </section>}
             {/* Header */}
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">

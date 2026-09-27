@@ -119,7 +119,9 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
                     workflowRequest={'workflow_type' in workflowRequest
                         ? workflowRequest.workflow_type === 'molecular_dynamics'
                             ? { ...workflowRequest, request: { ...workflowRequest.request, intent: prepareExecutionPlacement({ ...workflowRequest.request.intent, execution_target_id: target.id }) } }
-                            : { ...workflowRequest, request: prepareExecutionPlacement({ ...workflowRequest.request, execution_target_id: target.id }) }
+                            : workflowRequest.workflow_type === 'shape_blueprint'
+                                ? { ...workflowRequest, request: prepareExecutionPlacement({ ...workflowRequest.request, execution_target_id: target.id }) }
+                                : { ...workflowRequest, request: prepareExecutionPlacement({ ...workflowRequest.request, execution_target_id: target.id }) }
                         : prepareJobSubmission({ ...workflowRequest, execution_target_id: target.id }, submissionOptions)}
                     onChanged={() => targetsQuery.refetch()} />
                     : <p className="mt-3 text-xs text-slate-400">For current-request dependencies, select a worker and configure the workflow in its existing controls.</p>;

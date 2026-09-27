@@ -239,6 +239,18 @@ def test_shape_rfd3_wrapper_rejects_request_manifest_mismatch(tmp_path: Path) ->
         module.validate_request(request, manifest)
 
 
+def _sequence_request(engine, count, seed):
+    from services.shape_requests import _sequence_settings
+    settings, identity = _sequence_settings(engine, {}, count)
+    request = {'sequence_policy': 'external', 'sequence_engine': engine,
+               'sequences_per_backbone': count, 'seed': seed,
+               'sequence_settings': settings, 'sequence_settings_identity': identity,
+               'requested_sequence_settings': {}}
+    request['request_sha256'] = hashlib.sha256(
+        json.dumps(request, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+    return request
+
+
 def test_shape_proteinmpnn_lane_discards_native_and_uses_nonzero_seed(tmp_path: Path) -> None:
     module = _sequence_module()
     backbone = tmp_path / "shape_backbone_0001.pdb"
@@ -266,6 +278,8 @@ def test_shape_proteinmpnn_lane_discards_native_and_uses_nonzero_seed(tmp_path: 
         receipt_path=receipt,
         count=2,
         seed=0,
+        candidate_id='a' * 64,
+        request=_sequence_request('proteinmpnn', 2, 0),
         runner=str(fake),
         environment={"CAPTURE": str(capture)},
     )
@@ -305,6 +319,8 @@ def test_shape_fampnn_lane_uses_seq_only_and_natural_sample_order(tmp_path: Path
         receipt_path=tmp_path / "fampnn-receipt.json",
         count=3,
         seed=7,
+        candidate_id='b' * 64,
+        request=_sequence_request('fampnn', 3, 7),
         runner=str(fake),
         environment={"CAPTURE": str(capture)},
     )

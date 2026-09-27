@@ -85,7 +85,9 @@ export default function ShapeBlueprintTemplate({ initialValues = {}, embedded = 
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const [selectedId, setSelectedId] = useState(saved('geometry_id', ''));
-    const [clientRequestId] = useState(getShapeClientRequestId);
+    const [clientIdentity, setClientIdentity] = useState(() => ({
+        id: getShapeClientRequestId(), signature: sessionStorage.getItem(`${SHAPE_CLIENT_REQUEST_KEY}.signature`),
+    }));
     const [file, setFile] = useState<File | null>(null);
     const [unit, setUnit] = useState(saved('source_unit', 'angstrom'));
     const [name, setName] = useState(saved('name', 'Shape Blueprint design'));
@@ -187,6 +189,36 @@ export default function ShapeBlueprintTemplate({ initialValues = {}, embedded = 
         onError: (cause: unknown) => setError(requestError(cause, 'Geometry admission failed.')),
     });
 
+    const configuredRequest = selected ? buildShapeLaunchRequest(selected, {
+        client_request_id: clientIdentity.id,
+        name: name.trim() || 'Shape Blueprint design',
+        target_length: lengthMode === 'fixed' ? targetLength : undefined,
+        length_policy: {
+            ...(lengthMode === initialLengthPolicy?.mode ? initialLengthPolicy : {}),
+            mode: lengthMode,
+            min: lengthMode === 'fixed' ? targetLength : minimumLength,
+            max: lengthMode === 'fixed' ? targetLength : maximumLength,
+        },
+        num_backbones: numBackbones,
+        sequences_per_backbone: sequencePolicy === 'skip' ? 0 : sequencesPerBackbone,
+        sequence_policy: sequencePolicy,
+        sequence_engine: sequencePolicy === 'external' ? sequenceEngine : undefined,
+        sequence_settings: sequenceEnabled ? sequenceSettings : {},
+        seed,
+        guidance_profile: guidanceProfile,
+        validator_suite: validatorSuite,
+    }) : null;
+    // Loading native defaults must not consume a retained retry identity.
+    const requestSignature = configuredRequest && !sequenceSettingsError && !hydrationError
+        ? JSON.stringify({ ...configuredRequest, client_request_id: undefined }) : null;
+    if (requestSignature && requestSignature !== clientIdentity.signature) {
+        setClientIdentity({ signature: requestSignature, id: clientIdentity.signature ? crypto.randomUUID() : clientIdentity.id });
+    }
+    useEffect(() => {
+        sessionStorage.setItem(SHAPE_CLIENT_REQUEST_KEY, clientIdentity.id);
+        if (clientIdentity.signature) sessionStorage.setItem(`${SHAPE_CLIENT_REQUEST_KEY}.signature`, clientIdentity.signature);
+    }, [clientIdentity]);
+
     const launch = useMutation({
         mutationFn: () => {
             if (hydrationError) throw new Error(hydrationError);
@@ -196,28 +228,11 @@ export default function ShapeBlueprintTemplate({ initialValues = {}, embedded = 
                 (saved('geometry_sha256', '') && saved('geometry_sha256', '') !== selected.geometry_sha256)
                 || (saved('point_pool_sha256', '') && saved('point_pool_sha256', '') !== selected.point_pool_sha256)
             )) throw new Error('Saved geometry identity differs from the admitted geometry; select a new source explicitly.');
-            return submitShapeBlueprint(buildShapeLaunchRequest(selected, {
-                client_request_id: clientRequestId,
-                name: name.trim() || 'Shape Blueprint design',
-                target_length: lengthMode === 'fixed' ? targetLength : undefined,
-                length_policy: {
-                    ...(lengthMode === initialLengthPolicy?.mode ? initialLengthPolicy : {}),
-                    mode: lengthMode,
-                    min: lengthMode === 'fixed' ? targetLength : minimumLength,
-                    max: lengthMode === 'fixed' ? targetLength : maximumLength,
-                },
-                num_backbones: numBackbones,
-                sequences_per_backbone: sequencePolicy === 'skip' ? 0 : sequencesPerBackbone,
-                sequence_policy: sequencePolicy,
-                sequence_engine: sequencePolicy === 'external' ? sequenceEngine : undefined,
-                sequence_settings: sequenceEnabled ? sequenceSettings : {},
-                seed,
-                guidance_profile: guidanceProfile,
-                validator_suite: validatorSuite,
-            }));
+            return submitShapeBlueprint(configuredRequest!);
         },
         onSuccess: async (response) => {
             sessionStorage.removeItem(SHAPE_CLIENT_REQUEST_KEY);
+            sessionStorage.removeItem(`${SHAPE_CLIENT_REQUEST_KEY}.signature`);
             navigate(await completeCurrentLaunchContext(response.data) ?? `/designs/${response.data.job_id}`);
         },
         onError: (cause: unknown) => setError(requestError(cause, 'Shape request failed.')),
@@ -337,7 +352,8 @@ export default function ShapeBlueprintTemplate({ initialValues = {}, embedded = 
             <section className="space-y-4 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4">
                         <label className="mt-3 block text-xs text-[var(--text-secondary)]">Job name<input value={name} onChange={(event) => setName(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)]" /></label>
                 {runDetails}
-                <ExecutionTargetPicker preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
+                <ExecutionTargetPicker workflowRequest={configuredRequest && !hydrationError && !sequenceSettingsError && !invalidLengthPolicy
+                ? { workflow_type: 'shape_blueprint', request: configuredRequest } : null} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
                     {invalidLengthPolicy && <p className="text-xs text-amber-200">Minimum length must not exceed maximum length.</p>}
                     <button type="button" disabled={!selected || launch.isPending || invalidLengthPolicy || Boolean(hydrationError) || Boolean(sequenceSettingsError)} onClick={() => launch.mutate()} className="w-full rounded-xl bg-emerald-600 px-4 py-3 font-semibold text-[var(--text-primary)] hover:bg-emerald-500 disabled:opacity-40">{launch.isPending ? 'Staging immutable request…' : 'Launch Shape Blueprint'}</button>
             </section>

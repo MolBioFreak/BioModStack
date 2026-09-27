@@ -7,6 +7,7 @@ from typing import Optional, List, Any, Literal
 from datetime import datetime
 from enum import Enum
 from services.fampnn_policy_admission import FampnnAnalysisOverrides
+from services.binder_source_materialization import StructureSourceRequest
 
 
 def serialize_datetime(dt: datetime) -> str:
@@ -84,6 +85,7 @@ class JobCreate(BaseModel):
     sequence_design: SequenceDesignRequest | None = None
     binder_round: BinderRoundRequest | None = None
     binder_round_step: BinderRoundStepReference | None = None
+    source_structure: StructureSourceRequest | None = None
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     execution_plan_approval: str | None = Field(
         None, pattern=r"^[0-9a-f]{64}$",
@@ -205,6 +207,7 @@ class ExecutionStageResponse(BaseModel):
 class JobResponse(BaseModel):
     """Response schema for a job."""
 
+    source_structure: StructureSourceRequest | None = None
     execution_stages: List[ExecutionStageResponse] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -230,6 +233,9 @@ class JobResponse(BaseModel):
         saved_sequence = (self.provenance or {}).get('sequence_design_request')
         if saved_sequence is not None:
             self.sequence_design = SequenceDesignRequest.model_validate(saved_sequence)
+        self.source_structure = (self.provenance or {}).get('source_structure')
+        if self.source_structure is not None:
+            self.source_structure = StructureSourceRequest.model_validate(self.source_structure)
         saved_round = (self.provenance or {}).get('binder_round_request')
         if saved_round is not None:
             self.binder_round = BinderRoundRequest.model_validate(saved_round)

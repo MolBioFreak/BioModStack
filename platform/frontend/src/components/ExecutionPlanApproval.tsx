@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Button, Dialog, DialogBody, DialogFooter, HTMLTable } from '@blueprintjs/core';
 import '@blueprintjs/core/lib/css/blueprint.css';
+import type { Job } from '../lib/api';
 
 export interface ExecutionPlanPreview {
     schema: 'bms.job.execution-preview.v1';
     approval_digest: string;
     admissible: boolean;
-    request: { model_id: string; mode: string; execution_target_id?: string | null };
+    request: Partial<Job> & { model_id: string; mode: string };
     plan: {
         requested_json: Record<string, unknown>;
         effective_json: Record<string, unknown>;

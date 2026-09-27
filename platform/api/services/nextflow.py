@@ -4075,15 +4075,19 @@ def _native_plan_metadata_settings(model_id, params):
     from copy import deepcopy
     from paths import get_results_dir, get_inputs_dir, get_data_root
     settings = deepcopy(params)
-    key = 'cm_request' if model_id == 'conformational_mapping' else 'md_config' if model_id == 'molecular_dynamics' else None
+    key = ('cm_request' if model_id == 'conformational_mapping'
+           else 'md_config' if model_id == 'molecular_dynamics'
+           else 'shape_request' if model_id == 'protein_modification_experimental' and params.get('shape_request_path')
+           else None)
     if key is None:
         return settings
-    if key in settings:
+    if key in settings and key != 'shape_request':
         return settings
     if model_id == 'molecular_dynamics' and isinstance(params.get('md_job_spec'), dict):
         settings[key] = deepcopy(params['md_job_spec'])
         return settings
-    name = params.get('cm_request_path' if key == 'cm_request' else 'md_job_config')
+    name = params.get({'cm_request': 'cm_request_path', 'md_config': 'md_job_config',
+                       'shape_request': 'shape_request_path'}[key])
     if not name:
         return settings
     path = Path(str(name)).expanduser()
@@ -4095,6 +4099,12 @@ def _native_plan_metadata_settings(model_id, params):
     document = json.loads(path.read_bytes())
     if not isinstance(document, dict):
         raise ValueError('Selected native configuration must be an object')
+    if key == 'shape_request':
+        from scripts.shape_blueprint.plan_rfd3_batches import _validate_request_hash
+        _validate_request_hash(document)
+        if (document.get('request_id') != params.get('shape_request_id')
+                or document.get('request_sha256') != params.get('shape_request_sha256')):
+            raise ValueError('Shape request snapshot identity mismatch')
     settings[key] = document
     return settings
 

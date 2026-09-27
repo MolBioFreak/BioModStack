@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchRFD3LocalRedesign } from '../lib/api';
 import type { RFD3LocalRedesignReadModel } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
+import { continuationHref, inspectedResultState, rememberInspectedResult } from '../lib/deNovoContinuation';
 import { NativeCandidatePagination } from './RFD3GenerationResultsPane';
 import { resolveRFD3LocalRedesignRequestView } from './rfd3LocalRedesignResultsView';
 
@@ -34,9 +35,10 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
         retry: false,
     });
     const result = resultQuery.data?.data;
-    const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+    const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(() => inspectedResultState().candidate);
     const [selectedTrajectoryRole, setSelectedTrajectoryRole] = useState<'denoised_trajectory' | 'noisy_trajectory'>('denoised_trajectory');
-    const [requestedPage, setPage] = useState(1);
+    const [requestedPage, setRequestedPage] = useState(() => inspectedResultState().page);
+    const setPage = (page: number) => { setRequestedPage(page); rememberInspectedResult(selectedCandidateId, page); };
     const requestView = resolveRFD3LocalRedesignRequestView(result);
     const request = requestView.request;
     const fixedAtoms = request?.rfd3 && typeof request.rfd3 === 'object'
@@ -73,6 +75,7 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
     const activeTrajectory = result.artifacts.find(
         (artifact) => artifact.candidate_id === activeCandidateId && artifact.role === selectedTrajectoryRole,
     );
+    const activeCandidate = result.candidates.find(candidate => candidate.candidate_id === activeCandidateId);
     const sourceArtifact = result.artifacts.find((artifact) => artifact.role === 'source_structure');
     const sourceFormat = sourceArtifact?.media_type.includes('mmcif') ? 'cif' : 'pdb';
 
@@ -92,7 +95,7 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
                                 key={candidate.candidate_id}
                                 type="button"
                                 aria-pressed={candidate.candidate_id === activeCandidateId}
-                                onClick={() => setSelectedCandidateId(candidate.candidate_id)}
+                                onClick={() => { setSelectedCandidateId(candidate.candidate_id); rememberInspectedResult(candidate.candidate_id, page); }}
                                 className={`rounded-lg border px-3 py-1.5 text-xs ${candidate.candidate_id === activeCandidateId ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-100' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}
                             >
                                 {candidate.candidate_id}
@@ -100,6 +103,9 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
                         ))}
                     </div>
                 </div>
+                {activeCandidate?.source_structure && <div className="my-3 flex flex-wrap gap-4 text-sm text-cyan-300">
+                    {(['redesign', 'sequence', 'prediction'] as const).map((destination, index) => <a key={destination} href={continuationHref(activeCandidate.source_structure!, destination)}>{['Redesign', 'Design sequence', 'Predict structure'][index]}</a>)}
+                </div>}
                 <NativeCandidatePagination page={page} total={result.candidates.length} onPage={setPage} />
                 <div className="mt-4 overflow-hidden rounded-xl border border-slate-800">
                     {activeStructure ? <MolstarViewer

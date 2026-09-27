@@ -286,10 +286,10 @@ export function ProteinLocalRedesignTemplate({
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const {
-        gpuOptions,
+        gpuOptions, executionTargetId,
         isLoading: gpuCatalogLoading,
         isError: gpuCatalogError,
-    } = useLiveGpuCatalog({ requireFresh: true });
+    } = useLiveGpuCatalog({ followExecutionTarget: true, requireFresh: true });
     const [executionDepth, setExecutionDepth] = useState<ExecutionDepth>(
         submissionModelId === 'protein_local_redesign' ? 'native' : 'validated',
     );
@@ -387,6 +387,8 @@ export function ProteinLocalRedesignTemplate({
             if (synthetic) {
                 setSelectedTarget({
                     ...synthetic,
+                    sourceStructure: initialValues.source_structure as Rfd3SelectedSource['sourceStructure'],
+                    prepared: initialValues._source_prepared as Rfd3SelectedSource['prepared'],
                     modelNumber: typeof initialValues.model_number === 'number' ? initialValues.model_number : undefined,
                     designChainId: Array.isArray(initialValues.design_chains)
                         ? initialValues.design_chains.join(',')
@@ -495,6 +497,7 @@ export function ProteinLocalRedesignTemplate({
             if (!selectedTarget) {
                 setParsedStructure(null);
                 setStructureError(null);
+                setStructureLoading(false);
                 return;
             }
 
@@ -699,6 +702,7 @@ export function ProteinLocalRedesignTemplate({
     const projectDraftJson = JSON.stringify({
         // Preserve invalid imported requests for explicit repair, never broaden to defaults.
         fampnn_analysis_overrides: fampnnOverrides,
+        source_structure: selectedTarget?.sourceStructure, _source_prepared: selectedTarget?.prepared,
         input_structure: sourcePath ?? '', redesign_mode: nativeRedesignMode,
         design_chains: normalizeChainList(designChain), context_chains: contextChains,
         redesign_ranges: manualRangesText,
@@ -796,6 +800,7 @@ export function ProteinLocalRedesignTemplate({
     );
 
     const resolveSourceStructurePath = async () => {
+        if (selectedTarget?.prepared && selectedModelNumber === selectedTarget.prepared.model_number) return selectedTarget.prepared.path;
         if (sourcePath?.toLowerCase().endsWith('.pdb') && !selectedTarget) return sourcePath;
         if (!selectedTarget) return null;
         if (!activeModel?.content) {
@@ -1024,6 +1029,8 @@ export function ProteinLocalRedesignTemplate({
             };
             return {
                 name: jobName.trim(),
+                source_structure: selectedTarget?.sourceStructure ? { ...selectedTarget.sourceStructure, ...(selectedModelNumber == null ? {} : { model_number: selectedModelNumber }) } : undefined,
+                execution_target_id: executionTargetId ?? null,
                 model_id: 'protein_local_redesign',
                 mode: 'local_redesign',
                 pinned_gpu: effectiveNativePinnedGpu,
@@ -1037,6 +1044,8 @@ export function ProteinLocalRedesignTemplate({
 
         return {
             name: jobName.trim(),
+            source_structure: selectedTarget?.sourceStructure ? { ...selectedTarget.sourceStructure, ...(selectedModelNumber == null ? {} : { model_number: selectedModelNumber }) } : undefined,
+            execution_target_id: executionTargetId ?? null,
             model_id: 'protein_modification_experimental',
             mode: 'region_redesign',
             ...(effectiveSeqMethod === 'fampnn' ? fampnnOverridePayload(fampnnOverrides) : {}),
@@ -1095,7 +1104,7 @@ export function ProteinLocalRedesignTemplate({
     const workflowRequest = (() => {
         // A selected in-memory model still needs an immutable upload at launch.
         // Never preview a guessed path, a previous source, or perform that upload here.
-        if (selectedTarget || !sourcePath?.toLowerCase().endsWith('.pdb')) return null;
+        if ((selectedTarget && !selectedTarget.prepared) || !sourcePath?.toLowerCase().endsWith('.pdb')) return null;
         try { return buildWorkflowRequest(sourcePath, true); } catch { return null; }
     })();
 

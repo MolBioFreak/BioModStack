@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import type { StructureSourceSelection, StructureMaterialization } from '../lib/api';
 import { useMutation, useQuery } from '@tanstack/react-query';
 
 import {
@@ -13,6 +14,8 @@ export interface Rfd3SelectedSource {
     url?: string;
     path?: string;
     name: string;
+    sourceStructure?: StructureSourceSelection;
+    prepared?: StructureMaterialization;
     designId?: string;
     pdbId?: string;
     sourceId?: string;
@@ -55,7 +58,9 @@ const tabs: Array<{ value: SourceTab; label: string }> = [
 const inputClass = 'w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none';
 const panelClass = 'rounded-xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-tertiary)_42%,transparent)] p-3';
 
-export function Rfd3SourceSelector({ selectedSource, onSelect }: Rfd3SourceSelectorProps) {
+export function Rfd3SourceSelector({ selectedSource, onSelect: reportSelection }: Rfd3SourceSelectorProps) {
+    const selectionVersion = useRef(0);
+    const onSelect = (source: Rfd3SelectedSource | null) => { selectionVersion.current++; reportSelection(source); };
     const [activeTab, setActiveTab] = useState<SourceTab>('upload');
     const [rcsbQuery, setRcsbQuery] = useState('');
     const [rcsbResults, setRcsbResults] = useState<CmRcsbEntry[]>([]);
@@ -103,15 +108,18 @@ export function Rfd3SourceSelector({ selectedSource, onSelect }: Rfd3SourceSelec
 
     const fetchRcsbMutation = useMutation({
         mutationFn: async () => {
+            const version = selectionVersion.current;
             if (!selectedEntry) throw new Error('Select an RCSB entry.');
             const response = await fetch(`/api/rcsb/${selectedEntry.accession}`);
             if (!response.ok) {
                 const payload = await response.json().catch(() => null) as { detail?: string } | null;
                 throw new Error(payload?.detail || `RCSB structure fetch failed (${response.status})`);
             }
-            return response.json() as Promise<{ pdb_id: string; url: string }>;
+            const source = await response.json() as { pdb_id: string; url: string };
+            return { ...source, version };
         },
         onSuccess: (source) => {
+            if (source.version !== selectionVersion.current) return;
             onSelect({
                 type: 'rcsb',
                 url: source.url,
@@ -147,6 +155,7 @@ export function Rfd3SourceSelector({ selectedSource, onSelect }: Rfd3SourceSelec
 
     return (
         <div className="space-y-4" data-bms-rfd3-source-selector="bounded">
+            {selectedSource && <button type="button" onClick={() => onSelect(null)} className="rounded-lg border px-3 py-2 text-sm">Clear source</button>}
             <div className="flex flex-wrap gap-2" role="tablist" aria-label="RFD3 structure sources">
                 {tabs.map((tab) => (
                     <button
@@ -224,6 +233,7 @@ export function Rfd3SourceSelector({ selectedSource, onSelect }: Rfd3SourceSelec
                                 url: structure.structure_url,
                                 name: structure.design_name,
                                 designId: structure.design_id,
+                                sourceStructure: { job_id: structure.job_id, design_id: structure.design_id, output_format: 'native' },
                             })}
                             className={`${panelClass} w-full text-left`}
                         >

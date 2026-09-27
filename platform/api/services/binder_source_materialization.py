@@ -20,6 +20,8 @@ class StructureSourceRequest(BaseModel):
     path: str | None = None
     design_id: str | None = None
     job_id: str | None = None
+    request_id: str | None = None
+    candidate_id: str | None = None
     document: CandidateDocument | None = None
     output_format: Literal["native", "pdb"] = "native"
     model_number: int | None = None
@@ -33,6 +35,18 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
     from Bio.PDB.MMCIF2Dict import MMCIF2Dict
     from Bio.PDB.PDBExceptions import PDBConstructionException, PDBIOException
 
+    original = raw
+    compressed = suffix.lower() in {".cif.gz", ".mmcif.gz"}
+    original_path = None
+    if compressed:
+        import gzip
+        original_path = destination / "original.cif.gz"
+        original_path.write_bytes(raw)
+        with gzip.GzipFile(fileobj=io.BytesIO(raw)) as handle:
+            raw = handle.read(64 * 1024 * 1024 + 1)
+        if len(raw) > 64 * 1024 * 1024:
+            raise ValueError("Structure exceeds 64 MiB")
+        suffix = ".cif"
     native_format = "cif" if suffix.lower() in {".cif", ".mmcif"} else "pdb"
     if suffix.lower() not in {".pdb", ".cif", ".mmcif"}:
         raise ValueError("Select a PDB or mmCIF structure document")
@@ -84,7 +98,9 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
             consumed = _cif_selection_pdb(consumed, destination / "derived.pdb")
         except (PDBConstructionException, PDBIOException) as exc:
             raise ValueError(f"Selected CIF cannot be represented in PDB: {exc}") from exc
-    return {"path": to_allowed_relative(consumed), "format": "pdb" if output_format == "pdb" else native_format,
+    return {"original_path": to_allowed_relative(original_path or source),
+            "original_sha256": hashlib.sha256(original).hexdigest(),
+            "path": to_allowed_relative(consumed), "format": "pdb" if output_format == "pdb" else native_format,
             "sha256": hashlib.sha256(consumed.read_bytes()).hexdigest(),
             "native_path": to_allowed_relative(source), "native_sha256": hashlib.sha256(raw).hexdigest(),
             "native_format": native_format, "model_numbers": numbers,
@@ -92,8 +108,44 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
 
 
 async def resolve_structure_source(request: StructureSourceRequest, session):
+    from sqlalchemy import select
+    from database import RFD3LocalRedesignRequest, RFD3LocalRedesignCandidate, RFD3LocalRedesignArtifact
+    from services.binder_diagnostic_selection import root_id
     identity = {}
-    if request.design_id:
+    if request.request_id is not None or request.candidate_id is not None:
+        if not (request.job_id and request.request_id and request.candidate_id
+                and request.document and request.document.artifact_id) or request.design_id:
+            raise ValueError("Select an exact native request/candidate/artifact document")
+        job = await session.get(Job, request.job_id)
+        owner = await session.get(RFD3LocalRedesignRequest, request.request_id)
+        candidate = await session.scalar(select(RFD3LocalRedesignCandidate).where(
+            RFD3LocalRedesignCandidate.request_id == request.request_id,
+            RFD3LocalRedesignCandidate.candidate_id == request.candidate_id))
+        artifact = await session.get(RFD3LocalRedesignArtifact, request.document.artifact_id)
+        if (job is None or owner is None or owner.job_id != job.id
+                or job.model_id != "protein_local_redesign" or candidate is None
+                or artifact is None or artifact.request_id != owner.request_id
+                or artifact.candidate_id != candidate.candidate_id or artifact.role != "structure"
+                or request.document.target_state is not None):
+            raise ValueError("Native source document does not belong to the requested candidate")
+        from paths import resolve_runtime_data_path
+        root = resolve_runtime_data_path(str(job.output_dir or ""))
+        relative = Path(artifact.relative_path)
+        if (relative.is_absolute() or ".." in relative.parts or "\\" in artifact.relative_path
+                or relative.as_posix() != artifact.relative_path):
+            raise ValueError("Native source artifact path is unsafe")
+        path = root / relative
+        current = root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("Native source artifact path contains a symlink")
+        if path.resolve() != Path(artifact.storage_path).resolve():
+            raise ValueError("Native source artifact path binding differs")
+        identity = dict(owner_job_id=job.id, lineage_root_job_id=root_id(job),
+                        request_id=owner.request_id, candidate_id=candidate.candidate_id,
+                        artifact_id=artifact.artifact_id, artifact_sha256=artifact.content_sha256)
+    elif request.design_id:
         design = await session.get(Design, request.design_id)
         if design is None:
             raise ValueError("Source Design not found")
@@ -109,4 +161,8 @@ async def resolve_structure_source(request: StructureSourceRequest, session):
         path = resolve_allowed_path(request.path)
     else:
         raise ValueError("Choose a governed path or an exact Design document")
+    if request.path and identity:
+        # Retained originals are byte-bound to the producer, not reacquired from
+        # the historical output tree. Consumed derivatives remain model inputs.
+        path = resolve_allowed_path(request.path)
     return path, identity

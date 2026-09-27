@@ -137,6 +137,28 @@ async def selected_document(source, design, selector, session):
                 'parent_design_id': getattr(design, 'parent_design_id', None),
                 'design_provenance': provenance}
     path = design.pdb_path
+    if (getattr(source, "model_id", None) == "protein_modification_experimental"
+            and getattr(source, "mode", None) == "de_novo_design"
+            and isinstance(provenance.get("artifacts"), list)):
+        if selector and (selector.artifact_id is not None or selector.target_state is not None):
+            raise ValueError("Generation documents use their persisted Design identity")
+        rows = [row for row in provenance["artifacts"] if row.get("role") == "candidate_structure"]
+        if len(rows) != 1:
+            raise ValueError("Select one producer-bound generation structure")
+        doc = rows[0]
+        relative = Path(doc["relative_path"])
+        if relative.is_absolute() or ".." in relative.parts or "\\" in str(relative):
+            raise ValueError("Generation structure path is unsafe")
+        from paths import resolve_runtime_data_path
+        root = resolve_runtime_data_path(source.output_dir)
+        path = root / relative
+        current = root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("Generation structure path contains a symlink")
+        identity.update(candidate_id=design.name, artifact_sha256=doc["sha256"],
+                        producer_document=doc)
     identity.update({key: provenance[key] for key in ('primary_artifact_id', 'primary_target_state') if key in provenance})
     if selector and (selector.artifact_id is not None or selector.target_state is not None):
         matches = [doc for doc in documents(source, design)

@@ -32,6 +32,7 @@ let container: HTMLDivElement;
 let client: QueryClient;
 const adapter = api.defaults.adapter;
 beforeEach(() => {
+    window.history.replaceState({}, '', '/designs/fixture-job');
     vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
     container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
     client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
@@ -110,4 +111,26 @@ it.each([
     expect(container.textContent).toContain(state === 'missing' ? unknown : `${state === 'zero' ? '0' : '1,003'} ${noun} candidates`);
     expect(container.textContent).not.toContain('0 designs');
     expect(calls.filter(url => url.endsWith(endpoint))).toHaveLength(1);
+});
+
+it.each(['generation', 'redesign'] as const)('retains the inspected %s page and exact continuation identity on reopen', async kind => {
+    const source = kind === 'generation'
+        ? { job_id: 'fixture-job', design_id: 'persisted-design', output_format: 'native' as const }
+        : { job_id: 'fixture-job', request_id: 'fixture-request', candidate_id: 'fixture-1002', document: { artifact_id: 'document-fixture-1002' }, output_format: 'native' as const };
+    const model = kind === 'generation' ? generation : local;
+    client.setQueryData([kind === 'generation' ? 'rfd3-generation' : 'rfd3-local-redesign', model.job_id], { data: { ...model, candidates: model.candidates.map(candidate => ({ ...candidate, source_structure: candidate.candidate_id === 'fixture-1002' ? source : undefined })) } });
+    const pane = kind === 'generation' ? <RFD3GenerationResultsPane jobId={model.job_id} /> : <RFD3LocalRedesignResultsPane jobId={model.job_id} />;
+    await mount(pane);
+    await act(async () => button('Last').click());
+    await act(async () => button('fixture-1002').click());
+    for (const label of ['Redesign', 'Design sequence', 'Predict structure']) {
+        const link = [...container.querySelectorAll('a')].find(item => item.textContent === label)!;
+        const query = new URL(link.href).searchParams;
+        expect(JSON.parse(query.get('source_structure')!)).toEqual(source);
+        expect(link.href).not.toContain('binder-continuation');
+    }
+    await act(async () => root.render(null));
+    await mount(pane);
+    expect(container.textContent).toContain('Page 101 / 101');
+    expect(viewer().label).toBe('fixture-1002');
 });

@@ -474,6 +474,7 @@ export function Dashboard() {
             model_id: detailedJob.model_id,
             mode: detailedJob.mode,
             source_job_id: detailedJob.id,
+            source_structure: detailedJob.source_structure,
             execution_target_id: detailedJob.execution_target_id ?? null,
             execution_policy: detailedJob.execution_policy ?? { remote_result_policy: 'manual' },
             params: detailedJob.params || {},

@@ -157,8 +157,21 @@ class PreloadController:
         from schemas import JobCreate
         if selection.kind != "workflow" or isinstance(selection.workflow_request, JobCreate):
             return None
-        from services.nextflow import compile_native_workflow_provision_request
+        from services.nextflow import compile_native_workflow_provision_request, compile_workflow_provision_request
+        from .contracts import ShapeProvisionWorkflow
         try:
+            if isinstance(selection.workflow_request, ShapeProvisionWorkflow):
+                from paths import get_data_root
+                from services.shape_requests import materialize_shape_request, shape_job_request
+                if http_request is None or session is None:
+                    raise ValueError('Native provisioning requires an authenticated request and session')
+                source = await asyncio.to_thread(current_source_identity)
+                submitted = selection.workflow_request.request
+                staged = await materialize_shape_request(session, data_root=get_data_root(), submitted=submitted)
+                invocation = await asyncio.to_thread(compile_workflow_provision_request, shape_job_request(staged, submitted))
+                if await asyncio.to_thread(current_source_identity) != source:
+                    raise ValueError('Workflow provision source identity changed')
+                return invocation.execution_plan
             return await compile_native_workflow_provision_request(selection.workflow_request, http_request, session)
         except ValueError as exc:
             raise ExecutionTargetError("Native runtime preview unavailable; preview again with valid controls") from exc

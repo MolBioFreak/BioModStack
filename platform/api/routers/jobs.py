@@ -6265,6 +6265,44 @@ def _execution_plan_preview(job_data: JobCreate, declared_expansions=None) -> di
         'blockers': replace(metadata, blockers=remaining).to_dict()['blockers']}
 
 
+async def _prepare_selected_structure(job_data: JobCreate, session):
+    """Retain source bytes independently of placement and scientific settings."""
+    if job_data.source_structure is None:
+        return None
+    from services.binder_source_materialization import resolve_structure_source
+    from routers.files import (materialize_structure, get_governed_ngs_result_roots,
+        _under_persisted_ngs_root, _reject_governed_ngs_artifact, _sha256_regular_file_nofollow)
+    source = job_data.source_structure
+    try:
+        path, identity = await resolve_structure_source(source, session)
+        governed_roots = await get_governed_ngs_result_roots(session)
+        if _under_persisted_ngs_root(path, governed_roots):
+            raise HTTPException(403, "Access denied to this structure")
+        _reject_governed_ngs_artifact(path)
+        if source.path is None or not (path.parent.name.startswith('structure-') and source.expected_sha256):
+            prepared = await materialize_structure(source, session, governed_roots=governed_roots)
+            old_path = str(path)
+            consumed = str(resolve_allowed_path(prepared['path']))
+            def retained(value):
+                if isinstance(value, dict):
+                    return {key: retained(item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [retained(item) for item in value]
+                return consumed if isinstance(value, str) and value in {old_path, source.path} else value
+            job_data.params = retained(job_data.params)
+            job_data.source_structure = type(source).model_validate(prepared['source_structure'])
+        else:
+            # Prepared originals remain producer-bound, including compressed
+            # native artifacts. No historical bytes are opened on replay.
+            digest, _ = _sha256_regular_file_nofollow(path)
+            for expected in (identity.get('artifact_sha256'), source.expected_sha256):
+                if expected is not None and digest != expected:
+                    raise ValueError('Selected source bytes differ from the exact document digest')
+        return identity
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.post('/execution-plan/preview', response_model=JobExecutionPlanPreview)
 async def preview_job_execution_plan(
     job_data: JobCreate, session: AsyncSession = Depends(get_session),
@@ -6273,6 +6311,7 @@ async def preview_job_execution_plan(
     """Browser and agent use the exact same typed, nonexecuting preview."""
     _managed_resume_output_dir(job_data.params.get("resume_source_dir"))
     job_data = job_data.model_copy(deep=True)
+    await _prepare_selected_structure(job_data, session)
     if job_data.launch_context_id:
         if current_launch_context_id.get() != job_data.launch_context_id:
             raise HTTPException(status_code=409, detail='Launch context header and body must match')
@@ -6340,6 +6379,7 @@ async def _create_job(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     from copy import deepcopy
+    selected_structure_identity = await _prepare_selected_structure(job_data, session)
     approval_request = job_data.model_copy(deep=True)
     execution_preview = None
     original_requested_params = deepcopy(job_data.params)
@@ -7352,6 +7392,12 @@ async def _create_job(
         provenance_selected_input_schema_version = normalize_antibody_pipeline_contract_version(
             job_params.get("selected_input_schema_version") if isinstance(job_params, dict) else None
         )
+        if selected_structure_identity and not job_data.parent_job_id:
+            provenance_lineage_root = selected_structure_identity.get('lineage_root_job_id') or provenance_lineage_root
+            provenance_selection_source_job_id = selected_structure_identity.get('owner_job_id')
+            provenance_source_stage_job_id = provenance_selection_source_job_id
+            provenance_selection_source_type = 'structure'
+            provenance_source_selection_count = 1
         provenance_payload = {
             "job_id": job_id,
             "job_name": job_name,
@@ -7429,6 +7475,9 @@ async def _create_job(
         # In particular MD materialization and NGS path normalization must not
         # replace the submitted settings with scheduler-effective values.
         provenance_payload['core_protein_requested_params'] = deepcopy(original_requested_params)
+        if job_data.source_structure is not None:
+            provenance_payload['source_structure'] = job_data.source_structure.model_dump(mode='json', exclude_none=True)
+            provenance_payload['source_structure_identity'] = selected_structure_identity
         if job_data.binder_round is not None:
             provenance_payload['binder_round_request'] = job_data.binder_round.model_dump(mode='json')
         if job_data.sequence_design is not None:
@@ -8767,6 +8816,8 @@ async def get_rfd3_generation_result(job_id: str, session: AsyncSession = Depend
         candidates.append(
             {
                 "candidate_id": design.name,
+                "design_id": design.id,
+                "source_structure": {"job_id": job.id, "design_id": design.id, "output_format": "native"},
                 "status": "accepted" if is_accepted else "generated",
                 "length": int(length),
                 "radius": radius,
@@ -8889,6 +8940,14 @@ async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = De
         for roles in trajectory_roles_by_candidate.values()
     )
     public_request = _rfd3_public_json(request.request_json)
+    source_by_candidate = {}
+    for artifact in artifacts:
+        if artifact.role == 'structure':
+            source_by_candidate.setdefault(artifact.candidate_id, {
+                'job_id': job.id, 'request_id': request.request_id,
+                'candidate_id': artifact.candidate_id,
+                'document': {'artifact_id': artifact.artifact_id}, 'output_format': 'native',
+            })
     return {
         "schema": "bms.rfd3.local-redesign.read-model.v1",
         "job_id": str(job.id),
@@ -8937,6 +8996,7 @@ async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = De
         "candidates": [
             {
                 "candidate_id": row.candidate_id,
+                "source_structure": source_by_candidate.get(row.candidate_id),
                 "result_set": row.result_set,
                 "stage": row.stage,
                 "status": row.status,

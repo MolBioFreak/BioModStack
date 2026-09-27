@@ -1,3 +1,5 @@
+import { prepareDeNovoContinuation, nativeSequenceInput, sequenceDestinations, type DeNovoDestination } from '../lib/deNovoContinuation';
+import { materializeExactStructure, type StructureSourceSelection } from '../lib/api';
 import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLauncherTemplates } from '../lib/launcherCatalog';
 
 
@@ -230,6 +232,26 @@ export function JobSubmission() {
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [clonedValues, setClonedValues] = useState<Record<string, UntypedApiValue> | undefined>(undefined);
+    const continuationSource = searchParams.get('source_structure');
+    const continuationDestination = searchParams.get('continuation');
+    const continuationKey = `${continuationDestination}:${continuationSource}`;
+    const appliedContinuation = useRef<string | null>(null);
+    const continuationQuery = useQuery({
+        queryKey: ['de-novo-continuation', continuationKey],
+        enabled: Boolean(continuationSource && ['redesign', 'sequence', 'prediction'].includes(continuationDestination || '')
+            && (!projectSetup.active || (projectSetup.setup && !projectSetup.settings.sequence_continuation))),
+        staleTime: Infinity, retry: false,
+        queryFn: () => prepareDeNovoContinuation(JSON.parse(continuationSource!) as StructureSourceSelection, continuationDestination as DeNovoDestination),
+    });
+    useEffect(() => {
+        if (!continuationQuery.data || appliedContinuation.current === continuationKey || (projectSetup.active && (!projectSetup.setup || projectSetup.settings.sequence_continuation))) return;
+        appliedContinuation.current = continuationKey;
+        const values = continuationDestination === 'sequence'
+            ? { sequence_continuation: true, ...continuationQuery.data, ...nativeSequenceInput(selectedModelId || 'proteinmpnn', continuationQuery.data._source_prepared, continuationQuery.data._source_native_prepared) }
+            : continuationQuery.data;
+        setClonedValues(values); setParams(values);
+        setDedicatedTemplateVersion(version => version + 1);
+    }, [continuationQuery.data, continuationKey, projectSetup.active, projectSetup.setup]);
     const deNovoDraftRef = useRef<Record<string, unknown> | undefined>(undefined);
     const deNovoRoute = useMemo(() => deNovoRouteValues(searchParams), [searchParams]);
     const deNovoNavigationState = useMemo(() => deNovoNavigation(deNovoRoute), [deNovoRoute]);
@@ -266,8 +288,10 @@ export function JobSubmission() {
         setClonedValues(projectSetup.settings as Record<string, UntypedApiValue>);
         setProjectDraftValues(projectSetup.settings as Record<string, UntypedApiValue>);
         const draft = projectSetup.settings as Record<string, UntypedApiValue>;
+        if (draft.sequence_continuation) appliedContinuation.current = continuationKey;
+        binderNativeDrafts.current = { ...draft.binder_native_drafts };
         if (draft.binder_workflow_draft) binderDraftRef.current = draft.binder_workflow_draft;
-        if ((['ppiflow', 'boltzgen'].includes(String(draft.model_id))
+        if ((['ppiflow', 'boltzgen', 'proteinmpnn', 'fampnn'].includes(String(draft.model_id))
             || (draft.model_id === 'caliby_experimental' && ['ensemble_design', 'sidechain_pack'].includes(draft.mode))
             || (draft.model_id === 'ligandmpnn' && ['ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'].includes(draft.mode))) && typeof draft.mode === 'string') {
             setWizardMode('manual'); setSelectedTemplateId(null);
@@ -354,6 +378,8 @@ export function JobSubmission() {
 
     // Dedicated templates should not retain stale clone params once user navigates away.
     const handleDedicatedTemplateBack = () => {
+        const returnTo = searchParams.get('return_to');
+        if (continuationSource && returnTo?.startsWith('/') && !returnTo.startsWith('//')) { navigate(returnTo); return; }
         if (selectedTemplateId === 'antibody_denovo') setBinderInitialDraft(binderDraftRef.current);
         setSelectedTemplateId(null);
         setClonedValues(undefined);
@@ -383,6 +409,7 @@ export function JobSubmission() {
 
     // Check for cloned job data on mount
     useEffect(() => {
+        if (continuationSource) return;
         const stored = localStorage.getItem('clonedJobData');
         if (stored) {
             try {
@@ -397,6 +424,7 @@ export function JobSubmission() {
                 data.params = fampnnUserParams(data.params || {});
                 if (data.binder_round) data.params.binder_round = data.binder_round;
                 if (data.sequence_design) data.params.sequence_design = data.sequence_design;
+                if (data.source_structure) data.params.source_structure = data.source_structure;
                 delete data.params.remote_result_policy;
                 console.log('Loading cloned job data:', data);
 
@@ -504,6 +532,10 @@ export function JobSubmission() {
                     setClonedValues(draft);
                     setDedicatedTemplateVersion(version => version + 1);
                     navigateDeNovo(deNovoNavigation(draft), true);
+                }
+                else if (data.source_structure && ['boltz2', 'protenix'].includes(data.model_id)) {
+                    setWizardMode('templates'); setSelectedTemplateId('structure_prediction');
+                    setClonedValues({ ...data.params, name: data.name, pred_method: data.model_id === 'boltz2' ? 'boltz' : 'protenix' });
                 }
                 // 7. Manual Mode
                 else {
@@ -811,7 +843,8 @@ export function JobSubmission() {
             const prior = initializedModelParams.current;
             const sameDraft = prior?.id === selectedModelId && prior?.clone === clonedValues;
             setParams(previous => {
-                const saved = sameDraft ? previous : clonedValues || {};
+                const saved = sameDraft ? previous : (continuationDestination === 'sequence' || clonedValues?.sequence_continuation)
+                    ? { ...clonedValues, ...previous } : clonedValues || {};
                 definitions.forEach((p: UntypedApiValue) => {
                     if (p.default !== undefined && !(p.aliases || []).some((alias: string) => Object.hasOwn(saved, alias))) defaults[p.name] = p.default;
                 });
@@ -863,10 +896,59 @@ export function JobSubmission() {
         }
     }, [projectSetup.active, wizardMode, selectedModelId, selectedModeId, params, jobName]);
 
+    const isSequenceContinuation = continuationDestination === 'sequence' || Boolean(params.sequence_continuation);
+    const [sequencePreparationError, setSequencePreparationError] = useState<string | null>(null);
+    // Convert only for the active PDB consumer. Cleanup prevents a late response
+    // from replacing a different source, model, cleared input or reopened draft.
+    useEffect(() => {
+        setSequencePreparationError(null);
+        const native = params._source_native_prepared;
+        if (!isSequenceContinuation || !native || selectedModelId === 'caliby_experimental' || params.input_pdb) return;
+        let current = true;
+        const preparation = native.format === 'pdb' ? Promise.resolve(native)
+            : materializeExactStructure({ path: native.path, expected_sha256: native.sha256, output_format: 'pdb', ...(native.model_number == null ? {} : { model_number: native.model_number }) });
+        preparation.then(prepared => {
+            if (current) setParams(previous => ({ ...previous, input_pdb: prepared.path, _source_prepared: prepared }));
+        }).catch(error => { if (current) setSequencePreparationError(String(error)); });
+        return () => { current = false; };
+    }, [isSequenceContinuation, selectedModelId, selectedModeId, params._source_native_prepared, params.input_pdb, clonedValues]);
+
+    const sequenceDraft = () => {
+        const { binder_native_drafts: _inactive, ...active } = params;
+        return { ...active, sequence_continuation: true, job_name: jobName, model_id: selectedModelId, mode: selectedModeId,
+            binder_native_drafts: { ...binderNativeDrafts.current, [`${selectedModelId}:${selectedModeId}`]: active } };
+    };
+    const switchSequenceModel = (model: string, mode: string) => {
+        const { binder_native_drafts: _inactive, ...active } = params;
+        binderNativeDrafts.current[`${selectedModelId}:${selectedModeId}`] = active;
+        const next = binderNativeDrafts.current[`${model}:${mode}`] || {
+            sequence_continuation: true, source_structure: params.source_structure,
+            _source_prepared: params._source_prepared, _source_native_prepared: params._source_native_prepared,
+            ...(params._source_prepared ? nativeSequenceInput(model, params._source_prepared, params._source_native_prepared) : {}),
+        };
+        setClonedValues(next); setParams(next); setSelectedModelId(model); setSelectedModeId(mode);
+    };
+
     // Handle param change
     const updateParam = (key: string, value: UntypedApiValue) => {
+        appliedContinuation.current = continuationKey;
+        // Replacing the consumed source retires the old ancestry, not sequence edits.
         setParams(prev => {
             const next = { ...prev, [key]: value };
+            const sourcePaths = (ensembles: UntypedApiValue) => (ensembles || []).flatMap((ensemble: UntypedApiValue) => (ensemble.states || []).map((state: UntypedApiValue) => state.path));
+            const replaced = key === 'input_pdb' ? value !== prev.input_pdb
+                : key === 'ensembles' && JSON.stringify(sourcePaths(value)) !== JSON.stringify(sourcePaths(prev.ensembles));
+            if (replaced) {
+                const paths = key === 'input_pdb' ? [value] : sourcePaths(value);
+                next.source_structure = paths.length === 1 && paths[0] ? { path: paths[0], output_format: 'native' } : undefined;
+                next._source_prepared = undefined; next._source_native_prepared = undefined;
+                // Inactive science settings survive; ancestry to a replaced source does not.
+                for (const draft of Object.values(binderNativeDrafts.current)) {
+                    delete draft.source_structure; delete draft._source_prepared; delete draft._source_native_prepared;
+                    delete draft.input_pdb; delete draft.ensembles;
+                }
+
+            }
             if (selectedModelId && selectedModeId) binderNativeDrafts.current[`${selectedModelId}:${selectedModeId}`] = nativeBinderDraft(next, jobName);
             return next;
         });
@@ -1103,6 +1185,7 @@ export function JobSubmission() {
             // Template mode: merge preset params with user params
             const mergedParams = fampnnUserParams({ ...templateData.preset_params, ...params });
             delete mergedParams.fampnn_analysis_overrides;
+            delete mergedParams.source_structure; delete mergedParams._source_prepared; delete mergedParams._source_native_prepared;
             const templateModelIdOverride = mergedParams.template_model_id;
             const templateModeIdOverride = mergedParams.template_mode_id;
             delete mergedParams.template_model_id;
@@ -1186,6 +1269,8 @@ export function JobSubmission() {
 
             return {
                 name: templateLaunchName,
+                source_structure: params.source_structure,
+                execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null,
                 model_id: effectiveModelId,
                 mode: nextflowProfile,
                 params: finalParams,
@@ -1210,6 +1295,8 @@ export function JobSubmission() {
                 Object.assign(filteredParams, params);
             }
 
+            delete filteredParams.binder_native_drafts; delete filteredParams.sequence_continuation;
+            delete filteredParams.source_structure; delete filteredParams._source_prepared; delete filteredParams._continuation_chains; delete filteredParams._source_native_prepared;
             for (const key of Object.keys(filteredParams)) {
                 if (!(key in fampnnUserParams(filteredParams)) || key === 'fampnn_analysis_overrides') delete filteredParams[key];
             }
@@ -1236,6 +1323,8 @@ export function JobSubmission() {
 
             return {
                 name: jobName,
+                source_structure: params.source_structure,
+                execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null,
                 model_id: selectedModelId,
                 mode: selectedModeId,
                 ...(isNativeBinderGeneration ? { binder_round: hydrateBinderRound(params).binder_round } : {}),
@@ -1346,6 +1435,10 @@ export function JobSubmission() {
         },
     });
 
+    if (continuationDestination !== 'sequence' && continuationSource && (continuationQuery.isPending || (continuationQuery.data && appliedContinuation.current !== continuationKey))) {
+        return <p role="status">Preparing selected structure for the editor…</p>;
+    }
+    if (continuationDestination !== 'sequence' && continuationSource && continuationQuery.isError) return <p role="alert">{String(continuationQuery.error)}</p>;
     if (preparedStructureScheduler && !projectSetup.active) {
         return (
             <div className="min-h-screen bg-slate-950 p-6 text-slate-100">
@@ -1399,9 +1492,19 @@ export function JobSubmission() {
     return (
         <Suspense fallback={<p role="status">Loading selected editor…</p>}>
         <div className="min-h-screen bg-slate-950 p-6">
+            {continuationSource && <button type="button" onClick={handleDedicatedTemplateBack} className="mb-3 rounded-lg border border-slate-600 px-3 py-2 text-sm">Back to selected result</button>}
+            {isSequenceContinuation && <label className="block p-4 text-sm">Sequence design model
+                <select aria-label="Sequence design model" value={`${selectedModelId}:${selectedModeId}`} onChange={event => {
+                    const [model, mode] = event.target.value.split(':');
+                    switchSequenceModel(model, mode);
+                }} className="ml-3 rounded border bg-[var(--bg-secondary)] p-2">
+                    {sequenceDestinations.map(([model, mode, label]) => <option key={`${model}:${mode}`} value={`${model}:${mode}`}>{label}</option>)}
+                </select>
+            </label>}
+            {isSequenceContinuation && (sequencePreparationError || continuationQuery.error) && <p role="alert">{sequencePreparationError || String(continuationQuery.error)}</p>}
             {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" disabled={projectActionBusy} onClick={async () => {
                 setProjectActionBusy(true); setProjectActionError(null);
-                try { await projectSetup.saveDraft(projectDraftValues as JsonObject); }
+                try { await projectSetup.saveDraft((isSequenceContinuation ? sequenceDraft() : projectDraftValues) as JsonObject); }
                 catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
                 finally { setProjectActionBusy(false); }
             }}>Save draft</button>{selectedTemplateId === 'antibody_denovo'
@@ -1409,7 +1512,7 @@ export function JobSubmission() {
                 : <button type="button" className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white" disabled={projectActionBusy || (isNativeBinderGeneration && !isReady)} onClick={async () => {
                     if (isNativeBinderGeneration) { handleSubmit(); return; }
                     setProjectActionBusy(true); setProjectActionError(null);
-                    try { await projectSetup.startRun(projectDraftValues as JsonObject); }
+                    try { await projectSetup.startRun((isSequenceContinuation ? sequenceDraft() : projectDraftValues) as JsonObject); }
                     catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
                     finally { setProjectActionBusy(false); }
                 }}>Start run</button>}{projectActionError && <p role="alert">{projectActionError}</p>}<ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
@@ -1778,7 +1881,7 @@ export function JobSubmission() {
                             />
 
                             <div className="space-y-6">
-                                {(isCalibyNative || isLigandNative) && <label className="block text-sm text-slate-300">
+                                {(isCalibyNative || isLigandNative || ['proteinmpnn', 'fampnn'].includes(selectedModelId ?? '')) && <label className="block text-sm text-slate-300">
                                     Job name
                                     <input aria-label="Sequence job name" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 p-3" value={jobName} onChange={event => setJobName(event.target.value)} />
                                 </label>}
@@ -1800,6 +1903,7 @@ export function JobSubmission() {
                                         value={selectedModeId || ''}
                                         onChange={(e) => {
                                             const mode = e.target.value;
+                                            if (isSequenceContinuation && selectedModelId) { switchSequenceModel(selectedModelId, mode); return; }
                                             if (['boltzgen', 'ppiflow'].includes(selectedModelId ?? '')) {
                                                 binderNativeDrafts.current[`${selectedModelId}:${selectedModeId}`] = nativeBinderDraft(params, jobName);
                                                 const sourceContext = Object.fromEntries(['target_pdb', 'target_source', 'target_model_number', 'selected_chain', 'selected_residues']

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
     meshMount: vi.fn(), moleculeMount: vi.fn(),
-    geometries: vi.fn(), settings: vi.fn(), submit: vi.fn(),
+    geometries: vi.fn(), settings: vi.fn(), submit: vi.fn(), targets: vi.fn(),
 }));
 vi.mock('../../src/components/CanonicalMeshPreview', () => ({ default: ({ url }: { url: string }) => {
     useEffect(() => { mocks.meshMount(); }, []);
@@ -23,11 +23,15 @@ vi.mock('../../src/lib/api', async (original) => ({
     fetchShapeSequenceSettings: mocks.settings,
     submitShapeBlueprint: mocks.submit,
     submitJob: mocks.submit,
-    fetchExecutionTargets: vi.fn(async () => ({ data: [] })),
+    fetchExecutionTargets: mocks.targets,
     fetchSystemStatus: vi.fn(async () => ({ data: { gpus: [], gpu_error: null } })),
 }));
+import { api, EXECUTION_TARGET_STORAGE_KEY } from '../../src/lib/api';
 import ShapeBlueprintTemplate from '../../src/components/ShapeBlueprintTemplate';
 import ProteinLocalRedesignTemplate from '../../src/components/ProteinLocalRedesignTemplate';
+import { StructurePredictionTemplate } from '../../src/components/StructurePredictionTemplate';
+import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
+import { fetchSystemStatus } from '../../src/lib/api';
 
 // Synthetic UI-only geometry metadata and minimal PDB, never submitted or persisted.
 const geometry = (id: string) => ({
@@ -80,6 +84,7 @@ function field(label: string) {
 }
 beforeEach(() => {
     vi.clearAllMocks(); sessionStorage.clear();
+    mocks.targets.mockResolvedValue({ data: [] });
     mocks.geometries.mockResolvedValue({ data: { geometries: [geometry('first'), geometry('second')] } });
     mocks.settings.mockResolvedValue({ data: definition });
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ structures: [], cached: [] }) })));
@@ -152,6 +157,53 @@ it('preserves Shape explicit false, zero, empty settings through late native def
     expect(changed.mock.lastCall![0].shape_sequence_settings_by_engine).toEqual(initial.shape_sequence_settings_by_engine);
 });
 
+it('prepares and submits the exact current Shape request, keeping retry identity and source-free family preload', async () => {
+    const target = { id: 'vast:shape', provider: 'vast', provider_instance_id: 'shape', active: true, state: 'ready', capabilities: {} };
+    mocks.targets.mockResolvedValue({ data: [target] });
+    sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, target.id);
+    const posts: Array<{ url: string; body: any }> = [];
+    const adapter = api.defaults.adapter;
+    api.defaults.adapter = async config => {
+        const body = config.data ? JSON.parse(String(config.data)) : undefined;
+        if (config.method === 'post') posts.push({ url: String(config.url), body });
+        return { data: config.method === 'get' ? null : { selection: body, artifacts: [], total_bytes: 0,
+            preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'managed_asset_activation' },
+            status: 200, statusText: 'OK', headers: {}, config };
+    };
+    mocks.submit.mockRejectedValue(new Error('Review cancelled'));
+    try {
+        await mount(<ShapeBlueprintTemplate initialValues={{ shape_sequence_policy: 'skip' }} />);
+        expect(posts).toEqual([]); expect(mocks.submit).not.toHaveBeenCalled();
+        await click('Generation'); await edit(field('Target length'), '140');
+        const panel = () => container.querySelector('[aria-label="Unsaved workflow provisioning"]')!;
+        const previewCurrent = async () => {
+            const node = [...panel().querySelectorAll('button')].find(b => b.textContent === 'Preview artifact downloads')!;
+            expect(node).toBeTruthy(); await act(async () => node.click()); await flush();
+            return posts.at(-1)!.body.workflow_request.request;
+        };
+        const prepared = await previewCurrent();
+        expect(prepared).toMatchObject({ target_length: 140, sequence_policy: 'skip', sequences_per_backbone: 0,
+            execution_target_id: target.id, geometry_id: 'first' });
+        await click('Launch Shape Blueprint'); await flush();
+        const { execution_target_id, execution_policy, ...preparedScience } = prepared;
+        expect(JSON.parse(JSON.stringify(mocks.submit.mock.lastCall![0]))).toEqual(preparedScience);
+        expect(execution_target_id).toBe(target.id); expect(execution_policy).toBeTruthy();
+        const submitted = mocks.submit.mock.lastCall![0];
+        expect(submitted.client_request_id).toBe(prepared.client_request_id);
+        await click('Optional next steps'); await click('Generation');
+        await click('Launch Shape Blueprint'); await flush();
+        expect(mocks.submit.mock.lastCall![0]).toEqual(submitted);
+        await edit(field('Target length'), '160');
+        const edited = await previewCurrent();
+        expect(edited.target_length).toBe(160);
+        expect(edited.client_request_id).not.toBe(prepared.client_request_id);
+        const family = container.querySelector('[aria-label="Independent dependency preparation"]')!;
+        const familyButton = [...family.querySelectorAll('button')].find(b => b.textContent === 'Preview artifact downloads')!;
+        await act(async () => familyButton.click()); await flush();
+        expect(posts.at(-1)!.body).toEqual({ kind: 'model', model_id: 'protein_modification_experimental' });
+    } finally { api.defaults.adapter = adapter; }
+});
+
 it('preserves Redesign real pasted-source controls, viewer, ranges and blank seed across presentation toggles and remount', async () => {
     const changed = vi.fn();
     await mount(<ProteinLocalRedesignTemplate embedded onBack={vi.fn()} onDraftChange={changed} runDetails={<div data-testid="policy">Policy</div>} />);
@@ -194,4 +246,154 @@ it('does not emit Redesign defaults before saved hydration and preserves explici
     expect(field('Range string').value).toBe('');
     expect(changed.mock.lastCall![0]).toMatchObject({ redesign_ranges: '', context_chains: [], seed: 0 });
     await click('Back'); expect(back).toHaveBeenCalledTimes(1);
+});
+
+// These lifecycle cases use the real continuation and submission helpers and
+// editors. Only HTTP, telemetry transport and the low-level viewers are inert.
+const originalAdapter = api.defaults.adapter;
+const source = { job_id: 'returned-parent', request_id: 'native-request', candidate_id: 'candidate-7', document: { artifact_id: 'artifact-7' }, output_format: 'native' as const };
+const retained = { ...source, path: 'inputs/retained/selected.pdb', expected_sha256: '7'.repeat(64) };
+const selectedMaterialization = {
+    path: retained.path, format: 'pdb', sha256: retained.expected_sha256, model_number: 1,
+    source_structure: retained,
+    author_residues: [
+        { model_number: 1, auth_asym_id: 'A', auth_seq_id: 1, residue_name: 'ALA' },
+        { model_number: 1, auth_asym_id: 'A', auth_seq_id: 2, residue_name: 'GLY' },
+        { model_number: 2, auth_asym_id: 'authorB', auth_seq_id: 9, residue_name: 'MET' },
+        { model_number: 2, auth_asym_id: 'authorB', auth_seq_id: 10, residue_name: 'LYS' },
+        { model_number: 2, auth_asym_id: 'DNA', auth_seq_id: 1, residue_name: 'DA' },
+    ],
+};
+async function selectedTransport() {
+    window.history.replaceState({}, '', '/submit');
+    const real = await vi.importActual<typeof import('../../src/lib/api')>('../../src/lib/api');
+    mocks.submit.mockImplementation(real.submitJob);
+    const posts: Array<{ url: string; body: any }> = [];
+    const target = { id: 'vast:chosen', name: 'chosen', provider: 'vast', active: true, state: 'ready', capabilities: { gpu_count: 1 } };
+    mocks.targets.mockResolvedValue({ data: [target] });
+    vi.mocked(fetchSystemStatus).mockResolvedValue({ data: { gpus: [{ index: 0, name: 'Fixture GPU', memory_total_mb: 24000 }], gpu_error: null } } as any);
+    api.defaults.adapter = async config => {
+        const body = config.data ? JSON.parse(String(config.data)) : undefined;
+        if (config.method === 'post') posts.push({ url: String(config.url), body });
+        let data: any = {};
+        if (config.url === '/api/files/materialize-structure') data = selectedMaterialization;
+        else if (config.url === '/api/jobs/execution-plan/preview') data = {
+            schema: 'bms.job.execution-preview.v1', approval_digest: 'a'.repeat(64), admissible: true,
+            request: body, plan: { requested_json: body.params, effective_json: body.params,
+                source_identity: { revision: 'offline', tree: 'offline' },
+                metadata: { static_components: [], dynamic_templates: [], external_services: [] } },
+            deferred_preparation: [], blockers: [],
+        };
+        else if (config.url === '/api/jobs') throw new Error('Offline request captured; no Job created');
+        else if (config.url === '/api/execution-targets/active/telemetry') data = {
+            available: true, observed_at: new Date().toISOString(), target,
+            gpus: [{ index: 0, execution_target_id: target.id, name: 'Fixture remote GPU', memory_total_mb: 24000 }],
+        };
+        else if (config.url?.includes('integration')) data = { workflows: { structure_prediction: { default_enabled: false } } };
+        else if (config.url?.includes('msa')) data = { providers: {}, cache_entries: 0 };
+        return { data, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, blob: async () => new Blob([pdb]), json: async () => ({ structures: [], cached: [] }) })));
+    vi.spyOn(window, 'alert').mockImplementation(() => {});
+    return posts;
+}
+afterEach(() => { api.defaults.adapter = originalAdapter; vi.restoreAllMocks(); });
+
+it('prediction selects exact author/model sequence, clears and reselects ancestry, and reopens edited saved metadata without pose conditioning', async () => {
+    const posts = await selectedTransport(); const changed = vi.fn(); const save = vi.fn();
+    const prepared = await prepareDeNovoContinuation(source, 'prediction');
+    await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={{ ...prepared, boltz_use_msa: false, run_frustrampnn: false }} onDraftChange={changed} onOpenTemplateManager={save} />);
+    expect(posts.filter(p => p.url === '/api/jobs')).toEqual([]);
+    const chooser = () => field('Selected candidate protein chain');
+    expect(chooser().textContent).not.toContain('DNA');
+    expect(chooser().value).toBe('');
+    await edit(chooser(), '2:authorB');
+    expect(changed.mock.lastCall![0]).toMatchObject({ sequence: 'MK', primary_chain_id: 'authorB', source_structure: { ...retained, model_number: 2 } });
+    await click('Clear selected source');
+    expect(changed.mock.lastCall![0].source_structure).toBeUndefined();
+    expect(changed.mock.lastCall![0].sequence).toBe('');
+    const cleared = JSON.parse(JSON.stringify(changed.mock.lastCall![0]));
+    await unmount();
+    await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={cleared} onDraftChange={changed} onOpenTemplateManager={save} />);
+    await edit(chooser(), '1:A');
+    expect(changed.mock.lastCall![0]).toMatchObject({ sequence: 'AG', source_structure: { ...retained, model_number: 1 } });
+    const sequenceInput = [...container.querySelectorAll<HTMLTextAreaElement>('textarea')].find(n => n.value === 'AG')!;
+    expect(sequenceInput).toBeTruthy(); await edit(sequenceInput, 'AGM');
+    const esmfold = [...container.querySelectorAll<HTMLButtonElement>('button')].find(n => n.querySelector('span')?.textContent === 'ESMFold2')!;
+    expect(esmfold).toBeTruthy(); await act(async () => esmfold.click());
+    expect(changed.mock.lastCall![0]).toMatchObject({ pred_method: 'esmfold2', sequence: 'AGM', source_structure: { ...retained, model_number: 1 } });
+    await click('Save Template');
+    const saved = JSON.parse(JSON.stringify(save.mock.lastCall![0].currentParams));
+    expect(saved).toEqual(changed.mock.lastCall![0]);
+    await unmount();
+    await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={saved} onDraftChange={changed} />);
+    await click('Launch Prediction'); await flush();
+    const request = posts.filter(p => p.url === '/api/jobs').at(-1)?.body;
+    expect(request, container.textContent ?? '').toMatchObject({ execution_target_id: null, source_structure: { ...retained, model_number: 1 }, params: { sequence: 'AGM' } });
+    expect(request.params.source_structure).toBeUndefined();
+    expect(request.params.binder_chains).toBeUndefined();
+    expect(request.params.fixed_target_source_path).toBeUndefined();
+    expect(request.params.target_source).toBeUndefined();
+    expect(request.parent_job_id).toBeFalsy();
+    await unmount();
+    await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={{ ...request.params, source_structure: request.source_structure,
+        pred_method: 'esmfold2', job_name: 'cloned prediction' }} onDraftChange={changed} />);
+    expect(changed.mock.lastCall![0]).toMatchObject({ sequence: 'AGM', source_structure: request.source_structure });
+    expect(posts.filter(p => p.url === '/api/jobs')).toHaveLength(1);
+});
+
+it.each(['native', 'validated'] as const)('selected %s Redesign submits retained path, placement and native settings through serialized reopen', async depth => {
+    const posts = await selectedTransport(); const changed = vi.fn();
+    const prepared = await prepareDeNovoContinuation(source, 'redesign');
+    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={{ ...prepared, execution_depth: depth,
+        redesign_ranges: 'A1', select_unfixed_sequence: 'A1', seq_method: 'mpnn', pinned_gpu: 0,
+        seed: 0, partial_t: 0, dump_trajectories: false, interactive_gating: false, region_padding: 0,
+        fix_fixed_sidechains: false, seqs_per_design: 2 }} onDraftChange={changed} />);
+    await waitForViewer();
+    expect(posts.filter(p => p.url === '/api/jobs')).toEqual([]);
+    const draft = JSON.parse(JSON.stringify(changed.mock.lastCall![0]));
+    expect(draft).toMatchObject({ source_structure: retained, _source_prepared: selectedMaterialization, seed: 0, partial_t: 0, dump_trajectories: false });
+    await unmount();
+    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={draft} onDraftChange={changed} />);
+    await waitForViewer();
+    const launch = depth === 'native' ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation';
+    await click(launch); await flush();
+    let request = posts.filter(p => p.url === '/api/jobs').at(-1)?.body;
+    expect(request, container.textContent ?? '').toMatchObject({ source_structure: { ...retained, model_number: 1 }, execution_target_id: null,
+        model_id: depth === 'native' ? 'protein_local_redesign' : 'protein_modification_experimental', mode: depth === 'native' ? 'local_redesign' : 'region_redesign' });
+    expect(request.params).toMatchObject(depth === 'native' ? { input_structure: retained.path, seed: 0, partial_t: 0, dump_trajectories: false }
+        : { input_pdb: retained.path, seqs_per_design: 2, fix_fixed_sidechains: false, interactive_gating: false, region_padding: 0 });
+    expect(request.params.source_structure).toBeUndefined(); expect(request.parent_job_id).toBeFalsy();
+    await click('Vast · chosen'); await flush();
+    await click(launch); await flush();
+    let approval: HTMLButtonElement | undefined;
+    for (let attempt = 0; attempt < 40 && !approval; attempt++) {
+        await flush();
+        approval = [...document.querySelectorAll<HTMLButtonElement>('button')].find(n => n.textContent === 'Approve and submit');
+    }
+    expect(approval, container.textContent ?? '').toBeTruthy();
+    await act(async () => approval!.click()); await flush();
+    request = posts.filter(p => p.url === '/api/jobs').at(-1)?.body;
+    expect(request.execution_target_id).toBe('vast:chosen');
+    expect(request.source_structure).toEqual({ ...retained, model_number: 1 });
+    expect(request.execution_plan_approval).toBe('a'.repeat(64));
+    await click('Local'); await flush(); await click(launch); await flush();
+    expect(posts.filter(p => p.url === '/api/jobs').at(-1)?.body.execution_target_id).toBeNull();
+});
+
+it('Redesign clear ignores a late selected-source read and replacement drops old ancestry', async () => {
+    await selectedTransport(); const changed = vi.fn();
+    let finish!: (value: unknown) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { finish = resolve; })));
+    const prepared = await prepareDeNovoContinuation(source, 'redesign');
+    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={prepared} onDraftChange={changed} />);
+    await click('Clear source');
+    expect(container.textContent).not.toContain('Parsing structure');
+    await act(async () => finish({ ok: true, blob: async () => new Blob([pdb]) })); await flush();
+    expect(container.querySelector('[data-testid="molecule"]')).toBeNull();
+    expect(changed.mock.lastCall![0].source_structure).toBeUndefined();
+    await edit(container.querySelector<HTMLTextAreaElement>('[placeholder="ATOM ... or data_entry"]')!, pdb);
+    await click('Use pasted structure in Mol*'); await waitForViewer();
+    expect(changed.mock.lastCall![0].source_structure).toBeUndefined();
+    expect(changed.mock.lastCall![0]._source_prepared).toBeUndefined();
 });
