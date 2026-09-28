@@ -21,7 +21,7 @@ vi.mock('../../src/components/ProteinLocalRedesignTemplate', () => ({ ProteinLoc
 vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: () => null }));
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
-const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }, { kind: 'workflow_pack', workflow_id: 'structure_prediction' }];
+const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }, { kind: 'workflow_pack', workflow_id: 'structure_prediction' }, { kind: 'workflow_pack', workflow_id: 'antibody_denovo' }];
 const artifacts = [{ name: 'runtime/protenix.sif', sha256: 'a'.repeat(64), size_bytes: 1234 }];
 const preview = (selection: ProvisionSelection): ProvisionPreview => ({ selection, artifacts, total_bytes: 1234, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'managed_asset_activation' });
 const ready: ExecutionTarget = { id: 'vast:123', provider: 'vast', provider_instance_id: '123', name: 'Worker', state: 'ready', active: true, host: 'host', port: 22, username: 'root', remote_root: '/opt/bms', host_key_sha256: 'c'.repeat(64), capabilities: {}, pricing: {}, last_error: null, last_seen_at: null, activated_at: null };
@@ -73,6 +73,18 @@ it('prepares the entire workflow from one explicit click using its fresh digest,
   expect(button('Prepare entire workflow').disabled).toBe(true);
   await act(async () => { await client.invalidateQueries(); await settle(); });
   expect(posts).toHaveLength(2);
+});
+
+it('prepares all de novo binder dependencies in one click, without substituting a configured generator', async () => {
+  await render();
+  await select('Preparation workflow', 'antibody_denovo');
+  expect(container.textContent).toContain('binder generators, sequence designers, validators');
+  expect(container.querySelector('a[href*="template=antibody_denovo"]')).toBeNull();
+  await click('Prepare entire workflow', true);
+  expect(posts).toEqual([
+    { url: '/api/execution-targets/vast%3A123/provision/preview', body: { kind: 'workflow_pack', workflow_id: 'antibody_denovo' } },
+    { url: '/api/execution-targets/vast%3A123/provision', body: { kind: 'workflow_pack', workflow_id: 'antibody_denovo', preview_sha256: 'b'.repeat(64) } },
+  ]);
 });
 
 it('keeps whole-workflow missing-asset details visible without starting an incomplete pack', async () => {
@@ -479,8 +491,8 @@ it('discovers the shared launcher workflows and full model registry without gran
   expect(container.textContent).toContain('De Novo Binder Design');
   expect(container.textContent).toContain('De Novo Design');
   expect(container.textContent).toContain('Molecular Dynamics');
-  await select('Preparation workflow', 'antibody_denovo');
-  expect(container.querySelector('a')?.getAttribute('href')).toBe('/submit?template=antibody_denovo');
+  await select('Preparation workflow', 'molecular_dynamics');
+  expect(container.querySelector('a')?.getAttribute('href')).toBe('/submit?template=molecular_dynamics');
   expect(container.textContent).toContain('Unsaved preparation is available only where that form has “Preview artifact downloads”');
   expect(container.textContent).toContain('use an existing job as its dependency recipe without rerunning it');
   expect(container.textContent).not.toContain('No saved Job required');

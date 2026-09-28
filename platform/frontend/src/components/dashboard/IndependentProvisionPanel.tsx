@@ -133,7 +133,9 @@ function ProvisionChooser({ target, onChanged }: Props) {
     {selectedWorkflow && <div className="space-y-2 text-sm">
       <p>{selectedWorkflow.description}</p>
       {pack ? <>
-        <p>Downloads and installs the workflow’s supported local predictors and shared assets, including optional analysis assets. Jobs keep their own settings; inputs and MSA requests stay with each job.</p>
+        <p>{pack.workflow_id === 'antibody_denovo'
+          ? 'Downloads and installs the binder generators, sequence designers, validators and optional operation assets. Jobs keep their own settings and biological inputs.'
+          : 'Downloads and installs the workflow’s supported local predictors and shared assets, including optional analysis assets. Jobs keep their own settings; inputs and MSA requests stay with each job.'}</p>
         <ProvisionActions key={JSON.stringify(pack)} target={target} onChanged={onChanged} selection={pack} prepareInOneClick />
       </> : <>
       {familySelection && <CatalogProvisionPanel target={target} onChanged={onChanged} selection={familySelection} showStatus={false} />}

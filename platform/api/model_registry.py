@@ -102,7 +102,7 @@ class RuntimeDependencyRef(BaseModel):
 INDEPENDENT_RUNTIME_MODELS = frozenset({
     "protenix", "esmfold2", "esmfold2_experimental", "fampnn", "frustrampnn",
     "boltz2", "af2", "proteinmpnn", "unidock", "protein_modification_experimental",
-    "caliby_binder", "caliby_experimental", "ligandmpnn",
+    "caliby_binder", "caliby_experimental", "ligandmpnn", "bindcraft2",
 })
 
 
@@ -137,6 +137,10 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
     if model_id == 'protein_modification_experimental':
         return _denovo_runtime_dependencies()
     refs = [RuntimeDependencyRef(kind="image", relative_path=model.container)]
+    if model_id == 'bindcraft2':
+        # Native campaign bind in scripts/run_bindcraft2.py; image-owned MPNN
+        # plus the selected AlphaFold parameter tree.
+        refs.append(RuntimeDependencyRef(kind='weights', relative_path='alphafold/params'))
     if model_id == 'caliby_experimental':
         from services.caliby_native import SUPPORTED_MODES, selected_assets
         # Union of the two public native tasks' declared default checkpoints;
@@ -201,6 +205,30 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
     uses native member metadata for ordinary, anchored and template consumers.
     FrustraMPNN checkpoints are image-owned and add no shared weight members.
     """
+    if workflow_id == 'antibody_denovo':
+        from services.ppiflow_generation import MODES
+        boltzgen, blockers = native_checkpoint_dependencies('RunBoltzGen', {
+            'boltzgen_checkpoint_mode': 'both', 'boltzgen_protocol': 'protein-small_molecule'})
+        if blockers:
+            raise ValueError('Native BoltzGen pack dependencies are unresolved')
+        groups = {
+            'bindcraft2': ('alphafold/params',),
+            'rfantibody': ('rfantibody',),
+            'boltzgen': tuple(dep.relative_path for dep in boltzgen),
+            'caliby_binder': tuple(dep.relative_path for dep in
+                native_checkpoint_dependencies('RunCalibyBinder', {})[0]),
+            'boltz2': ('boltz',),
+            'esmfold2': ('esmfold2',),
+        }
+        groups.update({'ppiflow_' + mode: ('ppiflow/' + fields[2],)
+                       for mode, fields in MODES.items()})
+        for name, process, settings in (
+            ('protenix', 'ProtenixPredict', {}),
+            ('protenix_templates', 'ProtenixPredict', {'protenix_use_template': True}),
+        ):
+            groups[name] = tuple(dep.relative_path for dep in
+                native_checkpoint_dependencies(process, settings)[0])
+        return groups
     if workflow_id != 'structure_prediction':
         raise ValueError('Workflow pack binding is not available')
     boltz, _ = native_checkpoint_dependencies('RunBoltz', {})
@@ -222,14 +250,29 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
 
 
 def workflow_pack_dependencies(workflow_id: str):
-    """All supported Structure assets, not a synthetic scientific request.
-
-    Reuse public predictor/image bindings and the trusted embedded FrustraMPNN
-    binding. Boltz API is an external service: no image, credentials or MSA
-    acquisition belongs to this pack. Shared references are deduplicated before
-    filesystem inventory, not after hashing the same tree for each predictor.
-    """
-    workflow_pack_weight_groups(workflow_id)  # closed supported workflow identity
+    """Input-free union of the selected workflow's declared managed assets."""
+    groups = workflow_pack_weight_groups(workflow_id)  # closed supported identity
+    if workflow_id == 'antibody_denovo':
+        from native_components import LABEL_ASSETS
+        registry = get_registry()
+        bindcraft2 = registry.get_model('bindcraft2')
+        if bindcraft2 is None or not bindcraft2.enabled:
+            raise ValueError('BindCraft2 runtime binding is unavailable')
+        # RFANTIBODY is a process-level container in modules/antibody_denovo.nf.
+        # All other labels are the native nextflow.config process bindings.
+        images = {bindcraft2.container, 'rfantibody.sif'}
+        images.update(LABEL_ASSETS[label][0] for label in (
+            'BoltzGen', 'PPIFlow', 'MPNN', 'FAMPNN', 'Caliby',
+            'pyrosetta_tools', 'Foundry', 'MolecularDynamicsPreparation',
+            'MolecularDynamicsGromacs', 'MolecularDynamicsAnalysis'))
+        images.update(ref.relative_path for model_id in ('protenix', 'boltz2', 'esmfold2')
+                      for ref in model_image_dependencies(model_id))
+        images.update(ref.relative_path for ref in model_runtime_dependencies('frustrampnn', internal=True)
+                      if ref.kind == 'image')
+        refs = [RuntimeDependencyRef(kind='image', relative_path=path) for path in sorted(images)]
+        refs.extend(RuntimeDependencyRef(kind='weights', relative_path=member)
+                    for members in groups.values() for member in members)
+        return tuple(dict.fromkeys(refs))
     refs = []
     for model_id in ('boltz2', 'protenix', 'esmfold2'):
         refs.extend(ref for ref in model_runtime_dependencies(model_id)

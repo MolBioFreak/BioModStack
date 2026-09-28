@@ -97,7 +97,7 @@ class PreloadRequest(StrictModel):
 
 class WorkflowPackSelection(StrictModel):
     kind: Literal["workflow_pack"]
-    workflow_id: Literal["structure_prediction"]
+    workflow_id: Literal["structure_prediction", "antibody_denovo"]
 
 
 class WorkflowPackRequest(WorkflowPackSelection):

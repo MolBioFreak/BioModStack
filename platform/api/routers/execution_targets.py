@@ -129,7 +129,8 @@ async def provision_catalog():
         for kind, models in (("model", INDEPENDENT_RUNTIME_MODELS), ("image", INDEPENDENT_RUNTIME_IMAGES))
         for model_id in sorted(models)
         if get_registry().get_model(model_id) is not None] + [
-            WorkflowPackSelection(kind="workflow_pack", workflow_id="structure_prediction")]
+            WorkflowPackSelection(kind="workflow_pack", workflow_id=workflow_id)
+            for workflow_id in ("structure_prediction", "antibody_denovo")]
 
 
 @router.post("/{execution_target_id}/provision/preview", response_model=ProvisionPreview)

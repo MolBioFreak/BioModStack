@@ -97,6 +97,14 @@ Pristine queued jobs may coexist with preparation. Existing active attempts and 
 
 This path prepares approved assets already installed on the controller. Missing host assets are reported through the existing managed-setup/acquisition mechanism. A native download URL is not an approved acquisition manifest, and a whole-workflow button does not cure missing upstream acquisition metadata or licensing requirements. Unknown runtime observations remain evidence, not new launch prerequisites.
 
+### Whole De Novo Binder workflow preparation
+
+On a selected worker, choose **De Novo Binder Design** under Preparation workflow and click **Prepare entire workflow**. The browser previews and starts the same existing managed operation with `{"kind":"workflow_pack","workflow_id":"antibody_denovo"}` and its fresh `preview_sha256`. This is a separate product from the De Novo Design family pack (`protein_modification_experimental`); it never substitutes whichever generator was last used. BindCraft2 also has an independent model/image preload option.
+
+The binder pack inventories BC2, BoltzGen, PPIFlow (protein, antibody and nanobody modes) and RFantibody, followed by ProteinMPNN, FA-MPNN and Caliby binder design. It includes the editable Boltz2/Protenix/ESMFold2 validators, optional FrustraMPNN and LigandMPNN interface-context images, PPIFlow/FA-MPNN refinement dependencies, and the existing GROMACS preparation/run/analysis images. BoltzGen protocol and checkpoint variants are unioned through its native selector; shared images and weights are transferred once and per-consumer weight views reuse the same cached objects. The Protenix template-capable branch includes its managed mmCIF corpus. An absent host member is reported by the existing preview rather than quietly advertising a subset as the whole workflow.
+
+This action does not send biological inputs, job-specific checkpoints or configs, run inference, rent a worker, or alter the scientific compiler/launch gates. It cannot prove BC2 or another model's scientific execution; selected-request preparation and actual run evidence remain separate.
+
 ## Workflow coverage boundary
 
 Remote coverage belongs to the selected native execution plan and its actual process graph, not a blanket model-family label. De Novo RFD3 generation, native redesign, validated region redesign, CAD generation and Shape have selected-plan descriptors and existing remote bundle/result owners. Their installed runtime assets, optional stage combinations and live request-to-result behavior must be qualified separately. A connected descriptor or successful preload is not proof of native execution. Other workflow families retain their existing coverage and admission behavior; this De Novo repair neither certifies them nor adds new refusals.
