@@ -201,8 +201,9 @@ def _denovo_runtime_dependencies() -> tuple[RuntimeDependencyRef, ...]:
 def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
     """Input-free consumer layouts; preparation never selects scientific settings.
 
-    ESMFold fast/full share the managed tree (including its HF assets). Protenix
-    uses native member metadata for ordinary, anchored and template consumers.
+    ESMFold fast/full share the managed tree (including its HF assets). Binder
+    validation uses Protenix without generic template search; its target-anchored
+    mode constructs a task-local CIF, not a bulk mmCIF corpus.
     FrustraMPNN checkpoints are image-owned and add no shared weight members.
     """
     if workflow_id == 'antibody_denovo':
@@ -222,12 +223,8 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
         }
         groups.update({'ppiflow_' + mode: ('ppiflow/' + fields[2],)
                        for mode, fields in MODES.items()})
-        for name, process, settings in (
-            ('protenix', 'ProtenixPredict', {}),
-            ('protenix_templates', 'ProtenixPredict', {'protenix_use_template': True}),
-        ):
-            groups[name] = tuple(dep.relative_path for dep in
-                native_checkpoint_dependencies(process, settings)[0])
+        groups['protenix'] = tuple(dep.relative_path for dep in
+            native_checkpoint_dependencies('ProtenixPredict', {})[0])
         return groups
     if workflow_id != 'structure_prediction':
         raise ValueError('Workflow pack binding is not available')

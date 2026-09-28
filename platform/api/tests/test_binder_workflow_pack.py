@@ -37,7 +37,7 @@ def binder_assets(assets, monkeypatch):
                         root / name if name == 'frustrampnn.sif' else original(name, root))
     for ref in workflow_pack_dependencies('antibody_denovo'):
         path = (containers if ref.kind == 'image' else weights) / ref.relative_path
-        if ref.relative_path in {'rfantibody', 'boltz', 'esmfold2', 'protenix/mmcif'}:
+        if ref.relative_path in {'rfantibody', 'boltz', 'esmfold2'}:
             path /= 'fixture.bin'
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(('inert: ' + ref.relative_path).encode())
@@ -59,12 +59,13 @@ def test_binder_union_matches_native_generator_and_consumer_members():
     assert set(groups) == {'bindcraft2', 'rfantibody', 'boltzgen', 'caliby_binder',
                            'boltz2', 'esmfold2', 'ppiflow_protein_binder',
                            'ppiflow_antibody_binder', 'ppiflow_nanobody_binder',
-                           'protenix', 'protenix_templates'}
+                           'protenix'}
     selected, blockers = native_checkpoint_dependencies('RunBoltzGen', {
         'boltzgen_protocol': 'protein-small_molecule', 'boltzgen_checkpoint_mode': 'both'})
     assert not blockers
     assert groups['boltzgen'] == tuple(item.relative_path for item in selected)
-    assert set(groups['protenix']) < set(groups['protenix_templates'])
+    assert ('weights', 'protenix/mmcif') not in refs
+    assert all('template' not in name for name in groups)
     assert {(k, p) for k, p in refs if k == 'weights'} == {
         ('weights', p) for members in groups.values() for p in members}
 
@@ -127,12 +128,17 @@ def test_shared_bytes_inventoried_once_and_native_weight_views(binder_assets, mo
                        for member in members) for entry in groups[name])
 
 
-def test_missing_optional_member_is_reported_without_substituting_subset(binder_assets):
-    (binder_assets[1] / 'protenix/mmcif/fixture.bin').unlink()
-    (binder_assets[1] / 'protenix/mmcif').rmdir()
+def test_missing_real_member_is_reported_without_substituting_subset(binder_assets):
+    (binder_assets[1] / 'protenix/checkpoint/protenix-v2.pt').unlink()
     preview, _ = cache.independent_preview(SELECTION, TARGET)
     assert not preview.estimates_complete
-    assert 'protenix/mmcif' in ' '.join(preview.blockers)
+    assert 'protenix/checkpoint/protenix-v2.pt' in ' '.join(preview.blockers)
+
+def test_missing_optional_template_corpus_does_not_block_binder(binder_assets):
+    assert not (binder_assets[1] / 'protenix/mmcif').exists()
+    preview, _ = cache.independent_preview(SELECTION, TARGET)
+    assert preview.blockers == [] and preview.estimates_complete
+    assert not any('protenix/mmcif' in row.name for row in preview.artifacts)
 
 
 @pytest.mark.asyncio
