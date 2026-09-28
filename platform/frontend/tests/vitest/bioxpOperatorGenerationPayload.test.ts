@@ -54,7 +54,7 @@ describe('BioXP OEM deck movement request', () => {
         else expect(() => assertBioXpOperatorActionV2Request(request)).toThrow('ordinary deck destinations');
     });
 
-    it('accepts only semantic inputs and exact board 4/5 fences', () => {
+    it('validates semantic inputs and available epochs without requiring reference evidence', () => {
         const request = {
             expected_connection_generation: 7,
             schema_version: 'bioxp.operator_action_request.v2' as const,
@@ -65,7 +65,9 @@ describe('BioXP OEM deck movement request', () => {
             inputs: { target: 'LOC_OC', camera_offset: false },
         };
         expect(() => assertBioXpOperatorActionV2Request(request)).not.toThrow();
-        expect(() => assertBioXpOperatorActionV2Request({ ...request, expected_board_epoch_by_board: { '4': 11 } })).toThrow('boards 4 and 5');
+        expect(() => assertBioXpOperatorActionV2Request({ ...request, expected_board_epoch_by_board: { '4': 11 } })).not.toThrow();
+        expect(() => assertBioXpOperatorActionV2Request({ ...request, expected_board_epoch_by_board: {} })).not.toThrow();
+        expect(() => assertBioXpOperatorActionV2Request({ ...request, expected_board_epoch_by_board: { '04': 11 } })).toThrow('canonical');
         expect(() => assertBioXpOperatorActionV2Request({ ...request, inputs: { ...request.inputs, x: 1 } } as never)).toThrow('target and camera_offset');
     });
 });

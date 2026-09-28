@@ -31,7 +31,6 @@ const move = () => [...panel().querySelectorAll('button')].find(b => b.textConte
 const submit = async (target: string, cameraOffset = false) => {
     await act(async () => { const select = panel().querySelector('select')!; select.value = target; select.dispatchEvent(new Event('change', { bubbles: true })); });
     await act(async () => { const checkbox = panel().querySelector('input[type=checkbox]') as HTMLInputElement; if (!checkbox.disabled && checkbox.checked !== cameraOffset) checkbox.click(); });
-    expect(move().disabled).toBe(false);
     await act(async () => move().click()); await advance();
 };
 const accept = async (index: number) => { await act(async () => admissions[index].resolve({ data: receipt(index) })); await advance(); };
@@ -58,36 +57,33 @@ beforeEach(() => {
     container = document.createElement('div'); document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); vi.useRealTimers(); });
-it.each([2, 7])('retains %s ordered rapid intents and continuing entry while earlier receipts are running', async count => {
+it.each([2, 7])('allows %s successive intents after HTTP admission, with no receipt lock', async count => {
     await render(); const targets = deckCatalog.action.destination_options.slice(0, count).map(x => x.target);
-    for (const [index, target] of targets.entries()) await submit(target, index % 2 === 0);
-    expect(admissions).toHaveLength(1);
-    expect(panel().querySelectorAll('[data-request-key]')).toHaveLength(count);
-    expect(panel().textContent).toContain('submitting / not yet accepted');
-    expect((panel().querySelector('select') as HTMLSelectElement).disabled).toBe(false);
-    for (let i = 0; i < count; i++) {
-        expect(admissions[i].body.inputs).toEqual({ target: targets[i], camera_offset: i % 2 === 0 && deckCatalog.action.destination_options[i].camera_offset_option });
-        await accept(i);
+    for (const [index, target] of targets.entries()) {
+        await submit(target, index % 2 === 0);
+        await act(async () => { move().click(); move().click(); });
+        expect(admissions).toHaveLength(index + 1); // in-flight duplicates dropped
+        expect(move().disabled).toBe(true);
+        expect(admissions[index].body.inputs).toEqual({ target, camera_offset: index % 2 === 0 && deckCatalog.action.destination_options[index].camera_offset_option });
+        await accept(index); // dispatched/nonterminal receipt is not a host lock
     }
     expect(new Set(admissions.map(x => x.body.idempotency_key)).size).toBe(count);
     for (let i = 0; i < count; i++) expect(panel().textContent).toContain(`queue-${i}`);
-    await submit(targets[0]); expect(admissions).toHaveLength(count + 1); await accept(count);
-    expect(panel().querySelectorAll('[data-request-key]')).toHaveLength(count + 1);
 });
-it.each(['timeout', 'validation502', 'malformed'])('reconciles %s and in-flight 404 using GET without advancing or replaying POST', async mode => {
+it.each(['timeout', 'validation502', 'malformed'])('keeps %s visible without replay or a retained-receipt lock', async mode => {
     await render(); await submit('LOC_TC'); await submit('LOC_OC');
+    expect(admissions).toHaveLength(1);
     await act(async () => mode === 'malformed' ? admissions[0].resolve({ data: null }) : admissions[0].reject(mode === 'timeout' ? new Error('timeout') : { response: { status: 502, data: { detail: { error: 'post_dispatch_receipt_validation_failed', command_id: 'queue-0', status_path: '/operator/v2/actions/receipts/queue-0', retry_guidance: 'do_not_resubmit_reconcile_by_command_id' } } } }));
     await advance(2001); expect(admissions).toHaveLength(1); expect(panel().textContent).toContain('admission uncertain');
     state.error = true; await render(); lookup = { ...receipt(0), status: 'completed', terminal: true };
-    await advance(2001); expect(admissions).toHaveLength(2); expect(panel().textContent).not.toContain('admission uncertain');
-    await accept(1); expect(admissions).toHaveLength(2);
+    await advance(2001); expect(admissions).toHaveLength(1); expect(panel().textContent).not.toContain('admission uncertain');
+    await submit('LOC_OC'); expect(admissions).toHaveLength(2); await accept(1);
     expect(api.get).toHaveBeenCalledWith(expect.stringContaining('/requests/'), expect.objectContaining({ timeout: 12000, signal: expect.any(AbortSignal), params: { expected_connection_generation: 7 } }));
 });
-it('fences late admission responses and never resumes unsent old-generation requests', async () => {
+it('fences late admission responses and never resumes dropped old-generation clicks', async () => {
     await render(); await submit('LOC_TC'); await submit('LOC_OC'); state.generation = 8; await render();
     await accept(0); await advance(4000); expect(admissions).toHaveLength(1);
-    expect(panel().textContent).toContain('not sent / connection changed');
-    expect(panel().textContent).toContain('queue-0'); // retained only as earlier-connection identity
+    expect(panel().textContent).toContain('queue-0');
     expect([...panel().querySelectorAll('button')].find(b => b.textContent?.includes('queue-0'))?.disabled).toBe(true);
 });
 it('renders canonical active/queued identities and distinguishes missing from empty', async () => {
@@ -103,7 +99,8 @@ it('retains a definite refusal and leaves addressed Stop independent of held adm
     expect(stop.disabled).toBe(false); await act(async () => stop.click());
     expect(api.post).toHaveBeenCalledWith(expect.stringContaining('interrupts/oem.x.stop'), expect.anything());
     await act(async () => admissions[0].reject({ response: { status: 422, data: { detail: 'invalid target' } } })); await advance();
-    expect(panel().textContent).toContain('not accepted'); expect(admissions).toHaveLength(2);
+    expect(panel().textContent).toContain('not accepted'); expect(admissions).toHaveLength(1);
+    await submit('LOC_OC'); expect(admissions).toHaveLength(2);
 });
 it('bounds settled local rows and receipt queries over ongoing synchronous admissions', async () => {
     await render();
@@ -123,6 +120,52 @@ it('bounds settled local rows and receipt queries over ongoing synchronous admis
     }
     expect(new Set(admissions.map(x => x.body.idempotency_key)).size).toBe(30);
 });
+
+it.each(['missing', 'aged'])('submits with %s telemetry/reference/epoch displays, retaining robot refusal', async evidence => {
+    if (evidence === 'missing') catalog.dashboard.telemetry = null;
+    else {
+        catalog.dashboard.telemetry.motion.enabled = true;
+        catalog.dashboard.telemetry.snapshot.freshness = { state: 'stale', age_s: 99999 };
+        catalog.dashboard.telemetry.axes = [];
+    }
+    catalog.dashboard.deck = null;
+    const action = catalog.actions.find((a: any) => a.action_id === 'oem.deck.move_to_location');
+    action.expected_board_epoch_by_board = null;
+    state.error = true;
+    await render(); await submit('LOC_OC');
+    expect(admissions).toHaveLength(1);
+    expect(admissions[0].body.expected_board_epoch_by_board).toEqual({});
+    expect(admissions[0].body.inputs).toEqual({ target: 'LOC_OC', camera_offset: false });
+    if (evidence === 'aged') expect(container.textContent).toContain('Controllers enabled');
+    else expect(container.textContent).toContain('Unknown');
+    await act(async () => admissions[0].reject({ response: { status: 409, data: { detail: 'OEM door interlock denied' } } }));
+    await advance();
+    expect(panel().textContent).toContain('OEM door interlock denied');
+    expect(admissions).toHaveLength(1);
+    action.enabled = false; action.disabled_reason = 'OEM controller denied';
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'operator-controls', 'v2', 'catalog'] }); });
+    await advance();
+    expect(move().disabled).toBe(true);
+    expect(panel().textContent).toContain('OEM controller denied');
+});
+
+it('first terminal read invalidates existing status and catalogs once without collection or POST replay', async () => {
+    await render(); await submit('LOC_TC'); await accept(0);
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    completed.add(0);
+    await advance(501); await advance();
+    for (const key of [
+        ['bioxp', 'status'], ['bioxp', 'operator-controls', 'catalog'],
+        ['bioxp', 'operator-controls', 'v2', 'catalog'], ['bioxp', 'operator-controls', 'v2', 'dashboard'],
+    ]) expect(invalidate.mock.calls.filter(([options]) => JSON.stringify(options?.queryKey) === JSON.stringify(key))).toHaveLength(1);
+    await act(async () => { await client.refetchQueries({ queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt'] }); });
+    await advance();
+    expect(invalidate.mock.calls.filter(([options]) => JSON.stringify(options?.queryKey) === JSON.stringify(['bioxp', 'status']))).toHaveLength(1);
+    expect(admissions).toHaveLength(1);
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.get).mock.calls.every(([url]) => !url.includes('collect'))).toBe(true);
+});
+
 it('bounds a stalled browser admission by the existing request policy without retry', async () => {
     await render();
     vi.mocked(api.post).mockImplementation((_url, body: any, options) => new Promise((_resolve, reject) => {

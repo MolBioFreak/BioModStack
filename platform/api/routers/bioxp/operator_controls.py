@@ -360,8 +360,7 @@ def _validate_v2_action_inputs(action_id: str, request: OperatorActionRequestV2)
         validated = expected_type.model_validate(request.inputs)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail="Action inputs do not match the closed action schema") from exc
-    if action_id == "oem.deck.move_to_location" and set(request.expected_board_epoch_by_board) != {"4", "5"}:
-        raise HTTPException(status_code=422, detail="Deck movement requires exact expected board epochs 4 and 5")
+
     return validated.model_dump(mode="json")
 
 

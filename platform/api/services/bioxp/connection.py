@@ -141,6 +141,7 @@ class BioXpConnectionService:
         self._v2_query_locks: dict[str, asyncio.Lock] = {}
         self._v2_query_revision = 0
         self._v2_query_cache: dict[str, tuple[int, float, dict[str, Any]]] = {}
+        self._terminal_observations: dict[tuple[int, str], None] = {}
         self._interrupt_lock = asyncio.Lock()
         self._client: RobotClientProtocol | None = None
         self._active_target: ValidatedBioXpTarget | None = None
@@ -486,9 +487,8 @@ class BioXpConnectionService:
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        # Passive observations reconcile already-dispatched commands even when
-        # the separate status probe failed. They never renew status/admission
-        # authority. Limit the exemption to these registered GET routes.
+        # These registered GETs are passive observations. Stored status does
+        # not grant or revoke admission; connection identity is checked below.
         passive = route_name in {
             "operator_control_catalog_v2", "operator_dashboard_v2",
             "operator_action_receipt_v2", "operator_command_status_v2",
@@ -522,6 +522,22 @@ class BioXpConnectionService:
                             path_params=path_params,
                             timeout_override=12.0,
                         )
+                        # First exact terminal observation expires the short
+                        # dashboard/catalog cache. No probe or hardware collect.
+                        command_id = payload.get("command_id")
+                        if (route_name in {"operator_action_receipt_v2", "operator_command_status_v2"}
+                            and payload.get("terminal") is True
+                            and isinstance(command_id, str)
+                            and path_params is not None
+                            and command_id == path_params.get("command_id")
+                            and expected_generation == self._generation
+                            and client is self._client):
+                            identity = (expected_generation, command_id)
+                            if identity not in self._terminal_observations:
+                                self._terminal_observations[identity] = None
+                                if len(self._terminal_observations) > 128:
+                                    del self._terminal_observations[next(iter(self._terminal_observations))]
+                                self._invalidate_v2_query_cache()
                         if (
                             cacheable
                             and revision == self._v2_query_revision
@@ -700,10 +716,8 @@ class BioXpConnectionService:
             raise ConnectionStateError("BioXP saved profile is not actively connected")
         if self._generation != expected_generation:
             raise ConnectionStateError("Expected connection generation does not match the active generation")
-        if require_fresh:
-            snapshot = self.snapshot()
-            if snapshot.observation_fresh is not True or snapshot.reachable is not True:
-                raise ConnectionStateError("A fresh reachable process-local BioXP status observation is required")
+        # Kept as a call-site compatibility argument, not admission. Stored
+        # status age/reachability is evidence; the addressed robot owns refusal.
         lease = self._generation_leases.get(self._generation)
         if lease is None or lease.client is not self._client or lease.state != "OPEN":
             lease = _GenerationLease(self._generation, self._client)

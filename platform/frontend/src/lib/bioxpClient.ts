@@ -1735,9 +1735,6 @@ function assertCanonicalBoardEpochMap(value: Record<string, number>): void {
 export function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV2Request): void {
     assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
     if (request.action_id === 'oem.deck.move_to_location') {
-        if (Object.keys(request.expected_board_epoch_by_board).sort().join(',') !== '4,5') {
-            throw new Error('Deck movement requires exact board epochs for boards 4 and 5');
-        }
         const keys = Object.keys(request.inputs).sort().join(',');
         if (keys !== 'camera_offset,target'
             || !/^[A-Z0-9][A-Z0-9_]*$/.test(request.inputs.target)
@@ -1859,6 +1856,8 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
                 : api.post<BioXpOperatorReceiptV2>(path, body))).data;
         },
         onSettled: (_receipt, _error, variables) => {
+            void queryClient.invalidateQueries({ queryKey: statusKey });
+            void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
             void queryClient.invalidateQueries({ queryKey: [...operatorHistoryKey, variables.request.expected_connection_generation] });
             void queryClient.invalidateQueries({ queryKey: operatorV2DashboardKey });
             void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
@@ -1884,8 +1883,10 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
     const scope = useRef({ generation, active });
     scope.current = { generation, active };
     const sending = useRef<string | null>(null);
+    const reserved = useRef<string | null>(null);
     const pending = submissions.find(item => item.request.expected_connection_generation === generation
-        && (item.state === 'submitting' || item.state === 'uncertain'));
+        && item.state === 'submitting') ?? submissions.find(item => item.request.expected_connection_generation === generation
+        && item.state === 'uncertain');
     const lookup = useQuery({
         queryKey: ['bioxp', 'operator-controls', 'v2', 'request', generation, pending?.request.idempotency_key],
         enabled: active && pending?.state === 'uncertain',
@@ -1913,6 +1914,7 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
     }, [active, pending, lookup.data]);
     useEffect(() => {
         // Never resume unsent requests after connection replacement/disconnect.
+        if (sending.current === null) reserved.current = null;
         setSubmissions(items => items.map(item => item.state === 'submitting'
             && (!active || item.request.expected_connection_generation !== generation)
             ? { ...item, state: sending.current === item.request.idempotency_key ? 'uncertain' : 'not_sent' } : item));
@@ -1924,6 +1926,7 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
         sending.current = key;
         void mutation.mutateAsync({ request }).then(receipt => {
             sending.current = null;
+            if (reserved.current === key) reserved.current = null;
             if (scope.current.generation !== generation || !scope.current.active) {
                 update(key, { state: 'uncertain', commandId: receipt?.command_id });
                 return;
@@ -1933,6 +1936,7 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
             } else update(key, { state: 'accepted', receipt });
         }, error => {
             sending.current = null;
+            if (reserved.current === key) reserved.current = null;
             if (scope.current.generation !== generation || !scope.current.active) {
                 update(key, { state: 'uncertain', error, commandId: bioXpPostDispatchCommandIdentity(error)?.commandId });
                 return;
@@ -1958,7 +1962,9 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
         },
         submit: (request: BioXpOperatorActionV2Request) => {
             if (!active || request.expected_connection_generation !== generation || request.action_id !== 'oem.deck.move_to_location') return;
+            if (reserved.current !== null || sending.current !== null) return;
             assertBioXpOperatorActionV2Request(request);
+            reserved.current = request.idempotency_key;
             // Capture values, not the mutable picker; no admission batch gate.
             const captured = { ...request, inputs: { ...request.inputs },
                 expected_board_epoch_by_board: { ...request.expected_board_epoch_by_board } };
@@ -2043,31 +2049,50 @@ export const decodeBioXpReceiptDetailV2 = (receipt: BioXpOperatorReceiptDetailV2
     return receipt;
 };
 
+// Deduplicate across mounted consumers; bounded per QueryClient.
+const terminalObservations = new WeakMap<QueryClient, Set<string>>();
+
 export const useBioXpOperatorReceiptV2 = (
     commandId: string | null,
     connectionGeneration: number,
     enabled = true,
-) => useQuery({
-    queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
-    queryFn: async ({ signal }) => decodeBioXpReceiptDetailV2((
-        await api.get<BioXpOperatorReceiptDetailV2>(
-            `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
-            { signal, timeout: 12000, params: { detail: true } },
-        )
-    ).data, commandId ?? ''),
-    enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
-    gcTime: 0,
-    retry: false,
-    refetchInterval: (query) => {
-        // A failed read is not a terminal command outcome. Keep reconciling
-        // this identity at a slower cadence; never resubmit the action.
-        if (query.state.error) return 2_000;
-        if (!query.state.data) return 500;
-        if (query.state.data.status === 'ambiguous' || query.state.data.completion_class === 'recovery_required') return 2_000;
-        return bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false;
-    },
-    refetchIntervalInBackground: false,
-});
+) => {
+    const queryClient = useQueryClient();
+    return useQuery({
+        queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
+        queryFn: async ({ signal }) => {
+            const receipt = decodeBioXpReceiptDetailV2((
+            await api.get<BioXpOperatorReceiptDetailV2>(
+                `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
+                { signal, timeout: 12000, params: { detail: true } },
+            )
+            ).data, commandId ?? '');
+            const identity = `${connectionGeneration}:${commandId}`;
+            const observed = terminalObservations.get(queryClient) ?? new Set<string>();
+            terminalObservations.set(queryClient, observed);
+            if (receipt.terminal === true && !observed.has(identity)) {
+                observed.add(identity);
+                if (observed.size > 128) observed.delete(observed.values().next().value!);
+                for (const key of [statusKey, operatorCatalogKey, operatorV2CatalogKey, operatorV2DashboardKey]) {
+                    void queryClient.invalidateQueries({ queryKey: key });
+                }
+            }
+            return receipt;
+        },
+        enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
+        gcTime: 0,
+        retry: false,
+        refetchInterval: (query) => {
+            // A failed read is not a terminal command outcome. Keep reconciling
+            // this identity at a slower cadence; never resubmit the action.
+            if (query.state.error) return 2_000;
+            if (!query.state.data) return 500;
+            if (query.state.data.status === 'ambiguous' || query.state.data.completion_class === 'recovery_required') return 2_000;
+            return bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false;
+        },
+        refetchIntervalInBackground: false,
+    });
+};
 
 export const useSubmitBioXpOperatorMethodV1 = () => useMutation({
     mutationFn: async (request: BioXpOperatorMethodV1Request) => {

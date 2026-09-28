@@ -45,7 +45,8 @@ test('action forms and route provenance come only from the robot catalog and adm
     // R5: no retired freshness mutation; one upstream-aged V2 snapshot and
     // a generation-reset receipt union preserve ordinary, interrupt and lifecycle evidence.
     assert.doesNotMatch(cockpit, /updateFreshness|useBioXpFreshness/);
-    assert.match(cockpit, /localAgeMs < 15_000 && upstreamAgeMs < 15_000/);
+    assert.match(cockpit, /const currentCatalogV2 = active \? catalogV2Query\.data : undefined/);
+    assert.match(cockpit, /localAgeMs >= 15_000 \|\| upstreamAgeMs >= 15_000/);
     // Current command evidence survives an unrelated history read failure.
     assert.match(cockpit, /const displayedLatestReceipt = latestReceiptQuery\.data\?\.command_id === latestOperatorReceipt\?\.command_id/);
     assert.match(cockpit, /\? latestReceiptQuery\.data : latestOperatorReceipt/);
@@ -64,7 +65,7 @@ test('action forms and route provenance come only from the robot catalog and adm
 test('main tab has a compact live status dashboard for motion axes temperatures and pipettes', () => {
     assert.match(cockpit, /BioXpQuickDashboard/);
     for (const label of [
-        'Live Robot Dashboard', 'Motion', 'Door / latch', 'Axis Analytics',
+        'Live Robot Dashboard', 'Controllers enabled', 'Door / latch', 'Axis Analytics',
         'Temperatures', 'Pipettes', 'Motor temperature not reported',
     ]) assert.match(dashboard, new RegExp(label));
     assert.match(dashboard, /motor_temperature_available/);
@@ -77,10 +78,10 @@ test('main tab has a compact live status dashboard for motion axes temperatures 
     assert.doesNotMatch(dashboard, /useBioXpOperatorDashboard\(/);
     // R5: current embedded telemetry, not an extra retired dashboard poll.
     // Same-generation read-only catalog polling recovers status observation loss;
-    // fresh currentCatalogV2 still owns physical admission below.
+    // robot action flags remain authoritative; age only changes the display.
     assert.match(cockpit, /useBioXpOperatorControlCatalogV2\(generation, active\)/);
     assert.match(cockpit, /const currentDashboardV2 = currentCatalogV2\?\.dashboard/);
-    assert.match(cockpit, /const currentTelemetry = currentDashboardV2\?\.telemetry \?\? undefined/);
+    assert.match(cockpit, /const displayTelemetry = displayDashboardV2\?\.telemetry \?\? undefined/);
     assert.match(cockpit, /data=\{displayTelemetry\}/);
     assert.match(cockpit, /stale=\{showingLastKnown\}/);
     assert.doesNotMatch(cockpit, /useBioXpOperatorDashboard(?:V2)?\(/);

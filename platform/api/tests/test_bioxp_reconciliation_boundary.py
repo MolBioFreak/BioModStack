@@ -72,13 +72,13 @@ def test_passive_v2_reconciliation_survives_status_failure_without_motion(tmp_pa
                         assert response.json()['status'] == outcome
                         assert response.json()['terminal'] is True
                         assert response.json()['completion_class'] == receipt['completion_class']
-                # Receipt success is not status/admission authority.
+                # Receipt success never grants a different connection identity.
                 before = len(calls)
-                with pytest.raises(ConnectionStateError, match='fresh reachable'):
+                with pytest.raises(ConnectionStateError, match='generation'):
                     await b.connection.request_active_v2_enqueue('invoke_operator_action_v2',
-                        expected_generation=generation, path_params={'action_id': 'oem.xy.move_absolute'}, json_data={})
-                with pytest.raises(ConnectionStateError, match='fresh reachable'):
-                    await b.connection.request_active_v2_query('invoke_operator_action_v2', expected_generation=generation)
+                        expected_generation=generation + 1, path_params={'action_id': 'oem.xy.move_absolute'}, json_data={})
+                with pytest.raises(ConnectionStateError, match='generation'):
+                    await b.connection.request_active_v2_query('invoke_operator_action_v2', expected_generation=generation + 1)
                 assert len(calls) == before
             # Independently healthy passive camera observations already survive this fault.
             camera = await browser.get('/camera/status', params={'expected_generation': generation})

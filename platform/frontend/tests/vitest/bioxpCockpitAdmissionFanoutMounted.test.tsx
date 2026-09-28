@@ -649,14 +649,14 @@ describe('critical evidence presentation', () => {
         await act(async () => root.render(<BioXpCockpit />));
         expect(container.textContent).toContain('No robot action receipts recorded.');
     });
-    it('explains expired authority and does not renew it from cache receipt time', async () => {
+    it('shows aged observations without hiding known controller enablement', async () => {
         (state.v2Catalog.data!.dashboard as Record<string, unknown>).telemetry = state.dashboard.data;
         (state.v2Catalog.data!.dashboard as Record<string, unknown>).generated_at = Date.now() / 1000 - 16;
         await act(async () => root.render(<BioXpCockpit />));
-        expect(container.textContent).toContain('Robot state is missing or stale');
+        expect(container.textContent).toContain('showing last-known robot state');
         expect(container.textContent).not.toContain('Updating');
     });
-    it.each(['local', 'upstream'])('expires %s authority on the clock while a refresh is pending', async (clock) => {
+    it.each(['local', 'upstream'])('ages the %s observation display without expiring admission', async (clock) => {
         vi.useFakeTimers();
         const started = Date.now();
         // Publish a normal admitted XY action, not merely an absent/disabled button.
@@ -674,21 +674,21 @@ describe('critical evidence presentation', () => {
         dashboard.telemetry = state.dashboard.data;
         try {
             await act(async () => root.render(<BioXpCockpit />));
-            expect(container.textContent).not.toContain('Robot state is missing or stale');
+            expect(container.textContent).toContain('Hardware observation: unknown');
             const move = [...container.querySelectorAll('button')].find(button => button.textContent === 'Move X + Y together')!;
             expect(move).toBeDefined();
             expect(move.disabled).toBe(false);
             await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
-            expect(container.textContent).not.toContain('Robot state is missing or stale');
+            expect(container.textContent).toContain('Hardware observation: unknown');
             expect(move.disabled).toBe(false);
             // Keep the opposite clock fresh; each budget must independently expire.
             if (clock === 'upstream') Object.assign(state.v2Catalog, { dataUpdatedAt: Date.now() });
             else dashboard.generated_at = Date.now() / 1000;
             await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-            expect(container.textContent).toContain('Robot state is missing or stale');
-            expect(container.textContent).toContain('MotionUnknown —');
+            expect(container.textContent).toContain('showing last-known robot state');
+            expect(container.textContent).toContain('Controllers enabled');
             expect(move.isConnected).toBe(true);
-            expect(move.disabled).toBe(true);
+            expect(move.disabled).toBe(false);
             expect(state.quickDashboardProps?.data).toBe(state.dashboard.data);
             expect(state.quickDashboardProps?.stale).toBe(true);
             expect(state.v2Catalog).toMatchObject({ isFetching: true, error: null, isStale: false });
@@ -702,7 +702,7 @@ describe('critical evidence presentation', () => {
             expect(state.lifecycleInvokeCalls).toHaveLength(0);
             expect(state.yInvokeCalls).toHaveLength(0);
             expect(state.yInterruptCalls).toHaveLength(0);
-            expect(state.xyCalls).toHaveLength(0);
+            expect(state.xyCalls).toHaveLength(1);
         } finally {
             Object.assign(state.v2Catalog, { isFetching: false });
             vi.useRealTimers();
@@ -899,15 +899,15 @@ describe('primary cockpit query ownership', () => {
         expect(state.receiptHookCalls[4]).toEqual({ commandId: null, generation: 2, enabled: true });
         expect(container.textContent).not.toContain('old-generation');
     });
-    it('keeps catalog identity stable during dashboard freshness changes but blocks normal controls', async () => {
+    it('keeps catalog identity and normal controls stable during observation aging', async () => {
         await act(async () => { root.render(<BioXpCockpit />); });
         const original = state.catalogArgs.at(-1);
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
         await act(async () => { root.render(<BioXpCockpit />); });
         expect(state.catalogArgs.at(-1)).toEqual(original);
-        expect((container.querySelector('[data-testid="serial206-xy-oem-panel"] button') as HTMLButtonElement).disabled).toBe(true);
+        expect((container.querySelector('[data-testid="serial206-xy-oem-panel"] button') as HTMLButtonElement).disabled).toBe(false);
     });
-    it.each(['status-error', 'unreachable'])('retains XY reconciliation identity during %s while normal motion stays blocked', async (fault) => {
+    it.each(['status-error', 'unreachable'])('retains XY reconciliation identity during %s without an observation lock', async (fault) => {
         await act(async () => { root.render(<BioXpCockpit />); });
         const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
         const button = () => panel().querySelector('button') as HTMLButtonElement;
@@ -917,11 +917,11 @@ describe('primary cockpit query ownership', () => {
         await act(async () => { root.render(<BioXpCockpit />); });
         expect(state.receiptHookCalls).toContainEqual({ commandId: 'xy-retained', generation: 1, enabled: true });
         expect(panel().textContent).toContain('XY command pending');
-        expect(button().disabled).toBe(true);
+        expect(button().disabled).toBe(false);
         state.xyReceipt = { data: { command_id: 'xy-retained', status: 'failed', terminal: true }, error: null, isError: false };
         await act(async () => { root.render(<BioXpCockpit />); });
         expect(panel().textContent).toContain('XY command failed');
-        expect(button().disabled).toBe(true);
+        expect(button().disabled).toBe(false);
         state.statusError = false;
         state.connectionReachable = true;
         await act(async () => { root.render(<BioXpCockpit />); });
@@ -957,7 +957,7 @@ describe('primary cockpit query ownership', () => {
                 button().click();
                 state.xyCallbacks?.onSuccess?.({ command_id: bmsMetadata.compact.command_id, status: 'dispatched', terminal: false });
             });
-            expect(button().disabled).toBe(true);
+            expect(button().disabled).toBe(false);
             state.xyReceipt = { data: structuredClone(bmsMetadata.compact), error: null, isError: false };
             await render();
             for (let poll = 0; poll < 3; poll++) {
@@ -970,7 +970,7 @@ describe('primary cockpit query ownership', () => {
             // Pipette settings are lazy until the Pipettes tab is first opened.
             expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/calibration-settings')).toHaveLength(0);
             await advance(6000);
-            expect(button().disabled).toBe(true); // same old producer observation expires
+            expect(button().disabled).toBe(false); // same old producer observation expires
             expect(panel().textContent).toContain('Move timeout reported');
             expect(state.xyCalls).toHaveLength(1);
             expect(state.lifecycleInvokeCalls).toHaveLength(0);
@@ -992,14 +992,14 @@ describe('primary cockpit query ownership', () => {
             await render();
             const commandId = coherentFailureProducer.compact.command_id;
             await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({ command_id: commandId, status: 'dispatched', terminal: false }); });
-            expect(button().disabled).toBe(true);
+            expect(button().disabled).toBe(false);
             // Raw native → SQLite export; admission metadata below remains the
             // existing contract fixture, not a producer catalog compatibility claim.
             state.xyReceipt = { data: structuredClone(coherentFailureProducer.compact), error: null, isError: false };
             state.statusError = true;
             await render();
             expect(panel().textContent).toContain('Move timeout reported');
-            expect(button().disabled).toBe(true);
+            expect(button().disabled).toBe(false);
             state.statusError = false;
             const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(row => row.action_id === 'oem.xy.move_absolute')!;
             action.enabled = authority === 'eligible';
@@ -1079,11 +1079,11 @@ describe('primary cockpit query ownership', () => {
             }
             catalogDashboard().generated_at = Date.now() / 1000 - 20;
             await render();
-            expect(button().disabled).toBe(true);
+            expect(button().disabled).toBe(authority !== 'eligible');
             expect(visible()).toContain(explanation);
             state.statusError = true;
             await render();
-            expect(button().disabled).toBe(true);
+            expect(button().disabled).toBe(authority !== 'eligible');
             expect(visible()).toContain(explanation);
             state.statusError = false;
             catalogDashboard().generated_at = Date.now() / 1000;
@@ -1126,7 +1126,7 @@ describe('primary cockpit query ownership', () => {
                 expect(state.xyReceipt.data).toEqual(manualReport);
             }
             state.statusError=true;await render();
-            expect(button().disabled).toBe(true);
+            expect(button().disabled).toBe(false);
             expect(visible()).toContain('Move timeout reported');
         } finally {vi.useRealTimers();}
     });
@@ -1137,35 +1137,35 @@ describe('primary cockpit query ownership', () => {
         const button = () => panel().querySelector('button') as HTMLButtonElement;
         await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({ command_id: 'xy-one', status: 'queued', terminal: false }); });
         expect(state.xyCalls).toHaveLength(1);
-        const assertAxesHeld = () => {
+        const assertAxesAvailable = () => {
             for (const axis of ['X', 'Y', 'Z']) {
                 const axisPanel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
-                expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!.disabled).toBe(true);
-                expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Home')!.disabled).toBe(true);
+                expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!.disabled).toBe(false);
+                expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Home')!.disabled).toBe(false);
                 expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Stop')!.disabled).toBe(false);
-                if (axis === 'Z') expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Z Clear (automatic position)')!.disabled).toBe(true);
+                if (axis === 'Z') expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Z Clear (automatic position)')!.disabled).toBe(false);
             }
         };
-        assertAxesHeld();
+        assertAxesAvailable();
         expect(state.receiptHookCalls).toContainEqual({ commandId: 'xy-one', generation: 1, enabled: true });
-        expect(button().disabled).toBe(true);
+        expect(button().disabled).toBe(false);
         state.xyReceipt.data = { command_id: 'xy-other', status: 'completed', terminal: true };
         await act(async () => { root.render(<BioXpCockpit />); });
-        expect(button().disabled).toBe(true);
+        expect(button().disabled).toBe(false);
         state.xyReceipt.error = new Error('status unavailable');
         state.xyReceipt.isError = true;
         await act(async () => { root.render(<BioXpCockpit />); });
         expect(panel().textContent).toContain('Do not retry');
-        assertAxesHeld();
+        assertAxesAvailable();
         state.xyReceipt = { data: { command_id: 'xy-one', status, terminal: true }, error: null, isError: false };
         await act(async () => { root.render(<BioXpCockpit />); });
         expect(panel().textContent).toContain(status === 'ambiguous' ? 'XY command pending · ambiguous' : `XY command ${status}`);
-        expect(button().disabled).toBe(status === 'ambiguous');
+        expect(button().disabled).toBe(false);
         if (status === 'ambiguous') {
-            assertAxesHeld();
+            assertAxesAvailable();
             expect(panel().textContent).toContain('Do not retry');
             await act(async () => button().click());
-            expect(state.xyCalls).toHaveLength(1);
+            expect(state.xyCalls).toHaveLength(2);
         }
         state.connectionGeneration = 2;
         await act(async () => { root.render(<BioXpCockpit />); });
@@ -1554,7 +1554,7 @@ describe('L3 rapid submission and receipt reconciliation', () => {
         try {
             await render();
             await act(async () => { positive(axis).click(); await settle(); });
-            expect(positive(axis).disabled).toBe(true);
+            expect(positive(axis).disabled).toBe(false);
             expect(container.textContent).toContain(commandId);
             state.statusError = true; state.connectionReachable = false;
             await render();
@@ -1733,12 +1733,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(panel.textContent).not.toContain('stale-activation-receipt');
         for (const axis of ['X', 'Y', 'Z']) {
             const axisPanel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
-            expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!.disabled).toBe(true);
-            expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Home')!.disabled).toBe(true);
+            expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!.disabled).toBe(false);
+            expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Home')!.disabled).toBe(false);
             expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Stop')!.disabled).toBe(false);
         }
-        expect(activate.disabled).toBe(true);
-        expect(recover.disabled).toBe(true);
+        expect(activate.disabled).toBe(false);
+        expect(recover.disabled).toBe(false);
 
         catalogDashboard().ownership_generation = 2;
         catalogDashboard().latest_receipts = [{
@@ -1758,8 +1758,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         expect(panel.textContent).toContain('Activation / recovery result pending');
         expect(panel.textContent).not.toContain('other-generation-activation');
-        expect(activate.disabled).toBe(true);
-        expect(recover.disabled).toBe(true);
+        expect(activate.disabled).toBe(false);
+        expect(recover.disabled).toBe(false);
 
         catalogDashboard().ownership_generation = 1;
         catalogDashboard().latest_receipts = [{
@@ -1780,8 +1780,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(panel.textContent).toContain('lifecycle-command-activation');
         expect(panel.textContent).toContain('dispatched');
         expect(panel.textContent).toContain('Activation / recovery result pending');
-        expect(activate.disabled).toBe(true);
-        expect(recover.disabled).toBe(true);
+        expect(activate.disabled).toBe(false);
+        expect(recover.disabled).toBe(false);
 
         state.lifecycleReceipt.data = {
             schema_version: 'bioxp.operator_action_receipt.v2',
@@ -2101,7 +2101,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             await advance(); terminal = true; await advance(); await advance();
             expect(calls).toBeGreaterThanOrEqual(3);
             expect(panel.textContent).toContain('Lifecyclecompleted');
-            expect(move.disabled).toBe(true);
+            expect(move.disabled).toBe(false);
             expect(state.deckInvokeCalls).toHaveLength(1); expect(api.post).not.toHaveBeenCalled();
             state.connected = false; await render(); const prior = calls; await advance(); expect(calls).toBe(prior);
             state.connectionGeneration = 2; state.connected = true; await render(); await advance();
@@ -2224,7 +2224,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(api.post).not.toHaveBeenCalled();
     });
 
-    it('deck harmonization cold expired catalog permits explicit query refresh but no motion or automatic collection', async () => {
+    it('aged catalog permits explicit requests without automatic collection', async () => {
         const actions = state.v2Catalog.data!.actions as Array<Record<string, unknown>>;
         actions.push({ action_id: 'oem.deck.collect_authority', enabled: true, disabled_reason: null, interrupt: false,
             request_schema_version: 'bioxp.operator_action_request.v2', response_schema_version: 'bioxp.operator_action_receipt.v2' });
@@ -2236,12 +2236,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
         const refresh = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Refresh deck readiness (no motion)')!;
         expect(select.options).toHaveLength(2); expect(select.disabled).toBe(false);
-        expect(move.disabled).toBe(true); expect(refresh.disabled).toBe(false);
+        expect(move.disabled).toBe(false); expect(refresh.disabled).toBe(false);
         expect(state.yInvokeCalls).toHaveLength(0); expect(state.deckInvokeCalls).toHaveLength(0);
         await act(async () => refresh.click());
         expect(state.yInvokeCalls).toHaveLength(1);
         expect(state.yInvokeCalls[0]).toMatchObject({ request: { action_id: 'oem.deck.collect_authority', inputs: {}, expected_connection_generation: 1, expected_ownership_generation: 1 } });
-        expect(move.disabled).toBe(true); expect(state.deckInvokeCalls).toHaveLength(0);
+        expect(move.disabled).toBe(false); expect(state.deckInvokeCalls).toHaveLength(0);
         const action = actions.find(a => a.action_id === 'oem.deck.collect_authority')!;
         action.enabled = false; action.disabled_reason = 'query owner unavailable';
         await act(async () => root.render(<BioXpCockpit />)); expect(refresh.disabled).toBe(true);
@@ -2457,7 +2457,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             expect(move.disabled).toBe(false); // receipt query failure surfaces evidence state, never gates movement
             fail = false; state.statusError = true; state.connectionReachable = false;
             await render(); await advance();
-            expect(move.disabled).toBe(true);
+            expect(move.disabled).toBe(false);
             state.statusError = false; state.connectionReachable = true;
             refreshAuthority(); await render();
             expect(move.disabled, panel.textContent ?? '').toBe(false);
@@ -2560,7 +2560,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(panel.textContent).toContain('not pending');
     });
 
-    it('disables deck movement on stale generation authority with an exact reason', async () => {
+    it('retains deck admission when same-generation observations age', async () => {
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
         await act(async () => {
             root.render(<BioXpCockpit />);
@@ -2568,8 +2568,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
         const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
-        expect(move.disabled).toBe(true);
-        expect(panel.textContent).toContain('Fresh v2 catalog or dashboard authority is unavailable.');
+        expect(move.disabled).toBe(false);
+        expect(panel.textContent).not.toContain('Fresh v2 catalog or dashboard authority is unavailable.');
     });
 
     it.each([
@@ -2589,10 +2589,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             expect(state.deckInvokeCalls).toHaveLength(1);
             expect(state.deckInvokeCalls[0]).toMatchObject({ request: { expected_ownership_generation: 2 } });
         } else {
-            expect(move.disabled).toBe(true);
-            expect(panel.textContent).toContain('matching catalog and dashboard deck authority is unavailable');
+            expect(move.disabled).toBe(false);
+            expect(panel.textContent).not.toContain('matching catalog and dashboard deck authority is unavailable');
             await act(async () => move.click());
-            expect(state.deckInvokeCalls).toHaveLength(0);
+            expect(state.deckInvokeCalls).toHaveLength(1);
         }
     });
 
@@ -3050,7 +3050,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(state.invokeCalls).toHaveLength(0);
     });
 
-    it.each(['x', 'y', 'z'])('holds pending %s submission, then respects robot denial and expiry without blocking Stop', async (axis) => {
+    it.each(['x', 'y', 'z'])('holds pending %s submission, then respects robot denial but not observation expiry, with independent Stop', async (axis) => {
         state.invokePending = true;
         const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>)
             .find(row => row.action_id === `oem.${axis}.move_steps`)!;
@@ -3079,9 +3079,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         Object.assign(action, { enabled: true, disabled_reason: null });
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
         await act(async () => root.render(<BioXpCockpit />));
-        expect(move.disabled).toBe(true);
+        expect(move.disabled).toBe(false);
         await act(async () => move.click());
-        expect(state.yInvokeCalls).toHaveLength(1);
+        expect(state.yInvokeCalls).toHaveLength(2);
         const stop = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Stop')!;
         expect(stop.disabled).toBe(false);
         await act(async () => stop.click());
@@ -3366,7 +3366,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state[pending] = true;
         await act(async () => root.render(<BioXpCockpit />));
         expect(clear().disabled).toBe(true);
-        expect(clear().title).toBe('A command is pending; wait for its receipt before another normal action.');
+        expect(clear().title).toBe('A command submission is in flight; wait for its response.');
         const before = state.yInvokeCalls.length;
         await act(async () => clear().click());
         expect(state.yInvokeCalls).toHaveLength(before);
@@ -3378,7 +3378,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(state.yInvokeCalls.at(-1)).toMatchObject({ request: { action_id: 'oem.z.clear', inputs: {} } });
     });
 
-    it('keeps Z normal controls fail-closed with plain reasons while addressed Stop remains independent', async () => {
+    it('keeps robot-enabled Z controls and Stop available through catalog read failure', async () => {
         await act(async () => root.render(<BioXpCockpit />));
         const panel = () => [...container.querySelectorAll('article')].find((element) => element.querySelector('h3')?.textContent === 'Z Axis')!;
         const normal = () => [...panel().querySelectorAll('button')].filter((button) => ['Move −', 'Move +', 'Home', 'Go absolute'].includes(button.textContent ?? ''));
@@ -3388,15 +3388,15 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
         await act(async () => root.render(<BioXpCockpit />));
         for (const button of normal()) {
-            expect(button.disabled).toBe(true);
-            expect(button.title).toBe('Current robot control state is unavailable.');
+            expect(button.disabled).toBe(false);
+            expect(button.title).not.toBe('Current robot control state is unavailable.');
             expect(button.title).not.toContain('Fresh v2 catalog');
         }
         const stop = [...panel().querySelectorAll('button')].find((button) => button.textContent === 'Stop')!;
         expect(stop.disabled).toBe(false);
     });
 
-    it('fails normal Y closed when current robot control state is unavailable', async () => {
+    it('keeps robot-enabled Y available through catalog read failure', async () => {
         state.v2Catalog.error = new Error('catalog query failed');
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
         await act(async () => {
@@ -3405,12 +3405,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(true);
+        expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(false);
         expect((buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement).disabled).toBe(false);
         expect(section.textContent).not.toContain('Fresh v2 catalog or dashboard authority is unavailable');
     });
 
-    it('disables Z normal controls when current robot control state is unavailable instead of rendering dead controls', async () => {
+    it('submits robot-enabled Z controls through catalog read failure', async () => {
         state.catalog.data.actions.push({
             ...xAbsoluteAction(),
             action_id: 'oem.z.move_absolute',
@@ -3429,16 +3429,16 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
         const absolute = buttons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
-        expect(movePositive.disabled).toBe(true);
-        expect(home.disabled).toBe(true);
-        expect(absolute.disabled).toBe(true);
+        expect(movePositive.disabled).toBe(false);
+        expect(home.disabled).toBe(false);
+        expect(absolute.disabled).toBe(false);
         await act(async () => {
             movePositive.click();
             home.click();
             absolute.click();
             await Promise.resolve();
         });
-        expect(state.yInvokeCalls).toHaveLength(0);
+        expect(state.yInvokeCalls).toHaveLength(3);
     });
 
     it('renders successful detailed Y action and independent STOP receipts', async () => {
@@ -3490,17 +3490,17 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(raw).toContain('"status": 100');
     });
 
-    it.each(['status-error', 'unreachable-observation'])('retains the passive camera session during %s without admitting motion', async (failure) => {
+    it.each(['status-error', 'unreachable-observation'])('retains the passive camera session during %s without a status-observation lock', async (failure) => {
         await act(async () => root.render(<BioXpCockpit />));
         const camera = () => JSON.parse(container.querySelector('[data-testid="camera-session"]')!.textContent!);
         expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: true });
         if (failure === 'status-error') state.statusError = true;
         else state.connectionReachable = false;
         await act(async () => root.render(<BioXpCockpit />));
-        expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: false });
+        expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: true });
         const xy = container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-        expect([...xy.querySelectorAll('button')].every(button => button.disabled)).toBe(true);
-        if (failure === 'status-error') expect(container.textContent).toContain('Connection status refresh failed; checking again.');
+        expect([...xy.querySelectorAll('button')].every(button => button.disabled)).toBe(false);
+        if (failure === 'status-error') expect(container.textContent).toContain('Connection status refresh failed; showing last-known observations.');
         expect(state.xyCalls).toHaveLength(0);
         expect(state.invokeCalls).toHaveLength(0);
         state.statusError = false;

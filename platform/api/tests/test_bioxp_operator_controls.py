@@ -1282,9 +1282,11 @@ def test_deck_move_relays_only_semantic_inputs_and_exact_board_fences(monkeypatc
     }
 
 
-@pytest.mark.parametrize("epochs", [{"4": 2}, {"5": 8}, {"4": 2, "5": 8, "6": 1}])
-def test_deck_move_rejects_missing_or_extra_required_board_epochs(monkeypatch, epochs):
+@pytest.mark.parametrize("epochs", [{}, {"4": 2}, {"5": 8}, {"4": 2, "5": 8, "6": 1}])
+def test_deck_move_forwards_available_epoch_observations_without_host_gate(monkeypatch, epochs):
     client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["invoke_operator_action_v2"] = v2_receipt(
+        action_id="oem.deck.move_to_location", command_id="deck-command-observation")
     response = client.post(
         "/api/bioxp/operator-controls/v2/actions/oem.deck.move_to_location",
         json={
@@ -1296,8 +1298,9 @@ def test_deck_move_rejects_missing_or_extra_required_board_epochs(monkeypatch, e
             "inputs": {"target": "LOC_OC", "camera_offset": False},
         },
     )
-    assert response.status_code == 422
-    assert runtime.connection.client.calls == []
+    assert response.status_code == 202, response.text
+    assert len(runtime.connection.client.calls) == 1
+    assert runtime.connection.client.calls[0][1]["json_data"]["expected_board_epoch_by_board"] == epochs
 
 
 @pytest.mark.parametrize("status", [409, 422, 503])

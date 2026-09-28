@@ -37,7 +37,7 @@ export function BioXpQuickDashboard({ connected, data, isLoading, error, motionC
             {!connected && <div style={panelStyle}>Connect to view robot state.</div>}
             {connected && isLoading && !data && <div style={panelStyle}>Loading live state…</div>}
             {connected && stale && data && <div role="status" style={{ ...panelStyle, color: '#fcd34d' }}>
-                Last-known observation — refresh pending or unavailable. Motion admission requires fresh authority.
+                Last-known observation — refresh pending or unavailable. The robot checks each request.
             </div>}
             {connected && error !== null && error !== undefined && (
                 <div style={{ ...panelStyle, color: '#fca5a5' }}>{data ? 'Refresh failed; last-known values retained' : 'Dashboard unavailable'}: {bioXpErrorText(error)}</div>
@@ -53,11 +53,11 @@ export function BioXpQuickDashboard({ connected, data, isLoading, error, motionC
                             <div>{stale ? 'Last-known connection state' : data.connection.live === true ? 'Live / owned' : data.connection.live === false ? 'Not live' : 'Not reported'}</div>
                         </div>
                         <div style={panelStyle}>
-                            <strong>Motion controls</strong>
+                            <strong>Controllers enabled</strong>
                             <div style={{ color: motionControlsAvailable === true ? '#86efac' : motionControlsAvailable === false ? '#fca5a5' : '#cbd5e1' }}>
-                                {motionControlsAvailable === true ? 'Available' : motionControlsAvailable === false ? 'Unavailable' : 'Unknown'}
+                                {motionControlsAvailable === true ? 'Yes' : motionControlsAvailable === false ? 'No' : 'Unknown'}
                             </div>
-                            {motionControlsAvailable === undefined && <small>{unavailableReason ?? 'Fresh hardware observation is unavailable.'}</small>}
+                            {motionControlsAvailable === undefined && <small>{unavailableReason ?? 'Controller enablement is not reported.'}</small>}
                             {motionControlsAvailable === false && <small>{value(data.motion.reason, 'Robot control admission is unavailable.')}</small>}
                         </div>
                         <div style={panelStyle}>

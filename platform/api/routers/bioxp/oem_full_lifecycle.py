@@ -234,8 +234,7 @@ def _active_client(runtime: BioXpRuntime, *, expected_generation: int | None = N
         raise HTTPException(status_code=409, detail="An active BioXP target connection is required")
     if expected_generation is not None and snapshot.generation != expected_generation:
         raise HTTPException(status_code=409, detail="Expected connection generation does not match the active generation")
-    if require_fresh and snapshot.observation_fresh is not True:
-        raise HTTPException(status_code=409, detail="A fresh process-local BioXP status observation is required")
+
     return client
 
 

@@ -111,8 +111,8 @@ def test_request_lookup_uses_real_passive_connection_lane_through_status_failure
             assert service.snapshot().observation_fresh is not True
             result = await service.request_active_v2_query('operator_command_identity', expected_generation=generation, path_params={'key': KEY})
             assert result['route_name'] == 'operator_command_identity'
-            with pytest.raises(ConnectionStateError):
-                await service.request_active_v2_enqueue('invoke_operator_action_v2', expected_generation=generation, json_data={})
+            result = await service.request_active_v2_enqueue('invoke_operator_action_v2', expected_generation=generation, json_data={})
+            assert result['route_name'] == 'invoke_operator_action_v2'
             with pytest.raises(ConnectionStateError):
                 await service.request_active_v2_query('operator_command_identity', expected_generation=generation + 1, path_params={'key': KEY})
         finally:

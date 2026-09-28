@@ -76,8 +76,8 @@ def test_real_http_client_registration_fresh_reads_and_no_cache(tmp_path):
             boundary.connection._last_reachable = False
             boundary.connection._observed_at = None
             result = await browser.get('/protocols/transfer-preflight', params={'expected_connection_generation': generation})
-            assert result.status_code == 409, result.text
-            assert len(paths) == 4
+            assert result.status_code == 200, result.text
+            assert paths == ['/motion/reference/status', '/operator/v2/control-catalog'] * 3
         await boundary.connection.disconnect()
     asyncio.run(scenario())
 

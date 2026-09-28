@@ -228,20 +228,20 @@ def test_live_workflow_reads_and_execute_use_active_connection(tmp_path, observa
                 assert result['route_name'] == route
                 with pytest.raises(ConnectionStateError):
                     await service.request_active_v2_query(route, expected_generation=generation + 1)
-            with pytest.raises(ConnectionStateError):
-                await service.request_active('protocol_control', expected_generation=generation, json_data={})
+            control = await service.request_active('protocol_control', expected_generation=generation, json_data={})
+            assert control['route_name'] == 'protocol_control'
             result = await service.request_active('protocol_execute', expected_generation=generation,
                                                   require_fresh=False, json_data={'idempotency_key': KEY})
             assert result['kwargs']['json_data'] == {'idempotency_key': KEY}
             with pytest.raises(ConnectionStateError):
                 await service.request_active('protocol_execute', expected_generation=generation + 1,
                                              require_fresh=False, json_data={})
-            assert len(clients[0].request_calls) == 3
+            assert len(clients[0].request_calls) == 4
             await service.disconnect()
             with pytest.raises(ConnectionStateError):
                 await service.request_active('protocol_execute', expected_generation=service.snapshot().generation,
                                              require_fresh=False, json_data={})
-            assert len(clients[0].request_calls) == 3
+            assert len(clients[0].request_calls) == 4
         finally:
             await service.close()
     asyncio.run(scenario())
