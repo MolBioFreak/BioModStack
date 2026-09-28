@@ -208,7 +208,7 @@ it('displays completed large repeated samples and all saved stations while keepi
     const data = { ...fixture(), body_completed: true, error: null, samples,
         measurements: ['TC', 'MS', 'OC', 'RC', 'STRIP'].map((plate, i) => ({ plate, measured_raw_z: i, saved_revision_id: `saved-${i}` })) };
     await act(async () => root.render(<BioXpPipetteResults value={{ pipette_result: data }} />));
-    expect(host.textContent).toContain('Source bodyCompleted'); expect(host.textContent).toContain('A96');
+    expect(host.textContent).toContain('ProcedureCompleted'); expect(host.textContent).toContain('A96');
     for (const [i, plate] of ['TC', 'MS', 'OC', 'RC', 'STRIP'].entries()) {
         expect(host.textContent).toContain(`${plate}: ${i}`); expect(host.textContent).toContain(`saved-${i}`);
     }

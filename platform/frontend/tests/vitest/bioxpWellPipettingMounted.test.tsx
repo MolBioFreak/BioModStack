@@ -84,7 +84,7 @@ it.each(['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'] as const)('moun
     const wire = JSON.stringify(request);
     for (const forbidden of ['tip_loaded', '"tip_location":', 'oem_prepared', 'source_location', 'initialize', 'Park']) expect(wire).not.toContain(forbidden);
     if (op !== 'move') expect(wire).not.toContain('C3');
-    expect(host.textContent).toContain('not established by this panel');
+    expect(host.textContent).toContain('This does not load tips or change tip alignment');
     expect(button(`${op[0].toUpperCase()}${op.slice(1)} now`).disabled).toBe(false);
     exports.push({ name: op, authoring: { protocol_id: 'bms-manual-pipetting', steps: [expected[op]] }, request });
 });
@@ -240,12 +240,12 @@ it('explicit four-plunger strokes do not change well alignment and selection alo
     await mount(); await fields(); await check(1); await check(3); await check(4); await well('G9');
     expect(requests).toHaveLength(0); await click('Aspirate now');
     expect(requests[0].request.document.stages[0].actions[0].params).toEqual({ channels: [0, 1, 2, 3], volume_ul: 12.5, speed: 80 });
-    expect(host.textContent).toContain('other channels retain fixed spacing');
+    expect(host.textContent).toContain('tips keep their fixed spacing');
 });
 
 it('permits explicit canonical IDs without catalog/proof and does not invent defaults for required fields', async () => {
     await mount(77, []); await click('Move now'); expect(requests).toHaveLength(0);
-    await change('Canonical locationID', '4'); await well('A1'); await change('Move Z position', '0'); await click('Move now');
+    await change('Location number', '4'); await well('A1'); await change('Move Z position', '0'); await click('Move now');
     expect(requests[0].request.document.stages[0].actions[0].params).toEqual({ operation: 'move', location_id: 4, well: 'A1', position_flag: 0 });
 });
 
@@ -317,38 +317,38 @@ it.each(['completed', 'failed', 'denied'])('mounted submission traverses real BM
     exports.push({ name: `bms-route-${status}`, request: requests[0].request, relay: bridged });
 }, 30000);
 
-async function advanced() { await act(async () => { const summary = [...host.querySelectorAll('summary')].find(s => s.textContent === 'Advanced OEM source procedures and diagnostics')!; summary.click(); }); }
+async function advanced() { await act(async () => { for (const summary of host.querySelectorAll('summary')) (summary.parentElement as HTMLDetailsElement).open = true; }); }
 async function toggle(label: string) { await act(async () => (host.querySelector(`[aria-label="${label}"]`) as HTMLInputElement).click()); }
 it.each([-1, 0, 1, 2, 3])('source-selected pipette %s authors explicit ordered transfer preserving source indices', async pipette => {
     await mount(); await advanced(); await fields(); await check(2);
     if (pipette === -1) for (const c of [1,2,3,4]) await check(c); else await check(pipette + 1);
-    await change('Source pipette', String(pipette)); await change('Source tip type', '200'); await toggle('Force new tip');
+    await change('Pipettes to load', String(pipette)); await change('Tip size', '200'); await toggle('Force new tip');
     await append('source_load_tips'); await append('move'); await append('lower'); await append('aspirate'); await append('lift');
     await change('Block', '2'); await well('G8'); await append('move'); await append('lower'); await append('dispense'); await append('lift');
     await act(async () => (host.querySelector('[aria-label="Copy step 1 to editor"]') as HTMLButtonElement).click());
-    expect((host.querySelector('[aria-label="Source pipette"]') as HTMLSelectElement).value).toBe(String(pipette));
+    expect((host.querySelector('[aria-label="Pipettes to load"]') as HTMLSelectElement).value).toBe(String(pipette));
     await click('Run ordered steps');
     const actions = requests[0].request.document.stages[0].actions;
     expect(actions[0].params).toEqual({ operation: 'source_load_tips', tip_type: 200, pipette, force_new_tip: true });
     expect(actions[3].params.channels).toEqual(pipette === -1 ? [0,1,2,3] : [pipette]);
     expect(actions[5].params.well).toBe('G8');
     exports.push({ name: `selected-transfer-${pipette}`, request: requests[0].request });
-    await toggle('Force new tip'); await click('OEM selected tips now');
+    await toggle('Force new tip'); await click('Load selected tips now');
     expect(requests[1].request.document.stages[0].actions[0].params.force_new_tip).toBe(false);
     exports.push({ name: `selected-early-return-${pipette}`, request: requests[1].request });
     job = { ...job, execution: { ...job.execution, runtime_state: { ...job.execution.runtime_state, action_results: [{ pipette_result: { requested_pipette: pipette, tip_location: 2, alignment_published: false, already_matching_tip_type: true, physical_effect_verified: false } }] } } };
     await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs'] }); }); await tick();
-    expect(host.textContent).toContain('Existing alignment retained'); expect(host.textContent).toContain('Robot source TipLocation');
-    expect(button('OEM selected tips now').disabled).toBe(false);
+    expect(host.textContent).toContain('Existing alignment retained'); expect(host.textContent).toContain('Reported tip alignment');
+    expect(button('Load selected tips now').disabled).toBe(false);
 });
 it('authors every source mixing/air/purge field and copies typed values without changing mmix semantics', async () => {
     await mount(); await advanced();
     for (const [key, value] of Object.entries({ volume_ul: '23.5', air_ul: '7.5', aspirate_speed: '81', dispense_speed: '42', aspirate_delay_ms: '0', dispense_delay_ms: '-1', cycles: '0' })) await change(`Source mix ${key}`, value);
-    await change('Source mix type', 'C'); await toggle('Source mix tip dip'); await append('source_mix');
+    await change('Source mix type', 'C'); await toggle('Dip tips while mixing'); await append('source_mix');
     await change('Source mix volume_ul', '99'); await act(async () => (host.querySelector('[aria-label="Copy step 1 to editor"]') as HTMLButtonElement).click());
     expect((host.querySelector('[aria-label="Source mix volume_ul"]') as HTMLInputElement).value).toBe('23.5');
-    await change('OEM source aspirate air volume (µL)', '6.25'); await append('source_aspirate_air');
-    await change('OEM source dispense air volume (µL)', '3.5'); await append('source_dispense_air');
+    await change('Aspirate air volume (µL)', '6.25'); await append('source_aspirate_air');
+    await change('Dispense air volume (µL)', '3.5'); await append('source_dispense_air');
     await change('Source purge speed', '41.5'); await toggle('Source purge AMP'); await toggle('Source purge NTD'); await append('source_purge');
     await click('Run ordered steps');
     expect(requests[0].request.document.stages[0].actions.map((a: any) => a.params)).toEqual([
@@ -356,7 +356,7 @@ it('authors every source mixing/air/purge field and copies typed values without 
         { operation: 'source_aspirate_air', volume_ul: 6.25 }, { operation: 'source_dispense_air', volume_ul: 3.5 }, { operation: 'source_purge', speed: 41.5, amp: true, ntd: true },
     ]);
     exports.push({ name: 'source-all-fields', request: requests[0].request });
-    await change('Source mix aspirate_delay_ms', ''); await change('Source mix dispense_delay_ms', ''); await change('Source mix type', 'H'); await click('OEM source mix now');
+    await change('Source mix aspirate_delay_ms', ''); await change('Source mix dispense_delay_ms', ''); await change('Source mix type', 'H'); await click('Advanced mix now');
     expect(requests[1].request.document.stages[0].actions[0].params.aspirate_delay_ms).toBeNull();
     exports.push({ name: 'source-null-delays', request: requests[1].request });
 });
@@ -374,19 +374,19 @@ it.each(['aspirate', 'dispense', 'eject', 'plunger_up', 'plunger_down', 'dispens
     await click('Run ordered steps');
     expect(requests[0].request.document.stages[0].actions[0].params).toEqual({ operation: 'diagnostic_pipette', diagnostic });
     exports.push({ name: `oem-diagnostic-${action}`, request: requests[0].request });
-    if (diagnostic.channels) { for (const c of [1,3]) await toggle(`Diagnostic pipette ${c} (ID ${c - 1})`); await click('OEM diagnostic now'); expect(requests[1].request.document.stages[0].actions[0].params.diagnostic.channels).toEqual([]); exports.push({ name: `oem-diagnostic-empty-${action}`, request: requests[1].request }); }
+    if (diagnostic.channels) { for (const c of [1,3]) await toggle(`Diagnostic pipette ${c} (ID ${c - 1})`); await click('Pipette diagnostics now'); expect(requests[1].request.document.stages[0].actions[0].params.diagnostic.channels).toEqual([]); exports.push({ name: `oem-diagnostic-empty-${action}`, request: requests[1].request }); }
 });
 it('renders useful compact diagnostic values without events or raw results and retains primitive controls', async () => {
-    await mount(); await advanced(); await click('OEM diagnostic now');
+    await mount(); await advanced(); await click('Pipette diagnostics now');
     job = { ...job, execution: { ...job.execution, runtime_state: { ...job.execution.runtime_state, action_results: [{ pipette_result: { action: 'get_data', completed: false, channels: [{ channel: 0, part_number: 'ADP-123', revision: 'R2', firmware: 'FW-7', data: 42, information: 'RAW_HIDDEN', result: 'RAW_HIDDEN' }], error: 'partial channel read failure', events: ['RAW_HIDDEN'], tests: [{ number: 0, label: 'Plunger force', channels: [{ channel: 0, diagnosis: 1, display: 'Passed' }], result: 'RAW_HIDDEN' }], attempts: [{}, {}] } }] } } };
     await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs'] }); }); await tick();
     for (const text of ['ADP-123', 'R2', 'FW-7', 'Plunger force', 'Passed', 'partial channel read failure', 'Initialize attempts']) expect(host.textContent).toContain(text);
     expect(host.textContent).not.toContain('RAW_HIDDEN'); expect(button('Aspirate now').disabled).toBe(false);
 });
 it('rejects schema-invalid diagnostic inputs without refusing later valid source actions', async () => {
-    await mount(); await advanced(); await change('Diagnostic action', 'aspirate'); await change('Diagnostic speed', '1.5'); await click('OEM diagnostic now');
+    await mount(); await advanced(); await change('Diagnostic action', 'aspirate'); await change('Diagnostic speed', '1.5'); await click('Pipette diagnostics now');
     expect(requests).toHaveLength(0); expect(host.textContent).toContain('positive integer');
-    await change('Diagnostic speed', '1'); await change('Diagnostic volume (µL)', '0'); await click('OEM diagnostic now'); expect(requests).toHaveLength(1);
-    await change('Diagnostic action', 'plunger_up'); await change('Diagnostic Z steps', '-1'); await click('OEM diagnostic now'); expect(requests).toHaveLength(1);
-    await click('OEM selected tips now'); expect(requests).toHaveLength(2);
+    await change('Diagnostic speed', '1'); await change('Diagnostic volume (µL)', '0'); await click('Pipette diagnostics now'); expect(requests).toHaveLength(1);
+    await change('Diagnostic action', 'plunger_up'); await change('Diagnostic Z steps', '-1'); await click('Pipette diagnostics now'); expect(requests).toHaveLength(1);
+    await click('Load selected tips now'); expect(requests).toHaveLength(2);
 });

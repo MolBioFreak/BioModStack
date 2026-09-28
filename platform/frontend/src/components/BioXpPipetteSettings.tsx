@@ -62,26 +62,26 @@ export function BioXpPipetteSettings({ generation, connected }: { generation: nu
         finally { busy.current = false; if (epoch.current === token) setPending(false); }
     }
     const names = tray <= 2 ? ['TECANRACK1', 'TECANRACK2'] : ['TECANRACK3', 'TECANRACK4'];
-    return <section aria-label="Pipette settings" className="mt-4 space-y-3 rounded border border-slate-700 p-4">
-        <h3>Manual tip-tray Set and pipette settings</h3>
-        <p>Manual Set reads the current Z and saves the same zLow to both selected rack rows. The existing robot owner applies the paired calibration in-process. It does not pick up a tip, restart or home.</p>
-        <label>Tip tray<select aria-label="Tip tray for manual Set" value={tray} disabled={pending}
+    return <section aria-label="Pipette settings" className="mt-4 space-y-3 [&_button]:mr-2 [&_button]:rounded [&_button]:bg-slate-800 [&_button]:px-3 [&_button]:py-2 [&_button:disabled]:opacity-35">
+        <h3>Tip-tray height & pipette settings</h3>
+        <p>Set saves the current head height for both racks in the selected pair. It does not pick up tips, restart or home.</p>
+        <label className="flex items-center gap-3">Tip tray<select className="rounded bg-slate-950 p-2" aria-label="Tip tray for manual Set" value={tray} disabled={pending}
             onChange={e => { setTray(Number(e.target.value) as TipTray); setMeasurement(null); }}>
             {([1, 2, 3, 4] as const).map(value => <option key={value} value={value}>Tray {value}</option>)}
         </select></label>
         <p>Paired saved rows: {names.join(', ')}. Measured current Z: {measurement ?? 'not measured in this view'}.</p>
         <p>Active revision: {calibration?.active_revision_id ?? 'captured baseline'}; saved revision: {calibration?.saved_revision_id ?? 'captured baseline'}.
             {calibration?.pending_restart ? ' Saved configuration pending next ordinary startup.' : ' No pending saved revision reported.'}</p>
-        <table><thead><tr><th>Rack</th><th>Saved zLow (steps)</th><th>Active zLow (steps)</th></tr></thead><tbody>
+        <table className="w-full text-left text-sm"><thead><tr><th>Rack</th><th>Saved zLow (steps)</th><th>Active zLow (steps)</th></tr></thead><tbody>
             {names.map(name => <tr key={name}><th>{name}</th><td>{calibration?.saved_positions.find(row => row.name === name)?.zLow ?? 'unavailable'}</td>
                 <td>{calibration?.active_positions.find(row => row.name === name)?.zLow ?? 'unavailable'}</td></tr>)}
         </tbody></table>
         <button type="button" disabled={!connected || pending} onClick={() => void run('set')}>Set current Z for selected tray pair</button>
         <h4>Pipette operation flags</h4>
-        <p>Only source-consumed pipette flags; unrelated operation parameters are not edited here.</p>
+        <p>Changes apply only to pipette operations.</p>
         {pipetteFlags.map(flag => <label key={flag} className="block"><input type="checkbox" aria-label={flag} disabled={pending || !parameters}
             checked={draft[flag] ?? (parameters?.runtime_values?.[flag] === true)}
-            onChange={e => setDraft(previous => ({ ...previous, [flag]: e.target.checked }))} />{flag}</label>)}
+            onChange={e => setDraft(previous => ({ ...previous, [flag]: e.target.checked }))} />{flag === 'CheckForStaticTipLoss' ? 'Check for lost tips' : 'Log pressure'}</label>)}
         <button type="button" disabled={!connected || pending || !parameters} onClick={() => void run('flags')}>Save pipette flags</button>
         <button type="button" disabled={!connected || pending} onClick={() => void refresh()}>Read pipette settings</button>
         {pending && <p role="status">Submitting and reading back…</p>}

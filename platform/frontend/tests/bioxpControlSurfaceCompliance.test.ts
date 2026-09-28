@@ -7,7 +7,7 @@ test('operator surface is compact and robot-authority driven', () => {
   // R1/R2: require separated evidence rather than a physical-stop claim.
   assert.match(source, /physical stopping remains unverified/);
   assert.match(source, /Source completion, controller ACK, and terminal readback are separate evidence/);
-  for (const label of ['BioXP 3200', 'Connection', 'Controller Activation & Recovery', 'Activate 24 V / Prepare Motion', 'Non-homing Recovery', 'Manual Controls', 'BioXpCameraPanel', 'Software Abort', 'Recent Robot Actions']) assert.match(source, new RegExp(label));
+  for (const label of ['BioXP 3200', 'Connection', 'Controller Activation & Recovery', 'Enable controllers', 'Non-homing Recovery', 'Manual Controls', 'BioXpCameraPanel', 'Software Abort', 'Recent Robot Actions']) assert.match(source, new RegExp(label));
   for (const stale of ['available_commands', 'useBioXpCommand', 'BMS relay receipts', 'Physical Emergency Abort Unavailable']) assert.doesNotMatch(source, new RegExp(stale));
 });
 test('operator surface excludes rejected planning and evidence UI', () => {

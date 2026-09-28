@@ -71,7 +71,7 @@ function ChannelCard({ channelId, channel }: { channelId: 0 | 1 | 2 | 3; channel
         return (
             <article data-pipette-channel={channelId} className="rounded border border-slate-700 bg-slate-950/60 p-3 text-xs">
                 <h4 className="font-semibold text-slate-200">Channel {channelId + 1}</h4>
-                <p className="mt-2 text-amber-300">Unavailable — channel missing from projection</p>
+                <p className="mt-2 text-amber-300">Unavailable — no channel report</p>
                 <p className="mt-1 text-slate-400">Hardware tip readback: No valid hardware readback</p>
                 <p className="text-slate-400">Hardware pressure: No valid hardware readback</p>
             </article>
@@ -85,13 +85,13 @@ function ChannelCard({ channelId, channel }: { channelId: 0 | 1 | 2 | 3; channel
         <article data-pipette-channel={channelId} className="rounded border border-slate-700 bg-slate-950/60 p-3 text-xs">
             <h4 className="font-semibold text-slate-200">Channel {channelId + 1}</h4>
             <p className={channel.available ? 'text-cyan-200' : 'text-amber-300'}>{channel.available ? 'Transport available' : 'Transport unavailable'}</p>
-            <p className="mt-2 text-slate-300">Software shadow: {channel.software_initialized ? 'initialized' : 'not initialized'}; tip {channel.software_tip_loaded ? 'loaded' : 'not loaded'}</p>
+            <p className="mt-2 text-slate-300">Software record: {channel.software_initialized ? 'initialized' : 'not initialized'}; tip {channel.software_tip_loaded ? 'loaded' : 'not loaded'}</p>
             <p className="text-slate-300">Hardware tip readback: {tip === null ? 'No valid hardware readback' : tip ? 'loaded' : 'not loaded'}</p>
             <p className="text-slate-300">Hardware pressure: {pressure === null ? 'No valid hardware readback' : pressure}</p>
-            <p className="text-slate-400">Diagnosis/error queue: {diagnosis}</p>
+            <details className="mt-1 text-slate-300"><summary>Channel details</summary><p>Diagnosis/error queue: {diagnosis}</p>
             <p className="text-slate-400">Liquid/front/rear air: {channel.liquid_level_ul} / {channel.front_air_level_ul} / {channel.rear_air_level_ul} µL</p>
             <p className="text-slate-400">Last command: {channel.last_command ?? 'none'}</p>
-            <p className="text-slate-400">Projection truth: {channel.hardware_truth_level}</p>
+            <p className="text-slate-400">Report type: {channel.hardware_truth_level}</p></details>
         </article>
     );
 }
@@ -193,11 +193,11 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
         <section className="mt-4 rounded border border-amber-800/60 bg-amber-950/20 p-3" data-pipette-application-panel>
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                    <h3 className="font-semibold text-amber-100">Four-channel pipette controls</h3>
-                    <p className="mt-1 text-xs text-amber-200">Cached/software state and nested hardware-query evidence are shown separately. Physical pipette actions use the same safety checks as X/Y/Z and gripper controls. The application planner does not move hardware.</p>
+                    <h3 className="font-semibold text-amber-100">Pipette status</h3>
+                    <p className="mt-1 text-xs text-amber-200">Last reported state. Software tip records do not confirm physical tip presence.</p>
                 </div>
                 <div className="text-right text-xs text-slate-300">
-                    <p>Cached projection · live query performed {String(pipettes?.live_query_performed ?? false)}</p>
+                    <p>{pipettes?.live_query_performed ? 'Includes hardware query' : 'Cached report'}</p>
                     <p>{freshnessLabel}</p>
                 </div>
             </div>
@@ -212,11 +212,12 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                 ))}
             </div>
 
+            <details className="mt-3"><summary className="cursor-pointer font-semibold">Hardware checks & advanced controls</summary>
             <div className="mt-3 rounded border border-cyan-800/60 bg-cyan-950/20 p-3 text-xs" data-pipette-active-readback>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                         <h4 className="font-semibold text-cyan-100">Active hardware readback</h4>
-                        <p className="text-slate-400">Explicit POST query; separate from the cached dashboard and the no-motion application planner.</p>
+                        <p className="text-slate-400">Queries the hardware now; does not refresh the cached report above.</p>
                     </div>
                     <div className="flex items-center gap-3">
                         <label className="text-slate-300"><input type="checkbox" checked={includeData} onChange={(event) => setIncludeData(event.target.checked)} /> Include data sweep</label>
@@ -276,11 +277,12 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                         className="w-40 rounded bg-slate-900 px-2 py-1 font-mono text-xs"
                     />
                 </label>
-                <span className="text-slate-500">PositionTable location for head Z lift/lower (not liquid-plunger motion). Lower uses overpress=false. Planner tray, well, tip type and home-after fields below do not apply to these physical buttons.</span>
+                <span className="text-slate-500">Moves the head vertically, not the liquid plungers. Plan settings below do not apply to these buttons.</span>
             </div>
 
-            <div className="mt-4 rounded border border-slate-700 bg-slate-950/40 p-3">
-                <h4 className="text-sm font-semibold text-slate-200">No-motion application planner</h4>
+            <details className="mt-4 rounded border border-slate-700 p-3">
+                <summary className="cursor-pointer font-semibold">Plan only — no motion</summary>
+                <h4 className="sr-only">No-motion application planner</h4>
                 {application && application.dependency_blockers.length > 0 && (
                     <p className="mt-2 rounded border border-red-800/60 bg-red-950/30 px-3 py-2 text-xs text-red-200">
                         Planner dependencies: {application.dependency_blockers.join(', ')}
@@ -314,7 +316,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                 </button>
                 <DirectLiquidEvidence owner={planner} />
                 {planner.submission && <button type="button" disabled={!connected || planner.isPending} onClick={() => submitPlan(true)}>New operation — build plan</button>}
-            </div>
+            </details>
 
             <div className="mt-3 rounded border border-slate-700 bg-slate-950/40 p-3 text-xs text-slate-300" data-software-tip-type-control>
                 <h4 className="font-semibold text-slate-200">Software tip type selection</h4>
@@ -333,6 +335,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                 <p className="mt-1 text-slate-500">Separate from the no-motion load-tip planner above.</p>
             </div>
 
+            </details>
             {localError && <p className="mt-2 text-xs text-red-300">{localError}</p>}
             {status.error && <p className="mt-2 text-xs text-red-300">Status unavailable: {bioXpErrorText(status.error)}</p>}
             {planner.error && <p className="mt-2 text-xs text-red-300">Plan failed: {bioXpErrorText(planner.error)}</p>}

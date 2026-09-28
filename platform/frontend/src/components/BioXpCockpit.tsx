@@ -291,7 +291,8 @@ export function BioXpCockpit() {
     const [workflowOpen, setWorkflowOpen] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [cameraOpen, setCameraOpen] = useState(true);
-    const [pipettesOpen, setPipettesOpen] = useState(false);
+    const [controlTab, setControlTab] = useState<'robot' | 'pipettes'>('robot');
+    const [pipettesOpened, setPipettesOpened] = useState(false);
     const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'z' | 'g', number>>({ x: 60, z: 65000, g: 0 });
     const catalogV2Query = useBioXpOperatorControlCatalogV2(generation, active);
     // One catalog snapshot owns admission and its embedded dashboard. Cache
@@ -1153,15 +1154,15 @@ export function BioXpCockpit() {
 
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
                 <h2 className="text-lg font-semibold">Controller Activation & Recovery</h2>
-                <p className="mt-1 text-sm text-slate-400">Prepare the controller for motion, or recover it without homing.</p>
+                <p className="mt-1 text-sm text-slate-400">Prepares controllers without homing or moving the axes.</p>
                 <div className="mt-3 flex flex-wrap gap-3">
                     <button
                         type="button"
                         disabled={!linkConnected || v2ActionDisabledReason('meta.activate_motion') !== null || busy || lifecycleStatusRecoveryPending}
-                        title={v2ActionDisabledReason('meta.activate_motion') ?? 'Activate the robot controller'}
+                        title={v2ActionDisabledReason('meta.activate_motion') ?? 'Prepares controllers without homing or moving the axes.'}
                         onClick={claimTransport}
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
-                    >Activate 24 V / Prepare Motion</button>
+                    >Enable controllers</button>
                     <button
                         type="button"
                         disabled={!linkConnected || v2ActionDisabledReason('meta.recover_motion_non_homing') !== null || busy || lifecycleStatusRecoveryPending}
@@ -1197,6 +1198,38 @@ export function BioXpCockpit() {
                 <YOperatorError label="Activation / recovery receipt" error={lifecycleReceiptQuery.error} />
             </section>
 
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded bg-slate-950 p-2">
+                <div role="tablist" aria-label="Robot controls" className="flex gap-2">
+                    {(['robot', 'pipettes'] as const).map(tab => <button key={tab} type="button" role="tab"
+                        id={`control-tab-${tab}`} aria-controls={`control-panel-${tab}`} aria-selected={controlTab === tab}
+                        tabIndex={controlTab === tab ? 0 : -1}
+                        onKeyDown={event => {
+                            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                            event.preventDefault();
+                            const next = event.key === 'Home' ? 'robot' : event.key === 'End' ? 'pipettes' : tab === 'robot' ? 'pipettes' : 'robot';
+                            setControlTab(next); if (next === 'pipettes') setPipettesOpened(true);
+                            document.getElementById(`control-tab-${next}`)?.focus();
+                        }}
+                        onClick={() => { setControlTab(tab); if (tab === 'pipettes') setPipettesOpened(true); }}
+                        className={`rounded px-4 py-2 font-semibold ${controlTab === tab ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-200'}`}>
+                        {tab === 'robot' ? 'Robot controls' : 'Pipettes'}
+                    </button>)}
+                </div>
+                <div aria-label="Stop controls" className="flex flex-wrap gap-2">
+                    {(['x', 'y', 'z'] as const).map(axis => <button key={axis} type="button"
+                        disabled={!linkConnected || generation <= 0 || interruptPending(`oem.${axis}.stop`)}
+                        title={`Immediate ${axis.toUpperCase()} stop`}
+                        onClick={() => axis === 'y' ? interruptY() : stopAxis(axis)} className="rounded bg-red-800 px-3 py-2 text-sm disabled:opacity-35">Stop {axis.toUpperCase()}</button>)}
+                    <button type="button" disabled={!linkConnected || generation <= 0 || operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true || operatorActionForPath('/motion/diagnostics/stop')?.safety_class !== 'stop' || componentStop.isPending}
+                        onClick={() => stopAxis('g')} className="rounded bg-red-800 px-3 py-2 text-sm disabled:opacity-35">Stop gripper</button>
+                    <button type="button" disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all') || v2InterruptActionById('oem.abort_all')?.enabled !== true}
+                        title={v2InterruptActionById('oem.abort_all')?.disabled_reason ?? 'Software Abort cancels waiters only; motors may continue. Use Stop for motors.'}
+                        onClick={abortXAggregate} className="rounded bg-red-950 px-3 py-2 text-sm ring-1 ring-red-600 disabled:opacity-35">Software Abort (cancel waiters)</button>
+                </div>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
+            <div className="min-w-0">
+            <div role="tabpanel" id="control-panel-robot" aria-labelledby="control-tab-robot" hidden={controlTab !== 'robot'} className="space-y-4">
             <section data-testid="oem-deck-movement" className="rounded-xl border border-teal-700/60 bg-teal-950/20 p-4">
                 <h2 className="text-lg font-semibold">Deck Movement</h2>
                 <p className="mt-1 text-sm text-slate-300">Travel only: moves the tool to a destination. It does not pick up or transfer a plate or cover.</p>
@@ -1226,8 +1259,8 @@ export function BioXpCockpit() {
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current location</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_location ?? '—'}</dd></div>
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current well</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_well ?? '—'}</dd></div>
                 </dl>
-                <p className={`mt-3 text-sm ${deckDisabledReason ? 'text-amber-200' : 'text-emerald-300'}`}>
-                    {deckDisabledReason ? bioXpDeckReadinessText(deckDisabledReason) : 'Ready to move to the selected destination.'}
+                <p className={`mt-3 text-sm ${deckDisabledReason ? 'text-amber-200' : 'text-slate-300'}`}>
+                    {deckDisabledReason ? bioXpDeckReadinessText(deckDisabledReason) : 'Select a destination, then Move. The robot checks readiness when you send the command.'}
                 </p>
                 <button
                     type="button"
@@ -1290,7 +1323,7 @@ export function BioXpCockpit() {
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
+                <div className="grid gap-4">
                 <div className="min-w-0">
                 <h2 className="text-lg font-semibold">Manual Controls</h2>
                 <p className="mt-1 text-sm text-slate-400">Relative moves use a number of steps. Home, Open and Close use the selected axis controls.</p>
@@ -1629,24 +1662,33 @@ export function BioXpCockpit() {
                         </article>
                     ))}
                 </div>
+                </div>
+                </div>
+            </section>
+            </div>
+            <div role="tabpanel" id="control-panel-pipettes" aria-labelledby="control-tab-pipettes" hidden={controlTab !== 'pipettes'}>
+                {pipettesOpened && <>
+                <BioXpPipetteControlPanel
+                    generation={generation}
+                    connected={robotControlReady && operatorCatalog.data !== undefined}
+                    pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined}
+                    freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
+                    actions={catalog?.actions}
+                    catalogLoading={operatorCatalog.isLoading}
+                    invokePending={invokeOperatorAction.isPending}
+                    invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
+                />
                 <BioXpWellPipettingPanel key={`well:${generation}:${active}`} generation={generation} connected={linkConnected}
                     destinations={selectionAction?.destination_options ?? []}
                     positionTableRevision={selectionAction?.position_table_revision} />
-                <BioXpCalibrationSettings key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
-                <BioXpPipetteSettings key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
-                <details className="mt-4 rounded border border-slate-800 bg-slate-950/60 p-3" open={pipettesOpen} onToggle={(event) => setPipettesOpen(event.currentTarget.open)}>
-                    <summary className="cursor-pointer text-sm font-semibold">Pipette controls</summary>
-                    {pipettesOpen && <BioXpPipetteControlPanel
-                        generation={generation}
-                        connected={robotControlReady && operatorCatalog.data !== undefined}
-                        pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined}
-                        freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
-                        actions={catalog?.actions}
-                        catalogLoading={operatorCatalog.isLoading}
-                        invokePending={invokeOperatorAction.isPending}
-                        invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
-                    />}
+                <details className="mt-4 rounded border border-slate-700 p-3">
+                    <summary className="cursor-pointer font-semibold">Settings & calibration</summary>
+                    <BioXpPipetteSettings key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
+                    <BioXpCalibrationSettings key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
                 </details>
+                </>}
+            </div>
+            <section aria-label="Latest command" className="space-y-3">
                 {invokeOperatorAction.error && (
                     <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-sm text-red-300">{bioXpErrorText(invokeOperatorAction.error)}</p>
                 )}
@@ -1660,13 +1702,13 @@ export function BioXpCockpit() {
                         <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{JSON.stringify(displayedLatestReceipt, null, 2)}</pre>
                     </details>
                 )}
-                </div>
-                <details className="order-first w-full max-w-xs self-start rounded-lg border border-slate-800 bg-slate-950/70 p-2 xl:sticky xl:top-4 xl:order-last" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
+            </section>
+            </div>
+                <details className="w-full max-w-xs self-start rounded-lg border border-slate-800 bg-slate-950/70 p-2 xl:sticky xl:top-4 xl:order-last" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
                     <summary className="cursor-pointer text-sm font-semibold">Camera</summary>
                     {cameraOpen && <div className="mt-2"><BioXpCameraPanel connected={active} connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>}
                 </details>
-                </div>
-            </section>
+            </div>
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>

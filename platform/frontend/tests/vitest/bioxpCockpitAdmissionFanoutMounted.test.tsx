@@ -755,8 +755,8 @@ describe('primary cockpit query ownership', () => {
         await act(async () => { root.render(<BioXpCockpit />); });
         const emergencyButton = () => [...container.querySelectorAll('button')].find(node => node.textContent === 'Software Abort (cancel waiters)')!;
         expect(emergencyButton().disabled).toBe(false);
-        const disclosure = [...container.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent === 'Pipette controls')!;
-        await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); });
+        const disclosure = container.querySelector('#control-tab-pipettes') as HTMLButtonElement;
+        await act(async () => disclosure.click());
         expect(state.pipetteProps?.connected).toBe(true);
         expect(state.pipetteProps?.actions).toContain(pipette);
         expect(pipette.enabled).toBe(false);
@@ -967,7 +967,8 @@ describe('primary cockpit query ownership', () => {
                 expect(state.xyReceipt.data).toEqual(bmsMetadata.compact);
             }
             expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/operator-controls/v2/catalog')).toHaveLength(3);
-            expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/calibration-settings')).toHaveLength(1);
+            // Pipette settings are lazy until the Pipettes tab is first opened.
+            expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/calibration-settings')).toHaveLength(0);
             await advance(6000);
             expect(button().disabled).toBe(true); // same old producer observation expires
             expect(panel().textContent).toContain('Move timeout reported');
@@ -1615,7 +1616,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             (node) => node.textContent?.includes('Controller Activation & Recovery'),
         ) as HTMLElement;
         const activate = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Activate 24 V / Prepare Motion',
+            (button) => button.textContent === 'Enable controllers',
         ) as HTMLButtonElement;
         const recover = [...panel.querySelectorAll('button')].find(
             (button) => button.textContent === 'Non-homing Recovery',
@@ -1677,7 +1678,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             (node) => node.textContent?.includes('Controller Activation & Recovery'),
         ) as HTMLElement;
         const activate = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Activate 24 V / Prepare Motion',
+            (button) => button.textContent === 'Enable controllers',
         ) as HTMLButtonElement;
         const recover = [...panel.querySelectorAll('button')].find(
             (button) => button.textContent === 'Non-homing Recovery',
@@ -3632,6 +3633,91 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
 
 describe('Well pipetting cockpit integration', () => {
+    it('retains pipette drafts, ordered steps, pending submission and result across robot tabs with shared Stops', async () => {
+        nativeMetadataMode.protocols = true; vi.stubGlobal('crypto', webcrypto);
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+        let reject!: (reason: unknown) => void;
+        vi.mocked(api.post).mockReset().mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+        const tab = (name: string) => container.querySelector(`#control-tab-${name}`) as HTMLButtonElement;
+        const panel = (name: string) => container.querySelector(`#control-panel-${name}`) as HTMLElement;
+        const click = async (name: string) => act(async () => tab(name).click());
+        const field = (name: string) => container.querySelector(`[aria-label="${name}"]`) as HTMLInputElement;
+        const set = async (name: string, value: string) => act(async () => {
+            const input = field(name);
+            Object.getOwnPropertyDescriptor(input.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+            input.dispatchEvent(new Event(input.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+        });
+        const button = (text: string) => [...panel('pipettes').querySelectorAll('button')].find(b => b.textContent === text)!;
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            expect(panel('robot').hidden).toBe(false);
+            expect(panel('pipettes').hidden).toBe(true);
+            expect(container.querySelector('[aria-label="Well pipetting"]')).toBeNull();
+            expect(tab('pipettes').compareDocumentPosition(container.querySelector('[data-testid="oem-deck-movement"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+            await click('pipettes');
+            const original = field('Volume (µL)');
+            await set('Volume (µL)', '12.5'); await set('Dispense speed', '65');
+            await act(async () => field('Plunger 2').click());
+            await set('Tip tray', '5'); await set('Tip well', 'B12');
+            await set('Pipettes to load', '2'); await set('Tip size', '200');
+            await set('Step to append', 'dispense');
+            await act(async () => button('Append step').click());
+            await click('robot');
+            expect(panel('pipettes').hidden).toBe(true);
+            expect(panel('robot').hidden).toBe(false);
+            expect(field('Volume (µL)')).toBe(original);
+            expect(api.post).not.toHaveBeenCalled();
+            await click('pipettes');
+            expect(tab('pipettes').getAttribute('aria-selected')).toBe('true');
+            expect(field('Volume (µL)').value).toBe('12.5');
+            expect(field('Tip tray').value).toBe('5'); expect(field('Tip well').value).toBe('B12');
+            expect(field('Pipettes to load').value).toBe('2'); expect(field('Tip size').value).toBe('200');
+            expect(field('Plunger 2').checked).toBe(true);
+            expect(container.querySelectorAll('[data-manual-step]')).toHaveLength(1);
+            await act(async () => { button('Run ordered steps').click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+            expect(api.post).toHaveBeenCalledTimes(1);
+            const [path, request] = vi.mocked(api.post).mock.calls[0] as [string, any];
+            expect(path).toBe('/api/bioxp/protocols/submit');
+            expect(request).toMatchObject({ source_type: 'native', dry_run: false, expected_connection_generation: 1, live_execution: { live_execution_ack: true } });
+            expect(request.document.stages[0].actions[0]).toMatchObject({ kind: 'pipette_dispense', params: { channels: [1], volume_ul: 12.5, speed: 65 } });
+            await click('robot'); await click('pipettes');
+            expect(button('Run ordered steps').disabled).toBe(true);
+            const stops = container.querySelector('[aria-label="Stop controls"]')!;
+            expect(stops.closest('[hidden]')).toBeNull();
+            for (const text of ['Stop X', 'Stop Y', 'Stop Z', 'Software Abort (cancel waiters)']) {
+                const control = [...stops.querySelectorAll('button')].find(b => b.textContent === text)!;
+                expect(control.disabled).toBe(false);
+                await act(async () => control.click());
+            }
+            expect(state.yInterruptCalls.map(call => call.actionId)).toEqual(['oem.x.stop', 'oem.y.stop', 'oem.z.stop', 'oem.abort_all']);
+            await act(async () => reject(new Error('fixture response lost')));
+            await click('robot'); await click('pipettes');
+            expect(panel('pipettes').textContent).toContain('fixture response lost');
+            expect(button('Run ordered steps').disabled).toBe(false);
+            expect(field('Volume (µL)')).toBe(original);
+            expect(api.post).toHaveBeenCalledTimes(1);
+            vi.mocked(api.post).mockImplementationOnce(async (_path, body: any) => {
+                const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(body.idempotency_key));
+                const id = `protocol-live-${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`;
+                return { data: { job_id: id, status: 'completed', command: { idempotency_key: body.idempotency_key, status: 'completed' },
+                    execution: { runtime_state: { workflow: { phase: 'completed' }, action_results: [{ pipette_result: {
+                        selected_channels: [1], completed: true, physical_effect_verified: false,
+                    } }] } } } };
+            });
+            await act(async () => { button('Dispense now').click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+            expect(api.post).toHaveBeenCalledTimes(2);
+            expect(panel('pipettes').textContent).toContain('Robot job: completed');
+            await act(async () => tab('pipettes').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })));
+            expect(tab('robot').getAttribute('aria-selected')).toBe('true');
+            expect(document.activeElement).toBe(tab('robot'));
+            await act(async () => tab('robot').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })));
+            expect(panel('pipettes').textContent).toContain('Robot job: completed');
+            expect(panel('pipettes').textContent).toContain('Physical effect verifiedfalse');
+            expect(field('Volume (µL)')).toBe(original);
+        } finally {
+            await act(async () => root.render(null)); client.clear(); nativeMetadataMode.protocols = false; vi.unstubAllGlobals();
+        }
+    });
     it('uses catalog locationID rather than target ordinals and dispatches independently of projected availability', async () => {
         nativeMetadataMode.protocols = true; vi.stubGlobal('crypto', webcrypto);
         const action = state.v2Catalog.data.actions.find(a => a.action_id === 'oem.deck.move_to_location')!;
@@ -3641,6 +3727,8 @@ describe('Well pipetting cockpit integration', () => {
         vi.mocked(api.post).mockReset().mockRejectedValue(new Error('offline robot refusal'));
         try {
             await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            expect(container.querySelector('[aria-label="Well pipetting"]')).toBeNull();
+            await act(async () => (container.querySelector('#control-tab-pipettes') as HTMLButtonElement).click());
             const panel = container.querySelector('[aria-label="Well pipetting"]')!;
             expect(panel).not.toBeNull();
             for (const [name, value] of [['Block', '4'], ['Move Z position', '1']]) {
