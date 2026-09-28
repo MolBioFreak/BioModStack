@@ -5502,7 +5502,7 @@ class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
                 and deck.resolved_location_id is not None and deck.resolved_location_id > 0
                 and source.get("command_id") == self.command_id
                 and source.get("action_id") == self.action_id
-                and source.get("effective_inputs") == self.canonical_inputs
+                and (not self.canonical_inputs or source.get("effective_inputs") == self.canonical_inputs)
                 and source.get("status") == "completed"
                 and source.get("completion_class") == "source_noop"
                 and source.get("source_noop") is True
@@ -5510,7 +5510,7 @@ class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
                 and source.get("remote_acknowledged") is False
                 and source.get("controller_acknowledged") is False
                 and source.get("physical_effect_verified") is False
-                and source.get("recovery_required") is False
+                and source.get("recovery_required") is not True
                 and bool(deck.stages)
                 and all(stage.terminal_state == "completed" for stage in deck.stages)
             )
@@ -5702,7 +5702,7 @@ class OperatorDeckDashboardV1(BaseModel):
     position_table_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     destination_catalog_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     semantic_state_revision: StrictInt = Field(ge=0)
-    ambiguity_state: Literal["none", "recovery_required"]
+    ambiguity_state: Literal["none", "ambiguous", "recovery_required"]
 
 
 class OperatorDashboardV2(BaseModel):

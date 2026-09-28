@@ -14,14 +14,15 @@ from test_bioxp_camera_boundary import Boundary
 from test_serial206_bioxp_v2_models import _serial206_catalog_payload
 
 
+@pytest.mark.parametrize("ambiguity", ["none", "ambiguous", "recovery_required"])
 @pytest.mark.parametrize("epochs", [None, {}, {"4": 2}, {"4": 2, "5": 8}])
 @pytest.mark.parametrize("references", [[], ["x", "y", "z", "g"]])
-def test_catalog_evidence_is_not_consumer_admission(tmp_path, epochs, references):
+def test_catalog_evidence_is_not_consumer_admission(tmp_path, ambiguity, epochs, references):
     payload = _serial206_catalog_payload()
     action = payload["actions"][0]
     action["expected_board_epoch_by_board"] = epochs
     action["required_references"] = references
-    payload["dashboard"]["deck"]["ambiguity_state"] = "recovery_required"
+    payload["dashboard"]["deck"]["ambiguity_state"] = ambiguity
 
     async def scenario():
         boundary = Boundary(tmp_path)
@@ -44,7 +45,7 @@ def test_catalog_evidence_is_not_consumer_admission(tmp_path, epochs, references
             assert row["enabled"] is True
             assert row["expected_board_epoch_by_board"] == epochs
             assert row["required_references"] == references
-            assert result.json()["dashboard"]["deck"]["ambiguity_state"] == "recovery_required"
+            assert result.json()["dashboard"]["deck"]["ambiguity_state"] == ambiguity
             assert calls == [("GET", "/operator/v2/control-catalog")]
         finally:
             await boundary.connection.disconnect()
@@ -85,3 +86,16 @@ def test_actual_networkless_robot_producer_exports():
         assert receipt.physical_effect_verified is False
         cases.add((raw["reference_mode"], len(raw["caller_epochs"])))
     assert cases == {(mode, count) for mode in ("desynced", "missing_store", "missing_rows") for count in (0, 2)}
+    history_paths = sorted((Path(export) / "history-noop").glob("*.json"))
+    assert len(history_paths) == 2
+    states = set()
+    for path in history_paths:
+        raw = json.loads(path.read_text())
+        catalog = OperatorControlCatalogV2.model_validate(_normalize_interrupt_evidence(raw["catalog"]))
+        receipt = OperatorActionReceiptDetailV2.model_validate(raw["receipt"])
+        assert catalog.dashboard.deck is not None
+        states.add(catalog.dashboard.deck.ambiguity_state)
+        assert receipt.status == "completed"
+        assert receipt.completion_class == "source_noop"
+        assert receipt.physical_effect_verified is False
+    assert states == {"ambiguous", "recovery_required"}

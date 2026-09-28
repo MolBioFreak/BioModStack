@@ -566,7 +566,7 @@ export interface BioXpOperatorDashboardV2 {
         position_table_revision: string | null;
         destination_catalog_revision: string | null;
         semantic_state_revision: number;
-        ambiguity_state: 'none' | 'recovery_required';
+        ambiguity_state: 'none' | 'ambiguous' | 'recovery_required';
     } | null;
 }
 
