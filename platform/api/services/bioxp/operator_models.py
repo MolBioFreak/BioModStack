@@ -5779,8 +5779,14 @@ class OperatorActionSpecV2(BaseModel):
             self.destination_options,
         )
         if self.action_id == "oem.deck.move_to_location":
-            if self.required_boards != [4, 5] or self.required_references != ["x", "y", "z", "g"]:
-                raise ValueError("deck movement requires Serial-206 board and reference authority")
+            if self.required_boards != [4, 5]:
+                raise ValueError("deck movement addresses Serial-206 boards 4 and 5")
+            # Accept the current record-only contract and legacy producer rows.
+            # These observations must not become consumer-side admission policy.
+            if self.required_references not in ([], ["x", "y", "z", "g"]):
+                raise ValueError("unrecognized deck reference declaration")
+            if not set(self.expected_board_epoch_by_board or {}) <= {"4", "5"}:
+                raise ValueError("deck epoch observations must address boards 4 and 5")
             options = self.destination_options
             if options is None:
                 raise ValueError("deck movement catalog row requires destination_options")
@@ -5821,8 +5827,8 @@ class OperatorActionSpecV2(BaseModel):
             if self.enabled:
                 if self.disabled_reason is not None or self.destination_catalog_revision is None or self.position_table_revision is None:
                     raise ValueError("enabled deck movement requires complete revisions")
-                if set(self.expected_board_epoch_by_board or {}) != {"4", "5"} or not options:
-                    raise ValueError("enabled deck movement requires exact epochs and 26 destinations")
+                if not options:
+                    raise ValueError("enabled deck movement requires 26 destinations")
                 if not any(option.enabled for option in options):
                     raise ValueError("enabled deck movement requires an eligible destination")
             elif self.disabled_reason is None:
@@ -5863,8 +5869,6 @@ class OperatorControlCatalogV2(BaseModel):
             raise ValueError("deck destination catalog revision is incoherent")
         if action.position_table_revision != deck.position_table_revision:
             raise ValueError("deck position table revision is incoherent")
-        if action.enabled and deck.ambiguity_state != "none":
-            raise ValueError("enabled deck movement requires unambiguous dashboard truth")
         return self
 
 
