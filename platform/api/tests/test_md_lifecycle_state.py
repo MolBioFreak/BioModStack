@@ -6,19 +6,19 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy import event
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from database import Base, Job, JobArtifact, MdReplicaRun, MdRun
+from database import Base, Job, JobArtifact, MdEvent, MdReplicaRun, MdRun
 from services.job_control import reject_generic_md_lifecycle_control
 from services.md.cancel_actuator import cancel_running_md_run
 from services.md.read_model import md_run_snapshot
 from services.md.state import (
-    MdStateError, accept_checkpoint, append_event_cas, create_md_run,
+    MdStateError, accept_checkpoint, append_event_cas, bind_retry_child_projection, create_md_run,
     create_replica_attempt, finalize_cancel, finalize_pause, request_cancel,
     request_pause, resume_run, retry_replica_attempt,
 )
@@ -123,7 +123,10 @@ async def test_pause_requires_terminal_process_observation_and_accepted_checkpoi
 
 
 @pytest.mark.asyncio
-async def test_retry_dynamics_creates_new_attempt_without_mutating_failed_attempt(session, tmp_path) -> None:
+@pytest.mark.parametrize("response_lost", [False, True])
+async def test_retry_dynamics_creates_new_attempt_without_mutating_failed_attempt(
+    session, tmp_path, monkeypatch, response_lost,
+) -> None:
     job = Job(
         id="md-retry", name="MD", status="failed", model_id="md", mode="molecular_dynamics", params={},
         output_dir=str(tmp_path / "md-retry-results"),
@@ -149,30 +152,69 @@ async def test_retry_dynamics_creates_new_attempt_without_mutating_failed_attemp
     before_retry = await md_run_snapshot(session, job.id)
     assert before_retry is not None and "retry_dynamics" in before_retry["allowed_actions"]
 
-    retried = await retry_replica_attempt(
-        session, job_id=job.id, replica_index=0, expected_version=0,
-        idempotency_key="retry:0:1",
-    )
-    await session.flush()
+    from services.remote_execution import executor
 
+    calls = []
+    replacement_id = "md-retry-child-1"
+    async def shared_retry(db, parent, *, component_id, operation_id, actor, failure_code):
+        assert db is session and parent is job
+        assert (component_id, operation_id, actor, failure_code) == (
+            failed_child.id, "retry:0:1", "md-retry:md-retry", "worker_lost",
+        )
+        # The native intent must be durable before shared transport. The shared
+        # owner queues the same root; native lifecycle must not create a Job.
+        async with async_sessionmaker(session.bind, expire_on_commit=False)() as observer:
+            intent = await observer.scalar(select(MdEvent).where(
+                MdEvent.md_job_id == job.id, MdEvent.event_type == "retry_requested",
+            ))
+            assert intent is not None and intent.payload["source_child_job_id"] == failed_child.id
+        calls.append(operation_id)
+        parent.status = parent.queue_status = "queued"
+        await db.commit()
+        if response_lost and len(calls) == 1:
+            raise TimeoutError("shared acceptance response lost")
+        return {"child_job_id": replacement_id, "state": "queued", "operation_id": operation_id}
+
+    monkeypatch.setattr(executor, "retry_component_execution", shared_retry)
+    if response_lost:
+        with pytest.raises(MdStateError) as pending:
+            await retry_replica_attempt(session, job_id=job.id, replica_index=0,
+                expected_version=0, idempotency_key="retry:0:1")
+        assert pending.value.code == "MD_RETRY_ACTUATION_UNCERTAIN"
+
+    retried = await retry_replica_attempt(session, job_id=job.id, replica_index=0,
+        expected_version=0, idempotency_key="retry:0:1")
     assert retried.attempt == 1 and retried.active is True and retried.state == "queued"
-    retry_child = await session.get(Job, retried.child_job_id)
-    assert retry_child is not None and retry_child.status == "queued"
-    assert retry_child.parent_job_id == job.id and retry_child.params["md_attempt"] == 1
-    assert retry_child.output_dir == str(
-        tmp_path / "md-retry-results" / "md_retry_attempts" / "replica_000" / "attempt_001"
-    )
-    assert job.status == "running" and job.queue_status == "running"
+    assert retried.child_job_id is None
+    assert (job.status, job.queue_status) == ("queued", "queued")
+    assert run.phase == "reconciling" and run.controls_blocked
+    assert len(list((await session.scalars(select(Job))).all())) == 2
+    unbound_replay = await retry_replica_attempt(session, job_id=job.id, replica_index=0,
+        expected_version=0, idempotency_key="retry:0:1")
+    assert unbound_replay.id == retried.id
+
+    # Simulate the later authenticated shared importer observation, not a
+    # native shadow scheduler. Binding consumes the exact shared child identity.
+    retry_child = Job(id=replacement_id, name="replacement", status="queued", queue_status="queued",
+        model_id="molecular_dynamics", mode="replica", parent_job_id=job.id, child_stage="md_replica",
+        params={"md_replica_index": 0, "md_attempt": 1},
+        provenance={"component_projection": {"root_job_id": job.id}})
+    session.add(retry_child)
+    await session.flush()
+    intent = await session.scalar(select(MdEvent).where(
+        MdEvent.md_job_id == job.id, MdEvent.event_type == "retry_requested",
+    ))
+    assert await bind_retry_child_projection(session, parent=job, event=intent)
+    assert retried.child_job_id == replacement_id and not run.controls_blocked
+    calls_before_replay = list(calls)
+    replay = await retry_replica_attempt(session, job_id=job.id, replica_index=0,
+        expected_version=0, idempotency_key="retry:0:1")
+    assert replay.id == retried.id and calls == calls_before_replay
     assert failed.state == "failed" and failed.failure == {"code": "worker_lost"}
     assert failed_segment.execution_plan_sha256 == "b" * 64
-    replay = await retry_replica_attempt(
-        session, job_id=job.id, replica_index=0, expected_version=0,
-        idempotency_key="retry:0:1",
-    )
-    assert replay.id == retried.id
-    attempts = list((await session.scalars(
-        __import__("sqlalchemy").select(MdReplicaRun).where(MdReplicaRun.md_job_id == job.id)
-    )).all())
+    attempts = list((await session.scalars(select(MdReplicaRun).where(
+        MdReplicaRun.md_job_id == job.id,
+    ))).all())
     assert len(attempts) == 2
 
 

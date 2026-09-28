@@ -82,10 +82,14 @@ def test_statistics_child_migration_is_idempotent_and_foreign_key_bound(tmp_path
         ("frustrampnn_results", "invocation_id", "invocation_id"),
     }
     runner = importlib.import_module("migrations.runner")
-    assert (runner.MIGRATIONS[-1].version, runner.MIGRATIONS[-1].name) == (
-        42,
-        "add_frustrampnn_statistics_claim_leases",
-    )
+    # These migrations remain registered in order even after later migrations
+    # are appended; this subsystem does not own the global latest version.
+    registered = {item.version: item for item in runner.MIGRATIONS}
+    assert registered[41].name == "add_frustrampnn_statistics_analyses"
+    assert registered[41].fn is migration.migrate
+    assert registered[42].name == "add_frustrampnn_statistics_claim_leases"
+    assert registered[42].fn is lease_migration.migrate
+    assert runner.MIGRATIONS.index(registered[41]) < runner.MIGRATIONS.index(registered[42])
 
 
 @pytest.mark.asyncio
