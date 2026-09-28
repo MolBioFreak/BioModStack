@@ -147,17 +147,22 @@ async def acquire_reconciler_lease(
 async def reconcile_md_state(
     session: AsyncSession, *, owner_id: str, apply: bool = False,
 ) -> dict:
-    if apply and not await acquire_reconciler_lease(session, owner_id=owner_id):
-        raise RuntimeError("MD_RECONCILER_LEASE_UNAVAILABLE")
     stale_segment_runs = (
         select(MdReplicaRun.md_job_id)
         .join(MdAttemptSegment, MdAttemptSegment.replica_run_id == MdReplicaRun.id)
         .where(~MdAttemptSegment.state.in_(_TERMINAL_REPLICA_STATES | {"paused"}))
     )
-    runs = list((await session.scalars(select(MdRun).where(or_(
+    candidates = or_(
         ~MdRun.phase.in_(TERMINAL_PHASES),
         MdRun.job_id.in_(stale_segment_runs),
-    )))).all())
+    )
+    # Probe the full existing recovery selection, including unfinished segments
+    # of terminal runs. Do not renew a global write lease for an empty sweep.
+    has_work = await session.scalar(select(MdRun.job_id).where(candidates).limit(1)) is not None
+    if apply and has_work and not await acquire_reconciler_lease(session, owner_id=owner_id):
+        raise RuntimeError("MD_RECONCILER_LEASE_UNAVAILABLE")
+    # Re-read under the existing lease; the probe is not mutation authority.
+    runs = list((await session.scalars(select(MdRun).where(candidates))).all()) if has_work else []
     changes: list[dict] = []
     planned: list[tuple[MdRun, Job | None, list[tuple[MdReplicaRun, MdAttemptSegment | None, str]], str]] = []
     for run in runs:

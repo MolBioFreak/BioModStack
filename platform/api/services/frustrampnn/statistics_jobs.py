@@ -176,14 +176,21 @@ async def recover_abandoned_statistics_claims(
     stale_before: datetime,
 ) -> int:
     """Atomically requeue claims whose renewable ownership lease expired."""
+    expired = (
+        FrustraMPNNStatisticsAnalysis.state == "running",
+        FrustraMPNNStatisticsAnalysis.claim_token.is_not(None),
+        FrustraMPNNStatisticsAnalysis.lease_expires_at.is_not(None),
+        FrustraMPNNStatisticsAnalysis.lease_expires_at <= stale_before,
+    )
+    # Empty polls must not acquire SQLite's writer slot. The UPDATE still
+    # rechecks expiry atomically if a heartbeat wins after this read probe.
+    if await session.scalar(
+        select(FrustraMPNNStatisticsAnalysis.analysis_id).where(*expired).limit(1)
+    ) is None:
+        return 0
     recovered = await session.execute(
         update(FrustraMPNNStatisticsAnalysis)
-        .where(
-            FrustraMPNNStatisticsAnalysis.state == "running",
-            FrustraMPNNStatisticsAnalysis.claim_token.is_not(None),
-            FrustraMPNNStatisticsAnalysis.lease_expires_at.is_not(None),
-            FrustraMPNNStatisticsAnalysis.lease_expires_at <= stale_before,
-        )
+        .where(*expired)
         .values(
             state="queued",
             diagnostic="statistics claim lease expired",
@@ -402,49 +409,18 @@ async def complete_statistics_child(
     return child
 
 
-async def run_statistics_child_once(
-    session: AsyncSession,
-    *,
-    analysis_id: str,
-    claim_token: str,
-    lease_seconds: int = DEFAULT_LEASE_SECONDS,
-) -> dict[str, Any]:
-    """Compute one committed-running CPU child against its exact v3 core bundle."""
-
-    from services.scientific_artifacts.persistence import publish_json_payload
-
+def _load_statistics_bundle(
+    *, output_root_value: str, core_bundle_relative_path: str,
+    parent_job_id: str, invocation_id: str,
+    core_manifest_sha256: str, core_landscape_sha256: str,
+):
+    """Read and validate immutable inputs without carrying an ORM owner to a thread."""
     from . import runtime as runtime_contract
-    from .analytics import build_statistics_receipt
     from .contracts import canonical_json_loads, canonical_sha256
     from .persistence import load_and_validate_result_bundle
-    from .settings import _CAPABILITY_INVENTORY_PATH, load_capability_inventory
 
-    child = await _child(session, analysis_id)
-    if (
-        child.state != "running"
-        or child.claim_token != claim_token
-        or child.lease_expires_at is None
-        or child.lease_expires_at <= datetime.utcnow()
-    ):
-        raise FrustraMPNNStatisticsJobError(
-            "statistics computation requires the exact unexpired running claim"
-        )
-    result = await session.get(
-        FrustraMPNNResult,
-        (child.parent_job_id, child.invocation_id),
-    )
-    job = await session.get(Job, child.parent_job_id)
-    if result is None or job is None:
-        raise FrustraMPNNStatisticsJobError(
-            "statistics child lost its core result or owning Job"
-        )
-    output_root_value = job.child_output_dir or job.output_dir
-    if not isinstance(output_root_value, str) or not output_root_value.strip():
-        raise FrustraMPNNStatisticsJobError(
-            "statistics child owning Job has no output-root authority"
-        )
     output_root = Path(output_root_value).resolve(strict=True)
-    bundle_root = (output_root / child.core_bundle_relative_path).resolve(strict=True)
+    bundle_root = (output_root / core_bundle_relative_path).resolve(strict=True)
     try:
         bundle_root.relative_to(output_root)
     except ValueError as exc:
@@ -476,7 +452,7 @@ async def run_statistics_child_once(
     bundle = load_and_validate_result_bundle(
         bundle_root,
         terminal_envelope=terminal,
-        expected_parent_job_id=child.parent_job_id,
+        expected_parent_job_id=parent_job_id,
     )
     if bundle.contract_version != 3:
         raise FrustraMPNNStatisticsJobError(
@@ -484,14 +460,95 @@ async def run_statistics_child_once(
         )
     if (
         hashlib.sha256(bundle.manifest_bytes).hexdigest()
-        != child.core_manifest_sha256
-        or canonical_sha256(bundle.landscape) != child.core_landscape_sha256
-        or bundle.manifest["parent_job_id"] != child.parent_job_id
-        or bundle.manifest["invocation_id"] != child.invocation_id
+        != core_manifest_sha256
+        or canonical_sha256(bundle.landscape) != core_landscape_sha256
+        or bundle.manifest["parent_job_id"] != parent_job_id
+        or bundle.manifest["invocation_id"] != invocation_id
     ):
         raise FrustraMPNNStatisticsJobError(
             "statistics child core bundle identity no longer matches its receipt"
         )
+    return bundle
+
+
+def _build_statistics(bundle, analysis_receipt: dict[str, Any]) -> dict[str, Any]:
+    from .analytics import build_statistics_receipt
+    from .contracts import canonical_json_loads
+    from .settings import _CAPABILITY_INVENTORY_PATH, load_capability_inventory
+
+    inventory, inventory_byte_sha256 = load_capability_inventory()
+    inventory_bytes = _CAPABILITY_INVENTORY_PATH.read_bytes()
+    if (
+        hashlib.sha256(inventory_bytes).hexdigest() != inventory_byte_sha256
+        or inventory_byte_sha256
+        != bundle.request["capability_inventory_byte_sha256"]
+    ):
+        raise FrustraMPNNStatisticsJobError(
+            "statistics child capability inventory bytes no longer match the core"
+        )
+    structure_map = canonical_json_loads(
+        bundle.payloads["frustrampnn_structure_map_v1.json"]
+    )
+    if not isinstance(structure_map, dict):
+        raise FrustraMPNNStatisticsJobError(
+            "statistics child structure map is not an object"
+        )
+    return build_statistics_receipt(
+        request=bundle.request,
+        execution_receipt=bundle.receipt,
+        landscape=bundle.landscape,
+        structure_map=structure_map,
+        capability_inventory=inventory,
+        capability_inventory_bytes=inventory_bytes,
+        analysis_receipt=analysis_receipt,
+    )
+
+
+async def run_statistics_child_once(
+    session: AsyncSession,
+    *,
+    analysis_id: str,
+    claim_token: str,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+) -> dict[str, Any]:
+    """Compute one committed-running CPU child against its exact v3 core bundle."""
+
+    from services.scientific_artifacts.persistence import publish_json_payload
+    from services.remote_execution.executor import _joined_thread
+
+    child = await _child(session, analysis_id)
+    if (
+        child.state != "running"
+        or child.claim_token != claim_token
+        or child.lease_expires_at is None
+        or child.lease_expires_at <= datetime.utcnow()
+    ):
+        raise FrustraMPNNStatisticsJobError(
+            "statistics computation requires the exact unexpired running claim"
+        )
+    result = await session.get(
+        FrustraMPNNResult,
+        (child.parent_job_id, child.invocation_id),
+    )
+    job = await session.get(Job, child.parent_job_id)
+    if result is None or job is None:
+        raise FrustraMPNNStatisticsJobError(
+            "statistics child lost its core result or owning Job"
+        )
+    output_root_value = job.child_output_dir or job.output_dir
+    if not isinstance(output_root_value, str) or not output_root_value.strip():
+        raise FrustraMPNNStatisticsJobError(
+            "statistics child owning Job has no output-root authority"
+        )
+    bundle = await _joined_thread(
+        _load_statistics_bundle,
+        output_root_value=output_root_value,
+        core_bundle_relative_path=child.core_bundle_relative_path,
+        parent_job_id=child.parent_job_id,
+        invocation_id=child.invocation_id,
+        core_manifest_sha256=child.core_manifest_sha256,
+        core_landscape_sha256=child.core_landscape_sha256,
+    )
     core_artifact = await session.get(
         ScientificArtifactReceipt,
         child.core_artifact_id,
@@ -506,16 +563,6 @@ async def run_statistics_child_once(
             "statistics child core artifact receipt no longer matches"
         )
 
-    inventory, inventory_byte_sha256 = load_capability_inventory()
-    inventory_bytes = _CAPABILITY_INVENTORY_PATH.read_bytes()
-    if (
-        hashlib.sha256(inventory_bytes).hexdigest() != inventory_byte_sha256
-        or inventory_byte_sha256
-        != bundle.request["capability_inventory_byte_sha256"]
-    ):
-        raise FrustraMPNNStatisticsJobError(
-            "statistics child capability inventory bytes no longer match the core"
-        )
     analysis_receipt = {
         "schema_name": "frustrampnn_statistics_analysis_receipt",
         "schema_version": 1,
@@ -530,23 +577,7 @@ async def run_statistics_child_once(
         "statistics_schema_version": 2,
         "attempt_count": child.attempt_count,
     }
-    structure_map = canonical_json_loads(
-        bundle.payloads["frustrampnn_structure_map_v1.json"]
-    )
-    if not isinstance(structure_map, dict):
-        raise FrustraMPNNStatisticsJobError(
-            "statistics child structure map is not an object"
-        )
-    statistics = await asyncio.to_thread(
-        build_statistics_receipt,
-        request=bundle.request,
-        execution_receipt=bundle.receipt,
-        landscape=bundle.landscape,
-        structure_map=structure_map,
-        capability_inventory=inventory,
-        capability_inventory_bytes=inventory_bytes,
-        analysis_receipt=analysis_receipt,
-    )
+    statistics = await _joined_thread(_build_statistics, bundle, analysis_receipt)
     # Heartbeats use an independent committed session. End this read snapshot
     # before acquiring the final SQLite write lease so a fresh heartbeat cannot
     # make the computation session fail its read-to-write upgrade.
