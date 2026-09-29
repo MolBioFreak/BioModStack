@@ -42,6 +42,7 @@ from services.bioxp.operator_models import (
     PipetteApplicationPlanResponse,
     PipetteApplicationStatus,
     OperatorReportSummaryV1,
+    OperatorReportLegacySnapshotV1,
     OperatorReportCommandPageV1,
     OperatorReportCommandDetailV1,
     OperatorReportTransitionsV1,
@@ -421,7 +422,7 @@ async def _legacy_command_report_context(
         OperatorReportCommandPageV1,
         params={"command_id": command_id, "limit": 1},
     )
-    if not _is_supported_legacy_report_snapshot(page.snapshot.model_dump(mode="json")):
+    if not isinstance(page.snapshot, OperatorReportLegacySnapshotV1):
         raise HTTPException(status_code=502, detail="BioXP report detail lacks its current snapshot contract")
     if len(page.commands) != 1 or page.commands[0].command_id != command_id:
         raise HTTPException(status_code=502, detail="BioXP legacy report detail does not match its indexed command")
@@ -438,7 +439,7 @@ async def _legacy_pipette_report_context(
         OperatorReportPipettePageV1,
         params={"pipette_operation_id": pipette_operation_id, "limit": 1},
     )
-    if not _is_supported_legacy_report_snapshot(page.snapshot.model_dump(mode="json")):
+    if not isinstance(page.snapshot, OperatorReportLegacySnapshotV1):
         raise HTTPException(status_code=502, detail="BioXP pipette detail lacks its current snapshot contract")
     if len(page.pipette) != 1 or page.pipette[0].pipette_operation_id != pipette_operation_id:
         raise HTTPException(status_code=502, detail="BioXP legacy pipette detail does not match its indexed operation")
@@ -455,7 +456,7 @@ async def _legacy_pressure_report_context(
         OperatorReportPressureStreamsV1,
         params={"pressure_stream_id": stream_session_id, "limit": 1},
     )
-    if not _is_supported_legacy_report_snapshot(page.snapshot.model_dump(mode="json")):
+    if not isinstance(page.snapshot, OperatorReportLegacySnapshotV1):
         raise HTTPException(status_code=502, detail="BioXP pressure detail lacks its current snapshot contract")
     if len(page.pressure_streams) != 1 or page.pressure_streams[0].stream_session_id != stream_session_id:
         raise HTTPException(status_code=502, detail="BioXP legacy pressure detail does not match its indexed stream")
@@ -1405,7 +1406,7 @@ async def operator_report_export_list(
             OperatorReportSummaryV1,
             params={"limit": 1},
         )
-        if not _is_supported_legacy_report_snapshot(summary.snapshot.model_dump(mode="json")):
+        if not isinstance(summary.snapshot, OperatorReportLegacySnapshotV1):
             raise
         return OperatorReportExportListV1(
             items=[],
