@@ -621,7 +621,9 @@ def independent_plan(selection):
         if selection.kind == 'image' and ref.kind != 'image':
             continue
         root = (get_container_dir() if ref.kind == 'image' else get_weights_root()).resolve()
-        path = (resolve_image(ref.relative_path, root) if ref.kind == 'image'
+        # Managed selections are verified by resolve_image before alias resolution.
+        # Inventory legacy image bytes, retaining the registry's semantic name.
+        path = (resolve_image(ref.relative_path, root).resolve() if ref.kind == 'image'
                 else root / ref.relative_path)
         if (path.is_symlink() or (ref.kind != 'image' and not path.resolve().is_relative_to(root))):
             raise ValueError('Independent runtime asset is not a contained regular asset')
