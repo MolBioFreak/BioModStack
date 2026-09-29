@@ -1064,64 +1064,7 @@ export function bioXpOperatorGenerationPayload(
 }
 
 
-export interface BioXpProfileView {
-    configured: boolean;
-    valid: boolean;
-    display_name: string | null;
-    target_url: string | null;
-    freshness_budget_seconds: number | null;
-    detail?: string;
-}
-
-export interface BioXpProfileWrite {
-    schema_version?: 1;
-    display_name: string;
-    api_url: string;
-    freshness_budget_seconds?: number | null;
-}
-
-export type BioXpProtocolStep =
-    | { action: 'initialize_motors' }
-    | { action: 'start_job'; job_id: string }
-    | { action: 'pause_job'; job_id: string }
-    | { action: 'resume_job'; job_id: string }
-    | { action: 'stop_job'; job_id: string }
-    | { action: 'recover_runtime' };
-
-export interface BioXpProtocol {
-    schema_version?: 1;
-    name: string;
-    steps: BioXpProtocolStep[];
-}
-
-export interface BioXpCompiledProtocol {
-    protocol: BioXpProtocol;
-    compiled_hash: string;
-    validation_status: 'validated_offline';
-    robot_compatible: null;
-    executable: false;
-    required_capabilities: string[];
-    blockers: string[];
-}
-
-export interface BioXpJob {
-    job_id: string;
-    idempotency_key: string;
-    protocol: BioXpProtocol;
-    compiled_hash: string;
-    state: string;
-    created_at: string;
-    updated_at: string;
-    detail: string | null;
-    generation: number | null;
-    remote_job_id: string | null;
-}
-
-export interface BioXpJobListResponse {
-    jobs: BioXpJob[];
-}
-
-// Live workflows use robot custody; BioXpJob above remains offline history only.
+// Live workflows use robot custody.
 export type BioXpWorkflowPhase = 'queued' | 'preparing' | 'starting' | 'executing' | 'waiting' | 'waking' | 'epilogue' | 'cleanup' | 'reconciling' | 'terminal';
 export type BioXpWorkflowGate = 'ordinary_pause' | 'deferred_pause' | 'delaypoint' | 'review' | 'error_hold';
 export type BioXpWorkflowAction =
@@ -1242,77 +1185,11 @@ export type BioXpWorkflowReviewRequest = BioXpWorkflowBinding & {
 };
 
 
-export interface BioXpOemFullLifecycleProvider {
-    source_contract: boolean;
-    implemented: boolean | string;
-    live_bound: boolean;
-    commissioned: boolean;
-}
-
-export interface BioXpOemFullLifecycleContract {
-    schema_version: string;
-    command: 'initialize_oem_movement_lifecycle';
-    machine_serial: 206;
-    registry_sha256: string;
-    evidence_lock_sha256: string;
-    evidence_lock_verified: boolean;
-    source_registry_identity_verified: boolean;
-    machine_configuration_verified: boolean;
-    initialize_system_producers: ReadonlyArray<{
-        producer: string;
-        source_anchor: string;
-        selected_by_this_route: boolean;
-    }>;
-    plan_available: boolean;
-    plan_blockers: string[];
-    live_creation_enabled: boolean;
-    physical_commissioning_complete: boolean;
-    providers: Record<string, BioXpOemFullLifecycleProvider>;
-    safety_boundary: {
-        caller_supplied_motion_parameters: false;
-        dry_run_commands_hardware: false;
-        queue_acceptance_is_execution: false;
-        physical_effect_verified: false;
-    };
-}
-
-export interface BioXpOemFullLifecycleStage {
-    stage_id: string;
-    status: string;
-    source_anchor: string;
-    would_command_hardware: boolean;
-    would_command_physical_motion: boolean;
-    movement_ledger_stage?: string;
-    branch?: string;
-    execution_semantics?: string;
-    caller_result_used?: boolean;
-}
-
-export interface BioXpOemFullLifecycleRun {
-    run_id: string;
-    request: { mode: 'dry_run' };
-    run_state: string;
-    machine_serial: 206;
-    registry_sha256: string;
-    evidence_lock_sha256: string;
-    evidence_lock_verified: true;
-    source_registry_identity_verified: true;
-    machine_configuration_verified: true;
-    expected_next_stage: string | null;
-    physical_motion_commanded: false;
-    physical_effect_verified: false;
-    stages: BioXpOemFullLifecycleStage[];
-}
-
 const statusKey = ['bioxp', 'status'] as const;
 
-const profileKey = ['bioxp', 'profile'] as const;
-const jobsKey = ['bioxp', 'jobs'] as const;
-const fullLifecycleContractKey = ['bioxp', 'oem-full-lifecycle', 'contract'] as const;
 const operatorCatalogKey = ['bioxp', 'operator-controls', 'catalog'] as const;
 const operatorDashboardKey = ['bioxp', 'operator-controls', 'dashboard'] as const;
 const operatorHistoryKey = ['bioxp', 'operator-controls', 'history'] as const;
-const operatorV2DashboardKey = ['bioxp', 'operator-controls', 'v2', 'dashboard'] as const;
 const operatorV2CatalogKey = ['bioxp', 'operator-controls', 'v2', 'catalog'] as const;
 
 export interface BioXpOperatorReportFilters {
@@ -1817,7 +1694,6 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
             void queryClient.invalidateQueries({ queryKey: statusKey });
             void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
             void queryClient.invalidateQueries({ queryKey: [...operatorHistoryKey, variables.request.expected_connection_generation] });
-            void queryClient.invalidateQueries({ queryKey: operatorV2DashboardKey });
             void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
         },
     });
@@ -1971,7 +1847,6 @@ export const useInterruptBioXpOperatorActionV1 = () => {
             ).data;
         },
         onSettled: () => {
-            void queryClient.invalidateQueries({ queryKey: operatorV2DashboardKey });
             void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
             void queryClient.invalidateQueries({ queryKey: operatorHistoryKey });
         },
@@ -2031,7 +1906,7 @@ export const useBioXpOperatorReceiptV2 = (
             if (receipt.terminal === true && !observed.has(identity)) {
                 observed.add(identity);
                 if (observed.size > 128) observed.delete(observed.values().next().value!);
-                for (const key of [statusKey, operatorCatalogKey, operatorV2CatalogKey, operatorV2DashboardKey]) {
+                for (const key of [statusKey, operatorCatalogKey, operatorV2CatalogKey]) {
                     void queryClient.invalidateQueries({ queryKey: key });
                 }
             }
@@ -2662,9 +2537,6 @@ const useRefreshMutation = <TVariables, TData>(
             void Promise.all([
                 queryClient.invalidateQueries({ queryKey: statusKey }),
 
-                queryClient.invalidateQueries({ queryKey: profileKey }),
-                queryClient.invalidateQueries({ queryKey: jobsKey }),
-                queryClient.invalidateQueries({ queryKey: fullLifecycleContractKey }),
                 queryClient.invalidateQueries({ queryKey: operatorCatalogKey }),
                 queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
                 queryClient.invalidateQueries({ queryKey: operatorHistoryKey }),

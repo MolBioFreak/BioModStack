@@ -156,7 +156,7 @@ it('first terminal read invalidates existing status and catalogs once without co
     await advance(501); await advance();
     for (const key of [
         ['bioxp', 'status'], ['bioxp', 'operator-controls', 'catalog'],
-        ['bioxp', 'operator-controls', 'v2', 'catalog'], ['bioxp', 'operator-controls', 'v2', 'dashboard'],
+        ['bioxp', 'operator-controls', 'v2', 'catalog'],
     ]) expect(invalidate.mock.calls.filter(([options]) => JSON.stringify(options?.queryKey) === JSON.stringify(key))).toHaveLength(1);
     await act(async () => { await client.refetchQueries({ queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt'] }); });
     await advance();
