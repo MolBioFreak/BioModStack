@@ -200,10 +200,10 @@ async def _proxy_operator_report(
     path_params: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     try:
-        snapshot = runtime.connection.snapshot()
+        generation = runtime.connection.generation
         payload = await runtime.connection.request_active_query(
             route_name,
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             require_fresh=True,
             params=params,
             path_params=path_params,
@@ -556,11 +556,11 @@ def _post_dispatch_receipt_uncertainty(payload: Any) -> HTTPException | None:
 async def operator_control_catalog_v2(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorControlCatalogV2:
-    snapshot = runtime.connection.snapshot()
+    generation = runtime.connection.generation
     try:
         payload = await runtime.connection.request_active_v2_query(
             "operator_control_catalog_v2",
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             params={"schema_version": "bioxp.operator_control_catalog.v2"},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
@@ -572,11 +572,11 @@ async def operator_control_catalog_v2(
 async def operator_dashboard_v2(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorDashboardV2:
-    snapshot = runtime.connection.snapshot()
+    generation = runtime.connection.generation
     try:
         payload = await runtime.connection.request_active_v2_query(
             "operator_dashboard_v2",
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             params={"schema_version": "bioxp.operator_dashboard.v2"},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
@@ -709,11 +709,11 @@ async def operator_action_receipt_v2(
     detail: bool = Query(default=False),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionReceiptV2 | OperatorActionReceiptDetailV2:
-    snapshot = runtime.connection.snapshot()
+    generation = runtime.connection.generation
     try:
         payload = await runtime.connection.request_active_v2_query(
             "operator_action_receipt_v2",
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             path_params={"command_id": command_id},
             params={"detail": detail},
         )
@@ -755,11 +755,11 @@ async def operator_method_status_v1(
     method_id: str,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorMethodV1:
-    snapshot = runtime.connection.snapshot()
+    generation = runtime.connection.generation
     try:
         payload = await runtime.connection.request_active_v2_query(
             "operator_method_status_v1",
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             path_params={"method_id": method_id},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
@@ -776,11 +776,11 @@ async def operator_command_status_v2(
     detail: bool = Query(default=False),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionReceiptV2 | OperatorActionReceiptDetailV2:
-    snapshot = runtime.connection.snapshot()
+    generation = runtime.connection.generation
     try:
         payload = await runtime.connection.request_active_v2_query(
             "operator_command_status_v2",
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             path_params={"command_id": command_id},
             params={"detail": detail},
         )
@@ -798,12 +798,12 @@ async def operator_control_catalog(
     z_target_steps: int | None = Query(default=None, ge=-2147483648, le=2147483647),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorControlCatalog:
-    snapshot = runtime.connection.snapshot()
+    generation = runtime.connection.generation
     try:
         payload = await runtime.connection.request_active_query(
             "operator_control_catalog",
             params={"z_target_steps": z_target_steps} if z_target_steps is not None else None,
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             require_fresh=False,
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
@@ -815,11 +815,11 @@ async def operator_control_catalog(
 async def operator_dashboard(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorDashboard:
-    snapshot = runtime.connection.snapshot()
+    generation = runtime.connection.generation
     try:
         payload = await runtime.connection.request_active_query(
             "operator_dashboard",
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             require_fresh=False,
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
@@ -896,11 +896,11 @@ async def pipette_readback(
 async def pipette_application_status(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> PipetteApplicationStatus:
-    snapshot = runtime.connection.snapshot()
+    generation = runtime.connection.generation
     try:
         payload = await runtime.connection.request_active_query(
             "pipette_application_status",
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             require_fresh=True,
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
@@ -1037,11 +1037,11 @@ async def operator_action_history(
     cursor: str | None = Query(default=None, min_length=1, max_length=1024),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionHistory:
-    snapshot = runtime.connection.snapshot()
+    generation = runtime.connection.generation
     try:
         payload = await runtime.connection.request_active_query(
             "operator_action_history",
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             require_fresh=True,
             params={"limit": limit, **({"cursor": cursor} if cursor is not None else {})},
         )
@@ -1058,11 +1058,11 @@ async def operator_action_receipt(
     command_id: str,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorLiveActionReceipt:
-    snapshot = runtime.connection.snapshot()
+    generation = runtime.connection.generation
     try:
         payload = await runtime.connection.request_active_query(
             "operator_action_receipt",
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             require_fresh=False,
             path_params={"command_id": command_id},
         )
@@ -1370,10 +1370,10 @@ async def operator_report_export_create(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorReportExportV1:
     try:
-        snapshot = runtime.connection.snapshot()
+        generation = runtime.connection.generation
         payload = await runtime.connection.request_active(
             "operator_report_export_create",
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             require_fresh=True,
             json_data=body.model_dump(exclude_none=True),
         )
@@ -1431,11 +1431,11 @@ async def operator_report_export_detail(export_id: str, runtime: BioXpRuntime = 
 
 @router.get("/operator-controls/reports/exports/{export_id}/download", response_model=None)
 async def operator_report_export_download(export_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> Response:
-    snapshot = runtime.connection.snapshot()
+    generation = runtime.connection.generation
     try:
         artifact = await runtime.connection.request_active_bytes(
             "operator_report_export_download",
-            expected_generation=snapshot.generation,
+            expected_generation=generation,
             require_fresh=True,
             path_params={"export_id": export_id},
         )

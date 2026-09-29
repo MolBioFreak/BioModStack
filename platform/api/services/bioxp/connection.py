@@ -157,7 +157,6 @@ class BioXpConnectionService:
         self._hardware_evidence_error: str | None = None
         self._hardware_fresh_for_seconds: float | None = None
         self._hardware_snapshot_identity: tuple[object, ...] | None = None
-        self._automatic_snapshot_refresh: dict[str, Any] | None = None
         self._capabilities: tuple[str, ...] = ()
         self._maintenance_state: dict[str, Any] | None = None
         self._ownership: dict[str, Any] | None = None
@@ -753,9 +752,6 @@ class BioXpConnectionService:
     def _apply_probe_payload(
         self, payload: dict[str, Any], *, request_started_at: datetime | None = None,
     ) -> None:
-        automatic_snapshot_refresh = payload.get("automatic_snapshot_refresh")
-        if isinstance(automatic_snapshot_refresh, dict):
-            self._automatic_snapshot_refresh = copy.deepcopy(automatic_snapshot_refresh)
         found_maintenance, maintenance_state = _find_maintenance_state(payload)
         self._maintenance_state = maintenance_state if found_maintenance else None
         ownership = payload.get("ownership")
@@ -905,7 +901,6 @@ class BioXpConnectionService:
         self._hardware_snapshot_identity = None
         self._hardware_observation_fresh = None
         self._hardware_evidence_error = None
-        self._automatic_snapshot_refresh = None
         self._capabilities = ()
         self._maintenance_state = None
         self._ownership = None
@@ -951,7 +946,6 @@ class BioXpConnectionService:
             hardware_observation_fresh=hardware_fresh,
             hardware_observation_stale=hardware_fresh is False,
             hardware_evidence_error=hardware_error,
-            automatic_snapshot_refresh=copy.deepcopy(self._automatic_snapshot_refresh),
             capabilities=self._capabilities,
             observed_at=self._observed_at,
             freshness_budget_seconds=self.freshness_budget_seconds,

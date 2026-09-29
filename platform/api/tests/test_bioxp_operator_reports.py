@@ -103,8 +103,7 @@ class FakeConnection:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def snapshot(self):
-        return SimpleNamespace(generation=9)
+    generation = 9
 
     async def request_active_query(self, route_name, *, expected_generation, require_fresh, params=None, path_params=None, json_data=None):
         self.calls.append({
