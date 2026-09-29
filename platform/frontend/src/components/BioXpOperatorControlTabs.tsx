@@ -219,9 +219,12 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         connected,
         dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
     );
-    const actionEnabled = admission.error ? false : (admission.data?.enabled ?? (selected ? selected.enabled : false));
-    const disabledReason = admission.data?.disabled_reason ?? (selected ? selected.disabled_reason : null) ?? 'Robot did not admit this action.';
-    const dependencies = admission.data?.dependencies ?? (selected ? selected.dependencies : []);
+    // A failed preview is not a robot denial. The query key binds successful
+    // data to the exact action, normalized inputs and both generations.
+    const preview = admission.isSuccess ? admission.data : undefined;
+    const actionEnabled = preview?.enabled ?? selected?.enabled ?? false;
+    const disabledReason = preview?.disabled_reason ?? selected?.disabled_reason ?? 'Robot did not admit this action.';
+    const dependencies = preview?.dependencies ?? selected?.dependencies ?? [];
     const latestReceipt = connected && authoritativeCatalog && authoritativeHistory
         ? invoke.data ?? authoritativeHistory.items.find(isCurrentActionReceipt)
         : undefined;

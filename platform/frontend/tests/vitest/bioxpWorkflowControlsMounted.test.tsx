@@ -177,14 +177,14 @@ describe('canonical prepared workflow controls', () => {
     it('requires confirmation for cooperative Abort and leaves error holds without Continue', async () => {
         job = jobFixture({ phase: 'waiting', gate: 'error_hold', gate_id: 'error-1', held_reason: 'source_error' }); rows = [job]; await render();
         expect(button('Abort workflow').disabled).toBe(true); expect(host.textContent).not.toContain('Continue workflow');
-        await check(1); await click('Abort workflow');
+        await check(0); await click('Abort workflow');
         expect(api.post).toHaveBeenCalledWith('/api/bioxp/protocols/jobs/job-one/control', expect.objectContaining({ action: 'abort' }));
         expect(button('Abort workflow').disabled).toBe(true);
     });
     it.each(['epilogue', 'cleanup'] as const)('retains cooperative Abort admission during %s without exposing ordinary pause', async phase => {
         job = jobFixture({ phase }); rows = [job]; await render();
         expect(button('Pause workflow').disabled).toBe(true);
-        await check(1); expect(button('Abort workflow').disabled).toBe(false);
+        await check(0); expect(button('Abort workflow').disabled).toBe(false);
         await click('Abort workflow');
         expect(api.post).toHaveBeenCalledWith('/api/bioxp/protocols/jobs/job-one/control', expect.objectContaining({ action: 'abort' }));
     });
@@ -193,11 +193,11 @@ describe('canonical prepared workflow controls', () => {
         job.command!.terminal = true; job.command!.status = 'ambiguous'; rows = [job]; await render();
         expect(host.textContent).toContain('Robot status: ambiguous');
         expect(button('Pause workflow').disabled).toBe(true); expect(button('Request safe-state stop').disabled).toBe(true);
-        await pick(prepared); await check(0); expect(button('Submit prepared workflow').disabled).toBe(true);
+        await pick(prepared); expect(button('Submit prepared workflow').disabled).toBe(false);
         expect(api.post).not.toHaveBeenCalled();
     });
     it('submits captured selected input once, retaining identity and GET reconciliation after response loss', async () => {
-        rows = []; await render(); await pick(prepared); await check(0);
+        rows = []; await render(); await pick(prepared);
         vi.mocked(api.post).mockRejectedValue(new Error('response lost'));
         expect(button('Submit prepared workflow').disabled, host.textContent ?? '').toBe(false);
         await click('Submit prepared workflow');
@@ -210,7 +210,8 @@ describe('canonical prepared workflow controls', () => {
         expect(request).toEqual({ ...prepared, dry_run: false, expected_connection_generation: 9, idempotency_key: expect.any(String) });
         expect(host.textContent).toContain('Original submission key:');
         expect(host.textContent).toContain('no automatic retry');
-        expect(button('Submit prepared workflow').disabled).toBe(true);
+        expect(button('Submit prepared workflow').disabled).toBe(false);
+        expect(host.querySelector<HTMLInputElement>('input[type=file]')!.disabled).toBe(false);
         await tick(6100); expect(api.post).toHaveBeenCalledTimes(1);
         expect(api.get.mock.calls.some(([url]) => String(url).startsWith('/api/bioxp/protocols/jobs/protocol-live-'))).toBe(true);
     });

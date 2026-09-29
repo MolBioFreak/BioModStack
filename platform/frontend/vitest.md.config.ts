@@ -6,6 +6,7 @@ export default defineConfig({
         environment: 'jsdom',
         setupFiles: ['./tests/vitest/setup.ts'],
         include: [
+            './tests/vitest/test_debloat_bms*.test.tsx',
             './tests/vitest/jobQuickSummaryMounted.test.tsx',
             './tests/vitest/jobStageProgressMounted.test.tsx',
             './tests/vitest/coreSanity*.test.tsx',
