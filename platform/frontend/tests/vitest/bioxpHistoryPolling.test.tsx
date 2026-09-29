@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
-import { useBioXpOperatorReceiptV2, useInterruptBioXpOperatorActionV1, useBioXpOperatorActionHistory, useBioXpOperatorControlCatalogV2, useInvokeBioXpOperatorAction, useAssessBioXpOperatorAction, useBioXpOperatorMethodV1, useInvokeBioXpOperatorActionV2 } from '../../src/lib/bioxpClient';
+import { useBioXpOperatorReceiptV2, useInterruptBioXpOperatorActionV1, useBioXpOperatorActionHistory, useBioXpOperatorControlCatalogV2, useInvokeBioXpOperatorAction, useAssessBioXpOperatorAction, useInvokeBioXpOperatorActionV2 } from '../../src/lib/bioxpClient';
 
 import { BioXpQuickDashboard } from '../../src/components/BioXpQuickDashboard';
 
@@ -23,7 +23,6 @@ const historyKey = (generation: number, limit: number) => ['bioxp', 'operator-co
 const history = (status: string, count = 1) => ({ schema_version: 'bioxp.operator_action_history.v2', items: Array.from({ length: count }, (_, i) => ({ command_id: `old-${i}`, status, terminal: ['completed', 'failed', 'rejected', 'cleared', 'interrupted', 'ambiguous'].includes(status) })), next_cursor: null, limit: Math.max(1, count) });
 function Harness({ enabled = true }: { enabled?: boolean }) {
     useBioXpOperatorActionHistory(7, enabled, 8);
-    useBioXpOperatorMethodV1('xy-one', 7, enabled);
     invoke = useInvokeBioXpOperatorAction();
     assess = useAssessBioXpOperatorAction();
     invokeV2 = useInvokeBioXpOperatorActionV2();
@@ -101,7 +100,7 @@ it('retains independent normal and Stop hook receipts with real mutations and he
     expect(client.getQueryState(historyKey(7, 8))?.isInvalidated).toBe(true);
 });
 
-it('refreshes current-generation history after v2 submission and terminal method reconciliation', async () => {
+it('refreshes current-generation history after v2 submission', async () => {
     await render(false);
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     vi.mocked(api.post).mockResolvedValue({ data: { command_id: 'v2-one', terminal: false } });
@@ -113,10 +112,7 @@ it('refreshes current-generation history after v2 submission and terminal method
         } });
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['bioxp', 'operator-controls', 'history', 7] });
-    invalidate.mockClear();
-    vi.mocked(api.get).mockImplementation(async (url) => ({ data: String(url).includes('/methods/') ? { method_id: 'xy-one', status: 'completed' } : history('completed') }) as never);
-    await render();
-    await act(async () => { await vi.waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['bioxp', 'operator-controls', 'history', 7] })); });
+
 });
 
 it('bounds and cancels catalog reads without changing the authority freshness budget', async () => {
@@ -201,7 +197,7 @@ it.each(['invoke', 'assess'])('%s invalidates matching pages without synthesizin
         expect(client.getQueryData(historyKey(8, limit))).toEqual(history('completed', limit));
     }
 });
-it('polls only nonterminal history and keeps method reconciliation polling after an initial read failure', async () => {
+it('polls only nonterminal history', async () => {
     await render(false);
     const query = client.getQueryCache().find({ queryKey: historyKey(7, 8), exact: true });
     expect(query).toBeDefined();
@@ -210,11 +206,7 @@ it('polls only nonterminal history and keeps method reconciliation polling after
     for (const status of ['queued', 'active', 'dispatched']) expect(interval({ state: { data: history(status) } })).toBe(1000);
     for (const status of ['completed', 'failed', 'rejected', 'cleared']) expect(interval({ state: { data: history(status) } })).toBe(false);
     expect(interval({ state: {} })).toBe(false);
-    const method = client.getQueryCache().find({ queryKey: ['bioxp', 'operator-controls', 'v2', 'method', 'xy-one', 7] })!;
-    const methodInterval = method.options.refetchInterval as (query: unknown) => number | false;
-    expect(methodInterval({ state: {} })).toBe(500);
-    expect(methodInterval({ state: { data: { status: 'active' } } })).toBe(500);
-    expect(methodInterval({ state: { data: { status: 'failed' } } })).toBe(false);
+
 });
 
 

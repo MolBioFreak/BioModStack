@@ -48,7 +48,7 @@ def test_startup_is_disconnected_and_unverified_commands_are_not_advertised(
     assert after_restart["connection"]["generation"] != status.json()["connection"]["generation"]
 
 
-def test_offline_compile_is_open_but_legacy_local_submit_cannot_create_a_job(
+def test_retired_compile_and_legacy_local_submit_cannot_create_a_job(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -73,9 +73,7 @@ def test_offline_compile_is_open_but_legacy_local_submit_cannot_create_a_job(
         history = client.get("/api/bioxp/jobs")
     asyncio.run(runtime.close())
 
-    assert compiled.status_code == 200
-    assert compiled.json()["executable"] is False
-    assert compiled.json()["robot_compatible"] is None
+    assert compiled.status_code == 404
     assert blocked.status_code == 503
     # Live submit now requires the finite robot workflow contract. The old
     # offline template is not an executable input or a blocked-local job.

@@ -61,7 +61,6 @@ class BioXpSnapshot(BaseModel):
     last_observed_runtime_ready: bool | None = None
     last_observed_hardware_ready: bool | None = None
     last_error: str | None = None
-    startup_lifecycle: dict[str, Any] | None = None
     maintenance_state: dict[str, Any] | None = None
     ownership: dict[str, Any] | None = None
 

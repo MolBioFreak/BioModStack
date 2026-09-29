@@ -47,24 +47,6 @@ export interface BioXpMaintenanceState {
     last_recovery?: Record<string, unknown> | null;
 }
 
-export interface BioXpStartupStage {
-    name?: string;
-    state: string;
-    prerequisite?: string | null;
-    repeatable?: boolean;
-    attempt_count?: number;
-    started_at?: string | null;
-    completed_at?: string | null;
-    error?: string | null;
-    evidence?: unknown;
-}
-
-export interface BioXpStartupLifecycle {
-    state?: string;
-    next_stage?: string | null;
-    stages: Record<string, BioXpStartupStage>;
-}
-
 export interface BioXpStatusResponse {
     connection: BioXpConnectionSnapshot;
     startup_warnings: string[];
@@ -1213,19 +1195,6 @@ export interface BioXpWorkflowJob {
         };
     };
 }
-export interface BioXpTransferPreflight {
-    connection_generation: number;
-    ownership_generation: number;
-    observed_deck: { position_table_revision: string; destination_catalog_revision: string; current_location: string | null; semantic_state_revision: number; ambiguity_state: string };
-    preflight: { reference_snapshot: { ok: boolean; persisted: boolean; verified: boolean; durable_clean: boolean; rows: Record<string, { axis: string; state: string; source: string; updated_at: string; state_version: number }> }; artifact_refs: string[] };
-}
-export async function getBioXpTransferPreflight(generation: number): Promise<BioXpTransferPreflight> {
-    const { data } = await api.get<BioXpTransferPreflight>('/api/bioxp/protocols/transfer-preflight', {
-        params: { expected_connection_generation: generation },
-    });
-    return data;
-}
-
 export interface BioXpWorkflowInput {
     source_type: 'native' | 'oem_xml';
     document?: Record<string, unknown> | null;
@@ -1681,16 +1650,6 @@ export const useBioXpOperatorDashboard = (connectionGeneration: number, enabled 
     retry: false,
 });
 
-export const useBioXpOperatorDashboardV2 = (connectionGeneration: number, enabled = true) => useQuery({
-    queryKey: [...operatorV2DashboardKey, connectionGeneration, enabled],
-    queryFn: async () => (await api.get<BioXpOperatorDashboardV2>('/api/bioxp/operator-controls/v2/dashboard')).data,
-    enabled: enabled && connectionGeneration > 0,
-    gcTime: 0,
-    staleTime: 15_000,
-    retry: false,
-    refetchInterval: enabled && connectionGeneration > 0 ? 10_000 : false,
-    refetchIntervalInBackground: false,
-});
 
 export const useBioXpOperatorControlCatalogV2 = (
     connectionGeneration: number,
@@ -2093,14 +2052,6 @@ export const useBioXpOperatorReceiptV2 = (
     });
 };
 
-export const useSubmitBioXpOperatorMethodV1 = () => useMutation({
-    mutationFn: async (request: BioXpOperatorMethodV1Request) => {
-        assertBioXpOperatorMethodV1Request(request);
-        return (
-            await api.post<BioXpOperatorMethodV1>('/api/bioxp/operator-controls/v2/methods', request)
-        ).data;
-    },
-});
 
 const BIOXP_METHOD_V1_TERMINAL = new Set<BioXpOperatorMethodV1Status>([
     'completed', 'completed_partial', 'failed', 'cleared', 'interrupted', 'ambiguous',
@@ -2111,52 +2062,7 @@ export const bioXpMethodV1IsTerminal = (
 ): boolean => typeof method?.status !== 'string'
     || BIOXP_METHOD_V1_TERMINAL.has(method.status as BioXpOperatorMethodV1Status);
 
-export const useBioXpOperatorMethodV1 = (
-    methodId: string | null,
-    connectionGeneration: number,
-    enabled = true,
-) => {
-    const queryClient = useQueryClient();
-    return useQuery({
-        queryKey: ['bioxp', 'operator-controls', 'v2', 'method', methodId, connectionGeneration],
-        queryFn: async () => {
-            const method = (await api.get<BioXpOperatorMethodV1>(
-                `/api/bioxp/operator-controls/v2/methods/${encodeURIComponent(methodId ?? '')}`,
-            )).data;
-            if (method.method_id !== methodId) throw new Error('XY method identity mismatch; outcome remains unresolved');
-            if (bioXpMethodV1IsTerminal(method)) {
-                void queryClient.invalidateQueries({ queryKey: [...operatorHistoryKey, connectionGeneration] });
-                void queryClient.invalidateQueries({ queryKey: [...operatorV2DashboardKey, connectionGeneration] });
-                void queryClient.invalidateQueries({ queryKey: [...operatorV2CatalogKey, connectionGeneration] });
-            }
-            return method;
-        },
-        enabled: enabled && Boolean(methodId) && connectionGeneration > 0,
-        gcTime: 0,
-        retry: false,
-        refetchInterval: (query) => query.state.data && bioXpMethodV1IsTerminal(query.state.data) ? false : 500,
-        refetchIntervalInBackground: false,
-    });
-};
 
-export const useBioXpOperatorCommandV2 = (
-    commandId: string | null,
-    connectionGeneration: number,
-    enabled = true,
-) => useQuery({
-    queryKey: ['bioxp', 'operator-controls', 'v2', 'command', commandId, connectionGeneration],
-    queryFn: async () => (
-        await api.get<BioXpOperatorReceiptDetailV2>(
-            `/api/bioxp/operator-controls/v2/commands/${encodeURIComponent(commandId ?? '')}`,
-            { params: { detail: true } },
-        )
-    ).data,
-    enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
-    gcTime: 0,
-    retry: false,
-    refetchInterval: (query) => bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false,
-    refetchIntervalInBackground: false,
-});
 type BioXpDirectLiquidKind = 'readback' | 'application_plan';
 type BioXpDirectLiquidRequest = BioXpPipetteReadbackRequest | BioXpPipetteApplicationPlanRequest;
 type BioXpDirectLiquidResult = BioXpPipetteReadback | BioXpPipetteApplicationPlan;
@@ -2742,40 +2648,9 @@ export async function captureBioXpCameraSnapshot(connectionGeneration: number): 
     return cameraImageFromResponse(response);
 }
 
-export const useBioXpOemFullLifecycleContract = (enabled = true) => useQuery({
-    queryKey: fullLifecycleContractKey,
-    queryFn: async () => (
-        await api.get<BioXpOemFullLifecycleContract>('/api/bioxp/oem-full-lifecycle/contract')
-    ).data,
-    enabled,
-    retry: false,
-});
 
-export const useBioXpOemFullLifecycleRun = (runId: string | null) => useQuery({
-    queryKey: ['bioxp', 'oem-full-lifecycle', 'run', runId],
-    queryFn: async () => (
-        await api.get<BioXpOemFullLifecycleRun>(`/api/bioxp/oem-full-lifecycle/runs/${encodeURIComponent(runId ?? '')}/ledger`)
-    ).data,
-    enabled: Boolean(runId),
-    retry: false,
-});
 
-export const useBioXpProfile = (enabled = true) => useQuery({
-    queryKey: profileKey,
-    queryFn: async () => (await api.get<BioXpProfileView>('/api/bioxp/profile')).data,
-    enabled,
-    retry: false,
-});
 
-export const useBioXpJobs = (enabled = true) => useQuery({
-    queryKey: jobsKey,
-    queryFn: async () => {
-        const response = await api.get<BioXpJobListResponse>('/api/bioxp/jobs');
-        return response.data.jobs;
-    },
-    enabled,
-    refetchInterval: enabled ? 10_000 : false,
-});
 
 const useRefreshMutation = <TVariables, TData>(
     mutationFn: (variables: TVariables) => Promise<TData>,
@@ -2798,15 +2673,7 @@ const useRefreshMutation = <TVariables, TData>(
     });
 };
 
-export const useSaveBioXpProfile = () => useRefreshMutation(
-    async (profile: BioXpProfileWrite) => (
-        await api.put<BioXpProfileView>('/api/bioxp/profile', profile)
-    ).data,
-);
 
-export const useForgetBioXpProfile = () => useRefreshMutation(
-    async () => (await api.delete<{ forgotten: boolean }>('/api/bioxp/profile')).data,
-);
 
 export const useConnectBioXp = () => useRefreshMutation(
     async () => (await api.post<BioXpConnectionSnapshot>('/api/bioxp/connection/connect')).data,
@@ -2816,23 +2683,8 @@ export const useDisconnectBioXp = () => useRefreshMutation(
     async () => (await api.post<BioXpConnectionSnapshot>('/api/bioxp/connection/disconnect')).data,
 );
 
-export const useProbeBioXp = () => useRefreshMutation(
-    async () => (await api.post<BioXpConnectionSnapshot>('/api/bioxp/connection/probe')).data,
-);
 
-export const useUpdateBioXpFreshness = () => useRefreshMutation(
-    async (freshnessBudgetSeconds: number | null) => (
-        await api.put<BioXpConnectionSnapshot>('/api/bioxp/settings/freshness', {
-            freshness_budget_seconds: freshnessBudgetSeconds,
-        })
-    ).data,
-);
 
-export const useCompileBioXpProtocol = () => useMutation({
-    mutationFn: async (protocol: BioXpProtocol) => (
-        await api.post<BioXpCompiledProtocol>('/api/bioxp/protocols/compile', protocol)
-    ).data,
-});
 
 const workflowJobsKey = ['bioxp', 'protocols', 'jobs'] as const;
 export const useBioXpWorkflowJobs = (generation: number, enabled: boolean) => useQuery({
@@ -2956,40 +2808,3 @@ export const useAssessBioXpOperatorAction = () => {
         },
     });
 };
-
-export const usePlanBioXpOemFullLifecycle = () => useRefreshMutation(
-    async ({ generation, machineSerial, registrySha256, evidenceLockSha256 }: {
-        generation: number;
-        machineSerial: 206;
-        registrySha256: string;
-        evidenceLockSha256: string;
-    }) => (
-        await api.post<BioXpOemFullLifecycleRun>('/api/bioxp/oem-full-lifecycle/runs', {
-            expected_generation: generation,
-            expected_machine_serial: machineSerial,
-            expected_registry_sha256: registrySha256,
-            expected_evidence_lock_sha256: evidenceLockSha256,
-            idempotency_key: crypto.randomUUID(),
-        })
-    ).data,
-);
-
-export const useCancelBioXpOemFullLifecycle = () => useRefreshMutation(
-    async ({ runId, generation, machineSerial, registrySha256, evidenceLockSha256 }: {
-        runId: string;
-        generation: number;
-        machineSerial: 206;
-        registrySha256: string;
-        evidenceLockSha256: string;
-    }) => (
-        await api.post<BioXpOemFullLifecycleRun>(
-            `/api/bioxp/oem-full-lifecycle/runs/${encodeURIComponent(runId)}/cancel`,
-            {
-                expected_generation: generation,
-                expected_machine_serial: machineSerial,
-                expected_registry_sha256: registrySha256,
-                expected_evidence_lock_sha256: evidenceLockSha256,
-            },
-        )
-    ).data,
-);

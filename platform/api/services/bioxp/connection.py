@@ -159,7 +159,6 @@ class BioXpConnectionService:
         self._hardware_snapshot_identity: tuple[object, ...] | None = None
         self._automatic_snapshot_refresh: dict[str, Any] | None = None
         self._capabilities: tuple[str, ...] = ()
-        self._startup_lifecycle: dict[str, Any] | None = None
         self._maintenance_state: dict[str, Any] | None = None
         self._ownership: dict[str, Any] | None = None
         self._last_error: str | None = None
@@ -414,8 +413,8 @@ class BioXpConnectionService:
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         # Explicit query-only deck refresh may repair a stale status/readiness
-        # observation. This exact fixed-input alias is not motion admission;
-        # all other enqueue actions retain the fresh-status prerequisite.
+        # observation. Freshness is observational for every enqueue action;
+        # the addressed robot owns admission.
         query_only_refresh = (
             route_name == "invoke_operator_action_v2"
             and path_params == {"action_id": "oem.deck.collect_authority"}
@@ -757,8 +756,6 @@ class BioXpConnectionService:
         automatic_snapshot_refresh = payload.get("automatic_snapshot_refresh")
         if isinstance(automatic_snapshot_refresh, dict):
             self._automatic_snapshot_refresh = copy.deepcopy(automatic_snapshot_refresh)
-        startup = payload.get("startup")
-        self._startup_lifecycle = copy.deepcopy(startup) if isinstance(startup, dict) else None
         found_maintenance, maintenance_state = _find_maintenance_state(payload)
         self._maintenance_state = maintenance_state if found_maintenance else None
         ownership = payload.get("ownership")
@@ -910,7 +907,6 @@ class BioXpConnectionService:
         self._hardware_evidence_error = None
         self._automatic_snapshot_refresh = None
         self._capabilities = ()
-        self._startup_lifecycle = None
         self._maintenance_state = None
         self._ownership = None
         self._last_error = None
@@ -965,7 +961,6 @@ class BioXpConnectionService:
             last_observed_runtime_ready=self._last_runtime_ready,
             last_observed_hardware_ready=self._last_hardware_ready,
             last_error=profile_error or self._last_error,
-            startup_lifecycle=copy.deepcopy(self._startup_lifecycle),
             maintenance_state=copy.deepcopy(self._maintenance_state),
             ownership=copy.deepcopy(self._ownership),
         )

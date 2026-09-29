@@ -805,6 +805,10 @@ class FakeConnection:
         self.active_request_calls = []
         self.oem_action_calls = []
 
+    @property
+    def generation(self):
+        return self.value.generation
+
     def snapshot(self):
         return self.value
 

@@ -6,11 +6,7 @@ from fastapi import HTTPException, Request
 
 from services.bioxp.runtime import BioXpRuntime, bioxp_connection_enabled
 
-SAFE_LOCAL_MUTATIONS = frozenset(
-    {
-        "/protocols/compile",
-    }
-)
+SAFE_LOCAL_MUTATIONS = frozenset()
 CONNECTION_MUTATIONS = frozenset(
     {
         "/connection/connect",
