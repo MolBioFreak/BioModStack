@@ -53,7 +53,7 @@ def test_actual_stop_outputs_through_bms_http_get(case, detail, endpoint):
         calls.append((operation, kwargs))
         return copy.deepcopy(case['captures']['detail' if kwargs['params']['detail'] else 'compact']['projected'])
     runtime = SimpleNamespace(connection=SimpleNamespace(
-        snapshot=lambda: SimpleNamespace(generation=37), request_active_v2_query=query))
+        generation=37, request_active_v2_query=query))
     app = FastAPI()
     app.include_router(routes.router)
     app.dependency_overrides[routes.get_bioxp_runtime] = lambda: runtime

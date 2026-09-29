@@ -18,7 +18,7 @@ def test_manual_producer_receipts_survive_bms_route_consumer(status):
     payload=json.loads((Path(__file__).parent/'fixtures/gripper_door'/f'gripper-{status}.json').read_text())
     calls=[]
     class Connection:
-        def snapshot(self): return SimpleNamespace(generation=23)
+        generation = 23
         async def request_active(self, method, **kwargs):
             calls.append((method,kwargs))
             return payload
