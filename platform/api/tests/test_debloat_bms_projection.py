@@ -104,3 +104,40 @@ def test_pipette_response_never_dumps_validated_envelope(monkeypatch, route, mod
     assert "replayed" not in response.json()
     assert "source_identity" not in response.json()
     assert response.json()["physical_effect_verified"] is False
+
+
+def test_stream_frame_generation_checks_do_not_load_profiles(tmp_path, monkeypatch):
+    import httpx
+    from test_bioxp_camera_boundary import Boundary
+    from test_bioxp_camera_stream_boundary import PART, scope
+
+    class Frames(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for _ in range(30):
+                yield PART
+        async def aclose(self):
+            pass
+
+    async def scenario():
+        boundary = Boundary(tmp_path)
+        generation = await boundary.connect()
+        async def transport(request):
+            assert request.url.path == "/camera/mjpeg"
+            return httpx.Response(200, headers={"Content-Type": "multipart/x-mixed-replace; boundary=frame"}, stream=Frames())
+        boundary.clients[0]._client._transport._transport = httpx.MockTransport(transport)
+        messages = []
+        async def receive():
+            await asyncio.Event().wait()
+            return {"type": "http.disconnect"}
+        async def send(message):
+            messages.append(message)
+        def unused_snapshot():
+            raise AssertionError("per-frame generation check reconstructed snapshot/profile")
+        with monkeypatch.context() as patcher:
+            patcher.setattr(boundary.connection, "snapshot", unused_snapshot)
+            await asyncio.wait_for(boundary.app(scope(generation), receive, send), 2)
+        assert messages[0]["status"] == 200
+        assert sum(bool(m.get("body")) for m in messages) == 30
+        assert boundary.connection._generation_leases[generation].lease_count == 0
+        await boundary.connection.disconnect()
+    asyncio.run(scenario())
