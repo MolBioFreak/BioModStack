@@ -289,6 +289,7 @@ export function BioXpCockpit() {
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(8);
     const [reportsOpen, setReportsOpen] = useState(false);
     const [workflowOpen, setWorkflowOpen] = useState(false);
+    const [workflowVisible, setWorkflowVisible] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [cameraOpen, setCameraOpen] = useState(true);
     const [controlTab, setControlTab] = useState<'robot' | 'pipettes'>('robot');
@@ -296,11 +297,7 @@ export function BioXpCockpit() {
     const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'z' | 'g', number>>({ x: 60, z: 65000, g: 0 });
     const catalogV2Query = useBioXpOperatorControlCatalogV2(generation, active);
     // Observation age is presentation, not a second host admission policy.
-    const [authorityNow, setAuthorityNow] = useState(Date.now);
-    useEffect(() => {
-        const timer = window.setInterval(() => setAuthorityNow(Date.now()), 1000);
-        return () => window.clearInterval(timer);
-    }, []);
+    const authorityNow = Date.now();
     const upstreamGeneratedAt = catalogV2Query.data?.dashboard.generated_at;
     const upstreamAgeMs = typeof upstreamGeneratedAt === 'number'
         ? Math.max(0, authorityNow - upstreamGeneratedAt * 1000) : Infinity;
@@ -1119,10 +1116,10 @@ export function BioXpCockpit() {
                 </dl>
             </section>
 
-            <details onToggle={event => { if (event.currentTarget.open) setWorkflowOpen(true); }}>
+            <details onToggle={event => { setWorkflowVisible(event.currentTarget.open); if (event.currentTarget.open) setWorkflowOpen(true); }}>
                 <summary className="cursor-pointer text-lg font-semibold">Prepared workflows</summary>
                 {workflowOpen && <BioXpWorkflowControls key={generation} generation={generation} connected={active}
-                    controlsEnabled={robotControlReady} />}
+                    controlsEnabled={robotControlReady} visible={workflowVisible} />}
             </details>
 
             <BioXpQuickDashboard
@@ -1257,6 +1254,12 @@ export function BioXpCockpit() {
                     onClick={invokeDeckMove}
                     className="mt-3 rounded bg-teal-700 px-4 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-35"
                 >Move to destination</button>
+                <p role="status" data-testid="deck-current-command" className="mt-2 text-sm">
+                    Current command: {invokeDeckAction.isPending ? 'submitting' : deckReceipt?.status ?? (deckReceiptUnavailable ? 'outcome uncertain' : 'none')}
+                    {effectiveDeckCommandId ? ` · ${effectiveDeckCommandId}` : ''}
+                    {bioXpReceiptFailureText(deckReceipt)}
+                    {' · Command state is not an observation of physical motion.'}
+                </p>
                 <button
                     type="button"
                     disabled={v2ActionDisabledReason('oem.deck.collect_authority') !== null}
@@ -1386,18 +1389,12 @@ export function BioXpCockpit() {
                             <details className="mt-2 text-xs">
                                 <summary className="cursor-pointer text-slate-400">Y command details{yReceiptQuery.data.physical_effect_verified ? ' · physically observed' : ' · physical arrival not verified'}</summary>
                             <div className="mt-3 grid gap-2 text-xs lg:grid-cols-2">
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Requested</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.requested_values, null, 2)}</pre></div>
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Effective</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.effective_values, null, 2)}</pre></div>
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Observed, terminal position/speed, discrepancy</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.observed_values, null, 2)}</pre></div>
                                 <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Completion</strong><p className="mt-1">class={yReceiptQuery.data.completion_class ?? 'not reported'} · terminal position={String(yReceiptQuery.data.observed_values.terminal_position_steps ?? 'not reported')} · terminal speed={String(yReceiptQuery.data.observed_values.terminal_speed_steps_s ?? 'not reported')} · discrepancy={String(yReceiptQuery.data.observed_values.discrepancy_steps ?? 'not reported')}</p></div>
                                 <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><strong>Independent physical observation</strong><p className="mt-1">physical_effect_verified={String(yReceiptQuery.data.physical_effect_verified)}</p></div>
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Controller completion evidence</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.controller_evidence, null, 2)}</pre></div>
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Raw return layers</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.raw_return_layers, null, 2)}</pre></div>
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2 lg:col-span-2"><strong>Transport artifacts</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.transport_artifacts, null, 2)}</pre></div>
                             </div>
                             </details>
                         )}
-                        {interruptYStop.data && <details className="mt-2 text-xs"><summary>Latest independent Y STOP receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(interruptYStop.data, null, 2)}</pre></details>}
+                        {interruptYStop.data && <p role="status">Latest independent Y STOP receipt: {interruptYStop.data.command_id} · {interruptYStop.data.status}{bioXpReceiptFailureText(interruptYStop.data)}</p>}
                         {yReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-red-300">Y receipt unavailable: {bioXpErrorText(yReceiptQuery.error)}</p>}
                     </article>
                     <article data-testid="serial206-xy-oem-panel" style={{ order: 1 }} className="rounded-lg border border-cyan-700/60 bg-cyan-950/20 p-3 lg:col-span-2">
@@ -1432,9 +1429,8 @@ export function BioXpCockpit() {
                         {xyReceipt && !xyPending && !xyOutcomeUnresolved && <p role="status" className="mt-2 text-sm">{bioXpReceiptStatusText(xyReceipt, `XY command ${xyReceipt.status}`)}{xyReceipt.status === 'ambiguous' ? '; outcome unknown; do not resubmit' : ''}</p>}
                         {xyReceipt && bioXpReceiptFailureText(xyReceipt) && <p role="status" className="mt-2 text-sm text-amber-200">{bioXpReceiptFailureText(xyReceipt)}</p>}
                         {currentXYSubmission && xyReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-amber-200">XY command status unavailable: {bioXpErrorText(xyReceiptQuery.error)}. {xyOutcomeUnresolved ? 'Do not retry until the outcome is reconciled.' : 'The received terminal outcome is retained.'}</p>}
-                        {xyReceipt && <details className="mt-2 text-xs"><summary>Latest XY command receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(xyReceipt, null, 2)}</pre></details>}
                     </article>
-                    {linkConnected && componentStop.data && <details data-testid="component-stop-receipt"><summary>Independent component Stop receipt</summary><pre>{JSON.stringify(componentStop.data, null, 2)}</pre></details>}
+                    {linkConnected && componentStop.data && <p role="status" data-testid="component-stop-receipt">Independent component Stop receipt: {componentStop.data.command_id} · {componentStop.data.status}{bioXpReceiptFailureText(componentStop.data)}</p>}
                     {linkConnected && componentStop.error && <p role="alert">Component Stop: {bioXpErrorText(componentStop.error)}</p>}
                     {AXES.map(({ axis, label, controls }) => (
                         <article key={axis} style={{ order: axis === 'x' ? 3 : axis === 'z' ? 4 : axis === 'g' ? 5 : 6 }} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">

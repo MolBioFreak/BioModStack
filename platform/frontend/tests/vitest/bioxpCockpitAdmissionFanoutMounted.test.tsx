@@ -3486,8 +3486,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(section.textContent).toContain('Latest independent Y STOP receipt');
         expect(section.textContent).toContain('interrupt-attempt-12345678');
         const raw = [...section.querySelectorAll('pre')].map((node) => node.textContent).join('\n');
-        expect(raw).toContain('"addressed_event_128": true');
-        expect(raw).toContain('"status": 100');
+        expect(raw).toBe(''); // Noncritical transport dumps are not rendered.
+        expect(section.textContent).toContain('Latest independent Y STOP receipt');
     });
 
     it.each(['status-error', 'unreachable-observation'])('retains the passive camera session during %s without a status-observation lock', async (failure) => {

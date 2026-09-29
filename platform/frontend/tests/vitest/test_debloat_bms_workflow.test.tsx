@@ -88,6 +88,28 @@ afterEach(async () => { await act(async () => root.unmount()); client.clear(); h
 
 
 describe('debloat prepared intent boundary', () => {
+    it('stops settled selected polling while retaining bounded cross-client discovery', async () => {
+        job = jobFixture({ phase: 'terminal' });
+        job.command!.terminal = true; job.command!.status = 'completed'; rows = [job];
+        await render();
+        await act(async () => { const select = host.querySelector('select')!; select.value = job.job_id; select.dispatchEvent(new Event('change', { bubbles: true })); });
+        await tick();
+        const details = () => api.get.mock.calls.filter(([url]) => String(url).endsWith('/job-one')).length;
+        const lists = () => api.get.mock.calls.filter(([url]) => url === '/api/bioxp/protocols/jobs').length;
+        const before = details(); const initialLists = lists();
+        rows = [job, { ...job, job_id: 'another-client-job' }];
+        await tick(30_000);
+        expect(details()).toBe(before);
+        expect(lists() - initialLists).toBe(3);
+        expect(host.textContent).toContain('another-client-job');
+        expect(api.post).not.toHaveBeenCalled();
+    });
+    it('keeps ambiguous terminal reconciliation on its existing cadence', async () => {
+        job = jobFixture({ phase: 'reconciling' }); job.command!.terminal = true; job.command!.status = 'ambiguous'; rows = [job];
+        await render(); const before = api.get.mock.calls.length; await tick(6100);
+        expect(api.get.mock.calls.length - before).toBe(3);
+        expect(api.post).not.toHaveBeenCalled();
+    });
     it.each(['loading', 'error', 'active', 'ambiguous', 'missing'])('allows a new selection despite %s observations', async mode => {
         if (mode === 'loading') vi.mocked(api.get).mockImplementation(() => new Promise(() => {}));
         if (mode === 'error') vi.mocked(api.get).mockRejectedValue(new Error('offline readback'));

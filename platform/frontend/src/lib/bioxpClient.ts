@@ -23,7 +23,6 @@ export interface BioXpConnectionSnapshot {
     freshness_budget_seconds: number | null;
     fresh: boolean | null;
     last_error: string | null;
-    startup_lifecycle: BioXpStartupLifecycle | null;
     maintenance_state: BioXpMaintenanceState | null;
     ownership: BioXpOwnership | null;
 }
@@ -1702,8 +1701,8 @@ export const useBioXpOperatorControlCatalogV2 = (
     // display data through a transient status error without admitting motion.
     queryKey: [...operatorV2CatalogKey, connectionGeneration, authorityVersion],
     // A stalled read must not leave Loading forever. Cancellation applies only
-    // to this read, never to a dispatched robot action. Keep the existing 15 s
-    // authority expiry and single catalog/dashboard owner.
+    // to this read, never to a dispatched robot action. Age is presentation;
+    // actual robot action denials remain in the catalog.
     queryFn: async ({ signal }) => (await api.get<BioXpOperatorControlCatalogV2>(
         '/api/bioxp/operator-controls/v2/catalog', { signal, timeout: 12_000 },
     )).data,
@@ -2843,7 +2842,9 @@ export const useBioXpWorkflowJobs = (generation: number, enabled: boolean) => us
     })).data.rows,
     enabled: enabled && generation > 0,
     retry: false,
-    refetchInterval: enabled ? 2_000 : false,
+    // Discovery must continue even when this browser has no active job.
+    refetchInterval: enabled ? 10_000 : false,
+    refetchIntervalInBackground: false,
 });
 export const useBioXpWorkflowJob = (jobId: string | null, generation: number, enabled: boolean) => useQuery({
     queryKey: [...workflowJobsKey, generation, jobId],
@@ -2852,7 +2853,16 @@ export const useBioXpWorkflowJob = (jobId: string | null, generation: number, en
     })).data,
     enabled: enabled && generation > 0 && jobId !== null,
     retry: false,
-    refetchInterval: enabled ? 2_000 : false,
+    refetchInterval: (query) => {
+        if (!enabled) return false;
+        const job = query.state.data;
+        const command = job?.command;
+        const workflow = job?.execution?.runtime_state.workflow;
+        const settled = command?.command_id === jobId && command.terminal
+            && command.status !== 'ambiguous' && workflow?.command_id === jobId && workflow.phase === 'terminal';
+        return settled ? false : 2_000;
+    },
+    refetchIntervalInBackground: false,
 });
 export const useSubmitBioXpProtocol = () => useMutation({
     mutationFn: async (request: BioXpWorkflowSubmission) => (

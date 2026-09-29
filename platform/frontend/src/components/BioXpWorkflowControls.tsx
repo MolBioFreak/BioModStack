@@ -22,10 +22,10 @@ function selectedInput(text: string): BioXpWorkflowInput {
     return value;
 }
 
-export function BioXpWorkflowControls({ generation, connected, controlsEnabled }: {
-    generation: number; connected: boolean; controlsEnabled: boolean;
+export function BioXpWorkflowControls({ generation, connected, controlsEnabled, visible = true }: {
+    generation: number; connected: boolean; controlsEnabled: boolean; visible?: boolean;
 }) {
-    const jobs = useBioXpWorkflowJobs(generation, connected);
+    const jobs = useBioXpWorkflowJobs(generation, connected && visible);
     const [selection, setSelection] = useState<{ name: string; input: BioXpWorkflowInput } | null>(null);
     const [selectionError, setSelectionError] = useState<string | null>(null);
     const [selectedJob, setSelectedJob] = useState<{ generation: number; id: string } | null>(null);
@@ -46,7 +46,7 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
     const listedActive = jobs.data?.find(job => job.command && (!job.command.terminal || job.command.status === 'ambiguous'));
     const jobId = (selectedJob?.generation === generation ? selectedJob.id : null)
         ?? currentAttempt?.jobId ?? listedActive?.job_id ?? null;
-    const query = useBioXpWorkflowJob(jobId, generation, connected);
+    const query = useBioXpWorkflowJob(jobId, generation, connected && visible);
     const job = query.data?.job_id === jobId ? query.data
         : acceptedJob?.generation === generation && acceptedJob.job.job_id === jobId ? acceptedJob.job : null;
     const command = job?.command;
