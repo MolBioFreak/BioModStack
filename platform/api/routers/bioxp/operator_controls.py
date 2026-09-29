@@ -70,12 +70,13 @@ from services.bioxp.runtime import BioXpRuntime
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
 router = APIRouter()
+_live_action_receipt_adapter = TypeAdapter(OperatorLiveActionReceipt)
 
 
 def _validate_live_action_receipt(payload: Any) -> OperatorLiveActionReceipt:
     payload = _normalize_interrupt_evidence(payload)
     try:
-        return TypeAdapter(OperatorLiveActionReceipt).validate_python(payload)
+        return _live_action_receipt_adapter.validate_python(payload)
     except ValidationError as exc:
         uncertainty = _post_dispatch_receipt_uncertainty(payload)
         if uncertainty is not None:
@@ -486,7 +487,7 @@ def _normalize_legacy_pipette_detail_payload(
         len(transformed.get("pressure_streams") or []),
         1,
     )
-    transformed["snapshot"] = context.snapshot.model_dump(mode="json")
+    transformed["snapshot"] = context.snapshot
     transformed["child_page_limit"] = child_count
     return transformed
 
@@ -512,14 +513,14 @@ def _normalize_legacy_command_detail_payload(
             "has_more": False,
             "next_cursor": None,
         },
-        "snapshot": context.snapshot.model_dump(mode="json"),
+        "snapshot": context.snapshot,
         "child_page_limit": max(len(evidence), len(transitions), 1),
     }
     pipette = transformed.get("pipette")
     if isinstance(pipette, dict):
         pipette_context = OperatorReportPipettePageV1.model_validate({
-            "filters": context.filters.model_dump(mode="json"),
-            "snapshot": context.snapshot.model_dump(mode="json"),
+            "filters": context.filters,
+            "snapshot": context.snapshot,
             "returned_count": 1,
             "filtered_total": 1,
             "has_more": False,
@@ -596,7 +597,7 @@ async def invoke_operator_action_v2(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionReceiptV2:
     validated_inputs = _validate_v2_action_inputs(action_id, request)
-    robot_body = _robot_request_body(request)
+    robot_body = request.model_dump(exclude={"expected_connection_generation", "inputs"}, mode="json")
     robot_body["inputs"] = validated_inputs
     try:
         payload = await runtime.connection.request_active_v2_enqueue(
@@ -889,7 +890,7 @@ async def pipette_readback(
     envelope = _validate(PipetteReadbackPostEnvelope, payload)
     if envelope.include_data != request.include_data:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched readback request")
-    return _validate(PipetteReadbackResponse, envelope.model_dump(include=set(PipetteReadbackResponse.model_fields)))
+    return envelope
 
 
 @router.get("/operator-controls/pipettes/application/status", response_model=PipetteApplicationStatus)
@@ -918,18 +919,18 @@ async def pipette_application_plan(
 ) -> PipetteApplicationPlanResponse:
     """No-motion planning/receipt creation; unlike readback, no hardware query."""
     _direct_liquid_ingress(http_request, {"expected_connection_generation"})
+    inputs = request.model_dump(exclude_none=True)
     try:
         payload = await runtime.connection.request_active(
             "pipette_application_plan",
             expected_generation=expected_connection_generation,
             require_fresh=True,
-            json_data={**request.model_dump(exclude_none=True), "idempotency_key": idempotency_key},
+            json_data={**inputs, "idempotency_key": idempotency_key},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
     envelope = _validate(PipetteApplicationPlanPostEnvelope, payload)
     # Planner inputs are a documented projection, not the normalized HTTP body.
-    inputs = request.model_dump(exclude_none=True)
     if request.operation == "load_tip":
         expected_inputs = {name: inputs[name] for name in ("tip_tray", "tip_well", "tip_type", "tip_location", "home_z_after")}
     elif request.operation == "detect_fluid":
@@ -944,7 +945,7 @@ async def pipette_application_plan(
     if (envelope.operation != request.operation or actual_inputs.keys() != expected_inputs.keys()
             or any(type(actual_inputs[k]) is not type(v) or actual_inputs[k] != v for k, v in expected_inputs.items())):
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched plan request")
-    return _validate(PipetteApplicationPlanResponse, envelope.model_dump(include=set(PipetteApplicationPlanResponse.model_fields)))
+    return envelope
 
 
 @router.post(
@@ -1167,7 +1168,7 @@ async def operator_report_command_transitions(
         return _validate(OperatorReportTransitionsV1, {
             "command_id": command_id,
             "filters": {"command_id": command_id, "limit": max(limit, len(transitions), 1)},
-            "snapshot": context.snapshot.model_dump(mode="json"),
+            "snapshot": context.snapshot,
             "returned_count": len(transitions),
             "filtered_total": len(transitions),
             "has_more": False,
@@ -1204,11 +1205,11 @@ async def operator_report_command_evidence(
         OperatorReportCommandDetailV1,
         _normalize_legacy_command_detail_payload(detail_payload, context),
     )
-    evidence = [item.model_dump(mode="json") for item in detail.evidence]
+    evidence = detail.evidence
     return _validate(OperatorReportCommandEvidencePageV1, {
         "command_id": command_id,
         "filters": {"command_id": command_id, "limit": max(limit, len(evidence), 1)},
-        "snapshot": context.snapshot.model_dump(mode="json"),
+        "snapshot": context.snapshot,
         "returned_count": len(evidence),
         "filtered_total": len(evidence),
         "has_more": False,
@@ -1266,7 +1267,7 @@ async def operator_report_pipette_channels(
         return _validate(OperatorReportPipetteChannelsV1, {
             "pipette_operation_id": pipette_operation_id,
             "filters": {"pipette_operation_id": pipette_operation_id, "limit": max(limit, len(channels), 1)},
-            "snapshot": context.snapshot.model_dump(mode="json"),
+            "snapshot": context.snapshot,
             "returned_count": len(channels),
             "filtered_total": len(channels),
             "has_more": False,
@@ -1298,7 +1299,7 @@ async def operator_report_pipette_exchanges(
         return _validate(OperatorReportPipetteExchangesV1, {
             "pipette_operation_id": pipette_operation_id,
             "filters": {"pipette_operation_id": pipette_operation_id, "limit": max(limit, len(exchanges), 1)},
-            "snapshot": context.snapshot.model_dump(mode="json"),
+            "snapshot": context.snapshot,
             "returned_count": len(exchanges),
             "filtered_total": len(exchanges),
             "has_more": False,
@@ -1346,7 +1347,7 @@ async def operator_report_pressure_detail(stream_session_id: str, runtime: BioXp
         return _validate(OperatorReportPressureDetailV1, {
             **payload,
             "child_page_limit": max(len(chunks), 1),
-            "snapshot": context.snapshot.model_dump(mode="json"),
+            "snapshot": context.snapshot,
         })
 
 

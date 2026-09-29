@@ -84,3 +84,23 @@ def test_passive_status_keeps_current_malformed_profile_reporting(tmp_path):
         assert restored.display_name == "Restored" and restored.last_error is None
         await service.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("route,model,body", [
+    ("readback", "PipetteReadbackPostEnvelope", {"include_data": False}),
+    ("application/plan", "PipetteApplicationPlanPostEnvelope", {"operation": "detect_fluid", "fluid_class": "RC"}),
+])
+def test_pipette_response_never_dumps_validated_envelope(monkeypatch, route, model, body):
+    from services.bioxp import operator_models
+    client, runtime = make_client(monkeypatch)
+    def unused_dump(*args, **kwargs):
+        raise AssertionError("post envelope must be projected by response serializer")
+    monkeypatch.setattr(getattr(operator_models, model), "model_dump", unused_dump)
+    response = client.post(
+        f"/api/bioxp/operator-controls/pipettes/{route}?expected_connection_generation=77",
+        headers={"Idempotency-Key": "debloat-projection-12345678"}, json=body,
+    )
+    assert response.status_code == 200, response.text
+    assert "replayed" not in response.json()
+    assert "source_identity" not in response.json()
+    assert response.json()["physical_effect_verified"] is False
