@@ -841,13 +841,6 @@ class BioXpConnectionService:
             if client is self._client and generation == self._generation:
                 self._apply_probe_payload(payload, request_started_at=request_started_at)
 
-    @asynccontextmanager
-    async def workflow_lease(self, expected_generation: int):
-        """Hold connection authority stable across one admitted robot workflow."""
-        async with self.active_request_lease(expected_generation=expected_generation, require_fresh=False) as client:
-            async with self._v1_workflow_lock:
-                yield client
-
     async def disconnect(self) -> BioXpSnapshot:
         async with self._transition_lock:
             await self._deactivate_locked(increment=True)

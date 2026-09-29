@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -806,6 +807,13 @@ class FakeConnection:
 
     def snapshot(self):
         return self.value
+
+    @asynccontextmanager
+    async def active_request_lease(self, *, expected_generation, require_fresh=True):
+        if expected_generation != self.value.generation:
+            raise ConnectionStateError("Expected connection generation does not match")
+        self.active_request_calls.append({"require_fresh": require_fresh})
+        yield self.client
 
     async def request_active(self, route_name, *, expected_generation, require_fresh=True, **kwargs):
         if expected_generation != self.value.generation:

@@ -149,15 +149,15 @@ def test_review_is_separate_bound_request(monkeypatch):
     response = client.post(BASE + f'/jobs/{JOB}/review', json=body)
     assert response.status_code == 200, response.text
     assert runtime.connection.client.calls[0][0] == 'protocol_review'
-    assert runtime.connection.active_request_calls[0]['require_fresh'] is True
+    assert runtime.connection.active_request_calls[0]['require_fresh'] is False
 
 
-def test_control_retains_its_existing_freshness_policy(monkeypatch):
+def test_control_lease_does_not_add_observation_admission(monkeypatch):
     client, runtime = make_client(monkeypatch)
     runtime.connection.client.responses['protocol_control'] = control_receipt()
     response = client.post(BASE + f'/jobs/{JOB}/control', json=control_body(action='abort'))
     assert response.status_code == 200, response.text
-    assert runtime.connection.active_request_calls[0]['require_fresh'] is True
+    assert runtime.connection.active_request_calls[0]['require_fresh'] is False
 
 
 def test_timeout_has_one_attempt_and_preserves_uncertainty(monkeypatch):

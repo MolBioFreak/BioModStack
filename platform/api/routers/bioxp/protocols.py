@@ -30,15 +30,17 @@ async def _mutate(runtime, route, request, *, job_id=None):
     if job_id is not None and request.command_id != job_id:
         raise HTTPException(status_code=422, detail="Control command_id must match the addressed job")
     try:
-        return await runtime.connection.request_active(
-            route,
+        # Retain the original client across I/O without sharing the unrelated
+        # v1 workflow lane. Admission and physical ordering belong to the robot.
+        async with runtime.connection.active_request_lease(
             expected_generation=request.expected_connection_generation,
-            # Execution is admitted by the robot, not process-local status.
-            # Leave control/review and uncached preflight on their existing path.
-            require_fresh=route != "protocol_execute",
-            json_data=request.model_dump(mode="json", exclude_unset=True, exclude={"expected_connection_generation"}),
-            path_params={"job_id": job_id} if job_id is not None else None,
-        )
+            require_fresh=False,
+        ) as client:
+            kwargs = {"json_data": request.model_dump(
+                mode="json", exclude_unset=True, exclude={"expected_connection_generation"})}
+            if job_id is not None:
+                kwargs["path_params"] = {"job_id": job_id}
+            return await client.request(route, **kwargs)
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
 

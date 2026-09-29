@@ -1072,7 +1072,7 @@ def test_v2_duplicate_reads_coalesce(tmp_path: Path, route: str) -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("lane", ["v1", "oem", "enqueue", "interrupt", "workflow"])
+@pytest.mark.parametrize("lane", ["v1", "oem", "enqueue", "interrupt", "lease"])
 def test_v2_mutation_invalidates_cached_and_inflight_reads(tmp_path: Path, lane: str) -> None:
     _, BioXpProfile, _, _ = _load()
     clients = []
@@ -1111,7 +1111,7 @@ def test_v2_mutation_invalidates_cached_and_inflight_reads(tmp_path: Path, lane:
             elif lane == "interrupt":
                 await service.request_active_safety_interrupt("interrupt_operator_action_v1", **kwargs)
             else:
-                async with service.workflow_lease(generation) as client:
+                async with service.active_request_lease(expected_generation=generation) as client:
                     await client.request("invoke_operator_action")
             catalog = await asyncio.wait_for(service.request_active_v2_query(
                 "operator_control_catalog_v2", expected_generation=generation), 0.2)
