@@ -422,7 +422,7 @@ def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) ->
         robot.request_release = asyncio.Event()
 
         request_task = asyncio.create_task(service.request_active(
-            "plan_oem_full_lifecycle",
+            "protocol_execute",
             expected_generation=connected.generation,
             json_data={"expected_generation": connected.generation},
         ))
@@ -434,7 +434,7 @@ def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) ->
 
         robot.request_release.set()
         response = await request_task
-        assert response["route_name"] == "plan_oem_full_lifecycle"
+        assert response["route_name"] == "protocol_execute"
         disconnected = await disconnect_task
         assert disconnected.generation == connected.generation + 1
         assert disconnected.active is False
@@ -455,7 +455,7 @@ def test_rebind_drains_old_lease_without_closing_it_before_request_returns(tmp_p
         old.request_release = asyncio.Event()
 
         request_task = asyncio.create_task(service.request_active(
-            "plan_oem_full_lifecycle",
+            "protocol_execute",
             expected_generation=connected.generation,
             json_data={"expected_generation": connected.generation},
         ))
@@ -565,12 +565,12 @@ def test_multi_request_lease_serializes_disconnect_until_canonical_readback(tmp_
         async with service.active_request_lease(
             expected_generation=connected.generation,
         ) as robot:
-            assert (await robot.request("oem_full_lifecycle_contract"))["route_name"] == "oem_full_lifecycle_contract"
+            assert (await robot.request("protocol_jobs"))["route_name"] == "protocol_jobs"
             disconnect_task = asyncio.create_task(service.disconnect())
             await asyncio.sleep(0)
             assert disconnect_task.done() is False
-            assert (await robot.request("plan_oem_full_lifecycle"))["route_name"] == "plan_oem_full_lifecycle"
-            assert (await robot.request("get_oem_full_lifecycle_run"))["route_name"] == "get_oem_full_lifecycle_run"
+            assert (await robot.request("protocol_execute"))["route_name"] == "protocol_execute"
+            assert (await robot.request("protocol_job"))["route_name"] == "protocol_job"
             assert disconnect_task.done() is False
 
         disconnected = await disconnect_task

@@ -9,6 +9,13 @@ from test_bioxp_operator_controls import make_client
 from test_bioxp_protocol_relay import bundle, JOB
 
 
+def test_retired_full_lifecycle_facade_has_no_binding_or_mounted_route():
+    from routers.bioxp import router
+    from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
+    assert not any("/oem-full-lifecycle/" in route.path for route in router.routes)
+    assert not any("/oem/runtime/movement-runs" in path for _, path, _ in DEFAULT_ROBOT_ROUTES.values())
+
+
 def test_status_never_copies_unconsumed_startup(tmp_path):
     class Unconsumed(dict):
         def __deepcopy__(self, memo):

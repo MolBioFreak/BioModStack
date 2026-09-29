@@ -190,7 +190,7 @@ def test_robot_client_routes_only_supported_compact_commissioning_contracts() ->
     asyncio.run(client.close())
 
 
-def test_dynamic_full_lifecycle_run_path_is_percent_encoded_and_template_bound() -> None:
+def test_dynamic_protocol_job_path_is_percent_encoded_and_template_bound() -> None:
     target = ValidatedBioXpTarget(
         api_url="http://robot:8123",
         scheme="http",
@@ -201,12 +201,12 @@ def test_dynamic_full_lifecycle_run_path_is_percent_encoded_and_template_bound()
     transport = RecordingTransport()
     client = BioXpRobotClient(target, transport=transport)
 
-    asyncio.run(client.request("get_oem_full_lifecycle_run", path_params={"run_id": "run/../../status"}))
-    assert transport.requests[0].url.path == "/oem/runtime/movement-runs/run/../../status"
-    assert transport.requests[0].url.raw_path == b"/oem/runtime/movement-runs/run%2F..%2F..%2Fstatus"
+    asyncio.run(client.request("protocol_job", path_params={"job_id": "run/../../status"}))
+    assert transport.requests[0].url.path == "/protocol/jobs/run/../../status"
+    assert transport.requests[0].url.raw_path == b"/protocol/jobs/run%2F..%2F..%2Fstatus"
 
     try:
-        asyncio.run(client.request("get_oem_full_lifecycle_run"))
+        asyncio.run(client.request("protocol_job"))
     except Exception as exc:
         assert "route parameters" in str(exc)
     else:
@@ -214,7 +214,7 @@ def test_dynamic_full_lifecycle_run_path_is_percent_encoded_and_template_bound()
     asyncio.run(client.close())
 
 
-def test_lifecycle_routes_do_not_inject_authentication_headers() -> None:
+def test_protocol_routes_do_not_inject_authentication_headers() -> None:
     target = ValidatedBioXpTarget(
         api_url="http://robot:8123",
         scheme="http",
@@ -225,9 +225,9 @@ def test_lifecycle_routes_do_not_inject_authentication_headers() -> None:
     transport = RecordingTransport()
     client = BioXpRobotClient(target, transport=transport)
 
-    asyncio.run(client.request("oem_full_lifecycle_contract"))
-    asyncio.run(client.request("plan_oem_full_lifecycle", json_data={"mode": "dry_run"}))
-    asyncio.run(client.request("cancel_oem_full_lifecycle_run", path_params={"run_id": "run-12345678"}))
+    asyncio.run(client.request("protocol_jobs"))
+    asyncio.run(client.request("protocol_execute", json_data={"mode": "dry_run"}))
+    asyncio.run(client.request("protocol_control", path_params={"job_id": "run-12345678"}))
 
     assert all("X-BioXP-OEM-Token" not in request.headers for request in transport.requests)
     assert all("Authorization" not in request.headers for request in transport.requests)

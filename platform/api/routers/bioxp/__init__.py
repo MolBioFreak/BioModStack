@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from . import calibration, camera, connection, jobs, oem_full_lifecycle, operator_controls, protocols
+from . import calibration, camera, connection, jobs, operator_controls, protocols
 from .dependencies import (
     CONNECTION_MUTATIONS,
     SAFE_LOCAL_MUTATIONS,
@@ -16,7 +16,6 @@ for child_router in (
     calibration.router,
     protocols.router,
     jobs.router,
-    oem_full_lifecycle.router,
     operator_controls.router,
 ):
     router.routes.extend(child_router.routes)
