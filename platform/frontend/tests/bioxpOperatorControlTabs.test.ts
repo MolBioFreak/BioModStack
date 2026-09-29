@@ -25,8 +25,8 @@ test('catalog-driven control plane renders every action, critical groups, meta a
 test('action forms and route provenance come only from the robot catalog and admission', () => {
     for (const field of [
         'selected.inputs.map', 'selected.informational_method', 'selected.informational_path',
-        'selected.source_anchor', 'selected.stages', 'selected.enabled', 'selected.disabled_reason',
-        'selected.dependencies', 'admission.data?.enabled', 'source_authority_verified',
+        'selected.source_anchor', 'selected.stages', 'selected?.enabled', 'selected?.disabled_reason',
+        'selected?.dependencies', 'preview?.enabled', 'source_authority_verified',
     ]) assert.ok(source.includes(field), `missing source token: ${field}`);
     assert.match(source, /authoritativeCatalog\?\.ownership_generation/);
     assert.match(client, /expected_connection_generation/);

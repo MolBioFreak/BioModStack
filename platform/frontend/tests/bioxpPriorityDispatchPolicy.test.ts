@@ -45,7 +45,7 @@ test('operator polling budget retains only bounded dashboard freshness', () => {
 
 test('generic mutation refresh no longer extends pending state', () => {
     const start = source.indexOf('const useRefreshMutation');
-    const end = source.indexOf('export const useSaveBioXpProfile', start);
+    const end = source.indexOf('export const useConnectBioXp', start);
     const body = source.slice(start, end);
     assert.ok(start >= 0 && end > start);
     assert.doesNotMatch(body, /onSuccess: async/);

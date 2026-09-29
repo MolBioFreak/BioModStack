@@ -20,7 +20,6 @@ test('static BioXP metadata hooks are request-driven rather than timer-polled', 
     for (const [start, end] of [
         ['export const useBioXpOperatorControlCatalog', 'export const useBioXpOperatorDashboard'],
         ['export const useBioXpCameraStatus', 'export async function fetchBioXpCameraFrame'],
-        ['export const useBioXpOemFullLifecycleContract', 'export const useBioXpOemFullLifecycleRun'],
     ]) {
         const source = hookSource(start, end);
         assert.doesNotMatch(source, /refetchInterval/u, `${start} must not create unsolicited polling`);
