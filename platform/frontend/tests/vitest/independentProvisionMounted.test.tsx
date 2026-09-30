@@ -572,9 +572,7 @@ it('pairs a stale installed observation with the control that refreshes it', asy
     request_sha256: 'c'.repeat(64), phase: 'verifying', artifact: null, message: 'Artifact cache identities verified',
     started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z', artifact_summary: { total_count: 1, verified_count: 1, total_bytes: 1234, verified_bytes: 1234 } };
   await render();
-  const evidence = [...container.querySelectorAll('summary')].find(item => item.textContent?.startsWith('Evidence'))!;
-  await act(async () => { evidence.click(); await settle(); });
-  await act(async () => { await settle(); });
+  await disclose('Evidence');
   const stale = [...container.querySelectorAll('p')].find(item => item.textContent?.includes('Stale observation'))!;
   expect(stale).toBeTruthy();
   expect(stale.nextElementSibling?.textContent).toContain('Refresh installed observation');

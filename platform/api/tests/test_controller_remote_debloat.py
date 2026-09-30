@@ -122,3 +122,43 @@ def test_warm_archive_one_read_same_size_corruption_rejected(tmp_path, monkeypat
         bundle._staged_source_archive(repo, data, revision, tmp_path / 'corrupt', extract=False)
     assert not (tmp_path / 'corrupt' / 'fixture.txt').exists()
     assert bundle._staged_source_archive(repo, data, revision, tmp_path / 'retry', extract=False) == digest
+
+
+@pytest.mark.parametrize('model,mode,entrypoint', [
+    ('bindcraft2','campaign','workflows/bindcraft2.nf'),
+    ('boltzgen','protein_binder','workflows/boltzgen_generation.nf'),
+    ('antibody_denovo','antibody_denovo_pipeline','workflows/antibody_denovo.nf'),
+    ('ppiflow','protein_binder','workflows/ppiflow_generation.nf'),
+])
+def test_c01_saved_download_launch_only_coupling_reproduced(tmp_path, monkeypatch, model, mode, entrypoint):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from model_registry import selected_execution_metadata
+    from component_runtime import NativeInvocation, SelectedExecutionPlan, SourceIdentity, UnresolvedField
+    from services.remote_execution import cache
+    params = {'protenix_use_msa':False}
+    metadata = selected_execution_metadata(model, mode, params, entrypoint)
+    assert metadata.dependency_closure_complete
+    metadata = replace(metadata, blockers=metadata.blockers + (
+        UnresolvedField(model, 'result_retrieval', 'fixture retained-result owner',
+                        'Inert non-download launch blocker', ('launch',)),))
+    assert metadata.dependency_closure_complete
+    assert not metadata.blockers_for('provision')
+    invocation = NativeInvocation.capture(model_id=model, mode=mode, command=['nextflow',entrypoint],
+        requested=params, effective=params, native_parameters=params, entrypoint=entrypoint)
+    identity = SourceIdentity('a'*40,'b'*40)
+    plan = SelectedExecutionPlan(identity, model, model, mode, entrypoint,
+        invocation.requested_json, invocation.effective_json, invocation.native_parameters_json, metadata)
+    invocation = replace(invocation, source_identity=identity, execution_plan=plan)
+    monkeypatch.setattr(cache,'get_code_root',lambda:tmp_path)
+    monkeypatch.setattr(cache,'current_source_identity',lambda root:('a'*40,'b'*40))
+    def forbidden(*args, **kwargs):
+        pytest.fail('Coupling probe must not stage source or inputs')
+    monkeypatch.setattr(cache,'_staged_source_archive',forbidden)
+    with pytest.raises(bundle.RemoteBundleError, match='complete selected native execution plan'):
+        cache._prewarm_plan(SimpleNamespace(model_id=model,mode=mode), list(invocation.command),
+            'a'*40,'b'*40,tmp_path,native_invocation=invocation)
+    # Actual launch keeps exactly this existing refusal.
+    with pytest.raises(bundle.RemoteBundleError, match='complete selected native execution plan'):
+        bundle.compile_remote_dependencies(model,mode,list(invocation.command),native_invocation=invocation)
+    assert not list(tmp_path.iterdir())
