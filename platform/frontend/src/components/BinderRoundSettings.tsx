@@ -3,7 +3,9 @@ import { useQueries } from '@tanstack/react-query';
 import { fetchModelById } from '../lib/api';
 import { NativeSetting } from './NativeBinderGeneration';
 import { binderRoundDesigners, binderRoundPredictors, blindFixedParameters, changeRoundStage, hydrateBinderRound,
-    roundCountParameter, roundParameterIsBound, withRoundCatalogs, type BinderRoundCatalog, type BinderRoundDraft } from '../lib/binderRound';
+    roundParameterIsBound, withRoundCatalogs, type BinderRoundCatalog, type BinderRoundDraft } from '../lib/binderRound';
+
+import { roundCatalogFields, roundControlGroups, roundControlLabel } from '../lib/binderRoundControls';
 
 const names: Record<string, string> = { proteinmpnn: 'ProteinMPNN', fampnn: 'FA-MPNN', caliby_binder: 'Caliby', protenix: 'Protenix V2 (recommended)', boltz2: 'Boltz-2', esmfold2: 'ESMFold2' };
 const models = [...binderRoundDesigners, ...binderRoundPredictors];
@@ -43,35 +45,39 @@ export function BinderRoundSettings({ values, onChange }: {
         <p className="text-sm text-[var(--text-secondary)]">{request.enabled
             ? 'Predict every emitted candidate and every designed sequence against the independently declared target states. No hidden top-N selection.'
             : 'Generation only: no round sequence design or prediction. Your follow-on settings remain saved.'}</p>
+        <details open={request.enabled || undefined} data-round-settings><summary className="cursor-pointer">{request.enabled ? 'Round sampling and settings' : 'Retained round settings'}</summary>
+        <div className="mt-4 space-y-4">
         <p className="text-sm text-[var(--text-secondary)]">Sequence design runs only for producer-declared backbone-only candidates. Sequence-bearing candidates go directly to prediction without redesign. Generated poses, structural templates and interface restraints are not prediction inputs; MSA is configured independently below.</p>
         {(['sequence_design', 'prediction'] as const).map(role => {
             const stage = request[role];
             const ids = role === 'sequence_design' ? binderRoundDesigners : binderRoundPredictors;
             const catalog = catalogs.find(item => item.id === stage.model_id);
-            const fields = catalog?.params.filter(parameter => !roundParameterIsBound(parameter.name)) ?? [];
-            const count = role === 'sequence_design' ? fields.find(parameter => parameter.name === roundCountParameter(stage.model_id)) : undefined;
+            const fields = catalog ? roundCatalogFields(catalog).filter(parameter => !roundParameterIsBound(parameter.name)) : [];
+            const grouping = roundControlGroups(stage.model_id, fields, stage.params);
             const patch = (values: Record<string, UntypedApiValue>) => onChange(changeRoundStage(draft, role, stage.model_id, values));
-            return <fieldset key={role} aria-label={role === 'sequence_design' ? 'Round sequence design' : 'Round complex prediction'} className="space-y-3 rounded-lg border border-[var(--border-primary)] p-4">
+            return <fieldset key={role} aria-label={role === 'sequence_design' ? 'Round sequence design' : 'Round complex prediction'} className="min-w-0 space-y-3 rounded-lg border border-[var(--border-primary)] p-4">
                 <legend>{role === 'sequence_design' ? 'Backbone sequence designer' : 'Blind complex validator'}</legend>
                 <select className={input} aria-label={role === 'sequence_design' ? 'Round sequence designer' : 'Round complex validator'} value={stage.model_id} onChange={event => onChange(changeRoundStage(draft, role, event.target.value))}>
                     {!ids.some(id => id === stage.model_id) && <option value={stage.model_id} disabled>{stage.model_id} (saved; choose a supported model)</option>}
                     {ids.map(id => <option key={id} value={id}>{names[id]}</option>)}
                 </select>
-                {count && <NativeSetting parameter={{ ...count, label: 'Sequences per backbone' }} values={stage.params} onPatch={patch} chains={request.binder_chains} />}
+                {role === 'prediction' && <p className="text-sm text-[var(--text-secondary)]" data-round-msa-summary>{grouping.msa.summary}</p>}
+                <div className="grid gap-5 md:grid-cols-2" data-round-primary>{grouping.primary.map(parameter => <NativeSetting key={parameter.name} parameter={roundControlLabel(parameter)} values={stage.params} onPatch={patch} chains={[...request.binder_chains, ...request.target_chains]} />)}</div>
                 {queries[models.indexOf(stage.model_id as typeof models[number])]?.error && <p role="status">{queries[models.indexOf(stage.model_id as typeof models[number])].error?.message} Saved settings remain intact.</p>}
                 {!catalog && <p role="status">Loading model-owned settings…</p>}
-                <details><summary className="cursor-pointer">Full {names[stage.model_id] ?? stage.model_id} settings</summary>
-                    <div className="mt-4 grid gap-5 md:grid-cols-2">{fields.filter(parameter => parameter !== count).map(parameter =>
+                {[...grouping.groups].map(([group, parameters]) => <details key={group} data-round-group={group}><summary className="cursor-pointer">{group.replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase())}</summary>
+                    <div className="mt-4 grid gap-5 md:grid-cols-2">{parameters.map(parameter =>
                         role === 'prediction' && blindFixedParameters.has(parameter.name)
-                            ? <div key={parameter.name} data-round-fixed={parameter.name}><label className="flex gap-2"><input type="checkbox" aria-label={parameter.name} checked={false} disabled />{parameter.label ?? parameter.name}</label><p className="text-xs">Fixed off for blind prediction; no pose/template conditioning.</p></div>
-                            : <NativeSetting key={parameter.name} parameter={parameter} values={stage.params} onPatch={patch} chains={[...request.binder_chains, ...request.target_chains]} />)}</div>
-                    <p className="mt-3 text-xs text-[var(--text-secondary)]">Input structures, candidate sequences and source/target identities are bound by the producer and continuation owner, not overridden in model settings.</p>
-                </details>
+                            ? <div key={parameter.name} data-round-fixed={parameter.name}><label className="flex gap-2"><input type="checkbox" aria-label={parameter.name} checked={false} disabled />{roundControlLabel(parameter).label}</label><p className="text-xs">Fixed off for blind prediction; no pose/template conditioning.</p></div>
+                            : <NativeSetting key={parameter.name} parameter={{ ...roundControlLabel(parameter), ...(group.startsWith('Inactive ') ? { display_applicable: false } : {}) }} values={stage.params} onPatch={patch} chains={[...request.binder_chains, ...request.target_chains]} />)}</div>
+                </details>)}
+                <p className="text-xs text-[var(--text-secondary)]">Source structures, sequences and target identities come from the selected producer, not these sampling settings.</p>
             </fieldset>;
         })}
         <details><summary className="cursor-pointer">Chain roles (optional explicit overrides)</summary>
             <p className="my-2 text-sm">Leave empty to use producer-declared roles. No roles are inferred from filenames or sequence similarity. Overrides do not replace the native target source or template.</p>
             {(['binder_chains', 'target_chains'] as const).map(role => <label className="mr-4 inline-flex flex-col gap-1" key={role}>{role === 'binder_chains' ? 'Binder chains' : 'Target chains'}<ChainRoles role={role} value={request[role]} onChange={chains => edit({ [role]: chains })} /></label>)}
         </details>
+        </div></details>
     </section>;
 }

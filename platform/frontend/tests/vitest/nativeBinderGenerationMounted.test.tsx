@@ -38,6 +38,7 @@ vi.mock('../../src/components/MolecularDynamicsTemplate', () => ({ MolecularDyna
 // component, sequence selector, full-view toggle and native parent are mounted.
 vi.mock('../../src/structureViewer/StructureWorkbench', () => ({ StructureWorkbench: (props: any) => <output data-viewer={props.structureDocumentId} data-format={props.format}>{props.structureData}</output> }));
 import { JobSubmission } from '../../src/components/JobSubmission';
+import { hydrateBinderRound } from '../../src/lib/binderRound';
 import { ppiflowHotspotsFromSelection } from '../../src/lib/nativeBinderAuthoring';
 import { parseBC2Document } from '../../src/lib/bindcraft2StructureInputs';
 
@@ -131,7 +132,7 @@ it.each(['protein_binder', 'peptide_binder'])('BoltzGen %s submits independent s
     expect(document.querySelectorAll('[data-viewer]').length).toBe(2);
     expect(document.body.textContent).toContain('does not provide a verified native position map');
     await click('Launch Experiment');
-    expect(mocks.submit).toHaveBeenCalledWith({ name: 'Native request', model_id: 'boltzgen', mode: modeName, params: { ...values, num_designs: 10 } }, { launchContext: false });
+    expect(mocks.submit).toHaveBeenCalledWith({ name: 'Native request', model_id: 'boltzgen', mode: modeName, params: { ...values, num_designs: 10 }, binder_round: hydrateBinderRound().binder_round, execution_target_id: null, source_structure: undefined }, { launchContext: false });
 });
 
 it('Project save/reopen retains mode drafts, native null, sources and zero without metadata entering submission', async () => {
@@ -263,6 +264,6 @@ for (const [identity, inventory] of Object.entries(exportedInventory) as Array<[
             expect(document.querySelector(`[data-native-setting="${parameter.name}"], [aria-label="${parameter.name}"]`), parameter.name).not.toBeNull();
         }
         await click('Launch Experiment');
-        expect(mocks.submit).toHaveBeenCalledWith({ name: 'Native request', model_id: model, mode: modeName, params: Object.fromEntries(inventory.parameters.filter((parameter: any) => Object.hasOwn(parameter, 'default')).map((parameter: any) => [parameter.name, parameter.default])) }, { launchContext: false });
+        expect(mocks.submit).toHaveBeenCalledWith({ name: 'Native request', model_id: model, mode: modeName, params: Object.fromEntries(inventory.parameters.filter((parameter: any) => Object.hasOwn(parameter, 'default')).map((parameter: any) => [parameter.name, parameter.default])), binder_round: hydrateBinderRound().binder_round, execution_target_id: null, source_structure: undefined }, { launchContext: false });
     });
 }

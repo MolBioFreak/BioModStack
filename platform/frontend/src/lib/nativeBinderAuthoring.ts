@@ -32,6 +32,45 @@ export interface NativeBinderParameter {
     minimum?: number; maximum?: number; step?: number; enum?: Array<string | number>;
     required?: boolean; nullable?: boolean; aliases?: string[]; group?: string; section?: string; ui_group?: string; ui_control?: string;
     native_cli?: string | Record<string, string>; native_path?: string; ui_placeholder?: string;
+    accepted_types?: string[]; items?: { type?: string }; units?: string; read_only?: boolean; unavailable_reason?: string; display_help?: string; required_help?: string;
+    applicability?: boolean | NativeDisplayCondition;
+    display_required?: boolean; display_applicable?: boolean; display_nullable?: boolean;
+    required_when?: NativeDisplayCondition; applicable_when?: NativeDisplayCondition; nullable_when?: NativeDisplayCondition;
+}
+export type NativeDisplayCondition = Record<string, unknown>;
+/** Discovery conditions affect copy/grouping only, never scientific values or admission. */
+export function nativeDisplayMatches(condition: NativeDisplayCondition, values: Record<string, unknown>): boolean {
+    // The model-owned discovery contract uses predicates, not browser validation.
+    if (Array.isArray(condition.any)) return condition.any.some(item => nativeDisplayMatches(item as NativeDisplayCondition, values));
+    if (Array.isArray(condition.all)) return condition.all.every(item => nativeDisplayMatches(item as NativeDisplayCondition, values));
+    if (typeof condition.field === 'string') {
+        const actual = values[condition.field];
+        switch (condition.operator) {
+            case 'truthy': return Boolean(actual);
+            case 'falsy': return !actual;
+            case 'equals': return actual === condition.value;
+            case 'not_equals': return actual !== condition.value;
+            case 'in': return Array.isArray(condition.value) && condition.value.includes(actual);
+            default: return false;
+        }
+    }
+    return Object.entries(condition).every(([key, expected]) => {
+        const actual = values[key];
+        if (Array.isArray(expected)) return expected.includes(actual);
+        if (expected && typeof expected === 'object') {
+            const test = expected as Record<string, unknown>;
+            if ('$empty' in test) return (actual === undefined || actual === null || actual === '') === test.$empty;
+            if ('$not' in test) return actual !== test.$not;
+        }
+        return actual === expected;
+    });
+}
+export function nativeParameterDisplay(parameter: NativeBinderParameter, values: Record<string, unknown>) {
+    return {
+        required: parameter.display_required ?? (parameter.required_when ? nativeDisplayMatches(parameter.required_when, values) : parameter.required === true),
+        applicable: parameter.display_applicable ?? (typeof parameter.applicability === 'boolean' ? parameter.applicability : parameter.applicability ? nativeDisplayMatches(parameter.applicability, values) : parameter.applicable_when ? nativeDisplayMatches(parameter.applicable_when, values) : true),
+        nullable: parameter.display_nullable ?? (parameter.nullable_when ? nativeDisplayMatches(parameter.nullable_when, values) : parameter.nullable ?? parameter.default === null),
+    };
 }
 export const nativeBinderField = (name: string) => name.replace(/^boltzgen_/, '').replace(/^target_pdb_path$/, 'target_pdb');
 export const nativeParameterKey = (parameter: NativeBinderParameter, values: Record<string, UntypedApiValue>) =>
@@ -56,13 +95,13 @@ export function nativeBinderSection(model: NativeBinderModel, parameter: NativeB
     if (nativeBinderSections(model).some(section => section.id === parameter.section)) return parameter.section!;
     const key = nativeBinderField(parameter.name);
     if (model === 'ppiflow') {
-        if (['target_pdb', 'framework_pdb', 'input_csv', 'target_chain', 'antigen_chain', 'heavy_chain', 'light_chain'].includes(key)) return 'Targets & templates';
-        if (['specified_hotspots', 'binder_chain', 'samples_min_length', 'samples_max_length', 'sample_hotspot_rate_min', 'sample_hotspot_rate_max', 'cdr_length'].includes(key)) return 'Design';
+        if (['target_pdb', 'framework_pdb', 'input_csv', 'target_chain', 'antigen_chain', 'heavy_chain', 'light_chain', 'binder_chain'].includes(key)) return 'Targets & templates';
+        if (['specified_hotspots', 'samples_min_length', 'samples_max_length', 'sample_hotspot_rate_min', 'sample_hotspot_rate_max', 'cdr_length'].includes(key)) return 'Design';
         if (['samples_per_target', 'num_timesteps', 'dataset_seed'].includes(key)) return 'Generation';
         return 'Expert';
     }
     if (['target_pdb', 'target_pdb_path', 'target_chains', 'target_binding_positions', 'binding_site_residues', 'scaffold_path', 'scaffold_chain', 'scaffold_design_ranges', 'input_pdb', 'ligand_pdb', 'ligand_smiles', 'ntp_type'].includes(key)) return 'Sources';
-    if (/^(protocol|binder_sequence|scaffold_length|nanobody_framework|cdr_|secondary_structure)/.test(key)) return 'Binder & protocol';
+    if (/^(protocol|binder_sequence|scaffold_length|nanobody_framework|nanobody_scaffold_specs|cdr_|secondary_structure)/.test(key)) return 'Binder & protocol';
     if (/^(num_designs|batch_size|seed|diffusion|sampling|step_scale|noise_scale|recycling)/.test(key)) return 'Generation';
     if (/^(rank|filter|budget|alpha|max_rmsd|min_plddt|diversity)/.test(key)) return 'Native selection';
     if (parameter.group === 'selection') return 'Native selection';
