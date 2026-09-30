@@ -644,6 +644,75 @@ def test_critical_bytes_without_qualification_are_not_ready(critical_package, mo
     assert all(row['state'] == 'verified' for row in observed['artifacts'])
 
 
+@pytest.mark.parametrize('count', [1, 32])
+def test_install_resolves_release_path_independently_of_member_count(tree, monkeypatch, count):
+    managed, cache, root, make, _, _ = tree
+    data = b'workflow fixture payload'
+    manifest = make(data, tuple(f'weights/model/member-{index}.bin' for index in range(count)))
+    target = 'member-0.bin'
+    manifest['artifacts'].append(dict(name='weights/model/alias.bin', kind='runtime_link',
+        target=target, sha256=hashlib.sha256(target.encode()).hexdigest(),
+        size_bytes=len(target), mode=0o777))
+    release = managed.release_path(root, manifest)
+    original_path, original_copy = managed.release_path, cache.Cache._publish_copy
+    resolutions, copies = [], []
+    def resolve(*args):
+        resolutions.append(args)
+        return original_path(*args)
+    def copy(storage, source, out, name, row, mode):
+        copies.append(row['name'])
+        return original_copy(storage, source, out, name, row, mode)
+    monkeypatch.setattr(managed, 'release_path', resolve)
+    monkeypatch.setattr(cache.Cache, '_publish_copy', copy)
+    installed = managed.install(root, manifest, managed.boot_id(), cache)
+    assert installed['release']['state'] == 'verified'
+    assert all(row['state'] == 'verified' for row in installed['release']['artifacts'])
+    # Whole-manifest serialization is operation-local, never per destination or alias.
+    assert len(resolutions) <= 5
+    assert len(copies) == count
+    for index in range(count):
+        assert (release / f'weights/model/member-{index}.bin').read_bytes() == data
+    alias = release / 'weights/model/alias.bin'
+    assert alias.is_symlink() and str(alias.readlink()) == target
+    assert alias.read_bytes() == data
+    resolutions.clear()
+    copies.clear()
+    repeated = managed.install(root, manifest, managed.boot_id(), cache)
+    assert repeated['release']['state'] == 'verified'
+    assert repeated['admission']['additional_copy_bytes'] == 0
+    assert len(resolutions) <= 5
+    assert copies == []
+
+
+def test_interrupted_install_reuses_verified_destinations_on_retry(tree, monkeypatch):
+    managed, cache, root, make, _, marker = tree
+    manifest = make(b'retained cached payload', tuple(f'weights/retry/member-{i}' for i in range(3)))
+    prior_active = marker.read_bytes()
+    original = cache.Cache._publish_copy
+    attempted = []
+    def interrupt(storage, source, out, name, row, mode):
+        attempted.append(row['name'])
+        if len(attempted) == 2:
+            raise RuntimeError('fixture interrupted install')
+        return original(storage, source, out, name, row, mode)
+    monkeypatch.setattr(cache.Cache, '_publish_copy', interrupt)
+    with pytest.raises(RuntimeError, match='fixture interrupted install'):
+        managed.install(root, manifest, managed.boot_id(), cache)
+    assert marker.read_bytes() == prior_active
+    release = managed.release_path(root, manifest)
+    assert not (release / 'manifest.json').exists()
+    assert (release / 'weights/retry/member-0').read_bytes() == b'retained cached payload'
+    copied = []
+    def retry_copy(storage, source, out, name, row, mode):
+        copied.append(row['name'])
+        return original(storage, source, out, name, row, mode)
+    monkeypatch.setattr(cache.Cache, '_publish_copy', retry_copy)
+    result = managed.install(root, manifest, managed.boot_id(), cache)
+    assert result['release']['state'] == 'verified'
+    assert copied == ['weights/retry/member-1', 'weights/retry/member-2']
+    assert json.loads(marker.read_text())['release_sha256'] == managed.validate_manifest(manifest, cache)
+
+
 def production_release_manifest(count=88037):
     """Production-shaped provider release manifest: weights plus the shared images."""
     from test_artifact_cache import production_weight_rows
