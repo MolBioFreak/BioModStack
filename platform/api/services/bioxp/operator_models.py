@@ -5551,9 +5551,13 @@ class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
                 raise ValueError("reconciled transition requires the matching deck recovery decision")
         if self.action_id in deck_plan_actions:
             if self.deck_movement is None:
-                # The producer creates deck evidence only when it persists a plan.
-                # Queued, pre-plan failures and interrupted commands may lack it.
-                if self.status == "completed" or self.physical_effect_verified:
+                # Finite scripts retain their child outcomes without necessarily
+                # creating a movement plan. Native moves and any physical-proof
+                # claim still require typed evidence; supplied plans stay bound.
+                if (
+                    self.status == "completed"
+                    and self.action_id != "oem.deck._finite_operation"
+                ) or self.physical_effect_verified:
                     raise ValueError("completed deck movement requires typed deck evidence")
                 return self
             # The plan-bound check runs when the producer supplies the canonical
