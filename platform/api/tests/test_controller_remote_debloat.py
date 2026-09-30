@@ -105,7 +105,7 @@ async def test_admitted_transport_never_loads_full_target_or_projects_inventory(
         assert (await session.get(ExecutionTarget,'vast:1')).provider_metadata['preload']['phase'] == 'source_download_ready'
 
 
-def test_warm_archive_one_read_same_size_corruption_rejected(tmp_path, monkeypatch):
+def test_warm_archive_one_read_same_size_corruption_rejected(tmp_path, monkeypatch, record_property):
     repo = tmp_path / 'repo'
     repo.mkdir()
     subprocess.run(['git', 'init', '-q', str(repo)], check=True)
@@ -133,6 +133,8 @@ def test_warm_archive_one_read_same_size_corruption_rejected(tmp_path, monkeypat
     monkeypatch.setattr(Path, 'open', opened)
     assert bundle._staged_source_archive(repo, data, revision, tmp_path / 'warm', extract=False) == digest
     assert sum(reads) == archive.stat().st_size
+    record_property('warm_archive_bytes', archive.stat().st_size)
+    record_property('warm_source_body_bytes_read', sum(reads))
     content = archive.read_bytes()
     archive.write_bytes(bytes([content[0] ^ 1]) + content[1:])
     with pytest.raises(bundle.RemoteBundleError, match='changed during staging'):

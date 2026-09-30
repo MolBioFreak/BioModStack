@@ -34,13 +34,12 @@ const PHASE_LABELS: Record<string, string> = {
 };
 // Runtime identity already exposed by the attachment owner; never bind a full manifest.
 function capabilityIdentity(target: ExecutionTarget) {
-  const binding = target.capabilities.critical_runtime_binding;
-  const runtime = target.capabilities.critical_runtime;
-  const runtimeIdentity = runtime && typeof runtime === 'object' && !Array.isArray(runtime)
-    ? Object.fromEntries(Object.entries(runtime).filter(([key]) => key !== 'artifacts')) : runtime;
-  return [target.capabilities.gpu_name, target.capabilities.gpu_count, target.capabilities.gpu_vram_mb,
-    target.capabilities.provider_verified, target.capabilities.runner_sha256, target.capabilities.nextflow_launcher_sha256,
-    target.capabilities.container_backend, binding, runtimeIdentity, target.capabilities.readiness, target.capabilities.scheduling];
+  const binding = target.capabilities.critical_runtime_binding as Record<string, unknown> | undefined;
+  const runtime = target.capabilities.critical_runtime as Record<string, unknown> | undefined;
+  const environment = binding?.environment as Record<string, unknown> | undefined;
+  return [target.capabilities.container_backend, binding?.release_sha256,
+    environment?.BMS_CONTAINER_BACKEND, runtime?.release_sha256,
+    runtime?.source_revision, runtime?.source_tree];
 }
 // Strictly accept the download contract and its historical wire spelling.
 function isDownloadPreview(scope: unknown) {
