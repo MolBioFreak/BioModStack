@@ -1062,10 +1062,12 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     min={20}
                                     max={200}
                                     step={5}
+                                    aria-label="Diffusion steps slider"
                                     value={settings.rfantibody_diffusion_steps}
                                     onChange={(e) => updateSetting('rfantibody_diffusion_steps', parseInt(e.target.value))}
                                     className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-pink-500"
                                 />
+                                <input type="number" aria-label="Diffusion steps exact" step="1" value={settings.rfantibody_diffusion_steps} onChange={event => { if (event.target.value !== '') updateSetting('rfantibody_diffusion_steps', Number(event.target.value)); }} className="mt-2 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control)] p-2 text-[var(--text-primary)]" />
                                 <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                                     <span>20 (fast)</span>
                                     <span>50 (default ceiling)</span>
@@ -1082,10 +1084,12 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     min={1}
                                     max={50}
                                     step={1}
+                                    aria-label="Guide scale slider"
                                     value={settings.rfantibody_guide_scale}
-                                    onChange={(e) => updateSetting('rfantibody_guide_scale', parseInt(e.target.value))}
+                                    onChange={(e) => updateSetting('rfantibody_guide_scale', parseFloat(e.target.value))}
                                     className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-pink-500"
                                 />
+                                <input type="number" aria-label="Guide scale exact" step="any" value={settings.rfantibody_guide_scale} onChange={event => { if (event.target.value !== '') updateSetting('rfantibody_guide_scale', Number(event.target.value)); }} className="mt-2 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control)] p-2 text-[var(--text-primary)]" />
                                 <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                                     <span>1 (weak)</span>
                                     <span>25</span>
@@ -1097,17 +1101,19 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-xs text-slate-500 mb-1">
-                                    Noise Scale (CA) <span className="text-slate-600">({settings.rfantibody_noise_scale_ca.toFixed(1)})</span>
+                                    Noise Scale (CA) <span className="text-slate-600">({settings.rfantibody_noise_scale_ca})</span>
                                 </label>
                                 <input
                                     type="range"
                                     min={0.5}
                                     max={2.0}
                                     step={0.1}
+                                    aria-label="Noise scale CA slider"
                                     value={settings.rfantibody_noise_scale_ca}
                                     onChange={(e) => updateSetting('rfantibody_noise_scale_ca', parseFloat(e.target.value))}
                                     className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-pink-500"
                                 />
+                                <input type="number" aria-label="Noise scale CA exact" step="any" value={settings.rfantibody_noise_scale_ca} onChange={event => { if (event.target.value !== '') updateSetting('rfantibody_noise_scale_ca', Number(event.target.value)); }} className="mt-2 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control)] p-2 text-[var(--text-primary)]" />
                                 <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                                     <span>0.5 (consistent)</span>
                                     <span>1.0</span>
@@ -1117,17 +1123,19 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
 
                             <div>
                                 <label className="block text-xs text-slate-500 mb-1">
-                                    Noise Scale (Frame) <span className="text-slate-600">({settings.rfantibody_noise_scale_frame.toFixed(1)})</span>
+                                    Noise Scale (Frame) <span className="text-slate-600">({settings.rfantibody_noise_scale_frame})</span>
                                 </label>
                                 <input
                                     type="range"
                                     min={0.5}
                                     max={2.0}
                                     step={0.1}
+                                    aria-label="Noise scale frame slider"
                                     value={settings.rfantibody_noise_scale_frame}
                                     onChange={(e) => updateSetting('rfantibody_noise_scale_frame', parseFloat(e.target.value))}
                                     className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-pink-500"
                                 />
+                                <input type="number" aria-label="Noise scale frame exact" step="any" value={settings.rfantibody_noise_scale_frame} onChange={event => { if (event.target.value !== '') updateSetting('rfantibody_noise_scale_frame', Number(event.target.value)); }} className="mt-2 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control)] p-2 text-[var(--text-primary)]" />
                                 <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                                     <span>0.5 (consistent)</span>
                                     <span>1.0</span>

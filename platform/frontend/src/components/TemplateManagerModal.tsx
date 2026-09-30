@@ -27,6 +27,7 @@ interface TemplateManagerModalProps {
     currentModelId?: string;
     currentMode?: string;
     baseTemplateId?: string;
+    initialIntent?: 'browse' | 'save';
 }
 
 // Available icons for templates
@@ -42,7 +43,8 @@ export function TemplateManagerModal({
     currentParams,
     currentModelId,
     currentMode,
-    baseTemplateId
+    baseTemplateId,
+    initialIntent
 }: TemplateManagerModalProps) {
     const queryClient = useQueryClient();
 
@@ -120,9 +122,9 @@ export function TemplateManagerModal({
         wasOpen.current = isOpen;
         if (opening) {
             resetForm();
-            setMode(currentParams && Object.keys(currentParams).length > 0 ? 'edit' : 'list');
+            setMode(initialIntent === 'browse' ? 'list' : initialIntent === 'save' || (currentParams && Object.keys(currentParams).length > 0) ? 'edit' : 'list');
         }
-    }, [isOpen, currentParams]);
+    }, [isOpen, currentParams, initialIntent]);
 
     // Populate form when editing
     useEffect(() => {
