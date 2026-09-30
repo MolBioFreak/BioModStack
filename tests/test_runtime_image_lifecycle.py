@@ -69,7 +69,7 @@ def test_expected_size_rejected_before_new_lease_and_preserves_existing_owner(se
     state = lifecycle.load_state(store)
     assert state['generation'] == generation
     assert state['leases'][token]['identities'] == receipt
-    assert len(hashes) == 3  # one authoritative verification per request
+    assert hashes == []  # publication metadata, not a byte audit
 
 
 def test_publish_and_pin_share_fence_and_publisher_verification(setup, monkeypatch):
@@ -91,6 +91,29 @@ def test_publish_and_pin_share_fence_and_publisher_verification(setup, monkeypat
     assert again == (path, token, identities)
     assert len(calls) == 2
     assert path.stat().st_nlink == 1
+
+
+def test_acquire_and_ensure_use_legacy_publication_without_body_reads(setup, monkeypatch):
+    _, store, digest, _ = setup
+    path = publish(setup)
+    read, pread = os.read, os.pread
+    inode = path.stat().st_ino
+    def checked(fd, *args):
+        assert os.fstat(fd).st_ino != inode, 'lease read SIF body'
+        return read(fd, *args)
+    def checked_pread(fd, *args):
+        assert os.fstat(fd).st_ino != inode, 'lease read SIF body'
+        return pread(fd, *args)
+    monkeypatch.setattr(os, 'read', checked)
+    monkeypatch.setattr(os, 'pread', checked_pread)
+    monkeypatch.setattr(shared, '_hash', lambda *_: pytest.fail('lease hashed SIF'))
+    acquired, identity = lifecycle.acquire_lease(store, [digest], owner='new-owner')
+    token, ensured = lifecycle.ensure_lease(store, [digest], owner='retained-owner')
+    assert ensured == identity
+    assert lifecycle.ensure_lease(store, [digest], owner='retained-owner') == (token, ensured)
+    lifecycle.release_lease(store, token, owner='retained-owner')
+    lifecycle.release_lease(store, acquired, owner='new-owner')
+    assert not lifecycle.load_state(store)['leases']
 
 
 def test_exact_owner_lease_rejects_same_bytes_new_inode(setup):

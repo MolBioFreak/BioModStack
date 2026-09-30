@@ -36,7 +36,7 @@ def extract(fd, destination):
     (destination / 'data').write_bytes(b'fixture rootfs')
 
 
-def test_cold_once_warm_reuses_and_hashes_once(image, monkeypatch):
+def test_cold_once_warm_reuses_without_hashes(image, monkeypatch):
     root, digest, path = image
     calls = []
     def counted(fd, destination):
@@ -54,8 +54,7 @@ def test_cold_once_warm_reuses_and_hashes_once(image, monkeypatch):
     second = views.prepare_image(root, digest, counted)
     assert first == second
     assert len(calls) == 1
-    assert hashes.count(path.stat().st_ino) == 1
-    assert hashes.count((first['rootfs'] / 'data').stat().st_ino) == 1
+    assert hashes == []
     assert not lifecycle.load_state(root)['leases']
     assert not list(root.rglob('.image-view-*'))
 
@@ -75,8 +74,14 @@ def test_corruption_is_not_repaired_or_reextracted(image, damage):
         target.chmod(0o600)
         target.write_bytes(b'corrupt')
         target.chmod(0o400)
-    with pytest.raises((shared.SharedRuntimeImageError, OSError)):
-        views.prepare_image(root, digest, lambda *_: pytest.fail('must not reextract corruption'))
+    if damage == 'rootfs':
+        # Explicit preparation reuses the manifest, not a standalone leaf walk.
+        assert views.prepare_image(root, digest, lambda *_: pytest.fail('must not reextract')) == result
+        with pytest.raises(shared.SharedRuntimeImageError, match='integrity'):
+            views.verify_derivation(result['rootfs'].parent, result['identity'])
+    else:
+        with pytest.raises((shared.SharedRuntimeImageError, OSError)):
+            views.prepare_image(root, digest, lambda *_: pytest.fail('must not reextract corruption'))
     assert not lifecycle.load_state(root)['leases']
 
 
@@ -88,7 +93,7 @@ def test_size_mismatch_before_extraction(image):
     assert not lifecycle.load_state(root)['leases']
 
 
-def test_cold_preparation_reads_source_once(image, monkeypatch):
+def test_cold_preparation_does_not_rehash_published_source(image, monkeypatch):
     root, digest, path = image
     calls = []
     original = shared._hash
@@ -98,7 +103,7 @@ def test_cold_preparation_reads_source_once(image, monkeypatch):
         return original(fd)
     monkeypatch.setattr(shared, '_hash', measured)
     views.prepare_image(root, digest, extract)
-    assert calls == [1]
+    assert calls == []
 
 
 @pytest.mark.parametrize('mutation', ['write_restore', 'replace'])

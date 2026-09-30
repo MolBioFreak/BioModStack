@@ -18,19 +18,13 @@ from pathlib import Path
 from .shared_runtime_images import (
     SharedRuntimeImageError as Error, _absolute, _digest, _directory, _file,
     _check_file, _check_directory, _hash, _same, _identity, _member,
-    _DIRECTORY_FLAGS, _FILE_FLAGS,
+    _DIRECTORY_FLAGS, _FILE_FLAGS, _lock,
 )
 from . import runtime_image_lifecycle as lifecycle
 
 
 def parallel_workers():
-    """Use 80% of this host's cores for the whole-image passes.
-
-    Inventorying and hashing an extracted rootfs is a per-file pass over tens of
-    thousands of entries and gigabytes of content; leaving it on one core makes
-    every execution wait minutes for a machine that is otherwise idle. Extracting
-    an image uses the same share.
-    """
+    """Use 80% of this host's cores for cold extraction and explicit audits."""
     return max(1, int((os.cpu_count() or 1) * 0.8))
 
 FICLONE = 0x40049409
@@ -215,18 +209,28 @@ def _inventory(path, *, freeze=False, identities=None):
     return entries
 
 
-def verify_derivation(path, identity, *, verification=None):
+def verify_derivation(path, identity, *, verification=None, full=True):
+    """Explicit byte audit by default; routine use only reads publication metadata.
+
+    full=False retains the existing manifest/source generation and envelope. It
+    does not seek silent later leaf corruption or take standalone tree snapshots;
+    private cloning checks the required source members at the actual operations.
+    """
     try:
-        return _verify_derivation(path, identity, verification=verification)
+        return _verify_derivation(path, identity, verification=verification, full=full)
     except (ValueError, TypeError, KeyError) as exc:
         raise Error('invalid derived rootfs metadata') from exc
 
 
-def _verify_derivation(path, identity, *, verification=None):
+def _verify_derivation(path, identity, *, verification=None, full=True):
     with _directory(path) as fd:
         envelope = _identity(os.fstat(fd))
         if stat.S_IMODE(os.fstat(fd).st_mode) != 0o500 or set(os.listdir(fd)) != {"rootfs", "manifest.json"}:
             raise Error("invalid derived rootfs envelope")
+        with _directory(path / 'rootfs') as tree_fd:
+            root_identity = _identity(os.fstat(tree_fd))
+            if stat.S_IMODE(os.fstat(tree_fd).st_mode) & 0o222:
+                raise Error('derived rootfs integrity changed')
         with _file(path / "manifest.json") as (meta, parent, before):
             if stat.S_IMODE(before.st_mode) != 0o400 or before.st_nlink != 1:
                 raise Error("invalid derived rootfs metadata")
@@ -234,14 +238,15 @@ def _verify_derivation(path, identity, *, verification=None):
                 if (verification['path'] != str(path) or verification['source'] != identity
                         or verification['envelope'] != envelope
                         or verification['metadata'] != _identity(before)
-                        or snapshot_tree(path / 'rootfs') != verification['tree']):
+                        or (full and snapshot_tree(path / 'rootfs') != verification['tree'])
+                        or (not full and root_identity != verification['root'])):
                     raise Error('derived rootfs integrity changed')
                 _check_file(path / 'manifest.json', meta, parent, before)
                 _check_directory(path, fd)
                 if envelope != _identity(os.fstat(fd)):
                     raise Error('derived rootfs envelope changed')
                 return verification['receipt'], verification['manifest']
-            metadata_hash = _hash(meta)
+            metadata_hash = _hash(meta) if full else None
             os.lseek(meta, 0, os.SEEK_SET)
             with os.fdopen(os.dup(meta)) as stream:
                 manifest = json.load(stream, object_pairs_hook=lifecycle._unique_keys)
@@ -249,7 +254,7 @@ def _verify_derivation(path, identity, *, verification=None):
         if set(manifest) != {"schema_version", "source", "original", "frozen"} or manifest["schema_version"] != 1 or manifest["source"] != identity:
             raise Error("derived rootfs source identity mismatch")
         tree = {} if verification is not None else None
-        if _inventory(path / "rootfs", identities=tree) != manifest["frozen"]:
+        if full and _inventory(path / "rootfs", identities=tree) != manifest["frozen"]:
             raise Error("derived rootfs integrity mismatch")
         # Original modes are the only differences permitted in the restoration map.
         original = manifest["original"]
@@ -266,7 +271,7 @@ def _verify_derivation(path, identity, *, verification=None):
                    "inode": os.fstat(fd).st_ino}
         if verification is not None:
             verification.update(path=str(path), source=identity, envelope=envelope,
-                                metadata=_identity(before), tree=tree,
+                                metadata=_identity(before), tree=tree, root=root_identity,
                                 receipt=receipt, manifest=manifest)
         return receipt, manifest
 
@@ -293,7 +298,7 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
     _recover_stages(root, digest)
     with _directory(path.parent) as parent:
         if path.name in os.listdir(parent):
-            return path, verify_derivation(path, identity, verification=verification)[1]
+            return path, verify_derivation(path, identity, verification=verification, full=False)[1]
         name = ".derive-" + digest + "-" + uuid.uuid4().hex
         os.mkdir(name, 0o700, dir_fd=parent)
         stage = path.parent / name
@@ -310,7 +315,7 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
                 if row["kind"] in {"file", "directory"}:
                     row["mode"] = (row["mode"] & ~0o222) | (
                         0o400 if row["kind"] == "file" else 0o500)
-            # The lifecycle caller already verified these exact bytes. The
+            # The lifecycle caller already pinned this publication. The
             # retained FD and full no-follow inode/ctime check reject changes
             # during extraction without a second whole-SIF read.
             image = lifecycle.object_path(root, digest)
@@ -333,7 +338,7 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
             os.fsync(parent)
             # The rename moves the same inode and contents. Recheck its full
             # no-follow identity tree after publication, without rereading all
-            # member bytes for a third time. Warm launches still hash once.
+            # member bytes for a third time. Warm launches reuse the manifest.
             with _directory(path) as published:
                 envelope = _identity(os.fstat(published))
             # Linux rename updates the moved directory's ctime. Only that
@@ -353,14 +358,37 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
 
 def _clone(source, destination, manifest):
     rows = manifest["original"]
+    seen, inodes = set(), {}
+    link_counts = {}
+    for rel, row in rows.items():
+        if rel != '.' and (not rel or Path(rel).is_absolute() or '..' in Path(rel).parts):
+            raise Error('invalid derived rootfs path')
+        if 'hardlink' in row:
+            origin = rows.get(row['hardlink'])
+            if origin is None or origin['kind'] != 'file' or 'hardlink' in origin:
+                raise Error('invalid derived hardlink target')
+        if row['kind'] == 'file':
+            origin = row.get('hardlink', rel)
+            link_counts[origin] = link_counts.get(origin, 0) + 1
     destination.mkdir(mode=0o700)
     for parent, name, relative, info in _walk_tree(source):
+        rel = '.' if relative == '.' else relative[2:]
+        row = rows.get(rel)
+        frozen = manifest['frozen'].get(rel)
+        kinds = {'directory': stat.S_IFDIR, 'file': stat.S_IFREG, 'symlink': stat.S_IFLNK}
+        if (row is None or frozen is None or kinds.get(row['kind']) != stat.S_IFMT(info.st_mode)
+                or (row['kind'] != 'symlink' and stat.S_IMODE(info.st_mode) != frozen['mode'])
+                or (row['kind'] == 'file' and info.st_size != row['size'])
+                or (row['kind'] == 'symlink' and os.readlink(name, dir_fd=parent) != row['target'])):
+            raise Error('derived rootfs integrity changed during cloning')
+        seen.add(rel)
+        if row['kind'] == 'file':
+            origin = row.get('hardlink', rel)
+            inode = (info.st_dev, info.st_ino)
+            if info.st_nlink != link_counts[origin] or inode != inodes.setdefault(origin, inode):
+                raise Error('derived rootfs hardlink integrity changed during cloning')
         if relative == '.':
             continue
-        rel = relative[2:]
-        row = rows.get(rel)
-        if row is None:
-            raise Error('derived rootfs membership changed during cloning')
         target = destination / rel
         if row["kind"] == "directory":
             target.mkdir(mode=0o700)
@@ -380,6 +408,8 @@ def _clone(source, destination, manifest):
                         raise
                 finally:
                     os.close(out)
+    if seen != set(rows):
+        raise Error('derived rootfs membership changed during cloning')
     for rel, row in rows.items():
         if "hardlink" in row:
             os.link(destination / row["hardlink"], destination / rel, follow_symlinks=False)
@@ -421,7 +451,7 @@ def extract_sif(image_fd, destination):
 
 def _check_leased_source(image, image_fd, image_parent, before, identity):
     _check_file(image, image_fd, image_parent, before)
-    # The lifecycle owner already hashed this immutable generation. Recheck
+    # The lifecycle owner pinned this immutable publication generation. Recheck
     # exact inode/mode/ctime rather than rereading it within the same operation.
     if (stat.S_IMODE(before.st_mode) != 0o400 or before.st_nlink != 1
             or stat.S_IMODE(os.fstat(image_parent).st_mode) != 0o500
@@ -449,7 +479,7 @@ def prepare_image(store_root, digest, extract=None, *, owner=None, expected_size
             raise Error('runtime_image_size_mismatch')
         with _file(image) as (image_fd, image_parent, before):
             _check_leased_source(image, image_fd, image_parent, before, identity)
-            with lifecycle.transaction(root):
+            with _lock(root, digest):
                 derived, _ = _derive(root, digest, image_fd, identity,
                                      extract if extract is not None else extract_sif)
             _check_leased_source(image, image_fd, image_parent, before, identity)
@@ -479,7 +509,7 @@ def private_image_view(store_root, digest, workspace_root, extract):
                 _check_leased_source(image, image_fd, image_parent, before, identity)
             check_source()
             verification = {}
-            with lifecycle.transaction(root):
+            with _lock(root, digest):
                 derived, manifest = _derive(root, digest, image_fd, identity, extract,
                                             verification=verification)
             with _directory(workspace, create=True) as parent:
@@ -488,7 +518,7 @@ def private_image_view(store_root, digest, workspace_root, extract):
                 private = workspace / name / "rootfs"
                 try:
                     _clone(derived / "rootfs", private, manifest)
-                    verify_derivation(derived, identity, verification=verification)
+                    verify_derivation(derived, identity, verification=verification, full=False)
                     check_source()
                     _check_directory(workspace, parent)
                     os.lseek(image_fd, 0, os.SEEK_SET)
@@ -496,7 +526,7 @@ def private_image_view(store_root, digest, workspace_root, extract):
                         yield {"rootfs": private, "image": image, "image_fd": image_fd, "identity": identity}
                     finally:
                         check_source()
-                        verify_derivation(derived, identity, verification=verification)
+                        verify_derivation(derived, identity, verification=verification, full=False)
                 finally:
                     _remove(parent, name)
     finally:

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from .shared_runtime_images import (
     SharedRuntimeImageError, _absolute, _digest, _directory, _file, _check_file,
-    _lock, verify_image, _hash, _check_directory,
+    _lock, verify_image, image_identity, _hash, _check_directory,
 )
 
 Error = SharedRuntimeImageError
@@ -195,7 +195,7 @@ def forget_release(root, release_id):
 
 
 def acquire_lease(root, digests, *, owner):
-    """Atomically verify/pin exact objects. Returns (durable lease id, receipts).
+    """Atomically pin published generations, without a whole-SIF byte audit.
 
     Call before job admission, persist the id in its receipt, and retain it across
     queueing/restarts/resume. Release explicitly after all execution has ended.
@@ -213,7 +213,7 @@ def acquire_lease(root, digests, *, owner):
 def ensure_lease(root, digests, *, owner, expected_sizes=None):
     """Idempotently pin an exact durable owner; never extend/change its identity.
 
-    Existing owners are reverified, including inode identity. No expiry or
+    Existing owners retain their exact no-follow publication identity. No expiry or
     process-liveness inference is made; recovery uses the same token.
     """
     if not isinstance(owner, str) or not owner.strip():
@@ -231,7 +231,7 @@ def _ensure_lease_locked(root, state, digests, owner, *, identities=None, expect
     if len(matches) > 1 or (matches and set(matches[0][1]['identities']) != set(digests)):
         raise Error('lease owner identity mismatch')
     if identities is None:
-        identities = {d: verify_image(object_path(root, d), d) for d in digests}
+        identities = {d: image_identity(object_path(root, d), d) for d in digests}
     if set(identities) != set(digests):
         raise Error('lease identity set mismatch')
     if expected_sizes is not None and any(identities[d]['size'] != expected_sizes[d] for d in digests):
@@ -247,7 +247,7 @@ def _ensure_lease_locked(root, state, digests, owner, *, identities=None, expect
 def publish_leased_image(source, root, digest, *, owner):
     """Publish and durably pin before releasing the retirement fence.
 
-    Reuse the publisher's full no-follow/hash verification receipt under the
+    Reuse the publisher's streaming-copy/no-follow publication receipt under the
     same lock; do not recursively flock or hash multi-GB bytes again for pinning.
     """
     from .shared_runtime_images import _publish_image_locked
@@ -264,7 +264,7 @@ def publish_leased_image(source, root, digest, *, owner):
 
 def _acquire_lease_locked(root, state, digests, owner, *, identities=None):
     if identities is None:
-        identities = {d: verify_image(object_path(root, d), d) for d in digests}
+        identities = {d: image_identity(object_path(root, d), d) for d in digests}
     token = uuid.uuid4().hex
     state["leases"][token] = {"owner": owner, "identities": identities, "created_ns": time.time_ns()}
     save_state(root, state)
@@ -416,7 +416,8 @@ def recover_image_derivations(root):
             for name in names:
                 if name.startswith('.derive-'):
                     digest = _digest(name[len('.derive-'):len('.derive-') + 64])
-                    _recover_stages(root, digest)
+                    with _lock(root, digest):
+                        _recover_stages(root, digest)
             for name in names:
                 if not name.startswith('.quarantine-') or name.endswith('.rootfs'):
                     continue

@@ -148,8 +148,11 @@ def test_existing_invalid_object_rejected_not_repaired(image, workspace, mutatio
         os.link(result, workspace / "alias.sif")
     with pytest.raises((images.SharedRuntimeImageError, OSError)):
         images.verify_image(result, digest)
-    with pytest.raises((images.SharedRuntimeImageError, OSError)):
-        images.publish_image(source, store, digest)
+    if mutation == 'corrupt':
+        assert images.publish_image(source, store, digest) == result
+    else:
+        with pytest.raises((images.SharedRuntimeImageError, OSError)):
+            images.publish_image(source, store, digest)
     if mutation == "corrupt":
         assert result.read_bytes() == b"corruption"
     if mutation == "missing":
@@ -228,6 +231,52 @@ def test_invalid_digest_has_no_store_side_effect(image, value):
     with pytest.raises(images.SharedRuntimeImageError, match="SHA-256"):
         images.publish_image(source, store, value)
     assert not store.exists()
+
+
+def test_publication_single_pass_and_same_inode_receipt(image, monkeypatch):
+    source, store, digest = image
+    expected_size = source.stat().st_size
+    reads, copied = [], []
+    read, copy = images.os.read, images._copy
+    def measured(fd, size):
+        data = read(fd, size)
+        reads.append((os.fstat(fd).st_ino, len(data)))
+        return data
+    def counted(src, dst):
+        result = copy(src, dst)
+        copied.append(os.fstat(dst).st_ino)
+        return result
+    monkeypatch.setattr(images.os, 'read', measured)
+    monkeypatch.setattr(images, '_copy', counted)
+    monkeypatch.setattr(images, '_hash', lambda *_: pytest.fail('redundant body reread'))
+    receipts = {}
+    with images._lock(store, 'lifecycle'):
+        path = images._publish_image_locked(source, store, digest, _receipts=receipts)
+    assert sum(size for _, size in reads) == expected_size
+    assert {inode for inode, _ in reads} == {source.stat().st_ino}
+    assert copied == [path.stat().st_ino] == [receipts[digest]['inode']]
+    reads.clear()
+    assert images.publish_image(source, store, digest) == path
+    assert reads == []
+
+
+@pytest.mark.parametrize('wrong', ['source', 'copy_stream'])
+def test_copy_authenticates_actual_wrong_same_size_bytes(image, monkeypatch, wrong):
+    source, store, digest = image
+    # Both wrong acquisition bytes and a wrong copy stream must fail in _copy.
+    # Source descriptor identity remains stable in the copy_stream case.
+    if wrong == 'source':
+        source.write_bytes(b'X' * source.stat().st_size)
+    else:
+        read = images.os.read
+        def wrong_stream(fd, size):
+            data = read(fd, size)
+            return b'X' * len(data)
+        monkeypatch.setattr(images.os, 'read', wrong_stream)
+    monkeypatch.setattr(images, '_hash', lambda *_: pytest.fail('standalone hash'))
+    with pytest.raises(images.SharedRuntimeImageError, match='SHA-256'):
+        images.publish_image(source, store, digest)
+    assert not list((store / 'objects/sha256').iterdir())
 
 
 def test_wrong_source_digest_cleans_staging(image):

@@ -359,7 +359,7 @@ async def test_worker_helper_packages_required_lifecycle_peer(tmp_path, local_tr
     assert result.stdout.strip() == str(installed.with_name('runtime_image_lifecycle.py'))
 
 
-def test_warm_image_ingest_hashes_only_lease_and_rejects_corruption(tmp_path, monkeypatch):
+def test_warm_image_ingest_reuses_lease_identity_and_rejects_changes(tmp_path, monkeypatch):
     store, source, item = publish(tmp_path)
     lifecycle = tool.runtime_lifecycle()
     real = lifecycle.verify_image
@@ -371,7 +371,7 @@ def test_warm_image_ingest_hashes_only_lease_and_rejects_corruption(tmp_path, mo
 
     monkeypatch.setattr(lifecycle, 'verify_image', counted)
     assert store.ingest_runtime(item, source)['cache_hit'] is True
-    assert len(hashes) == 1
+    assert hashes == []
     obj = store.image_path(item)
     obj.chmod(0o600)
     obj.write_bytes(b'x' * item['size_bytes'])

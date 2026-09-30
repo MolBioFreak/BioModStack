@@ -4,7 +4,7 @@ import hashlib
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event
 from pathlib import Path
 
 import pytest
@@ -60,7 +60,42 @@ def clone_double(monkeypatch):
     monkeypatch.setattr(views.fcntl, 'ioctl', clone)
 
 
-def test_warm_launch_hashes_each_generation_once(store, monkeypatch, clone_double):
+def test_warm_view_zero_body_reads_and_no_extra_tree_walks(store, monkeypatch):
+    root, digest, workspace, image = store
+    path, _ = derive(store)
+    forbidden_inodes = {image.stat().st_ino}
+    forbidden_inodes.update(p.stat().st_ino for p in (path / 'rootfs/bin').iterdir())
+    read, pread, walk = os.read, os.pread, views._walk_tree
+    walks = []
+    def checked_read(fd, *args):
+        assert os.fstat(fd).st_ino not in forbidden_inodes, 'warm body read'
+        return read(fd, *args)
+    def checked_pread(fd, *args):
+        assert os.fstat(fd).st_ino not in forbidden_inodes, 'warm body pread'
+        return pread(fd, *args)
+    def counted_walk(source):
+        walks.append(source)
+        yield from walk(source)
+    def reflink_double(dst, operation, src):
+        assert operation == views.FICLONE
+        # Known fixture bytes only: unlike clone_double, this does not read src.
+        os.write(dst, b'original bytes' * 8192)
+    monkeypatch.setattr(os, 'read', checked_read)
+    monkeypatch.setattr(os, 'pread', checked_pread)
+    monkeypatch.setattr(views.fcntl, 'ioctl', reflink_double)
+    monkeypatch.setattr(views, '_walk_tree', counted_walk)
+    for symbol in ('_hash', '_inventory', 'snapshot_tree'):
+        monkeypatch.setattr(views, symbol, lambda *_a, **_k: pytest.fail('warm audit'))
+    monkeypatch.setattr(shared, '_hash', lambda *_: pytest.fail('warm SIF hash'))
+    for _ in range(2):
+        with views.private_image_view(root, digest, workspace, lambda *_: pytest.fail('warm extract')) as view:
+            (view['rootfs'] / 'bin/program').write_bytes(b'private changed bytes')
+        assert views.prepare_image(root, digest, lambda *_: pytest.fail('warm extract'))['rootfs'] == path / 'rootfs'
+    assert walks == [path / 'rootfs', path / 'rootfs']  # required FICLONE traversal only
+    assert not lifecycle.load_state(root)['leases']
+
+
+def test_warm_launch_never_hashes_shared_bodies(store, monkeypatch, clone_double):
     root, digest, workspace, image = store
     path, _ = derive(store)
     program = path / 'rootfs/bin/program'
@@ -78,10 +113,10 @@ def test_warm_launch_hashes_each_generation_once(store, monkeypatch, clone_doubl
         calls.clear()
         with views.private_image_view(root, digest, workspace,
                                       lambda *_: pytest.fail('warm launch extracted')):
-            assert calls.count(image.stat().st_ino) == 1
-            assert calls.count(program.stat().st_ino) == 1  # includes its hardlink
-        assert calls.count(image.stat().st_ino) == 1
-        assert calls.count(program.stat().st_ino) == 1
+            assert calls.count(image.stat().st_ino) == 0
+            assert calls.count(program.stat().st_ino) == 0  # includes its hardlink
+        assert calls.count(image.stat().st_ino) == 0
+        assert calls.count(program.stat().st_ino) == 0
     assert not lifecycle.load_state(root)['leases']
 
 
@@ -171,10 +206,20 @@ def test_generation_rechecks_reject_mutation(store, monkeypatch, clone_double, p
         if phase == 'cloning':
             mutate()
     monkeypatch.setattr(views, '_clone', clone)
-    with pytest.raises(shared.SharedRuntimeImageError):
-        with views.private_image_view(root, digest, workspace, extract):
-            assert phase == 'execution', 'changed generation reached engine'
-            mutate()
+    if mutation in {'source_restore', 'metadata'}:
+        with pytest.raises(shared.SharedRuntimeImageError):
+            with views.private_image_view(root, digest, workspace, extract):
+                assert phase == 'execution', 'changed source/manifest reached engine'
+                mutate()
+    else:
+        # The clone is already private. No post-clone/exit leaf audit is wanted.
+        with views.private_image_view(root, digest, workspace, extract) as view:
+            if phase == 'execution':
+                mutate()
+            assert (view['rootfs'] / 'bin/program').read_bytes() == b'original bytes' * 8192
+        if mutation != 'tree_restore':
+            with pytest.raises((shared.SharedRuntimeImageError, OSError)):
+                views.verify_derivation(path, shared.image_identity(image, digest))
     assert not lifecycle.load_state(root)['leases']
     assert not any(p.name.startswith('.image-view-') for p in workspace.iterdir())
 
@@ -221,6 +266,25 @@ def test_real_cow_preserves_modes_hardlinks_and_source(store):
         assert not lifecycle.load_state(root)['leases']
         pytest.skip('Actual local filesystem unavailable: ' + str(exc))
     assert shared.verify_image(image, digest) == before
+    assert not list(workspace.iterdir())
+    assert not lifecycle.load_state(root)['leases']
+
+
+def test_reflink_source_changed_at_actual_operation_is_rejected(store, monkeypatch, clone_double):
+    root, digest, workspace, _ = store
+    path, _ = derive(store)
+    clone = views.fcntl.ioctl
+    def changed(dst, operation, src):
+        clone(dst, operation, src)
+        # Same-byte write-and-restore at the pinned member changes ctime.
+        source = path / 'rootfs/bin/program'
+        source.chmod(0o755)
+        source.write_bytes(b'original bytes' * 8192)
+        source.chmod(0o555)
+    monkeypatch.setattr(views.fcntl, 'ioctl', changed)
+    with pytest.raises(shared.SharedRuntimeImageError, match='changed'):
+        with views.private_image_view(root, digest, workspace, extract):
+            pytest.fail('changed descriptor reached engine')
     assert not list(workspace.iterdir())
     assert not lifecycle.load_state(root)['leases']
 
@@ -312,6 +376,82 @@ def test_corrupt_derivation_is_not_replaced(store):
         with views.private_image_view(root, digest, workspace, lambda *_: pytest.fail('must not heal')):
             pytest.fail('corrupt rootfs admitted')
     assert program.read_bytes() == b'corrupt'
+
+
+@pytest.mark.parametrize('cancel', [False, True])
+def test_digest_lock_recovery_waits_and_other_lifecycle_progresses(store, cancel):
+    root, digest, _, _ = store
+    extracting, finish, recovering = Event(), Event(), Event()
+    def blocked(fd, destination):
+        empty(fd, destination)
+        extracting.set()
+        assert finish.wait(10)
+        if cancel:
+            raise KeyboardInterrupt('cancel owned extractor')
+    def preparation():
+        try:
+            views.prepare_image(root, digest, blocked)
+        except KeyboardInterrupt:
+            assert cancel
+    def recovery():
+        recovering.set()
+        lifecycle.recover_image_derivations(root)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        prepared = pool.submit(preparation)
+        assert extracting.wait(10)
+        stage = next((root / 'objects/sha256').glob('.derive-*'))
+        # Extraction does not monopolize the store-wide lifecycle fence.
+        token, _ = lifecycle.acquire_lease(root, [digest], owner='unrelated-lifecycle')
+        lifecycle.release_lease(root, token, owner='unrelated-lifecycle')
+        recovered = pool.submit(recovery)
+        assert recovering.wait(10)
+        try:
+            assert not recovered.done()
+            assert stage.exists(), 'recovery deleted an active stage'
+        finally:
+            finish.set()
+        prepared.result(timeout=10)
+        recovered.result(timeout=10)
+    assert not lifecycle.load_state(root)['leases']
+    assert not list((root / 'objects/sha256').glob('.derive-*'))
+    assert views.derived_path(root, digest).exists() is not cancel
+
+
+def test_cancel_while_waiting_for_digest_lock_releases_lease(store):
+    import multiprocessing
+    import signal
+    from contextlib import contextmanager
+    root, digest, _, _ = store
+    context = multiprocessing.get_context('fork')
+    parent, child = context.Pipe()
+    def worker():
+        original = views._lock
+        @contextmanager
+        def entered(*args):
+            child.send('waiting')
+            with original(*args):
+                yield
+        views._lock = entered
+        try:
+            views.prepare_image(root, digest, empty)
+        except KeyboardInterrupt:
+            child.send('cancelled')
+    with shared._lock(root, digest):
+        process = context.Process(target=worker)
+        process.start()
+        try:
+            assert parent.poll(10) and parent.recv() == 'waiting'
+            assert lifecycle.load_state(root)['leases']
+            os.kill(process.pid, signal.SIGINT)
+            assert parent.poll(10) and parent.recv() == 'cancelled'
+            process.join(10)
+            assert process.exitcode == 0
+        finally:
+            if process.is_alive():
+                process.kill()
+                process.join()
+    assert not lifecycle.load_state(root)['leases']
+    views.prepare_image(root, digest, empty)  # successor can take the same lock
 
 
 @pytest.mark.parametrize('where', ['extract', 'execute'])
