@@ -304,7 +304,10 @@ def parse_pdb_polymer_components(
 
     chains: dict[str, list[tuple[str, str]]] = {}
     seen_residues: set[tuple[str, str, str]] = set()
-    for line in pdb_path.read_text(encoding="utf-8", errors="replace").splitlines():
+    # The round author's former second read was strict UTF-8. Keep that input
+    # behavior for the opt-in projection, without changing the default bridge.
+    errors = "strict" if _author_residue_rows is not None else "replace"
+    for line in pdb_path.read_text(encoding="utf-8", errors=errors).splitlines():
         if not (line.startswith("ATOM  ") or line.startswith("HETATM")):
             continue
         chain_id = (line[21:22].strip() or "_") if len(line) >= 22 else "_"

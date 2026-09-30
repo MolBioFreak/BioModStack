@@ -148,6 +148,16 @@ def test_source_completion_invalid_behavior_matches_old(tmp_path, case):
     assert new == old
 
 
+def test_source_completion_invalid_utf8_preserves_round_rejection_and_native_default(tmp_path):
+    path = tmp_path / 'source.pdb'
+    path.write_bytes(atom('B', 42, 'A', 'ALA').encode() + b'REMARK invalid \xff\n')
+    old = outcome(legacy_source_components, path, ['B'])
+    assert old[0] == 'UnicodeDecodeError'
+    assert outcome(source_components, path, ['B']) == old
+    assert native.parse_pdb_polymer_components(path)[0]['sequence'] == 'A'
+    assert blind._source(path, ['B'], role='binder')[0]['sequence'] == 'A'
+
+
 def test_source_completion_unmatched_projection_remains_none(tmp_path, monkeypatch):
     path = tmp_path / 'source.pdb'
     path.write_text(atom('B', 42, 'A', 'ALA'))
