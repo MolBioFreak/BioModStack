@@ -264,6 +264,36 @@ class Cache:
             raise ValueError('runtime_image_size_mismatch')
         return self.image_path(item)
 
+    def runtime_identity(self, item):
+        """Reuse a canonical generation using the publisher's no-follow checks.
+
+        Return its existing receipt shape for retained lease identity comparison.
+        Legacy generations need no new proof document; this is not a byte audit.
+        """
+        images = runtime_images()
+        path = self.image_path(item)
+        with images._file(path) as (fd, parent, before):
+            envelope = os.fstat(parent)
+            if (stat.S_IMODE(before.st_mode) != 0o400 or before.st_nlink != 1
+                    or stat.S_IMODE(envelope.st_mode) != 0o500):
+                raise ValueError('runtime_image_publication_mode_mismatch')
+            if before.st_size != item['size_bytes']:
+                raise ValueError('runtime_image_size_mismatch')
+            images._check_file(path, fd, parent, before)
+            if not images._same(envelope, os.fstat(parent)):
+                raise ValueError('runtime_image_directory_changed')
+            return dict(sha256=item['sha256'], size=before.st_size,
+                        device=before.st_dev, inode=before.st_ino,
+                        mtime_ns=before.st_mtime_ns, ctime_ns=before.st_ctime_ns)
+
+    def pin_runtime(self, item, owner):
+        authority = runtime_lifecycle()
+        with authority.transaction(self.image_store) as root:
+            identity = self.runtime_identity(item)
+            return authority._ensure_lease_locked(root, authority.load_state(root),
+                [item['sha256']], owner, identities={item['sha256']: identity},
+                expected_sizes={item['sha256']: item['size_bytes']})
+
     def prepare_runtime_image(self, value, backend, operation_id):
         """Warm the backend's shared image representation, never execute it.
 
@@ -280,7 +310,8 @@ class Cache:
         if backend == 'apptainer':
             # Apptainer consumes the canonical SIF directly: no rootfs tooling,
             # extraction, workspace or CoW filesystem requirement.
-            self.verify_runtime(item)
+            with runtime_lifecycle().transaction(self.image_store):
+                self.runtime_identity(item)
             return {**item, 'state': 'ready', 'backend': backend, 'rootfs': None}
         import importlib
         authority = runtime_lifecycle()
@@ -300,12 +331,13 @@ class Cache:
                 os.stat(parent.name, dir_fd=fd, follow_symlinks=False)
             except FileNotFoundError:
                 return {**item, 'state': 'missing'}
-        self.verify_runtime(item)
+        authority = runtime_lifecycle()
+        with authority.transaction(self.image_store):
+            self.runtime_identity(item)
         return {**item, 'state': 'cache_hit'}
 
     def ingest_runtime(self, item, source):
-        # A warm ingest needs one authoritative hash under the lifecycle lock,
-        # not probe_runtime's full hash followed by ensure_lease's full hash.
+        # Warm acquisition reuses the generation under the lifecycle lock.
         # Presence is determined by the digest directory, never by a missing
         # runtime.sif inside a damaged published generation.
         parent = self.image_path(item).parent
@@ -317,16 +349,14 @@ class Cache:
             else:
                 present = True
         if present:
-            runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
-                owner='cache-artifact:' + item['sha256'],
-                expected_sizes={item['sha256']: item['size_bytes']})
+            self.pin_runtime(item, 'cache-artifact:' + item['sha256'])
             return {**item, 'state': 'ready', 'cache_hit': True}
         # One private upload -> one independently copied immutable object. Never
         # retain another artifact-CAS SIF or adopt/hardlink a mutable incoming file.
         with directory(source.parent) as parent:
             fd = os.open(source.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
             try:
-                if not verified(fd, item):
+                if regular(fd).st_size != item['size_bytes']:
                     raise ValueError('runtime_image_identity_mismatch')
             finally:
                 os.close(fd)
@@ -345,9 +375,7 @@ class Cache:
                 or '..' in destination.parts or destination == root
                 or not destination.is_relative_to(root)):
             raise ValueError('unsafe_runtime_alias')
-        runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
-            owner='attempt:' + relative.parts[0] + ':image:' + item['sha256'],
-            expected_sizes={item['sha256']: item['size_bytes']})
+        self.pin_runtime(item, 'attempt:' + relative.parts[0] + ':image:' + item['sha256'])
         target = self.image_path(item)
         with directory(destination.parent, create=not check) as parent:
             # Exact, controller-derived target only, not arbitrary external links.
@@ -380,8 +408,8 @@ class Cache:
         """Resolve an immutable named view of the existing content objects.
 
         The only durable bytes are still CAS objects. Read-only aliases are
-        never exposed as writable task binds. A warm lookup reads metadata;
-        execute_runtime verifies the selected bytes at the use boundary.
+        never exposed as writable task binds. Acquisition and execution reuse the
+        canonical root/marker; full=True remains an explicit maintenance audit.
         """
         digest, rows, payload = weight_layout(entries)
         root = Path(self.root) / 'weights' / digest
@@ -446,9 +474,41 @@ class Cache:
             if seen != set(expected) | {'.bms-weights.json'}:
                 raise ValueError('missing_weight_member')
 
+        def publication(path):
+            # The existing marker was written only after every declared member.
+            # Retained layouts use the same payload, without a new proof/age gate.
+            signature = lambda info: (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+            with directory(path) as parent:
+                before = os.fstat(parent)
+                if stat.S_IMODE(before.st_mode) != 0o555:
+                    raise ValueError('writable_weight_directory')
+                fd = os.open('.bms-weights.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=parent)
+                try:
+                    marker = regular(fd)
+                    if marker.st_size != len(payload) or stat.S_IMODE(marker.st_mode) != 0o444:
+                        raise ValueError('weight_identity_changed')
+                    if not verified(fd, dict(sha256=digest, size_bytes=len(payload))):
+                        raise ValueError('weight_hash_mismatch')
+                    after = regular(fd)
+                    current = os.stat('.bms-weights.json', dir_fd=parent, follow_symlinks=False)
+                    if (signature(marker) != signature(after)
+                            or (current.st_dev, current.st_ino) != (marker.st_dev, marker.st_ino)):
+                        raise ValueError('weight_changed_during_read')
+                finally:
+                    os.close(fd)
+                if signature(before) != signature(os.fstat(parent)):
+                    raise ValueError('weight_directory_changed')
+                with directory(path) as current:
+                    if signature(before) != signature(os.fstat(current)):
+                        raise ValueError('weight_root_changed')
+
         with self.locked(dict(sha256='weights-' + digest, size_bytes=0)):
             try:
-                check(root, full)
+                if full:
+                    check(root, True)
+                else:
+                    publication(root)
             except FileNotFoundError:
                 # A damaged published generation is never repaired in place.
                 if root.exists() or root.is_symlink():
@@ -472,7 +532,7 @@ class Cache:
                             source = os.open(row['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=objects)
                             try:
                                 info = regular(source)
-                                if stat.S_IMODE(info.st_mode) != 0o444 or not verified(source, row):
+                                if stat.S_IMODE(info.st_mode) != 0o444 or info.st_size != row['size_bytes']:
                                     raise ValueError('corrupt_weight_object')
                                 if row['mode'] == 0o444:
                                     os.link(row['sha256'], destination.name, src_dir_fd=objects,
@@ -487,6 +547,11 @@ class Cache:
                                     self._publish_copy(source, out, destination.name, row, row['mode'])
                             finally:
                                 os.close(source)
+                    for name in sorted(dirs, key=lambda n: len(PurePosixPath(n).parts), reverse=True):
+                        with directory(stage / name) as fd:
+                            os.fchmod(fd, 0o555)
+                            os.fsync(fd)
+                    # Accounted members are durable; publish the marker last.
                     with directory(stage) as parent:
                         fd = os.open('.bms-weights.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
                         with os.fdopen(fd, 'wb') as stream:
@@ -494,14 +559,9 @@ class Cache:
                             stream.flush()
                             os.fchmod(stream.fileno(), 0o444)
                             os.fsync(stream.fileno())
-                    for name in sorted(dirs, key=lambda n: len(PurePosixPath(n).parts), reverse=True):
-                        with directory(stage / name) as fd:
-                            os.fchmod(fd, 0o555)
-                            os.fsync(fd)
                     with directory(stage) as fd:
                         os.fchmod(fd, 0o555)
                         os.fsync(fd)
-                    check(stage)
                     with directory(root.parent) as parent:
                         os.rename(stage.name, root.name, src_dir_fd=parent, dst_dir_fd=parent)
                         os.fsync(parent)
@@ -541,14 +601,14 @@ class Cache:
         return record
 
     def object_present(self, row):
-        """Metadata-only presence, as the warm weight-view lookup already relies
-        on; complete bytes are still verified by weights() before publication."""
+        """Metadata-only canonical CAS publication lookup (no body audit)."""
         with self.objects(row) as parent:
             try:
                 info = os.stat(row['sha256'], dir_fd=parent, follow_symlinks=False)
             except FileNotFoundError:
                 return False
-        return stat.S_ISREG(info.st_mode) and info.st_size == row['size_bytes']
+        return (stat.S_ISREG(info.st_mode) and info.st_size == row['size_bytes']
+                and stat.S_IMODE(info.st_mode) == 0o444)
 
     def absent_objects(self, digests, expected):
         return sorted(digest for digest in digests
@@ -618,7 +678,9 @@ class Cache:
                 raise ValueError('archive_source_unavailable') from None
             with os.fdopen(fd, 'rb') as stream:
                 regular(stream.fileno())
-                # Authenticate the transport bytes before reading any member.
+                # One explicit authentication pass remains: download and unpack
+                # are separate helper processes, with no retained FD custody.
+                # Do not infer verified transport from a controller assertion.
                 if not verified(stream.fileno(), item):
                     raise ValueError('archive_identity_mismatch')
                 stream.seek(0)
@@ -777,7 +839,7 @@ class Cache:
             for alias in row['aliases']:
                 self.runtime_alias(row, alias, references['runtime_root'], check=True)
         if references.get('weights'):
-            result = self.weights(references['weights'], full=True)
+            result = self.weights(references['weights'])
             if result['state'] != 'ready':
                 raise ValueError('shared_weights_missing')
             os.environ['BMS_SHARED_WEIGHTS_ROOT'] = result['root']
@@ -816,7 +878,12 @@ class Cache:
         except OSError:
             return 'corrupt'
         try:
-            return 'cache_hit' if verified(fd, item) else 'corrupt'
+            info = regular(fd)
+            current = os.stat(item['sha256'], dir_fd=parent, follow_symlinks=False)
+            return ('cache_hit' if info.st_size == item['size_bytes']
+                    and stat.S_IMODE(info.st_mode) == 0o444
+                    and (info.st_dev, info.st_ino) == (current.st_dev, current.st_ino)
+                    else 'corrupt')
         except ValueError:
             return 'corrupt'
         finally:
