@@ -6,14 +6,17 @@ export type BinderRoundDesigner = typeof binderRoundDesigners[number];
 export type BinderRoundPredictor = typeof binderRoundPredictors[number];
 export interface BinderRoundStage { model_id: string; params: Record<string, UntypedApiValue> }
 /** This envelope belongs to Jobs, never to the generator's native settings. */
-export interface BinderRoundRequest {
-    schema_version: 1;
+interface BinderRoundCommon {
     enabled: boolean;
-    sequence_design: BinderRoundStage;
-    prediction: BinderRoundStage;
     binder_chains: string[];
     target_chains: string[];
 }
+export type BinderRoundRequest = BinderRoundCommon & (
+    | { schema_version: 1; sequence_design: BinderRoundStage; prediction: BinderRoundStage }
+    | { schema_version: 2; sequence_design: BinderRoundStage[]; prediction: BinderRoundStage[] }
+);
+export type BinderRoundRole = 'sequence_design' | 'prediction';
+export const roundStages = (value: BinderRoundStage | BinderRoundStage[]): BinderRoundStage[] => Array.isArray(value) ? value : [value];
 export interface BinderRoundDraft {
     binder_round: BinderRoundRequest;
     binder_round_drafts: Record<string, Record<string, UntypedApiValue>>;
@@ -48,7 +51,7 @@ export function hydrateBinderRound(values?: Record<string, UntypedApiValue>): Bi
         prediction: { model_id: 'protenix', params: {} }, binder_chains: [], target_chains: [],
     };
     const drafts = structuredClone(values?.binder_round_drafts ?? {}) as BinderRoundDraft['binder_round_drafts'];
-    for (const stage of [request.sequence_design, request.prediction]) {
+    for (const stage of [...roundStages(request.sequence_design), ...roundStages(request.prediction)]) {
         stage.params = roundStageParams(stage.model_id, stage.params);
         drafts[stage.model_id] = { ...drafts[stage.model_id], ...stage.params };
     }
@@ -65,13 +68,41 @@ export function withRoundCatalogs(draft: BinderRoundDraft, catalogs: BinderRound
     }
     const stage = (value: BinderRoundStage): BinderRoundStage => ({ ...value,
         params: roundStageParams(value.model_id, { ...drafts[value.model_id], ...value.params }) });
-    return { binder_round: { ...draft.binder_round, sequence_design: stage(draft.binder_round.sequence_design),
-        prediction: stage(draft.binder_round.prediction) }, binder_round_drafts: drafts };
+    const request = draft.binder_round;
+    return { binder_round: request.schema_version === 1
+        ? { ...request, sequence_design: stage(request.sequence_design), prediction: stage(request.prediction) }
+        : { ...request, sequence_design: request.sequence_design.map(stage), prediction: request.prediction.map(stage) },
+        binder_round_drafts: drafts };
 }
 
-export function changeRoundStage(draft: BinderRoundDraft, role: 'sequence_design' | 'prediction', model: string, patch?: Record<string, UntypedApiValue>): BinderRoundDraft {
-    const current = draft.binder_round[role];
-    const params = roundStageParams(model, { ...draft.binder_round_drafts[model], ...(current.model_id === model ? current.params : {}), ...patch });
-    return { binder_round: { ...draft.binder_round, [role]: { model_id: model, params } },
-        binder_round_drafts: { ...draft.binder_round_drafts, [current.model_id]: current.params, [model]: params } };
+/** Legacy selector switches the sole engine; a multi-engine edit updates only its branch. */
+export function changeRoundStage(draft: BinderRoundDraft, role: BinderRoundRole, model: string, patch?: Record<string, UntypedApiValue>): BinderRoundDraft {
+    const selected = roundStages(draft.binder_round[role]);
+    const current = selected.find(stage => stage.model_id === model);
+    const params = roundStageParams(model, { ...draft.binder_round_drafts[model], ...current?.params, ...patch });
+    const stage = { model_id: model, params };
+    const stages = selected.length === 1 ? [stage] : selected.map(value => value.model_id === model ? stage : value);
+    const drafts = { ...draft.binder_round_drafts, ...Object.fromEntries(selected.map(value => [value.model_id, value.params])), [model]: params };
+    return replaceRoundStages(draft, role, stages, drafts);
+}
+
+function replaceRoundStages(draft: BinderRoundDraft, role: BinderRoundRole, stages: BinderRoundStage[], drafts: BinderRoundDraft['binder_round_drafts']): BinderRoundDraft {
+    const request = draft.binder_round;
+    // Once promoted, retain v2 even after removing back to a single engine.
+    const binder_round: BinderRoundRequest = request.schema_version === 1 && stages.length === 1
+        ? { ...request, [role]: stages[0] }
+        : { ...request, schema_version: 2,
+            sequence_design: role === 'sequence_design' ? stages : roundStages(request.sequence_design),
+            prediction: role === 'prediction' ? stages : roundStages(request.prediction) };
+    return { binder_round, binder_round_drafts: drafts };
+}
+
+export function toggleRoundStage(draft: BinderRoundDraft, role: BinderRoundRole, model: string): BinderRoundDraft {
+    const selected = roundStages(draft.binder_round[role]);
+    const current = selected.find(stage => stage.model_id === model);
+    if (current && selected.length === 1) return draft;
+    const drafts = { ...draft.binder_round_drafts, ...Object.fromEntries(selected.map(stage => [stage.model_id, stage.params])) };
+    const stages = current ? selected.filter(stage => stage.model_id !== model)
+        : [...selected, { model_id: model, params: roundStageParams(model, drafts[model] ?? {}) }];
+    return replaceRoundStages(draft, role, stages, drafts);
 }

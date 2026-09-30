@@ -1,4 +1,4 @@
-import type { BinderRoundRequest } from './binderRound';
+import { roundStages, type BinderRoundRequest } from './binderRound';
 import type { BC2Request } from '../components/BindCraft2Settings';
 import type { BC2Source } from './bindcraft2StructureInputs';
 import { portableNativeSource } from './nativeBinderAuthoring';
@@ -8,8 +8,8 @@ const names: Record<string, string> = { fampnn: 'FA-MPNN', proteinmpnn: 'Protein
 export function initialRoundSteps(generator: string | null, round: BinderRoundRequest) {
     const steps = [{ title: names[generator ?? ''] ?? 'Generator', detail: 'Initial candidate generation' }];
     if (round.enabled) steps.push(
-        { title: names[round.sequence_design.model_id] ?? round.sequence_design.model_id, detail: 'Sequence design only for producer-declared backbone-only candidates' },
-        { title: names[round.prediction.model_id] ?? round.prediction.model_id, detail: 'Blind prediction of candidate sequences' },
+        ...roundStages(round.sequence_design).map(stage => ({ title: names[stage.model_id] ?? stage.model_id, detail: 'Sequence design only for producer-declared backbone-only candidates' })),
+        ...roundStages(round.prediction).map(stage => ({ title: names[stage.model_id] ?? stage.model_id, detail: 'Blind prediction of candidate sequences' })),
     );
     return steps;
 }

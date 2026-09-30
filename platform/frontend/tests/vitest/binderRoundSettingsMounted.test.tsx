@@ -8,7 +8,8 @@ import { api } from '../../src/lib/api';
 import { BinderRoundSettings } from '../../src/components/BinderRoundSettings';
 import { AntibodyDenovoTemplate } from '../../src/components/AntibodyDenovoTemplate';
 import { JobSubmission } from '../../src/components/JobSubmission';
-import { binderRoundDesigners, binderRoundPredictors, hydrateBinderRound, roundParameterIsBound, withRoundCatalogs } from '../../src/lib/binderRound';
+import { initialRoundSteps } from '../../src/lib/binderShell';
+import { binderRoundDesigners, binderRoundPredictors, hydrateBinderRound, roundParameterIsBound, toggleRoundStage, withRoundCatalogs } from '../../src/lib/binderRound';
 
 // Read the actual global contracts, not a reduced collection of hand-written
 // sampling fields. This subprocess only decodes repository YAML; no science runs.
@@ -30,7 +31,8 @@ beforeEach(() => {
         if (url.endsWith('/integration')) return { data: { workflows: {} } };
         if (url.includes('system')) return { data: { gpus: [] } };
         if (url.includes('cached')) return { data: { cached: [] } };
-        if (url.includes('templates')) return { data: savedTemplates };
+        if (url.includes('user-templates')) return { data: savedTemplates };
+        if (url.includes('templates')) return { data: [] };
         return { data: [] };
     });
     vi.spyOn(api, 'post').mockImplementation(async (url: string, body: any) => {
@@ -62,6 +64,56 @@ async function edit(label: string, value: string) { const node = document.queryS
 async function click(label: string) { const node = [...document.querySelectorAll<HTMLButtonElement>('button')].find(node => node.textContent?.trim() === label && !node.closest('[hidden]')); expect(node, label).toBeTruthy(); expect(node!.disabled).toBe(false); await act(async () => node!.click()); await settle(); }
 async function toggle(label: string) { const node = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!; expect(node, label).toBeTruthy(); await act(async () => node.click()); await settle(); }
 function expectedRound() { return withRoundCatalogs(hydrateBinderRound(), catalogs).binder_round; }
+
+it('multi-engine round edits independent native settings, saves and freshly loads through JobSubmission, then submits and clones exact arrays', async () => {
+    const settings = { max_trajectories: 2, trajectory_only: false };
+    localStorage.setItem('clonedJobData', JSON.stringify({ model_id: 'bindcraft2', mode: 'campaign', name: 'Multi round', params: { bindcraft2_settings: settings, binder_round_drafts: { proteinmpnn: { mpnn_extra_config: null } } } }));
+    await mount(<JobSubmission />);
+    await edit('seqs_per_design', '5');
+    await toggle('Include proteinmpnn in round'); await select('Round sequence designer', 'proteinmpnn');
+    await edit('seqs_per_design', '3'); await edit('mpnn_backbone_noise', '0');
+    await toggle('Include boltz2 in round');
+    await toggle('protenix_use_msa'); await edit('protenix_n_sample', '3'); await edit('num_parallel_jobs', '2');
+    await select('Round complex validator', 'boltz2'); await edit('boltz_diffusion_samples', '4'); await edit('num_parallel_jobs', '3');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="boltz_use_msa"]')!.checked).toBe(true);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="colabfold_use_templates"]')!.disabled).toBe(true);
+    // Removing and re-adding retains an inactive draft without switching other engines.
+    await toggle('Include proteinmpnn in round'); await toggle('Include proteinmpnn in round');
+    await select('Round sequence designer', 'proteinmpnn');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="seqs_per_design"]')!.value).toBe('3');
+    expect(document.querySelectorAll('[data-round-engine]')).toHaveLength(2); // one editor per role, not six forms
+    await click('Save campaign draft');
+    const name = document.querySelector<HTMLInputElement>('input[placeholder="e.g., My Boltz Config"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Multi saved'); name.dispatchEvent(new Event('input', { bubbles: true })); });
+    await click('Save Template'); expect(savedTemplates).toHaveLength(1);
+    const saved = structuredClone(savedTemplates[0]); const round = saved.params.binder_round;
+    expect(round).toMatchObject({ schema_version: 2, enabled: true,
+        sequence_design: [{ model_id: 'fampnn', params: { seqs_per_design: 5 } }, { model_id: 'proteinmpnn', params: { seqs_per_design: 3, mpnn_backbone_noise: 0, mpnn_extra_config: null } }],
+        prediction: [{ model_id: 'protenix', params: { protenix_use_msa: false, protenix_n_sample: 3, num_parallel_jobs: 2 } }, { model_id: 'boltz2', params: { boltz_use_msa: true, boltz_diffusion_samples: 4, num_parallel_jobs: 3 } }] });
+    expect(initialRoundSteps('bindcraft2', round).map(step => step.title)).toEqual(['BindCraft2', 'FA-MPNN', 'ProteinMPNN', 'Protenix', 'Boltz2']);
+    const one = toggleRoundStage(toggleRoundStage(hydrateBinderRound(saved.params), 'sequence_design', 'proteinmpnn'), 'prediction', 'boltz2');
+    const reopenedOne = hydrateBinderRound(JSON.parse(JSON.stringify(one)));
+    expect(reopenedOne.binder_round).toMatchObject({ schema_version: 2, sequence_design: [round.sequence_design[0]], prediction: [round.prediction[0]] });
+    expect(reopenedOne.binder_round_drafts.proteinmpnn.mpnn_extra_config).toBeNull();
+    await unmount(); await mount(<JobSubmission />);
+    await click('Template Manager'); await click('Load');
+    await click('Save campaign draft');
+    const reopenedName = document.querySelector<HTMLInputElement>('input[placeholder="e.g., My Boltz Config"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(reopenedName, 'Multi reopened'); reopenedName.dispatchEvent(new Event('input', { bubbles: true })); });
+    await click('Save Template'); expect(savedTemplates[1].params.binder_round).toEqual(round);
+    expect(savedTemplates[1].params.binder_round_drafts).toEqual(saved.params.binder_round_drafts);
+    await click('✕'); await click('Preview native campaign');
+    expect(previews[0]).toEqual({ model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: settings } });
+    await click('Launch BindCraft2 campaign');
+    expect(submitted[0].binder_round).toEqual(round);
+    expect(submitted[0].params).toEqual({ bindcraft2_settings: settings, bc2_preview_digest: 'native-only-digest' });
+    const launched = structuredClone(submitted[0]); await unmount();
+    localStorage.setItem('clonedJobData', JSON.stringify(launched)); await mount(<JobSubmission />);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Include proteinmpnn in round"]')!.checked).toBe(true);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Include boltz2 in round"]')!.checked).toBe(true);
+    await click('Preview native campaign'); await click('Launch BindCraft2 campaign');
+    expect(submitted[1].binder_round).toEqual(round);
+});
 
 it('all six global inventories render every applicable typed field and preserve catalog defaults', async () => {
     let latest: any;

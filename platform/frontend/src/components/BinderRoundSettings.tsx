@@ -3,7 +3,7 @@ import { useQueries } from '@tanstack/react-query';
 import { fetchModelById } from '../lib/api';
 import { NativeSetting } from './NativeBinderGeneration';
 import { binderRoundDesigners, binderRoundPredictors, blindFixedParameters, changeRoundStage, hydrateBinderRound,
-    roundParameterIsBound, withRoundCatalogs, type BinderRoundCatalog, type BinderRoundDraft } from '../lib/binderRound';
+    roundParameterIsBound, roundStages, toggleRoundStage, withRoundCatalogs, type BinderRoundCatalog, type BinderRoundDraft } from '../lib/binderRound';
 
 import { roundCatalogFields, roundControlGroups, roundControlLabel } from '../lib/binderRoundControls';
 
@@ -38,7 +38,8 @@ export function BinderRoundSettings({ values, onChange }: {
     const originalSerialized = JSON.stringify({ binder_round: values.binder_round, binder_round_drafts: values.binder_round_drafts });
     useEffect(() => { if (serialized !== originalSerialized) onChange(JSON.parse(serialized)); }, [serialized, originalSerialized, onChange]);
     const request = draft.binder_round;
-    const edit = (patch: Partial<typeof request>) => onChange({ ...draft, binder_round: { ...request, ...patch } });
+    const [editing, setEditing] = useState<Record<string, string>>({});
+    const edit = (patch: Partial<Pick<typeof request, 'enabled' | 'binder_chains' | 'target_chains'>>) => onChange({ ...draft, binder_round: { ...request, ...patch } });
     return <section aria-label="Initial candidate round" className="space-y-4 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 text-[var(--text-primary)]">
         <h3 className="text-lg font-semibold">Initial candidate round</h3>
         <label className="flex items-center gap-2"><input aria-label="Automatic blind complex prediction" type="checkbox" checked={request.enabled} onChange={event => edit({ enabled: event.target.checked })} />Automatic blind complex prediction</label>
@@ -49,18 +50,31 @@ export function BinderRoundSettings({ values, onChange }: {
         <div className="mt-4 space-y-4">
         <p className="text-sm text-[var(--text-secondary)]">Sequence design runs only for producer-declared backbone-only candidates. Sequence-bearing candidates go directly to prediction without redesign. Generated poses, structural templates and interface restraints are not prediction inputs; MSA is configured independently below.</p>
         {(['sequence_design', 'prediction'] as const).map(role => {
-            const stage = request[role];
+            const stages = roundStages(request[role]);
             const ids = role === 'sequence_design' ? binderRoundDesigners : binderRoundPredictors;
+            const stage = stages.find(value => value.model_id === editing[role]) ?? stages[0];
             const catalog = catalogs.find(item => item.id === stage.model_id);
             const fields = catalog ? roundCatalogFields(catalog).filter(parameter => !roundParameterIsBound(parameter.name)) : [];
             const grouping = roundControlGroups(stage.model_id, fields, stage.params);
             const patch = (values: Record<string, UntypedApiValue>) => onChange(changeRoundStage(draft, role, stage.model_id, values));
             return <fieldset key={role} aria-label={role === 'sequence_design' ? 'Round sequence design' : 'Round complex prediction'} className="min-w-0 space-y-3 rounded-lg border border-[var(--border-primary)] p-4">
                 <legend>{role === 'sequence_design' ? 'Backbone sequence designer' : 'Blind complex validator'}</legend>
-                <select className={input} aria-label={role === 'sequence_design' ? 'Round sequence designer' : 'Round complex validator'} value={stage.model_id} onChange={event => onChange(changeRoundStage(draft, role, event.target.value))}>
+                <p className="text-sm text-[var(--text-secondary)]">{stages.length} selected · Same launched round; the scheduler owns execution concurrency.</p>
+                <select className={input} aria-label={role === 'sequence_design' ? 'Round sequence designer' : 'Round complex validator'} value={stage.model_id} onChange={event => {
+                    const model = event.target.value;
+                    setEditing(previous => ({ ...previous, [role]: model }));
+                    if (stages.length === 1) onChange(changeRoundStage(draft, role, model));
+                }}>
                     {!ids.some(id => id === stage.model_id) && <option value={stage.model_id} disabled>{stage.model_id} (saved; choose a supported model)</option>}
-                    {ids.map(id => <option key={id} value={id}>{names[id]}</option>)}
+                    {(stages.length === 1 ? ids : stages.map(value => value.model_id)).map(id => <option key={id} value={id}>{names[id] ?? id}</option>)}
                 </select>
+                <div className="flex flex-wrap gap-3" aria-label="Selected round engines">
+                    {ids.map(id => { const selected = stages.some(stage => stage.model_id === id); return <label key={id} className="flex items-center gap-2 text-sm">
+                        <input type="checkbox" aria-label={`Include ${id} in round`} checked={selected} disabled={selected && stages.length === 1} onChange={() => onChange(toggleRoundStage(draft, role, id))} />
+                        {names[id]}{selected ? ' · selected' : ''}
+                    </label>; })}
+                </div>
+                <div data-round-engine={stage.model_id} className="space-y-3">
                 {role === 'prediction' && <p className="text-sm text-[var(--text-secondary)]" data-round-msa-summary>{grouping.msa.summary}</p>}
                 <div className="grid gap-5 md:grid-cols-2" data-round-primary>{grouping.primary.map(parameter => <NativeSetting key={parameter.name} parameter={roundControlLabel(parameter)} values={stage.params} onPatch={patch} chains={[...request.binder_chains, ...request.target_chains]} />)}</div>
                 {queries[models.indexOf(stage.model_id as typeof models[number])]?.error && <p role="status">{queries[models.indexOf(stage.model_id as typeof models[number])].error?.message} Saved settings remain intact.</p>}
@@ -72,6 +86,7 @@ export function BinderRoundSettings({ values, onChange }: {
                             : <NativeSetting key={parameter.name} parameter={{ ...roundControlLabel(parameter), ...(group.startsWith('Inactive ') ? { display_applicable: false } : {}) }} values={stage.params} onPatch={patch} chains={[...request.binder_chains, ...request.target_chains]} />)}</div>
                 </details>)}
                 <p className="text-xs text-[var(--text-secondary)]">Source structures, sequences and target identities come from the selected producer, not these sampling settings.</p>
+                </div>
             </fieldset>;
         })}
         <details><summary className="cursor-pointer">Chain roles (optional explicit overrides)</summary>
