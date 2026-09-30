@@ -893,22 +893,55 @@ async def pause_md_production(session: AsyncSession, job: Job, *, operation_id: 
         if observed.get('state') in {'failed','cancelled','uncertain'} or asyncio.get_running_loop().time() >= deadline:
             raise RemoteExecutionError('MD pause remains unresolved: ' + str(observed.get('state')))
         await asyncio.sleep(0.1)
-    if runtime is None:
+    if runtime is not None:
+        from services.nextflow import _project_local_components
+        runtime.publish_projection()
+        await _project_local_components(job, session, local_path)
+    else:
         status = await remote_status(session, job)
         if status.state != 'paused' or not status.quiescent:
             raise RemoteExecutionError('MD worker outer writer ownership remains unresolved')
         remote_root = Path(attempt_dir) / 'results'
         output = Path(job.output_dir)
         if not output.is_absolute(): output = get_data_root() / output
+        from services.result_ingester import ingest_component_projection
+        edge = observed.get('continuation_edge') or {}
+        native_output = Path((edge.get('parent_snapshot') or {}).get('output_dir', str(remote_root)))
+        locator = (native_output.relative_to(remote_root) / '.bms-components.json').as_posix()
+        descriptor = observed['component_projection']
+        if descriptor['relative_path'] != locator:
+            raise RemoteExecutionError('MD pause projection generation locator conflicts')
+        await rsync_selected_from_remote(connection, str(remote_root), output, [locator],
+            max_file_bytes=descriptor['bytes'], timeout=300)
+        expected = dict(context, generation=observed.get('generation', 0),
+            current_plan_sha256=edge.get('plan_sha256', context.get('plan_sha256')),
+            projection_relative_path=locator, projection_sha256=descriptor['sha256'])
+        raw_projection = (output / locator).read_bytes()
+        if hashlib.sha256(raw_projection).hexdigest() != descriptor['sha256']:
+            raise RemoteExecutionError('MD pause returned projection digest conflicts')
+        from component_runtime import ResultReference
+        projection = json.loads(raw_projection)
+        references = [ResultReference(**reference)
+            for row in projection['components']
+            for reference in (row.get('result') or {}).get('references', [])]
+        if references:
+            await rsync_selected_from_remote(connection, str(remote_root), output,
+                sorted({reference.relative_path for reference in references}),
+                max_file_bytes=max(reference.size_bytes for reference in references), timeout=300)
+        for row in projection['components']:
+            # Executed failed/processless outputs can be empty. Bind only the
+            # authenticated native directory, never fabricate scientific files.
+            _safe_result_path(output, row['output_relative_path']).mkdir(parents=True, exist_ok=True)
         for identity, checkpoint in observed['md_checkpoints'].items():
             native = Path(checkpoint['md_resume_output_dir'])
             relative = native.relative_to(remote_root).as_posix()
-            local = output / '.bms-md-pause-import'
+            local = output
             local.mkdir(parents=True, exist_ok=True)
             selected = [relative + '/production/production.cpt', relative + '/md-checkpoint-receipt.json']
             await rsync_selected_from_remote(connection, str(remote_root), local, selected,
                 max_file_bytes=max(checkpoint['receipt']['bytes'], checkpoint['receipt_bytes']), timeout=300)
             checkpoint['local_output_dir'] = str(local / relative)
+        await ingest_component_projection(job, str(output), session, expected_context=expected)
         if not await _publish_remote_transition(session, job,
                 {'remote_state':'paused', 'status':'paused', 'queue_status':'paused', 'paused':True}, release_lease=True):
             raise RemoteExecutionError('MD pause current attempt changed during checkpoint return')

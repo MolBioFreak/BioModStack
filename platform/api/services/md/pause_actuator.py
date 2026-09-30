@@ -297,7 +297,7 @@ async def _pause_shared_run(session: AsyncSession, *, run: MdRun, parent: Job,
     for replica in replicas:
         child = await session.get(Job, replica.child_job_id) if replica.child_job_id else None
         if child:
-            by_component[(child.provenance or {}).get('component_id')] = (replica, child)
+            by_component[(child.provenance or {}).get('component_id', child.id)] = (replica, child)
     for identity, checkpoint in observation['md_checkpoints'].items():
         if identity not in by_component:
             raise MdStateError('MD_PAUSE_ACTUATION_FAILED', 'paused native replica projection is not yet registered')
@@ -357,7 +357,7 @@ async def resume_shared_md_run(session: AsyncSession, *, job_id: str,
         for replica in paused:
             checkpoint, _ = resolved[replica.id]
             child = await session.get(Job, replica.child_job_id)
-            identity = (child.provenance or {}).get('component_id')
+            identity = (child.provenance or {}).get('component_id', child.id)
             segment = await resume_replica(session, job_id=job_id, replica_run_id=replica.id,
                                           checkpoint_id=checkpoint.id)
             segments.append(segment)

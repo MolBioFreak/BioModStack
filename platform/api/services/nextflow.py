@@ -2647,19 +2647,22 @@ async def _project_local_components(job, session, context_path):
     if runtime is None or runtime.target_id != 'local' or runtime.root_job_id != str(job.id):
         raise ValueError('Local component projection requires the retained root owner')
     state = runtime.root_state()
-    if state is None or not state.get('quiescent'):
+    observing = (job.model_id == 'molecular_dynamics' and job.mode == 'simulate'
+                 and state is not None and state.get('state') == 'running')
+    if state is None or (not observing and not state.get('quiescent')):
         raise ValueError('Local component projection requires stopped execution writers')
     # Transport bindings stay relative to the original attempt root. Each native
     # collector publishes its own immutable sidecar inside its output generation.
-    native_output = Path(runtime.context['parent']['output_dir']).resolve()
+    native_output = Path(((state.get('continuation_edge') or {}).get('parent_snapshot')
+                          or runtime.context['parent'])['output_dir']).resolve()
     projection_relative = (native_output.relative_to(runtime.artifact_root) / '.bms-components.json').as_posix()
     expected = dict(root_job_id=runtime.root_job_id, attempt_id=runtime.attempt_id,
         target_id=runtime.target_id, lease_id=runtime.lease_id,
         source_identity=runtime.source_identity, plan_sha256=runtime.plan_sha256,
-        current_plan_sha256=runtime.context['plan_sha256'],
+        current_plan_sha256=(state.get('continuation_edge') or {}).get('plan_sha256', runtime.plan_sha256),
         generation=state.get('generation', 0), artifact_root=str(runtime.artifact_root),
         projection_relative_path=projection_relative,
-        projection_sha256=hashlib.sha256(canonical_bytes(runtime.export_projection())).hexdigest())
+        projection_sha256=hashlib.sha256(canonical_bytes(runtime.export_projection(control_observation=observing))).hexdigest())
     await ingest_component_projection(job, str(runtime.artifact_root), session,
                                       expected_context=expected)
 

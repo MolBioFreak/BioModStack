@@ -1311,8 +1311,8 @@ class ComponentRuntime(GroupingLedger):
                 raise ValueError("foreign component group")
             return self._effective_children(db, json.loads(row[0]))
 
-    def export_projection(self) -> dict[str, Any]:
-        """Snapshot authenticated ledger facts after the execution owner joins writers.
+    def export_projection(self, *, control_observation: bool = False) -> dict[str, Any]:
+        """Snapshot authenticated ledger facts, or explicit running control observations.
 
         This is host projection evidence, not a scientific success receipt. Original
         requests/groups and all failed/replaced children remain auditable.
@@ -1320,8 +1320,9 @@ class ComponentRuntime(GroupingLedger):
         with self._connect() as db:
             db.execute('BEGIN')
             root = db.execute('SELECT state,owner,boot,detail FROM root_execution').fetchone()
-            if (not root or root[0] not in {'completed', 'failed', 'cancelled', 'paused'}
-                    or not json.loads(root[3]).get('quiescent')):
+            running = bool(control_observation and root and root[0] == 'running')
+            if (not root or (not running and (root[0] not in {'completed', 'failed', 'cancelled', 'paused'}
+                    or not json.loads(root[3]).get('quiescent')))):
                 raise ValueError('component projection requires proven quiescent execution')
             detail = json.loads(root[3])
             components, unexecuted = [], []
@@ -1335,7 +1336,8 @@ class ComponentRuntime(GroupingLedger):
             for identity, request, state, result, error, owner in db.execute(
                     'SELECT component,request,state,result,error,owner FROM components ORDER BY rowid'):
                 if (owner is None or identity not in snapshots
-                        or state not in {'execution_finished', 'completed', 'failed', 'cancelled'}):
+                        or state not in ({'running', 'execution_finished', 'completed', 'failed', 'cancelled', 'paused'}
+                                         if running else {'execution_finished', 'completed', 'failed', 'cancelled', 'paused'})):
                     unexecuted.append(dict(component_id=identity, request=json.loads(request),
                         state=state, error=error, result=json.loads(result) if result else None))
                     continue
@@ -1367,20 +1369,27 @@ class ComponentRuntime(GroupingLedger):
             components=components, unprojected_components=unexecuted, groups=groups,
             replacements=replacements, events=events)
 
-    def publish_projection(self) -> Path:
-        payload = self.export_projection()
+    def publish_projection(self, *, control_observation: bool = False) -> Path:
+        payload = self.export_projection(control_observation=control_observation)
         encoded = canonical_bytes(payload)
         retained = self.artifact_root / 'component-projections' / f"generation-{payload['generation']}.json"
-        if retained.exists() and retained.read_bytes() != encoded:
-            raise ValueError('immutable terminal component projection conflicts')
-        durable_write(retained, encoded)
+        running = payload['root_state']['state'] == 'running'
+        if not running:
+            if retained.exists() and retained.read_bytes() != encoded:
+                raise ValueError('immutable terminal component projection conflicts')
+            durable_write(retained, encoded)
         edge = payload['root_state'].get('continuation_edge') or {}
         parent_output = Path((edge.get('parent_snapshot') or {}).get('output_dir', self.artifact_root)).resolve()
         if not parent_output.is_relative_to(self.artifact_root):
             raise ValueError('component projection output escapes its attempt')
         current = parent_output / '.bms-components.json'
         if current.exists() and current.read_bytes() != encoded:
-            raise ValueError('immutable native generation component projection conflicts')
+            previous = json.loads(current.read_bytes())
+            if (previous.get('root_state', {}).get('state') != 'running'
+                    or previous.get('generation') != payload['generation']
+                    or any(previous.get(key) != payload[key] for key in
+                        ('root_job_id', 'attempt_id', 'target_id', 'lease_id', 'source_identity', 'plan_sha256'))):
+                raise ValueError('immutable native generation component projection conflicts')
         durable_write(current, encoded)
         return current
 

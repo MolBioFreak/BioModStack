@@ -398,7 +398,15 @@ async def test_remote_controller_to_actual_worker_pause_resume(store,retained,mo
         execution_source_revision='a'*40,execution_source_tree='b'*40,execution_bundle_sha256='e'*64,
         output_dir=str(output),params={},provenance={'remote_execution_receipt':remote_receipt,
             'remote_execution_assignment':{'resources':resources}})
-    session.add_all([target,parent]);await session.commit()
+    remote_receipt['component_context_identity'].update(source_identity=runtime.source_identity,
+        plan_sha256=runtime.plan_sha256, artifact_root=str(runtime.artifact_root))
+    parent.provenance=dict(parent.provenance,remote_execution_receipt=remote_receipt)
+    session.add_all([target,parent]);await session.flush()
+    from services.md.state import create_md_run
+    await create_md_run(session,job=parent,normalized_request=dict(schema='bms.md.job.v2',
+        engine='gromacs',replicas=2,random_seed=71,chemistry=dict(profile_id='retained',
+        profile_sha256='a'*64,assurance='curated_profile')))
+    await session.commit()
     monkeypatch.setattr(executor,'_connection_for_attempt',lambda target,job:(object(),str(attempt)))
     monkeypatch.setattr(executor,'_worker_argv',lambda conn,command,directory,*args:[command,*args])
     async def verified(*args,**kwargs): pass

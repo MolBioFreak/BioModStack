@@ -626,7 +626,14 @@ def md_production_control(attempt_dir: Path, *, attempt_id: str, expected_boot_i
             raise RuntimeError('MD control original lease conflicts')
         if not resume:
             runtime.request_md_pause(operation_id, boot_id=expected_boot_id)
-            return runtime.root_state()
+            state = runtime.root_state()
+            if state.get('state') == 'paused' and state.get('quiescent'):
+                projection = runtime.publish_projection()
+                raw = projection.read_bytes()
+                state = dict(state, component_projection=dict(
+                    relative_path=projection.relative_to(runtime.artifact_root).as_posix(),
+                    sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw)))
+            return state
         claim = attempt_dir / ('md-resume-launch-' + hashlib.sha256(operation_id.encode()).hexdigest() + '.json')
         binding = dict(operation_id=operation_id, attempt_id=attempt_id,
                        boot_id=expected_boot_id, continuation_lease_id=continuation_lease_id)
