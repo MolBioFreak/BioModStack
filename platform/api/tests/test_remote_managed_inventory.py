@@ -371,8 +371,12 @@ async def test_download_completes_without_managed_install_or_audit(mounted, stor
     progress = (await client.get('')).json()[0]['preload']
     assert progress['phase'] == 'source_download_ready'
     assert progress['message'] == 'Downloads complete; source cached and 1 shared weight layouts prepared'
-    assert progress['artifacts'] == preview['artifacts']
-    weight, = [row for row in progress['artifacts'] if row['name'].startswith('weights/')]
+    receipts = (await client.get(f"/vast:1/preload/{progress['operation_id']}/artifacts",
+        params={'collection': 'cached', 'offset': 0, 'limit': 100})).json()['items']
+    assert progress['artifact_summary']['total_count'] == len(preview['artifacts'])
+    assert progress['cached_artifact_count'] == len(preview['artifacts'])
+    assert receipts == preview['artifacts']
+    weight, = [row for row in receipts if row['name'].startswith('weights/')]
     objects = worker / 'cache/artifacts/v1/objects/sha256'
     weight_object = objects / weight['sha256'][:2] / weight['sha256']
     # Source is a preparation object, not another selected-asset receipt.
@@ -455,3 +459,26 @@ def test_helper_rejects_unsafe_manifest_and_symlink_parent(tmp_path):
         bad['artifacts'][0]['name'] = path
         with pytest.raises(ValueError):
             runtime.validate_manifest(bad, helper)
+
+
+@pytest.mark.asyncio
+async def test_explicit_refresh_summary_keeps_full_readback_compatible(mounted, historical_release):
+    client, controller, worker, (calls, _) = mounted
+    await historical_release('model')
+    before = (await client.get('/vast:1/runtime-inventory/summary')).json()
+    previous_calls = len(calls)
+    response = await client.post('/vast:1/runtime-inventory/refresh', params={'summary': True})
+    assert response.status_code == 200, response.text
+    summary = response.json()
+    assert len(response.content) < 3000
+    assert summary['observation_id'] != before['observation_id']
+    assert summary['releases'][0]['artifact_count'] == 2
+    assert 'artifacts' not in summary['releases'][0]
+    assert any(c['action'] == 'bounded_check' for c in calls[previous_calls:])
+    assert (await client.get('/vast:1/runtime-inventory/summary')).json() == summary
+    full = (await client.get('/vast:1/runtime-inventory')).json()
+    assert full['observed_at'] == summary['observed_at']
+    assert full['releases'][0]['native_readiness'] == summary['releases'][0]['native_readiness']
+    assert len(full['releases'][0]['artifacts']) == 2
+    legacy = await client.post('/vast:1/runtime-inventory/refresh')
+    assert legacy.status_code == 200 and len(legacy.json()['releases'][0]['artifacts']) == 2

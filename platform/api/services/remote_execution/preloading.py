@@ -488,7 +488,7 @@ class PreloadController:
             await session.rollback()
             return response
 
-    async def refresh_inventory(self, session, target_id):
+    async def refresh_inventory(self, session, target_id, *, summary=False):
         from .managed_inventory import observe_releases, endpoint_digest, project_inventory, saved_manifests
         async with self.lock:
             if self.closed:
@@ -534,7 +534,11 @@ class PreloadController:
                     await session.rollback()
                     raise ExecutionTargetError('Worker identity or activity changed during inventory observation')
                 await session.commit()
-                result = project_inventory(await get_target(session, target_id))
+                if summary:
+                    from .managed_inventory import read_inventory_summary
+                    result = await read_inventory_summary(session, target_id)
+                else:
+                    result = project_inventory(await get_target(session, target_id))
                 await session.rollback()
                 return result
             except BaseException as exc:

@@ -24,7 +24,10 @@ from services.remote_execution.targets import (
     refresh_vast_targets, target_status, artifact_page, _target_response,
 )
 
-from services.remote_execution.managed_inventory import ManagedInventory, project_inventory
+from services.remote_execution.managed_inventory import (
+    ManagedInventory, project_inventory, ManagedInventorySummary, ManagedInventoryArtifactPage,
+    read_inventory_summary, read_inventory_artifacts,
+)
 
 router = APIRouter()
 
@@ -51,13 +54,36 @@ async def runtime_inventory(execution_target_id: str, session: AsyncSession = De
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post('/{execution_target_id}/runtime-inventory/refresh', response_model=ManagedInventory)
+@router.get('/{execution_target_id}/runtime-inventory/summary', response_model=ManagedInventorySummary | None)
+async def runtime_inventory_summary(execution_target_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        return await read_inventory_summary(session, execution_target_id)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get('/{execution_target_id}/runtime-inventory/artifacts', response_model=ManagedInventoryArtifactPage)
+async def runtime_inventory_artifacts(execution_target_id: str,
+    observation_id: str = Query(pattern=r'^[0-9a-f]{64}$'),
+    release_sha256: str = Query(pattern=r'^[0-9a-f]{64}$'),
+    offset: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=250),
+    session: AsyncSession = Depends(get_session)):
+    try:
+        return await read_inventory_artifacts(session, execution_target_id, observation_id, release_sha256, offset, limit)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post('/{execution_target_id}/runtime-inventory/refresh', response_model=ManagedInventory | ManagedInventorySummary | None)
 async def refresh_runtime_inventory(execution_target_id: str, http_request: Request,
+                                    summary: bool = Query(default=False),
                                     session: AsyncSession = Depends(get_session)):
     controller = getattr(http_request.app.state, 'preload_controller', None)
     if controller is None:
         raise HTTPException(status_code=503, detail='Preload service is unavailable')
     try:
+        if summary:
+            return await controller.refresh_inventory(session, execution_target_id, summary=True)
         return await controller.refresh_inventory(session, execution_target_id)
     except ExecutionTargetError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

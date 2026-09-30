@@ -77,6 +77,40 @@ class ManagedRelease(StrictModel):
     readiness_scope: Literal['asset_integrity_and_critical_compatibility_only'] = 'asset_integrity_and_critical_compatibility_only'
 
 
+class ManagedReleaseSummary(StrictModel):
+    selection: ProvisionSelection | CriticalRuntimeSelection | WorkflowRuntimeSelection
+    critical: CriticalRuntimeCompatibility | None = None
+    native_readiness: NativeReadiness | None = None
+    release_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    source_revision: str = Field(pattern=r'^[0-9a-f]{40}$')
+    source_tree: str = Field(pattern=r'^[0-9a-f]{40}$')
+    state: Literal['verified', 'missing', 'partial', 'corrupt', 'incompatible', 'unverified']
+    artifact_count: int = Field(ge=0)
+    bounded_readiness: Literal['verified_assets_and_critical_runtime', 'blocked', 'stale'] = 'blocked'
+    readiness_scope: Literal['asset_integrity_and_critical_compatibility_only'] = 'asset_integrity_and_critical_compatibility_only'
+
+
+class ManagedInventorySummary(StrictModel):
+    observation_id: str
+    observed_at: datetime
+    boot_id: uuid.UUID
+    state: Literal['current', 'stale']
+    scope: Literal['managed_independent_asset_releases'] = 'managed_independent_asset_releases'
+    releases: list[ManagedReleaseSummary]
+    scientific_ready: Literal[False] = False
+    critical_runtime_ready: bool
+    blockers: list[str]
+
+
+class ManagedInventoryArtifactPage(StrictModel):
+    observation_id: str
+    release_sha256: str
+    offset: int
+    limit: int
+    total: int
+    artifacts: list[ManagedArtifact]
+
+
 class ManagedInventory(StrictModel):
     observed_at: datetime
     boot_id: uuid.UUID
@@ -320,6 +354,148 @@ def project_native_readiness(release, *, current, critical_ready, boot=None):
                                           'scripts/check_rfantibody_runtime.py:operation_owned_gpu_probe_not_recorded'}]
         result.missing_authorities.append('complete_selected_model_native_probe_coverage')
     return result
+
+
+# Compact readers trust the existing immutable observation publication owner.
+# SQL removes manifests/artifact bodies before driver decoding; no ORM target or
+# full observation validation belongs on this routine saved-evidence path.
+async def _saved_header(session, target_id):
+    from sqlalchemy import select, func
+    from database import ExecutionTarget as T
+    from types import SimpleNamespace
+    from .targets import ExecutionTargetError
+    paths = ['inventory', 'managed_boot_id', 'managed_inventory.endpoint_sha256',
+             'managed_inventory.refresh_failed', 'managed_inventory.observation.observed_at',
+             'managed_inventory.observation.boot_id']
+    columns = [T.host, T.port, T.username, T.remote_root, T.host_key_sha256, T.active, T.state]
+    row = (await session.execute(select(*columns, *[
+        func.json_extract(T.provider_metadata, '$.' + path) for path in paths
+    ]).where(T.id == target_id))).first()
+    if row is None:
+        raise ExecutionTargetError('Execution target not found')
+    target = SimpleNamespace(**dict(zip(
+        ['host', 'port', 'username', 'remote_root', 'host_key_sha256', 'active', 'state'], row[:7])))
+    provider, boot, endpoint, failed, when, observed_boot = row[7:]
+    target.provider_metadata = {'inventory': json.loads(provider) if provider else {}}
+    return target, boot, endpoint, failed, when, observed_boot
+
+
+def _observation_parameters(target_id, header):
+    return dict(target_id=target_id, observed_at=header[4], boot_id=header[5], endpoint=header[2])
+
+
+_SAVED_RELEASES = """
+    FROM execution_targets t,
+         json_each(t.provider_metadata, '$.managed_inventory.observation.releases') r
+    WHERE t.id = :target_id
+      AND json_extract(t.provider_metadata, '$.managed_inventory.observation.observed_at') = :observed_at
+      AND json_extract(t.provider_metadata, '$.managed_inventory.observation.boot_id') = :boot_id
+      AND json_extract(t.provider_metadata, '$.managed_inventory.endpoint_sha256') = :endpoint
+"""
+
+
+async def read_inventory_summary(session, target_id, *, header=None):
+    from sqlalchemy import text
+    from .targets import inventory_fresh, INVENTORY_MAX_AGE_SECONDS
+    header = header or await _saved_header(session, target_id)
+    target, boot, endpoint, failed, when, observed_boot = header
+    if when is None:
+        return None
+    try:
+        observed_at = datetime.fromisoformat(when.replace('Z', '+00:00'))
+        observed_boot = uuid.UUID(observed_boot)
+        age = (datetime.now(timezone.utc) - (observed_at if observed_at.tzinfo else
+               observed_at.replace(tzinfo=timezone.utc))).total_seconds()
+        provider = target.provider_metadata['inventory']
+        current = (0 <= age <= INVENTORY_MAX_AGE_SECONDS and inventory_fresh(target)
+            and provider.get('present') is True and provider.get('running') is True
+            and target.active and target.state == 'ready' and endpoint == endpoint_digest(target)
+            and not failed and str(observed_boot) == boot)
+        params = _observation_parameters(target_id, header)
+        rows = (await session.execute(text("""
+            SELECT json_remove(r.value, '$.artifacts', '$.image_reference'),
+                   json_array_length(r.value, '$.artifacts'), r.key
+        """ + _SAVED_RELEASES + ' ORDER BY CAST(r.key AS INTEGER)'), params)).all()
+        releases = []
+        for payload, count, index in rows:
+            value = json.loads(payload)
+            native = value.pop('native_readiness', None)
+            release = ManagedReleaseSummary.model_validate(dict(value, artifact_count=count))
+            # Only a dependency witness per required prefix and the RFantibody
+            # image is needed for the existing native projection, never all names.
+            prefixes = []
+            if release.selection.kind == 'model':
+                from model_registry import model_runtime_dependencies
+                try:
+                    prefixes = [('containers/' if d.kind == 'image' else 'weights/') + d.relative_path
+                                for d in model_runtime_dependencies(release.selection.model_id)]
+                except ValueError:
+                    pass
+            witnesses = []
+            for prefix in dict.fromkeys(['containers/rfantibody.sif', *prefixes]):
+                witness = (await session.execute(text("""
+                    SELECT (SELECT a.value FROM json_each(r.value, '$.artifacts') a
+                        WHERE (json_extract(a.value, '$.name') = :prefix OR
+                            (:weight = 1 AND substr(json_extract(a.value, '$.name'), 1,
+                                length(:prefix) + 1) = :prefix || '/'))
+                          AND (:rf = 1 OR json_extract(a.value, '$.state') = 'verified')
+                        ORDER BY (json_extract(a.value, '$.state') = 'verified') DESC LIMIT 1)
+                """ + _SAVED_RELEASES + ' AND r.key = :release_index'),
+                    params | dict(release_index=index, prefix=prefix, weight=prefix.startswith('weights/'),
+                                  rf=prefix == 'containers/rfantibody.sif'))).scalar()
+                if witness:
+                    witnesses.append(ManagedArtifact.model_validate_json(witness))
+            stub = ManagedRelease.model_construct(**{key: getattr(release, key) for key in
+                ('selection', 'critical', 'release_sha256', 'source_revision', 'source_tree', 'state')},
+                artifacts=witnesses, native_readiness=None)
+            try:
+                stub.native_readiness = NativeReadiness.model_validate(native) if native else None
+            except ValueError:
+                pass
+            releases.append((release, stub))
+        critical_ready = current and any(r.selection.kind == 'critical_runtime' and r.state == 'verified'
+                                         for r, _ in releases)
+        for release, stub in releases:
+            release.native_readiness = project_native_readiness(stub, current=current,
+                critical_ready=critical_ready, boot=observed_boot)
+            release.bounded_readiness = ('stale' if not current else 'verified_assets_and_critical_runtime'
+                                        if critical_ready and release.state == 'verified' else 'blocked')
+        identity = hashlib.sha256(json.dumps([endpoint, when, str(observed_boot),
+            [r.release_sha256 for r, _ in releases]], separators=(',', ':')).encode()).hexdigest()
+        return ManagedInventorySummary(observation_id=identity, observed_at=observed_at,
+            boot_id=observed_boot, state='current' if current else 'stale',
+            releases=[r for r, _ in releases], critical_runtime_ready=critical_ready,
+            blockers=['scientific_readiness_not_checked'] if critical_ready else
+                     ['critical_release_not_verified', 'scientific_readiness_not_checked'])
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
+async def read_inventory_artifacts(session, target_id, observation_id, release_sha256, offset, limit):
+    from sqlalchemy import text
+    from .targets import ExecutionTargetError
+    header = await _saved_header(session, target_id)
+    summary = await read_inventory_summary(session, target_id, header=header)
+    release = next((r for r in summary.releases if r.release_sha256 == release_sha256), None) if summary else None
+    if not summary or summary.observation_id != observation_id or release is None:
+        raise ExecutionTargetError('Saved inventory observation or release changed; reload saved observation')
+    params = _observation_parameters(target_id, header) | dict(release_sha256=release_sha256, offset=offset, limit=limit)
+    rows = (await session.execute(text('''
+        SELECT a.value FROM execution_targets t,
+            json_each(t.provider_metadata, '$.managed_inventory.observation.releases') r,
+            json_each(r.value, '$.artifacts') a
+        WHERE t.id = :target_id
+          AND json_extract(t.provider_metadata, '$.managed_inventory.observation.observed_at') = :observed_at
+          AND json_extract(t.provider_metadata, '$.managed_inventory.observation.boot_id') = :boot_id
+          AND json_extract(t.provider_metadata, '$.managed_inventory.endpoint_sha256') = :endpoint
+          AND json_extract(r.value, '$.release_sha256') = :release_sha256
+        ORDER BY CAST(a.key AS INTEGER) LIMIT :limit OFFSET :offset
+    '''), params)).scalars().all()
+    if _observation_parameters(target_id, await _saved_header(session, target_id)) != _observation_parameters(target_id, header):
+        raise ExecutionTargetError('Saved inventory observation changed; reload saved observation')
+    return ManagedInventoryArtifactPage(observation_id=observation_id, release_sha256=release_sha256,
+        offset=offset, limit=limit, total=release.artifact_count,
+        artifacts=[ManagedArtifact.model_validate_json(row) for row in rows])
 
 
 def project_inventory(target):

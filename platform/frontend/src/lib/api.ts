@@ -745,6 +745,24 @@ export interface ManagedRuntimeInventory {
     critical_runtime_ready: boolean;
     blockers: Array<'critical_release_not_verified' | 'scientific_readiness_not_checked'>;
 }
+export interface ManagedRuntimeInventorySummary extends Omit<ManagedRuntimeInventory, 'releases'> {
+    observation_id: string;
+    releases: Array<Omit<ManagedRuntimeRelease, 'artifacts'> & { artifact_count: number }>;
+}
+export interface ManagedRuntimeArtifactPage {
+    observation_id: string;
+    release_sha256: string;
+    offset: number;
+    limit: number;
+    total: number;
+    artifacts: ManagedRuntimeArtifact[];
+}
+export const fetchExecutionTargetRuntimeInventorySummary = async (targetId: string, signal?: AbortSignal): Promise<ManagedRuntimeInventorySummary | null> =>
+    (await api.get<ManagedRuntimeInventorySummary | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory/summary`, { signal })).data;
+export const fetchExecutionTargetRuntimeInventoryArtifacts = async (targetId: string, observationId: string, releaseSha256: string, offset = 0, signal?: AbortSignal): Promise<ManagedRuntimeArtifactPage> =>
+    (await api.get<ManagedRuntimeArtifactPage>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory/artifacts`, { params: { observation_id: observationId, release_sha256: releaseSha256, offset, limit: 100 }, signal })).data;
+export const refreshExecutionTargetRuntimeInventorySummary = async (targetId: string): Promise<ManagedRuntimeInventorySummary | null> =>
+    (await api.post<ManagedRuntimeInventorySummary | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory/refresh`, undefined, { params: { summary: true } })).data;
 export const fetchExecutionTargetRuntimeInventory = async (targetId: string): Promise<ManagedRuntimeInventory | null> =>
     (await api.get<ManagedRuntimeInventory | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory`)).data;
 export const refreshExecutionTargetRuntimeInventory = async (targetId: string): Promise<ManagedRuntimeInventory> =>

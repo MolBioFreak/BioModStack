@@ -15,6 +15,7 @@ import {
 interface Props {
   target: ExecutionTarget;
   onChanged: () => void | Promise<unknown>;
+  inventoryVisible?: boolean;
 }
 const buttonClass = 'rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm text-[var(--text-primary)] hover:bg-[var(--card-hover)] disabled:opacity-50';
 const selectClass = 'mt-1 block w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-[var(--text-primary)]';
@@ -82,7 +83,8 @@ export function IndependentProvisionPanel(props: Props) {
     target.preload?.source_revision, target.preload?.source_tree, target.preload?.phase, target.preload?.recovery_required, target.progress?.operation_id]);
   return <ProvisionChooser key={binding} {...props} />;
 }
-function ProvisionChooser({ target, onChanged }: Props) {
+function ProvisionChooser({ target, onChanged, inventoryVisible = true }: Props) {
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [kind, setKind] = useState<CatalogProvisionSelection['kind'] | 'workflow'>('workflow');
   const [modelId, setModelId] = useState('');
   const catalog = useQuery({ queryKey: ['remote-provision-catalog'], queryFn: fetchProvisionCatalog, retry: false });
@@ -140,7 +142,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
     </div>}
     {kind !== 'workflow' && <ProvisionActions key={JSON.stringify([kind, modelId, valid])} target={target} onChanged={onChanged} selection={valid ? { kind, model_id: modelId } : null} />}
     {!live && <PreparationStatus target={target} onChanged={onChanged} />}
-    <details className="border-t border-[var(--border-primary)] pt-3 text-sm">
+    <details onToggle={event => setEvidenceOpen(event.currentTarget.open)} className="border-t border-[var(--border-primary)] pt-3 text-sm">
       <summary className="cursor-pointer font-medium">Evidence — last preparation receipt and worker asset inventory</summary>
       <div aria-label="Last independent provision receipt" className="space-y-2 pt-2">
         <h5 className="font-medium">Last preparation receipt</h5>
@@ -151,7 +153,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
           <p className="break-all text-xs">Operation {target.artifact_inventory.operation_id}</p>
           <PagedArtifactDetails targetId={target.id} operationId={target.artifact_inventory.operation_id} collection="inventory" count={target.artifact_inventory.artifact_count} />
         </> : <p>No independent provision observation. Installed artifacts are unknown.</p>}
-        <ManagedRuntimeInventoryPanel target={target} />
+        {inventoryVisible && evidenceOpen && <ManagedRuntimeInventoryPanel target={target} />}
       </div>
     </details>
   </section>;
