@@ -519,4 +519,3 @@ async def test_public_independent_preproduction_controls_remain_unchanged(store,
         assert response.json()['detail']['code']=='MD_PAUSE_UNAVAILABLE'
         await session.refresh(run)
         assert run.phase==phase and run.state_version==0
-

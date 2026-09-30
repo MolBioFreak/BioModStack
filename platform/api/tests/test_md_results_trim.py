@@ -350,4 +350,3 @@ async def test_terminal_cas_preserves_control_arriving_during_filesystem_validat
         assert parent.status == ('cancelled' if control == 'cancelled' else 'running')
         assert parent.awaiting_input is (control == 'awaiting_input')
         assert list((await observer.scalars(select(JobArtifact))).all()) == []
-
