@@ -132,8 +132,9 @@ async def test_hf_weight_aliases_prepare_without_duplicate_objects(store, assets
     from services.remote_execution import bundle
     from component_runtime import SourceIdentity
     from paths import get_code_root
-    source = SourceIdentity.from_checkout(get_code_root())
-    monkeypatch.setattr(cache, 'current_source_identity', lambda: (source.revision, source.tree))
+    source = SourceIdentity('a'*40, 'b'*40)
+    monkeypatch.setattr(SourceIdentity, 'from_checkout', classmethod(lambda cls, *args: source))
+    monkeypatch.setattr(cache, 'current_source_identity', lambda *args: (source.revision, source.tree))
     monkeypatch.setattr(bundle, 'get_container_dir', lambda: assets[0])
     monkeypatch.setattr(bundle, 'get_weights_root', lambda: assets[1])
     (assets[0] / 'esmfold2.sif').write_bytes(b'controlled image')
@@ -176,12 +177,12 @@ async def test_hf_weight_aliases_prepare_without_duplicate_objects(store, assets
             async with store() as session:
                 row = await session.get(ExecutionTarget, 'vast:1')
                 assert row.provider_metadata['preload']['phase'] == 'source_download_ready', row.provider_metadata['preload']
-            installed = list((tmp_path / 'worker/managed-assets/v1/releases').rglob('snapshots/revision/model.pt'))
+            installed = list((tmp_path / 'worker/cache/artifacts/v1/weights').rglob('snapshots/revision/model.pt'))
             assert len(installed) == 1
             assert installed[0].is_symlink() and installed[0].readlink().as_posix() == '../../model.pt'
             assert installed[0].read_bytes() == (root / 'model.pt').read_bytes()
             calls, uploads = local_transport
-            assert len(uploads) == 2  # image + one physical weight; never dereference aliases
+            assert len(uploads) == 2  # image + batch of source/weight; never dereference aliases
             # Warm preparation reuses physical objects and authenticates aliases again.
             response = await client.post(prefix, json={**selection, 'preview_sha256': approved['preview_sha256']})
             assert response.status_code == 202, response.text
@@ -190,10 +191,10 @@ async def test_hf_weight_aliases_prepare_without_duplicate_objects(store, assets
             async with store() as session:
                 row = await session.get(ExecutionTarget, 'vast:1')
                 assert row.provider_metadata['preload']['phase'] == 'source_download_ready'
-                assert len(row.provider_metadata['artifact_inventory']['artifacts']) == 2
-                observed = row.provider_metadata['managed_inventory']['observation']['releases'][0]
-                assert len(observed['artifacts']) == 3
-                assert all(a['state'] == 'verified' for a in observed['artifacts'])
+                assert len(row.provider_metadata['artifact_inventory']['artifacts']) == 3
+                assert 'managed_inventory' not in row.provider_metadata
+                assert row.provider_metadata['preload']['message'] == (
+                    'Downloads complete; source cached and 1 shared weight layouts prepared')
             from services.remote_execution.managed_inventory import manifest_for
             from tools import bms_managed_runtime as managed, bms_artifact_cache as artifacts
             manifest = manifest_for(selected, entries, (source.revision, source.tree))
@@ -205,6 +206,31 @@ async def test_hf_weight_aliases_prepare_without_duplicate_objects(store, assets
                 bad_link.update(target=bad_target, sha256=hashlib.sha256(bad_target.encode()).hexdigest(), size_bytes=len(bad_target))
                 with pytest.raises(ValueError):
                     managed.validate_manifest(bad, artifacts)
+            # Same-size silent corruption is not automatically audited or repaired.
+            # The explicit maintenance owner still performs full leaf verification.
+            rows = [dict(name=e.remote_destination.removeprefix('weights/'),
+                         sha256=e.sha256, size_bytes=e.size_bytes,
+                         mode=0o777 if e.link_target is not None else e.mode,
+                         **({'target': e.link_target} if e.link_target is not None else {}))
+                    for e in entries if e.remote_destination.startswith('weights/')]
+            worker_cache = artifacts.Cache(tmp_path / 'worker/cache/artifacts/v1')
+            layout = worker_cache.weights(rows, full=True)
+            leaf = installed[0].resolve()
+            before = leaf.stat()
+            leaf.chmod(0o600)
+            leaf.write_bytes(b'x' * before.st_size)
+            leaf.chmod(before.st_mode & 0o777)
+            response = await client.post(prefix, json={**selection, 'preview_sha256': approved['preview_sha256']})
+            assert response.status_code == 202, response.text
+            await settle(controller)
+            async with store() as session:
+                row = await session.get(ExecutionTarget, 'vast:1')
+                assert row.provider_metadata['preload']['phase'] == 'source_download_ready'
+            assert len(uploads) == 2 and worker_cache.weights(rows) == layout
+            assert leaf.stat().st_ino == before.st_ino
+            assert leaf.read_bytes() == b'x' * before.st_size
+            with pytest.raises(ValueError, match='weight_hash_mismatch'):
+                worker_cache.weights(rows, full=True)
             # Same-path alias replacement invalidates the previously approved preview.
             (root / 'other.pt').write_bytes(b'other controlled weight')
             (root / 'snapshots/revision/model.pt').unlink()
