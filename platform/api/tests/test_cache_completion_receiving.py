@@ -145,4 +145,3 @@ async def test_cache_completion_receiving_real_source_launch_prewarm_lossless_an
                 local = source / member.name
                 assert local.read_bytes() == archive.extractfile(member).read()
                 assert local.stat().st_mode & 0o777 == member.mode & 0o777
-

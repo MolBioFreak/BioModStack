@@ -471,3 +471,39 @@ async def test_d04_actual_baseline_candidate_origin_payload_counters(tmp_path, m
     assert measurements[1][0] == 18 and measurements[1][1] == 27
     assert measurements[1][0]+measurements[1][1] < measurements[0][0]
     assert measurements[1][2] < measurements[0][2]
+
+
+@pytest.mark.asyncio
+async def test_d04_large_delta_sql_chunks_retained_exact(store, record_property):
+    rows = [dict(name='runtime/' + str(i),sha256=hashlib.sha256(str(i).encode()).hexdigest(),
+                 size_bytes=i,state='pending') for i in range(85)]
+    updates = []
+    from sqlalchemy import event
+    engine = store.kw['bind'].sync_engine
+    def statement(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith('UPDATE'): updates.append(parameters)
+    event.listen(engine, 'before_cursor_execute', statement)
+    async def prewarm(**kwargs):
+        await kwargs['progress'](dict(phase='checking',message='Admission',artifact_progress=rows))
+        before = len(updates)
+        status = await kwargs['progress'](dict(phase='verifying',message='Changed selected batch',
+            artifact_delta=[(i,dict(row,state='verified')) for i,row in enumerate(rows)]))
+        assert len(updates)-before == 4  # three bounded row updates plus one scalar publication
+        assert status.sequence == 2 and status.artifact_summary.verified_count == 85
+        async with store() as session:
+            raw = (await session.get(ExecutionTarget,'vast:1')).provider_metadata['preload']
+            assert raw['artifact_progress'] == [dict(row,state='verified') for row in rows]
+        return dict(source_revision='a'*40,source_tree='b'*40,
+                    artifacts=[{k:v for k,v in row.items() if k != 'state'} for row in rows])
+    controller = p.PreloadController(store,prewarm=prewarm)
+    async with store() as session: await controller.start(session,'vast:1',PreloadRequest(job_id='recipe'))
+    await settle(controller)
+    async with store() as session:
+        raw = (await session.get(ExecutionTarget,'vast:1')).provider_metadata['preload']
+        assert raw['phase'] == 'source_download_ready' and raw['sequence'] == 3
+        assert len(raw['artifacts']) == 85
+    event.remove(engine, 'before_cursor_execute', statement)
+    record_property('changed_batch_rows',85)
+    record_property('bounded_row_sql_updates',3)
+    record_property('scalar_sql_updates',1)
+    record_property('sequence_increments_per_callback',1)
