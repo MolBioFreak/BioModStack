@@ -7062,7 +7062,7 @@ async def _create_job(
     if bc2_action_source is not None and normalized_mode != 'resume':
         vram_estimate = 0
         job_data.pinned_gpu = None
-    if job_data.model_id == "molecular_dynamics" and job_data.mode in {"simulate", "analyze"}:
+    if job_data.model_id == "molecular_dynamics" and job_data.mode == "analyze":
         vram_estimate = 0
         job_data.pinned_gpu = None
         logger.info(f"[QUEUE] MD {job_data.mode} job '{job_data.name}': CPU-only, vram_estimate=0")
@@ -7282,6 +7282,9 @@ async def _create_job(
                 )
                 _raise_md_launch_http_error(exc)
             job_params["job_name"] = job_name
+            from services.gpu_orchestrator import md_root_vram_estimate
+            vram_estimate = md_root_vram_estimate(job_params, vram_estimate,
+                selected_plan=execution_preview['plan'] if execution_preview is not None else None)
 
         if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
             try:
@@ -7608,7 +7611,7 @@ async def _create_job(
                     request_json=local_request,
                 )
             )
-        if is_md_launch and job_params.get("md_job_spec", {}).get("schema") == "bms.md.job.v2":
+        if is_md_launch:
             await create_md_run(
                 session,
                 job=job,

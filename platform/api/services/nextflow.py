@@ -2562,7 +2562,9 @@ def _component_launch_command(invocation, job, command, environment, *, attempt,
         invocation.execution_plan.plan_sha256, {})
     from services.remote_execution.targets import selected_plan_target_resources
     from types import SimpleNamespace
-    gpu_ids = (job.params or {}).get('pinned_gpus') or ([] if job.assigned_gpu is None else [job.assigned_gpu])
+    gpu_ids = ([] if job.assigned_gpu is None else [job.assigned_gpu]) if (
+        job.model_id == 'molecular_dynamics' and job.mode == 'simulate'
+    ) else ((job.params or {}).get('pinned_gpus') or ([] if job.assigned_gpu is None else [job.assigned_gpu]))
     resources = selected_plan_target_resources(SimpleNamespace(id='local'), invocation.execution_plan,
         gpu_ids=gpu_ids, scratch_bytes=0)
     resources['gpu_id'] = job.assigned_gpu
@@ -3769,10 +3771,8 @@ async def launch_nextflow_job(
                         # worker ORM snapshot has been expunged, so an operator's
                         # concurrent cancellation remains authoritative even when
                         # the terminal CAS loses its race.
-                        from services.md.lifecycle import reconcile_md_analysis_parent
-
                         session.expire_all()
-                        await reconcile_md_analysis_parent(md_analysis_parent_id, session)
+                        await reconcile_md_analysis_parent_if_current(md_analysis_parent_id, session)
                         await session.commit()
                 _running_units.pop(job_id, None)
                 
@@ -3844,10 +3844,28 @@ async def launch_nextflow_job(
                             stale_log_message="Skipped stale Nextflow exception publication for job %s",
                         )
                         if published and is_md_analysis:
-                            from services.md.lifecycle import reconcile_md_analysis_parent
-
-                            await reconcile_md_analysis_parent(str(job.parent_job_id), session)
+                            await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session)
                             await session.commit()
+
+
+async def reconcile_md_analysis_parent_if_current(parent_job_id, session):
+    """Hand off a fresh parent, never a cancelled/review-owned ORM snapshot.
+
+    The lifecycle finalizer still owns the publication fence and transaction.
+    This read also covers a late callback whose child terminal CAS lost.
+    """
+    from database import Job, MdRun
+    from services.md.lifecycle import reconcile_md_analysis_parent
+    with session.no_autoflush:
+        parent = await session.get(Job, str(parent_job_id), populate_existing=True)
+        run = await session.get(MdRun, str(parent_job_id), populate_existing=True)
+    if parent is not None and (
+        parent.status in {'cancelled', 'awaiting_input'}
+        or parent.queue_status == 'cancelled' or parent.awaiting_input
+        or (run is not None and run.phase in {'cancelling', 'cancelled'})
+    ):
+        return {'status': 'preserved'}
+    return await reconcile_md_analysis_parent(str(parent_job_id), session)
 
 
 def launch_nextflow_job_detached(
@@ -5469,6 +5487,16 @@ def compile_nextflow_invocation(
             'md_input_root',
             str(Path(str(params['md_job_config'])).expanduser().resolve().parent),
         )
+        if mode == 'simulate' and params.get('gpu_id') is not None:
+            # Bind execution, not the saved requested science. The preparation
+            # task passes this physical identity into shared replica expansion;
+            # each engine's existing singleton namespace still runs logical 0.
+            bound = _native_plan_metadata_settings(model_id, params)['md_config']
+            bound['execution'] = {**bound.get('execution', {}),
+                                  'gpu_id': str(params['gpu_id'])}
+            execution_path = Path(output_dir) / 'inputs' / 'md_execution_config.json'
+            plan_input(execution_path, (json.dumps(bound, sort_keys=True) + '\n').encode('utf-8'))
+            params['md_job_config'] = str(execution_path)
     
     # Handle GPU priority forcing
     gpu_priority = params.get('gpu_priority', 'auto')
