@@ -270,21 +270,10 @@ class Cache:
         Return its existing receipt shape for retained lease identity comparison.
         Legacy generations need no new proof document; this is not a byte audit.
         """
-        images = runtime_images()
-        path = self.image_path(item)
-        with images._file(path) as (fd, parent, before):
-            envelope = os.fstat(parent)
-            if (stat.S_IMODE(before.st_mode) != 0o400 or before.st_nlink != 1
-                    or stat.S_IMODE(envelope.st_mode) != 0o500):
-                raise ValueError('runtime_image_publication_mode_mismatch')
-            if before.st_size != item['size_bytes']:
-                raise ValueError('runtime_image_size_mismatch')
-            images._check_file(path, fd, parent, before)
-            if not images._same(envelope, os.fstat(parent)):
-                raise ValueError('runtime_image_directory_changed')
-            return dict(sha256=item['sha256'], size=before.st_size,
-                        device=before.st_dev, inode=before.st_ino,
-                        mtime_ns=before.st_mtime_ns, ctime_ns=before.st_ctime_ns)
+        identity = runtime_images().image_identity(self.image_path(item), item['sha256'])
+        if identity['size'] != item['size_bytes']:
+            raise ValueError('runtime_image_size_mismatch')
+        return identity
 
     def pin_runtime(self, item, owner):
         authority = runtime_lifecycle()
@@ -526,7 +515,6 @@ class Cache:
                         if 'target' in row:
                             with directory(destination.parent, create=True) as out:
                                 os.symlink(row['target'], destination.name, dir_fd=out)
-                                os.fsync(out)
                             continue
                         with self.locked(row), self.objects(row) as objects, directory(destination.parent, create=True) as out:
                             source = os.open(row['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=objects)
@@ -540,7 +528,6 @@ class Cache:
                                     linked = os.stat(destination.name, dir_fd=out, follow_symlinks=False)
                                     if (linked.st_dev, linked.st_ino) != (info.st_dev, info.st_ino):
                                         raise ValueError('weight_object_changed')
-                                    os.fsync(out)
                                 else:
                                     # An executable permission projection cannot chmod
                                     # other aliases of an immutable content object.
