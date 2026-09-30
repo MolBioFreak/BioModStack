@@ -34,6 +34,8 @@ export interface StructureViewerHostProps extends MolstarViewerProps {
     readonly onFiltersChange?: (filters: StructureFilterState) => void;
     readonly onMetricSelection?: (selection: MetricSelection) => void;
     readonly residueSelections?: readonly ResidueRef[];
+    /** Source editors own selection; clicks must not leave a second local highlight. */
+    readonly controlledResidueSelection?: boolean;
     readonly structureData?: string;
     readonly showMeasurements?: boolean;
     readonly showComplexWorkbench?: boolean;
@@ -102,6 +104,7 @@ export default function StructureViewerHost({
     onFiltersChange,
     onMetricSelection,
     residueSelections = [],
+    controlledResidueSelection = false,
     structureData,
     measurements: controlledMeasurements,
     onMeasurementsChange,
@@ -237,7 +240,7 @@ export default function StructureViewerHost({
         labelAtomIds:ref.labelAtomId ? [ref.labelAtomId] : undefined, authAtomIds:ref.authAtomId ? [ref.authAtomId] : undefined, altLoc:ref.altLoc,
     });
     const residues = useMemo(() => selectedResidues(selection), [selection]);
-    const selectedResidueKeys = useMemo(() => new Set(residues.map(canonicalSpatialRefKey)), [residues]);
+    const selectedResidueKeys = useMemo(() => new Set([...residues, ...residueSelections].map(canonicalSpatialRefKey)), [residues, residueSelections]);
     const linkedSelections: NonNullable<MolstarViewerProps['selections']> = residues.flatMap((residue) => {
         if ((residue as AtomRef).labelAtomId || (residue as AtomRef).authAtomId) return [];
         const chain = residue.labelAsymId;
@@ -337,7 +340,7 @@ export default function StructureViewerHost({
             authSeqId: residue.authSeqId,
             insertionCode: residue.insertionCode || undefined,
         };
-        commitSelection({ metricId: activeLayer?.descriptor.id ?? 'structure-selection', identities: [identity], origin: 'canvas' });
+        if (!controlledResidueSelection) commitSelection({ metricId: activeLayer?.descriptor.id ?? 'structure-selection', identities: [identity], origin: 'canvas' });
         callerResidueClick?.(residue);
     };
     const scenePresentation = useMemo<StructureScenePresentation>(() => ({
@@ -350,14 +353,17 @@ export default function StructureViewerHost({
             opacity: layerOpacity,
             order: 0,
         }] : [],
-        selection: residues.length > 0 ? [{ selectionSetId: 'linked-selection', label: 'Linked selection', residues }] : [],
+        selection: [
+            ...(residues.length > 0 ? [{ selectionSetId: 'linked-selection', label: 'Linked selection', residues }] : []),
+            ...(residueSelections.length > 0 ? [{ selectionSetId: 'source-selection', label: 'Source selection', residues: residueSelections }] : []),
+        ],
         filters,
         measurements,
         colorQueries,
         tooltipQueries,
         hiddenQueries,
         nonSelectedColor: residueMetricLayer?.nonSelectedColor ?? (legacyColors?.selections.length ? { r: 68, g: 68, b: 68 } : undefined),
-    }), [activeLayer, colorQueries, filters, hiddenQueries, layerOpacity, layerVisible, legacyColors, measurements, residueMetricLayer, residues, restoredPresentation, tooltipQueries]);
+    }), [activeLayer, colorQueries, filters, hiddenQueries, layerOpacity, layerVisible, legacyColors, measurements, residueMetricLayer, residueSelections, residues, restoredPresentation, tooltipQueries]);
 
     const residueLayer = filteredLayer && ['residue-scalar', 'atom-scalar'].includes(filteredLayer.descriptor.dimension) ? filteredLayer : undefined;
     const pairLayer = filteredLayer?.descriptor.dimension === 'residue-pair-matrix'

@@ -86,6 +86,8 @@ export interface MolstarDirectQuery {
 }
 
 export interface MolstarDirectPresentation {
+    /** Canonical selected residues, independent of analytical color layers. */
+    readonly selectionSelections?: readonly MolstarDirectQuery[];
     readonly colorSelections?: readonly MolstarDirectQuery[];
     readonly nonSelectedColor?: string | number | { r: number; g: number; b: number };
     readonly tooltipSelections?: readonly MolstarDirectQuery[];
@@ -358,7 +360,9 @@ export class MolstarDirectAdapter {
                 const labelSeqId = StructureProperties.residue.label_seq_id(location);
                 const authSeqId = StructureProperties.residue.auth_seq_id(location);
                 const insertionCode = StructureProperties.residue.pdbx_PDB_ins_code(location);
-                const documentId = this.documentStructures.get(loci.structure);
+                // Representation/component loci use derived Structures. Mol* retains
+                // their authoritative root; chain labels cannot identify a document.
+                const documentId = this.documentStructures.get(loci.structure.root);
                 if (!documentId || !labelAsymId || !authAsymId || !Number.isInteger(labelSeqId) || !Number.isInteger(authSeqId)) return;
                 this.residueClickHandler?.({
                     documentId,
@@ -450,7 +454,7 @@ export class MolstarDirectAdapter {
                     for (const entry of plugin.managers.structure.hierarchy.current.structures) {
                         const structure = entry.cell.obj?.data;
                         if (structure && !existingStructures.has(structure)) {
-                            this.documentStructures.set(structure, document.id);
+                            this.documentStructures.set(structure.root, document.id);
                         }
                     }
                 }
@@ -529,7 +533,7 @@ export class MolstarDirectAdapter {
             this.molecularDynamics = { replica: replica.replica, modelRef, frameCount };
             for (const entry of plugin.managers.structure.hierarchy.current.structures) {
                 const structure = entry.cell.obj?.data;
-                if (structure) this.documentStructures.set(structure, `md:replica:${replica.replica}`);
+                if (structure) this.documentStructures.set(structure.root, `md:replica:${replica.replica}`);
             }
             return viewerOk(undefined);
         } catch (error) {
@@ -605,7 +609,7 @@ export class MolstarDirectAdapter {
                 for (const point of measurement.points) {
                     const structureEntry = plugin.managers.structure.hierarchy.current.structures.find((entry) => {
                         const structure = entry.cell.obj?.data;
-                        return structure ? this.documentStructures.get(structure) === point.documentId : false;
+                        return structure ? this.documentStructures.get(structure.root) === point.documentId : false;
                     });
                     const structure = structureEntry?.cell.obj?.data;
                     if (!structure) return viewerUnsupported(`Measurement document ${point.documentId} is not loaded in this scene`, 'measurements');
@@ -677,7 +681,7 @@ export class MolstarDirectAdapter {
         const plugin = this.requirePlugin();
         return plugin.managers.structure.hierarchy.current.structures.flatMap((structureRef) => {
             const structure = structureRef.cell.obj?.data;
-            const documentId = structure ? this.documentStructures.get(structure) : undefined;
+            const documentId = structure ? this.documentStructures.get(structure.root) : undefined;
             if (!documentId) return [];
             return structureRef.components.flatMap((component, componentIndex) => component.representations.flatMap((representation, representationIndex) => {
                 const params = representation.cell.transform.params as { type?: { name?: string; params?: { alpha?: number } } } | undefined;
@@ -742,6 +746,9 @@ export class MolstarDirectAdapter {
             const tooltips = presentation.tooltipSelections ?? [];
             const hidden = presentation.hiddenSelections ?? [];
             if (presentation.representations) await this.applyRepresentations(presentation.representations);
+            if (presentation.selectionSelections !== undefined) {
+                this.applySelectionSelections(plugin, presentation.selectionSelections);
+            }
 
             if (colors.length > 0 || hidden.length > 0) {
                 await this.applyColorSelections(plugin, colors, presentation.nonSelectedColor);
@@ -1077,6 +1084,31 @@ export class MolstarDirectAdapter {
         });
     }
 
+    private applySelectionSelections(plugin: PluginUIContext, selections: readonly MolstarDirectQuery[]): void {
+        const planned = new Map<Structure, StructureElement.Loci>();
+        for (const entry of plugin.managers.structure.hierarchy.current.structures) {
+            const root = entry.cell.obj?.data.root;
+            if (!root || planned.has(root)) continue;
+            const documentId = this.documentStructures.get(root);
+            if (!documentId) continue;
+            const queries = selections.filter(selection => !selection.document_id || selection.document_id === documentId);
+            planned.set(root, queries.length ? queryLoci(queries, root) : StructureElement.Loci.none(root));
+        }
+        const manager = plugin.managers.structure.selection;
+        for (const [root, next] of planned) {
+            const current = manager.getLoci(root);
+            const previous = StructureElement.Loci.is(current) ? current : StructureElement.Loci.none(root);
+            if (StructureElement.Loci.areEqual(previous, next)) continue;
+            // Update only the changed residues, not an EveryLoci deselect over
+            // every representation. Native sequence and canvas providers stay
+            // linked without rebuilding unchanged markers or UI granularity.
+            const removed = StructureElement.Loci.subtract(previous, next);
+            const added = StructureElement.Loci.subtract(next, previous);
+            if (!StructureElement.Loci.isEmpty(removed)) manager.fromLoci('remove', removed, false);
+            if (!StructureElement.Loci.isEmpty(added)) manager.fromLoci('add', added, false);
+        }
+    }
+
     private async clearColorSelections(plugin: PluginUIContext): Promise<void> {
         this.paintCache = new WeakMap();
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
@@ -1099,7 +1131,7 @@ export class MolstarDirectAdapter {
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
             const structure = structureRef.cell.obj?.data;
             if (!structure) continue;
-            const documentId = this.documentStructures.get(structure);
+            const documentId = this.documentStructures.get(structure.root);
             const documentSelections = selections.filter((selection) => !selection.document_id || selection.document_id === documentId);
             const signature = JSON.stringify([nonSelectedColor, documentSelections.map(({opacity: _opacity, ...selection}) => selection)]);
             let cached = this.paintCache.get(structure);
@@ -1154,7 +1186,7 @@ export class MolstarDirectAdapter {
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
             const structure = structureRef.cell.obj?.data;
             if (!structure) continue;
-            const documentId = this.documentStructures.get(structure);
+            const documentId = this.documentStructures.get(structure.root);
             const documentSelections = selections.filter((selection) => !selection.document_id || selection.document_id === documentId);
             for (const selection of documentSelections) {
                 await setStructureTransparency(
@@ -1179,7 +1211,7 @@ export class MolstarDirectAdapter {
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
             const structure = structureRef.cell.obj?.data;
             if (!structure) continue;
-            const documentId = this.documentStructures.get(structure);
+            const documentId = this.documentStructures.get(structure.root);
             const documentSelections = selections.filter((selection) => !selection.document_id || selection.document_id === documentId);
             for (const selection of documentSelections) {
                 if (!selection.tooltip) continue;
