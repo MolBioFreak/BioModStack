@@ -80,7 +80,7 @@ export function IndependentProvisionPanel(props: Props) {
   const binding = JSON.stringify([target.id, target.provider_instance_id, target.host, target.port,
     target.username, target.remote_root, target.host_key_sha256, target.active, target.state,
     target.activated_at, capabilityIdentity(target), target.preload?.operation_id,
-    target.preload?.source_revision, target.preload?.source_tree, target.preload?.phase, target.preload?.recovery_required, target.progress?.operation_id]);
+    target.preload?.source_revision, target.preload?.source_tree, target.preload?.recovery_required, target.progress?.operation_id]);
   return <ProvisionChooser key={binding} {...props} />;
 }
 function ProvisionChooser({ target, onChanged, inventoryVisible = true }: Props) {

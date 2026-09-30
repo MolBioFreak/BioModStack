@@ -1118,7 +1118,7 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
         expected = _SOURCE_ARCHIVE_DIGESTS.get(key)
         if archive.is_symlink() or (archive.exists() and not archive.is_file()):
             raise RemoteBundleError('Unsafe cached source archive')
-        if not archive.exists() or not expected or _sha256_file(archive) != expected:
+        if not archive.exists() or not expected:
             temporary = cache_root / ('.archive-' + uuid.uuid4().hex)
             try:
                 with temporary.open('xb') as output:
@@ -1143,6 +1143,8 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
                 destination.write(chunk)
                 staged_digest.update(chunk)
         if staged_digest.hexdigest() != expected:
+            # Retry regenerates through Git; never extract mismatched private bytes.
+            _SOURCE_ARCHIVE_DIGESTS.pop(key, None)
             raise RemoteBundleError('Cached source archive changed during staging')
         os.utime(archive, None, follow_symlinks=False)
         _prune_source_archives(cache_root)

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArtifactDetails } from './ArtifactDetails';
 import { isAxiosError } from 'axios';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -28,8 +28,7 @@ const buttonClass = 'rounded-lg border border-[var(--border-primary)] px-3 py-1.
 const ACTIVE_PHASES = ['checking', 'transferring', 'verifying', 'cancelling', 'recovery_blocked'];
 export function ManagedRuntimeInventoryPanel({ target }: { target: ExecutionTarget }) {
   const binding = JSON.stringify([target.id, target.provider_instance_id, target.host, target.port, target.username, target.remote_root,
-    target.host_key_sha256, target.active, target.state, target.activated_at, target.preload?.operation_id,
-    target.preload?.phase, target.preload?.recovery_required, target.preload?.source_revision, target.preload?.source_tree, target.progress?.operation_id]);
+    target.host_key_sha256, target.activated_at]);
   return <InventoryObservation key={binding} target={target} binding={binding} />;
 }
 function InventoryObservation({ target, binding }: { target: ExecutionTarget; binding: string }) {
@@ -40,6 +39,13 @@ function InventoryObservation({ target, binding }: { target: ExecutionTarget; bi
   const lock = useRef(false);
   const saved = useQuery({ queryKey, queryFn: ({ signal }) => fetchExecutionTargetRuntimeInventorySummary(target.id, signal),
     retry: false, staleTime: 0, gcTime: 0, refetchOnMount: 'always', refetchInterval: 30_000 });
+  const terminal = ['source_download_ready', 'failed', 'cancelled'].includes(target.preload?.phase ?? '')
+    ? `${target.preload?.operation_id}:${target.preload?.phase}` : null;
+  const previousTerminal = useRef(terminal);
+  useEffect(() => {
+    if (terminal && terminal !== previousTerminal.current) void client.invalidateQueries({ queryKey });
+    previousTerminal.current = terminal;
+  }, [terminal, client, binding, target.id]);
   const refresh = useMutation({ mutationKey, retry: false,
     mutationFn: () => refreshExecutionTargetRuntimeInventorySummary(target.id),
     onSuccess: data => { client.setQueryData(queryKey, data); },

@@ -87,10 +87,14 @@ class TargetSnapshot:
     managed_inventory: object | None = None
 
     @classmethod
-    def capture(cls, target):
+    def capture(cls, target, *, inventory=True):
         from .managed_inventory import project_inventory
-        return cls(target.id, *endpoint(target), deepcopy(target.capabilities or {}),
-                   deepcopy(project_inventory(target)))
+        # Planning uses the retained inventory; transport only needs its backend.
+        capabilities = target.capabilities or {}
+        return cls(target.id, *endpoint(target),
+                   deepcopy(capabilities if inventory else {
+                       'critical_runtime_binding': capabilities.get('critical_runtime_binding', {})}),
+                   deepcopy(project_inventory(target)) if inventory else None)
 
 
 def admission_clause(target):
@@ -184,7 +188,15 @@ class PreloadController:
             try:
                 return await asyncio.shield(task)
             except asyncio.CancelledError:
-                await task
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not task.cancelled():
+                    task.exception()
                 raise
             except Exception as exc:
                 raise ExecutionTargetError("Runtime preview unavailable; verify reviewed model and managed assets") from exc
@@ -289,13 +301,12 @@ class PreloadController:
             "$.preload_artifact_summary", func.json(json.dumps(artifact_summary(progress))),
             "$.preload_cached_artifact_count", len(progress.artifacts))
         if progress.selection is not None and progress.phase == "source_download_ready":
-            target = await get_target(session, target_id)
-            if expected_endpoint is None or endpoint(target) != expected_endpoint:
+            if expected_endpoint is None:
                 raise ExecutionTargetError("Worker identity or activity changed during preload")
             observed = dict(operation_id=progress.operation_id,
                 selection=progress.selection.model_dump(mode="json"), observed_at=progress.updated_at.isoformat(),
                 artifacts=[r.model_dump() for r in progress.artifacts],
-                endpoint_sha256=hashlib.sha256(json.dumps(endpoint(target)).encode()).hexdigest())
+                endpoint_sha256=hashlib.sha256(json.dumps(expected_endpoint).encode()).hexdigest())
             metadata = func.json_set(metadata, "$.artifact_inventory", func.json(json.dumps(observed)))
         fence = []
         if expected_endpoint is not None:
@@ -320,11 +331,25 @@ class PreloadController:
         remote_started = False
         try:
             connection = replace(connection, provision_operation_id=progress.operation_id)
-            async def check_fence():
+            async def check_fence(*, source=True):
                 async with self.session_factory() as session:
-                    target = await get_target(session, target_id)
-                    inventory = (target.provider_metadata or {}).get("inventory", {})
-                    current = (target.provider_metadata or {}).get("preload", {})
+                    # Do not load inventories, capabilities or artifact rosters
+                    # at the repeated transport fence.
+                    columns = ('id', 'host', 'port', 'username', 'remote_root',
+                               'host_key_sha256', 'active', 'state', 'leased_job_id')
+                    row = (await session.execute(select(
+                        *(getattr(ExecutionTarget, key) for key in columns),
+                        func.json_extract(ExecutionTarget.provider_metadata, '$.inventory'),
+                        func.json_extract(ExecutionTarget.provider_metadata, '$.preload.operation_id'),
+                        func.json_extract(ExecutionTarget.provider_metadata, '$.preload.phase'),
+                        func.json_extract(ExecutionTarget.provider_metadata, '$.preload.cancel_requested'),
+                    ).where(ExecutionTarget.id == target_id))).one_or_none()
+                    if row is None:
+                        raise ExecutionTargetError("Worker identity or activity changed during preload")
+                    target = SimpleNamespace(**dict(zip(columns, row[:len(columns)])),
+                        provider_metadata={'inventory': json.loads(row[len(columns)] or '{}')})
+                    inventory = target.provider_metadata['inventory']
+                    current = dict(operation_id=row[-3], phase=row[-2], cancel_requested=row[-1])
                     if current.get("cancel_requested"):
                         raise asyncio.CancelledError()
                     if (not target.active or target.state != "ready" or not inventory_fresh(target)
@@ -337,11 +362,19 @@ class PreloadController:
                         job = await session.get(Job, snapshot.id, populate_existing=True)
                         if job is None or recipe_digest(job) != progress.request_sha256:
                             raise ExecutionTargetError("Saved recipe changed during preload")
-                if await asyncio.to_thread(current_source_identity) != (progress.source_revision, progress.source_tree):
+                if source and await asyncio.to_thread(current_source_identity) != (progress.source_revision, progress.source_tree):
                     raise ExecutionTargetError("Source identity changed during preload")
 
+            progress_lock = asyncio.Lock()
+
             async def publish(event):
-                await check_fence()
+                async with progress_lock:
+                    await publish_locked(event)
+
+            async def publish_locked(event):
+                # Pure display progress retains the operation/recipe/worker
+                # fence. Source is checked at acquisition and final publication.
+                await check_fence(source=False)
                 # Validate the closed projection; raw stderr/path/command never enters UI.
                 updated = progress.model_copy(update={**event, "updated_at": datetime.utcnow()})
                 validated = PreloadProgress.model_validate(updated.model_dump())
@@ -357,7 +390,8 @@ class PreloadController:
             if progress.selection is not None:
                 from .cache import provision_cache
                 async with self.session_factory() as session:
-                    target = TargetSnapshot.capture(await get_target(session, target_id))
+                    target = TargetSnapshot.capture(await get_target(session, target_id),
+                                                    inventory=admitted_plan is None)
                 if admitted_plan is None:
                     preview, entries = await self._preview(progress.selection, target, compiled_plan=compiled_plan)
                     digest = preview.preview_sha256
