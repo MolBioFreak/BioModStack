@@ -79,7 +79,7 @@ test('main tab has a compact live status dashboard for motion axes temperatures 
     // R5: current embedded telemetry, not an extra retired dashboard poll.
     // Same-generation read-only catalog polling recovers status observation loss;
     // robot action flags remain authoritative; age only changes the display.
-    assert.match(cockpit, /useBioXpOperatorControlCatalogV2\(generation, active\)/);
+    assert.match(cockpit, /useBioXpOperatorControlCatalog\(\s*generation,\s*linkConnected,/);
     assert.match(cockpit, /const currentDashboardV2 = currentCatalogV2\?\.dashboard/);
     assert.match(cockpit, /const displayTelemetry = displayDashboardV2\?\.telemetry \?\? undefined/);
     assert.match(cockpit, /data=\{displayTelemetry\}/);
@@ -91,7 +91,6 @@ test('main tab has a compact live status dashboard for motion axes temperatures 
 test('browser uses fixed BMS routes and action ids, never arbitrary robot paths', () => {
     for (const routeToken of [
         '/api/bioxp/operator-controls/catalog',
-        '/api/bioxp/operator-controls/dashboard',
         '/api/bioxp/operator-controls/pipettes/readback',
         '/api/bioxp/operator-controls/pipettes/application/status',
         '/api/bioxp/operator-controls/pipettes/application/plan',
@@ -111,7 +110,7 @@ test('four-channel pipette surface separates physical admission from no-motion p
     );
     assert.doesNotMatch(source, /BioXpPipetteControlPanel/);
     for (const label of [
-        'Four-channel pipette controls', 'Channel', 'Hardware tip readback', 'Hardware pressure',
+        'Pipette status', 'Channel', 'Hardware tip readback', 'Hardware pressure',
         'Load tip physically', 'Move to waste physically', 'Detect fluid physically', 'Lift pipette head (Z)', 'Lower pipette head (Z)',
         'Build no-motion plan', 'No-motion application planner', 'Active hardware readback', 'Read live hardware',
     ]) assert.ok(pipettePanel.toLowerCase().includes(label.toLowerCase()), `missing literal label: ${label}`);
@@ -126,7 +125,7 @@ test('four-channel pipette surface separates physical admission from no-motion p
 test('receipts expose machine assessment and require explicit human PASS or FAIL observations', () => {
     for (const label of [
         'machine_assessment', 'operator_assessment', 'physical_effect_verified',
-        'remote_acknowledged', 'duration_ms', 'Stage receipts', 'Bounded response',
+        'remote_acknowledged', 'duration_ms',
         'Your physical observation', 'Record PASS', 'Record FAIL',
     ]) assert.match(source, new RegExp(label));
     assert.match(source, /Operator observation must remain attached to the robot-owned receipt/);

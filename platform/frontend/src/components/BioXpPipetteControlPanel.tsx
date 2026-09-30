@@ -342,7 +342,6 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
             {planner.data && (
                 <div className="mt-3 rounded border border-amber-700/50 bg-slate-950/50 p-2 text-xs text-slate-300">
                     <p><strong>Plan only:</strong> {planner.data.operation} · dependencies satisfied {String(planner.data.dependencies_satisfied)} · motion commanded {String(planner.data.motion_commanded)} · controller acknowledged {String(planner.data.controller_acknowledged)} · physical effect verified {String(planner.data.physical_effect_verified)} · receipt {planner.data.receipt_id}</p>
-                    <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap">{JSON.stringify(planner.data, null, 2)}</pre>
                 </div>
             )}
         </section>

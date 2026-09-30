@@ -22,7 +22,7 @@ import type { BioXpOperatorReportCommandRow, BioXpOperatorReportFilters } from '
 
 function display(value: unknown): string {
     if (value === null || value === undefined || value === '') return '—';
-    if (typeof value === 'object') return JSON.stringify(value);
+    if (typeof value === 'object') return 'See typed event fields';
     return String(value);
 }
 
@@ -307,7 +307,7 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
 
             {(eventDetailQuery.data || pressureDetailQuery.data) && (
                 <div className="mt-4 grid gap-3 lg:grid-cols-2" aria-label="Report evidence drill-down">
-                    {eventDetailQuery.data && <div className="rounded border border-slate-800 bg-slate-900/50 p-3"><h3 className="font-semibold">Runtime event detail</h3><dl className="mt-2 grid grid-cols-2 gap-2 text-xs"><dt className="text-slate-400">Event</dt><dd>{display(eventDetailQuery.data.event_id)}</dd><dt className="text-slate-400">Source</dt><dd>{display(eventDetailQuery.data.event_source)}</dd><dt className="text-slate-400">Kind</dt><dd>{display(eventDetailQuery.data.event_kind)}</dd><dt className="text-slate-400">Observed</dt><dd>{display(eventDetailQuery.data.observed_at)}</dd></dl><pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-xs text-slate-400">{JSON.stringify(eventDetailQuery.data, null, 2)}</pre></div>}
+                    {eventDetailQuery.data && <div className="rounded border border-slate-800 bg-slate-900/50 p-3"><h3 className="font-semibold">Runtime event detail</h3><dl className="mt-2 grid grid-cols-2 gap-2 text-xs"><dt className="text-slate-400">Event</dt><dd>{display(eventDetailQuery.data.event_id)}</dd><dt className="text-slate-400">Source</dt><dd>{display(eventDetailQuery.data.event_source)}</dd><dt className="text-slate-400">Kind</dt><dd>{display(eventDetailQuery.data.event_kind)}</dd><dt className="text-slate-400">Observed</dt><dd>{display(eventDetailQuery.data.observed_at)}</dd></dl></div>}
                     {pressureDetailQuery.data && <div className="rounded border border-slate-800 bg-slate-900/50 p-3"><h3 className="font-semibold">Pressure stream detail and trend evidence</h3><dl className="mt-2 grid grid-cols-2 gap-2 text-xs"><dt className="text-slate-400">Stream</dt><dd className="font-mono">{display(pressureDetailQuery.data.stream_session_id)}</dd><dt className="text-slate-400">Channels</dt><dd>{display(pressureDetailQuery.data.channels)}</dd><dt className="text-slate-400">Terminal state</dt><dd>{display(pressureDetailQuery.data.terminal_state)}</dd><dt className="text-slate-400">Chunks</dt><dd>{pressureSamplesQuery.data?.filtered_total ?? pressureDetailQuery.data.chunks?.length ?? 0}</dd></dl><ol className="mt-3 max-h-40 space-y-1 overflow-auto text-xs text-slate-400">{(pressureSamplesQuery.data?.samples ?? []).map((sample, index) => <li key={String(sample.chunk_id ?? index)}>#{display(sample.chunk_sequence)} · channel {display(sample.channel)} · {display(sample.sample_count)} samples · {display(sample.units)} · {display(sample.summary)}</li>)}</ol><button type="button" className="mt-2 rounded border border-slate-700 px-2 py-1 text-xs disabled:opacity-40" disabled={!pressureSamplesQuery.data?.next_cursor} onClick={() => setSampleCursor(pressureSamplesQuery.data?.next_cursor ?? null)}>Next pressure samples</button></div>}
                 </div>
             )}

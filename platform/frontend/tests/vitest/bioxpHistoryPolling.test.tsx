@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
-import { useBioXpOperatorReceiptV2, useInterruptBioXpOperatorActionV1, useBioXpOperatorActionHistory, useBioXpOperatorControlCatalogV2, useInvokeBioXpOperatorAction, useAssessBioXpOperatorAction, useInvokeBioXpOperatorActionV2 } from '../../src/lib/bioxpClient';
+import { useBioXpOperatorReceiptV2, useInterruptBioXpOperatorActionV1, useBioXpOperatorActionHistory, useBioXpOperatorControlCatalog, useInvokeBioXpOperatorAction, useAssessBioXpOperatorAction, useInvokeBioXpOperatorActionV2 } from '../../src/lib/bioxpClient';
 
 import { BioXpQuickDashboard } from '../../src/components/BioXpQuickDashboard';
 
@@ -116,15 +116,15 @@ it('refreshes current-generation history after v2 submission', async () => {
 });
 
 it('bounds and cancels catalog reads without changing the authority freshness budget', async () => {
-    function CatalogHarness() { useBioXpOperatorControlCatalogV2(7); return null; }
+    function CatalogHarness() { useBioXpOperatorControlCatalog(7); return null; }
     vi.mocked(api.get).mockImplementation(() => new Promise(() => {}));
     await act(async () => root.render(<QueryClientProvider client={client}><CatalogHarness /></QueryClientProvider>));
-    expect(api.get).toHaveBeenCalledWith('/api/bioxp/operator-controls/v2/catalog', {
-        timeout: 12_000, signal: expect.any(AbortSignal),
+    expect(api.get).toHaveBeenCalledWith('/api/bioxp/operator-controls/catalog', {
+        timeout: 12_000, signal: expect.any(AbortSignal), params: undefined,
     });
     const options = vi.mocked(api.get).mock.calls[0][1]!;
     const query = client.getQueryCache().getAll()[0];
-    expect(query.options).toMatchObject({ staleTime: 15_000, refetchInterval: expect.any(Function), retry: false, refetchIntervalInBackground: false });
+    expect(query.options).toMatchObject({ refetchInterval: expect.any(Function), retry: false, refetchIntervalInBackground: false });
     expect(options.signal?.aborted).toBe(false);
     await act(async () => root.render(null));
     expect(options.signal?.aborted).toBe(true);
@@ -134,14 +134,14 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
     vi.useFakeTimers();
     let calls = 0;
     function CatalogHarness() {
-        const query = useBioXpOperatorControlCatalogV2(7);
+        const query = useBioXpOperatorControlCatalog(7);
         return <><output>{query.status}</output><BioXpQuickDashboard connected data={undefined}
             isLoading={query.isLoading} error={query.error} motionControlsAvailable={undefined}
             unavailableReason={query.isSuccess ? 'Catalog recovered; telemetry not reported.' : undefined} /></>;
     }
     vi.mocked(api.get).mockImplementation((_url, options) => {
         calls++;
-        if (calls > 1) return Promise.resolve({ data: { dashboard: { generated_at: Date.now() / 1000, telemetry: null } } }) as never;
+        if (calls > 1) return Promise.resolve({ data: { actions: [], dashboard: {} } }) as never;
         // Model the transport timeout rejection, not a never-settling GET.
         // Missing timeout leaves this pending and causes the regression to fail.
         return new Promise((_resolve, reject) => {
@@ -159,8 +159,8 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
         expect(container.textContent).toContain('Dashboard unavailable: timeout of 12000ms exceeded');
         expect(container.textContent).not.toContain('Loading live state');
         expect(container.querySelector('output')?.textContent).toBe('error');
-        // Missing/expired catalog observations use the existing 1 s read cadence.
-        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        // The consolidated catalog retains its existing five-second cadence.
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
         await act(async () => { await vi.advanceTimersByTimeAsync(1); });
         expect(api.get).toHaveBeenCalledTimes(2);
         expect(container.querySelector('output')?.textContent).toBe('success');
@@ -244,7 +244,8 @@ it('fetches full retained evidence only on expansion and hides it on disconnect'
     await flush();
     expect(api.get).toHaveBeenCalledTimes(1);
     expect(api.get.mock.calls[0]).toEqual(['/api/bioxp/operator-controls/v2/receipts/retained-proof', { params: { detail: true }, signal: expect.any(AbortSignal), timeout: 12000 }]);
-    expect(container.textContent).toContain('native-proof-value');
+    expect(container.textContent).toContain('retained-proof');
+    expect(container.textContent).not.toContain('native-proof-value');
     await act(async () => { render(false); });
     expect(container.textContent).not.toContain('native-proof-value');
     expect(api.post).not.toHaveBeenCalled();

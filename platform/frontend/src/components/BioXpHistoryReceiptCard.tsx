@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
+import { BioXpReceiptEvidence } from './BioXpReceiptEvidence';
 import {
     type BioXpOperatorHistoryReceipt,
     bioXpErrorText,
-    useBioXpOperatorReceiptV2,
+    useBioXpOperatorReceiptDetailV2,
 } from '../lib/bioxpClient';
 import { bioXpReceiptTimestampText } from '../lib/bioxpReceiptTimestamp';
 import { bioXpReceiptFailureText, bioXpReceiptIsMoveTimeoutReport, bioXpReceiptStatusText } from '../lib/bioxpEvidencePresentation';
@@ -12,7 +13,7 @@ export function BioXpHistoryReceiptCard({ receipt, generation, connected }: {
     receipt: BioXpOperatorHistoryReceipt; generation: number; connected: boolean;
 }) {
     const [expanded, setExpanded] = useState(false);
-    const detail = useBioXpOperatorReceiptV2(receipt.command_id, generation, connected && expanded);
+    const detail = useBioXpOperatorReceiptDetailV2(receipt.command_id, generation, connected && expanded, false);
     const evidence = receipt.history;
     const displayedReceipt = detail.data?.command_id === receipt.command_id ? detail.data : receipt;
     const report = bioXpReceiptIsMoveTimeoutReport(displayedReceipt);
@@ -43,7 +44,7 @@ export function BioXpHistoryReceiptCard({ receipt, generation, connected }: {
             {expanded && connected && <>
                 {detail.isLoading && <p role="status">Loading receipt evidence…</p>}
                 {detail.isError ? <p role="alert">Receipt evidence unavailable: {bioXpErrorText(detail.error)}</p>
-                    : detail.data && <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify(detail.data, null, 2)}</pre>}
+                    : detail.data && <BioXpReceiptEvidence receipt={detail.data} />}
             </>}
         </details>
     </article>;

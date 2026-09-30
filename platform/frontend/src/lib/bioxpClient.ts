@@ -17,7 +17,6 @@ export interface BioXpConnectionSnapshot {
     hardware_fresh: boolean | null;
     hardware_stale: boolean;
     hardware_evidence_error: string | null;
-    automatic_snapshot_refresh: Record<string, unknown> | null;
     capabilities: string[];
     observed_at: string | null;
     freshness_budget_seconds: number | null;
@@ -884,6 +883,7 @@ export interface BioXpOperatorActionSpec {
 }
 
 export interface BioXpOperatorControlCatalog {
+    canonical: BioXpOperatorControlCatalogV2;
     schema_name: 'bioxp.operator_control_catalog';
     schema_version: 'bioxp.operator_control_catalog.v1';
     machine_serial: string;
@@ -1188,9 +1188,7 @@ export type BioXpWorkflowReviewRequest = BioXpWorkflowBinding & {
 const statusKey = ['bioxp', 'status'] as const;
 
 const operatorCatalogKey = ['bioxp', 'operator-controls', 'catalog'] as const;
-const operatorDashboardKey = ['bioxp', 'operator-controls', 'dashboard'] as const;
 const operatorHistoryKey = ['bioxp', 'operator-controls', 'history'] as const;
-const operatorV2CatalogKey = ['bioxp', 'operator-controls', 'v2', 'catalog'] as const;
 
 export interface BioXpOperatorReportFilters {
     status?: string;
@@ -1455,7 +1453,7 @@ export interface BioXpErrorPresentation {
 }
 
 
-export function bioXpErrorPresentation(error: unknown): BioXpErrorPresentation {
+function bioXpErrorParts(error: unknown) {
     const response = error && typeof error === 'object' && 'response' in error
         ? (error as { response?: { status?: unknown; data?: unknown } }).response
         : undefined;
@@ -1471,16 +1469,17 @@ export function bioXpErrorPresentation(error: unknown): BioXpErrorPresentation {
             ? boundedOperatorText(error.message)
             : typeof error === 'string' ? boundedOperatorText(error) : 'Unknown error'
     );
-    const rawJson = bioXpErrorBodyPreview(response?.data ?? null);
-    return {
-        status,
-        summary,
-        rawJson,
-    };
+    return { status, summary, body: response?.data ?? null };
+}
+
+export function bioXpErrorPresentation(error: unknown): BioXpErrorPresentation {
+    const { status, summary, body } = bioXpErrorParts(error);
+    return { status, summary, rawJson: bioXpErrorBodyPreview(body) };
 }
 
 export function bioXpErrorText(error: unknown): string {
-    return bioXpErrorPresentation(error).summary;
+    // Summary-only consumers must not serialize a diagnostic they never render.
+    return bioXpErrorParts(error).summary;
 }
 
 export const useBioXpStatus = (enabled = true) => useQuery({
@@ -1511,45 +1510,6 @@ export const useBioXpOperatorControlCatalog = (
     retry: false,
     refetchInterval: (query) => enabled && connectionGeneration > 0
         ? query.state.data?.actions.some(action => action.disabled_reason === 'cached_projection_stale') ? 1_000 : 5_000
-        : false,
-    refetchIntervalInBackground: false,
-});
-
-export const useBioXpOperatorDashboard = (connectionGeneration: number, enabled = true) => useQuery({
-    queryKey: [...operatorDashboardKey, connectionGeneration, enabled],
-    queryFn: async () => (
-        await api.get<BioXpOperatorDashboard>('/api/bioxp/operator-controls/dashboard')
-    ).data,
-    enabled: enabled && connectionGeneration > 0,
-    gcTime: 0,
-    refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
-    refetchIntervalInBackground: false,
-    retry: false,
-});
-
-
-export const useBioXpOperatorControlCatalogV2 = (
-    connectionGeneration: number,
-    enabled = true,
-    authorityVersion: string | null = null,
-) => useQuery({
-    // Poll enablement is not an observation identity. Retain same-generation
-    // display data through a transient status error without admitting motion.
-    queryKey: [...operatorV2CatalogKey, connectionGeneration, authorityVersion],
-    // A stalled read must not leave Loading forever. Cancellation applies only
-    // to this read, never to a dispatched robot action. Age is presentation;
-    // actual robot action denials remain in the catalog.
-    queryFn: async ({ signal }) => (await api.get<BioXpOperatorControlCatalogV2>(
-        '/api/bioxp/operator-controls/v2/catalog', { signal, timeout: 12_000 },
-    )).data,
-    enabled: enabled && connectionGeneration > 0,
-    gcTime: 0,
-    staleTime: 15_000,
-    retry: false,
-    // The robot serves the preceding cached projection while refreshing it.
-    // Poll inside its 15 s expiry instead of consuming 10 s on each side.
-    refetchInterval: (query) => enabled && connectionGeneration > 0
-        ? Date.now() - (query.state.data?.dashboard.generated_at ?? 0) * 1000 >= 10_000 ? 1_000 : 5_000
         : false,
     refetchIntervalInBackground: false,
 });
@@ -1694,7 +1654,6 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
             void queryClient.invalidateQueries({ queryKey: statusKey });
             void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
             void queryClient.invalidateQueries({ queryKey: [...operatorHistoryKey, variables.request.expected_connection_generation] });
-            void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
         },
     });
 };
@@ -1847,7 +1806,7 @@ export const useInterruptBioXpOperatorActionV1 = () => {
             ).data;
         },
         onSettled: () => {
-            void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
+            void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
             void queryClient.invalidateQueries({ queryKey: operatorHistoryKey });
         },
     });
@@ -1859,7 +1818,7 @@ export const bioXpReceiptV2IsNonTerminal = (receipt: BioXpOperatorReceiptV2 | nu
     receipt !== null && receipt !== undefined && receipt.terminal !== true;
 
 /** Validate the additive native decision; it never changes historical outcome. */
-export const bioXpDeckRecoveryResolution = (receipt: BioXpOperatorReceiptDetailV2 | undefined) => {
+export const bioXpDeckRecoveryResolution = (receipt: (BioXpOperatorReceiptV2 & Partial<BioXpOperatorReceiptDetailV2>) | undefined) => {
     const value = receipt?.deck_movement?.recovery_resolution;
     if (value == null) return null;
     if (typeof value !== 'object' || Array.isArray(value)
@@ -1894,19 +1853,20 @@ export const useBioXpOperatorReceiptV2 = (
     return useQuery({
         queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
         queryFn: async ({ signal }) => {
-            const receipt = decodeBioXpReceiptDetailV2((
-            await api.get<BioXpOperatorReceiptDetailV2>(
+            const receipt = (
+            await api.get<BioXpOperatorReceiptV2>(
                 `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
-                { signal, timeout: 12000, params: { detail: true } },
+                { signal, timeout: 12000, params: { detail: false } },
             )
-            ).data, commandId ?? '');
+            ).data;
+            if (receipt.command_id !== commandId) throw new Error('Receipt command identity mismatch');
             const identity = `${connectionGeneration}:${commandId}`;
             const observed = terminalObservations.get(queryClient) ?? new Set<string>();
             terminalObservations.set(queryClient, observed);
             if (receipt.terminal === true && !observed.has(identity)) {
                 observed.add(identity);
                 if (observed.size > 128) observed.delete(observed.values().next().value!);
-                for (const key of [statusKey, operatorCatalogKey, operatorV2CatalogKey]) {
+                for (const key of [statusKey, operatorCatalogKey]) {
                     void queryClient.invalidateQueries({ queryKey: key });
                 }
             }
@@ -1927,6 +1887,36 @@ export const useBioXpOperatorReceiptV2 = (
     });
 };
 
+
+/** Retained evidence is read only for a mounted typed consumer or explicit request.
+ * Compact status owns the cadence; unchanged observations never reread bulk evidence.
+ */
+export const useBioXpOperatorReceiptDetailV2 = (
+    commandId: string | null, connectionGeneration: number, enabled = true, observe = true,
+) => {
+    const status = useBioXpOperatorReceiptV2(commandId, connectionGeneration, enabled && observe);
+    const receipt = status.data;
+    const detail = useQuery({
+        queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt-detail', commandId, connectionGeneration,
+            receipt?.state_version, receipt?.status, receipt?.terminal_receipt_id,
+            // Recovery decisions can be appended without changing historical outcome.
+            receipt?.status === 'ambiguous' || receipt?.completion_class === 'recovery_required' ? status.dataUpdatedAt : null],
+        queryFn: async ({ signal }) => decodeBioXpReceiptDetailV2((await api.get<BioXpOperatorReceiptDetailV2>(
+            `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
+            { signal, timeout: 12000, params: { detail: true } },
+        )).data, commandId ?? ''),
+        enabled: enabled && Boolean(commandId) && connectionGeneration > 0 && (!observe || receipt != null),
+        gcTime: 0,
+        staleTime: observe ? Infinity : 0,
+        retry: false,
+    });
+    // Never hide current lifecycle/denials while retained evidence is loading.
+    // No invented empty evidence or proof defaults stand in for an absent detail.
+    const data: (BioXpOperatorReceiptV2 & Partial<BioXpOperatorReceiptDetailV2>) | undefined =
+        detail.data ?? receipt;
+    return { ...detail, data, error: (observe && status.error) || detail.error,
+        isError: (observe && status.isError) || detail.isError };
+};
 
 const BIOXP_METHOD_V1_TERMINAL = new Set<BioXpOperatorMethodV1Status>([
     'completed', 'completed_partial', 'failed', 'cleared', 'interrupted', 'ambiguous',
@@ -2538,7 +2528,6 @@ const useRefreshMutation = <TVariables, TData>(
                 queryClient.invalidateQueries({ queryKey: statusKey }),
 
                 queryClient.invalidateQueries({ queryKey: operatorCatalogKey }),
-                queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
                 queryClient.invalidateQueries({ queryKey: operatorHistoryKey }),
             ]);
         },
@@ -2637,14 +2626,10 @@ export const useInvokeBioXpOperatorAction = (lane: 'normal' | 'stop' = 'normal')
             await queryClient.cancelQueries({ queryKey: operatorHistoryKey });
         },
         onSettled: () => {
-            void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
+            void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
         },
         onSuccess: (_receipt, variables) => {
             refreshBioXpHistoryCaches(queryClient, variables.connectionGeneration);
-            void Promise.all([
-                queryClient.invalidateQueries({ queryKey: operatorCatalogKey }),
-                queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
-            ]);
         },
     });
 };
@@ -2674,9 +2659,7 @@ export const useAssessBioXpOperatorAction = () => {
         },
         onSuccess: (_receipt, variables) => {
             refreshBioXpHistoryCaches(queryClient, variables.connectionGeneration);
-            void Promise.all([
-                queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
-            ]);
+            void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
         },
     });
 };

@@ -453,20 +453,26 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
         isError: state.statusError,
         };
     },
-    useBioXpOperatorDashboard: (_generation: number, enabled: boolean) => {
-        state.v1DashboardEnabled = enabled;
-        return state.dashboard;
-    },
-    useBioXpOperatorDashboardV2: () => ({ ...state.v2Dashboard, data: { ...state.v2Dashboard.data, telemetry: state.dashboard.data } }),
-    useBioXpOperatorControlCatalogV2: (...args: Parameters<typeof real.useBioXpOperatorControlCatalogV2>) => {
-        state.catalogArgs.push(args);
-        return nativeMetadataMode.enabled ? real.useBioXpOperatorControlCatalogV2(...args) : state.v2Catalog;
-    },
     useBioXpOperatorMethodV1: (...args: unknown[]) => { state.methodHookArgs.push(args); return state.methodReceipt; },
     bioXpMethodV1IsTerminal: (method: { status?: string } | undefined) => !method?.status || ['completed', 'failed', 'interrupted', 'ambiguous', 'completed_partial', 'cleared'].includes(method.status),
     useBioXpOperatorReceiptV2: (commandId: string | null, generation: number, enabled: boolean) => {
         state.receiptHookCalls.push({ commandId, generation, enabled });
         if (nativeMetadataMode.receipts) return real.useBioXpOperatorReceiptV2(commandId, generation, enabled);
+        const dashboardReceipt = [
+            ...(catalogDashboard().active_commands as Array<Record<string, unknown>>),
+            ...(catalogDashboard().latest_receipts as Array<Record<string, unknown>>),
+        ].find((receipt) => receipt.command_id === commandId
+            && ['oem.deck.move_to_location', 'oem.deck._mov_execution', 'oem.deck._finite_operation'].includes(String(receipt.action_id)));
+        if (dashboardReceipt) return { data: dashboardReceipt, error: null, isStale: false };
+        if (commandId?.startsWith('xy-') || commandId === coherentFailureProducer.compact.command_id || commandId === bmsMetadata.compact.command_id || commandId === actualY5.command_id || commandId === manualReport.command_id) return state.xyReceipt;
+        if (commandId?.startsWith('deck-command-')) return state.deckReceipt;
+        if (commandId?.startsWith('lifecycle-command-')) return state.lifecycleReceipt;
+        if (commandId?.startsWith('z-command-')) return state.zReceipt;
+        return state.yReceipt;
+    },
+    useBioXpOperatorReceiptDetailV2: (commandId: string | null, generation: number, enabled: boolean) => {
+        state.receiptHookCalls.push({ commandId, generation, enabled });
+        if (nativeMetadataMode.receipts) return real.useBioXpOperatorReceiptDetailV2(commandId, generation, enabled);
         const dashboardReceipt = [
             ...(catalogDashboard().active_commands as Array<Record<string, unknown>>),
             ...(catalogDashboard().latest_receipts as Array<Record<string, unknown>>),
@@ -491,9 +497,11 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
         && receipt.status !== 'rejected'
         && receipt.status !== 'blocked'
         && receipt.status !== 'cleared',
-    useBioXpOperatorControlCatalog: (_generation: number, enabled: boolean) => {
-        state.v1CatalogEnabled = enabled;
-        return enabled ? state.catalog : { data: undefined };
+    useBioXpOperatorControlCatalog: (...args: Parameters<typeof real.useBioXpOperatorControlCatalog>) => {
+        state.catalogArgs.push(args);
+        state.v1CatalogEnabled = args[1];
+        if (nativeMetadataMode.enabled) return real.useBioXpOperatorControlCatalog(...args);
+        return { ...state.v2Catalog, data: args[1] ? { ...state.catalog.data, dashboard: { ...state.dashboard.data, ...state.catalog.data?.dashboard }, canonical: state.v2Catalog.data } : undefined };
     },
     useBioXpOperatorActionAdmission: () => {
         state.admissionCalls += 1;
@@ -839,9 +847,7 @@ describe('primary cockpit query ownership', () => {
         expect(outcome?.textContent).toContain('Controller stop ACK: yes · Controller terminal state verified: no · Physical effect unverified');
         expect(outcome?.textContent).toContain('Receipt persistence: committed');
         expect(outcome?.textContent).not.toContain('Outcome or persistence unresolved');
-        const retained = JSON.parse(outcome!.querySelector('pre')!.textContent!);
-        expect(retained.interrupt_evidence.first_stop_acknowledged).toBe(producer.first_ack);
-        expect(retained.interrupt_evidence.second_stop_acknowledged).toBe(true);
+        expect(outcome?.textContent).toContain(`First stop ACK: ${producer.first_ack ? 'yes' : 'no'} · Second stop ACK: yes`);
         expect(state.yInterruptCalls).toEqual([]);
         expect(state.invokeCalls).toEqual([]);
     });
@@ -939,8 +945,8 @@ describe('primary cockpit query ownership', () => {
         vi.mocked(api.post).mockReset();
         vi.mocked(api.get).mockImplementation(async (url) => {
             if (url === '/api/bioxp/calibration-settings') throw new Error('offline calibration fixture unavailable');
-            expect(url).toBe('/api/bioxp/operator-controls/v2/catalog');
-            return { data: structuredClone(bmsMetadata.catalog) };
+            expect(url).toBe('/api/bioxp/operator-controls/catalog');
+            return { data: { ...state.catalog.data, canonical: structuredClone(bmsMetadata.catalog) } };
         });
         const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
         const advance = async (ms: number) => {
@@ -966,7 +972,7 @@ describe('primary cockpit query ownership', () => {
                 expect(button().disabled).toBe(false);
                 expect(state.xyReceipt.data).toEqual(bmsMetadata.compact);
             }
-            expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/operator-controls/v2/catalog')).toHaveLength(3);
+            expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/operator-controls/catalog')).toHaveLength(3);
             // Pipette settings are lazy until the Pipettes tab is first opened.
             expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/calibration-settings')).toHaveLength(0);
             await advance(6000);
@@ -2006,9 +2012,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         vi.mocked(api.get).mockReset(); vi.mocked(api.post).mockReset();
         vi.mocked(api.get).mockImplementation(async (url) => {
-            expect(url).toBe('/api/bioxp/operator-controls/v2/catalog');
+            expect(url).toBe('/api/bioxp/operator-controls/catalog');
             if (fail) throw new Error('temporary catalog failure');
-            return { data: structuredClone(response) };
+            return { data: { ...state.catalog.data, canonical: structuredClone(response) } };
         });
         const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
         const advance = async (ms = 5001) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
@@ -2154,8 +2160,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
         action.enabled = false; action.disabled_reason = 'canonical_deck_authority_unavailable:deck_authority_unobserved';
         let finish!: (value: { data: typeof actualParkReceipt }) => void;
-        vi.mocked(api.get).mockImplementation(async (url) => {
+        vi.mocked(api.get).mockImplementation(async (url, options) => {
             expect(url).toBe(`/api/bioxp/operator-controls/v2/receipts/${actualParkReceipt.command_id}`);
+            if (options?.params?.detail) return { data: structuredClone(actualParkReceipt) };
             return new Promise(resolve => { finish = resolve; });
         });
         try {

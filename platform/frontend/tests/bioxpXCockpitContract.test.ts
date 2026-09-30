@@ -41,7 +41,7 @@ test('X manual controls route only through stable provider-owned action IDs', ()
 });
 
 test('X authority panel is a normal read-only truth surface with governed movement actions', () => {
-    const panel = sourceBetween('<h4 className="mt-2 font-semibold text-sky-50">X OEM authority</h4>', "{axis === 'z' && (");
+    const panel = sourceBetween("{axis === 'x' && (", "{axis === 'z' && (");
 
     for (const actionId of ['oem.x.stop', 'oem.abort_all']) {
         assert.ok(panel.includes(actionId), `X authority panel must use ${actionId}`);
@@ -62,7 +62,7 @@ test('X authority panel is a normal read-only truth surface with governed moveme
     for (const id of ['move_steps', 'move_absolute', 'manual_panel_home']) {
         assert.ok(source.includes(`v2ActionDisabledReason('oem.x.${id}')`));
     }
-    assert.match(source, /if \(!v2AuthorityCoherent\) return 'Current robot control state is unavailable.'/);
+    assert.match(source, /if \(!queryOnlyRefresh && !v2AuthorityCoherent\) return 'Current robot control state is unavailable.'/);
     assert.match(source, /return action.enabled === true \? null : action.disabled_reason/);
     assert.doesNotMatch(source, /xMotionConfirmation/);
     assert.doesNotMatch(source, /Confirm one exact next X action/);
@@ -74,7 +74,7 @@ test('X authority panel is a normal read-only truth surface with governed moveme
     assert.match(panel, /GAP9\/10/);
     assert.match(panel, /GAP13\/12/);
     assert.match(panel, /Configured GAP4\/5\/6\/205/);
-    assert.match(panel, /Board lifecycle generation/);
+    assert.match(panel, /Lifecycle:/);
     assert.match(panel, /Last X failure/);
     assert.match(panel, /Latest X authority receipt/);
     assert.match(panel, /SAP12\/13 observed/);
@@ -86,10 +86,14 @@ test('X authority panel is a normal read-only truth surface with governed moveme
     assert.doesNotMatch(panel, /<input type="number"/);
 });
 
-test('receipt history keeps terminal proof and nested robot evidence visible', () => {
-    assert.match(source, /Terminal proof verified/);
-    assert.match(source, /Nested robot evidence/);
-    assert.match(source, /stage_receipts/);
+test('receipt history keeps typed terminal proof and loads selected retained evidence', () => {
+    const history = readFileSync('src/components/BioXpHistoryReceiptCard.tsx', 'utf8');
+    const evidence = readFileSync('src/components/BioXpReceiptEvidence.tsx', 'utf8');
+    assert.match(history, /Terminal proof verified/);
+    assert.match(history, /connected && expanded, false/);
+    assert.match(history, /BioXpReceiptEvidence/);
+    assert.match(evidence, /child_receipts/);
+    assert.doesNotMatch(history, /JSON.stringify/);
 });
 
 test('X absolute input and action gate use the effective 60 through 90263 envelope', () => {

@@ -1,5 +1,14 @@
-import { expect, it } from 'vitest';
-import { bioXpErrorPresentation } from '../../src/lib/bioxpClient';
+import { expect, it, vi } from 'vitest';
+import { bioXpErrorPresentation, bioXpErrorText } from '../../src/lib/bioxpClient';
+
+it('does not eagerly serialize diagnostics for summary-only consumers', () => {
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+        const text = bioXpErrorText({ response: { status: 409, data: { detail: { error: 'controller_conflict', message: 'Robot refused' } } } });
+        expect(text).toContain('Robot refused');
+        expect(stringify).not.toHaveBeenCalled();
+    } finally { stringify.mockRestore(); }
+});
 
 it('bounds validation arrays and location arrays without visiting their tails', () => {
     const detail = Array.from({ length: 100_000 }, () => ({ loc: ['body', 'target'], msg: 'invalid' }));

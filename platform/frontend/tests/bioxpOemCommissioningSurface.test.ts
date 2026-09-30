@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
+const history = readFileSync(resolve('src/components/BioXpHistoryReceiptCard.tsx'), 'utf8');
 const controls = readFileSync(resolve('src/components/BioXpOperatorControlTabs.tsx'), 'utf8');
 
 test('OEM operator surface retains connection, recovery, camera, stop, and mounts the route plane', () => {
@@ -20,8 +21,8 @@ test('OEM operator surface retains connection, recovery, camera, stop, and mount
 
 test('commissioning and provenance are robot-owned receipt fields, not duplicate cockpit state', () => {
     // R1/R5 require receipt proof in history, never independently fabricated state.
-    assert.match(cockpit, /record\.physical_effect_verified \? 'Physical effect verified' : 'Physical effect unverified'/);
-    assert.match(cockpit, /record\.controller_terminal_state_verified/);
+    assert.match(history, /receipt\.physical_effect_verified \? 'Physical effect verified' : 'Physical effect unverified'/);
+    assert.match(history, /evidence\.controller_terminal_state_verified/);
     assert.doesNotMatch(cockpit, /setPhysicalEffectVerified|physical_effect_verified\s*:\s*true/);
     for (const value of ['collect_hardware_snapshot', 'OEM Startup Lifecycle', 'startup_lifecycle', 'registry_sha256', 'Local Jobs']) {
         assert.doesNotMatch(cockpit, new RegExp(value));

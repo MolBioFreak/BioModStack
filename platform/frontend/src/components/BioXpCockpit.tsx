@@ -15,8 +15,8 @@ import {
 
     useBioXpOperatorActionHistory,
     useBioXpOperatorControlCatalog,
-    useBioXpOperatorControlCatalogV2,
     useBioXpOperatorReceiptV2,
+    useBioXpOperatorReceiptDetailV2,
     useInterruptBioXpOperatorActionV1,
     useInvokeBioXpOperatorActionV2,
     useInvokeBioXpDeckActionV2,
@@ -251,10 +251,10 @@ function InterruptOutcome({ label, receipt, error, pending, generation, connecte
         <p>Source call completed: {truth(evidence?.source_call_completed)} · Source return OK: {truth(evidence?.source_return_ok)}</p>
         <p>Controller stop ACK: {truth(evidence?.controller_stop_acknowledged)} · Controller terminal state verified: {truth(evidence?.controller_terminal_state_verified)} · Physical effect unverified</p>
         <p>Receipt persistence: {evidence?.persistence_state ?? 'unknown'}</p>
+        <p>First stop ACK: {truth(evidence?.first_stop_acknowledged)} · Second stop ACK: {truth(evidence?.second_stop_acknowledged)}</p>
         {uncertain && <p>Outcome or persistence unresolved. Do not resubmit this command; reconcile the retained command identity.</p>}
         {error != null && <p>{bioXpErrorText(error)}</p>}
         {query.error != null && <p>Receipt lookup: {bioXpErrorText(query.error)}</p>}
-        <details><summary>Actual robot stop evidence, components and latch</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap">{JSON.stringify(current ?? bioXpErrorPresentation(error), null, 2)}</pre></details>
     </div>;
 }
 
@@ -295,7 +295,13 @@ export function BioXpCockpit() {
     const [controlTab, setControlTab] = useState<'robot' | 'pipettes'>('robot');
     const [pipettesOpened, setPipettesOpened] = useState(false);
     const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'z' | 'g', number>>({ x: 60, z: 65000, g: 0 });
-    const catalogV2Query = useBioXpOperatorControlCatalogV2(generation, active);
+    const operatorCatalog = useBioXpOperatorControlCatalog(
+        generation,
+        linkConnected,
+        null,
+        Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined,
+    );
+    const catalogV2Query = { ...operatorCatalog, data: operatorCatalog.data?.canonical };
     // Observation age is presentation, not a second host admission policy.
     const authorityNow = Date.now();
     const upstreamGeneratedAt = catalogV2Query.data?.dashboard.generated_at;
@@ -340,7 +346,7 @@ export function BioXpCockpit() {
         ?? yAxisV2?.active_command?.command_id
         ?? yAxisV2?.latest_compact_receipt?.command_id
         ?? null;
-    const yReceiptQuery = useBioXpOperatorReceiptV2(yReceiptCommandId, generation, active);
+    const yReceiptQuery = useBioXpOperatorReceiptDetailV2(yReceiptCommandId, generation, active);
     const zHomeReceiptQuery = useBioXpOperatorReceiptV2(currentZHomeCommandId, generation, active);
     const lifecycleReceiptQuery = useBioXpOperatorReceiptV2(currentLifecycleCommandId, generation, linkConnected);
     const [reconciledDeckPredecessor, setReconciledDeckPredecessor] = useState<{ commandId: string; generation: number } | null>(null);
@@ -359,7 +365,7 @@ export function BioXpCockpit() {
     const effectiveDeckCommandId = active
         ? (deckMutationGeneration === generation ? deckCommandId : null) ?? dashboardDeckReceipt?.command_id ?? null
         : null;
-    const deckReceiptQuery = useBioXpOperatorReceiptV2(effectiveDeckCommandId, generation, active);
+    const deckReceiptQuery = useBioXpOperatorReceiptDetailV2(effectiveDeckCommandId, generation, active);
     const invokeLifecycleActionMutation = useInvokeBioXpOperatorActionV2();
     const invokeYAction = useInvokeBioXpOperatorActionV2();
     const [axisSubmission, setAxisSubmission] = useState<{ generation: number; commandId: string; actionId: string; receipt: BioXpOperatorReceiptV2 | null } | null>(null);
@@ -398,12 +404,7 @@ export function BioXpCockpit() {
     const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected, historyLimit, historyPagination.cursor);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
-    const operatorCatalog = useBioXpOperatorControlCatalog(
-        generation,
-        linkConnected,
-        null,
-        Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined,
-    );
+
     const invokeOperatorAction = useInvokeBioXpOperatorAction();
     const componentStop = useInvokeBioXpOperatorAction('stop');
 
@@ -1389,7 +1390,7 @@ export function BioXpCockpit() {
                             <details className="mt-2 text-xs">
                                 <summary className="cursor-pointer text-slate-400">Y command details{yReceiptQuery.data.physical_effect_verified ? ' · physically observed' : ' · physical arrival not verified'}</summary>
                             <div className="mt-3 grid gap-2 text-xs lg:grid-cols-2">
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Completion</strong><p className="mt-1">class={yReceiptQuery.data.completion_class ?? 'not reported'} · terminal position={String(yReceiptQuery.data.observed_values.terminal_position_steps ?? 'not reported')} · terminal speed={String(yReceiptQuery.data.observed_values.terminal_speed_steps_s ?? 'not reported')} · discrepancy={String(yReceiptQuery.data.observed_values.discrepancy_steps ?? 'not reported')}</p></div>
+                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Completion</strong><p className="mt-1">class={yReceiptQuery.data.completion_class ?? 'not reported'} · terminal position={String(yReceiptQuery.data.observed_values?.terminal_position_steps ?? 'not reported')} · terminal speed={String(yReceiptQuery.data.observed_values?.terminal_speed_steps_s ?? 'not reported')} · discrepancy={String(yReceiptQuery.data.observed_values?.discrepancy_steps ?? 'not reported')}</p></div>
                                 <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><strong>Independent physical observation</strong><p className="mt-1">physical_effect_verified={String(yReceiptQuery.data.physical_effect_verified)}</p></div>
                             </div>
                             </details>
@@ -1528,8 +1529,8 @@ export function BioXpCockpit() {
                                                 <button type="button" className="rounded bg-red-800 px-3 py-2 text-sm font-semibold hover:bg-red-700 disabled:opacity-35" disabled={!linkConnected || generation <= 0 || interruptPending('oem.x.stop')} title="Immediate X stop" onClick={() => stopAxis('x')}>Stop X</button>
                                                 <button type="button" className="rounded bg-red-950 px-3 py-2 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35" disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all') || v2InterruptActionById('oem.abort_all')?.enabled !== true} title="Software Abort cancels waiters only; motors may continue" onClick={abortXAggregate}>Software Abort (cancel waiters)</button>
                                             </div>
-                                            {xLastFailure != null && <details className="mt-2"><summary className="cursor-pointer text-red-200">Last X failure</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(xLastFailure, null, 2)}</pre></details>}
-                                            {xReceipt != null && <details className="mt-2"><summary className="cursor-pointer">Latest X authority receipt</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-sky-200/80">{JSON.stringify(xReceipt, null, 2)}</pre></details>}
+                                             {xLastFailure != null && <p className="text-red-200">Last X failure: {bioXpReceiptFailureText({ error: xLastFailure }) || bioXpErrorText(xLastFailure)}</p>}
+                                             {xReceipt != null && <p>Latest X authority receipt: {String(xReceipt.command_id ?? "unknown")} · {String(xReceipt.status ?? "unknown")} · {bioXpReceiptFailureText(xReceipt)}</p>}
                                         </details>
                                         )}
                                         {axis === 'z' && (
@@ -1558,7 +1559,7 @@ export function BioXpCockpit() {
                                                     }}
                                                 >Z Clear (automatic position)</button>
                                             </div>
-                                            {dashboard?.z_axis?.last_failure != null && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(dashboard.z_axis.last_failure, null, 2)}</pre>}
+                                             {dashboard?.z_axis?.last_failure != null && <p className="text-red-200">Last Z failure: {bioXpReceiptFailureText({ error: dashboard.z_axis.last_failure }) || bioXpErrorText(dashboard.z_axis.last_failure)}</p>}
                                         </details>
                                     )}
                                 </div>
@@ -1683,7 +1684,7 @@ export function BioXpCockpit() {
                 {linkConnected && displayedLatestReceipt && (
                     <details className="mt-3 rounded border border-slate-800 bg-slate-900/60 p-3">
                         <summary className="cursor-pointer text-sm font-semibold">Action receipt details · {bioXpReceiptStatusText(displayedLatestReceipt, displayedLatestReceipt.status)}</summary>
-                        <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{JSON.stringify(displayedLatestReceipt, null, 2)}</pre>
+                         <p>{displayedLatestReceipt.command_id} · {displayedLatestReceipt.completion_class ?? "completion not reported"} · physical effect verified={String(displayedLatestReceipt.physical_effect_verified)}</p>
                     </details>
                 )}
             </section>
@@ -1696,7 +1697,7 @@ export function BioXpCockpit() {
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
-                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">Additional service, recovery and diagnostic controls.</p><div className="mt-4"><BioXpOperatorControlTabs generation={generation} connected={robotControlReady} /></div></>}
+                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">Additional service, recovery and diagnostic controls.</p><div className="mt-4"><BioXpOperatorControlTabs generation={generation} connected={robotControlReady} catalogObservation={operatorCatalog} zTargetSteps={Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined} /></div></>}
             </details>
 
             <section className="rounded-xl border border-red-800/70 bg-red-950/30 p-4">

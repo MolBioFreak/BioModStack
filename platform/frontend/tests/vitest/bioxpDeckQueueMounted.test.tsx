@@ -12,7 +12,6 @@ vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 vi.mock('../../src/lib/bioxpClient', async importOriginal => ({
     ...await importOriginal<typeof import('../../src/lib/bioxpClient')>(),
     useBioXpStatus: () => ({ data: { connection: { active: state.active, configured: true, generation: state.generation, reachable: true, runtime_ready: true }, mutation_access: { enabled: true } }, isError: state.error }),
-    useBioXpOperatorControlCatalog: () => ({ data: { actions: [], dashboard: {} }, error: null }),
     useBioXpOperatorActionHistory: () => ({ data: { items: [], next_cursor: null }, error: null }),
 }));
 vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: () => null }));
@@ -44,7 +43,7 @@ beforeEach(() => {
     catalog.actions = catalog.actions.filter((a: any) => a.action_id !== 'oem.deck.move_to_location').concat(structuredClone(deckCatalog.action));
     admissions = []; lookup = null; completed = new Set();
     vi.mocked(api.get).mockImplementation(async (url) => {
-        if (url.includes('/v2/catalog')) { catalog.dashboard.generated_at = Date.now() / 1000; return { data: structuredClone(catalog) }; }
+        if (url.endsWith('/catalog')) { catalog.dashboard.generated_at = Date.now() / 1000; return { data: { actions: [], dashboard: {}, canonical: structuredClone(catalog) } }; }
         if (url.includes('/requests/')) { if (lookup == null) throw { response: { status: 404 } }; return { data: lookup }; }
         if (url.includes('/receipts/')) { const id = Number(url.split('queue-')[1]); return { data: completed.has(id) ? { ...receipt(id), terminal: true, status: 'completed', completion_class: 'completed' } : receipt(id) }; }
         throw new Error(`Unexpected GET ${url}`);
@@ -143,7 +142,7 @@ it.each(['missing', 'aged'])('submits with %s telemetry/reference/epoch displays
     expect(panel().textContent).toContain('OEM door interlock denied');
     expect(admissions).toHaveLength(1);
     action.enabled = false; action.disabled_reason = 'OEM controller denied';
-    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'operator-controls', 'v2', 'catalog'] }); });
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'operator-controls', 'catalog'] }); });
     await advance();
     expect(move().disabled).toBe(true);
     expect(panel().textContent).toContain('OEM controller denied');
@@ -156,7 +155,7 @@ it('first terminal read invalidates existing status and catalogs once without co
     await advance(501); await advance();
     for (const key of [
         ['bioxp', 'status'], ['bioxp', 'operator-controls', 'catalog'],
-        ['bioxp', 'operator-controls', 'v2', 'catalog'],
+        ['bioxp', 'operator-controls', 'catalog'],
     ]) expect(invalidate.mock.calls.filter(([options]) => JSON.stringify(options?.queryKey) === JSON.stringify(key))).toHaveLength(1);
     await act(async () => { await client.refetchQueries({ queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt'] }); });
     await advance();

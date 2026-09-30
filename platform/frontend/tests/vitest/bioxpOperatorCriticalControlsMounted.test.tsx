@@ -65,8 +65,7 @@ const action = (
 });
 
 vi.mock('../../src/lib/bioxpClient', () => ({
-    useBioXpOperatorControlCatalog: () => state.catalog,
-    useBioXpOperatorDashboard: () => state.dashboard,
+    useBioXpOperatorControlCatalog: () => ({ ...state.catalog, data: { ...state.catalog.data, dashboard: state.dashboard.data } }),
     useBioXpOperatorActionHistory: () => ({ data: { items: [], next_cursor: null, limit: 100 }, error: null }),
     useBioXpOperatorActionAdmission: (...args: unknown[]) => {
         state.admissionArgs = args;
