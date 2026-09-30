@@ -22,6 +22,8 @@ REPO = Path(__file__).resolve().parents[3]
 @pytest.mark.asyncio
 async def test_real_source_launch_prewarm_lossless_and_cache_reuse(package, local_transport, monkeypatch, tmp_path):
     roots, release, job, target, command = package
+    # Launch and prewarm must share one isolated controller archive cache.
+    monkeypatch.setattr(cache, 'get_data_root', lambda: roots['data'])
     fake_run = subprocess.run
     archive_commands = []
 
@@ -43,7 +45,11 @@ async def test_real_source_launch_prewarm_lossless_and_cache_reuse(package, loca
         job.execution_source_tree, prewarm_dir, native_invocation=job.native_invocation)
     launch_source, = [a for a in bundle.cache_transfer_artifacts(prepared) if a.role == 'source']
     warm_source, = [a for a in prewarmed if a.role == 'source']
-    assert archive_commands == [['git', 'archive', '--format=tar.gz', '-6', job.execution_source_revision]] * 2
+    # One revision-keyed shared archive, privately staged for both consumers.
+    assert archive_commands == [['git', 'archive', '--format=tar.gz', '-6', job.execution_source_revision]]
+    assert launch_source.source != warm_source.source
+    assert (roots['data'] / 'remote-execution/source-archives' /
+            (job.execution_source_revision + '.tar.gz')).read_bytes() == launch_source.source.read_bytes()
     compressed = launch_source.source.read_bytes()
     raw = REAL_RUN(['git', 'archive', '--format=tar', 'HEAD'], cwd=REPO,
                    check=True, capture_output=True).stdout

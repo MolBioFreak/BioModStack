@@ -7,7 +7,7 @@ import { ProteinModificationTemplate } from '../../src/components/ProteinModific
 import { ExecutionTargetPicker } from '../../src/components/ExecutionTargetPicker';
 import { RemotePreloadPanel } from '../../src/components/dashboard/RemotePreloadPanel';
 import { DE_NOVO_PRELOAD_SELECTION } from '../../src/components/dashboard/IndependentProvisionPanel';
-import { api, EXECUTION_TARGET_STORAGE_KEY, type ExecutionTarget, type ProvisionSelection } from '../../src/lib/api';
+import { api, EXECUTION_TARGET_STORAGE_KEY, type ExecutionTarget, type ProvisionSelection, type ShapeNativeSettingsDefinition, type ShapeSettingsDefinition } from '../../src/lib/api';
 
 // Only GPU rendering is replaced; shell, all leaves, draft owners and transport are real.
 vi.mock('../../src/components/CanonicalMeshPreview', () => ({ default: () => <div /> }));
@@ -20,6 +20,20 @@ const other = { ...ready, id: 'vast:456', name: 'Other', provider_instance_id: '
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
 const preview = (selection: ProvisionSelection) => ({ selection, artifacts: [], total_bytes: 0, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'download_only' });
 const originalAdapter = api.defaults.adapter;
+// Complete wire fields for the real Shape leaf; this suite does not launch science.
+const nativeSettings = (model_id: string, mode: string): ShapeNativeSettingsDefinition => ({
+  model_id, mode, model_version: 'fixture', schema_sha256: 'a'.repeat(64), params: [],
+  initial_values: {}, contextual_defaults: {}, contextual_default_reason: 'Offline navigation fixture',
+});
+const shapeSettings: ShapeSettingsDefinition = {
+  schema: 'bms_shape_settings_v1', rfd3: nativeSettings('rfd3', 'unconditional'),
+  sequence_engines: ['proteinmpnn', 'fampnn', 'caliby_experimental'],
+  validators: {
+    esmfold2: nativeSettings('esmfold2', 'fold'),
+    boltz2: nativeSettings('boltz2', 'predict'),
+    protenix_v2: nativeSettings('protenix', 'predict'),
+  },
+};
 let root: Root;
 let host: HTMLDivElement;
 let client: QueryClient;
@@ -74,6 +88,7 @@ beforeEach(() => {
     if (config.method === 'get') {
       if (url === '/api/execution-targets') return response([ready, other]);
       if (url.endsWith('/catalog')) return response([family]);
+      if (url === '/api/shape-blueprint/settings') return response(shapeSettings);
       if (url.endsWith('/geometries')) return response({ geometries: [] });
       if (url.includes('/sequence-settings/')) return response({ engine: 'proteinmpnn', initial_values: {}, contextual_defaults: {}, params: [] });
       if (url.includes('/system')) return response({ gpus: [], gpu_error: null });
