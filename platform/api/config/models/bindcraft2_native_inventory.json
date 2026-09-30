@@ -1,5 +1,5 @@
 {
-  "coverage_status": "INCOMPLETE: source observations are not validated types/defaults; UI/API/runtime acceptance pending",
+  "coverage_status": "source-qualified typed subset; unresolved fields and runtime validation still prevent full parity",
   "default_sha256": "4b929f04e58f16d83d058155513bacbcdd8a818da16ac91ea53d9c015212ad22",
   "default_values": {
     "archive_trajectories": false,
@@ -166,7 +166,8 @@
       "native_key": "auto_multi_gpu",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "unresolved_reason": "internal runtime, storage or scheduler ownership; excluded from operator controls"
     },
     "autotune": {
       "has_native_default": true,
@@ -182,9 +183,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "autotune_loss_weights",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/parameter_sweep.py:192"
     },
     "betasheet_reopt_extra_anneal_steps": {
       "has_native_default": true,
@@ -210,9 +215,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "betasheet_reopt_recycles",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/trajectory.py:192"
     },
     "betasheet_reopt_trigger": {
       "has_native_default": true,
@@ -228,9 +237,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "bigbang",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:383 (property preset switch)"
     },
     "bigbang_initialization": {
       "has_native_default": true,
@@ -246,9 +259,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "binder_chain",
-      "observed_types": [],
+      "observed_types": [
+        "string"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:110; bindcraft/design_identity.py:7"
     },
     "binder_lengths": {
       "has_native_default": false,
@@ -264,9 +281,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "binder_name",
-      "observed_types": [],
+      "observed_types": [
+        "string"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/campaign_log.py:125; bindcraft/campaign_log.py:128; bindcraft/design_identity.py:7"
     },
     "binder_scaffold": {
       "has_native_default": false,
@@ -282,17 +303,25 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "binder_shapes",
-      "observed_types": [],
+      "observed_types": [
+        "array"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/loss.py:60; bindcraft/settings.py:304; bindcraft/settings.py:305"
     },
     "campaign_name": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "campaign_name",
-      "observed_types": [],
+      "observed_types": [
+        "string"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/campaign_log.py:125; bindcraft/design_identity.py:7"
     },
     "campaign_seed": {
       "has_native_default": false,
@@ -310,7 +339,8 @@
       "native_key": "compile_next_length",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "unresolved_reason": "internal runtime, storage or scheduler ownership; excluded from operator controls"
     },
     "copies": {
       "has_native_default": false,
@@ -337,17 +367,27 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "crop_fasta_sequence",
-      "observed_types": [],
+      "observed_types": [
+        "integer",
+        "array",
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:61; bindcraft/campaign_log.py:147; bindcraft/protein_preparation.py:83"
     },
     "cyclic_offset_mode": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "cyclic_offset_mode",
-      "observed_types": [],
+      "observed_types": [
+        "string"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:89; bindcraft/settings.py:495; bindcraft/parameter_sweep.py:36"
     },
     "cyclize_peptide": {
       "has_native_default": false,
@@ -395,7 +435,8 @@
       "native_key": "design_workers",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "unresolved_reason": "internal runtime, storage or scheduler ownership; excluded from operator controls"
     },
     "desperation": {
       "has_native_default": true,
@@ -411,17 +452,25 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "desperation_trajectories",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/desperation.py:24"
     },
     "detarget_check_interval": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "detarget_check_interval",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/target_schedule.py:18"
     },
     "disulfide_distance": {
       "has_native_default": false,
@@ -447,25 +496,37 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "disulfide_sigma",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:33"
     },
     "disulfide_staple": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "disulfide_staple",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:383 (property preset switch)"
     },
     "disulfide_temperature": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "disulfide_temperature",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:33"
     },
     "domain_contact_cutoff": {
       "has_native_default": false,
@@ -481,17 +542,25 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "domain_linker_fix_cut",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/loss.py:838"
     },
     "domain_linker_gap": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "domain_linker_gap",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/loss.py:837; bindcraft/settings.py:34"
     },
     "domain_linker_helix_weight": {
       "has_native_default": false,
@@ -507,9 +576,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "domain_linker_sharpness",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/loss.py:837; bindcraft/settings.py:34"
     },
     "domain_pae_margin": {
       "has_native_default": false,
@@ -620,9 +693,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "forced_targeting_shell",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:173; bindcraft/settings.py:260; bindcraft/epitope_targeting.py:81"
     },
     "gpu_ids": {
       "has_native_default": false,
@@ -630,7 +707,8 @@
       "native_key": "gpu_ids",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "unresolved_reason": "internal runtime, storage or scheduler ownership; excluded from operator controls"
     },
     "harden_steps": {
       "has_native_default": false,
@@ -666,9 +744,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "humanization_hydro_weight",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:33"
     },
     "humanization_mhc2_weight": {
       "has_native_default": false,
@@ -694,17 +776,25 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "humanize",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:383 (property preset switch)"
     },
     "idr_crop_count": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "idr_crop_count",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:117; bindcraft/settings.py:270; bindcraft/campaign_log.py:146"
     },
     "induced_fit_delta": {
       "has_native_default": false,
@@ -720,73 +810,109 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "induced_fit_interface_cutoff",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:33"
     },
     "induced_fit_monomer_adaptive": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "induced_fit_monomer_adaptive",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/trajectory.py:96"
     },
     "induced_fit_monomer_chunk": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "induced_fit_monomer_chunk",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/trajectory.py:66; bindcraft/trajectory.py:85"
     },
     "induced_fit_monomer_plddt": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "induced_fit_monomer_plddt",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/trajectory.py:96"
     },
     "induced_fit_monomer_steps": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "induced_fit_monomer_steps",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/preflight.py:111; bindcraft/trajectory.py:76"
     },
     "induced_fit_mpnn_designed_share": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "induced_fit_mpnn_designed_share",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/MPNN_stage.py:166"
     },
     "induced_fit_mpnn_shell": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "induced_fit_mpnn_shell",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/MPNN_stage.py:166"
     },
     "induced_fit_mpnn_threshold": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "induced_fit_mpnn_threshold",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/MPNN_stage.py:166"
     },
     "induced_fit_steps": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "induced_fit_steps",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/target_schedule.py:35"
     },
     "induced_fit_tm_target": {
       "has_native_default": false,
@@ -812,9 +938,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "interface_contact_distance",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:33; bindcraft/settings.py:223"
     },
     "kept_sequences": {
       "has_native_default": true,
@@ -830,9 +960,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "length_bucket_size",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:496; bindcraft/af2.py:50; bindcraft/parameter_sweep.py:36"
     },
     "losses": {
       "has_native_default": true,
@@ -885,105 +1019,157 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_binder_chain_breaks_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:265 (ModalityCheck threshold is converted to float by native filter builder)"
     },
     "max_binder_free_cysteines_final": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_binder_free_cysteines_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:333 (ModalityCheck threshold is converted to float by native filter builder)"
     },
     "max_coldspot_contact_final": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_coldspot_contact_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:195; bindcraft/settings.py:274; bindcraft/settings.py:419"
     },
     "max_cyclic_closure_distance_final": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_cyclic_closure_distance_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:267"
     },
     "max_detarget_interface_residues_final": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_detarget_interface_residues_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/preflight.py:167; bindcraft/settings.py:200; bindcraft/settings.py:280 (ModalityCheck threshold is converted to float by native filter builder)"
     },
     "max_detarget_iptm": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_detarget_iptm",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/target_schedule.py:18"
     },
     "max_detarget_iptm_anneal": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_detarget_iptm_anneal",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (generated per-stage threshold)"
     },
     "max_detarget_iptm_final": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_detarget_iptm_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (generated per-stage threshold)"
     },
     "max_detarget_iptm_harden": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_detarget_iptm_harden",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (generated per-stage threshold)"
     },
     "max_detarget_iptm_mutate": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_detarget_iptm_mutate",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (generated per-stage threshold)"
     },
     "max_detarget_iptm_refine": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_detarget_iptm_refine",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (generated per-stage threshold)"
     },
     "max_detarget_iptm_screen": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_detarget_iptm_screen",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (generated per-stage threshold)"
     },
     "max_detarget_rounds": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_detarget_rounds",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/target_schedule.py:18"
     },
     "max_domain_size": {
       "has_native_default": false,
@@ -1069,25 +1255,37 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_off_epitope_contact_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:277; bindcraft/settings.py:419"
     },
     "max_off_paratope_contact_final": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_off_paratope_contact_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:214; bindcraft/settings.py:254; bindcraft/settings.py:419"
     },
     "max_oligomer_symmetry_rmsd_final": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_oligomer_symmetry_rmsd_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:246"
     },
     "max_protease_site_score_final": {
       "has_native_default": false,
@@ -1113,9 +1311,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "max_surface_hydrophobicity_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:328; bindcraft/settings.py:419"
     },
     "max_termini_distance_final": {
       "has_native_default": false,
@@ -1153,7 +1355,8 @@
       "native_key": "max_workers_per_gpu",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "unresolved_reason": "internal runtime, storage or scheduler ownership; excluded from operator controls"
     },
     "min_binder_disulfides_final": {
       "has_native_default": false,
@@ -1199,17 +1402,25 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "min_epitope_residues_contacted_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:278 (ModalityCheck threshold is converted to float by native filter builder)"
     },
     "min_framework_packing_final": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "min_framework_packing_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:253; bindcraft/settings.py:419"
     },
     "min_hotspot_contact_final": {
       "has_native_default": false,
@@ -1235,9 +1446,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "min_interface_buried_area_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:326"
     },
     "min_iptm_anneal": {
       "has_native_default": true,
@@ -1283,17 +1498,25 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "min_iptm_refine",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (generated per-stage threshold)"
     },
     "min_iptm_screen": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "min_iptm_screen",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (generated per-stage threshold)"
     },
     "min_monomer_plddt_final": {
       "has_native_default": false,
@@ -1389,9 +1612,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "min_receptor_chains_contacted_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:308 (ModalityCheck threshold is converted to float by native filter builder)"
     },
     "min_scaffold_sequence_retained_final": {
       "has_native_default": false,
@@ -1407,17 +1634,25 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "min_target_crop_length_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:288 (ModalityCheck threshold is converted to float by native filter builder)"
     },
     "min_target_plddt_final": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "min_target_plddt_final",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:226; bindcraft/settings.py:309"
     },
     "min_termini_away_cosine_final": {
       "has_native_default": false,
@@ -1433,9 +1668,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "mixed_topology",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:383 (property preset switch)"
     },
     "modality": {
       "has_native_default": false,
@@ -1452,9 +1691,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "mpnn_fix_linker",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/MPNN_stage.py:148"
     },
     "mpnn_model": {
       "has_native_default": true,
@@ -1480,89 +1723,133 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "multitarget_best_round",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/trajectory.py:115"
     },
     "multitarget_cumulative_filter": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "multitarget_cumulative_filter",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/trajectory.py:254; bindcraft/design_identity.py:11"
     },
     "multitarget_filter_models": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "multitarget_filter_models",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/trajectory.py:182; bindcraft/design_identity.py:11"
     },
     "multitarget_merged_gradient_budget": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "multitarget_merged_gradient_budget",
-      "observed_types": [],
+      "observed_types": [
+        "string"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:672"
     },
     "multitarget_merged_gradients": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "multitarget_merged_gradients",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:665"
     },
     "multitarget_rounds_per_target": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "multitarget_rounds_per_target",
-      "observed_types": [],
+      "observed_types": [
+        "array"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:669"
     },
     "multitarget_steps": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "multitarget_steps",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/target_schedule.py:35"
     },
     "multitarget_swap_patience": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "multitarget_swap_patience",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/target_schedule.py:18"
     },
     "multitarget_swap_threshold": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "multitarget_swap_threshold",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/target_schedule.py:18"
     },
     "multitarget_tied_redesign": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "multitarget_tied_redesign",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/MPNN_stage.py:179; bindcraft/design_identity.py:12"
     },
     "multitarget_warmup_patience": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "multitarget_warmup_patience",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/target_schedule.py:18"
     },
     "mutate_positions": {
       "has_native_default": false,
@@ -1598,25 +1885,37 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "non_contact_distance",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:33"
     },
     "number_of_final_designs": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "number_of_final_designs",
-      "observed_types": [],
+      "observed_types": [
+        "integer"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/design_workers.py:256; bindcraft/campaign.py:135; bindcraft/campaign.py:276"
     },
     "oligomer_tie": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "oligomer_tie",
-      "observed_types": [],
+      "observed_types": [
+        "string"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:104; bindcraft/settings.py:494; bindcraft/campaign_log.py:145"
     },
     "parameter_sweep": {
       "has_native_default": false,
@@ -1644,15 +1943,20 @@
       "native_key": "project_folder",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "unresolved_reason": "internal runtime, storage or scheduler ownership; excluded from operator controls"
     },
     "protease_stable": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "protease_stable",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:383 (property preset switch)"
     },
     "redesign_interface": {
       "has_native_default": true,
@@ -1690,7 +1994,9 @@
       "native_key": "relax_learning_rate",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "type_authority": "accepted by bindcraft/settings.py registry; no pinned native consumer or preset supplies a type",
+      "unresolved_reason": "native accepted but no pinned runtime consumer, native preset value, or documented type; do not claim scientific support"
     },
     "relax_min_sep": {
       "has_native_default": false,
@@ -1698,7 +2004,9 @@
       "native_key": "relax_min_sep",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "type_authority": "accepted by bindcraft/settings.py registry; no pinned native consumer or preset supplies a type",
+      "unresolved_reason": "native accepted but no pinned runtime consumer, native preset value, or documented type; do not claim scientific support"
     },
     "relax_overlap_tol": {
       "has_native_default": false,
@@ -1706,7 +2014,9 @@
       "native_key": "relax_overlap_tol",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "type_authority": "accepted by bindcraft/settings.py registry; no pinned native consumer or preset supplies a type",
+      "unresolved_reason": "native accepted but no pinned runtime consumer, native preset value, or documented type; do not claim scientific support"
     },
     "relax_restraint_backbone": {
       "has_native_default": false,
@@ -1714,7 +2024,9 @@
       "native_key": "relax_restraint_backbone",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "type_authority": "accepted by bindcraft/settings.py registry; no pinned native consumer or preset supplies a type",
+      "unresolved_reason": "native accepted but no pinned runtime consumer, native preset value, or documented type; do not claim scientific support"
     },
     "relax_restraint_sidechain": {
       "has_native_default": false,
@@ -1722,7 +2034,9 @@
       "native_key": "relax_restraint_sidechain",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "type_authority": "accepted by bindcraft/settings.py registry; no pinned native consumer or preset supplies a type",
+      "unresolved_reason": "native accepted but no pinned runtime consumer, native preset value, or documented type; do not claim scientific support"
     },
     "relax_steps": {
       "has_native_default": false,
@@ -1730,7 +2044,9 @@
       "native_key": "relax_steps",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "type_authority": "accepted by bindcraft/settings.py registry; no pinned native consumer or preset supplies a type",
+      "unresolved_reason": "native accepted but no pinned runtime consumer, native preset value, or documented type; do not claim scientific support"
     },
     "relax_weight_bond": {
       "has_native_default": false,
@@ -1738,7 +2054,9 @@
       "native_key": "relax_weight_bond",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "type_authority": "accepted by bindcraft/settings.py registry; no pinned native consumer or preset supplies a type",
+      "unresolved_reason": "native accepted but no pinned runtime consumer, native preset value, or documented type; do not claim scientific support"
     },
     "relax_weight_clash": {
       "has_native_default": false,
@@ -1746,7 +2064,9 @@
       "native_key": "relax_weight_clash",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "type_authority": "accepted by bindcraft/settings.py registry; no pinned native consumer or preset supplies a type",
+      "unresolved_reason": "native accepted but no pinned runtime consumer, native preset value, or documented type; do not claim scientific support"
     },
     "resume": {
       "has_native_default": true,
@@ -1862,9 +2182,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "sparse_output",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:475; bindcraft/design_identity.py:10"
     },
     "subbatch_size": {
       "has_native_default": true,
@@ -1891,9 +2215,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "target_chain",
-      "observed_types": [],
+      "observed_types": [
+        "string"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/loss.py:900; bindcraft/trajectory.py:79; bindcraft/settings.py:113"
     },
     "target_flexibility": {
       "has_native_default": true,
@@ -1919,9 +2247,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "termini_accessible",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:383 (property preset switch)"
     },
     "termini_distance_threshold": {
       "has_native_default": false,
@@ -1937,9 +2269,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "termini_together",
-      "observed_types": [],
+      "observed_types": [
+        "boolean"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:383 (property preset switch)"
     },
     "trajectory_only": {
       "has_native_default": true,
@@ -1985,9 +2321,14 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "validation_models",
-      "observed_types": [],
+      "observed_types": [
+        "integer",
+        "array"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/preflight.py:25; bindcraft/settings.py:490; bindcraft/settings.py:562"
     },
     "validation_recycles": {
       "has_native_default": true,
@@ -2043,9 +2384,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_binder_intra_hotspot",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (registered loss weight)"
     },
     "weights_binder_pae": {
       "has_native_default": true,
@@ -2071,25 +2416,37 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_coldspot_repel",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:193; bindcraft/settings.py:194"
     },
     "weights_collective_softness": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_collective_softness",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (registered loss weight)"
     },
     "weights_com_distance": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_com_distance",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (registered loss weight)"
     },
     "weights_compactness": {
       "has_native_default": true,
@@ -2105,9 +2462,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_distogram_cce",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (registered loss weight)"
     },
     "weights_disulfide": {
       "has_native_default": false,
@@ -2123,9 +2484,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_experimentally_resolved",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (registered loss weight)"
     },
     "weights_exposed_loops": {
       "has_native_default": false,
@@ -2151,9 +2516,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_fold_switching",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:303"
     },
     "weights_humanization": {
       "has_native_default": false,
@@ -2239,9 +2608,13 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_non_contact",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:198"
     },
     "weights_non_helical": {
       "has_native_default": false,
@@ -2277,49 +2650,73 @@
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_ptm_loss",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:185"
     },
     "weights_sequence_entropy": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_sequence_entropy",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (registered loss weight)"
     },
     "weights_target_helicity": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_target_helicity",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (registered loss weight)"
     },
     "weights_target_plddt": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_target_plddt",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (registered loss weight)"
     },
     "weights_target_rigidity": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_target_rigidity",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:410 (registered loss weight)"
     },
     "weights_target_rmsd": {
       "has_native_default": false,
       "native_default": null,
       "native_key": "weights_target_rmsd",
-      "observed_types": [],
+      "observed_types": [
+        "number"
+      ],
       "preset_examples": 0,
-      "status": "unresolved"
+      "preset_examples_by_tier": {},
+      "status": "typed",
+      "type_authority": "bindcraft/settings.py:217"
     },
     "weights_termini_angle": {
       "has_native_default": false,
@@ -2347,7 +2744,8 @@
       "native_key": "worker_launch_stagger",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "unresolved_reason": "internal runtime, storage or scheduler ownership; excluded from operator controls"
     },
     "workers_per_gpu": {
       "has_native_default": false,
@@ -2355,7 +2753,8 @@
       "native_key": "workers_per_gpu",
       "observed_types": [],
       "preset_examples": 0,
-      "status": "unresolved"
+      "status": "unresolved",
+      "unresolved_reason": "internal runtime, storage or scheduler ownership; excluded from operator controls"
     }
   },
   "nested_surfaces": {
@@ -4655,7 +5054,10 @@
           },
           "reference_state": {
             "default_literal": null,
+            "request_type": "string",
             "required": false,
+            "resolved_default": "binder_alone",
+            "source_authority": "bindcraft/protein.py:28",
             "source_default": "BINDER_ALONE"
           }
         }
@@ -4745,7 +5147,10 @@
           },
           "epitope_cutoff": {
             "default_literal": null,
+            "request_type": "number",
             "required": false,
+            "resolved_default": 10.0,
+            "source_authority": "bindcraft/epitope_targeting.py:7",
             "source_default": "EPITOPE_CUTOFF"
           },
           "prediction_state": {
@@ -4850,7 +5255,10 @@
           },
           "reference_state": {
             "default_literal": null,
+            "request_type": "string",
             "required": false,
+            "resolved_default": "binder_alone",
+            "source_authority": "bindcraft/protein.py:28",
             "source_default": "BINDER_ALONE"
           },
           "target": {
@@ -4875,7 +5283,10 @@
           },
           "reference_state": {
             "default_literal": null,
+            "request_type": "string",
             "required": false,
+            "resolved_default": "binder_alone",
+            "source_authority": "bindcraft/protein.py:28",
             "source_default": "BINDER_ALONE"
           }
         }
@@ -4895,7 +5306,10 @@
           },
           "reference_state": {
             "default_literal": null,
+            "request_type": "string",
             "required": false,
+            "resolved_default": "binder_alone",
+            "source_authority": "bindcraft/protein.py:28",
             "source_default": "BINDER_ALONE"
           }
         }
@@ -5090,7 +5504,10 @@
           },
           "epitope_cutoff": {
             "default_literal": null,
+            "request_type": "number",
             "required": false,
+            "resolved_default": 10.0,
+            "source_authority": "bindcraft/epitope_targeting.py:7",
             "source_default": "EPITOPE_CUTOFF"
           },
           "prediction_state": {
@@ -5345,7 +5762,10 @@
         "params": {
           "chain": {
             "default_literal": null,
+            "request_type": "string",
             "required": false,
+            "resolved_default": null,
+            "source_authority": "bindcraft/filters.py:73 (chain: str | None)",
             "source_default": "None"
           },
           "prediction_state": {
@@ -5497,7 +5917,12 @@
           },
           "contact_residue_count": {
             "default_literal": null,
+            "request_type": "number",
             "required": false,
+            "resolved_default": {
+              "$bc2_nonfinite_float": "Infinity"
+            },
+            "source_authority": "binder_contacts_loss",
             "source_default": "float('inf')"
           },
           "contacts_per_residue": {
@@ -5612,7 +6037,10 @@
         "params": {
           "chain": {
             "default_literal": null,
+            "request_type": "string",
             "required": false,
+            "resolved_default": null,
+            "source_authority": "bindcraft/loss.py:346 (chain: str | None)",
             "source_default": "None"
           },
           "domain_ids": {
@@ -5752,7 +6180,10 @@
         "params": {
           "chain": {
             "default_literal": null,
+            "request_type": "string",
             "required": false,
+            "resolved_default": null,
+            "source_authority": "bindcraft/loss.py:364 (chain: str | None)",
             "source_default": "None"
           },
           "eps": {
@@ -5972,7 +6403,10 @@
           },
           "reference_state": {
             "default_literal": null,
+            "request_type": "string",
             "required": false,
+            "resolved_default": "binder_alone",
+            "source_authority": "bindcraft/protein.py:28",
             "source_default": "BINDER_ALONE"
           },
           "tm_target": {
@@ -5997,7 +6431,10 @@
           },
           "interface_mask": {
             "default_literal": null,
+            "request_type": "nullable",
             "required": false,
+            "resolved_default": null,
+            "source_authority": "induced_fit_interface_loss",
             "source_default": "None"
           },
           "interface_rmsd_target": {
@@ -6012,7 +6449,10 @@
           },
           "reference_state": {
             "default_literal": null,
+            "request_type": "string",
             "required": false,
+            "resolved_default": "binder_alone",
+            "source_authority": "bindcraft/protein.py:28",
             "source_default": "BINDER_ALONE"
           },
           "target": {
@@ -6032,7 +6472,12 @@
           },
           "contact_residue_count": {
             "default_literal": null,
+            "request_type": "number",
             "required": false,
+            "resolved_default": {
+              "$bc2_nonfinite_float": "Infinity"
+            },
+            "source_authority": "interface_contacts_loss",
             "source_default": "float('inf')"
           },
           "contacts_per_residue": {
@@ -6422,85 +6867,11 @@
   ],
   "unresolved_fields": [
     "auto_multi_gpu",
-    "autotune_loss_weights",
-    "betasheet_reopt_recycles",
-    "bigbang",
-    "binder_chain",
-    "binder_name",
-    "binder_shapes",
-    "campaign_name",
     "compile_next_length",
-    "crop_fasta_sequence",
-    "cyclic_offset_mode",
     "design_workers",
-    "desperation_trajectories",
-    "detarget_check_interval",
-    "disulfide_sigma",
-    "disulfide_staple",
-    "disulfide_temperature",
-    "domain_linker_fix_cut",
-    "domain_linker_gap",
-    "domain_linker_sharpness",
-    "forced_targeting_shell",
     "gpu_ids",
-    "humanization_hydro_weight",
-    "humanize",
-    "idr_crop_count",
-    "induced_fit_interface_cutoff",
-    "induced_fit_monomer_adaptive",
-    "induced_fit_monomer_chunk",
-    "induced_fit_monomer_plddt",
-    "induced_fit_monomer_steps",
-    "induced_fit_mpnn_designed_share",
-    "induced_fit_mpnn_shell",
-    "induced_fit_mpnn_threshold",
-    "induced_fit_steps",
-    "interface_contact_distance",
-    "length_bucket_size",
-    "max_binder_chain_breaks_final",
-    "max_binder_free_cysteines_final",
-    "max_coldspot_contact_final",
-    "max_cyclic_closure_distance_final",
-    "max_detarget_interface_residues_final",
-    "max_detarget_iptm",
-    "max_detarget_iptm_anneal",
-    "max_detarget_iptm_final",
-    "max_detarget_iptm_harden",
-    "max_detarget_iptm_mutate",
-    "max_detarget_iptm_refine",
-    "max_detarget_iptm_screen",
-    "max_detarget_rounds",
-    "max_off_epitope_contact_final",
-    "max_off_paratope_contact_final",
-    "max_oligomer_symmetry_rmsd_final",
-    "max_surface_hydrophobicity_final",
     "max_workers_per_gpu",
-    "min_epitope_residues_contacted_final",
-    "min_framework_packing_final",
-    "min_interface_buried_area_final",
-    "min_iptm_refine",
-    "min_iptm_screen",
-    "min_receptor_chains_contacted_final",
-    "min_target_crop_length_final",
-    "min_target_plddt_final",
-    "mixed_topology",
-    "mpnn_fix_linker",
-    "multitarget_best_round",
-    "multitarget_cumulative_filter",
-    "multitarget_filter_models",
-    "multitarget_merged_gradient_budget",
-    "multitarget_merged_gradients",
-    "multitarget_rounds_per_target",
-    "multitarget_steps",
-    "multitarget_swap_patience",
-    "multitarget_swap_threshold",
-    "multitarget_tied_redesign",
-    "multitarget_warmup_patience",
-    "non_contact_distance",
-    "number_of_final_designs",
-    "oligomer_tie",
     "project_folder",
-    "protease_stable",
     "relax_learning_rate",
     "relax_min_sep",
     "relax_overlap_tol",
@@ -6509,25 +6880,6 @@
     "relax_steps",
     "relax_weight_bond",
     "relax_weight_clash",
-    "sparse_output",
-    "target_chain",
-    "termini_accessible",
-    "termini_together",
-    "validation_models",
-    "weights_binder_intra_hotspot",
-    "weights_coldspot_repel",
-    "weights_collective_softness",
-    "weights_com_distance",
-    "weights_distogram_cce",
-    "weights_experimentally_resolved",
-    "weights_fold_switching",
-    "weights_non_contact",
-    "weights_ptm_loss",
-    "weights_sequence_entropy",
-    "weights_target_helicity",
-    "weights_target_plddt",
-    "weights_target_rigidity",
-    "weights_target_rmsd",
     "worker_launch_stagger",
     "workers_per_gpu"
   ],

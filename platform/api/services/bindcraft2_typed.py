@@ -45,6 +45,23 @@ def _check(value: object, observed: list[str], path: str) -> None:
     if isinstance(value, (int, float)) and not isinstance(value, bool) and not math.isfinite(value):
         raise ValueError(f"{path}: numeric request must be finite")
 
+def _metric_parameter(value: object, descriptor: dict, path: str) -> None:
+    kind = descriptor.get("request_type")
+    if kind == "nullable":
+        if value is not None:
+            raise ValueError(f"{path}: native default is null; non-null type unqualified")
+    elif kind:
+        _check(value, [kind], path)
+    elif descriptor["default_literal"] is not None:
+        _check(value, [_kind(descriptor["default_literal"])], path)
+    else:
+        raise ValueError(f"{path}: type unresolved")
+
+def _string_list(value: object, path: str) -> None:
+    _check(value, ["array"], path)
+    for index, item in enumerate(value):
+        _check(item, ["string"], f"{path}[{index}]")
+
 
 def validate_request(request: dict, data: dict | None = None) -> dict:
     """No unknown/unsupported fields, inferred defaults or opaque nested JSON."""
@@ -85,10 +102,7 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
                                 source = registered["params"].get(parameter)
                                 if source is None:
                                     raise ValueError(f"{name}.{metric}.params.{parameter}: unknown parameter")
-                                default = source["default_literal"]
-                                if default is None:
-                                    raise ValueError(f"{name}.{metric}.params.{parameter}: type unresolved")
-                                _check(param_value, [_kind(default)], f"{name}.{metric}.params.{parameter}")
+                                _metric_parameter(param_value, source, f"{name}.{metric}.params.{parameter}")
                         elif key in ("higher", "mandatory"):
                             _check(entry_value, ["boolean"], f"{name}.{metric}.{key}")
                         elif key == "threshold":
@@ -97,6 +111,30 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
                             _check(entry_value, ["string"], f"{name}.{metric}.{key}")
             else:
                 raise ValueError(f"{name}: nested type not yet qualified")
+        if name == "crop_fasta_sequence":
+            if isinstance(value, list):
+                if len(value) != 2 or any(type(x) is not int or x < 1 for x in value):
+                    raise ValueError("crop_fasta_sequence: positive two-length range required")
+            elif value is not False and (type(value) is not int or value < 1):
+                raise ValueError("crop_fasta_sequence: positive length or false required")
+        if name == "binder_shapes":
+            if any(not isinstance(group, list) for group in value):
+                raise ValueError("binder_shapes: groups must be arrays")
+            for index, group in enumerate(value):
+                _string_list(group, f"binder_shapes[{index}]")
+        if name == "validation_models":
+            if isinstance(value, list):
+                for index, model in enumerate(value):
+                    if type(model) not in (int, str):
+                        raise ValueError(f"validation_models[{index}]: model name or index required")
+            elif type(value) is not int or value < 1:
+                raise ValueError("validation_models: positive count or model list required")
+        if name == "multitarget_rounds_per_target":
+            _string_list(value, name)
+        if name == "cyclic_offset_mode" and value not in ("distance", "direction", "neighbours"):
+            raise ValueError("cyclic_offset_mode: unknown mode")
+        if name == "oligomer_tie" and value not in ("symmetric", "none"):
+            raise ValueError("oligomer_tie: unknown tie mode")
         if isinstance(value, list) and name == "binder_lengths":
             if not value or any(isinstance(item, bool) or not isinstance(item, int) or item < 1 for item in value):
                 raise ValueError("binder_lengths: positive integer lengths required")
@@ -117,7 +155,7 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
                     _check(item, ["number"] if key == "weight" else ["string"], f"targets[{index}].{key}")
                 if not all(target.get(key) for key in ("name", "target_path")):
                     raise ValueError(f"targets[{index}]: name and target_path required")
-        if isinstance(value, list) and name not in ("modality", "core", "target", "targets", "binder_lengths", "paratope_conformations"):
+        if isinstance(value, list) and name not in ("modality", "core", "target", "targets", "binder_lengths", "paratope_conformations", "binder_shapes", "validation_models", "multitarget_rounds_per_target", "crop_fasta_sequence"):
             raise ValueError(f"{name}: element schema not yet qualified")
         if name in ("modality", "core", "target"):
             names = value if isinstance(value, list) else [value]
