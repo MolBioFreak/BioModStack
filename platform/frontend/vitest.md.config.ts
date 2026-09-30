@@ -23,6 +23,7 @@ export default defineConfig({
             './tests/vitest/binderAuthoringMounted.test.tsx',
             './tests/vitest/binderProjectAuthoringCompletionMounted.test.tsx',
             './tests/vitest/binderResultsCompletionMounted.test.tsx',
+            './tests/vitest/binderEvidencePollingMounted.test.tsx',
             './tests/vitest/nativeGenerationWorkbenchMounted.test.tsx',
             './tests/vitest/nativeGenerationCohortMounted.test.tsx',
             './tests/vitest/sequenceNativeResultsMounted.test.tsx',
