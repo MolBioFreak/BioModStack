@@ -673,8 +673,7 @@ def install(root, manifest, expected_boot, cache):
                     source = os.open(row['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                      dir_fd=objects)
                     try:
-                        if not cache.verified(source, row):
-                            raise ValueError('corrupt_object')
+                        cache.regular(source)
                         # Copy through the already-open destination descriptor.
                         # The complete directory map is checked once before activation.
                         fence()
