@@ -449,6 +449,12 @@ async def test_successful_job_finalizes_blind_evidence_without_a_new_design(sour
         output / 'blind_pose_results', model_variant='fast', model_id_or_path='',
         num_loops=1, num_sampling_steps=25, num_diffusion_samples=1,
         seed=7, device='cpu', runner=tmp_path / 'native.py')
+    inventory_calls = []
+    inventory = selected._result_inventory
+    def counted_inventory(*args, **kwargs):
+        inventory_calls.append(args[0])
+        return inventory(*args, **kwargs)
+    monkeypatch.setattr(selected, '_result_inventory', counted_inventory)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'blind-pose.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -463,11 +469,41 @@ async def test_successful_job_finalizes_blind_evidence_without_a_new_design(sour
             await session.commit()
             completed = await finalize_successful_job(job, str(output), session)
             assert completed.completed, completed
+            assert len(inventory_calls) == 2  # publish + finalizer, not ingester read
+        import shutil
+        shutil.rmtree(directory)  # completed readback consumes only published bytes
         async with factory() as session:
             job = await session.get(Job, 'blind-child')
             assert job.status == 'completed'
             assert job.provenance['result_integrity']['result_kind'] == 'blind_pose_native_evidence'
             assert await session.scalar(select(func.count(Design.id)).where(Design.job_id == job.id)) == 0
-            assert (await selected.read_selected(job, session))['records'][0]['classification'] == 'unclassified'
+            result = await selected.read_selected(job, session)
+            assert result['records'][0]['classification'] == 'unclassified'
+            assert result['records'][0]['source_identity'] == binding['candidates'][0]['source_identity']
+            from copy import deepcopy
+            for field, value in [('source_job_id', 'foreign'), ('candidates', [])]:
+                changed = deepcopy(job.params)
+                changed[selected.KEY][field] = value
+                job.params = changed
+                with pytest.raises(selected.BlindPoseError, match='binding changed'):
+                    await selected.read_selected(job, session)
+                job.params = deepcopy(params)
+            job.retry_count = 1
+            with pytest.raises(selected.BlindPoseError, match='attempt changed'):
+                await selected.read_selected(job, session)
+            job.retry_count = 0
+            artifact = await session.scalar(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))
+            original_path = artifact.storage_path
+            artifact.storage_path += '.foreign'
+            with pytest.raises(selected.BlindPoseError, match='registry disagrees'):
+                await selected.read_selected(job, session)
+            artifact.storage_path = original_path
+            published_cif = next((output / 'blind_pose_results').rglob('*.cif'))
+            original_bytes = published_cif.read_bytes()
+            published_cif.write_bytes(original_bytes + b'# changed\n')
+            with pytest.raises(selected.BlindPoseError, match='bytes changed'):
+                await selected.read_selected(job, session)
+            published_cif.write_bytes(original_bytes)
+            assert await selected.read_selected(job, session)
     finally:
         await engine.dispose()

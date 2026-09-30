@@ -38,6 +38,36 @@ def parameter_contract(mode: str) -> list[dict]:
 def ppiflow_generation_inventory(mode: str) -> dict:
     """Typed controls plus visible checkpoint-owned architecture and native limits."""
     fields = parameter_contract(mode)
+    # Discovery-only projection of the existing normalization branches below.
+    # parameter_contract remains unchanged: this metadata never validates inputs.
+    by_name = {field['name']: field for field in fields}
+    if mode == 'protein_binder':
+        by_name['target_pdb'].update(
+            required_when={'field': 'input_csv', 'operator': 'falsy'},
+            applicability={'field': 'input_csv', 'operator': 'falsy'},
+            required_help='Specify exactly one target PDB or input CSV. CSV input does not require a target PDB.')
+        by_name['input_csv'].update(
+            required_when={'field': 'target_pdb', 'operator': 'falsy'},
+            applicability={'field': 'target_pdb', 'operator': 'falsy'},
+            required_help='Alternative to target PDB; each row supplies its native processed input.')
+        by_name['binder_chain'].update(
+            required_when={'field': 'target_pdb', 'operator': 'truthy'},
+            applicability={'field': 'target_pdb', 'operator': 'truthy'},
+            required_help='Required for native PDB preprocessing as the virtual binder identity; not required for CSV input.')
+        by_name['specified_hotspots'].update(
+            required_when={'any': [
+                {'field': 'sample_hotspot_rate_min', 'operator': 'not_equals', 'value': 0.2},
+                {'field': 'sample_hotspot_rate_max', 'operator': 'not_equals', 'value': 0.5}]},
+            required_help='Explicit hotspots are required when either hotspot rate differs from the native 0.2–0.5 interval. Null retains native hotspot sampling.')
+    else:
+        for key in ('target_pdb', 'framework_pdb', 'antigen_chain', 'heavy_chain', 'specified_hotspots'):
+            by_name[key].update(required=True, nullable=False,
+                                required_help='Required by the native antibody/nanobody generator; no inherited null value.')
+        by_name['light_chain'].update(
+            required=mode == 'antibody_binder', nullable=mode == 'nanobody_binder',
+            applicability=mode == 'antibody_binder',
+            required_help=('Required for the native antibody operation.' if mode == 'antibody_binder'
+                           else 'Inactive for heavy-only nanobody generation; must remain null.'))
     model = yaml.safe_load(MODEL_YAML.read_text())
     return {"schema_version": SCHEMA_VERSION, "mode": mode, "parameters": fields,
             "profile": model["native_profiles"][mode], "assets": selected_assets(mode),

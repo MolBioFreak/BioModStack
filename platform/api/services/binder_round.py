@@ -149,6 +149,8 @@ async def _plan(session, root, progress, request, *, retry=False):
             settings = request if general else (request.sequence_design if is_backbone else request.prediction)
             samples = settings.params.get('num_parallel_jobs', 1) or 1
             for target_source in stage_targets:
+                base_request = None
+                binding = {}
                 for sample in range(samples):
                     step_id = identity(root.id, stage, design.id, target_source, sample)
                     if step_id in progress['steps']:
@@ -161,15 +163,18 @@ async def _plan(session, root, progress, request, *, retry=False):
                             (design.provenance or {}).get('producer_candidate_key'),
                         'target_state': target_source.get('name') if target_source else None,
                         'binder_chains': binder, 'target_chains': target, 'sample_index': sample}
-                    if general:
-                        from services.sequence_round_inputs import design_request as general_design_request
-                        child_request, binding = general_design_request(root, owner, design, request)
-                        metadata.update(binding)
-                    elif is_backbone:
-                        child_request = design_request(root, owner, design, request, binder, target)
-                    else:
-                        child_request, binding = prediction_request(root, owner, design, request, binder, target, target_source)
-                        metadata.update(binding)
+                    if base_request is None:
+                        # Resolve immutable inputs only when this pair needs work.
+                        # Outputs/step identity stay private to every child below.
+                        if general:
+                            from services.sequence_round_inputs import design_request as general_design_request
+                            base_request, binding = general_design_request(root, owner, design, request)
+                        elif is_backbone:
+                            base_request = design_request(root, owner, design, request, binder, target)
+                        else:
+                            base_request, binding = prediction_request(root, owner, design, request, binder, target, target_source)
+                    child_request = base_request.model_copy(deep=True)
+                    metadata.update(deepcopy(binding))
                     child_request.name = f'binder-round-{step_id}'
                     child_request.params['num_parallel_jobs'] = 1
                     child_request.binder_round_step = BinderRoundStepReference(root_job_id=root.id, step_id=step_id)

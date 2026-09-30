@@ -309,7 +309,11 @@ async def read_selected(job: Job, session) -> dict:
         raise BlindPoseError('blind pose attempt changed')
     if not job.output_dir or Path(job.output_dir).is_symlink():
         raise BlindPoseError('published result root changed')
-    _verify_request_snapshots(job, receipt['binding'])
+    # Published binding and native components retain immutable source identity.
+    # Reopening outputs consumes no launch snapshots; selected execution still
+    # verifies those files at preparation and first publication.
+    if (job.params or {}).get(KEY) != receipt['binding']:
+        raise BlindPoseError('published selected request binding changed')
     native, files = _result_inventory(Path(job.output_dir).absolute(), receipt['binding'],
                                        _requested_settings(job.params))
     if files != receipt['files']:

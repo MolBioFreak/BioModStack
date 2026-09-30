@@ -18,6 +18,7 @@ from services.bindcraft2_typed import validate_request
 
 IMAGE = Path('/mnt/BioModStack/apptainer/bindcraft2.sif')
 SCRIPT = Path(__file__).resolve().parents[3] / 'scripts/compile_bindcraft2_campaign.py'
+COMPILE_TIMEOUT_SECONDS = 120
 
 
 def _source_path(value: str) -> Path:
@@ -77,8 +78,11 @@ def _native_compile(request: dict, destination: Path, *, resume: bool = False, i
     command.extend([str(image), 'python3', str(script), str(destination)])
     if resume:
         command.append('--resume')
-    completed = subprocess.run(command, input=json.dumps(request, allow_nan=False), text=True,
-                               capture_output=True, timeout=120, check=False)
+    try:
+        completed = subprocess.run(command, input=json.dumps(request, allow_nan=False), text=True,
+                                   capture_output=True, timeout=COMPILE_TIMEOUT_SECONDS, check=False)
+    except subprocess.TimeoutExpired:
+        raise ValueError(f'BC2 native compilation timed out after {COMPILE_TIMEOUT_SECONDS} seconds') from None
     if completed.returncode:
         raise ValueError('Pinned BC2 compilation failed: ' + completed.stderr[-2000:])
     compiled = json.loads(completed.stdout)
@@ -109,11 +113,15 @@ def _materialized(request: dict, sources: list[tuple[str, int | None, Path]],
 
 
 def _compile(settings: dict, destination: Path, *, copy: bool,
-             compiler: Callable[[dict, Path], dict]) -> dict:
-    validate_request(settings)
+             compiler: Callable[[dict, Path], dict],
+             _resolved: tuple[list[tuple[str, int | None, Path]], list[dict]] | None = None) -> dict:
+    if _resolved is None:
+        validate_request(settings)
+        sources = _sources(settings)
+        before = _identity(sources)
+    else:
+        sources, before = _resolved
     destination = destination.resolve()
-    sources = _sources(settings)
-    before = _identity(sources)
     native_request = _materialized(settings, sources, destination, copy=copy)
     if copy:
         for role, index, source in sources:
@@ -129,13 +137,14 @@ def _compile(settings: dict, destination: Path, *, copy: bool,
         raise ValueError('BC2 native compilation did not retain the materialized request')
     # Preserve the saved operator request separately from CLI-materialized paths.
     compiled['requested_settings'] = settings
-    compiled['request_sha256'] = hashlib.sha256(_canonical(settings)).hexdigest()
+    request_sha256 = hashlib.sha256(_canonical(settings)).hexdigest()
+    compiled['request_sha256'] = request_sha256
     if compiled.get('effective_sha256') != hashlib.sha256(_canonical(compiled['effective_settings'])).hexdigest():
         raise ValueError('BC2 native compilation digest mismatch')
     return {'compiled': compiled, 'sources': before,
             'requested_settings': settings, 'effective_settings': compiled['effective_settings'],
             'effective_sha256': compiled['effective_sha256'],
-            'request_sha256': hashlib.sha256(_canonical(settings)).hexdigest(),
+            'request_sha256': request_sha256,
             'sweep_budget': compiled['sweep_budget']}
 
 
@@ -143,9 +152,10 @@ def preview_campaign(settings: dict, *, compiler: Callable[[dict, Path], dict] =
     """Native CPU preview against a deterministic logical root; no directory created."""
     validate_request(settings)
     sources = _sources(settings)
-    token = hashlib.sha256(_canonical({'request': settings, 'sources': _identity(sources)})).hexdigest()
+    before = _identity(sources)
+    token = hashlib.sha256(_canonical({'request': settings, 'sources': before})).hexdigest()
     destination = get_results_dir().resolve() / '.bc2-preview' / token
-    result = _compile(settings, destination, copy=False, compiler=compiler)
+    result = _compile(settings, destination, copy=False, compiler=compiler, _resolved=(sources, before))
     result.pop('compiled')
     result['preview_digest'] = hashlib.sha256(_canonical(result)).hexdigest()
     result['note'] = 'Job-owned materialization recompiles with its actual paths; read back that effective digest.'

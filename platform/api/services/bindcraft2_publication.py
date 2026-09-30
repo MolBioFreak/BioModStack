@@ -343,17 +343,19 @@ async def read_published_native_results(job: Job, session) -> tuple[NativePublic
                   if a.logical_path.startswith("bindcraft2/native/")}
     if set(registered) != set(receipt["files"]):
         raise PublicationError("BC2 registered artifact inventory changed")
-    for name, expected in receipt["files"].items():
-        path, content = _regular(root, name)
-        row = registered[name]
-        if (hashlib.sha256(content).hexdigest() != expected["sha256"] or len(content) != expected["bytes"]
-                or row.sha256 != expected["sha256"] or row.bytes != expected["bytes"]
-                or row.storage_path != str(path) or row.media_type != expected["media_type"]):
-            raise PublicationError("BC2 published bytes or artifact receipt changed")
     publication = read_native_publication(root)
-    if (_inventory(root, publication, legacy="inventory_version" not in receipt) != receipt["files"]
-            or _summary(publication) != receipt["arms"]):
-        raise PublicationError("BC2 native inventory or accounting changed")
+    inventory = _inventory(root, publication, legacy="inventory_version" not in receipt)
+    if inventory != receipt["files"]:
+        raise PublicationError("BC2 published bytes or native inventory changed")
+    if _summary(publication) != receipt["arms"]:
+        raise PublicationError("BC2 native accounting changed")
+    # The fresh inventory owns byte/containment verification in this read. Keep
+    # registry custody against those same observations, without another hash pass.
+    for name, expected in inventory.items():
+        row = registered[name]
+        if (row.sha256 != expected["sha256"] or row.bytes != expected["bytes"]
+                or row.storage_path != str(root / name) or row.media_type != expected["media_type"]):
+            raise PublicationError("BC2 published bytes or artifact receipt changed")
     if receipt.get("candidates") != _candidate_bindings(publication, {
             "bindcraft2/native/" + name: row for name, row in registered.items()}, job.id, source=receipt.get("source")):
         raise PublicationError("BC2 candidate artifact bindings changed")
