@@ -374,7 +374,8 @@ export const validateMolecularDynamicsForm = (
     if (!finitePositive(form.checkpointIntervalMinutes)) errors.push('Checkpoint interval must be greater than 0 minutes.');
     if (!Number.isInteger(form.minimizationSteps) || form.minimizationSteps < 1) errors.push('Minimization steps must be a positive integer.');
     if (!finitePositive(form.nvtPs) || !finitePositive(form.nptPs)) errors.push('NVT and NPT durations must be greater than 0 ps.');
-    if (!Number.isInteger(form.ntomp) || form.ntomp < 1 || form.ntomp > 64) errors.push('CPU threads must be an integer from 1 to 64.');
+    if (form.inputMode === 'structure' && form.neutralize === false) errors.push('Neutralization is fixed on by the selected profile. Correct the saved OFF value before preview.');
+    if (!Number.isInteger(form.ntomp) || form.ntomp < 1 || form.ntomp > 128) errors.push('CPU threads must be an integer from 1 to 128.');
 
     const constraints = form.inputMode === 'structure' ? chemistryProfile?.launch_constraints : undefined;
     if (form.inputMode === 'structure' && chemistryProfile && !constraints) {
