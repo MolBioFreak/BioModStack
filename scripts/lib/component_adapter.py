@@ -236,6 +236,7 @@ def retry_component_workflow(context_path: Path, *, component_id: str,
     from services.nextflow import (compile_component_retry_invocation,
                                    component_checkpoint_parent_snapshot)
     from scripts.bms_md.spawn_replicas import prepare_replica_retry
+    from scripts.bms_md.spawn_analysis import prepare_analysis_retry
 
     runtime = runtime_from_environment(context_path)
     if runtime is None:
@@ -264,12 +265,15 @@ def retry_component_workflow(context_path: Path, *, component_id: str,
                         or file_identity(path) != (reference['sha256'], reference['size_bytes'])):
                     raise ValueError('retained retry compiler input changed')
             context = dict(runtime.context, **prior['retry_context'])
+            context['native_runtime'] = prior['retry_context'].get('native_runtime',
+                prior['retry_context']['parent']['params'])
             key = digest([component_id, operation_id])
             invocation = compile_component_retry_invocation(context, component_id=component_id,
                 operation_id=operation_id, generation=prior['generation'],
                 output_dir=prior['parent_snapshot']['output_dir'],
                 working_directory=str(Path(context['working_directory']) / 'component-retries' / key),
-                spawn_receipt=json.loads(Path(prior['native_parameters']['md_retry_spawn_receipt']).read_bytes()))
+                spawn_receipt=json.loads(Path(prior['native_parameters'].get('md_analysis_retry_spawn_receipt')
+                    or prior['native_parameters']['md_retry_spawn_receipt']).read_bytes()))
             if (list(invocation.command) != prior['command']
                     or invocation.execution_plan.plan_sha256 != prior['plan_sha256']
                     or [item.reference for item in invocation.generated_inputs] != prior['generated_inputs']):
@@ -277,7 +281,9 @@ def retry_component_workflow(context_path: Path, *, component_id: str,
             native_invocations.append(invocation)
         return prior
     context = dict(runtime.context, resources=renewed_resources)
-    replacement, receipt = prepare_replica_retry(runtime, component_id=component_id,
+    prepare_retry = (prepare_analysis_retry if runtime.request(component_id).stage == 'md_analysis'
+                     else prepare_replica_retry)
+    replacement, receipt = prepare_retry(runtime, component_id=component_id,
         operation_id=operation_id, failure_code=failure_code)
     generation = int((runtime.root_state() or {}).get('generation', 0)) + 1
     key = digest([component_id, operation_id])
@@ -302,8 +308,9 @@ def retry_component_workflow(context_path: Path, *, component_id: str,
     return runtime.retry_component(component_id, replacement=replacement,
         operation_id=operation_id, actor=actor, boot_id=boot_id, invocation=invocation,
         continuation_lease_id=continuation_lease_id, parent_snapshot=parent, resources=renewed_resources,
-        retry_context={key: context[key] for key in
-            ("parent", "native_runtime", "execution_plan", "plan_sha256", "resources", "generation") if key in context})
+        retry_context={**{key: context[key] for key in
+            ("parent", "execution_plan", "plan_sha256", "resources", "generation") if key in context},
+            "native_runtime": context.get("native_runtime", context["parent"]["params"])})
 
 
 def resume_md_workflow(context_path: Path, *, operation_id: str, pause_operation_id: str,

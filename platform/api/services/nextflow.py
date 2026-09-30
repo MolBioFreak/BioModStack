@@ -4836,7 +4836,7 @@ def compile_component_retry_invocation(context, *, component_id, operation_id,
             any(path.is_symlink() for path in (output, *output.parents, work, *work.parents))):
         raise ValueError('Component retry requires fresh contained output and owned absolute work paths')
     receipt = deepcopy(spawn_receipt)
-    if (not isinstance(receipt, dict) or receipt.get('schema') != 'bms.md.replica-spawn.v1'
+    if (not isinstance(receipt, dict) or receipt.get('schema') not in {'bms.md.replica-spawn.v1', 'bms.md.analysis-spawn.v1'}
             or receipt.get('parent_job_id') != context['root_job_id']):
         raise ValueError('Component retry requires the native parent-bound replica spawn receipt')
     # Native adapter owns seed/roster validation; bind its complete bytes to this
@@ -4850,7 +4850,13 @@ def compile_component_retry_invocation(context, *, component_id, operation_id,
     for key in ('out_dir', 'job_id', 'resume_job_id', 'resume_source_dir',
                 'resume_requested_stage', 'resume_work_dir'):
         params.pop(key, None)
-    params['md_retry_spawn_receipt'] = str(root / receipt_relative)
+    params.pop('md_retry_spawn_receipt', None)
+    params.pop('md_analysis_retry_spawn_receipt', None)
+    receipt_key = ('md_analysis_retry_spawn_receipt' if receipt['schema'] == 'bms.md.analysis-spawn.v1'
+                   else 'md_retry_spawn_receipt')
+    params[receipt_key] = str(root / receipt_relative)
+    # Preserve bound metadata when the compiler relocates generated config inputs.
+    params['md_config'] = _native_plan_metadata_settings('molecular_dynamics', params)['md_config']
     params['work_dir'] = str(work / 'work')
     requested = deepcopy(parent.get('provenance', {}).get(
         'core_protein_requested_params', parent['params']))

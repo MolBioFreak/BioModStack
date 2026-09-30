@@ -1119,6 +1119,7 @@ async def _queue_local_component_retry(session, job, intent, history, saved):
         sys.path.insert(0, code_root)
     from scripts.lib.component_adapter import runtime_from_environment
     from scripts.bms_md.spawn_replicas import prepare_replica_retry
+    from scripts.bms_md.spawn_analysis import prepare_analysis_retry
 
     provenance = dict(job.provenance or {})
     path = Path(str(provenance.get('component_context_path') or ''))
@@ -1148,7 +1149,9 @@ async def _queue_local_component_retry(session, job, intent, history, saved):
     if (job.status != 'failed' or state.get('state') != 'failed' or not state.get('quiescent')
             or state.get('boot_id') != Path('/proc/sys/kernel/random/boot_id').read_text().strip()):
         raise RemoteExecutionError('Local retry requires same-boot failed quiescent root')
-    replacement, _ = prepare_replica_retry(runtime, component_id=intent['component_id'],
+    prepare_retry = (prepare_analysis_retry if runtime.request(intent['component_id']).stage == 'md_analysis'
+                     else prepare_replica_retry)
+    replacement, _ = prepare_retry(runtime, component_id=intent['component_id'],
         operation_id=intent['operation_id'], failure_code=intent['failure_code'])
     gpu = runtime.context['resources'].get('gpu_id')
     if type(gpu) is not int or gpu < 0:

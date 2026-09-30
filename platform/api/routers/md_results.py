@@ -118,7 +118,7 @@ async def get_md_analysis(job_id: str, session: AsyncSession = Depends(get_sessi
         )
         md = (job.provenance or {}).get("md") if isinstance(job.provenance, dict) else None
         accepted_set = md.get("replica_manifest_set_sha256") if isinstance(md, dict) else None
-        lifecycle_retrying = isinstance(md, dict) and md.get("analysis_state") == "retrying"
+        lifecycle_retrying = isinstance(md, dict) and md.get("analysis_state") == "retrying" and job.status != "failed"
         generation_matches = await _joined_thread(_generation_matches_accepted, result_record(job))
         eligible = bool(
             report.get("status") != "completed"
@@ -142,6 +142,55 @@ async def get_md_analysis(job_id: str, session: AsyncSession = Depends(get_sessi
         _raise(exc)
 
 
+def _retained_analysis_roster(provenance: dict, root_job_id: str, target_id: str,
+                              parent_root: Path) -> dict[int, dict]:
+    """Resolve exact current requests, including retained but unprojected lanes."""
+    context_path = provenance.get("component_context_path")
+    if context_path:
+        from scripts.lib.component_adapter import runtime_from_environment
+        runtime = runtime_from_environment(Path(context_path))
+        if runtime.root_job_id != root_job_id or runtime.target_id != target_id:
+            raise ValueError("Retained analysis roster root/target conflicts")
+        rows = runtime.children(root_job_id, "md_analysis")
+    else:
+        # Remote terminal return retains the real ledger snapshot even for lanes
+        # the host importer did not project. Use its issued attempt identities.
+        path = parent_root / ".bms-components.json"
+        if not path.exists():
+            return {}
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Retained analysis roster must be a regular publication")
+        envelope = json.loads(path.read_bytes())
+        receipt = provenance.get("remote_execution_receipt") or {}
+        expected = receipt.get("component_context_identity") or provenance.get("assignment_context") or {}
+        for key in ("root_job_id", "attempt_id", "target_id", "lease_id", "source_identity", "plan_sha256"):
+            if envelope.get(key) != expected.get(key) or key not in expected:
+                raise ValueError("Retained analysis roster attempt identity conflicts")
+        if (envelope.get("schema_name") != "bms.component-projection.v1"
+                or envelope.get("generation") != receipt.get("generation", 0)
+                or envelope.get("current_plan_sha256") != receipt.get("plan_sha256", expected["plan_sha256"])):
+            raise ValueError("Retained analysis roster generation conflicts")
+        from component_runtime import ComponentRequest
+        replaced = {row["original"] for row in envelope.get("replacements", [])}
+        rows = []
+        for row in [*envelope.get("components", []), *envelope.get("unprojected_components", [])]:
+            request = ComponentRequest.capture(**row["request"])
+            if request.component_id != row["component_id"]:
+                raise ValueError("Retained analysis component request identity conflicts")
+            if request.component_id not in replaced and request.stage == "md_analysis":
+                rows.append(dict(id=request.component_id, status=row["state"],
+                                 required=request.required, params=request.payload["params"]))
+    roster = {}
+    for row in rows:
+        if not row["required"]:
+            continue
+        index = row["params"]["md_replica_index"]
+        if type(index) is not int or index < 0 or index in roster:
+            raise ValueError("Retained analysis roster replica identity conflicts")
+        roster[index] = row
+    return roster
+
+
 @router.post("/{job_id}/md/analysis/retry", description=f"Authorization scope: {MD_AUTHORIZATION_SCOPE}")
 async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     parent = (
@@ -160,7 +209,11 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
         raise HTTPException(status_code=409, detail={"code": "MD_ANALYSIS_RETRY_NOT_ELIGIBLE",
             "message": "MD cancellation or review owns the parent"})
     current_md = (parent.provenance or {}).get("md") if isinstance(parent.provenance, dict) else None
-    if isinstance(current_md, dict) and current_md.get("analysis_state") == "retrying":
+    retained_intent = (parent.provenance or {}).get("component_retry") or {}
+    recovering = (retained_intent.get("actor") == "md-analysis-retry:" + job_id
+                  and retained_intent.get("state") in {"pending", "requested", "uncertain"})
+    if (isinstance(current_md, dict) and current_md.get("analysis_state") == "retrying"
+            and parent.status != "failed" and not recovering):
         raise HTTPException(
             status_code=409,
             detail={"code": "MD_ANALYSIS_RETRY_ACTIVE", "message": "An MD analysis retry is already active"},
@@ -188,7 +241,7 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
         if current is None or (child.created_at, str(child.id)) > (current.created_at, str(current.id)):
             latest[replica] = child
     active = [child for child in children if str(child.status or child.queue_status).lower() in {"queued", "running", "pending"}]
-    if active:
+    if active and not recovering:
         raise HTTPException(
             status_code=409,
             detail={"code": "MD_ANALYSIS_RETRY_ACTIVE", "message": "An MD analysis retry is already active"},
@@ -208,7 +261,7 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
         for replica in replica_indices
         if replica not in latest or str(latest[replica].status or latest[replica].queue_status).lower() != "completed"
     ]
-    if not retry_indices:
+    if not retry_indices and not (parent.execution_target_id or (parent.provenance or {}).get("component_context_path")):
         raise HTTPException(
             status_code=409,
             detail={"code": "MD_ANALYSIS_RETRY_NOT_ELIGIBLE", "message": "No failed or missing MD analysis lane is retryable"},
@@ -247,17 +300,46 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
                     for row in templates)):
             raise HTTPException(status_code=409, detail='Remote MD analysis retry requires its retained approved analysis expansion')
 
-    if approved is not None:
+    shared_context = (parent.provenance or {}).get("component_context_path")
+    if approved is not None or shared_context:
         from services.remote_execution.executor import retry_component_execution
         # The retained shared owner persists its own exact-operation intent and
         # reacquires the original target. Never submit a scheduler-visible leaf.
-        source = next((latest[index] for index in retry_indices if index in latest), None)
-        component_id = str(source.id) if source is not None else f"{job_id}:md_analysis"
+        try:
+            roster = (await _joined_thread(_retained_analysis_roster, dict(parent.provenance or {}),
+                str(parent.id), parent.execution_target_id or "local", parent_root) if not recovering else {})
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(status_code=409, detail={"code": "MD_ANALYSIS_RETRY_ACTUATION_UNCERTAIN",
+                "message": "Retained runtime analysis roster requires same-attempt recovery"}) from exc
+        # The existing authority replaces one exact failed component per operation.
+        # A later explicit operator request addresses the next failed lane; never
+        # launch a background roster retry or call one replacement roster success.
+        if roster:
+            retry_indices = sorted(index for index, row in roster.items()
+                                   if row["status"] != "completed")
+            if any(row["status"] in {"queued", "running", "uncertain"} for row in roster.values()):
+                raise HTTPException(status_code=409, detail={"code": "MD_ANALYSIS_RETRY_ACTIVE",
+                    "message": "Retained analysis components are still active"})
+        if recovering and not retry_indices:
+            retry_indices = replica_indices
+        if not retry_indices:
+            raise HTTPException(status_code=409, detail={"code": "MD_ANALYSIS_RETRY_NOT_ELIGIBLE",
+                "message": "No failed or missing MD analysis lane is retryable"})
+        selected_index = retry_indices[0]
+        source = latest.get(selected_index)
+        component_id = (roster[selected_index]["id"] if selected_index in roster else
+                        str((source.provenance or {}).get("component_id") or source.id) if source else None)
+        if recovering:
+            component_id = retained_intent["component_id"]
+        if component_id is None:
+            raise HTTPException(status_code=409, detail={"code": "MD_ANALYSIS_RETRY_ACTUATION_UNCERTAIN",
+                "message": "Retained runtime analysis roster is unavailable; no component identity was invented"})
         operation_id = "md-analysis:" + hashlib.sha256(json.dumps(
-            [job_id, parent.remote_attempt_id, manifest_set_sha256, retry_indices,
-             [str(latest[index].id) if index in latest else None for index in retry_indices]],
+            [job_id, parent.remote_attempt_id, manifest_set_sha256, selected_index, component_id],
             separators=(",", ":"),
         ).encode()).hexdigest()
+        if recovering:
+            operation_id = retained_intent["operation_id"]
         try:
             receipt = await retry_component_execution(session, parent,
                 component_id=component_id, operation_id=operation_id,
@@ -280,11 +362,17 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
             aggregate_manifest_sha256=current_aggregate_sha256,
             replica_manifest_set_sha256=manifest_set_sha256)
         provenance["md"] = md
-        parent.provenance = provenance
-        await session.commit()
+        from services.remote_execution.executor import _publish_remote_transition
+        if not await _publish_remote_transition(session, parent, {"provenance": provenance}, require_lease=False):
+            await session.refresh(parent)
+            return {"schema": "bms.md.analysis-retry.v1", "status": "cancelled" if parent.status == "cancelled" else "ownership_changed",
+                "created_child_ids": []}
         child_id = receipt.get("child_job_id") or receipt.get("component_id")
+        selected_index = ((receipt.get("replacement") or {}).get("payload") or {}).get("params", {}).get("md_replica_index", selected_index)
         return {"schema": "bms.md.analysis-retry.v1", "status": "scheduled",
-            "created_child_ids": [str(child_id)] if child_id else []}
+            "created_child_ids": [str(child_id)] if child_id else [],
+            "scheduled_replica_indices": [selected_index],
+            "remaining_replica_indices": [index for index in retry_indices if index != selected_index]}
 
     provenance = dict(parent.provenance or {})
     md = dict(provenance.get("md") or {})
