@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""RFantibody runtime preflight checks.
+"""Manual RFantibody runtime compatibility diagnostic.
 
-Fails fast when the runtime stack is incompatible before RFantibody inference starts.
+Explicit CLI invocation only; production inference does not run this probe.
+Its synthetic operations are diagnostic evidence, not launch certification.
 """
 
 from __future__ import annotations

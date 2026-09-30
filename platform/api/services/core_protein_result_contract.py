@@ -244,7 +244,7 @@ def _persisted_candidate_artifacts(receipt, row):
     return artifacts
 
 
-def validate_persisted_publication(job, rows, root):
+def validate_persisted_publication(job, rows, root, *, observations=None):
     """Exact row identity plus required artifact/hash validation; no basename join."""
     from pathlib import Path
     receipt = (job.provenance or {}).get('core_protein_candidate_publication')
@@ -256,15 +256,108 @@ def validate_persisted_publication(job, rows, root):
     actual = _ids([row.name for row in rows], 'persisted candidates')
     if actual != set(expected):
         raise CandidateIntegrityError('candidate_publication_mismatch', 'persisted identities differ from expected publication')
+    def observed(evidence):
+        prior = (observations or {}).get(evidence['path'])
+        return prior[0] if prior is not None else _artifact(Path(root), evidence['path'])[0]
+
     for row in rows:
         for evidence in _persisted_candidate_artifacts(receipt, row).values():
-            current, _ = _artifact(Path(root), evidence['path'])
+            current = observed(evidence)
             if current != evidence:
                 raise CandidateIntegrityError('candidate_replay_changed', 'candidate artifact bytes changed')
-    current, _ = _artifact(Path(root), receipt['manifest']['path'])
+    current = observed(receipt['manifest'])
     if current != receipt['manifest']:
         raise CandidateIntegrityError('candidate_replay_changed', 'producer manifest changed')
     return receipt['summary']
+
+
+def native_record_index(raw, *, member=None):
+    """Byte offsets in the already sealed native artifact, not a result cache."""
+    import hashlib
+    import json
+    text = raw.decode('utf-8')
+    offsets = [0]
+    for character in text:
+        offsets.append(offsets[-1] + len(character.encode('utf-8')))
+    decoder = json.JSONDecoder()
+    spans = []
+    if member is None:
+        start = 0
+        for line in text.splitlines(keepends=True):
+            if line.strip():
+                spans.append((start, start + len(line.rstrip('\r\n'))))
+            start += len(line)
+    else:
+        cursor = text.index('{') + 1
+        while True:
+            while text[cursor].isspace() or text[cursor] == ',':
+                cursor += 1
+            if text[cursor] == '}':
+                break
+            key, cursor = decoder.raw_decode(text, cursor)
+            while text[cursor].isspace() or text[cursor] == ':':
+                cursor += 1
+            if key == member:
+                if text[cursor] != '[':
+                    raise ValueError('Native record collection is not an array')
+                cursor += 1
+                while True:
+                    while text[cursor].isspace() or text[cursor] == ',':
+                        cursor += 1
+                    if text[cursor] == ']':
+                        break
+                    start = cursor
+                    _, cursor = decoder.raw_decode(text, cursor)
+                    spans.append((start, cursor))
+                break
+            _, cursor = decoder.raw_decode(text, cursor)
+    return [{'offset': offsets[start], 'bytes': offsets[end] - offsets[start],
+             'sha256': hashlib.sha256(raw[offsets[start]:offsets[end]]).hexdigest()}
+            for start, end in spans]
+
+
+async def read_addressed_native_file(job, session, publication, root, name, prefix, *, record=None):
+    """Registered whole-file identity plus bounded addressed-byte verification."""
+    import hashlib
+    from database import JobArtifact
+    from sqlalchemy import select
+    from services.bindcraft2_publication import _regular
+    info = publication['files'].get(name)
+    if info is None:
+        raise ValueError('Native artifact is not published')
+    rows = list((await session.scalars(select(JobArtifact).where(
+        JobArtifact.owner_job_id == job.id, JobArtifact.logical_path == prefix + name))).all())
+    if len(rows) != 1:
+        raise ValueError('Native registered artifact identity changed')
+    row = rows[0]
+    if (row.attempt, row.storage_path, row.sha256, row.bytes) != (
+            publication['attempt'], str(root / name), info['sha256'], info['bytes']):
+        raise ValueError('Native registered artifact changed')
+    byte_range = (record['offset'], record['bytes']) if record is not None else None
+    path, raw = _regular(root, name, byte_range=byte_range)
+    expected = record if record is not None else info
+    if path.stat().st_size != info['bytes'] or len(raw) != expected['bytes'] or hashlib.sha256(raw).hexdigest() != expected['sha256']:
+        raise ValueError('Native addressed bytes changed')
+    return raw
+
+
+def native_page_root(job, publication, *, schema, campaign_root):
+    from pathlib import Path
+    if (publication.get('schema') != schema or publication.get('job_id') != job.id
+            or publication.get('campaign_root') != campaign_root
+            or not job.output_dir or publication.get('root') != str(Path(job.output_dir).absolute())
+            or publication.get('attempt') != (job.retry_count or 0)
+            or publication.get('remote_attempt_id') != job.remote_attempt_id):
+        raise ValueError('Native publication owner, root or attempt changed')
+    output = Path(publication['root'])
+    if output.is_symlink() or not output.is_dir():
+        raise ValueError('Native published root unavailable')
+    root = output
+    for part in Path(campaign_root).parts:
+        root /= part
+        if root.is_symlink() or not root.is_dir():
+            raise ValueError('Native campaign root unavailable')
+    return root
 
 
 def verify_addressed_design_artifacts(job, row, root, *, verify_file):

@@ -31,7 +31,7 @@ A cache is an optimization, not a new source of scientific truth. Reuse requires
 Required invariants:
 
 - Template provisioning and BMS-controlled preload populate a cache consumed by normal launch, rather than parallel unused directories.
-- Cache hits are verified; missing or corrupt objects are never used as model weights or executable code.
+- Cold acquisition verifies exact bytes before atomic publication. Warm shared image/weight reuse checks the existing immutable publication and declared identity without routine body rehashing; explicit full audits remain available. Mutable source archives and consumed inputs retain their distinct byte checks.
 - Downloads/transfers publish only complete verified objects atomically. Interrupted writes must not poison a later hit.
 - Concurrent preparations do not overwrite an in-use immutable asset. Source and runtime materializations belong to one attempt; a new attempt must not inherit unmanifested files from an older source working directory or runtime generation. Runtime relocation must preserve exact source authority, including supported runtime-internal symlinks and interpreter paths.
 - Preloading admits only server-resolved model/runtime/workflow dependencies. It does not cache biological inputs, user results, credentials, or arbitrary browser-supplied filesystem paths.
@@ -51,7 +51,7 @@ Vast documents a `PROVISIONING_SCRIPT` URL for startup installation/model downlo
 
 Vast's [volume documentation](https://docs.vast.ai/guides/instances/storage/volumes) explicitly says provider volumes are currently Docker-only, not supported for VM instances. The worker cache is therefore instance-local reuse, not a promise of cache persistence across new rentals. Template configuration tests do not replace a real guest startup check.
 
-The supported BMS scientific runtime requires real VM capabilities for its Apptainer stack. Switching to an ordinary Vast Docker container or adding an ignored privileged flag is not an acceptable cache integration shortcut.
+The VM recipe is one supported alternative for an Apptainer backend, not a VM-only runtime requirement. Other supported container backends remain selectable through the existing backend qualification owner; an ignored privileged flag does not establish backend support.
 
 Keep credentials out of image layers, source, template environment settings and startup URLs. Fetch executable provisioning assets by immutable identity and verify them. Template updates are configuration changes; renting, recreating, stopping or destroying an instance is a separate provider lifecycle action. A saved template does not retroactively provision an already-running worker.
 
@@ -91,7 +91,7 @@ Send it to `/provision/preview`; send the same fields plus the returned `preview
 
 The pack references the existing Boltz-2, Fold-CP, Protenix V2, ESMFold2 and embedded FrustraMPNN asset bindings. It includes the supported ESMFold variants and Protenix ordinary, anchored and template-capable weight members. Shared assets are inventoried and transferred once; preparing an optional asset does not enable the corresponding scientific stage. FrustraMPNN remains an internal workflow component, not an independently enabled model. Boltz API and input-specific MSA calls are services, not predictor downloads, and are not invoked by preparation.
 
-The runtime-preparation owner reuses the job's source archive, content store, packed-weight acquisition, exact per-consumer shared weight layouts, and backend image derivation. It does not construct a disposable union-only weight tree or per-execution private container view. When the attached backend is unknown, assets and weight layouts still install, and the final status reports image preparation as deferred rather than ready. Backend-specific cold preparation remains separate from native inference and input-dependent compilation; software checks do not establish scientific readiness.
+Preload reuses the job's source archive, content store, packed-weight acquisition and exact per-consumer shared weight layouts. It downloads, unpacks and publishes selected layouts; it does not derive images or invoke native compatibility probes (images=not_requested). It does not construct a disposable union-only weight tree or per-execution private container view. Actual backend-specific image preparation belongs to its separate runtime consumer, whether or not backend metadata is already known. Software provisioning evidence does not establish scientific readiness.
 
 Pristine queued jobs may coexist with preparation. Existing active attempts and leases retain their protection. The existing scheduler waits while preparation is active and may claim an eligible queued job afterward; preparation does not create a Job, change approval or paused state, or implement another dispatch/resume path. Deactivation retains its broader nonterminal-job protection.
 

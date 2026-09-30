@@ -246,16 +246,6 @@ PY
         fi
     fi
 
-    # Run preflight guard to ensure runtime is healthy
-    python3 ${params.code_root}/scripts/check_rfantibody_runtime.py \\
-        2>&1 | tee -a "\${LOG_FILE}"
-
-    # End if preflight fails
-    if [ \${PIPESTATUS[0]} -ne 0 ]; then
-        echo "Preflight check failed. Aborting." >> "\${LOG_FILE}"
-        exit 1
-    fi
-
     # Run RFantibody RFdiffusion inference
     # Script is at /opt/RFantibody/scripts/rfdiffusion_inference.py
     # PYTHONPATH is set in container environment to include src/ and include/

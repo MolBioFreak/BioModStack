@@ -64,7 +64,7 @@ def native_campaign_root(job: Job, root: Path, campaign_root: Path | None = None
     return campaign_root
 
 
-def _regular(root: Path, relative: str) -> tuple[Path, bytes]:
+def _regular(root: Path, relative: str, *, byte_range=None) -> tuple[Path, bytes]:
     path = root
     for part in Path(relative).parts:
         if part in (".", "..") or part == "":
@@ -75,6 +75,11 @@ def _regular(root: Path, relative: str) -> tuple[Path, bytes]:
             raise PublicationError(f"unsafe native path: {relative}")
     if not stat.S_ISREG(path.stat().st_mode):
         raise PublicationError(f"native file is not regular: {relative}")
+    if byte_range is not None:
+        offset, length = byte_range
+        with path.open('rb') as handle:
+            handle.seek(offset)
+            return path, handle.read(length)
     return path, path.read_bytes()
 
 
@@ -361,6 +366,42 @@ async def read_published_native_results(job: Job, session) -> tuple[NativePublic
         raise PublicationError("BC2 candidate artifact bindings changed")
     await _verify_designs(job, session, receipt["candidates"], root)
     return publication, receipt
+
+
+async def verify_selected_native_designs(job: Job, session, designs) -> None:
+    """Selected custody is independent of unrelated campaign evidence."""
+    receipt = (job.provenance or {}).get("bindcraft2_native_publication")
+    if job.model_id != "bindcraft2" or not isinstance(receipt, dict) or receipt.get("schema") != _SCHEMA:
+        raise PublicationError("BC2 publication missing")
+    root = Path(receipt["root"])
+    if root.is_symlink() or not root.is_dir() or not job.output_dir or Path(job.output_dir).absolute() != root:
+        raise PublicationError("BC2 published root is unavailable or changed")
+    root = native_campaign_root(job, root)
+    if receipt["attempt"] != (job.retry_count or 0) or receipt["remote_attempt_id"] != job.remote_attempt_id:
+        raise PublicationError("BC2 job attempt changed")
+    bindings = {b["design_id"]: b for b in receipt.get("candidates", [])}
+    for design in designs:
+        binding = bindings.get(design.id)
+        persisted = await session.get(Design, design.id)
+        if binding is None or persisted is None:
+            raise PublicationError("BC2 selected Design identity changed")
+        fields = _design_fields(job, binding, root)
+        if any(getattr(row, key) != value for row in (design, persisted) for key, value in fields.items()):
+            raise PublicationError("BC2 selected Design lineage changed")
+        # Design ownership consumes its primary native document. An explicitly
+        # selected alternate is verified by the existing selected-document owner.
+        for structure in (s for s in binding["structures"] if s["primary"]):
+            row = await session.get(JobArtifact, structure["artifact_id"])
+            name = structure["logical_path"].removeprefix("bindcraft2/native/")
+            info = receipt["files"].get(name)
+            if (row is None or info is None or row.owner_job_id != job.id or row.attempt != receipt["attempt"]
+                    or row.logical_path != structure["logical_path"] or row.storage_path != str(root / name)
+                    or row.sha256 != structure["sha256"] or row.sha256 != info["sha256"]
+                    or row.bytes != info["bytes"] or row.media_type != info["media_type"]):
+                raise PublicationError("BC2 selected artifact binding changed")
+            _, data = _regular(root, name)
+            if len(data) != row.bytes or hashlib.sha256(data).hexdigest() != row.sha256:
+                raise PublicationError("BC2 selected bytes changed")
 
 
 def native_workbench_page(page: dict, receipt: dict) -> dict:

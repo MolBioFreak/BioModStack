@@ -2737,8 +2737,8 @@ async def _validate_selected_design_owners(
             raise HTTPException(status_code=422, detail="Selected design source job is missing.")
         if owner_id == source_job.id or (root_job is not None and owner_id == root_job.id):
             if owner.model_id == 'bindcraft2':
-                from services.bindcraft2_publication import read_published_native_results
-                await read_published_native_results(owner, session)
+                from services.bindcraft2_publication import verify_selected_native_designs
+                await verify_selected_native_designs(owner, session, [d for d in designs if d.job_id == owner_id])
             owner_roots[owner_id] = root_job.id if root_job is not None else source_job.id
             continue
         if root_job is None:
@@ -2750,8 +2750,8 @@ async def _validate_selected_design_owners(
         if owner_root.id != root_job.id:
             raise HTTPException(status_code=422, detail="Selected design belongs to another lineage root.")
         if owner.model_id == 'bindcraft2':
-            from services.bindcraft2_publication import read_published_native_results
-            await read_published_native_results(owner, session)
+            from services.bindcraft2_publication import verify_selected_native_designs
+            await verify_selected_native_designs(owner, session, [d for d in designs if d.job_id == owner_id])
         owner_roots[owner_id] = owner_root.id
 
 
@@ -9316,13 +9316,13 @@ async def get_native_generation_results(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.model_id == "boltzgen" and job.mode in {"protein_binder", "nanobody_binder", "peptide_binder"}:
-        from services.boltzgen_candidate_publication import read_published_generation_results
+        from services.boltzgen_candidate_publication import read_published_generation_page
     elif job.model_id == "ppiflow" and job.mode in {"protein_binder", "antibody_binder", "nanobody_binder"}:
-        from services.ppiflow_generation import read_published_generation_results
+        from services.ppiflow_generation import read_published_generation_page
     else:
         raise HTTPException(status_code=400, detail="Job is not a supported native generation mode")
     try:
-        return await read_published_generation_results(job, session, offset=offset, limit=limit)
+        return await read_published_generation_page(job, session, offset=offset, limit=limit)
     except (ValueError, RuntimeError, OSError) as exc:
         logger.warning("Native generation results unavailable for job %s: %s", job_id, exc)
         raise HTTPException(status_code=409, detail="Native generation results unavailable") from exc

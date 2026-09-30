@@ -39,6 +39,7 @@ class ManagedImageReference(StrictModel):
 
 
 class NativeProbeEvidence(StrictModel):
+    # Retained manual/historical diagnostic contract, not a production task dependency.
     authority: Literal['scripts/check_rfantibody_runtime.py:run_preflight']
     outcome: Literal['passed', 'failed']
     gpu_id: int | None = Field(default=None, ge=0)
