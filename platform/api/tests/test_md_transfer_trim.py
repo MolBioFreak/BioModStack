@@ -26,6 +26,8 @@ def git_package(package, monkeypatch):
     repo = roots['repo']
     (repo / 'executable.sh').write_text('#!/bin/sh\nexit 0\n')
     (repo / 'executable.sh').chmod(0o755)
+    monkeypatch.setenv('GIT_AUTHOR_DATE', '2026-09-30T12:00:00+00:00')
+    monkeypatch.setenv('GIT_COMMITTER_DATE', '2026-09-30T12:00:00+00:00')
     REAL_RUN(['git', 'init', '-q', str(repo)], check=True)
     REAL_RUN(['git', '-C', str(repo), 'add', '.'], check=True)
     REAL_RUN(['git', '-C', str(repo), '-c', 'user.name=Fixture',
@@ -107,6 +109,7 @@ def test_real_cold_warm_archive_chain(git_package, monkeypatch, record_property)
             assert (record.sha256, record.size_bytes, record.mode) == (
                 hashlib.sha256(payload).hexdigest(), len(payload), path.stat().st_mode & 0o777)
     assert snapshots[0] == snapshots[1]
+    record_property('source_records', json.dumps(snapshots[0], sort_keys=True))
     first, second = prepared_bundles
     assert first.source_transfer.source != second.source_transfer.source
     # Real CAS publication/extraction and worker receiving verification retain all leaves.
@@ -161,3 +164,46 @@ def test_corrupt_cached_copy_evicts_before_extract_and_retry_regenerates(git_pac
     assert bundle._staged_source_archive(repo, data, revision, data / 'restart-source') == digest
     assert counts == Counter(git_archive=2, extract=2)
     record_property('corruption_retry_restart', json.dumps(dict(counts), sort_keys=True))
+
+
+@pytest.mark.parametrize('role', ['source', 'input', 'runtime'])
+def test_digest_reuse_is_only_top_level_source_archive(tmp_path, monkeypatch, role):
+    root = tmp_path / 'inventory'
+    (root / 'nested').mkdir(parents=True)
+    names = ['.bms-source.tar.gz', 'nested/.bms-source.tar.gz', 'leaf.txt']
+    for name in names:
+        (root / name).write_bytes(name.encode())
+    hashed = []
+    original = bundle._sha256_file
+    def hashed_file(path):
+        hashed.append(path.relative_to(root).as_posix())
+        return original(path)
+    monkeypatch.setattr(bundle, '_sha256_file', hashed_file)
+    # Same nodes run against the pinned original; only its missing reuse argument differs.
+    baseline = int(os.environ.get('BMS_TEST_ARCHIVE_RECORD_PASSES', '0')) == 1
+    digest = hashlib.sha256(names[0].encode()).hexdigest()
+    kwargs = {} if baseline else {'source_archive_sha256': digest}
+    records = bundle._records_for_source(root, role, role, **kwargs)
+    assert {r.relative_path for r in records} == {role + '/' + name for name in names}
+    expected = set(names) - ({names[0]} if not baseline and role == 'source' else set())
+    assert set(hashed) == expected
+    for row in records:
+        name = row.relative_path.removeprefix(role + '/')
+        assert row.sha256 == hashlib.sha256(name.encode()).hexdigest()
+
+
+@pytest.mark.parametrize('mutation', ['symlink', 'special_mode'])
+def test_reused_archive_keeps_metadata_rejection(tmp_path, mutation):
+    root = tmp_path / 'inventory'
+    root.mkdir()
+    archive = root / '.bms-source.tar.gz'
+    archive.write_bytes(b'inert')
+    if mutation == 'symlink':
+        archive.rename(root / 'body')
+        archive.symlink_to('body')
+    else:
+        archive.chmod(0o4644)
+    baseline = int(os.environ.get('BMS_TEST_ARCHIVE_RECORD_PASSES', '0')) == 1
+    kwargs = {} if baseline else {'source_archive_sha256': hashlib.sha256(b'inert').hexdigest()}
+    with pytest.raises(bundle.RemoteBundleError, match='symlink|special mode'):
+        bundle._records_for_source(root, 'source', 'source', **kwargs)
