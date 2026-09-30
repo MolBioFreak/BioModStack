@@ -137,6 +137,8 @@ def test_c01_saved_download_launch_only_coupling_reproduced(tmp_path, monkeypatc
     from component_runtime import NativeInvocation, SelectedExecutionPlan, SourceIdentity, UnresolvedField
     from services.remote_execution import cache
     params = {'protenix_use_msa':False}
+    if model == 'boltzgen':
+        params['boltzgen_protocol'] = 'protein-anything'
     metadata = selected_execution_metadata(model, mode, params, entrypoint)
     assert metadata.dependency_closure_complete
     metadata = replace(metadata, blockers=metadata.blockers + (
@@ -162,3 +164,39 @@ def test_c01_saved_download_launch_only_coupling_reproduced(tmp_path, monkeypatc
     with pytest.raises(bundle.RemoteBundleError, match='complete selected native execution plan'):
         bundle.compile_remote_dependencies(model,mode,list(invocation.command),native_invocation=invocation)
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['active', 'state', 'lease', 'operation', 'cancel', 'endpoint', 'inventory', 'recipe'])
+async def test_compact_progress_fence_preserves_each_authority_guard(store, change):
+    async def prewarm(**kwargs):
+        async with store() as session:
+            row = await session.get(ExecutionTarget, 'vast:1')
+            metadata = dict(row.provider_metadata)
+            if change == 'active': row.active = False
+            if change == 'state': row.state = 'unavailable'
+            if change == 'lease': row.leased_job_id = 'recipe'
+            if change == 'endpoint': row.port = 23
+            if change == 'operation': metadata['preload'] = {**metadata['preload'], 'operation_id':'successor'}
+            if change == 'cancel': metadata['preload'] = {**metadata['preload'], 'cancel_requested':True}
+            if change == 'inventory': metadata['inventory'] = {**metadata['inventory'], 'running':False}
+            if change == 'recipe':
+                from database import Job
+                (await session.get(Job, 'recipe')).params = {'science':18}
+            row.provider_metadata = metadata
+            await session.commit()
+        await kwargs['progress']({'phase':'transferring','message':'Must not publish'})
+        pytest.fail('Changed authority admitted progress')
+    async def quiesce(*args): return True
+    controller = p.PreloadController(store, prewarm=prewarm, quiesce=quiesce)
+    async with store() as session:
+        await controller.start(session,'vast:1',PreloadRequest(job_id='recipe'))
+    await asyncio.gather(*list(controller.tasks.values()),return_exceptions=True)
+    async with store() as session:
+        raw = (await session.get(ExecutionTarget,'vast:1')).provider_metadata['preload']
+        assert raw['message'] != 'Must not publish'
+        if change == 'operation':
+            assert raw['operation_id'] == 'successor'
+            assert raw['phase'] == 'checking'
+        else:
+            assert raw['phase'] == ('cancelled' if change == 'cancel' else 'failed')
