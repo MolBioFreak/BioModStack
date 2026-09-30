@@ -227,7 +227,7 @@ async def test_mounted_post_only_progress_and_no_job_mutation(store):
         await settle(controller)
         rows = (await client.get('/execution-targets')).json()
         assert rows[0]['preload']['phase'] == 'source_download_ready'
-        assert 'launch still prepares support Python' in rows[0]['preload']['message']
+        assert rows[0]['preload']['message'] == 'Downloads complete'
     async with store() as s:
         assert p.recipe_digest(await s.get(Job,'recipe')) == before
         assert (await s.get(ExecutionTarget,'vast:1')).leased_job_id is None
