@@ -179,7 +179,7 @@ def test_c01_saved_download_launch_only_coupling_reproduced(tmp_path, monkeypatc
     class SelectedClosureReached(Exception):
         pass
     def selected_assets(*args, native_invocation, **kwargs):
-        assert native_invocation.execution_plan is plan
+        assert native_invocation.execution_plan == plan
         raise SelectedClosureReached
     monkeypatch.setattr(cache, '_runtime_assets', selected_assets)
     # The launch-only blocker must not stop the selected download closure.

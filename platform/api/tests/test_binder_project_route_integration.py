@@ -34,7 +34,7 @@ async def test_generation_endpoint_native_page_and_zero_yield(stores, model, mod
     output.mkdir(parents=True)
     if model == 'ppiflow':
         from services.ppiflow_generation import publish_generation_results as publish
-        from services.ppiflow_generation import read_published_generation_results_page as read
+        from services.ppiflow_generation import read_published_generation_page as read
         pp_output(output, 0 if zero else 2)
         for path in (output / 'ppiflow_generation').rglob('*.json'):
             value = json.loads(path.read_text())
@@ -46,7 +46,7 @@ async def test_generation_endpoint_native_page_and_zero_yield(stores, model, mod
             samples.write_text('\n'.join(json.dumps(row) for row in values) + '\n')
     else:
         from services.boltzgen_candidate_publication import ingest as publish
-        from services.boltzgen_candidate_publication import read_published_generation_results_page as read
+        from services.boltzgen_candidate_publication import read_published_generation_page as read
         from test_boltzgen_candidate_accounting import published
         if zero:
             from filter_boltzgen import run_strict_filter

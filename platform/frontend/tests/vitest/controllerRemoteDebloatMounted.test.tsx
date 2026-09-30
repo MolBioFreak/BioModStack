@@ -31,7 +31,7 @@ beforeEach(() => {
   client = new QueryClient({defaultOptions:{queries:{retry:false, staleTime:Infinity}}});
   api.defaults.adapter = async config => {
     gets.push(String(config.url));
-    const data = config.url?.endsWith('/runtime-inventory') ? null : [];
+    const data = config.url?.endsWith('/runtime-inventory/summary') ? null : [];
     return {data,status:200,statusText:'OK',headers:{},config};
   };
 });
@@ -45,28 +45,28 @@ it('does zero collapsed inventory GETs and keeps one attachment query across ten
     request_sha256:'c'.repeat(64), phase:'checking', message:'Planning', started_at:'2026-09-30T12:00:00',
     updated_at:'2026-09-30T12:00:00', artifact_summary:{total_count:0,verified_count:0,total_bytes:0,verified_bytes:0},cached_artifact_count:0}};
   await render();
-  expect(gets.filter(url => url.endsWith('/runtime-inventory'))).toHaveLength(0);
+  expect(gets.filter(url => url.endsWith('/runtime-inventory/summary'))).toHaveLength(0);
   await disclose(true);
-  expect(gets.filter(url => url.endsWith('/runtime-inventory'))).toHaveLength(1);
+  expect(gets.filter(url => url.endsWith('/runtime-inventory/summary'))).toHaveLength(1);
   for (let n=0; n<10; n++) {
     target = {...target, preload:{...target.preload!,phase:n%2===0?'transferring':'verifying',
       sequence:n,updated_at:`2026-09-30T12:00:${String(n).padStart(2,'0')}`},
       capabilities:{readiness:{free_bytes:n}, scheduling:{inventory_fresh:n%2===0}}};
     await render();
   }
-  expect(gets.filter(url => url.endsWith('/runtime-inventory'))).toHaveLength(1);
+  expect(gets.filter(url => url.endsWith('/runtime-inventory/summary'))).toHaveLength(1);
   expect(client.getQueryCache().findAll({queryKey:['managed-runtime-inventory']})).toHaveLength(1);
   target = {...target,preload:{...target.preload!,phase:'source_download_ready'}};
   await render();
   await act(async () => { await wait(); });
-  expect(gets.filter(url => url.endsWith('/runtime-inventory'))).toHaveLength(2);
+  expect(gets.filter(url => url.endsWith('/runtime-inventory/summary'))).toHaveLength(2);
   await disclose(false);
   expect(container.querySelector('[aria-label="Managed runtime inventory"]')).toBeNull();
   target = {...target, activated_at:'2026-09-30T12:00:00'};
   await render();
-  expect(gets.filter(url => url.endsWith('/runtime-inventory'))).toHaveLength(2);
+  expect(gets.filter(url => url.endsWith('/runtime-inventory/summary'))).toHaveLength(2);
   await disclose(true);
-  expect(gets.filter(url => url.endsWith('/runtime-inventory'))).toHaveLength(3);
+  expect(gets.filter(url => url.endsWith('/runtime-inventory/summary'))).toHaveLength(3);
 });
 
 it('retains scope choice on observation changes and resets on backend generation change', async () => {
