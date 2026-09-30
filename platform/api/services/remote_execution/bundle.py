@@ -391,7 +391,7 @@ def verify_selected_preparation_inputs(plan, observed=None):
             raise RemoteBundleError('Native preparation input changed or is missing: ' + path)
 
 
-def _published_runtime_records(source: Path, prefix: str, *, publication=None):
+def _published_runtime_records(source: Path, prefix: str, *, publication=None, resolved=None):
     """Reuse declared shared assets only at their existing installation binding.
 
     Attempt source/inputs and custom weight overrides retain their byte inventory.
@@ -403,7 +403,7 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None):
         expected = get_weights_root().resolve() / logical.removeprefix('weights/')
         if source != expected:
             return None
-        rows = published_asset_rows(logical, index=publication)
+        rows = published_asset_rows(logical, index=publication, resolved=resolved)
     elif logical.startswith('containers/'):
         name = logical.removeprefix('containers/')
         path, digest = image_reference(name, get_container_dir().resolve())
@@ -414,7 +414,7 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None):
                 {IMAGE_SELECTORS[name][0]: str(source)})
             if source != path.resolve():
                 return None
-        rows = published_asset_rows(logical, index=publication)
+        rows = published_asset_rows(logical, index=publication, resolved=resolved)
         if digest is not None:
             rows = [r for r in rows or [] if r['sha256'] == digest]
             if not rows:
@@ -434,15 +434,16 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None):
         link_target=r.get('target')) for r in rows]
 
 
-def _runtime_records(source: Path, prefix: str, *, publication=None):
-    rows = _published_runtime_records(source, prefix, publication=publication)
+def _runtime_records(source: Path, prefix: str, *, publication=None, resolved=None):
+    rows = _published_runtime_records(source, prefix, publication=publication, resolved=resolved)
     return rows if rows is not None else _records_for_source(source, prefix, 'runtime')
 
 
 def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
                     include_support=False, native_invocation: NativeInvocation | None = None,
                     selected_plan: SelectedExecutionPlan | None = None,
-                    only_kinds: frozenset[str] | None = None) -> list[tuple[Path, str]]:
+                    only_kinds: frozenset[str] | None = None, publication=None,
+                    resolved=None) -> list[tuple[Path, str]]:
     """Materialize the shared selected dependency projection, never reselect science.
 
     The native compiler owns conditional stage selection. This boundary only
@@ -500,7 +501,8 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
             if relative in IMAGE_SELECTORS or not selected:
                 path, digest = image_reference(relative, root, params)
                 from .hf_assets import published_asset_rows
-                if digest is None and published_asset_rows('containers/' + relative) is None:
+                if digest is None and published_asset_rows('containers/' + relative, index=publication,
+                                                           resolved=resolved) is None:
                     path = resolve_image(relative, root, params)
             else:
                 path = Path(str(selected)).expanduser()
@@ -1248,8 +1250,12 @@ def prepare_remote_bundle(
         if (not bound_paths.get('nextflow_container') or not bound_environment.get('BMS_NEXTFLOW_EXECUTABLE')
                 or bound_paths.get('nextflow') != bound_environment['BMS_NEXTFLOW_EXECUTABLE']):
             raise RemoteBundleError('Managed Nextflow container runtime needs updating; reattach the target')
+    from .hf_assets import publication_index
+    publication = publication_index() or {}
+    resolved = {}
     runtime_assets = _runtime_assets(str(job.model_id), str(job.mode), effective_params,
-                                    include_support=not bool(binding), native_invocation=native_invocation)
+                                    include_support=not bool(binding), native_invocation=native_invocation,
+                                    publication=publication, resolved=resolved)
     runtime_paths = {path.resolve() for path, _ in runtime_assets}
     runtime_references: dict[str, dict[str, Any]] = {}
     runtime_records: list[RemoteFileRecord] = []
@@ -1272,8 +1278,6 @@ def prepare_remote_bundle(
         runtime_paths.add(host_support.resolve())
         if effective_params.get("api_python"):
             runtime_paths.add(Path(effective_params["api_python"]).resolve())
-    from .hf_assets import publication_index
-    publication = publication_index() or {}
     for path, relative in runtime_assets:
         destination = f"{remote_runtime}/{relative}"
         source = path
@@ -1295,7 +1299,7 @@ def prepare_remote_bundle(
             source = _relocate_python_runtime(path, staging_root / "support-python", destination)
             lexical_runtime = Path(os.getenv("BMS_CM_API_RUNTIME_DIR", str(data_root / "runtime" / "cm-api-python")))
             runtime_path_map[str(lexical_runtime / "current")] = destination
-        recorded = _runtime_records(source, f"runtime/{relative}", publication=publication)
+        recorded = _runtime_records(source, f"runtime/{relative}", publication=publication, resolved=resolved)
         (weight_records if relative.startswith("weights/") else runtime_records).extend(recorded)
         runtime_hashes.update({record.relative_path.removeprefix("runtime/"): record.sha256
                                for record in recorded if record.link_target is None})

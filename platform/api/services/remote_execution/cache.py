@@ -171,9 +171,20 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     states = {}
     activity = [dict(name=e.remote_destination.removeprefix(connection.remote_root.rstrip("/") + "/"),
                      sha256=e.sha256, size_bytes=e.size_bytes, state="pending") for e in artifacts]
-    async def report(phase, artifact, message):
-        await progress(dict(phase=phase, artifact=artifact, message=message,
-                            **({"artifact_progress": [dict(row) for row in activity]} if track_artifacts else {})))
+    summary = dict(total_count=len(activity), total_bytes=sum(e.size_bytes for e in artifacts),
+                   verified_count=0, verified_bytes=0)
+    async def report(phase, artifact, message, *, delta=(), reset=False):
+        event = dict(phase=phase, artifact=artifact, message=message)
+        if track_artifacts:
+            event['artifact_summary'] = dict(summary)
+            if reset:
+                event['artifact_progress'] = [dict(row) for row in activity]
+            else:
+                event['artifact_delta'] = [(index, dict(activity[index])) for index in delta]
+        await progress(event)
+    # Each call owns a roster: packed/remainder/source calls replace, never append.
+    if track_artifacts:
+        await report('checking', None, 'Checking selected artifact declarations', reset=True)
     def identity(entry):
         return {'sha256': entry.sha256, 'size_bytes': entry.size_bytes,
                 **({'kind': 'runtime_image'} if entry.role == 'image' else {})}
@@ -205,14 +216,24 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     for index, entry in enumerate(artifacts):
         indices.setdefault(key(entry), []).append(index)
     async def batch_progress(batch, state):
+        changed = []
         for entry in batch:
             for index in indices[key(entry)]:
+                previous = activity[index]['state']
+                if previous == state:
+                    continue
+                if previous == 'verified':
+                    summary['verified_count'] -= 1
+                    summary['verified_bytes'] -= activity[index]['size_bytes']
+                if state == 'verified':
+                    summary['verified_count'] += 1
+                    summary['verified_bytes'] += activity[index]['size_bytes']
                 activity[index]['state'] = state
-        # One operation update carries every artifact's state. Thousands of
-        # identical DB/fence updates would reintroduce per-file setup latency.
-        await report(state, activity[indices[key(batch[0])][0]]['name'] if len(batch) == 1 else None,
+                changed.append(index)
+        await report('verifying' if state == 'verified' else state,
+                     activity[indices[key(batch[0])][0]]['name'] if len(batch) == 1 else None,
                      'Transferring artifact batch' if state == 'transferring'
-                     else 'Verifying and publishing artifact batch')
+                     else 'Verifying and publishing artifact batch', delta=changed)
 
     async def transfer(batch, *, direct=False, use_hf=False):
         batch_id = uuid.uuid4().hex
@@ -289,8 +310,8 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
         await call({'action': 'remove_incoming', **owner})
         for entry in batch:
             states[key(entry)] = 'cache_hit'
-            for index in indices[key(entry)]:
-                activity[index]['state'] = 'verified'
+        if track_artifacts:
+            await batch_progress(batch, 'verified')
 
     batch, size = [], 0
     staged_plans: list[tuple[list, bool, bool]] = []
@@ -309,6 +330,9 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
             size += entry.size_bytes
     if batch:
         staged_plans.append((batch, False, False))
+    hits = [entry for entry in objects if states[key(entry)] == 'cache_hit']
+    if hits and track_artifacts:
+        await batch_progress(hits, 'verified')
     if staged_plans:
         await report('transferring', None,
                      f'Transferring {len(staged_plans)} artifact batch(es), {TRANSFER_CONCURRENCY} at a time')
@@ -327,9 +351,9 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     for index, entry in enumerate(artifacts):
         name = activity[index]['name']
         receipts.append({'name': name, 'sha256': entry.sha256, 'size_bytes': entry.size_bytes})
-        activity[index]['state'] = 'verified'
+
     if track_artifacts:
-        await report('verifying', None, 'Artifact cache identities verified')
+        await report('verifying', None, 'Artifact cache identities verified', reset=True)
     if materialize:
         materialize_batches = [artifacts[offset:offset + 128] for offset in range(0, len(artifacts), 128)]
         if materialize_batches:
@@ -559,28 +583,27 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory, *, nati
     identity = native_invocation.source_identity
     if identity is None or (identity.revision, identity.tree) != (source_revision, source_tree):
         raise ValueError('Prewarm source identity does not match current committed source')
-    _, effective = compile_remote_dependencies(str(job.model_id), str(job.mode), command,
-                                                native_invocation=native_invocation)
-    source = directory / 'source'
-    _staged_source_archive(repo, get_data_root().resolve(), source_revision, source, extract=False)
-
+    if tuple(command) != native_invocation.command:
+        raise ValueError('Prewarm command does not match selected native invocation')
+    # Download consumes the selected dependency closure, not launch completeness.
+    effective = json.loads(native_invocation.native_parameters_json)
     entries = []
     publication = hf_assets.publication_index() or {}
-    assets = [(source / '.bms-source.tar.gz', 'source/.bms-source.tar.gz')]
-    assets.extend((path, 'runtime/' + relative) for path, relative in
-                  _runtime_assets(str(job.model_id), str(job.mode), effective,
-                                  native_invocation=native_invocation)
-                  if relative != 'support-python')
+    resolved = {}
+    assets = [(path, 'runtime/' + relative) for path, relative in
+              _runtime_assets(str(job.model_id), str(job.mode), effective,
+                              native_invocation=native_invocation, publication=publication, resolved=resolved)
+              if relative != 'support-python']
+    if not any(prefix.startswith('runtime/weights/') for _, prefix in assets):
+        entries.append(_workflow_source_archive(directory, (source_revision, source_tree)))
     for path, prefix in assets:
         if prefix.startswith('runtime/') and _is_runtime_image(path, prefix):
             path = path.resolve()
-        for record in (_records_for_source(path, prefix, 'source') if prefix.startswith('source/')
-                       else _declared_runtime_records(path, prefix, publication)):
+        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved):
             suffix = record.relative_path[len(prefix):].lstrip('/')
             local = path / suffix if suffix else path
             entries.append(CacheTransferArtifact(local, record.relative_path, record.sha256,
                                                   record.size_bytes, record.mode,
-                                                  'source' if prefix.startswith('source/') else
                                                   'image' if _is_runtime_image(local, record.relative_path) else 'runtime',
                                                   link_target=record.link_target))
     verify_selected_preparation_inputs(native_invocation.execution_plan)
@@ -613,17 +636,17 @@ def workflow_pack_weight_layouts(selection, entries):
         for member in members)) for name, members in groups.items()}
 
 
-def _declared_runtime_records(path, prefix, publication):
-    rows = _published_runtime_records(path, prefix, publication=publication)
+def _declared_runtime_records(path, prefix, publication, *, resolved=None):
+    rows = _published_runtime_records(path, prefix, publication=publication, resolved=resolved)
     return rows if rows is not None else _records_for_source(path, prefix, 'runtime')
 
 
-def independent_plan(selection):
+def independent_plan(selection, *, dependencies=None, publication=None):
     """Resolve only reviewed registry dependencies; no Job or biological inputs."""
     from paths import get_container_dir, get_weights_root
     entries = []
-    refs = _independent_dependencies(selection)
-    publication = hf_assets.publication_index() or {}
+    refs = _independent_dependencies(selection) if dependencies is None else dependencies
+    publication = hf_assets.publication_index() or {} if publication is None else publication
     for ref in {(r.kind, r.relative_path): r for r in refs}.values():
         if selection.kind == 'image' and ref.kind != 'image':
             continue
@@ -672,7 +695,7 @@ def validate_workflow_provision_authority(params):
     visit(params)
 
 
-def workflow_plan(selection, *, compiled_plan=None):
+def workflow_plan(selection, *, compiled_plan=None, publication=None):
     """Bind an authorized shared plan; inspect runtime leaves, never inputs."""
     from services.nextflow import compile_workflow_provision_request
     from schemas import JobCreate
@@ -692,11 +715,13 @@ def workflow_plan(selection, *, compiled_plan=None):
     if plan is None or not plan.dependency_closure_complete:
         raise ValueError('Workflow dependency closure is unresolved')
     entries = []
-    publication = hf_assets.publication_index() or {}
+    publication = hf_assets.publication_index() or {} if publication is None else publication
+    resolved = {}
 
     for path, prefix in _runtime_assets(plan.model_id, plan.mode,
-            json.loads(plan.native_parameters_json), include_support=False, selected_plan=plan):
-        for record in _declared_runtime_records(path, prefix, publication):
+            json.loads(plan.native_parameters_json), include_support=False, selected_plan=plan,
+            publication=publication, resolved=resolved):
+        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved):
             suffix = record.relative_path[len(prefix):].lstrip('/')
             local = path / suffix if suffix else path
             entries.append(CacheTransferArtifact(local, record.relative_path, record.sha256,
@@ -713,6 +738,8 @@ def independent_preview(selection, target, *, compiled_plan=None):
     plan = compiled_plan
     invocation = None
     dependencies, blockers = [], []
+    refs = None
+    publication = hf_assets.publication_index() or {}
     if selection.kind == 'workflow':
         if plan is None:
             from schemas import JobCreate
@@ -739,9 +766,9 @@ def independent_preview(selection, target, *, compiled_plan=None):
     if not blockers:
         try:
             if selection.kind == 'workflow':
-                entries, plan = workflow_plan(selection, compiled_plan=plan)
+                entries, plan = workflow_plan(selection, compiled_plan=plan, publication=publication)
             else:
-                entries = independent_plan(selection)
+                entries = independent_plan(selection, dependencies=refs, publication=publication)
         except (RemoteBundleError, ValueError, OSError) as exc:
             # Project only known preparation failures, never raw exception paths,
             # biological inputs or arbitrary compiler diagnostics. Other failures
@@ -947,7 +974,9 @@ async def _prepare_workflow_runtime(*, connection, entries, operation_id, progre
     await _bounded_group(missing, install_layout)
     image_evidence = 'not_requested'
     await check_fence()
-    return dict(artifacts=[dict(name=e.remote_destination, sha256=e.sha256,
+    return dict(source_artifact=dict(name=source.remote_destination, sha256=source.sha256,
+                                    size_bytes=source.size_bytes),
+                artifacts=[dict(name=e.remote_destination, sha256=e.sha256,
                                size_bytes=e.size_bytes) for e in entries],
                 preparation=dict(source='cached', weight_layouts=len(layouts),
                                  images=image_evidence, backend=backend))
@@ -980,8 +1009,16 @@ async def prewarm_cache(*, connection, job, command, source_revision, source_tre
         try:
             entries = await asyncio.shield(plan_task)
         except asyncio.CancelledError:
-            # The hashing/archive writer must stop before its directory closes.
-            await plan_task
+            # Retain the writer's directory through repeated cancellation.
+            while not plan_task.done():
+                try:
+                    await asyncio.shield(plan_task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not plan_task.cancelled():
+                plan_task.exception()
             raise
         if any(e.remote_destination.startswith('runtime/weights/') for e in entries):
             from dataclasses import replace
@@ -991,9 +1028,7 @@ async def prewarm_cache(*, connection, job, command, source_revision, source_tre
                          for e in runtime], operation_id=operation_id, progress=progress,
                 check_fence=check_fence, source_identity=(source_revision, source_tree))
             receipts = [dict(r, name='runtime/' + r['name']) for r in prepared['artifacts']]
-            # The same source archive was acquired by the preparation owner.
-            receipts += [dict(name=e.remote_destination, sha256=e.sha256, size_bytes=e.size_bytes)
-                         for e in entries if e.role == 'source']
+            receipts.append(prepared['source_artifact'])
         else:
             receipts = await _cache_artifacts(connection=connection, artifacts=entries,
                 operation_id=operation_id, progress=progress, check_fence=check_fence, track_artifacts=True)

@@ -291,10 +291,35 @@ class PreloadController:
             await session.rollback()
             return response
 
-    async def _publish(self, session, target_id, progress, expected_endpoint=None):
-        metadata = func.json_set(ExecutionTarget.provider_metadata, "$.preload", func.json(progress.model_dump_json()),
+    async def _publish(self, session, target_id, progress, expected_endpoint=None, *, delta=None,
+                       summary=None, reset=False):
+        if delta is None:
+            metadata = func.json_set(ExecutionTarget.provider_metadata, "$.preload", func.json(progress.model_dump_json()))
+        else:
+            metadata = ExecutionTarget.provider_metadata
+            if reset:
+                metadata = func.json_set(metadata, '$.preload.artifact_progress',
+                    func.json(json.dumps([row.model_dump() for row in progress.artifact_progress])))
+            # Bounded JSON row writes; no full-array bind/read/validation on events.
+            for offset in range(0, len(delta), 40):
+                args = []
+                for index, row in delta[offset:offset + 40]:
+                    args.extend((f'$.preload.artifact_progress[{index}]', func.json(row.model_dump_json())))
+                metadata = func.json_set(metadata, *args)
+                changed = await session.execute(update(ExecutionTarget).where(
+                    ExecutionTarget.id == target_id,
+                    ExecutionTarget.provider_metadata['preload']['operation_id'].as_string() == progress.operation_id,
+                ).values(provider_metadata=metadata).execution_options(synchronize_session=False))
+                if changed.rowcount != 1:
+                    await session.rollback()
+                    raise ExecutionTargetError('Preload operation was superseded')
+                metadata = ExecutionTarget.provider_metadata
+            metadata = func.json_set(metadata, '$.preload.phase', progress.phase,
+                '$.preload.artifact', progress.artifact, '$.preload.message', progress.message,
+                '$.preload.updated_at', progress.updated_at.isoformat())
+        metadata = func.json_set(metadata,
             "$.preload.sequence", func.coalesce(ExecutionTarget.provider_metadata["preload"]["sequence"].as_integer(), 0) + 1,
-            "$.preload_artifact_summary", func.json(json.dumps(artifact_summary(progress))),
+            "$.preload_artifact_summary", func.json(json.dumps(summary if summary is not None else artifact_summary(progress))),
             "$.preload_cached_artifact_count", len(progress.artifacts))
         if progress.selection is not None and progress.phase == "source_download_ready":
             if expected_endpoint is None:
@@ -318,9 +343,14 @@ class PreloadController:
             ExecutionTarget.provider_metadata["preload"]["operation_id"].as_string() == progress.operation_id,
             ExecutionTarget.provider_metadata["preload"]["phase"].as_string().in_(PRELOAD_ACTIVE_PHASES),
         ).values(provider_metadata=metadata).execution_options(synchronize_session=False))
-        await session.commit()
         if changed.rowcount != 1:
+            await session.rollback()
             raise ExecutionTargetError("Preload operation was superseded")
+        await session.commit()
+        # Compact committed readback, including the SQL-owned operation sequence.
+        status = await target_status(session, target_id)
+        progress.sequence = status.preload.sequence
+        return status.preload
 
     async def _run(self, target_id, progress, snapshot, command, connection, expected_endpoint,
                    *, native_invocation=None, compiled_plan=None, admitted_plan=None):
@@ -362,25 +392,63 @@ class PreloadController:
                     raise ExecutionTargetError("Source identity changed during preload")
 
             progress_lock = asyncio.Lock()
+            summary = artifact_summary(progress)
 
             async def publish(event):
                 async with progress_lock:
-                    await publish_locked(event)
+                    return await publish_locked(event)
 
             async def publish_locked(event):
+                nonlocal summary
                 # Pure display progress retains the operation/recipe/worker
                 # fence. Source is checked at acquisition and final publication.
                 await check_fence(source=False)
                 # Validate the closed projection; raw stderr/path/command never enters UI.
-                updated = progress.model_copy(update={**event, "updated_at": datetime.utcnow()})
-                validated = PreloadProgress.model_validate(updated.model_dump())
+                from .contracts import ProvisionArtifactProgress, ArtifactSummary
+                event = dict(event)
+                roster = event.pop('artifact_progress', None)
+                supplied_summary = event.pop('artifact_summary', None)
+                changes = event.pop('artifact_delta', [])
+                # Validate scalars without visiting the retained roster.
+                scalars = {key: value for key, value in progress.__dict__.items()
+                           if key not in {'artifact_progress', 'artifacts'}}
+                validated = PreloadProgress.model_validate({**scalars, **event, 'updated_at': datetime.utcnow()})
                 if validated.phase not in {"checking", "transferring", "verifying"}:
                     raise ExecutionTargetError("Cache callback supplied a terminal phase")
+                if roster is not None:
+                    if changes:
+                        raise ValueError('Progress cannot reset and change a roster together')
+                    rows = [ProvisionArtifactProgress.model_validate(row) for row in roster]
+                    candidate_summary = artifact_summary({'artifact_progress': rows})
+                else:
+                    rows = progress.artifact_progress
+                    candidate_summary = dict(summary)
+                delta, seen = [], set()
+                for index, raw in changes:
+                    if type(index) is not int or not 0 <= index < len(rows) or index in seen:
+                        raise ValueError('Invalid artifact progress index')
+                    seen.add(index)
+                    row = ProvisionArtifactProgress.model_validate(raw)
+                    previous = rows[index]
+                    if (row.name, row.sha256, row.size_bytes) != (previous.name, previous.sha256, previous.size_bytes):
+                        raise ValueError('Artifact progress declaration changed')
+                    candidate_summary['verified_count'] += int(row.state == 'verified') - int(previous.state == 'verified')
+                    candidate_summary['verified_bytes'] += row.size_bytes * (int(row.state == 'verified') - int(previous.state == 'verified'))
+                    delta.append((index, row))
+                if supplied_summary is not None:
+                    checked = ArtifactSummary.model_validate(supplied_summary).model_dump()
+                    if checked != candidate_summary:
+                        raise ValueError('Artifact progress aggregate mismatch')
                 progress.phase, progress.artifact, progress.message = validated.phase, validated.artifact, validated.message
                 progress.updated_at = validated.updated_at
-                progress.artifact_progress = validated.artifact_progress
+                if roster is not None:
+                    progress.artifact_progress = rows
+                for index, row in delta:
+                    rows[index] = row
+                summary = candidate_summary
                 async with self.session_factory() as session:
-                    await self._publish(session, target_id, progress, expected_endpoint=expected_endpoint)
+                    return await self._publish(session, target_id, progress, expected_endpoint=expected_endpoint,
+                                               delta=delta, summary=summary, reset=roster is not None)
 
             await check_fence()
             if progress.selection is not None:

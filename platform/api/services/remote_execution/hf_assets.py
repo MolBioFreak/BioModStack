@@ -192,7 +192,16 @@ def publication_index() -> dict | None:
         return None
 
 
-def published_asset_rows(prefix: str, *, index=None) -> list[dict] | None:
+def published_asset_rows(prefix: str, *, index=None, resolved=None) -> list[dict] | None:
+    if resolved is not None and prefix in resolved:
+        return resolved[prefix]
+    rows = _published_asset_rows(prefix, index=index)
+    if resolved is not None:
+        resolved[prefix] = rows
+    return rows
+
+
+def _published_asset_rows(prefix: str, *, index=None) -> list[dict] | None:
     if index is None:
         index = publication_index()
     if not index or not any(prefix == name or prefix.startswith(name + '/')
