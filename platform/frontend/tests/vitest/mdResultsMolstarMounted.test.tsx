@@ -113,7 +113,7 @@ describe('mounted MD results and sole Molstar route lifecycle', () => {
             await Promise.resolve();
         });
         await waitForSoleHost();
-        expect(ownerStats.representationPresets).toContain('auto');
+        expect(ownerStats.representationPresets).toContain('polymer-cartoon');
         const paneA = container.querySelector('[data-bms-result-pane="molecular-dynamics"]');
         expect(paneA).toBeTruthy();
         await renderJob('job-b');

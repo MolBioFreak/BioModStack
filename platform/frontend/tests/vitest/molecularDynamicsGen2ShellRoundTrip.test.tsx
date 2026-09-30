@@ -187,7 +187,7 @@ const completeRoundTrip = async () => {
     await click('Complete prediction and return');
     await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Molecular Dynamics')); });
     expect(container.querySelector('[data-mounted-structure-prediction]')).toBeNull();
-    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Returned from Structure Prediction')); });
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect(container.textContent).toContain('Returned from Structure Prediction'); });
 };
 
 describe('mounted JobSubmission same-route MD handoff ownership', () => {

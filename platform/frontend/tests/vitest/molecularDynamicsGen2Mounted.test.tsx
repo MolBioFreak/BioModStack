@@ -274,7 +274,7 @@ const mountAdmittedFixture = async () => {
     });
     await act(async () => {
         await vi.waitFor(() => expect(
-            [...container.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.includes('Preview effective request'))?.disabled,
+            [...container.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.includes('Preview'))?.disabled,
         ).toBe(false));
     });
 };
@@ -340,7 +340,7 @@ const mountPredictionCandidateRace = async () => {
             </QueryClientProvider>,
         );
     });
-    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('candidate_B')); });
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect(container.textContent).toContain('candidate_B'); });
 
     return {
         candidateAId,
@@ -392,10 +392,10 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
             select?.dispatchEvent(new Event('change', { bubbles: true }));
         });
         await act(async () => { await vi.waitFor(() => expect([...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((button) => button.textContent?.includes('Preview effective request'))?.disabled).toBe(false)); });
-        await click('Preview effective request');
+            .find((button) => button.textContent?.includes('Preview'))?.disabled).toBe(false)); });
+        await click('Preview');
         await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Effective request digest')); });
-        await click('Launch typed MD job');
+        await click('Launch');
         const launch = apiMocks.post.mock.calls.find(([url]) => url === '/api/molecular-dynamics/launch');
         expect(launch?.[1].intent.source_ref).toEqual(selected.source_ref);
         expect(launch?.[1].intent.expected_source_sha256).toBe(hash('e'));
@@ -708,7 +708,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
                 </QueryClientProvider>,
             );
         });
-        await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('model_01')); });
+        await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect(container.textContent).toContain('model_01'); });
         expect(container.textContent).toContain('Returned from Structure Prediction');
         expect(container.textContent).toContain('Candidate A structure prediction');
         expect(container.textContent).toContain('Run another prediction');
@@ -853,7 +853,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         });
         await mountAdmittedFixture();
         const previewButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((item) => item.textContent?.includes('Preview effective request'));
+            .find((item) => item.textContent?.includes('Preview'));
         expect(previewButton?.disabled).toBe(false);
 
         const chemistrySelect = container.querySelector<HTMLSelectElement>('[data-md-chemistry-profile]');
@@ -896,7 +896,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         });
         await mountAdmittedFixture();
         const previewButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((item) => item.textContent?.includes('Preview effective request'));
+            .find((item) => item.textContent?.includes('Preview'));
         const chemistrySelect = container.querySelector<HTMLSelectElement>('[data-md-chemistry-profile]');
         await act(async () => {
             Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(chemistrySelect, profileB.id);
@@ -932,7 +932,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         });
         await mountAdmittedFixture();
         const previewButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((item) => item.textContent?.includes('Preview effective request'));
+            .find((item) => item.textContent?.includes('Preview'));
         const chemistrySelect = container.querySelector<HTMLSelectElement>('[data-md-chemistry-profile]');
         expect(previewButton?.disabled).toBe(false);
 
@@ -991,7 +991,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         });
         await mountAdmittedFixture();
 
-        await click('Preview effective request');
+        await click('Preview');
         await act(async () => { await vi.waitFor(() => expect(previewBodies).toHaveLength(1)); });
         const seed = container.querySelector<HTMLInputElement>('[data-md-setting="random_seed"]');
         await act(async () => {
@@ -999,9 +999,9 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
             seed?.dispatchEvent(new Event('input', { bubbles: true }));
         });
         const previewButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((item) => item.textContent?.includes('Preview effective request') || item.textContent?.includes('Compiling preview'));
+            .find((item) => item.textContent?.includes('Preview') || item.textContent?.includes('Compiling preview'));
         const launchButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((item) => item.textContent?.includes('Launch typed MD job'));
+            .find((item) => item.textContent?.includes('Launch'));
         expect(previewButton?.disabled).toBe(false);
         expect(launchButton?.disabled).toBe(true);
 
@@ -1009,7 +1009,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         expect(container.textContent).not.toContain(hash('d'));
         expect(launchButton?.disabled).toBe(true);
 
-        await click('Preview effective request');
+        await click('Preview');
         await act(async () => { await vi.waitFor(() => expect(previewBodies).toHaveLength(2)); });
         await act(async () => previewB.resolve(launchPreviewResponse(previewBodies[1], hash('e'))));
         await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(hash('e'))); });
@@ -1024,7 +1024,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
             throw new Error(`unexpected POST ${url}`);
         });
         await mountAdmittedFixture();
-        await click('Preview effective request');
+        await click('Preview');
         const seed = container.querySelector<HTMLInputElement>('[data-md-setting="random_seed"]');
         await act(async () => {
             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(seed, '31');
@@ -1035,9 +1035,9 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         expect(container.textContent).not.toContain('stale preview A failed');
         expect(container.querySelector('[role="alert"]')).toBeNull();
         expect([...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((item) => item.textContent?.includes('Preview effective request'))?.disabled).toBe(false);
+            .find((item) => item.textContent?.includes('Preview'))?.disabled).toBe(false);
         expect([...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((item) => item.textContent?.includes('Launch typed MD job'))?.disabled).toBe(true);
+            .find((item) => item.textContent?.includes('Launch'))?.disabled).toBe(true);
     });
 
     it('invalidates a valid preview when only the hydrated catalog digest changes and accepts a fresh preview', async () => {
@@ -1052,10 +1052,10 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
             throw new Error(`unexpected POST ${url}`);
         });
         await mountAdmittedFixture();
-        await click('Preview effective request');
+        await click('Preview');
         await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(hash('d'))); });
         const launchButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((item) => item.textContent?.includes('Launch typed MD job'));
+            .find((item) => item.textContent?.includes('Launch'));
         expect(launchButton?.disabled).toBe(false);
 
         await act(async () => {
@@ -1073,7 +1073,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         await act(async () => launchButton?.click());
         expect(apiMocks.post.mock.calls.some(([url]) => url === '/api/molecular-dynamics/launch')).toBe(false);
 
-        await click('Preview effective request');
+        await click('Preview');
         await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(hash('e'))); });
         expect(previewBodies[1]).toMatchObject({ intent: { catalog_digest: hash('1') } });
         expect(launchButton?.disabled).toBe(false);
@@ -1097,7 +1097,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
             throw new Error(`unexpected POST ${url}`);
         });
         await mountAdmittedFixture();
-        await click('Preview effective request');
+        await click('Preview');
         await act(async () => { await vi.waitFor(() => expect(previewBodies).toHaveLength(1)); });
 
         await act(async () => {
@@ -1107,7 +1107,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
             });
         });
         const launchButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((item) => item.textContent?.includes('Launch typed MD job'));
+            .find((item) => item.textContent?.includes('Launch'));
         await act(async () => previewA.resolve(launchPreviewResponse(previewBodies[0], hash('d'))));
         expect(container.textContent).not.toContain(hash('d'));
         expect(launchButton?.disabled).toBe(true);
@@ -1118,7 +1118,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
             chemistrySelect?.dispatchEvent(new Event('change', { bubbles: true }));
         });
         await act(async () => { await vi.waitFor(() => expect(profiledInspectionCount).toBe(2)); });
-        await click('Preview effective request');
+        await click('Preview');
         await act(async () => { await vi.waitFor(() => expect(previewBodies).toHaveLength(2)); });
         await act(async () => previewB.resolve(launchPreviewResponse(previewBodies[1], hash('f'))));
         await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(hash('f'))); });
@@ -1139,7 +1139,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
             throw new Error(`unexpected POST ${url}`);
         });
         await mountAdmittedFixture();
-        await click('Preview effective request');
+        await click('Preview');
         await act(async () => { await vi.waitFor(() => expect(previewBodies).toHaveLength(1)); });
         await act(async () => {
             client.setQueryData(['molecular-dynamics', 'chemistry-profiles'], {
@@ -1150,10 +1150,10 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         await act(async () => previewA.reject(new Error('stale catalog preview failed')));
         expect(container.textContent).not.toContain('stale catalog preview failed');
         const launchButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((item) => item.textContent?.includes('Launch typed MD job'));
+            .find((item) => item.textContent?.includes('Launch'));
         expect(launchButton?.disabled).toBe(true);
 
-        await click('Preview effective request');
+        await click('Preview');
         await act(async () => { await vi.waitFor(() => expect(previewBodies).toHaveLength(2)); });
         await act(async () => previewB.resolve(launchPreviewResponse(previewBodies[1], hash('e'))));
         await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(hash('e'))); });
@@ -1177,7 +1177,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         });
         await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(profile.display_name)); });
 
-        expect(container.textContent).toContain('Choose a starting structure');
+        expect(container.textContent).toContain('Starting structure');
         expect(container.textContent).toContain('RCSB');
         expect(container.textContent).toContain('Your Runs');
         expect(container.textContent).toContain('Accepted samples');
@@ -1193,7 +1193,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         expect(container.querySelector('[data-md-starting-structure-viewer]')).not.toBeNull();
         expect(container.textContent).toContain('Exact starting-structure bytes are admitted');
 
-        const previewButton = [...container.querySelectorAll('button')].find((item) => item.textContent?.includes('Preview effective request')) as HTMLButtonElement;
+        const previewButton = [...container.querySelectorAll('button')].find((item) => item.textContent?.includes('Preview')) as HTMLButtonElement;
         const promoteButton = [...container.querySelectorAll('button')].find((item) => item.textContent?.includes('Use this structure')) as HTMLButtonElement;
         expect(promoteButton).toBeTruthy();
         expect(promoteButton.disabled).toBe(true);
@@ -1223,7 +1223,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         const provisionCall = apiMocks.post.mock.calls.at(-1);
         await click('Local');
 
-        await click('Preview effective request');
+        await click('Preview');
         await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Effective request digest')); });
         const previewCall = apiMocks.post.mock.calls.find(([url]) => url === '/api/molecular-dynamics/launch-preview');
         expect(provisionCall?.[1]).toEqual({ kind: 'workflow', workflow_request: {
@@ -1254,9 +1254,9 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         });
         expect(container.textContent).not.toContain('Effective request digest');
 
-        await click('Preview effective request');
+        await click('Preview');
         await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Effective request digest')); });
-        await click('Launch typed MD job');
+        await click('Launch');
         await act(async () => { await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith('/designs/md-job-1')); });
         const launchCall = apiMocks.post.mock.calls.find(([url]) => url === '/api/molecular-dynamics/launch');
         expect(launchCall?.[1]).toMatchObject({

@@ -54,10 +54,12 @@ const seedPlayback = (client: QueryClient, jobId: string) => {
         evidence: { status: 'insufficient_evidence', reason: 'fixture', frames_are_independent_replicates: false },
         retry: { eligible: false, active: false, reason: 'not available' },
     }));
-    client.setQueryData(['md-trajectory-frame-map', jobId, 'map'], {
+    client.setQueryData(['md-trajectory-frame-map', jobId, 'map', shaA], {
         schema: 'bms.md.trajectory-frame-map.v1', job_id: jobId, replica: 0, frame_count: 6, frames,
     });
 };
+
+const activate = async (container: HTMLElement) => act(async () => container.querySelector<HTMLButtonElement>('[data-bms-md-activate-trajectory]')!.click());
 
 afterEach(() => document.body.replaceChildren());
 
@@ -72,7 +74,7 @@ describe('governed MD trajectory frame controls', () => {
         const summaryRead = vi.spyOn(api, 'fetchMDSummary').mockResolvedValue(fixture.getQueryData(['md-summary', jobId])!);
         const artifactsRead = vi.spyOn(api, 'fetchMDArtifacts').mockResolvedValue(fixture.getQueryData(['md-artifacts', jobId])!);
         const analysisRead = vi.spyOn(api, 'fetchMDAnalysis').mockResolvedValue(fixture.getQueryData(['md-analysis', jobId])!);
-        client.setQueryData(['md-trajectory-frame-map', jobId, 'map'], fixture.getQueryData(['md-trajectory-frame-map', jobId, 'map']));
+        client.setQueryData(['md-trajectory-frame-map', jobId, 'map', shaA], fixture.getQueryData(['md-trajectory-frame-map', jobId, 'map', shaA]));
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root = createRoot(container);
@@ -80,6 +82,7 @@ describe('governed MD trajectory frame controls', () => {
         await act(async () => { root.render(<MemoryRouter><QueryClientProvider client={client}><MDResultsPane jobId={jobId} /></QueryClientProvider></MemoryRouter>); });
         await settle();
         await settle();
+        await activate(container);
         expect(container.textContent).toContain('Dynamics lifecycle is unavailable');
         expect(container.querySelector('[data-testid="molstar-scene"]')).toBeTruthy();
         expect(container.querySelector('[data-bms-md-lifecycle]')).toBeNull();
@@ -123,6 +126,7 @@ describe('governed MD trajectory frame controls', () => {
             await Promise.resolve();
         });
 
+        await activate(container);
         const receipt = () => container.querySelector('[data-bms-md-frame-receipt]')?.textContent ?? '';
         const play = container.querySelector<HTMLButtonElement>('[data-bms-md-playback="play"]');
         expect(play).toBeTruthy();
@@ -165,13 +169,14 @@ describe('governed MD trajectory frame controls', () => {
             ...inventory.artifacts.map((item) => ({ ...item, id: `${item.id}-1`, replica: 1 })),
             ...[0, 1].map((replica) => ({ id: `final-${replica}`, replica, semantic_role: 'representative_structure', format: 'pdb', content_url: `/final-${replica}`, sha256: shaA })),
         ] }));
-        client.setQueryData(['md-trajectory-frame-map', jobId, 'map-1'], {
+        client.setQueryData(['md-trajectory-frame-map', jobId, 'map-1', shaA], {
             replica: 1, frames: [{ display_frame: 0, source_frame: 81, time_ps: 177, step: 91 }],
         });
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root = createRoot(container);
         await act(async () => { root.render(<MemoryRouter><QueryClientProvider client={client}><MDResultsPane jobId={jobId} /></QueryClientProvider></MemoryRouter>); });
+        await activate(container);
         const click = async (selector: string) => act(async () => container.querySelector<HTMLButtonElement>(selector)!.click());
         const scene = () => container.querySelector('[data-testid="molstar-scene"]')!.textContent!;
         const receipt = () => container.querySelector('[data-bms-md-frame-receipt]')?.textContent ?? '';
@@ -211,6 +216,7 @@ describe('governed MD trajectory frame controls', () => {
         document.body.appendChild(container);
         const root = createRoot(container);
         await act(async () => { root.render(<MemoryRouter><QueryClientProvider client={client}><MDResultsPane jobId={jobId} /></QueryClientProvider></MemoryRouter>); });
+        await activate(container);
         expect(container.querySelector('[data-bms-md-lifecycle]')).toBeTruthy();
         expect(container.querySelector('[data-testid="molstar-scene"]')).toBeTruthy();
         expect(container.querySelector('[data-bms-md-playback="play"]')).toBeTruthy();
@@ -232,6 +238,7 @@ describe('governed MD trajectory frame controls', () => {
             await Promise.resolve();
         });
 
+        await activate(container);
         const receipt = () => container.querySelector('[data-bms-md-frame-receipt]')?.textContent ?? '';
         const scene = () => container.querySelector('[data-testid="molstar-scene"]')?.textContent ?? '';
         expect(receipt()).toContain('Display frame 0');

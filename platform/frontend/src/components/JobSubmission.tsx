@@ -157,7 +157,23 @@ export function JobSubmission() {
             return { route: null, error: error instanceof Error ? error.message.slice(0, 512) : 'Invalid Molecular Dynamics handoff route.' };
         }
     }, [searchParams]);
-    const launchContextId = searchParams.get('launch_context_id');
+    const mdHandoffInitialValues = useMemo<Record<string, UntypedApiValue> | undefined>(() => {
+        const route = mdHandoff.route;
+        if (!route) return undefined;
+        const savedDraft = route.draftId ? loadMolecularDynamicsDraft(sessionStorage, route.draftId) : null;
+        return buildMolecularDynamicsHandoffInitialValues(route, savedDraft) as Record<string, UntypedApiValue>;
+    }, [mdHandoff.route]);
+    const launchContextId = searchParams.get('launch_context_id')
+        ?? (searchParams.get('template') === 'molecular_dynamics'
+            && typeof mdHandoffInitialValues?.md_destination_launch_context_id === 'string'
+            ? mdHandoffInitialValues.md_destination_launch_context_id : null);
+    useEffect(() => {
+        // Restore only MD's destination. The predictor must not claim the MD stage.
+        if (searchParams.get('template') !== 'molecular_dynamics' || !launchContextId || searchParams.has('launch_context_id')) return;
+        const restored = new URLSearchParams(searchParams);
+        restored.set('launch_context_id', launchContextId);
+        setSearchParams(restored, { replace: true });
+    }, [searchParams, launchContextId, setSearchParams]);
     const launchContextQuery = useQuery({
         queryKey: ['launch-context', launchContextId],
         queryFn: ({ signal }) => getLaunchContext(launchContextId as string, signal),
@@ -314,12 +330,6 @@ export function JobSubmission() {
             setParams(draft); setJobName(typeof draft.job_name === 'string' ? draft.job_name : '');
         }
     }, [projectSetup.active, projectSetup.setup?.project_id, projectSetup.setup?.setup_context_id, projectSetup.setup?.generation]);
-    const mdHandoffInitialValues = useMemo<Record<string, UntypedApiValue> | undefined>(() => {
-        const route = mdHandoff.route;
-        if (!route) return undefined;
-        const savedDraft = route.draftId ? loadMolecularDynamicsDraft(sessionStorage, route.draftId) : null;
-        return buildMolecularDynamicsHandoffInitialValues(route, savedDraft) as Record<string, UntypedApiValue>;
-    }, [mdHandoff.route]);
     const molecularDynamicsInitialValues = useMemo<Record<string, UntypedApiValue>>(
         () => ({ ...(clonedValues || {}), ...(mdHandoffInitialValues || {}) }),
         [clonedValues, mdHandoffInitialValues],
