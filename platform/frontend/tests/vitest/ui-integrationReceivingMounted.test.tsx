@@ -8,6 +8,8 @@ import { JobSubmission } from '../../src/components/JobSubmission';
 import { NativeBinderSource } from '../../src/components/NativeBinderSource';
 import { TemplateManagerModal } from '../../src/components/TemplateManagerModal';
 import { BindCraft2Campaign } from '../../src/components/BindCraft2Campaign';
+import { BindCraft2StructureInputs } from '../../src/components/BindCraft2StructureInputs';
+import type { BC2Source } from '../../src/lib/bindcraft2StructureInputs';
 import { QualitySettingsPanel } from '../../src/components/QualitySettingsPanel';
 import { PRESETS } from '../../src/components/qualitySettingsLogic';
 
@@ -58,6 +60,7 @@ beforeEach(() => {
         else if (url.includes('/workflow-setup/') || url.includes('/workflow-setups/')) { if (body?.draft) project = { ...project, draft: body.draft, generation: project.generation + 1 }; data = project; }
         else if (url === '/api/jobs') data = { id: 'fixture-created-job' };
         else if (url === '/api/files/materialize-structure') data = materialization;
+        else if (url === '/api/files/upload') data = { path: `inputs/upload-${calls.filter(call => call.url === url).length}.pdb` };
         else if (url.includes('/campaign/preview')) data = { preview_digest: 'fixture-preview', requested_settings: body.params.bindcraft2_settings, effective_settings: body.params.bindcraft2_settings };
         else if (url === '/api/rcsb') data = { cached: [] };
         else if (url.includes('/templates/')) data = { user_params: [], preset_params: {}, stages: [] };
@@ -67,7 +70,7 @@ beforeEach(() => {
         const url = String(input);
         if (url.includes('/native-settings')) return { ok: true, json: async () => ({ model_id: 'bindcraft2', launch_available: true, settings: bc2 }) };
         if (url.includes('/generation-settings')) return { ok: true, json: async () => ({ mode: new URL(url, 'http://fixture').searchParams.get('mode'), parameters: nativeParameters }) };
-        return { ok: true, text: async () => url.includes('native.cif') ? CIF : PDB, blob: async () => new Blob([PDB]), json: async () => ({}) };
+        return { ok: true, text: async () => url.includes('native.cif') ? CIF : url.includes('6aru.pdb') ? PDB.replace('ALA a', 'ALA A') : PDB, blob: async () => new Blob([PDB]), json: async () => ({}) };
     }));
     if (!Blob.prototype.text) Object.defineProperty(Blob.prototype, 'text', { configurable: true, value: function () { return new Promise<string>(resolve => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.readAsText(this); }); } });
 });
@@ -204,20 +207,86 @@ it('noncampaign direct action uses existing lifecycle source/options editor and 
     const request = calls.find(call => call.url === '/api/jobs')!.body;
     expect(request).toMatchObject({ model_id: 'bindcraft2', mode: 'rank', execution_target_id: null, params: { bc2_source_job_id: 'producer', bc2_action_options: { top: 3, list: false } } });
 });
-it('actual campaign Save callback serializes sparse round/source draft and browse Load reopens it unchanged', async () => {
-    const settings = { targets: [{ name: 'Alternate', target_path: 'inputs/native.cif' }], max_trajectories: 4, trajectory_only: false };
-    localStorage.setItem('clonedJobData', JSON.stringify({ model_id: 'bindcraft2', mode: 'campaign', name: 'Saved campaign', params: { bindcraft2_settings: settings, bc2_source_references: handoff.bc2.references,
-        binder_round: { schema_version: 1, enabled: false, sequence_design: { model_id: 'fampnn', params: {} }, prediction: { model_id: 'protenix', params: {} }, binder_chains: [], target_chains: [] } } }));
+it('actual campaign Save/unmount/fresh Template Manager Load restores governed source inspection and unchanged scientific drafts without Job POST', async () => {
+    const path = 'rcsb/6aru.pdb';
+    const origin = { name: 'RCSB: 6ARU', path, url: 'https://files.rcsb.org/download/6ARU.pdb', document: { artifact_id: 'rcsb-6aru', target_state: 'native' } };
+    const references = { 'target:0': { path, source: { name: 'Retained model', path: 'original/other.pdb', modelNumber: 7, chainIds: ['A'], derivedFrom: origin } } };
+    const settings = { targets: [{ name: '6ARU', target_path: path, chains: 'A', hotspots: 'A42' }], modality: ['VHH'], max_trajectories: 4, trajectory_only: false };
+    const round = { schema_version: 1, enabled: true, sequence_design: { model_id: 'fampnn', params: { seqs_per_design: 3, fampnn_psce_threshold: 0 } }, prediction: { model_id: 'protenix', params: { protenix_model_weights: 'protenix-v2', protenix_use_msa: false } }, binder_chains: [], target_chains: [] };
+    const roundDrafts = { fampnn: { seqs_per_design: 3, fampnn_psce_threshold: 0 }, caliby_binder: { caliby_num_seqs_per_pdb: 5, caliby_verbose: false } };
+    localStorage.setItem('clonedJobData', JSON.stringify({ model_id: 'bindcraft2', mode: 'campaign', name: 'Saved campaign', params: { bindcraft2_settings: settings, bc2_source_references: references, binder_round: round, binder_round_drafts: roundDrafts } }));
     await mount('/submit'); await ready(() => !!document.querySelector('[aria-label="BindCraft2 campaign"]'));
     await click('Save campaign draft'); await ready(() => !!document.querySelector('input[placeholder="e.g., My Boltz Config"]'));
     await edit('input[placeholder="e.g., My Boltz Config"]', 'Campaign saved'); await click('Save Template'); await ready(() => rows.length === 1);
-    expect(rows[0].model_id).toBe('bindcraft2'); expect(rows[0].mode).toBe('campaign');
-    expect(rows[0].params.bindcraft2_settings).toEqual(settings); expect(rows[0].params.binder_round.enabled).toBe(false);
-    expect(rows[0].params.bc2_source_references).toEqual(handoff.bc2.references);
-    await click('✕'); await click('Saved campaigns'); await ready(() => !!document.querySelector('input[placeholder="Search templates..."]'));
-    await click('Load'); expect(document.querySelector('[aria-label="BindCraft2 campaign"]')).not.toBeNull();
+    const saved = JSON.parse(JSON.stringify(rows[0]));
+    expect(saved.model_id).toBe('bindcraft2'); expect(saved.mode).toBe('campaign');
+    expect(saved.params.bindcraft2_settings).toEqual(settings); expect(saved.params.binder_round).toEqual(round);
+    expect(saved.params.bc2_source_references).toEqual(references); expect(saved.params.binder_round_drafts).toMatchObject(roundDrafts);
+    await unmount(); (fetch as any).mockClear(); calls = [];
+    await mount('/submit'); expect(document.querySelector('[aria-label="BindCraft2 campaign"]')).toBeNull();
+    await click('Template Manager'); await ready(() => !!document.querySelector('input[placeholder="Search templates..."]'));
+    await click('Load'); await ready(() => !!document.querySelector('[aria-label="Source identity"]') && !!document.querySelector('[data-viewer]'));
+    expect(document.querySelector('[aria-label="Source identity"]')!.textContent).toContain('RCSB: 6ARU · PDB');
+    expect(document.querySelector('[aria-label="Source identity"]')!.textContent).toContain('source document rcsb-6aru');
+    expect(document.querySelector('[aria-label="Source identity"]')!.textContent).toContain('model 7 · chains A');
+    expect(document.querySelector('[data-viewer]')!.textContent).toBe(PDB.replace('ALA a', 'ALA A'));
+    expect(document.querySelector('[aria-label="targets.0.target_path"]')!.textContent).toBe(path);
+    expect((fetch as any).mock.calls.map(([url]: any[]) => String(url)).filter((url: string) => !url.includes('/native-settings'))).toEqual([`/api/files/download/${encodeURIComponent(path)}`]);
     await click('Save campaign draft'); await edit('input[placeholder="e.g., My Boltz Config"]', 'Campaign reopened'); await click('Save Template'); await ready(() => rows.length === 2);
-    expect(rows[1].params.bindcraft2_settings).toEqual(settings); expect(rows[1].params.bc2_source_references).toEqual(handoff.bc2.references); expect(rows[1].params.binder_round.enabled).toBe(false);
+    expect(rows[1].params.bindcraft2_settings).toEqual(settings); expect(rows[1].params.bc2_source_references).toEqual(references);
+    expect(rows[1].params.binder_round).toEqual(round); expect(rows[1].params.binder_round_drafts).toEqual(saved.params.binder_round_drafts);
+    expect(calls.some(call => call.url === '/api/jobs' && call.method === 'post')).toBe(false);
+    expect(calls.some(call => call.url === '/api/files/materialize-structure' || call.url === '/api/files/upload')).toBe(false);
+});
+function BC2InspectionHarness({ initial, references }: { initial: any; references: Record<string, { path: string; source: BC2Source }> }) {
+    const [value, setValue] = useState(initial);
+    const [refs, setRefs] = useState(references);
+    sourceState = value; draft = refs;
+    return <><button type="button" onClick={() => setRefs(old => ({ ...old, 'target:0': { ...old['target:0'], source: { ...old['target:0'].source, name: 'Updated inspection context' } } }))}>Update inspection context</button>
+        <button type="button" onClick={() => setValue((old: any) => ({ ...old, targets: [{ ...old.targets[0], target_path: 'inputs/replaced.pdb' }] }))}>Replace governed path</button>
+        <BindCraft2StructureInputs value={value} onChange={setValue} inventory={bc2 as any} sourceReferences={refs} onSourcePrepared={entry => setRefs(old => ({ ...old, [entry.role === 'target' ? `target:${entry.targetIndex}` : 'scaffold']: { path: entry.path, source: entry.source } }))} /></>;
+}
+it('BC2 cached inspection updates provenance without reread/remount and replaced path ignores stale role ancestry', async () => {
+    const path = 'inputs/active.pdb';
+    const source = { name: 'RCSB: 6ARU', path: 'inputs/wrong.pdb', url: 'https://files.rcsb.org/download/6ARU.pdb', file: new File(['WRONG BYTES'], 'wrong.pdb'), document: reference.document, modelNumber: 7, chainIds: ['a'] };
+    const refs = { 'target:0': { path, source }, 'target:1': { path: 'inputs/replaced.pdb', source: { ...source, name: 'Wrong target slot' } }, scaffold: { path: 'inputs/replaced.pdb', source: { ...source, name: 'Wrong scaffold slot' } } };
+    await mount('/submit', <BC2InspectionHarness initial={{ targets: [{ name: 'Active', target_path: path, chains: 'a', hotspots: 'a42' }] }} references={refs} />);
+    await ready(() => !!document.querySelector('[data-viewer]'));
+    expect(document.querySelector('[aria-label="Source identity"]')!.textContent).toContain('RCSB: 6ARU');
+    expect(document.querySelector('[data-viewer]')!.textContent).toBe(PDB);
+    const scene = document.querySelector('[data-viewer]'), mounts = renderer.mounts;
+    await click('Update inspection context');
+    expect(document.querySelector('[aria-label="Source identity"]')!.textContent).toContain('Updated inspection context');
+    expect(document.querySelector('[data-viewer]')).toBe(scene); expect(renderer.mounts).toBe(mounts);
+    expect((fetch as any).mock.calls.map(([url]: any[]) => String(url))).toEqual([`/api/files/download/${encodeURIComponent(path)}`]);
+    await click('Replace governed path'); await ready(() => document.querySelector('[aria-label="Source identity"]')?.textContent === 'inputs/replaced.pdb · PDB');
+    expect(sourceState.targets[0]).toEqual({ name: 'Active', target_path: 'inputs/replaced.pdb', chains: 'a', hotspots: 'a42' });
+    expect(draft['target:0'].path).toBe(path);
+    expect((fetch as any).mock.calls.map(([url]: any[]) => String(url))).toEqual([`/api/files/download/${encodeURIComponent(path)}`, '/api/files/download/inputs%2Freplaced.pdb']);
+    expect(calls).toHaveLength(0);
+});
+it('BC2 explicit model and scaffold-chain derivatives retain matching governed document context', async () => {
+    const path = 'inputs/models.pdb';
+    const source = { name: 'RCSB: 6ARU', path: 'ancestry/not-active.pdb', url: 'https://files.rcsb.org/download/6ARU.pdb', document: reference.document, modelNumber: 7, chainIds: ['a'], derivedFrom: { name: 'Original RCSB', document: reference.document } };
+    const secondModel = PDB.replace('7.000', '9.000');
+    const models = `MODEL        1\n${PDB.replace('END\n', '')}ENDMDL\nMODEL        2\n${secondModel.replace('END\n', '')}ENDMDL\nEND\n`;
+    (fetch as any).mockImplementation(async () => ({ ok: true, text: async () => models }));
+    await mount('/submit', <BC2InspectionHarness initial={{ targets: [{ target_path: path }], binder_scaffold: path }} references={{ 'target:0': { path, source }, scaffold: { path, source: { ...source, name: 'Scaffold RCSB' } } }} />);
+    await ready(() => !!document.querySelector('[aria-label="Use source model"]'));
+    await select('Use source model', '2'); await ready(() => sourceState.targets[0].target_path === 'inputs/upload-1.pdb');
+    const targetSource = draft['target:0'].source;
+    expect(targetSource.modelNumber).toBe(2);
+    expect(targetSource.derivedFrom).toEqual({ ...source, path, file: undefined });
+    expect(targetSource.derivedFrom.document).toEqual(reference.document);
+    expect(targetSource.derivedFrom.modelNumber).toBe(7); expect(targetSource.derivedFrom.chainIds).toEqual(['a']);
+    expect(await calls.find(call => call.url === '/api/files/upload')!.body.get('file').text()).toBe(secondModel);
+    await click('Inspect scaffold'); await ready(() => !!button('Use selected scaffold chains'));
+    await click('Use selected scaffold chains'); await ready(() => sourceState.binder_scaffold === 'inputs/upload-2.pdb');
+    expect(draft.scaffold.source.chainIds).toEqual(['a']);
+    expect(draft.scaffold.source.derivedFrom).toEqual({ ...source, name: 'Scaffold RCSB', path, file: undefined });
+    expect((fetch as any).mock.calls.map(([url]: any[]) => String(url))).toEqual([`/api/files/download/${encodeURIComponent(path)}`]);
+    expect(calls.filter(call => call.url === '/api/files/upload')).toHaveLength(2);
+    expect(calls.some(call => call.url === '/api/files/materialize-structure' || call.url === '/api/jobs')).toBe(false);
 });
 it('campaign browse/save use real modal; incompatible Load stays open and explicit own-workflow Load routes', async () => {
     rows = [{ id: 'other', name: 'Other native workflow', model_id: 'ppiflow', mode: 'protein_binder', icon: 'bookmark', color: '#6B7280', params: { native_generation_authoring: true, target_pdb: 'inputs/other.pdb', dataset_seed: 0, self_condition: false } }];

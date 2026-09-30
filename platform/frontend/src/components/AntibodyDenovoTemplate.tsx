@@ -3214,7 +3214,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             {bc2DiscoveryError && bc2Inventory && <p role="status" className="text-sm text-[var(--text-secondary)]">{bc2DiscoveryError} Explicit settings and launch behavior are unchanged.</p>}
             {bc2Inventory ? <BindCraft2Settings inventory={bc2Inventory} value={bc2Settings} onChange={setBc2Settings} launchAvailable={bc2LaunchAvailable} section={bc2Section}
                 {...{ effectiveSettings: activeBc2Preview?.effective_settings }}
-                structureInputs={<BindCraft2StructureInputs value={bc2Settings} onChange={setBc2Settings} inventory={bc2Inventory} initialSources={bc2InitialSources}
+                structureInputs={<BindCraft2StructureInputs value={bc2Settings} onChange={setBc2Settings} inventory={bc2Inventory} initialSources={bc2InitialSources} sourceReferences={retainedDraft.bc2_source_references}
                     onSourcePrepared={entry => setRetainedDraft(previous => ({ ...previous, bc2_source_references: { ...(previous.bc2_source_references || {}), [entry.role === 'target' ? `target:${entry.targetIndex}` : 'scaffold']: { path: entry.path, source: portableNativeSource(entry.source) } } }))} />} />
                 : <div className="rounded-xl border p-6" style={themedPanelStyle}><p role={bc2DiscoveryError ? 'alert' : 'status'}>{bc2DiscoveryError ?? 'Loading BindCraft2 settings…'}</p></div>}
         </BindCraft2Campaign>

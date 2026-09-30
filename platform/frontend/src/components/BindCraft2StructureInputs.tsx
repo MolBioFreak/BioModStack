@@ -67,7 +67,7 @@ function SourceChooser({ scaffold, onSelect, onClose }: { scaffold: boolean; onS
 }
 
 type Cache = Map<string, BC2Document>;
-function useSourceDocument(path: string, cache: Cache, session: ReturnType<typeof createBC2SourceSession>) {
+function useSourceDocument(path: string, cache: Cache, session: ReturnType<typeof createBC2SourceSession>, source?: BC2Source) {
     const [loaded, setLoaded] = useState<{ path: string; document: BC2Document }>();
     const [failure, setFailure] = useState<{ path: string; error: string }>();
     const [retry, setRetry] = useState(0);
@@ -80,7 +80,11 @@ function useSourceDocument(path: string, cache: Cache, session: ReturnType<typeo
         }).catch(error => { if (!cancelled) setFailure({ path, error: message(error) }); });
         return () => { cancelled = true; };
     }, [path, cache, retry, session]);
-    return { document: cache.get(path) || (loaded?.path === path ? loaded.document : undefined), error: failure?.path === path ? failure.error : '', retry: () => { setFailure(undefined); setRetry(old => old + 1); } };
+    const bytes = cache.get(path) || (loaded?.path === path ? loaded.document : undefined);
+    // Provenance decorates already-read bytes. It never participates in the read
+    // effect/cache key, overrides the governed path, or reacquires an ancestor.
+    const document = useMemo(() => bytes && source ? { ...bytes, source: { ...source, path, file: undefined } } : bytes, [bytes, source, path]);
+    return { document, error: failure?.path === path ? failure.error : '', retry: () => { setFailure(undefined); setRetry(old => old + 1); } };
 }
 
 function NativeTargetFields({ target, index, update }: { target: BC2Target; index: number; update: (field: string, next: unknown) => void }) {
@@ -93,8 +97,10 @@ function NativeTargetFields({ target, index, update }: { target: BC2Target; inde
 
 /** The canonical request is the only scientific state. Documents/cache are previews
  * keyed by exact materialized source; asynchronous work never owns the request. */
-export function BindCraft2StructureInputs({ value, onChange, inventory, initialSources, onSourcePrepared }: {
+export function BindCraft2StructureInputs({ value, onChange, inventory, initialSources, sourceReferences, onSourcePrepared }: {
     value: BC2Request; onChange: (next: BC2Request) => void; inventory: BC2Inventory; initialSources?: BC2InitialSources;
+    /** Saved inspection ancestry, applicable only to its exact active role/path. */
+    sourceReferences?: Record<string, { path: string; source: BC2Source }>;
     /** Optional draft provenance handoff; not part of the native scientific request. */
     onSourcePrepared?: (entry: { role: 'target' | 'scaffold'; targetIndex?: number; path: string; source: BC2Source }) => void;
 }) {
@@ -172,7 +178,8 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
     const targets = bc2Targets(value);
     const target = typeof active === 'number' ? targets[active] : undefined;
     const activePath = active === 'scaffold' ? textValue(value.binder_scaffold) : textValue(target?.target_path);
-    const loaded = useSourceDocument(activePath, cache, session);
+    const retainedSource = sourceReferences?.[active === 'scaffold' ? 'scaffold' : `target:${active}`];
+    const loaded = useSourceDocument(activePath, cache, session, activePath && retainedSource?.path === activePath ? retainedSource.source : undefined);
     const document = loaded.document;
     const sourceIdentity = document?.source?.derivedFrom || document?.source;
     const modelFamily = modelFamilies.get(activePath) || document;
