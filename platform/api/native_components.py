@@ -821,6 +821,18 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         if workflow == 'analyze':
             a.stage('MD_ANALYZE_REPLICA')
             return True
+        if workflow == 'orchestrator' and p.get('md_analysis_retry_spawn_receipt'):
+            retained = a.chain(['MD_ASSERT_REPLICA_OUTCOME'])
+            analysis = a.stage('MD_ANALYZE_REPLICA', retained, expansion={
+                'authority': 'scripts/bms_md/spawn_analysis.py:prepare_analysis_retry',
+                'child_model': 'molecular_dynamics', 'child_mode': 'analyze', 'child_stage': 'md_analysis',
+                'candidate_identity': 'retained immutable analysis work item + explicit retry operation',
+                'grouping': 'existing exact required analysis roster with one replacement',
+                'join': 'MD_ASSERT_ANALYSIS_OUTCOME; retained completed siblings'})
+            wait = a.chain(['MD_WAIT_FOR_ANALYSIS'], (*retained, analysis))
+            result = a.chain(['MD_COLLECT_ANALYSIS', 'MD_ASSERT_ANALYSIS_OUTCOME'], wait)
+            a.stage('MD_COMPLETION_BARRIER', (*retained, *result))
+            return True
         cfg = p.get('md_config')
         engine = p.get('md_engine') or (cfg.get('engine') if isinstance(cfg, dict) else None)
         if engine not in {'gromacs', 'openmm'}:

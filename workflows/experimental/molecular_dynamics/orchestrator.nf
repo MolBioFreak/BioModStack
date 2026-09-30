@@ -4,6 +4,7 @@ include { MD_PREPARE_CONFIG } from '../../../modules/experimental/molecular_dyna
 
 params.md_job_config = null
 params.md_retry_spawn_receipt = null
+params.md_analysis_retry_spawn_receipt = null
 params.md_input_root = null
 params.api_url = System.getenv('API_BASE_URL') ?: 'http://127.0.0.1:8000'
 params.job_id = null
@@ -274,49 +275,60 @@ workflow {
 
     aggregate_manifest = "${params.out_dir}/manifest.json"
     analysis_manifest = "${params.out_dir}/analysis/manifest.json"
-    if (params.md_retry_spawn_receipt) {
-        // The shared attempt owner has already authorized the replacement and
-        // sealed this exact native roster. Never repeat preparation or siblings.
-        spawn_ch = Channel.fromPath(params.md_retry_spawn_receipt, checkIfExists: true)
+    analysis_aggregate = aggregate_manifest
+    if (params.md_analysis_retry_spawn_receipt) {
+        // Only the admitted failed analysis is replaced; completed siblings
+        // and all dynamics remain owned by the retained component ledger.
+        receipt = new groovy.json.JsonSlurper().parseText(file(params.md_analysis_retry_spawn_receipt).text)
+        analysis_aggregate = receipt.aggregate_manifest.toString()
+        analysis_spawn_ch = Channel.fromPath(params.md_analysis_retry_spawn_receipt, checkIfExists: true)
+        MD_ASSERT_REPLICA_OUTCOME(analysis_spawn_ch, analysis_aggregate)
     } else {
-        config_ch = Channel.fromPath(params.md_job_config, checkIfExists: true)
-        base_dir = params.md_input_root ?: file(params.md_job_config).parent.toString()
-        MD_PREPARE_CONFIG(config_ch, base_dir)
-        MD_SPAWN_REPLICAS(
-            MD_PREPARE_CONFIG.out.normalized_config,
-            MD_PREPARE_CONFIG.out.metadata,
-            MD_PREPARE_CONFIG.out.preparation_bundle,
+        if (params.md_retry_spawn_receipt) {
+            // The shared attempt owner has already authorized the replacement and
+            // sealed this exact native roster. Never repeat preparation or siblings.
+            spawn_ch = Channel.fromPath(params.md_retry_spawn_receipt, checkIfExists: true)
+        } else {
+            config_ch = Channel.fromPath(params.md_job_config, checkIfExists: true)
+            base_dir = params.md_input_root ?: file(params.md_job_config).parent.toString()
+            MD_PREPARE_CONFIG(config_ch, base_dir)
+            MD_SPAWN_REPLICAS(
+                MD_PREPARE_CONFIG.out.normalized_config,
+                MD_PREPARE_CONFIG.out.metadata,
+                MD_PREPARE_CONFIG.out.preparation_bundle,
+                params.job_id.toString(),
+                params.job_name.toString(),
+                params.api_url.toString(),
+            )
+            spawn_ch = MD_SPAWN_REPLICAS.out.spawn_result
+        }
+        MD_WAIT_FOR_REPLICAS(
+            spawn_ch,
             params.job_id.toString(),
             params.job_name.toString(),
             params.api_url.toString(),
+            params.md_child_poll_seconds as int,
         )
-        spawn_ch = MD_SPAWN_REPLICAS.out.spawn_result
+        MD_COLLECT_REPLICAS(MD_WAIT_FOR_REPLICAS.out.child_status, spawn_ch)
+        MD_ASSERT_REPLICA_OUTCOME(MD_COLLECT_REPLICAS.out.collection_marker, aggregate_manifest)
+        MD_SPAWN_ANALYSIS(
+            MD_ASSERT_REPLICA_OUTCOME.out.verified,
+            aggregate_manifest,
+            params.job_id.toString(),
+            params.job_name.toString(),
+            params.api_url.toString(),
+            params.md_analysis_sif_sha256.toString(),
+        )
+        analysis_spawn_ch = MD_SPAWN_ANALYSIS.out.spawn_result
     }
-    MD_WAIT_FOR_REPLICAS(
-        spawn_ch,
-        params.job_id.toString(),
-        params.job_name.toString(),
-        params.api_url.toString(),
-        params.md_child_poll_seconds as int,
-    )
-    MD_COLLECT_REPLICAS(MD_WAIT_FOR_REPLICAS.out.child_status, spawn_ch)
-    MD_ASSERT_REPLICA_OUTCOME(MD_COLLECT_REPLICAS.out.collection_marker, aggregate_manifest)
-    MD_SPAWN_ANALYSIS(
-        MD_ASSERT_REPLICA_OUTCOME.out.verified,
-        aggregate_manifest,
-        params.job_id.toString(),
-        params.job_name.toString(),
-        params.api_url.toString(),
-        params.md_analysis_sif_sha256.toString(),
-    )
     MD_WAIT_FOR_ANALYSIS(
-        MD_SPAWN_ANALYSIS.out.spawn_result,
+        analysis_spawn_ch,
         params.job_id.toString(),
         params.job_name.toString(),
         params.api_url.toString(),
         params.md_child_poll_seconds as int,
     )
-    MD_COLLECT_ANALYSIS(MD_WAIT_FOR_ANALYSIS.out.child_status, aggregate_manifest, MD_SPAWN_ANALYSIS.out.spawn_result)
+    MD_COLLECT_ANALYSIS(MD_WAIT_FOR_ANALYSIS.out.child_status, analysis_aggregate, analysis_spawn_ch)
     MD_ASSERT_ANALYSIS_OUTCOME(MD_COLLECT_ANALYSIS.out.collection_marker, analysis_manifest)
     MD_COMPLETION_BARRIER(
         MD_ASSERT_REPLICA_OUTCOME.out.verified,
