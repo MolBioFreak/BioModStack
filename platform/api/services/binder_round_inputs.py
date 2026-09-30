@@ -285,7 +285,12 @@ def prediction_request(root, owner, design, request, binder, target, target_sour
                                 bound=reference is not None,
                                 mapping=binder_mapping if role == 'binder' else target_correspondence)})
     params = deepcopy(request.prediction.params)
-    params.update(complex_components=components, sequence=':'.join(c['sequence'] for c in components),
+    # ESM's public admission/summary is a protein sequence, not a colon-delimited
+    # complex. The producer-bound components remain the sole native complex input.
+    summary = (''.join(c['sequence'] for c in binder_components)
+               if request.prediction.model_id == 'esmfold2'
+               else ':'.join(c['sequence'] for c in components))
+    params.update(complex_components=components, sequence=summary,
                   sequence_name=design.id, lineage_root_job_id=root.id,
                   iteration_source_root_job_id=root.id, iteration_source_job_id=owner.id,
                   iteration_source_design_ids=[design.id], source_design_id=design.id,
