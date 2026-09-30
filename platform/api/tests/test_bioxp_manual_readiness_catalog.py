@@ -34,4 +34,4 @@ def test_native_readiness_catalog_reaches_consumer(monkeypatch,fresh_motion,phas
     assert action['enabled'] is expected
     assert action['available'] is expected
     assert action['snapshot_freshness']==raw['actions'][next(i for i,a in enumerate(raw['actions']) if a['informational_path']=='/motion/gripper/open')]['snapshot_freshness']
-    assert all(call[0]=='operator_control_catalog' for call in runtime.connection.client.calls)
+    assert [call[0] for call in runtime.connection.client.calls] == ['operator_control_catalog', 'operator_control_catalog_v2']

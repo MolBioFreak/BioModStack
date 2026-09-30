@@ -1,5 +1,5 @@
 import React, { act } from 'react';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { expect, it, vi } from 'vitest';
@@ -13,8 +13,11 @@ it('mounted cockpit and opened Advanced share the exact catalog including draft 
     const host = document.createElement('div'); document.body.append(host);
     const root = createRoot(host);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const catalog = { schema_version: 'bioxp.operator_control_catalog.v1', actions: [], ownership_generation: 1,
-        dashboard: metadata.catalog.dashboard.telemetry, canonical: structuredClone(metadata.catalog), source_authority_verified: true };
+    const catalog = process.env.BMS_CATALOG_PRODUCER
+        ? JSON.parse(readFileSync(process.env.BMS_CATALOG_PRODUCER, 'utf8')).bms
+        : { schema_version: 'bioxp.operator_control_catalog.v1', actions: [], ownership_generation: 1,
+            dashboard: metadata.catalog.dashboard.telemetry, canonical: structuredClone(metadata.catalog), source_authority_verified: true };
+    // Freshness clock is a mounted cadence fixture; producer fields are otherwise unchanged.
     catalog.canonical.dashboard.generated_at = Date.now() / 1000;
     vi.mocked(api.get).mockImplementation(async url => {
         if (url === '/api/bioxp/status') return { data: { connection: { active: true, configured: true, generation: 7, reachable: true } } };

@@ -4225,6 +4225,9 @@ class OperatorControlCatalog(BaseModel):
     source_authority_verified: StrictBool
     dashboard: OperatorDashboard
     actions: list[OperatorActionSpec] = Field(max_length=512)
+    # BMS composes the robot's V2 catalog into this one response so the
+    # cockpit and Advanced panel share a single observation.
+    canonical: "OperatorControlCatalogV2 | None" = None
 
     @field_validator("actions")
     @classmethod
@@ -6790,3 +6793,6 @@ class OperatorReportExportMetadataV1(BaseModel):
     legal_hold: StrictBool
     evidence_available: StrictBool
     download: str | None = Field(default=None, max_length=512)
+
+
+OperatorControlCatalog.model_rebuild()

@@ -856,6 +856,7 @@ class FakeConnection:
         return await self.request_active(
             route_name,
             expected_generation=expected_generation,
+            require_fresh=False,
             **kwargs,
         )
 
@@ -2613,7 +2614,11 @@ def test_catalog_is_robot_owned_and_strict(monkeypatch):
     assert response.status_code == 200
     assert response.json()["actions"][0]["action_id"] == "motion.home_xy"
     assert response.json()["actions"][0]["inputs"][0]["exclusive_minimum"] == 0.1
-    assert runtime.connection.client.calls == [("operator_control_catalog", {"params": None})]
+    assert runtime.connection.client.calls == [
+        ("operator_control_catalog", {"params": None}),
+        ("operator_control_catalog_v2", {"params": {"schema_version": "bioxp.operator_control_catalog.v2"}}),
+    ]
+    assert response.json()["canonical"]["schema_version"] == "bioxp.operator_control_catalog.v2"
 
 
 def test_catalog_accepts_typed_z_provider_last_observation(monkeypatch):
@@ -2667,6 +2672,7 @@ def test_shared_xz_catalog_and_dashboard_query_robot_without_bms_freshness_gate(
         for call in runtime.connection.active_request_calls
     ] == [
         ("operator_control_catalog", False),
+        ("operator_control_catalog_v2", False),
         ("operator_dashboard", False),
     ]
 

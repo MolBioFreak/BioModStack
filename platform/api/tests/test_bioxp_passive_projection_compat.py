@@ -84,7 +84,9 @@ def test_all_four_cockpit_routes_relay_passive_x_without_making_queries(
     assert relayed["x_axis"]["provider"]["live_status"] == PASSIVE_X
     assert relayed["x_axis"]["provider"]["profile"]["verified"] is False
     assert relayed["x_axis"]["physical_position_verified"] is False
-    assert [call[0] for call in runtime.connection.client.calls] == [route]
+    assert [call[0] for call in runtime.connection.client.calls] == (
+        [route, "operator_control_catalog_v2"] if suffix == "catalog" else [route]
+    )
     assert not runtime.connection.oem_action_calls
     assert not runtime.connection.safety_interrupt_calls
 

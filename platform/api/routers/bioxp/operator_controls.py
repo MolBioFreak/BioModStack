@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal, cast
 from urllib.parse import quote
 
@@ -802,15 +803,33 @@ async def operator_control_catalog(
 ) -> OperatorControlCatalog:
     generation = runtime.connection.generation
     try:
-        payload = await runtime.connection.request_active_query(
-            "operator_control_catalog",
-            params={"z_target_steps": z_target_steps} if z_target_steps is not None else None,
-            expected_generation=generation,
-            require_fresh=False,
-        )
+        queries = [asyncio.create_task(query) for query in (
+            runtime.connection.request_active_query(
+                "operator_control_catalog",
+                params={"z_target_steps": z_target_steps} if z_target_steps is not None else None,
+                expected_generation=generation,
+                require_fresh=False,
+            ),
+            runtime.connection.request_active_v2_query(
+                "operator_control_catalog_v2",
+                expected_generation=generation,
+                params={"schema_version": "bioxp.operator_control_catalog.v2"},
+            ),
+        )]
+        try:
+            payload, canonical = await asyncio.gather(*queries)
+        finally:
+            # A failed or cancelled observation must not strand its sibling's
+            # connection lease while disconnect drains the original client.
+            for query in queries:
+                if not query.done():
+                    query.cancel()
+            await asyncio.gather(*queries, return_exceptions=True)
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    return _validate(OperatorControlCatalog, _quarantine_catalog_payload(payload))
+    catalog = _validate(OperatorControlCatalog, _quarantine_catalog_payload(payload))
+    catalog.canonical = _validate(OperatorControlCatalogV2, _normalize_interrupt_evidence(canonical))
+    return catalog
 
 
 @router.get("/operator-controls/dashboard", response_model=OperatorDashboard)
