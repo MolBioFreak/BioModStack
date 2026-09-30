@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import { api, type Design, type PersistedAnalysisRun } from '../lib/api';
 import { CandidateRoundProgress } from './CandidateRoundProgress';
@@ -20,19 +20,18 @@ function EvidenceBrowser({ jobId, sourceDesignId, launchContextId }: { jobId: st
     const [candidate, setCandidate] = useState(sourceDesignId ?? '');
     const [sequenceId, setSequenceId] = useState('');
     const [predictionId, setPredictionId] = useState('');
-    const query = useInfiniteQuery({
-        queryKey: ['binder-evidence', jobId], initialPageParam: 0,
-        queryFn: ({ pageParam, signal }) => fetchBinderEvidence(jobId, pageParam, signal),
-        getNextPageParam: page => page.records.length && page.offset + page.records.length < page.total ? page.offset + page.records.length : undefined,
-        retry: false, refetchOnWindowFocus: false,
+    const [offset, setOffset] = useState(0);
+    const query = useQuery({
+        queryKey: ['binder-evidence', jobId, sourceDesignId === undefined ? 'page' : 'source', sourceDesignId ?? offset],
+        queryFn: ({ signal }) => fetchBinderEvidence(jobId, offset, signal, sourceDesignId),
+        retry: false, refetchOnWindowFocus: false, gcTime: 0,
         // Primary completion does not imply child completion; discover late children too.
         refetchInterval: 5000,
     });
-    const records = useMemo(() => query.data?.pages.flatMap(page => page.records) ?? [], [query.data]);
+    const records = query.data?.records ?? [];
     const record = records.find(row => row.source_design_id === candidate);
-    useEffect(() => {
-        if (sourceDesignId && !record && query.hasNextPage && !query.isFetching && !query.isFetchNextPageError) void query.fetchNextPage();
-    }, [sourceDesignId, record, query.hasNextPage, query.isFetching, query.isFetchNextPageError, query.fetchNextPage]);
+    // Page navigation deliberately clears inspection; polling preserves exact IDs.
+    const changePage = (next: number) => { setOffset(next); setCandidate(''); setSequenceId(''); setPredictionId(''); };
     const sequence = record?.sequences.find(row => JSON.stringify([row.job_id, row.design_id]) === sequenceId);
     const prediction = sequence?.predictions.find(row => predictionKey(row) === predictionId);
     return <section aria-label="Candidate-linked prediction evidence" className="space-y-3 rounded-xl border border-[var(--border-color)] p-4 text-[var(--text-primary)]">
@@ -41,10 +40,15 @@ function EvidenceBrowser({ jobId, sourceDesignId, launchContextId }: { jobId: st
         <p className="text-xs text-[var(--text-secondary)]">Each sequence, prediction sample and target state retains its own evidence. Missing measurements are not zero. Source viewing and selection remain independent.</p>
         {query.isLoading && <p role="status">Reading candidate-linked evidence…</p>}
         {query.isError && <p role="status">Evidence readback unavailable. <button type="button" onClick={() => void query.refetch()}>Retry evidence readback</button></p>}
-        {!sourceDesignId && <label>Source candidate <select className={control} aria-label="Evidence candidate" value={candidate} onChange={event => { setCandidate(event.target.value); setSequenceId(''); setPredictionId(''); }}>
+        {sourceDesignId === undefined && <label>Source candidate <select className={control} aria-label="Evidence candidate" value={candidate} onChange={event => { setCandidate(event.target.value); setSequenceId(''); setPredictionId(''); }}>
             <option value="">Choose a candidate</option>{records.map(row => <option key={row.source_design_id} value={row.source_design_id}>{row.candidate_key ?? row.source_design_id}</option>)}
         </select></label>}
-        {query.hasNextPage && <button type="button" disabled={query.isFetching} onClick={() => void query.fetchNextPage()}>Load more evidence candidates ({records.length} of {query.data?.pages[0].total})</button>}
+        {sourceDesignId === undefined && <nav aria-label="Evidence candidate pages" className="flex items-center gap-3">
+            <button type="button" disabled={offset === 0 || query.isFetching} onClick={() => changePage(Math.max(0, offset - 100))}>Previous evidence candidates</button>
+            <span>{query.data ? `${records.length ? offset + 1 : 0}–${offset + records.length} of ${query.data.total}` : 'Reading page…'}</span>
+            <button type="button" disabled={!query.data || offset + 100 >= query.data.total || query.isFetching} onClick={() => changePage(offset + 100)}>Next evidence candidates</button>
+        </nav>}
+        {sourceDesignId !== undefined && query.isError && !record && <p>Requested source evidence is unavailable; no other candidate has been substituted.</p>}
         {record && <>
             <p className="text-xs">Source Design: {record.source_design_id}</p>
             {!record.sequences.length ? <p>No explicitly linked sequence or prediction jobs are recorded. PAE, ipSAE and fold/pose evidence: Unmeasured.</p> : <label>Sequence <select className={control} aria-label="Evidence sequence" value={sequenceId} onChange={event => { setSequenceId(event.target.value); setPredictionId(''); }}>
@@ -98,11 +102,11 @@ function AnalysisEvidence({ run }: { run: PersistedAnalysisRun<unknown> }) {
     </section>;
 }
 function PredictionDetail({ prediction: p, launchContextId }: { prediction: BinderPrediction; launchContextId?: string | null }) {
-    const design = useQuery({ queryKey: ['binder-evidence-design', p.design_id], enabled: !!p.design_url, retry: false,
+    const design = useQuery({ queryKey: ['binder-evidence-design', p.job_id, p.design_id, p.design_url], enabled: !!p.design_url, retry: false, gcTime: 0,
         queryFn: ({ signal }) => api.get<Design>(p.design_url!, { signal }).then(response => response.data) });
-    const pae = useQuery({ queryKey: ['binder-evidence-pae', p.design_id], enabled: !!p.pae_url, retry: false,
+    const pae = useQuery({ queryKey: ['binder-evidence-pae', p.job_id, p.design_id, p.pae_url], enabled: !!p.pae_url, retry: false, gcTime: 0,
         queryFn: ({ signal }) => api.get(p.pae_url!, { params: { max_size: 200 }, signal }).then(response => response.data) });
-    const chains = useQuery({ queryKey: ['binder-evidence-chains', p.design_id], enabled: !!p.chain_metrics_url, retry: false,
+    const chains = useQuery({ queryKey: ['binder-evidence-chains', p.job_id, p.design_id, p.chain_metrics_url], enabled: !!p.chain_metrics_url, retry: false, gcTime: 0,
         queryFn: ({ signal }) => api.get(p.chain_metrics_url!, { signal }).then(response => response.data) });
     const doc = design.data?.id === p.design_id ? design.data.scientific_structure_document : null;
     const boundPae = parseScientificPae(pae.data, doc, p.design_id ?? undefined);
