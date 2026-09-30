@@ -644,7 +644,8 @@ def test_job_owned_routes_stream_the_same_verified_descriptor_with_range_support
     assert '"/{job_id}/md/artifacts"' in router
     assert '"/{job_id}/md/analysis"' in router
     assert "job-bound/no-authenticated-principal" in router
-    assert "artifact, handle = open_verified_artifact" in router
+    assert "asyncio.to_thread(open_verified_artifact, record, artifact_id)" in router
+    assert "artifact, handle = await asyncio.shield(task)" in router
     assert "_stream_verified_artifact(handle" in router
     assert "_serve_file_response(artifact.path" not in router
 
@@ -654,7 +655,9 @@ def test_all_live_md_terminal_writers_route_through_the_md_completion_barrier() 
     orchestrator = (REPO_ROOT / "platform/api/services/gpu_orchestrator.py").read_text()
     completion = (REPO_ROOT / "platform/api/services/md/completion.py").read_text()
     assert "await validate_and_finalize_md_job(job, session)" in nextflow
-    assert "await validate_and_finalize_md_job(job, session)" in orchestrator
+    assert "await _finalize_local_md_job(job, session, result_output_dir)" in orchestrator
+    wrapper = nextflow.split("async def _finalize_local_md_job(", 1)[1].split("\nasync def ", 1)[0]
+    assert "await validate_and_finalize_md_job(job, session)" in wrapper
     assert "def validate_and_finalize_md_job" in completion
 
 

@@ -483,7 +483,7 @@ async def test_generic_completion_does_not_publish_over_active_md_parent(tmp_pat
     async with factory() as seed:
         seed.add(Job(
             id="md-parent", name="md-parent", model_id="molecular_dynamics",
-            mode="molecular_dynamics", params={}, status="running", queue_status="running",
+            mode="simulate", params={}, status="running", queue_status="running",
             awaiting_input=False, awaiting_payload={}, retry_count=0, max_retries=0,
         ))
         seed.add(MdRun(

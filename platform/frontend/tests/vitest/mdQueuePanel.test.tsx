@@ -400,12 +400,13 @@ describe('MD queue integration in the dashboard job queue', () => {
         });
 
         expect(container.textContent).toContain('MD Operations');
-        expect(container.textContent).toContain('available only in MD Operations');
+        expect(container.querySelector(`a[href="/designs/${mdJob.id}"]`)?.textContent).toContain('MD Operations');
         expect(container.textContent).not.toContain('No structure files');
         expect(container.querySelector(`option[value="${mdJob.id}"]`)).toBeNull();
         const structureQuery = client.getQueryState(['structure-files', mdJob.id]);
-        expect(structureQuery?.fetchStatus).toBe('idle');
-        expect(structureQuery?.dataUpdateCount).toBe(0);
+        // The summary no longer creates even a disabled generic structure query.
+        expect(structureQuery).toBeUndefined();
+        expect(client.getQueriesData({ queryKey: ['structure-files', mdJob.id] })).toEqual([]);
         expect(container.querySelectorAll('[data-bms-structure-viewer-host]')).toHaveLength(0);
 
         await act(async () => root.unmount());

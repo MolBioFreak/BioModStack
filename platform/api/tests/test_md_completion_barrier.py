@@ -17,7 +17,7 @@ def test_md_completion_service_is_the_named_terminal_authority() -> None:
     service = (REPO_ROOT / "platform/api/services/md/completion.py").read_text(encoding="utf-8")
     results = (REPO_ROOT / "platform/api/services/md/results.py").read_text(encoding="utf-8")
     assert "def validate_and_finalize_md_job" in service
-    assert "apply_completion_barrier(job)" in service
+    assert "apply_completion_barrier(job, _snapshot=snapshot)" in service
     assert "md_run_v1.schema.json" in results
     assert "md_analysis_v1.schema.json" in results
     assert "replica_manifest_set_sha256" in results
@@ -35,14 +35,14 @@ async def test_md_terminal_authority_closes_durable_run_state_in_the_callers_tra
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessions() as session:
-            parent = Job(id="job-1", name="MD", status="running", model_id="md",
-                         mode="molecular_dynamics", params={})
-            replica_child = Job(id="replica", name="replica", status="running", model_id="md",
+            parent = Job(id="job-1", name="MD", status="running", model_id="molecular_dynamics",
+                         mode="simulate", params={})
+            replica_child = Job(id="replica", name="replica", status="running", model_id="molecular_dynamics",
                 mode="replica", params={}, parent_job_id=parent.id, child_stage="md_replica",
                 provenance={"component_projection": {"root_job_id": parent.id, "state": "completed",
                     "result": {"references": [] if missing_evidence else [{"role": "manifest"}]}}})
-            analysis_child = Job(id="analysis", name="analysis", status="completed", model_id="md",
-                mode="analysis", params={}, parent_job_id=parent.id, child_stage="md_analysis")
+            analysis_child = Job(id="analysis", name="analysis", status="completed", model_id="molecular_dynamics",
+                mode="analyze", params={}, parent_job_id=parent.id, child_stage="md_analysis")
             session.add_all([parent, replica_child, analysis_child])
             await session.flush()
             run = await create_md_run(session, job=parent, normalized_request={
@@ -61,8 +61,9 @@ async def test_md_terminal_authority_closes_durable_run_state_in_the_callers_tra
             # not merely a state string. Exercise their real persisted lineage.
             snapshot = {"state": "completed", "replica_child_ids": ["replica"],
                         "analysis_child_ids": ["analysis"]}
-            monkeypatch.setattr(completion_module, "apply_completion_barrier", lambda candidate: snapshot)
-            async def no_artifacts(_job, _session) -> None:
+            monkeypatch.setattr(completion_module, "_prepare_completion",
+                                lambda record: (snapshot, None, None))
+            async def no_artifacts(_job, _session, *, _inventory, _frame_endpoints) -> None:
                 return None
             monkeypatch.setattr(completion_module, "_ingest_durable_artifacts", no_artifacts)
 
