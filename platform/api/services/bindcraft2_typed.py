@@ -82,6 +82,10 @@ def schema() -> dict:
                 else:
                     descriptor["unresolved_reason"] = "No source-backed JSON type"
     data["typed_evidence"] = evidence
+    from services.bindcraft2_typed_settings import FEATURE_SELECTORS
+    data["display_selector_fields"] = sorted(
+        {"core", "modality", "target"} | set(data["presets"]["property"]) | FEATURE_SELECTORS
+    )
     data["nested_control_schemas"] = nested_control_schemas(data)
     from services.bindcraft2_runtime import action_schema
     data["native_actions"] = action_schema()

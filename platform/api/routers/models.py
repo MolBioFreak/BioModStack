@@ -9,7 +9,6 @@ from database import get_session, Job
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from model_registry import get_registry, ModelDefinition
-from services.model_registry import serialize_parameter
 from services.frustrampnn.settings import (
     FrustraMPNNRequestedSettings,
     complete_requested_settings_schema,
@@ -335,7 +334,7 @@ async def list_models(
                 for mode in m.modes
             ],
             **({} if compact else {"params": [
-                serialize_parameter(p)
+                p.model_dump()
                 for p in m.params
             ]}),
             "enabled": m.enabled,
@@ -469,7 +468,7 @@ async def get_model(model_id: str):
             for mode in model.modes
         ],
         "params": [
-            serialize_parameter(p)
+            p.model_dump()
             for p in model.params
         ],
         "ntp_templates": [

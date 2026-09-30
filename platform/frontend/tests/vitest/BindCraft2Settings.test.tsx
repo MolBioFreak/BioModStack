@@ -301,7 +301,7 @@ it('mounted discovery coalesces identical pending reads and discards stale proje
     expect(JSON.parse(decodeURIComponent(requests[0].url.split('selectors=')[1]))).toEqual({ core: 'benchmark' });
     await domAct(async () => root.render(<React.StrictMode><Discovery core="binder" /></React.StrictMode>));
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    await domAct(async () => requests[1].resolve({ ok: true, json: async () => ({ settings: { ...inventory, upstream_commit: 'current' } }) } as Response));
+    await domAct(async () => requests[1].resolve({ ok: true, json: async () => ({ model_id: 'bindcraft2', launch_available: true, settings: { ...inventory, upstream_commit: 'current' } }) } as Response));
     expect(host.textContent).toBe('current');
     await domAct(async () => requests[0].reject(new Error('obsolete')));
     expect(host.textContent).toBe('current');

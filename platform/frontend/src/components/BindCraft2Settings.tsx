@@ -9,29 +9,8 @@ import { BC2_SYSTEM_FIELDS, BC2_PRIMARY, BC2_EXPERT_GROUPS, BC2_GROUP_CONTEXT, B
 
 /** Model-owned operator adapter. Discovery is the same inventory consumed by
  * services.bindcraft2_typed.validate_request; it does not enable the model. */
-export type BC2Field = {
-  native_key: string
-  observed_types: string[]
-  has_native_default: boolean
-  native_default: unknown
-  choices?: string[]
-  runtime_fallback?: unknown
-  applicable_when?: Record<string, unknown>
-  fallback_authority?: string
-  source_evidence?: string
-  items?: { type?: string };
-  status: 'typed' | 'unresolved'
-}
-export type BC2Inventory = {
-  display?: BC2LeafDisplay;
-  upstream_commit: string
-  fields: Record<string, BC2Field>
-  presets: Record<string, Record<string, unknown>>
-  paratope_conformations: string[]
-  registered_metrics: Record<string, Record<string, { params: Record<string, { default_literal: unknown; source_default: string | null; request_types?: string[]; resolved_default?: unknown; native_default_encoding?: string; unresolved_reason?: string }> }>>
-}
-export type BC2Request = Record<string, unknown>
-export type BC2Section = 'sources' | 'binder' | 'campaign' | 'objectives' | 'expert';
+import type { BC2Field, BC2Inventory, BC2Request, BC2Section } from '../lib/bindcraft2Types';
+export type { BC2Field, BC2Inventory, BC2Request, BC2Section } from '../lib/bindcraft2Types';
 const internal = BC2_SYSTEM_FIELDS;
 const selectors = new Set(['core', 'modality', 'target']);
 const defaultSummary = (value: unknown) => value !== null && typeof value === 'object'
@@ -46,7 +25,7 @@ export function BindCraft2Settings({ inventory, value, onChange, structureInputs
   // The shell supplies only preview values whose captured scientific revision is current.
   const effective = effectiveSettings;
   const candidate = inherited ?? inventory.display;
-  const display = candidate && bc2SelectorSignature(candidate.selectors) === bc2SelectorSignature(bc2DisplaySelectors(value)) ? candidate : undefined;
+  const display = candidate && bc2SelectorSignature(candidate.selectors) === bc2SelectorSignature(bc2DisplaySelectors(value, inventory)) ? candidate : undefined;
   const inheritedValue = (key: string, field: BC2Field): unknown => {
     if (key === 'max_trajectories') return undefined;
     if (display && Object.hasOwn(display.values, key)) return display.values[key];

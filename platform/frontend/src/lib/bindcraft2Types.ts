@@ -12,7 +12,8 @@ export type BC2Field = {
   has_native_default: boolean;
   native_default: unknown;
   choices?: string[];
-  items?: Record<string, unknown>;
+  items?: { type?: string } & Record<string, unknown>;
+  source_evidence?: string;
   runtime_fallback?: unknown;
   applicable_when?: Record<string, unknown>;
   fallback_authority?: string;
@@ -37,6 +38,7 @@ export type BC2Inventory = {
   paratope_conformations: string[];
   registered_metrics: Record<string, Record<string, { params: Record<string, BC2MetricParameter> }>>;
   display?: BC2Display;
+  display_selector_fields?: string[];
 };
 export type BC2NativeSettingsResponse = {
   model_id: 'bindcraft2';

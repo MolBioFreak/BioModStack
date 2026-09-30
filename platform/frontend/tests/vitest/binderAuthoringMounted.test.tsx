@@ -13,14 +13,14 @@ vi.mock('../../src/components/FrameworkBrowser', () => ({ FrameworkBrowser: () =
 
 vi.mock('../../src/components/EpitopeMolstarViewer', () => ({ default: () => null }));
 vi.mock('../../src/components/Rfd3SourceSelector', () => ({ Rfd3SourceSelector: () => null }));
-import { api } from '../../src/lib/api';
+import { api, fetchModelById } from '../../src/lib/api';
 import { AntibodyDenovoTemplate } from '../../src/components/AntibodyDenovoTemplate';
 import { BinderGeneratorChooser } from '../../src/components/BinderGeneratorChooser';
 import { BindCraft2Settings } from '../../src/components/BindCraft2Settings';
 import { QualitySettingsPanel } from '../../src/components/QualitySettingsPanel';
 import { PRESETS } from '../../src/components/qualitySettingsLogic';
 let root: Root; let client: QueryClient;
-afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); localStorage.clear(); sessionStorage.clear(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); localStorage.clear(); sessionStorage.clear(); vi.mocked(fetchModelById).mockReset().mockImplementation(async (id: string) => ({ data: { id, params: [] } }) as any); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 async function mount(node: React.ReactNode, refinement = false) {
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
@@ -93,6 +93,7 @@ it('actual BC2 authoring previews server payload, submits digest, and reopens un
     expect(document.querySelector('[aria-label="Compiled native campaign preview"]')?.textContent).toContain('native notice');
     await click('Launch BindCraft2 campaign');
     expect(mocks.submit.mock.calls[0][0]).toMatchObject({ model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: settings, bc2_preview_digest: 'compiled-digest' } });
+    await click('Save current campaign');
     const saved = JSON.parse(document.querySelector('[data-saved]')!.textContent!);
     expect(saved.bindcraft2_settings).toEqual(settings);
     await act(async () => mocks.select({ name: 'reopened', model_id: 'bindcraft2', mode: 'campaign', params: saved }));
@@ -275,7 +276,7 @@ async function editCaliby(key: string, value: string) {
     });
 }
 it('Caliby typed controls use discovered defaults without mutating the draft on load', async () => {
-    vi.spyOn(api, 'get').mockResolvedValue({ data: calibyModel });
+    vi.mocked(fetchModelById).mockResolvedValue({ data: calibyModel } as any);
     const changes = vi.fn();
     await mount(<QualitySettingsPanel settings={PRESETS.balanced} onSettingsChange={changes} showCalibySettings />);
     await click('Quality Settings');
@@ -287,10 +288,10 @@ it('Caliby typed controls use discovered defaults without mutating the draft on 
     expect(changes.mock.calls.at(-1)?.[0].caliby_scn_num_steps).toBe(17);
 });
 it('Caliby typed false/zero/empty values survive edits, save, reopen and a second clone', async () => {
-    vi.spyOn(api, 'get').mockResolvedValue({ data: calibyModel });
+    vi.mocked(fetchModelById).mockResolvedValue({ data: calibyModel } as any);
     const drafts = vi.fn();
     const native = { caliby_gaussian_n_conformers: 0, caliby_gaussian_noise_std: 0, caliby_potts_rejection_step: false, caliby_scn_num_steps: 0, caliby_omit_aas: '', caliby_max_potts_energy: null };
-    await mount(<AntibodyDenovoTemplate onBack={() => {}} onDraftChange={drafts} initialValues={{ seq_designer: 'caliby', initial_orchestration_sequence_design: true, ...native }} />);
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} onDraftChange={drafts} initialValues={{ seq_designer: 'caliby', initial_orchestration_sequence_design: true, ...native }} />, true);
     await click('Quality Settings');
     expect(calibyField('caliby_scn_num_steps').value).toBe('0');
     expect(calibyField('caliby_potts_rejection_step').checked).toBe(false);
@@ -309,9 +310,49 @@ it('Caliby typed false/zero/empty values survive edits, save, reopen and a secon
 
 
 it.each(['fampnn', 'antifold'])('binder designer lineup retains %s only when historically selected', async selected => {
-    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ seq_designer: selected, initial_orchestration_sequence_design: true }} />);
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ seq_designer: selected, initial_orchestration_sequence_design: true }} />, true);
     const buttons = [...document.querySelectorAll('button')].map(button => button.textContent?.trim());
     for (const designer of ['FAMPNN', 'PROTEINMPNN', 'CALIBY']) expect(buttons).toContain(designer);
     expect(buttons.includes('ANTIFOLD')).toBe(selected === 'antifold');
     expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!).seq_designer).toBe(selected);
+});
+
+it('RF generation sampling stays independent of downstream stages and preserves precise edited clone values', async () => {
+    const pdb = 'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 20.00           C\nEND\n';
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => pdb })));
+    const drafts = vi.fn();
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} onDraftChange={drafts} initialDraft={{
+        denovo_generator: 'rfantibody', job_name: 'RF precision',
+        target_source: { type: 'preset', path: 'inputs/target.pdb', name: 'Target' },
+        selected_chain: 'A', selected_residues: ['A1'], framework_type: 'nanobody',
+        initial_orchestration_sequence_design: false, initial_orchestration_validation: false,
+        initial_orchestration_ppiflow: false, initial_orchestration_qc: false,
+        rfantibody_noise_scale_ca: 0.25,
+    }} />);
+    const section = document.querySelector('section[aria-label="RFantibody backbone sampling"]')!;
+    expect(section).not.toBeNull();
+    await click('Generation');
+    for (const suffix of ['diffusion_steps', 'guide_scale', 'noise_scale_ca', 'noise_scale_frame']) {
+        const field = section.querySelector<HTMLInputElement>(`[aria-label="rfantibody_${suffix}"]`)!;
+        expect(field, suffix).not.toBeNull();
+        expect(field.type).toBe('number');
+    }
+    expect(section.querySelector<HTMLInputElement>('[aria-label="rfantibody_noise_scale_ca"]')!.value).toBe('0.25');
+    await edit('rfantibody_noise_scale_ca', '0.275');
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    const saved = JSON.parse(document.querySelector('[data-saved]')!.textContent!);
+    expect(saved.rfantibody_noise_scale_ca).toBe(0.275);
+    expect(saved.quality_settings.rfantibody_noise_scale_ca).toBe(0.275);
+    expect(drafts.mock.calls.at(-1)?.[0]).toEqual(saved);
+    await act(async () => mocks.select({ name: 'reopened RF', params: saved }));
+    expect(section.querySelector<HTMLInputElement>('[aria-label="rfantibody_noise_scale_ca"]')!.value).toBe('0.275');
+    await click('Optional operations');
+    await click('Analysis');
+    await click('Generation');
+    expect(document.querySelector('section[aria-label="RFantibody backbone sampling"]')).toBe(section);
+    expect(section.querySelector<HTMLInputElement>('[aria-label="rfantibody_noise_scale_ca"]')!.value).toBe('0.275');
+    const launch = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('Launch '))!;
+    expect(launch.disabled).toBe(false);
+    await act(async () => launch.click());
+    expect(mocks.submit.mock.calls.at(-1)?.[0].params.rfantibody_noise_scale_ca).toBe(0.275);
 });

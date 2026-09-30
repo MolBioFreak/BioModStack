@@ -48,6 +48,8 @@ import { BinderWorkflowWorkspace } from './BinderWorkflowWorkspace';
 import { BindCraft2Settings, type BC2Inventory, type BC2Request, type BC2Section } from './BindCraft2Settings';
 import { BindCraft2Campaign } from './BindCraft2Campaign';
 import { BinderRoundSettings } from './BinderRoundSettings';
+import { RFantibodyGeneration } from './RFantibodyGeneration';
+import { bc2DisplaySelectors, useBC2LeafDiscovery } from '../lib/bc2LeafDisplay';
 import { hydrateBinderRound } from '../lib/binderRound';
 import { BindCraft2StructureInputs } from './BindCraft2StructureInputs';
 import type { BC2InitialSources } from '../lib/bindcraft2StructureInputs';
@@ -353,24 +355,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     }
     useEffect(() => { setBc2SubmitError(null); setBc2ErrorLocation(null); setBc2PreviewBusy(false); }, [bc2RequestIdentity]);
     const activeBc2Preview = bc2Preview?.identity === bc2RequestIdentity && bc2Preview.revision === currentBc2Request.current.revision ? bc2Preview.data : null;
+    const bc2Discovery = useBC2LeafDiscovery<BC2Inventory>(
+        deNovoGenerator === 'bindcraft2', bc2DisplaySelectors(bc2Settings, bc2Inventory));
     useEffect(() => {
-        if (deNovoGenerator !== 'bindcraft2') return;
-        const controller = new AbortController();
-        fetch('/api/models/bindcraft2/native-settings', { signal: controller.signal })
-            .then(async response => {
-                if (!response.ok) throw new Error(`Native settings discovery unavailable (${response.status})`);
-                return response.json();
-            })
-            .then(data => {
-                if (controller.signal.aborted) return;
-                if (!data.settings?.fields || data.model_id !== 'bindcraft2') throw new Error('Invalid BindCraft2 settings discovery');
-                setBc2Inventory(data.settings as BC2Inventory);
-                setBc2LaunchAvailable(data.launch_available === true);
-                setBc2DiscoveryError(null);
-            })
-            .catch(error => { if (!controller.signal.aborted) setBc2DiscoveryError(String(error)); });
-        return () => controller.abort();
-    }, [deNovoGenerator]);
+        if (bc2Discovery?.inventory) {
+            setBc2Inventory(bc2Discovery.inventory);
+            setBc2LaunchAvailable(bc2Discovery.launchAvailable);
+            setBc2DiscoveryError(null);
+        } else if (bc2Discovery?.error) {
+            setBc2DiscoveryError(bc2Discovery.error);
+        }
+    }, [bc2Discovery]);
     const [deNovoStageSelection, setDeNovoStageSelection] = useState<Record<DeNovoOrchestrationStage, boolean>>(() => hydrateDeNovoStageSelection(initialValues));
 
     useEffect(() => {
@@ -2590,7 +2585,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     lock_gpus: lockGpus,
                     out_dir: customOutputDir.trim() || undefined,
                     // Quality settings
-                    ...Object.fromEntries(Object.entries(qualitySettings).filter(([key]) => key.startsWith('caliby_'))),
+                    ...Object.fromEntries(Object.entries(qualitySettings).filter(([key]) => key.startsWith('caliby_') || key.startsWith('rfantibody_'))),
                     ...(seqDesigner === 'caliby' ? { caliby_num_seqs_per_pdb: seqsPerDesign } : {}),
                     quality_settings: qualitySettings,
                     sabdab_framework: sabdabFramework ? {
@@ -3215,6 +3210,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     card?.scrollIntoView?.({ block: 'nearest' }); card?.querySelector<HTMLElement>('input,select,button')?.focus();
                 });
             }}>Open {bc2ErrorLocation?.field ?? binderShellError({ message: bc2SubmitError }).field ?? 'campaign'} settings</button>}
+            {bc2DiscoveryError && bc2Inventory && <p role="status" className="text-sm text-[var(--text-secondary)]">{bc2DiscoveryError} Explicit settings and launch behavior are unchanged.</p>}
             {bc2Inventory ? <BindCraft2Settings inventory={bc2Inventory} value={bc2Settings} onChange={setBc2Settings} launchAvailable={bc2LaunchAvailable} section={bc2Section}
                 {...{ effectiveSettings: activeBc2Preview?.effective_settings }}
                 structureInputs={<BindCraft2StructureInputs value={bc2Settings} onChange={setBc2Settings} inventory={bc2Inventory} initialSources={bc2InitialSources}
@@ -3238,6 +3234,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             executionControls={<ExecutionTargetPicker workflowRequest={workflowRequest} />}
             submitControls={submitControls} library={!bc2Workspace && library}
         >
+            {!isRefinementMode && deNovoGenerator === 'rfantibody' && <div hidden={sectionHidden('generation')}>
+                <RFantibodyGeneration settings={qualitySettings} onSettingsChange={setQualitySettings} />
+            </div>}
             {!isRefinementMode && !bc2Workspace && <div hidden={sectionHidden('generation')}><BinderRoundSettings values={roundDraft} onChange={setRoundDraft} /></div>}
             {showRfSourceHandoff && deNovoGenerator === 'rfantibody' && <section hidden={sectionHidden('sources')} aria-label="BindCraft2 source handoff" className="mb-4 space-y-3 rounded-xl border p-4" style={themedPanelStyle}>
                 <h3>Reuse BindCraft2 sources</h3>
@@ -5672,7 +5671,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         onSettingsChange={setQualitySettings}
                         structureValidator={structureValidator}
                         allowPostPpiFlowRetry={refinementSourceIsPpiFlow}
-                        showRfantibodySettings={showRfQualitySettings}
+                        showRfantibodySettings={isRefinementMode && showRfQualitySettings}
                         showStructureValidationSettings={showStructureValidationQualitySettings}
                         showFampnnSettings={showFampnnQualitySettings}
                         showCalibySettings={showCalibyQualitySettings}

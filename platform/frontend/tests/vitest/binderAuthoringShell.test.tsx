@@ -171,7 +171,7 @@ it('advertised native generation submits only its model-mode fields, preserving 
     const launch = [...document.querySelectorAll('button')].find(button => button.textContent === 'Launch Experiment')!;
     expect(launch.disabled).toBe(false);
     await act(async () => launch.click());
-    expect(mocks.submit).toHaveBeenCalledWith({ name: 'native generation', model_id: 'boltzgen', mode: 'protein_binder', params: { target_pdb: '' }, binder_round: { schema_version: 1, enabled: true, sequence_design: { model_id: 'fampnn', params: {} }, prediction: { model_id: 'protenix', params: {} }, binder_chains: [], target_chains: [] } }, { launchContext: false });
+    expect(mocks.submit).toHaveBeenCalledWith({ name: 'native generation', model_id: 'boltzgen', mode: 'protein_binder', params: { target_pdb: '' }, execution_target_id: null, source_structure: undefined, binder_round: { schema_version: 1, enabled: true, sequence_design: { model_id: 'fampnn', params: {} }, prediction: { model_id: 'protenix', params: {} }, binder_chains: [], target_chains: [] } }, { launchContext: false });
 });
 
 
