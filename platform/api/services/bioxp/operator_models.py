@@ -6038,7 +6038,8 @@ class OperatorReportSchemaIdentityV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     database_identity: Literal["robot_authoritative_sqlite"]
-    schema_version: Literal[5]
+    # Robot PRAGMA user_version: database metadata, not the export protocol tag.
+    schema_version: StrictInt = Field(ge=1)
     identity_version: StrictInt | None
     release_identity: OperatorReportReleaseIdentityV1
 
