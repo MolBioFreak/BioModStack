@@ -120,19 +120,141 @@ def test_warm_launch_never_hashes_shared_bodies(store, monkeypatch, clone_double
     assert not lifecycle.load_state(root)['leases']
 
 
-def test_cold_derivation_hashes_rootfs_twice_and_reuses_frozen_receipt(store, monkeypatch, clone_double):
+def test_cold_derivation_hashes_each_unique_inode_once_and_reuses_frozen_receipt(store, monkeypatch, clone_double):
     root, digest, workspace, _ = store
     counts = []
     original = views._hash
     def counted(fd):
-        counts.append(os.fstat(fd).st_size)
+        info = os.fstat(fd)
+        counts.append((info.st_dev, info.st_ino))
         return original(fd)
     monkeypatch.setattr(views, '_hash', counted)
-    with views.private_image_view(root, digest, workspace, extract) as view:
+    def multiple(fd, destination):
+        extract(fd, destination)
+        # Distinct inode with identical bytes: deduplication is by inode only.
+        (destination / 'independent').write_bytes(b'original bytes' * 8192)
+    with views.private_image_view(root, digest, workspace, multiple) as view:
         assert (view['rootfs'] / 'bin/program').read_bytes() == b'original bytes' * 8192
-        assert counts.count(len(b'original bytes') * 8192) == 2
-    assert counts.count(len(b'original bytes') * 8192) == 2
+        tree = views.derived_path(root, digest) / 'rootfs'
+        expected = {(p.stat().st_dev, p.stat().st_ino) for p in
+                    (tree / 'bin/program', tree / 'bin/alias', tree / 'independent')}
+        assert len(expected) == 2
+        assert set(counts) == expected and len(counts) == len(expected)
+    assert set(counts) == expected and len(counts) == len(expected)
     assert not list(workspace.iterdir())
+
+
+@pytest.mark.parametrize('boundary', ['hash', 'before_freeze', 'freeze', 'after_freeze'])
+@pytest.mark.parametrize('mutation', ['write_restore', 'replace', 'symlink', 'membership'])
+def test_cold_actual_inventory_boundaries_reject_mutation(store, monkeypatch, boundary, mutation):
+    root, digest, _, _ = store
+    selected = []
+    def callback(fd, destination):
+        extract(fd, destination)
+        selected.append(destination)
+    def mutate():
+        tree = selected[0]
+        program = tree / 'bin/program'
+        if mutation == 'write_restore':
+            info, content = program.stat(), program.read_bytes()
+            program.chmod(0o755)
+            program.write_bytes(b'X' * len(content))
+            program.write_bytes(content)
+            if boundary != 'freeze':
+                os.utime(program, ns=(info.st_atime_ns, info.st_mtime_ns))
+            program.chmod(0o555)
+        elif mutation == 'membership':
+            program.parent.chmod(0o755)
+            (program.parent / 'injected').write_bytes(b'not extracted')
+        else:
+            program.parent.chmod(0o755)
+            content = program.read_bytes()
+            program.unlink()
+            if mutation == 'replace':
+                program.write_bytes(content)
+                program.chmod(0o555)
+            else:
+                program.symlink_to('alias')
+    fired = []
+    original_hash, original_chmod, original_inventory = views._hash, os.fchmod, views._inventory
+    def hash_member(fd):
+        value = original_hash(fd)
+        if boundary == 'hash' and not fired:
+            fired.append(True)
+            mutate()
+        return value
+    def chmod_member(fd, mode):
+        original_chmod(fd, mode)
+        if boundary == 'freeze' and not fired and os.fstat(fd).st_ino == (selected[0] / 'bin/program').stat().st_ino:
+            fired.append(True)
+            mutate()
+    def inventory(path, **kwargs):
+        value = original_inventory(path, **kwargs)
+        if boundary == 'after_freeze' and kwargs.get('freeze'):
+            fired.append(True)
+            mutate()
+        return value
+    if boundary == 'before_freeze':
+        # Mutation after successful hashing, at the first freeze operation.
+        def chmod_member(fd, mode):
+            if not fired:
+                fired.append(True)
+                mutate()
+            original_chmod(fd, mode)
+    monkeypatch.setattr(views, '_hash', hash_member if boundary != 'before_freeze' else original_hash)
+    monkeypatch.setattr(os, 'fchmod', chmod_member)
+    monkeypatch.setattr(views, '_inventory', inventory)
+    with pytest.raises((shared.SharedRuntimeImageError, OSError)):
+        views.prepare_image(root, digest, callback)
+    assert fired
+    assert not views.derived_path(root, digest).exists()
+    assert not list(views.derived_path(root, digest).parent.glob('.derive-*'))
+    assert not lifecycle.load_state(root)['leases']
+
+
+@pytest.mark.parametrize('boundary', ['hash', 'freeze'])
+def test_cancel_actual_cold_inventory_releases_stage_lease_and_lock(store, monkeypatch, boundary):
+    root, digest, _, _ = store
+    original_hash, original_chmod = views._hash, os.fchmod
+    def cancelled_hash(fd):
+        raise KeyboardInterrupt('cancel inventory hash')
+    cancelled = []
+    def cancelled_freeze(fd, mode):
+        if not cancelled:
+            cancelled.append(True)
+            raise KeyboardInterrupt('cancel inventory freeze')
+        return original_chmod(fd, mode)
+    with monkeypatch.context() as patch:
+        patch.setattr(views, '_hash', cancelled_hash if boundary == 'hash' else original_hash)
+        patch.setattr(os, 'fchmod', cancelled_freeze if boundary == 'freeze' else original_chmod)
+        with pytest.raises(KeyboardInterrupt):
+            views.prepare_image(root, digest, extract)
+    assert not lifecycle.load_state(root)['leases']
+    assert not views.derived_path(root, digest).exists()
+    assert not list(views.derived_path(root, digest).parent.glob('.derive-*'))
+    views.prepare_image(root, digest, extract)  # same-digest successor owns the lock
+
+
+def test_explicit_full_audit_still_reads_bytes_and_rejects_silent_corruption(store, monkeypatch):
+    root, digest, _, image = store
+    path, manifest = derive(store)
+    program = path / 'rootfs/bin/program'
+    info = program.stat()
+    program.chmod(0o755)
+    program.write_bytes(b'X' * info.st_size)
+    os.utime(program, ns=(info.st_atime_ns, info.st_mtime_ns))
+    program.chmod(0o555)
+    identity = shared.image_identity(image, digest)
+    assert views.verify_derivation(path, identity, full=False)[1] == manifest
+    calls = []
+    original = views._hash
+    def counted(fd):
+        calls.append(os.fstat(fd).st_ino)
+        return original(fd)
+    monkeypatch.setattr(views, '_hash', counted)
+    with pytest.raises(shared.SharedRuntimeImageError, match='integrity mismatch'):
+        views.verify_derivation(path, identity)
+    assert calls.count(program.stat().st_ino) == 1
 
 
 def test_freeze_mutation_rejected_before_publication(store, monkeypatch):

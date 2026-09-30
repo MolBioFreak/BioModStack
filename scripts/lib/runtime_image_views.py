@@ -18,7 +18,7 @@ from pathlib import Path
 from .shared_runtime_images import (
     SharedRuntimeImageError as Error, _absolute, _digest, _directory, _file,
     _check_file, _check_directory, _hash, _same, _identity, _member,
-    _DIRECTORY_FLAGS, _FILE_FLAGS, _lock,
+    _DIRECTORY_FLAGS, _lock,
 )
 from . import runtime_image_lifecycle as lifecycle
 
@@ -105,11 +105,10 @@ def _inventory(path, *, freeze=False, identities=None):
     Hardlinks are allowed only when every link is contained in this rootfs.
     """
     entries, links, original_modes, hashes = {}, {}, {}, {}
-    stamps, pending = {}, {}
+    stamps, pending, members = {}, {}, {}
 
     def record(relative, info, target=None):
-        if identities is not None:
-            identities['.' if relative == '.' else './' + relative] = _identity(info) + (target,)
+        members['.' if relative == '.' else './' + relative] = _identity(info) + (target,)
 
     def readable(parent, name, bits):
         info = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -173,17 +172,12 @@ def _inventory(path, *, freeze=False, identities=None):
         # were the frozen member.
         def digest_member(item):
             stamp, rel = item
-            fd = os.open(path / rel, _FILE_FLAGS)
-            try:
-                before = os.fstat(fd)
+            with _file(path / rel) as (fd, parent, before):
                 if _identity(before) != stamp:
                     raise Error('derived rootfs member changed before hashing')
                 digest = _hash(fd)
-                if not _same(before, os.fstat(fd)):
-                    raise Error('derived rootfs member changed while hashing')
+                _check_file(path / rel, fd, parent, before)
                 return stamp, digest
-            finally:
-                os.close(fd)
 
         with ThreadPoolExecutor(max_workers=parallel_workers()) as pool:
             for stamp, digest in pool.map(digest_member, sorted(pending.items())):
@@ -196,16 +190,43 @@ def _inventory(path, *, freeze=False, identities=None):
         for rel, _ in group[1:]:
             entries[rel]["hardlink"] = group[0][0]
     if freeze:
+        frozen_inodes = {}
         for rel, row in sorted(entries.items(), reverse=True):
             target = path if rel == "." else path / rel
-            if row["kind"] == "file":
-                with _file(target) as (fd, _, _):
-                    os.fchmod(fd, (row["mode"] & ~0o222) | 0o400)
+            member = '.' if rel == '.' else './' + rel
+            expected = members[member][:-1]
+            if row["kind"] == "symlink":
+                continue
+            with (_file(target) if row["kind"] == "file" else
+                  _directory(target)) as opened:
+                fd = opened[0] if row["kind"] == "file" else opened
+                before = os.fstat(fd)
+                key = (before.st_dev, before.st_ino)
+                expected = frozen_inodes.get(key, expected)
+                if _identity(before) != expected:
+                    raise Error('derived rootfs integrity changed before freezing')
+                mode = (row["mode"] & ~0o222) | (
+                    0o400 if row["kind"] == "file" else 0o500)
+                if key not in frozen_inodes:
+                    os.fchmod(fd, mode)
                     os.fsync(fd)
-            elif row["kind"] == "directory":
-                with _directory(target) as fd:
-                    os.fchmod(fd, (row["mode"] & ~0o222) | 0o500)
-                    os.fsync(fd)
+                after = os.fstat(fd)
+                # chmod changes mode and ctime only. Byte identity, link count
+                # and reachable no-follow inode must survive the actual freeze.
+                stamp = _identity(after)
+                if (stamp[:2] != expected[:2] or stamp[3:6] != expected[3:6]
+                        or after.st_mode != stat.S_IFMT(before.st_mode) | mode
+                        or stamp[-1] < expected[-1]
+                        or not _same(after, os.stat(target, follow_symlinks=False))):
+                    raise Error('derived rootfs integrity changed while freezing')
+                if row["kind"] == "file":
+                    _check_file(target, fd, opened[1], after)
+                else:
+                    _check_directory(target, fd)
+                frozen_inodes[key] = stamp
+                members[member] = stamp + (None,)
+    if identities is not None:
+        identities.update(members)
     return entries
 
 
@@ -305,11 +326,11 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
         try:
             os.lseek(image_fd, 0, os.SEEK_SET)
             extract(image_fd, stage / "rootfs")
-            original = _inventory(stage / "rootfs", freeze=True)
-            # Freeze only changes modes, not member bytes. Verify the actual
-            # frozen tree below rather than hashing it here and then again in
-            # verify_derivation. The post-freeze pass also detects mutations
-            # made while freezing (including write-and-restore via ctime).
+            tree = {}
+            original = _inventory(stage / "rootfs", freeze=True, identities=tree)
+            # Inventory hashes each extracted inode once and records the
+            # identities checked by the actual freeze. Publication compares
+            # those stamps, not a second inventory of member bodies.
             frozen = {rel: dict(row) for rel, row in original.items()}
             for row in frozen.values():
                 if row["kind"] in {"file", "directory"}:
@@ -330,15 +351,17 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
                 os.fchmod(fd, 0o500)
                 os.fsync(fd)
             stage_verification = {}
-            verify_derivation(stage, identity, verification=stage_verification)
+            verify_derivation(stage, identity, verification=stage_verification, full=False)
+            if snapshot_tree(stage / 'rootfs') != tree:
+                raise Error('derived rootfs integrity changed before publication')
             _check_directory(path.parent, parent)
             if path.name in os.listdir(parent):
                 raise Error("derivation appeared during publication")
             os.rename(name, path.name, src_dir_fd=parent, dst_dir_fd=parent)
             os.fsync(parent)
             # The rename moves the same inode and contents. Recheck its full
-            # no-follow identity tree after publication, without rereading all
-            # member bytes for a third time. Warm launches reuse the manifest.
+            # no-follow identity tree after publication, without rereading
+            # member bytes. Warm launches reuse the manifest.
             with _directory(path) as published:
                 envelope = _identity(os.fstat(published))
             # Linux rename updates the moved directory's ctime. Only that
@@ -347,7 +370,9 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
                     or envelope[-1] < stage_verification['envelope'][-1]):
                 raise Error('derived rootfs envelope changed during publication')
             stage_verification.update(path=str(path), envelope=envelope)
-            verify_derivation(path, identity, verification=stage_verification)
+            verify_derivation(path, identity, verification=stage_verification, full=False)
+            if snapshot_tree(path / 'rootfs') != tree:
+                raise Error('derived rootfs integrity changed during publication')
         finally:
             if name in os.listdir(parent):
                 _remove(parent, name)
