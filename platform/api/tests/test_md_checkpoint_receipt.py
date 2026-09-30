@@ -81,7 +81,7 @@ def test_write_checkpoint_receipt_rejects_missing_checkpoint(tmp_path: Path) -> 
     config.write_text(json.dumps({"engine": "gromacs"}), encoding="utf-8")
     output = tmp_path / "replica_0"
     output.mkdir()
-    with pytest.raises(RuntimeError, match="no GROMACS checkpoint"):
+    with pytest.raises(RuntimeError, match="no GROMACS production checkpoint"):
         write_checkpoint_receipt(config_path=config, output_dir=output, gmx_binary="gmx")
 
 
@@ -90,7 +90,8 @@ def test_write_checkpoint_receipt_rejects_checkpoint_older_than_pause(tmp_path: 
     config.write_text(json.dumps({"engine": "gromacs"}), encoding="utf-8")
     output = tmp_path / "replica_0"
     output.mkdir()
-    checkpoint = output / "production.cpt"
+    checkpoint = output / "production" / "production.cpt"
+    checkpoint.parent.mkdir()
     checkpoint.write_bytes(b"periodic-before-pause")
     minimum_mtime_ns = time.time_ns() + 1_000_000
     with pytest.raises(RuntimeError, match="updated after the pause request"):
@@ -133,7 +134,8 @@ def test_checkpointing_runner_observes_pause_boundary_and_waits_for_gromacs_gran
         encoding="utf-8",
     )
     parent = tmp_path / "parent.py"
-    checkpoint = output / "signal.cpt"
+    checkpoint = output / "production" / "production.cpt"
+    checkpoint.parent.mkdir()
     parent.write_text(
         "import subprocess,sys,time\n"
         "subprocess.Popen([sys.executable, sys.argv[1], sys.argv[2]])\n"
@@ -163,6 +165,6 @@ def test_checkpointing_runner_observes_pause_boundary_and_waits_for_gromacs_gran
             process.wait(timeout=10)
     assert time.monotonic() - started >= 0.30
     receipt = json.loads((output / "md-checkpoint-receipt.json").read_text(encoding="utf-8"))
-    assert receipt["checkpoint_path"] == "signal.cpt"
+    assert receipt["checkpoint_path"] == "production/production.cpt"
     assert receipt["sha256"] == hashlib.sha256(b"signal-flushed").hexdigest()
     assert receipt["step"] == 3000 and receipt["time_ps"] == 6.0

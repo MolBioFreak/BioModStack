@@ -147,11 +147,16 @@ def test_md_launch_error_mapper_maps_transient_service_errors_to_safe_503(exc: E
 
 def test_preview_and_final_materialization_calls_are_both_wired_to_typed_mapper() -> None:
     tree = ast.parse(JOBS_PATH.read_text(encoding="utf-8"))
-    create_job = next(
-        node
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "create_job"
-    )
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    public_calls = {call.func.id for call in ast.walk(functions["create_job"])
+                    if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
+    assert "_create_job" in public_calls
+    receiving_calls = {call.func.id for call in ast.walk(functions["_create_job"])
+                       if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
+    assert "normalize_job_request" in receiving_calls
+    create_job = ast.Module(body=[functions["normalize_job_request"], functions["_create_job"]],
+                            type_ignores=[])
     mapped_calls: set[str] = set()
     for node in ast.walk(create_job):
         if not isinstance(node, ast.Try):

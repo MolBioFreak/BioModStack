@@ -199,12 +199,6 @@ async def _ingest_durable_artifacts(job: MDJobRecord, session: Any, *, _inventor
     await session.flush()
 
 
-def validate_md_completion(job: MDJobRecord) -> dict[str, Any]:
-    """Validate the complete immutable MD generation without mutating job state."""
-
-    return completion_barrier(job)
-
-
 async def validate_and_finalize_md_job(job: Job, session: Any) -> dict[str, Any]:
     """Apply the MD-specific terminal barrier to the caller's current DB transaction."""
 

@@ -77,7 +77,9 @@ def test_standalone_md_cli_uses_same_default_off_gate(
 
 def test_public_ingress_calls_gate_before_db_or_command_side_effects() -> None:
     jobs_source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
-    create_job_source = jobs_source[jobs_source.index("async def create_job(") :]
+    public_source = jobs_source[jobs_source.index("async def create_job(") :]
+    assert "await _create_job(" in public_source
+    create_job_source = jobs_source[jobs_source.index("async def _create_job(") :]
     assert create_job_source.index("require_molecular_dynamics_feature") < create_job_source.index(
         "_raise_if_workflow_launches_disabled"
     )
@@ -86,8 +88,9 @@ def test_public_ingress_calls_gate_before_db_or_command_side_effects() -> None:
 
     adapter_source = (API_ROOT / "routers" / "workflow_adapter.py").read_text(encoding="utf-8")
     launch_source = adapter_source[adapter_source.index("async def workflow_adapter_launch(") :]
+    assert launch_source.index("require_molecular_dynamics_feature") < launch_source.index("await session.execute(")
     assert launch_source.index("require_molecular_dynamics_feature") < launch_source.index(
-        "nextflow.launch_nextflow_job_detached("
+        "build_systemd_run_command("
     )
 
 

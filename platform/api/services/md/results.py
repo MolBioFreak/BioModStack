@@ -929,17 +929,3 @@ def summary(job: MDJobRecord) -> dict[str, Any]:
         "replicas": replica_summaries,
         "trajectory_playback": _trajectory_playback(inventory),
     }
-
-
-def build_analysis_work_items(job: MDJobRecord) -> dict[str, Any]:
-    root, aggregate, _inventory = _load_inventory(job, include_analysis=False)
-    items = []
-    for replica in aggregate["replicas"]:
-        index = int(replica["replica_index"])
-        manifest = root / "replicas" / f"replica_{index}" / "manifest.json"
-        items.append({
-            "schema": "bms.md.analysis-work-item.v1", "job_id": job.id, "replica_index": index,
-            "manifest": str(manifest), "manifest_sha256": _digest(manifest),
-            "state_authority": "source_contract_only_no_durable_md_analysis_table",
-        })
-    return {"schema": "bms.md.analysis-work-items.v1", "job_id": job.id, "items": items, "retryable": True}
