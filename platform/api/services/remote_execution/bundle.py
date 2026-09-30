@@ -24,7 +24,7 @@ from paths import get_code_root, get_container_dir, get_data_root, get_weights_r
 from services.result_contracts import resolve_result_contract
 
 from .contracts import RemoteExecutionEnvelope, RemoteFileRecord
-from .images import IMAGE_SELECTORS, resolve_image
+from .images import IMAGE_SELECTORS, resolve_image, image_reference
 
 
 class RemoteBundleError(RuntimeError):
@@ -391,6 +391,54 @@ def verify_selected_preparation_inputs(plan, observed=None):
             raise RemoteBundleError('Native preparation input changed or is missing: ' + path)
 
 
+def _published_runtime_records(source: Path, prefix: str, *, publication=None):
+    """Reuse declared shared assets only at their existing installation binding.
+
+    Attempt source/inputs and custom weight overrides retain their byte inventory.
+    """
+    from .hf_assets import published_asset_rows
+    from .images import image_reference
+    logical = prefix.removeprefix('runtime/')
+    if logical.startswith('weights/'):
+        expected = get_weights_root().resolve() / logical.removeprefix('weights/')
+        if source != expected:
+            return None
+        rows = published_asset_rows(logical, index=publication)
+    elif logical.startswith('containers/'):
+        name = logical.removeprefix('containers/')
+        path, digest = image_reference(name, get_container_dir().resolve())
+        if source != path.resolve():
+            if name not in IMAGE_SELECTORS:
+                return None
+            path, digest = image_reference(name, get_container_dir().resolve(),
+                {IMAGE_SELECTORS[name][0]: str(source)})
+            if source != path.resolve():
+                return None
+        rows = published_asset_rows(logical, index=publication)
+        if digest is not None:
+            rows = [r for r in rows or [] if r['sha256'] == digest]
+            if not rows:
+                info = path.stat(follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode):
+                    raise RemoteBundleError('Selected runtime image is not regular')
+                rows = [dict(name=logical, sha256=digest, size_bytes=info.st_size,
+                             mode=stat.S_IMODE(info.st_mode))]
+        elif rows and any(Path(r.get('source', str(path.resolve()))) != source for r in rows):
+            return None
+    else:
+        return None
+    if rows is None:
+        return None
+    return [RemoteFileRecord(relative_path=('runtime/' if prefix.startswith('runtime/') else '') + r['name'],
+        sha256=r['sha256'], size_bytes=r['size_bytes'], mode=r['mode'], role='runtime',
+        link_target=r.get('target')) for r in rows]
+
+
+def _runtime_records(source: Path, prefix: str, *, publication=None):
+    rows = _published_runtime_records(source, prefix, publication=publication)
+    return rows if rows is not None else _records_for_source(source, prefix, 'runtime')
+
+
 def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
                     include_support=False, native_invocation: NativeInvocation | None = None,
                     selected_plan: SelectedExecutionPlan | None = None,
@@ -449,8 +497,13 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
         relative = dependency.relative_path
         selected = params.get(dependency.selector) if dependency.selector else None
         if dependency.kind == 'image' and relative:
-            path = (resolve_image(relative, root, params) if relative in IMAGE_SELECTORS or not selected
-                    else Path(str(selected)).expanduser())
+            if relative in IMAGE_SELECTORS or not selected:
+                path, digest = image_reference(relative, root, params)
+                from .hf_assets import published_asset_rows
+                if digest is None and published_asset_rows('containers/' + relative) is None:
+                    path = resolve_image(relative, root, params)
+            else:
+                path = Path(str(selected)).expanduser()
         else:
             path = Path(str(selected)).expanduser() if selected else root / relative if relative else None
         if dependency.selector_subpath is not None:
@@ -860,7 +913,7 @@ def compile_remote_dependencies(
             # The default is inventoried/verified below; no override to compile.
             continue
         try:
-            selected = str(resolve_image(name, get_container_dir().resolve(), params))
+            selected = str(image_reference(name, get_container_dir().resolve(), params)[0])
         except (OSError, RuntimeError, ValueError, KeyError) as exc:
             raise RemoteBundleError(f"Selected runtime image is unavailable: {name}") from exc
         if (flag not in params and selected == str(get_container_dir().resolve() / name)):
@@ -1217,6 +1270,8 @@ def prepare_remote_bundle(
         runtime_paths.add(host_support.resolve())
         if effective_params.get("api_python"):
             runtime_paths.add(Path(effective_params["api_python"]).resolve())
+    from .hf_assets import publication_index
+    publication = publication_index() or {}
     for path, relative in runtime_assets:
         destination = f"{remote_runtime}/{relative}"
         source = path
@@ -1238,7 +1293,7 @@ def prepare_remote_bundle(
             source = _relocate_python_runtime(path, staging_root / "support-python", destination)
             lexical_runtime = Path(os.getenv("BMS_CM_API_RUNTIME_DIR", str(data_root / "runtime" / "cm-api-python")))
             runtime_path_map[str(lexical_runtime / "current")] = destination
-        recorded = _records_for_source(source, f"runtime/{relative}", "runtime")
+        recorded = _runtime_records(source, f"runtime/{relative}", publication=publication)
         (weight_records if relative.startswith("weights/") else runtime_records).extend(recorded)
         runtime_hashes.update({record.relative_path.removeprefix("runtime/"): record.sha256
                                for record in recorded if record.link_target is None})

@@ -65,7 +65,7 @@ async def test_native_subset_layouts_installed_once_and_warm_no_transfer(prepare
     p = prepared
     result = await cache.provision_cache(**p.kwargs)
     assert result['preparation'] == dict(source='cached', weight_layouts=6,
-        images='deferred_backend_unknown', backend=None)
+        images='not_requested', backend=None)
     root = Path(p.kwargs['connection'].remote_root) / 'cache/artifacts/v1'
     store = worker.Cache(root)
     digests = set()
@@ -106,35 +106,16 @@ async def test_archive_owner_called_once_with_bound_weights_not_mutated(prepared
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('backend', ['apptainer', 'udocker'])
-@pytest.mark.parametrize('damage', [None, 'sha256', 'backend', 'state'])
-async def test_image_preparation_identity_and_operation(prepared, monkeypatch, backend, damage):
+async def test_download_never_expands_images(prepared, monkeypatch, backend):
     p = prepared
     image = p.repo.parent / 'inert.sif'
     image.write_bytes(b'inert image, never executed')
     entry = CacheTransferArtifact(image, 'containers/inert.sif',
         hashlib.sha256(image.read_bytes()).hexdigest(), image.stat().st_size, 0o444, 'image')
-    original = cache.run_remote
-    requests = []
-    async def remote(connection, argv, input_bytes=None, **kwargs):
-        request = json.loads(input_bytes) if '-c' not in argv and input_bytes else {}
-        if request.get('action') == 'prepare_runtime_image':
-            requests.append(request)
-            response = dict(request['artifact'], backend=backend, state='ready',
-                            rootfs='/shared/rootfs' if backend == 'udocker' else None)
-            if damage:
-                response[damage] = 'wrong'
-            return SimpleNamespace(stdout=json.dumps(response))
-        return await original(connection, argv, input_bytes=input_bytes, **kwargs)
-    monkeypatch.setattr(cache, 'run_remote', remote)
-    kwargs = dict(p.kwargs, entries=[*p.kwargs['entries'], entry, entry], backend=backend)
-    if damage:
-        with pytest.raises(ValueError, match='image preparation identity mismatch'):
-            await cache.provision_cache(**kwargs)
-    else:
-        result = await cache.provision_cache(**kwargs)
-        assert result['preparation']['images'] == 'ready'
-    assert len(requests) == 1
-    assert requests[0]['operation_id'] == p.kwargs['operation_id']
+    result = await cache.provision_cache(**dict(p.kwargs,
+        entries=[*p.kwargs['entries'], entry, entry], backend=backend))
+    assert result['preparation']['images'] == 'not_requested'
+    assert not any(c['action'] == 'prepare_runtime_image' for c in p.calls)
 
 
 @pytest.mark.asyncio
@@ -250,7 +231,7 @@ async def test_link_layout_matches_job_mode_without_link_byte_transfer(prepared)
 
 
 @pytest.mark.asyncio
-async def test_cancel_during_remote_derivation_has_no_ready_return(prepared, monkeypatch):
+async def test_cancel_during_layout_publication_has_no_ready_return(prepared, monkeypatch):
     p = prepared
     started = asyncio.Event()
     cancelled = asyncio.Event()
@@ -260,7 +241,7 @@ async def test_cancel_during_remote_derivation_has_no_ready_return(prepared, mon
     original = cache.run_remote
     async def remote(connection, argv, input_bytes=None, **kwargs):
         request = json.loads(input_bytes) if '-c' not in argv and input_bytes else {}
-        if request.get('action') == 'prepare_runtime_image':
+        if request.get('action') == 'weights_install':
             started.set()
             try:
                 await asyncio.Future()
@@ -316,9 +297,9 @@ async def test_real_inert_image_unknown_backend_or_apptainer(prepared, backend):
     image = replace(p.kwargs['entries'][0], role='image', remote_destination='containers/inert.sif')
     result = await cache.provision_cache(**dict(p.kwargs,
         entries=[*p.kwargs['entries'], image], backend=backend))
-    assert result['preparation']['images'] == ('ready' if backend else 'deferred_backend_unknown')
+    assert result['preparation']['images'] == 'not_requested'
     requests = [c for c in p.calls if c['action'] == 'prepare_runtime_image']
-    assert len(requests) == (1 if backend else 0)
+    assert not requests
     root = Path(p.kwargs['connection'].remote_root)
     assert not list(root.rglob('.rootfs-*'))
 
@@ -347,3 +328,34 @@ async def test_changed_source_does_not_transfer(prepared):
     with pytest.raises(ValueError, match='source identity changed'):
         await cache.provision_cache(**dict(prepared.kwargs, source_identity=('a' * 40, 'b' * 40)))
     assert not prepared.uploads
+
+
+@pytest.mark.asyncio
+async def test_nonpack_weights_publish_actual_selected_layout_and_source(prepared):
+    p = prepared
+    subset = p.kwargs['entries'][:2]
+    result = await cache.provision_cache(**dict(p.kwargs, entries=subset,
+        selection=SimpleNamespace(kind='model', model_id='fixture')))
+    assert result['preparation']['weight_layouts'] == 1
+    assert result['preparation']['source'] == 'cached'
+    store = worker.Cache(Path(p.kwargs['connection'].remote_root) / 'cache/artifacts/v1')
+    assert store.weights(rows(subset))['state'] == 'ready'
+    assert len([c for c in p.calls if c['action'] == 'weights_install']) == 1
+    before = len(p.uploads)
+    p.calls.clear()
+    again = await cache.provision_cache(**dict(p.kwargs, entries=subset,
+        selection=SimpleNamespace(kind='model', model_id='fixture'), operation_id=str(uuid.uuid4())))
+    assert again['artifacts'] == result['artifacts']
+    assert len(p.uploads) == before
+    assert not any(c['action'] in {'weights_install', 'extract_source', 'prepare_runtime_image'} for c in p.calls)
+
+
+@pytest.mark.asyncio
+async def test_image_only_has_no_final_object_probe_or_source_build(prepared, monkeypatch):
+    from dataclasses import replace
+    entry = replace(prepared.kwargs['entries'][0], role='image', remote_destination='containers/inert.sif')
+    monkeypatch.setattr(cache, '_workflow_source_archive', lambda *args: pytest.fail('No source for image-only scope'))
+    result = await cache.provision_cache(**dict(prepared.kwargs, entries=[entry],
+        selection=SimpleNamespace(kind='image', model_id='fixture')))
+    assert isinstance(result, list) and len(result) == 1
+    assert len([c for c in prepared.calls if c['action'] == 'probe']) == 1

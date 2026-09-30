@@ -453,6 +453,7 @@ def test_metadata_only_runtime_projection_preserves_plan(roots, monkeypatch, mod
                      'runtime_data': roots['data']}
     # Image approval has separate tests; these leaves exercise the actual shared
     # metadata selection and provisioning projection without constructing argv.
+    monkeypatch.setattr(bundle, 'image_reference', lambda relative, root, params: (root/relative, None))
     monkeypatch.setattr(bundle, 'resolve_image', lambda relative, root, params: root/relative)
     params = {}
     for dependency in plan.dependencies:

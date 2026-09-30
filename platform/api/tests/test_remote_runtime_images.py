@@ -588,7 +588,10 @@ async def test_actual_job_compiler_no_original_prewarm_provision_and_repeated_ex
     assert not (roots['containers'] / 'protenix.sif').exists()
     assert not list((Path(target.remote_root) / 'cache/artifacts/v1/objects').rglob(image.sha256))
     assert not list((Path(target.remote_root) / 'cache/artifacts/v1/incoming').rglob('*sif'))
-    assert all(not p.is_file() for p in (Path(target.remote_root) / 'cache/artifacts/v1/incoming').rglob('*'))
+    # Selected-weight prewarm also publishes its authenticated layout request.
+    # It is metadata, not a retained incoming asset body.
+    assert all(not p.is_file() or p.name == '.bms-runtime-images.json'
+               for p in (Path(target.remote_root) / 'cache/artifacts/v1/incoming').rglob('*'))
     assert explicit.stat().st_nlink == 1
     assert hashlib.sha256(images[0].read_bytes()).hexdigest() == image.sha256
     # Corruption between staging and execution prevents the real child from running.
