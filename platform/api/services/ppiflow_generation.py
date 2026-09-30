@@ -63,11 +63,12 @@ def ppiflow_generation_inventory(mode: str) -> dict:
         for key in ('target_pdb', 'framework_pdb', 'antigen_chain', 'heavy_chain', 'specified_hotspots'):
             by_name[key].update(required=True, nullable=False,
                                 required_help='Required by the native antibody/nanobody generator; no inherited null value.')
-        by_name['light_chain'].update(
-            required=mode == 'antibody_binder', nullable=mode == 'nanobody_binder',
-            applicability=mode == 'antibody_binder',
-            required_help=('Required for the native antibody operation.' if mode == 'antibody_binder'
-                           else 'Inactive for heavy-only nanobody generation; must remain null.'))
+        if 'light_chain' in by_name:
+            by_name['light_chain'].update(
+                required=mode == 'antibody_binder', nullable=mode == 'nanobody_binder',
+                applicability=mode == 'antibody_binder',
+                required_help=('Required for the native antibody operation.' if mode == 'antibody_binder'
+                               else 'Inactive for heavy-only nanobody generation; must remain null.'))
     model = yaml.safe_load(MODEL_YAML.read_text())
     return {"schema_version": SCHEMA_VERSION, "mode": mode, "parameters": fields,
             "profile": model["native_profiles"][mode], "assets": selected_assets(mode),
@@ -76,6 +77,7 @@ def ppiflow_generation_inventory(mode: str) -> dict:
                 "global_seed": "No native global seed control; dataset_seed is not a global seed",
                 "antibody_retry_limit": 20 if mode != "protein_binder" else None,
                 "antibody_native_retention": "rmsd_framework < 1 and no backbone clash" if mode != "protein_binder" else None,
+                "light_chain": "inactive; heavy-only operation, no light-chain input" if mode == "nanobody_binder" else "required" if mode == "antibody_binder" else "not applicable",
                 "chain_case": "Native preprocessing uppercases structural dictionary keys; BMS does not rewrite requests",
             }}
 

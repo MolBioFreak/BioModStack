@@ -20,6 +20,7 @@ from test_bindcraft2_launch import setup_source, stub_compiler
 from test_bindcraft2_publication import campaign
 from test_binder_continuation import selected
 from test_binder_round_orchestration import fixture_root
+from test_project_workflow_setups import setup_store
 
 
 @pytest.mark.asyncio
@@ -81,8 +82,11 @@ def test_ppiflow_display_requiredness_does_not_change_normalizer(mode, tmp_path)
     else:
         for key in ('target_pdb', 'framework_pdb', 'antigen_chain', 'heavy_chain', 'specified_hotspots'):
             assert fields[key]['required'] and fields[key]['nullable'] is False
-        assert fields['light_chain']['required'] == (mode == 'antibody_binder')
-        assert fields['light_chain']['applicability'] == (mode == 'antibody_binder')
+        if mode == 'antibody_binder':
+            assert fields['light_chain']['required'] and fields['light_chain']['nullable'] is False
+        else:
+            assert 'light_chain' not in fields  # the mode excludes this input entirely
+            assert 'heavy-only' in ppiflow_generation_inventory(mode)['native_behavior']['light_chain']
         missing = {**requested, 'specified_hotspots': None}
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as rejected:
