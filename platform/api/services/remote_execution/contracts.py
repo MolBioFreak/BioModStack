@@ -222,7 +222,8 @@ class ProvisionPreview(StrictModel):
     artifacts: list[CachedArtifactReceipt]
     total_bytes: int = Field(ge=0)
     scientific_ready: Literal[False] = False
-    scope: Literal["managed_asset_activation"] = "managed_asset_activation"
+    # Historical previews remain readable; new previews promise file acquisition only.
+    scope: Literal["download_only", "managed_asset_activation"] = "download_only"
     destination: ProvisionDestination | None = None
     effective_params: dict[str, Any] | None = None
     plan_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)

@@ -39,7 +39,7 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
   return <section aria-label="Remote preload and activity" className="space-y-3 rounded-lg border border-[var(--border-primary)] p-3">
     <details onToggle={event => { if (event.currentTarget.open) setPreparationOpened(true); }}>
       <summary className="cursor-pointer rounded py-1 text-sm font-medium focus-visible:outline focus-visible:outline-2">
-        Prepare worker <span className="font-normal text-[var(--text-muted)]">— optional dependency downloads{preload ? ` · ${preload.phase}` : ''}</span>
+        Prepare worker <span className="font-normal text-[var(--text-muted)]">— optional dependency downloads{preload ? ` · ${preload.phase === 'source_download_ready' ? 'Downloads complete' : preload.phase}` : ''}</span>
       </summary>
       <div className="mt-3 space-y-3">
     {preparationOpened && <IndependentProvisionPanel target={target} onChanged={onChanged} />}
@@ -58,7 +58,7 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
     </details>
     {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
     {preload && <div role="status" aria-label="Preload progress" className="text-sm">
-      {preload.phase === 'source_download_ready' && <p>Source/download ready — not scientific Ready</p>}
+      {preload.phase === 'source_download_ready' && <p>Downloads complete</p>}
       <p>{preload.message}</p>
       {preload.artifact && <p className="break-all font-mono">{preload.artifact}</p>}
       <p className="text-xs text-[var(--text-muted)]">{preload.selection ? `${preload.selection.kind} ${provisionSelectionLabel(preload.selection)}` : `Recipe ${preload.job_id}`} · Source {preload.source_revision.slice(0, 12)} · Updated {preload.updated_at}</p>

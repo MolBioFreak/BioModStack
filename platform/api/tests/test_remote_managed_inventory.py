@@ -79,8 +79,7 @@ async def provision(client, controller, kind='model'):
     response = await client.post('/vast:1/provision/preview', json=selection)
     assert response.status_code == 200, response.text
     preview = response.json()
-    # Historical strict payloads remain readable during the scope migration.
-    assert preview['scope'] in {'managed_asset_activation', 'selected_asset_download'}
+    assert preview['scope'] == 'download_only'
     response = await client.post('/vast:1/provision', json=selection | {'preview_sha256': preview['preview_sha256']})
     assert response.status_code == 202, response.text
     await settle(controller)

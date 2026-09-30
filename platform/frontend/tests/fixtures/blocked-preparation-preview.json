@@ -22,7 +22,7 @@
   "artifacts": [],
   "total_bytes": 0,
   "scientific_ready": false,
-  "scope": "managed_asset_activation",
+  "scope": "download_only",
   "destination": {
     "target_id": "vast:1",
     "remote_root": "/opt/biomodstack"

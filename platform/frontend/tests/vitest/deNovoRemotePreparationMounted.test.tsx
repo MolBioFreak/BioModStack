@@ -18,7 +18,7 @@ const family = DE_NOVO_PRELOAD_SELECTION;
 const ready: ExecutionTarget = { id: 'vast:123', provider: 'vast', provider_instance_id: '123', name: 'Worker', state: 'ready', active: true, host: 'host', port: 22, username: 'root', remote_root: '/opt/bms', host_key_sha256: 'c'.repeat(64), capabilities: {}, pricing: {}, last_error: null, last_seen_at: null, activated_at: null };
 const other = { ...ready, id: 'vast:456', name: 'Other', provider_instance_id: '456' };
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
-const preview = (selection: ProvisionSelection) => ({ selection, artifacts: [], total_bytes: 0, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'managed_asset_activation' });
+const preview = (selection: ProvisionSelection) => ({ selection, artifacts: [], total_bytes: 0, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'download_only' });
 const originalAdapter = api.defaults.adapter;
 let root: Root;
 let host: HTMLDivElement;

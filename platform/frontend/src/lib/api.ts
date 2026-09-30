@@ -521,7 +521,7 @@ export interface ProvisionPreview {
     artifacts: CachedArtifactReceipt[];
     total_bytes: number;
     scientific_ready: false;
-    scope: 'managed_asset_activation';
+    scope: 'download_only' | 'managed_asset_activation';
 }
 
 export type ProvisionRequest = ProvisionSelection & {

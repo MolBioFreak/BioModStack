@@ -23,7 +23,7 @@ vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: () => n
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
 const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }, { kind: 'workflow_pack', workflow_id: 'structure_prediction' }, { kind: 'workflow_pack', workflow_id: 'antibody_denovo' }];
 const artifacts = [{ name: 'runtime/protenix.sif', sha256: 'a'.repeat(64), size_bytes: 1234 }];
-const preview = (selection: ProvisionSelection): ProvisionPreview => ({ selection, artifacts, total_bytes: 1234, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'managed_asset_activation' });
+const preview = (selection: ProvisionSelection): ProvisionPreview => ({ selection, artifacts, total_bytes: 1234, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'download_only' });
 const ready: ExecutionTarget = { id: 'vast:123', provider: 'vast', provider_instance_id: '123', name: 'Worker', state: 'ready', active: true, host: 'host', port: 22, username: 'root', remote_root: '/opt/bms', host_key_sha256: 'c'.repeat(64), capabilities: {}, pricing: {}, last_error: null, last_seen_at: null, activated_at: null };
 const adapter = api.defaults.adapter;
 let container: HTMLDivElement;
@@ -61,6 +61,7 @@ afterEach(async () => { await act(async () => root.unmount()); client.clear(); c
 
 it('prepares the entire workflow from one explicit click using its fresh digest, without a Job', async () => {
   await render();
+  const invalidate = vi.spyOn(client, 'invalidateQueries');
   await select('Preparation workflow', 'structure_prediction');
   expect(posts).toEqual([]);
   expect(button('Prepare entire workflow')).toBeTruthy();
@@ -71,6 +72,8 @@ it('prepares the entire workflow from one explicit click using its fresh digest,
     { url: '/api/execution-targets/vast%3A123/provision', body: { kind: 'workflow_pack', workflow_id: 'structure_prediction', preview_sha256: 'b'.repeat(64) } },
   ]);
   expect(button('Prepare entire workflow').disabled).toBe(true);
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(posts.some(post => post.url.endsWith('/runtime-inventory/refresh'))).toBe(false);
   await act(async () => { await client.invalidateQueries(); await settle(); });
   expect(posts).toHaveLength(2);
 });
@@ -266,9 +269,9 @@ it('mounts in the real worker panel without Jobs; previews exact bytes then star
   expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('1,234 bytes');
   expect(container.textContent).toContain(artifacts[0].name);
   expect(container.textContent).toContain(artifacts[0].sha256);
-  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('additional installed copy');
-  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('retains prior release generations');
-  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('not a missing-byte transfer estimate');
+  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).not.toContain('additional installed copy');
+  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).not.toContain('retains prior release generations');
+  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('Reuses cached assets and downloads missing files');
   expect(container.textContent).toContain('b'.repeat(64));
   await click('Start provision', true);
   expect(posts).toHaveLength(2);
@@ -320,7 +323,17 @@ it('discards a late preview after selection change and requires explicit preview
   expect(button('Start provision').disabled).toBe(true);
 });
 
-it('rejects the retired cache-only preview scope before enabling provision', async () => {
+it.each(['download_only', 'managed_asset_activation'] as const)('accepts %s preview wire compatibility without promising activation', async scope => {
+  await render(); await select('Provision model', 'protenix');
+  vi.spyOn(api, 'post').mockResolvedValueOnce(response(JSON.parse(JSON.stringify({ ...preview(catalog[0]), scope }))));
+  await click('Preview artifact downloads');
+  expect(button('Start provision').disabled).toBe(false);
+  expect(container.textContent).toContain('no separate managed installation or native runtime probe');
+  await click('Start provision');
+  expect(posts).toEqual([{ url: '/api/execution-targets/vast%3A123/provision', body: { ...catalog[0], preview_sha256: 'b'.repeat(64) } }]);
+});
+
+it('rejects unknown preview scopes before enabling provision', async () => {
   await render(); await select('Provision model', 'protenix');
   vi.spyOn(api, 'post').mockResolvedValueOnce(response({ ...preview(catalog[0]), scope: 'cache_download_only' }));
   await click('Preview artifact downloads');
@@ -337,7 +350,7 @@ it('restores only the persisted last receipt and displays stale/failed status wi
   await act(async () => root.render(null)); await render();
   expect(container.textContent).toContain('2026-01-01T00:00:00Z');
   target = { ...target, artifact_inventory: { ...target.artifact_inventory!, state: 'stale' } }; await render();
-  expect(container.textContent).toContain('Stale cache observation');
+  expect(container.textContent).toContain('Historical cache observation');
   expect(posts).toEqual([]);
 });
 
@@ -523,8 +536,8 @@ it('leads with the running preparation, its verified bytes and the stop control'
       { name: 'weights/protenix.bin', sha256: 'd'.repeat(64), size_bytes: 2000, state: 'transferring' }] };
   await render();
   expect(container.textContent).toContain('Downloading assets');
-  expect(container.textContent).toContain('1 of 2 artifacts verified');
-  expect(container.textContent).toContain('1,234 bytes verified of 3,234 bytes declared');
+  expect(container.textContent).toContain('1 of 2 artifacts complete or cached');
+  expect(container.textContent).toContain('1,234 bytes complete or cached of 3,234 bytes declared');
   expect(container.textContent).toContain('Transfer progress and rate are not reported');
   expect(container.textContent).toContain('2m 0s elapsed');
   clock.mockReturnValue(Date.parse('2026-09-20T23:57:14Z'));
@@ -562,7 +575,8 @@ it('pairs a stale installed observation with the control that refreshes it', asy
   expect(stale.nextElementSibling?.textContent).toContain('Refresh installed observation');
 });
 
-it('refreshes the target and installed evidence once as a running preparation settles', async () => {
+it('does not refresh or invalidate installed inventory as downloads settle or complete', async () => {
+  const invalidate = vi.spyOn(client, 'invalidateQueries');
   target.preload = { operation_id: 'settle1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
     request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: artifacts[0].name, message: 'Downloading artifact from Hugging Face',
     started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z',
@@ -572,6 +586,13 @@ it('refreshes the target and installed evidence once as a running preparation se
   target = { ...target, preload: { ...target.preload!, phase: 'verifying', message: 'Artifact cache identities verified',
     artifact_progress: [{ ...artifacts[0], state: 'verified' }] } };
   await render();
-  expect(changed).toHaveBeenCalledTimes(1);
-  expect(posts.filter(post => post.url.includes('/provision'))).toEqual([]);
+  expect(changed).not.toHaveBeenCalled();
+  target = { ...target, preload: { ...target.preload!, phase: 'source_download_ready' } };
+  await render(); await render();
+  expect(container.textContent).toContain('Downloads complete');
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(changed).not.toHaveBeenCalled();
+  // Saved GET projections may remount; the explicit audit POST never runs.
+  expect(posts.some(post => post.url.endsWith('/runtime-inventory/refresh'))).toBe(false);
+  expect(posts).toEqual([]);
 });
