@@ -8,9 +8,10 @@ import json
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, overload
 
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import Integer, case, func, or_, select, update, text
+from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import ExecutionTarget, Job
@@ -19,7 +20,8 @@ from .contracts import (
     DiscoveredExecutionTarget,
     ExecutionTargetActivateRequest,
     ExecutionTargetInventoryResponse,
-    ExecutionTargetResponse,
+    ExecutionTargetResponse, ExecutionTargetDetails, ArtifactInventoryStatus,
+    CachedArtifactPage, PreloadArtifactPage, PreloadStatus,
 )
 from .transport import (
     BOOTSTRAP_ERRORS,
@@ -104,7 +106,7 @@ def target_id(provider: str, provider_instance_id: str) -> str:
     return f"{provider}:{provider_instance_id}"
 
 
-def observed_artifact_inventory(target):
+def observed_artifact_inventory(target, *, compact=False):
     """Last explicit verified download, not discovery of all installed science."""
     import json
     from datetime import timezone
@@ -118,9 +120,12 @@ def observed_artifact_inventory(target):
         return None
     raw = dict(stored)
     binding = raw.pop("endpoint_sha256", None)
+    if compact:
+        raw["artifact_count"] = raw.get("artifact_count", len(raw.get("artifacts", [])))
+        raw.pop("artifacts", None)
     identity = (target.host, target.port, target.username, target.remote_root, target.host_key_sha256)
     try:
-        observation = ObservedArtifactInventory.model_validate(raw)
+        observation = (ArtifactInventoryStatus if compact else ObservedArtifactInventory).model_validate(raw)
     except (ValidationError, TypeError, ValueError):
         # Optional historical observations must not break otherwise healthy
         # target listings. GET neither repairs metadata nor probes the worker.
@@ -143,11 +148,25 @@ def observed_artifact_inventory(target):
     return observation
 
 
-def _target_response(target: ExecutionTarget) -> ExecutionTargetResponse:
-    return ExecutionTargetResponse(
-        artifact_inventory=observed_artifact_inventory(target),
+@overload
+def _target_response(target: Any, *, details: Literal[False] = False) -> ExecutionTargetResponse: ...
+
+
+@overload
+def _target_response(target: Any, *, details: Literal[True]) -> ExecutionTargetDetails: ...
+
+
+def _target_response(target: Any, *, details: bool = False) -> ExecutionTargetResponse | ExecutionTargetDetails:
+    metadata = target.provider_metadata or {}
+    preload = metadata.get("preload")
+    if not details and isinstance(preload, dict):
+        preload = {key: value for key, value in preload.items() if key not in {"artifacts", "artifact_progress"}}
+        preload["artifact_summary"] = metadata.get("preload_artifact_summary") or artifact_summary(metadata.get("preload", {}))
+        preload["cached_artifact_count"] = metadata.get("preload_cached_artifact_count", len(metadata.get("preload", {}).get("artifacts", [])))
+    return (ExecutionTargetDetails if details else ExecutionTargetResponse).model_validate(dict(
+        artifact_inventory=observed_artifact_inventory(target, compact=not details),
         setup=(target.provider_metadata or {}).get("setup"),
-        preload=(target.provider_metadata or {}).get("preload"),
+        preload=preload,
         progress=(target.provider_metadata or {}).get("progress") if target.leased_job_id else None,
         id=str(target.id),
         provider="vast",
@@ -163,7 +182,7 @@ def _target_response(target: ExecutionTarget) -> ExecutionTargetResponse:
         username=target.username,
         remote_root=str(target.remote_root),
         host_key_sha256=target.host_key_sha256,
-        capabilities={**dict(target.capabilities or {}), "scheduling": {
+        capabilities={**(dict(target.capabilities or {}) if details else compact_capabilities(target.capabilities)), "scheduling": {
             "policy": "exclusive_target", "max_concurrent_root_attempts": 1,
             "new_work_ready": target_eligible(target) and not target.leased_job_id,
             "inventory_fresh": inventory_fresh(target),
@@ -175,7 +194,202 @@ def _target_response(target: ExecutionTarget) -> ExecutionTargetResponse:
         activated_at=target.activated_at,
         created_at=target.created_at,
         updated_at=target.updated_at,
-    )
+    ))
+
+
+# Only identity and runtime observations belong in the routine status transport.
+# Full managed manifests and receipt collections remain authoritative in the DB.
+STATUS_CAPABILITY_KEYS = (
+    "gpu_name", "gpu_count", "gpu_vram_mb", "provider_verified",
+    "runner_sha256", "nextflow_launcher_sha256", "container_backend", "critical_runtime_binding",
+)
+STATUS_READINESS_KEYS = (
+    "architecture", "free_bytes", "gpus", "cuda_container_verified", "container_qualification",
+    "python", "nextflow", "apptainer", "udocker", "container_backend",
+    "cuda", "cuda_version", "gpu_count", "gpu_name", "gpu_vram_mb",
+    "runner_sha256", "nextflow_launcher_sha256",
+)
+
+
+STATUS_RUNTIME_KEYS = ("state", "release_sha256", "source_revision", "source_tree",
+                       "bounded_readiness", "readiness_scope")
+
+
+def compact_capabilities(raw):
+    raw = raw if isinstance(raw, dict) else {}
+    result = {key: raw[key] for key in STATUS_CAPABILITY_KEYS if key in raw}
+    readiness = raw.get("readiness")
+    if isinstance(readiness, dict):
+        result["readiness"] = {key: readiness[key] for key in STATUS_READINESS_KEYS
+                               if key in readiness and (key == "gpus" or not isinstance(readiness[key], (dict, list)))}
+    runtime = raw.get("critical_runtime")
+    if isinstance(runtime, dict):
+        observed = {key: runtime[key] for key in STATUS_RUNTIME_KEYS if key in runtime}
+        if observed:
+            result["critical_runtime"] = observed
+    return result
+
+
+def artifact_summary(preload):
+    """Same operation-local denominator as the retained progress collection.
+
+    Publication can aggregate typed rows without dumping a second full inventory.
+    """
+    def field(row, key, default=None):
+        return row.get(key, default) if isinstance(row, dict) else getattr(row, key, default)
+    activity = field(preload, "artifact_progress") or []
+    rows = activity or field(preload, "artifacts") or []
+    total_bytes = verified_count = verified_bytes = 0
+    for row in rows:
+        size = cast(int, field(row, "size_bytes"))
+        total_bytes += size
+        if not activity or field(row, "state") == "verified":
+            verified_count += 1
+            verified_bytes += size
+    return dict(total_count=len(rows), verified_count=verified_count,
+                total_bytes=total_bytes, verified_bytes=verified_bytes)
+
+
+def _json_object(column, keys, prefix=""):
+    args = []
+    for key in keys:
+        path = f"$.{prefix}{key}"
+        # json_extract alone turns JSON booleans into SQLite 0/1. Preserve the
+        # original scalar wire types, especially provider/readiness observations.
+        value = case((func.json_type(column, path) == "true", func.json("true")),
+                     (func.json_type(column, path) == "false", func.json("false")),
+                     else_=func.json_extract(column, path))
+        args.extend((key, value))
+    return func.json_object(*args)
+
+
+def status_query(*, include_observations=True):
+    """SQLite projects scalar metadata before any Python JSON/ORM decoding.
+
+    New publications carry exact aggregates. Legacy rows use SQL JSON aggregates,
+    never full receipt decoding, validation, a migration or a status-time write.
+    """
+    table = ExecutionTarget.__table__
+    columns = [column for column in table.c if column.name not in
+               {"capabilities", "provider_metadata"}]
+    metadata = ExecutionTarget.provider_metadata
+    preload = case((func.json_type(metadata, "$.preload") == "object",
+        _json_object(metadata, (key for key in PreloadStatus.model_fields
+                               if key not in {"artifact_summary", "cached_artifact_count"}), "preload.")))
+    inventory = case((func.json_type(metadata, "$.artifact_inventory") == "object",
+        _json_object(metadata, (*[key for key in ArtifactInventoryStatus.model_fields if key != "artifact_count"],
+                               "endpoint_sha256"), "artifact_inventory.")))
+    # COALESCE is lazy in SQLite: current publications do not enumerate receipts.
+    summary = func.coalesce(func.json_extract(metadata, "$.preload_artifact_summary"), text("""
+        (SELECT json_object('total_count', count(*),
+            'verified_count', coalesce(sum(CASE WHEN json_extract(value, '$.state') = 'verified'
+                OR path = '$.preload.artifacts' THEN 1 ELSE 0 END), 0),
+            'total_bytes', coalesce(sum(json_extract(value, '$.size_bytes')), 0),
+            'verified_bytes', coalesce(sum(CASE WHEN json_extract(value, '$.state') = 'verified'
+                OR path = '$.preload.artifacts'
+                THEN json_extract(value, '$.size_bytes') ELSE 0 END), 0))
+         FROM json_each(execution_targets.provider_metadata,
+            CASE WHEN coalesce(json_array_length(execution_targets.provider_metadata, '$.preload.artifact_progress'), 0) > 0
+            THEN '$.preload.artifact_progress' ELSE '$.preload.artifacts' END))
+    """))
+    capabilities = _json_object(ExecutionTarget.capabilities, STATUS_CAPABILITY_KEYS)
+    readiness = _json_object(ExecutionTarget.capabilities, STATUS_READINESS_KEYS, "readiness.")
+    runtime = _json_object(ExecutionTarget.capabilities, STATUS_RUNTIME_KEYS, "critical_runtime.")
+    columns.extend((capabilities.label("status_capabilities"), readiness.label("status_readiness"),
+                    runtime.label("status_runtime"),
+                    _json_object(metadata, ("inventory", "setup", "attachment", "progress")
+                                 if include_observations else ("inventory", "setup", "attachment")).label("status_metadata")))
+    if include_observations:
+        columns.extend((preload.label("status_preload"), inventory.label("status_inventory"), summary.label("status_summary"),
+            func.coalesce(func.json_extract(metadata, "$.preload_cached_artifact_count"),
+                          func.json_array_length(metadata, "$.preload.artifacts")).label("cached_count"),
+            func.json_array_length(metadata, "$.artifact_inventory.artifacts").label("inventory_count")))
+    # Sampling does not emit target status; it needs only endpoint/runtime identity
+    # and the existing telemetry-eligibility evidence, never legacy aggregates.
+    return select(*columns)
+
+
+def _status_row(row):
+    value = dict(row)
+    metadata = json.loads(value.pop("status_metadata"))
+    # json_object emits null for absent keys; preserve legacy attachment absence.
+    metadata = {key: item for key, item in metadata.items() if item is not None}
+    preload = value.pop("status_preload", None)
+    inventory = value.pop("status_inventory", None)
+    summary = value.pop("status_summary", None)
+    if summary is not None:
+        metadata["preload_artifact_summary"] = json.loads(summary)
+        metadata["preload_cached_artifact_count"] = value.pop("cached_count") or 0
+    count = value.pop("inventory_count", 0) or 0
+    if preload:
+        metadata["preload"] = {key: item for key, item in json.loads(preload).items() if item is not None}
+    if inventory:
+        observed = {key: item for key, item in json.loads(inventory).items() if item is not None}
+        if isinstance(observed, dict):
+            metadata["artifact_inventory"] = {**observed, "artifact_count": count}
+    capabilities = json.loads(value.pop("status_capabilities"))
+    capabilities = {key: item for key, item in capabilities.items() if item is not None}
+    readiness = json.loads(value.pop("status_readiness"))
+    readiness = {key: item for key, item in readiness.items() if item is not None}
+    if readiness:
+        capabilities["readiness"] = readiness
+    runtime = json.loads(value.pop("status_runtime"))
+    runtime = {key: item for key, item in runtime.items() if item is not None}
+    if runtime:
+        capabilities["critical_runtime"] = runtime
+    return SimpleNamespace(**value, provider_metadata=metadata, capabilities=capabilities)
+
+
+async def _status_rows(session, *, identifier=None, order=False):
+    query = status_query()
+    if identifier is not None:
+        query = query.where(ExecutionTarget.id == identifier)
+    if order:
+        query = query.where(or_(ExecutionTarget.active.is_(True), ExecutionTarget.leased_job_id.is_not(None),
+                                ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True)))
+        query = query.order_by(ExecutionTarget.active.desc(), ExecutionTarget.updated_at.desc())
+    return [_status_row(row) for row in (await session.execute(query)).mappings()]
+
+
+async def target_status(session, identifier):
+    rows = await _status_rows(session, identifier=identifier)
+    if not rows:
+        raise ExecutionTargetError("Execution target does not exist")
+    return _target_response(rows[0])
+
+
+async def artifact_page(session, identifier, *, offset=0, limit=100, operation_id=None, collection="cached"):
+    """Page the retained current operation, in publication order, in one snapshot."""
+    if offset < 0 or not 1 <= limit <= 250 or collection not in {"progress", "cached"}:
+        raise ExecutionTargetError("Invalid artifact page bounds or collection")
+    is_preload = operation_id is not None
+    prefix = "$.preload" if is_preload else "$.artifact_inventory"
+    path = prefix + (".artifact_progress" if is_preload and collection == "progress" else ".artifacts")
+    # A bounded correlated subquery never returns the complete collection to Python.
+    members = func.json_each(ExecutionTarget.provider_metadata, path).table_valued("key", "value")
+    page = (select(members.c.value).order_by(members.c.key.cast(Integer)).limit(limit).offset(offset)
+            .correlate(ExecutionTarget).subquery())
+    items = (select(func.coalesce(func.json_group_array(func.json(page.c.value)), "[]"))
+             .correlate(ExecutionTarget).scalar_subquery())
+    query = select(items.label("items"),
+        func.coalesce(func.json_array_length(ExecutionTarget.provider_metadata, path), 0).label("total_count"),
+        func.json_extract(ExecutionTarget.provider_metadata, prefix + ".operation_id").label("operation_id"),
+        func.coalesce(func.json_extract(ExecutionTarget.provider_metadata, "$.preload.sequence"), 0).label("sequence")
+        ).where(ExecutionTarget.id == identifier)
+    row = (await session.execute(query)).mappings().first()
+    if row is None:
+        raise ExecutionTargetError("Execution target does not exist")
+    if is_preload and row["operation_id"] != operation_id:
+        raise ExecutionTargetError("Preload operation does not exist")
+    value = dict(items=json.loads(row["items"]), total_count=row["total_count"], offset=offset,
+                 limit=limit, operation_id=row["operation_id"])
+    if is_preload:
+        value["sequence"] = row["sequence"]
+    from pydantic import ValidationError
+    try:
+        return (PreloadArtifactPage if is_preload else CachedArtifactPage).model_validate(value)
+    except ValidationError as exc:
+        raise ExecutionTargetError("Stored artifact page is invalid") from exc
 
 
 def _pricing(instance: DiscoveredExecutionTarget) -> dict[str, Any]:
@@ -206,16 +420,10 @@ def _optional_float(value: str) -> float | None:
 
 
 async def list_targets(session: AsyncSession) -> list[ExecutionTargetResponse]:
-    rows = (
-        await session.execute(
-            select(ExecutionTarget).order_by(
-                ExecutionTarget.active.desc(),
-                ExecutionTarget.updated_at.desc(),
-            )
-        )
-    ).scalars().all()
+    rows = await _status_rows(session, order=True)
+    any_row = bool(rows) or (await session.scalar(select(ExecutionTarget.id).limit(1))) is not None
     if (
-        not rows and (_empty_inventory_checked_at is None or
+        not any_row and (_empty_inventory_checked_at is None or
         (datetime.utcnow() - _empty_inventory_checked_at).total_seconds() > INVENTORY_MAX_AGE_SECONDS)
     ):
         raise ExecutionTargetError("Vast inventory is unknown or expired; placement is unavailable")
@@ -996,13 +1204,11 @@ async def active_remote_telemetry(
     session: AsyncSession, since: str | None = None,
     execution_target_id: str | None = None,
 ) -> dict[str, Any]:
-    query = select(ExecutionTarget).where(
-        ExecutionTarget.active.is_(True),
-    )
+    query = status_query().where(ExecutionTarget.active.is_(True))
     if execution_target_id is not None:
         query = query.where(ExecutionTarget.id == execution_target_id)
     # Preserve the single-worker API, but never choose an arbitrary fleet member.
-    candidates = (await session.execute(query.limit(2))).scalars().all()
+    candidates = [_status_row(row) for row in (await session.execute(query.limit(2))).mappings()]
     target = candidates[0] if len(candidates) == 1 else None
     from .telemetry import remote_telemetry
     value = remote_telemetry.read(target, since)

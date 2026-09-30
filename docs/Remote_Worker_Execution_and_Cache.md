@@ -111,6 +111,32 @@ Remote coverage belongs to the selected native execution plan and its actual pro
 
 A pack describes reusable assets, not a new scientific execution route. Structure and complex prediction and Fold-CP retain their existing compiler, stage selection, result publication and remote placement behavior. Other workflow families retain their own configured preparation and execution contracts; the Structure pack does not claim their asset coverage or enable them. Verify actual native local/remote execution separately from metadata, fixture installs, or menu availability.
 
+## Worker status and artifact detail
+
+Routine `GET /api/execution-targets` reads return compact worker status, not
+per-file manifests. Target mutation responses and telemetry's embedded target use
+the same status contract. Availability, setup, scheduling, operation identity,
+phase, recovery/cancellation state and the frozen provision selection remain
+visible. Polling intervals and execution behavior are unchanged.
+
+`preload.artifact_summary` contains `total_count`, `verified_count`, `total_bytes`
+and `verified_bytes`; `cached_artifact_count` counts retained cache receipts.
+`artifact_inventory.artifact_count` accompanies the existing observation identity
+and state. These figures describe the recorded operation/phase, not whole-workflow
+scientific readiness or a new launch prerequisite. Full authoritative records
+remain stored at their existing owners.
+
+Artifact disclosures fetch one page only when opened. Read
+`/{id}/artifact-inventory/artifacts?offset=0&limit=100` for the observed receipts,
+or `/{id}/preload/{operation_id}/artifacts?collection=progress&offset=0&limit=100`
+for operation-local progress; `collection=cached` reads its cache receipts.
+These paths are relative to `/api/execution-targets`. Pages return `items`,
+`total_count`, `offset`, `limit` and `operation_id`; preload pages also report
+`sequence`. The default page size is 100 and the maximum is 250. Explicit
+`/{id}/details` and the existing `/{id}/artifact-inventory` read retain full detail
+for clients that deliberately request it. None of these reads starts preparation,
+refreshes an integrity audit, changes approval, or transfers scientific results.
+
 ## Visible lifecycle
 
 Keep provider presence, attachment, cache preparation, scientific execution and result retrieval separate:

@@ -84,6 +84,7 @@ export default defineConfig({
             './tests/vitest/remoteTelemetryHistory.test.tsx',
             './tests/vitest/fleetTelemetryMounted.test.tsx',
             './tests/vitest/dashboardTelemetryScopes.test.tsx',
+            './tests/vitest/compactExecutionTargetMounted.test.tsx',
             './tests/vitest/independentProvisionMounted.test.tsx',
             './tests/vitest/managedRuntimeInventoryMounted.test.tsx',
             './tests/vitest/molecularDynamicsGen2Mounted.test.tsx',

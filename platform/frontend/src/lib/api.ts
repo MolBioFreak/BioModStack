@@ -532,21 +532,36 @@ export interface ObservedArtifactInventory {
     operation_id: string;
     selection: ProvisionSelection;
     observed_at: string;
-    artifacts: CachedArtifactReceipt[];
+    artifact_count: number;
     scope: 'last_independent_provision';
     state: 'download_verified' | 'stale';
     scientific_ready: false;
 }
 
+export type PreloadArtifactReceipt = CachedArtifactReceipt & { state: 'pending' | 'transferring' | 'verifying' | 'verified' | 'interrupted' };
+export interface ArtifactSummary {
+    total_count: number;
+    verified_count: number;
+    total_bytes: number;
+    verified_bytes: number;
+}
+export interface ArtifactPage<T = CachedArtifactReceipt> {
+    items: T[];
+    total_count: number;
+    offset: number;
+    limit: number;
+    operation_id: string | null;
+    sequence?: number;
+}
 export interface RemotePreloadProgress {
-    artifact_progress?: Array<CachedArtifactReceipt & { state: 'pending' | 'transferring' | 'verifying' | 'verified' | 'interrupted' }>;
+    artifact_summary: ArtifactSummary;
+    cached_artifact_count: number;
     sequence?: number;
     cancel_requested?: boolean;
     recovery_required?: boolean;
     operation_id: string;
     job_id?: string | null;
     selection?: ProvisionSelection | null;
-    artifacts?: CachedArtifactReceipt[];
     source_revision: string;
     source_tree: string;
     request_sha256: string;
@@ -733,6 +748,12 @@ export const refreshExecutionTargetRuntimeInventory = async (targetId: string): 
 
 export const fetchExecutionTargetArtifactInventory = async (targetId: string): Promise<ObservedArtifactInventory | null> =>
     (await api.get<ObservedArtifactInventory | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/artifact-inventory`)).data;
+
+export const fetchExecutionTargetInventoryArtifacts = async (targetId: string, offset = 0, signal?: AbortSignal): Promise<ArtifactPage> =>
+    (await api.get<ArtifactPage>(`/api/execution-targets/${encodeURIComponent(targetId)}/artifact-inventory/artifacts`, { params: { offset, limit: 100 }, signal })).data;
+
+export const fetchExecutionTargetPreloadArtifacts = async (targetId: string, operationId: string, collection: 'progress' | 'cached', offset = 0, signal?: AbortSignal): Promise<ArtifactPage<PreloadArtifactReceipt | CachedArtifactReceipt>> =>
+    (await api.get<ArtifactPage<PreloadArtifactReceipt | CachedArtifactReceipt>>(`/api/execution-targets/${encodeURIComponent(targetId)}/preload/${encodeURIComponent(operationId)}/artifacts`, { params: { collection, offset, limit: 100 }, signal })).data;
 
 export const fetchExecutionTargets = () =>
     api.get<ExecutionTarget[]>('/api/execution-targets');

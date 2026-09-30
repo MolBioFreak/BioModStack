@@ -555,7 +555,11 @@ async def test_cancel_retains_artifact_evidence_and_blocks_until_quiescent(store
         assert response.preload.recovery_required is (not quiet)
         assert response.preload.cancel_requested
         assert response.preload.sequence >= 3
-        assert [row.state for row in response.preload.artifact_progress] == ['verified', 'interrupted']
+        assert response.preload.artifact_summary.model_dump() == dict(
+            total_count=2, verified_count=1, total_bytes=11, verified_bytes=4)
+        from services.remote_execution.targets import artifact_page
+        page = await artifact_page(session, 'vast:1', operation_id=operation, collection='progress')
+        assert [row.state for row in page.items] == ['verified', 'interrupted']
         if not quiet:
             with pytest.raises(ExecutionTargetError):
                 await controller.start(session, 'vast:1', PreloadRequest(job_id='recipe'))

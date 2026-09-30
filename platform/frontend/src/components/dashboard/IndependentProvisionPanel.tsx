@@ -1,4 +1,5 @@
 import { ArtifactDetails } from './ArtifactDetails';
+import { PagedArtifactDetails } from './PagedArtifactDetails';
 import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLauncherTemplates } from '../../lib/launcherCatalog';
 import { useEffect, useRef, useState } from 'react';
 import { ManagedRuntimeInventoryPanel } from './ManagedRuntimeInventoryPanel';
@@ -30,9 +31,16 @@ const PHASE_LABELS: Record<string, string> = {
   cancelled: 'Cancelled',
   source_download_ready: 'Downloads complete',
 };
-const ARTIFACT_STATE_LABELS: Record<string, string> = {
-  pending: 'queued', transferring: 'downloading', verifying: 'publishing', verified: 'complete or cached', interrupted: 'interrupted',
-};
+// Runtime identity already exposed by the attachment owner; never bind a full manifest.
+function capabilityIdentity(target: ExecutionTarget) {
+  const binding = target.capabilities.critical_runtime_binding;
+  const runtime = target.capabilities.critical_runtime;
+  const runtimeIdentity = runtime && typeof runtime === 'object' && !Array.isArray(runtime)
+    ? Object.fromEntries(Object.entries(runtime).filter(([key]) => key !== 'artifacts')) : runtime;
+  return [target.capabilities.gpu_name, target.capabilities.gpu_count, target.capabilities.gpu_vram_mb,
+    target.capabilities.provider_verified, target.capabilities.runner_sha256, target.capabilities.nextflow_launcher_sha256,
+    target.capabilities.container_backend, binding, runtimeIdentity, target.capabilities.readiness, target.capabilities.scheduling];
+}
 // Strictly accept the download contract and its historical wire spelling.
 function isDownloadPreview(scope: unknown) {
   return scope === 'download_only' || scope === 'managed_asset_activation';
@@ -70,7 +78,7 @@ export function IndependentProvisionPanel(props: Props) {
   // Backend digest admission binds the selected declarations and destination.
   const binding = JSON.stringify([target.id, target.provider_instance_id, target.host, target.port,
     target.username, target.remote_root, target.host_key_sha256, target.active, target.state,
-    target.activated_at, target.capabilities, target.preload?.operation_id,
+    target.activated_at, capabilityIdentity(target), target.preload?.operation_id,
     target.preload?.source_revision, target.preload?.source_tree, target.preload?.phase, target.preload?.recovery_required, target.progress?.operation_id]);
   return <ProvisionChooser key={binding} {...props} />;
 }
@@ -141,7 +149,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
           <p>{target.artifact_inventory.state === 'download_verified' ? 'Cache downloads verified at observation' : 'Historical cache observation — not a current audit'}</p>
           <p>{target.artifact_inventory.selection.kind} · {provisionSelectionLabel(target.artifact_inventory.selection)} · Observed {target.artifact_inventory.observed_at}</p>
           <p className="break-all text-xs">Operation {target.artifact_inventory.operation_id}</p>
-          <ArtifactList artifacts={target.artifact_inventory.artifacts} />
+          <PagedArtifactDetails targetId={target.id} operationId={target.artifact_inventory.operation_id} collection="inventory" count={target.artifact_inventory.artifact_count} />
         </> : <p>No independent provision observation. Installed artifacts are unknown.</p>}
         <ManagedRuntimeInventoryPanel target={target} />
       </div>
@@ -151,7 +159,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
 export function WorkflowProvisionPanel({ target, onChanged, workflowRequest }: Props & { workflowRequest: WorkflowProvisionRequest }) {
   const selection: ProvisionSelection = { kind: 'workflow', workflow_request: workflowRequest };
   const binding = JSON.stringify([selection, target.id, target.provider_instance_id, target.host, target.port, target.username, target.remote_root,
-    target.host_key_sha256, target.active, target.state, target.activated_at, target.capabilities,
+    target.host_key_sha256, target.active, target.state, target.activated_at, capabilityIdentity(target),
     target.preload?.operation_id, target.preload?.source_revision, target.preload?.source_tree, target.preload?.phase, target.preload?.recovery_required, target.progress?.operation_id]);
   return <section aria-label="Unsaved workflow provisioning" className="mt-3 space-y-3">
     <h4>Provision this workflow's dependencies without launching</h4>
@@ -169,7 +177,7 @@ export function ProvisionActions(props: ProvisionActionsProps) {
   const { target, selection, retryOperationId } = props;
   const binding = JSON.stringify([selection, retryOperationId, target.id, target.provider_instance_id,
     target.host, target.port, target.username, target.remote_root, target.host_key_sha256,
-    target.active, target.state, target.activated_at, target.capabilities, target.preload?.operation_id,
+    target.active, target.state, target.activated_at, capabilityIdentity(target), target.preload?.operation_id,
     target.preload?.source_revision, target.preload?.source_tree, target.preload?.phase,
     target.preload?.recovery_required, target.progress?.operation_id]);
   return <BoundProvisionActions key={binding} {...props} />;
@@ -291,10 +299,7 @@ function PreparationStatus({ target, onChanged }: Props) {
   });
   if (!operation?.selection) return null;
   const cancellable = operation.recovery_required || ACTIVE_PHASES.includes(operation.phase);
-  const artifacts = operation.artifact_progress ?? [];
-  const declared = artifacts.reduce((sum, artifact) => sum + (artifact.size_bytes || 0), 0);
-  const verified = artifacts.filter(artifact => artifact.state === 'verified').reduce((sum, artifact) => sum + (artifact.size_bytes || 0), 0);
-  const verifiedCount = artifacts.filter(artifact => artifact.state === 'verified').length;
+  const { total_count: totalCount, total_bytes: declared, verified_bytes: verified, verified_count: verifiedCount } = operation.artifact_summary;
   // Receipts only report completed objects, not live transfer bytes or throughput.
   // Poll-driven rerenders advance active elapsed time; settled receipts end at their last update.
   const elapsed = elapsedLabel(operation.started_at, ACTIVE_PHASES.includes(operation.phase) ? undefined : operation.updated_at);
@@ -309,9 +314,10 @@ function PreparationStatus({ target, onChanged }: Props) {
       <p className="font-medium">{PHASE_LABELS[operation.phase] ?? operation.phase}{operation.artifact ? ` — ${operation.artifact}` : ''}</p>
       <p className="text-xs text-[var(--text-muted)]">{ACTIVE_PHASES.includes(operation.phase) ? 'Running' : 'Last preparation'}{elapsed ? ` · ${elapsed} elapsed` : ''}</p>
     </div>
-    <p>{verifiedCount} of {artifacts.length} artifacts complete or cached{declared > 0 ? ` · ${bytes(verified)} complete or cached of ${bytes(declared)} declared` : ''}. Transfer progress and rate are not reported.</p>
+    <p>{verifiedCount} of {totalCount} artifacts complete or cached{declared > 0 ? ` · ${bytes(verified)} complete or cached of ${bytes(declared)} declared` : ''}. Transfer progress and rate are not reported.</p>
     <p className="text-xs text-[var(--text-muted)]">{operation.message}{operation.sequence != null ? ` · Sequence ${operation.sequence}` : ''} · Started {operation.started_at} · Last worker update {operation.updated_at}</p>
-    {artifacts.length > 0 && <ArtifactDetails label="Artifact progress" count={artifacts.length}>{() => <ul aria-label="Artifact progress">{artifacts.map(artifact => <li key={artifact.name} className="break-all">{artifact.name} · {ARTIFACT_STATE_LABELS[artifact.state] ?? artifact.state} · {bytes(artifact.size_bytes)} declared · SHA256 {artifact.sha256}</li>)}</ul>}</ArtifactDetails>}
+    <PagedArtifactDetails targetId={target.id} operationId={operation.operation_id} collection="progress" count={totalCount} sequence={operation.sequence} />
+    <PagedArtifactDetails targetId={target.id} operationId={operation.operation_id} collection="cached" count={operation.cached_artifact_count} sequence={operation.sequence} />
     <p className="text-xs text-[var(--text-muted)]">States are reported worker activity; completed objects are retained for retry.</p>
     {(operation.cancel_requested || operation.recovery_required) && <p role="status">Cancellation requested or recovery required. Ownership is not released until the server proves underlying transport stopped. No automatic retry.</p>}
     {cancellable && <button type="button" className={buttonClass} disabled={active > 0} onClick={() => void requestCancel()}>{cancel.isPending ? 'Requesting cancellation…' : operation.phase === 'recovery_blocked' ? 'Recheck cancellation quiescence' : 'Cancel provision'}</button>}
@@ -319,7 +325,7 @@ function PreparationStatus({ target, onChanged }: Props) {
     {['failed', 'cancelled', 'recovery_blocked'].includes(operation.phase) && <ProvisionActions
       key={JSON.stringify([operation.operation_id, operation.selection, operation.phase, target.id, target.host, target.port,
         target.username, target.remote_root, target.host_key_sha256, target.activated_at, target.active, target.state,
-        target.capabilities, operation.source_revision, operation.source_tree, operation.recovery_required, target.provider_instance_id, target.progress?.operation_id])}
+        capabilityIdentity(target), operation.source_revision, operation.source_tree, operation.recovery_required, target.provider_instance_id, target.progress?.operation_id])}
       target={target} onChanged={onChanged} selection={operation.selection} retryOperationId={operation.operation_id} />}
   </section>;
 }

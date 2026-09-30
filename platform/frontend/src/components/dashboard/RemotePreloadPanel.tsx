@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { IndependentProvisionPanel } from './IndependentProvisionPanel';
+import { PagedArtifactDetails } from './PagedArtifactDetails';
 import { isAxiosError } from 'axios';
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
 import { preloadExecutionTarget, provisionSelectionLabel, type ExecutionTarget } from '../../lib/api';
@@ -60,6 +61,11 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
     {preload && <div role="status" aria-label="Preload progress" className="text-sm">
       {preload.phase === 'source_download_ready' && <p>Downloads complete</p>}
       <p>{preload.message}</p>
+      <p>{preload.artifact_summary.verified_count} of {preload.artifact_summary.total_count} artifacts complete or cached · {preload.artifact_summary.verified_bytes.toLocaleString()} bytes complete or cached of {preload.artifact_summary.total_bytes.toLocaleString()} bytes declared. Transfer progress and rate are not reported.</p>
+      {!preload.selection && <>
+        <PagedArtifactDetails targetId={target.id} operationId={preload.operation_id} collection="progress" count={preload.artifact_summary.total_count} sequence={preload.sequence} />
+        <PagedArtifactDetails targetId={target.id} operationId={preload.operation_id} collection="cached" count={preload.cached_artifact_count} sequence={preload.sequence} />
+      </>}
       {preload.artifact && <p className="break-all font-mono">{preload.artifact}</p>}
       <p className="text-xs text-[var(--text-muted)]">{preload.selection ? `${preload.selection.kind} ${provisionSelectionLabel(preload.selection)}` : `Recipe ${preload.job_id}`} · Source {preload.source_revision.slice(0, 12)} · Updated {preload.updated_at}</p>
     </div>}

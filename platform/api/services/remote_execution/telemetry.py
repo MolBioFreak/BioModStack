@@ -11,7 +11,6 @@ from pathlib import Path
 import time
 import uuid
 
-from sqlalchemy import select
 from database import ExecutionTarget
 from .transport import RemoteConnection, RemoteConnectionError, RemoteExecutionTimeout, run_remote
 
@@ -145,17 +144,15 @@ class RemoteTelemetry:
         entry['due'] = time.monotonic() + min(60, INTERVAL * 2 ** min(entry['failures'], 3))
 
     async def run(self, session_factory, stop):
-        from .targets import telemetry_eligible
+        from .targets import telemetry_eligible, status_query, _status_row
         try:
             while not stop.is_set():
                 try:
                     async with session_factory() as session:
-                        targets = list((await session.scalars(select(ExecutionTarget).where(
-                            ExecutionTarget.active.is_(True)))).all())
+                        targets = [_status_row(row) for row in (await session.execute(
+                            status_query(include_observations=False).where(ExecutionTarget.active.is_(True)))).mappings()]
                         targets = [target for target in targets if telemetry_eligible(target)]
-                        # Snapshot ORM fields before the DB session closes; no DB lock during SSH.
-                        for target in targets:
-                            session.expunge(target)
+                        # Detached scalar snapshots; no full ORM JSON load or DB lock during SSH.
                     wanted = {identity(target) for target in targets}
                     for key in list(self.entries):
                         if key not in wanted:

@@ -20,7 +20,7 @@ from .contracts import (PreloadProgress, ProvisionRequest, ProvisionSelection, C
     WorkflowProvisionRequest, WorkflowProvisionSelection, WorkflowPackRequest, WorkflowPackSelection)
 from .progress import PRELOAD_ACTIVE_PHASES, preload_idle_clause
 from .targets import (ExecutionTargetError, INVENTORY_MAX_AGE_SECONDS, get_target,
-    inventory_fresh, _target_response, _has_preparation_conflicts)
+    inventory_fresh, _target_response, target_status, artifact_summary, _has_preparation_conflicts)
 from .transport import RemoteConnection, RemoteHelperError
 
 
@@ -266,7 +266,9 @@ class PreloadController:
                            if retry_operation_id is not None else [])
             admitted = await session.execute(update(ExecutionTarget).where(admission_clause(target), *retry_fence).values(
                 provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.preload",
-                    func.json(progress.model_dump_json()))).execution_options(synchronize_session=False))
+                    func.json(progress.model_dump_json()),
+                    "$.preload_artifact_summary", func.json(json.dumps(artifact_summary(progress))),
+                    "$.preload_cached_artifact_count", len(progress.artifacts))).execution_options(synchronize_session=False))
             if admitted.rowcount != 1:
                 await session.rollback()
                 raise ExecutionTargetError("Worker inventory, endpoint, or activity changed; refresh and retry")
@@ -277,13 +279,15 @@ class PreloadController:
                 command, connection, expected_endpoint,
                 native_invocation=native_invocation, compiled_plan=compiled_plan,
                 admitted_plan=admitted_plan), name=f"preload-{operation_id}")
-            response = _target_response(await get_target(session, target_id))
+            response = await target_status(session, target_id)
             await session.rollback()
             return response
 
     async def _publish(self, session, target_id, progress, expected_endpoint=None):
         metadata = func.json_set(ExecutionTarget.provider_metadata, "$.preload", func.json(progress.model_dump_json()),
-            "$.preload.sequence", func.coalesce(ExecutionTarget.provider_metadata["preload"]["sequence"].as_integer(), 0) + 1)
+            "$.preload.sequence", func.coalesce(ExecutionTarget.provider_metadata["preload"]["sequence"].as_integer(), 0) + 1,
+            "$.preload_artifact_summary", func.json(json.dumps(artifact_summary(progress))),
+            "$.preload_cached_artifact_count", len(progress.artifacts))
         if progress.selection is not None and progress.phase == "source_download_ready":
             target = await get_target(session, target_id)
             if expected_endpoint is None or endpoint(target) != expected_endpoint:
@@ -480,7 +484,7 @@ class PreloadController:
                 progress.artifact = None
                 progress.updated_at = datetime.utcnow()
                 await self._publish(session, target_id, progress)
-            response = _target_response(await get_target(session, target_id))
+            response = await target_status(session, target_id)
             await session.rollback()
             return response
 

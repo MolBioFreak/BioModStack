@@ -194,7 +194,7 @@ it.each(['cancelling', 'recovery_blocked', 'cancelled'] as const)('does not prom
     source_revision: '3'.repeat(40), source_tree: '4'.repeat(40), state: 'verified', artifacts: [],
     bounded_readiness: 'verified_assets_and_critical_runtime', readiness_scope: 'asset_integrity_and_critical_compatibility_only' });
   await render(); expect(container.textContent).toContain('Critical runtime ready: true');
-  target = { ...target, preload: { operation_id: 'recovering', selection: { kind: 'model', model_id: 'boltz2' },
+  target = { ...target, preload: { artifact_summary: { total_count: 0, verified_count: 0, total_bytes: 0, verified_bytes: 0 }, cached_artifact_count: 0, operation_id: 'recovering', selection: { kind: 'model', model_id: 'boltz2' },
     source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64), phase,
     recovery_required: true, artifact: null, message: 'Transport quiescence unknown', started_at: 'now', updated_at: 'now' } };
   await render();
