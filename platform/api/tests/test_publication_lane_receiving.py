@@ -68,7 +68,13 @@ def test_ppiflow_display_requiredness_does_not_change_normalizer(mode, tmp_path)
     target, framework = tmp_path / 'target.pdb', tmp_path / 'framework.pdb'
     requested = settings(mode, (target, framework, tmp_path))
     normalized = normalize_job_request(JobCreate(name='requiredness', model_id='ppiflow', mode=mode, params=requested))
-    fields = {p['name']: p for p in ppiflow_generation_inventory(mode)['parameters']}
+    inventory = ppiflow_generation_inventory(mode)
+    app = FastAPI()
+    app.include_router(router, prefix='/models')
+    served = TestClient(app).get(f'/models/ppiflow/generation-settings?mode={mode}')
+    assert served.status_code == 200
+    assert served.json() == inventory
+    fields = {p['name']: p for p in served.json()['parameters']}
     assert parameter_contract(mode) == before
     assert normalize_job_request(normalized).params == normalized.params
     if mode == 'protein_binder':
@@ -198,7 +204,27 @@ async def test_bc2_one_inventory_pass_and_launch_offline_reopen(tmp_path, monkey
             native, receipt = await publication.read_published_native_results(job, session)
             assert reads == Counter({name: 1 for name in receipt['files']})
             assert len(receipt['candidates']) == (0 if zero else 1)
+            job.retry_count = 1
+            with pytest.raises(publication.PublicationError, match='attempt changed'):
+                await publication.read_published_native_results(job, session)
+            job.retry_count = 0
+            extra = root / 'campaign_metadata.json'
+            extra.write_text('{}')
+            with pytest.raises(publication.PublicationError, match='bytes or native inventory changed'):
+                await publication.read_published_native_results(job, session)
+            extra.unlink()
+            state = root / '.campaign_state.json'
+            state_bytes = state.read_bytes()
+            state.unlink()
+            with pytest.raises(publication.PublicationError, match='inventory changed'):
+                await publication.read_published_native_results(job, session)
+            state.write_bytes(state_bytes)
             artifact = await session.scalar(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))
+            original_path = artifact.storage_path
+            artifact.storage_path += '.foreign'
+            with pytest.raises(publication.PublicationError, match='artifact receipt changed'):
+                await publication.read_published_native_results(job, session)
+            artifact.storage_path = original_path
             artifact.media_type = 'wrong/type'
             with pytest.raises(publication.PublicationError, match='artifact receipt changed'):
                 await publication.read_published_native_results(job, session)
