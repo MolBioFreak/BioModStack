@@ -106,42 +106,7 @@ def source_components(path, chain_ids, role):
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
     from run_binder_blind_pose import _source
-    path = Path(path)
-    components = _source(path, chain_ids, role=role)
-    # Retain author identity in the exact sequence extraction order, solely for
-    # later comparison. Neither these rows nor coordinates enter prediction.
-    rows = {chain: {} for chain in chain_ids}
-    if path.suffix.lower() in {'.cif', '.mmcif'}:
-        from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-        cif = MMCIF2Dict(str(path))
-        count = len(cif.get('_atom_site.id', []))
-        columns = {name: cif.get('_atom_site.' + name, [''] * count) for name in (
-            'auth_asym_id', 'group_PDB', 'label_asym_id', 'label_seq_id', 'pdbx_PDB_ins_code', 'auth_seq_id')}
-        def col(name):
-            return columns[name]
-        for i in range(count):
-            chain = col('auth_asym_id')[i]
-            if chain not in rows or col('group_PDB')[i] != 'ATOM':
-                continue
-            key = (col('label_asym_id')[i], col('label_seq_id')[i])
-            insertion = col('pdbx_PDB_ins_code')[i]
-            rows[chain].setdefault(key, {'chain_id': chain, 'residue_number': int(col('auth_seq_id')[i]),
-                'insertion_code': '' if insertion in {'.', '?'} else insertion})
-    else:
-        from run_esmfold2_inference import _map_residue_to_letter
-        for line in path.read_text().splitlines():
-            if not line.startswith(('ATOM  ', 'HETATM')):
-                continue
-            chain, name = line[21:22].strip() or '_', line[17:20].strip().upper()
-            if chain not in rows or not _map_residue_to_letter(name, 'protein'):
-                continue
-            key = (line[22:27].strip(), name)
-            rows[chain].setdefault(key, {'chain_id': chain, 'residue_number': int(line[22:26]),
-                                       'insertion_code': line[26:27].strip()})
-    for component in components:
-        residues = list(rows[component['id']].values())
-        component['source_residues'] = residues if len(residues) == len(component['sequence']) else None
-    return components
+    return _source(Path(path), chain_ids, role=role, include_source_residues=True)
 
 
 def design_request(root, owner, design, request, binder, target):

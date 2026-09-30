@@ -23,7 +23,8 @@ from io import StringIO
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
-def _source(path: Path, chain_ids: list[str], *, role: str) -> list[dict]:
+def _source(path: Path, chain_ids: list[str], *, role: str,
+            include_source_residues: bool = False) -> list[dict]:
     if not chain_ids or len(set(chain_ids)) != len(chain_ids) or any(not isinstance(x, str) or not x for x in chain_ids):
         raise ValueError(f"{role} chains must be distinct explicit chain IDs")
     if path.suffix.lower() in {'.cif', '.mmcif'}:
@@ -63,12 +64,38 @@ def _source(path: Path, chain_ids: list[str], *, role: str) -> list[dict]:
             components.append({'id': chain, 'type': 'protein',
                                'sequence': ''.join(PROTEIN_3TO1[name] for name in names)})
     elif path.suffix.lower() == '.pdb':
-        components = parse_pdb_polymer_components(path, chain_ids=chain_ids, include_dna_rna=False)
+        rows = {chain: {} for chain in chain_ids} if include_source_residues else None
+        components = parse_pdb_polymer_components(path, chain_ids=chain_ids, include_dna_rna=False,
+                                                  _author_residue_rows=rows)
     else:
         raise ValueError(f'{role} source must be PDB or native CIF')
     by_id = {component['id']: component for component in components if component['type'] == 'protein'}
     if set(by_id) != set(chain_ids):
         raise ValueError(f"{role} protein chains disagree: requested {chain_ids}, observed {sorted(by_id)}")
+    if include_source_residues:
+        # Project author identity from the already parsed document, retaining the
+        # comparison caller's order, deduplication and unmatched-length behavior.
+        if path.suffix.lower() in {'.cif', '.mmcif'}:
+            rows = {chain: {} for chain in chain_ids}
+            columns = {name: cif.get('_atom_site.' + name, [''] * count) for name in (
+                'auth_asym_id', 'group_PDB', 'label_asym_id', 'label_seq_id',
+                'pdbx_PDB_ins_code', 'auth_seq_id')}
+            for i in range(count):
+                chain = columns['auth_asym_id'][i]
+                if chain not in rows or columns['group_PDB'][i] != 'ATOM':
+                    continue
+                key = (columns['label_asym_id'][i], columns['label_seq_id'][i])
+                insertion = columns['pdbx_PDB_ins_code'][i]
+                rows[chain].setdefault(key, {'chain_id': chain,
+                    'residue_number': int(columns['auth_seq_id'][i]),
+                    'insertion_code': '' if insertion in {'.', '?'} else insertion})
+        else:
+            for chain_rows in rows.values():
+                for row in chain_rows.values():
+                    row['residue_number'] = int(row['residue_number'])
+        for component in components:
+            residues = list(rows[component['id']].values())
+            component['source_residues'] = residues if len(residues) == len(component['sequence']) else None
     return [by_id[chain] for chain in chain_ids]
 
 
