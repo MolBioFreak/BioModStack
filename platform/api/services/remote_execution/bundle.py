@@ -237,6 +237,8 @@ def _record_file(
     path: Path,
     relative_path: str,
     role: Literal["source", "input", "runtime", "result", "log", "receipt"],
+    *,
+    staged_sha256: str | None = None,
 ) -> RemoteFileRecord:
     if path.is_symlink() or not path.is_file():
         raise RemoteBundleError(f"Package input is not one regular file: {path}")
@@ -250,7 +252,7 @@ def _record_file(
         from .images import verify_image
         digest = verify_image(path, path.parent.name)['sha256']
     else:
-        digest = _sha256_file(path)
+        digest = staged_sha256 if staged_sha256 is not None else _sha256_file(path)
     return RemoteFileRecord(
         relative_path=relative_path,
         size_bytes=path.stat().st_size,
@@ -276,6 +278,8 @@ def _records_for_source(
     source: Path,
     prefix: str,
     role: Literal["source", "input", "runtime", "result", "log", "receipt"],
+    *,
+    source_archive_sha256: str | None = None,
 ) -> list[RemoteFileRecord]:
     if source.is_symlink():
         if role != "runtime":
@@ -301,8 +305,13 @@ def _records_for_source(
             records.append(_record_runtime_symlink(path, relative))
             continue
         if path.is_file():
+            # Only the archive just verified while staging can reuse its digest.
+            # Extracted leaves and all other inventory retain their body checks.
+            staged_sha256 = (source_archive_sha256
+                if role == "source" and path == source / '.bms-source.tar.gz' else None)
             records.append(
-                _record_file(path, f"{prefix.rstrip('/')}/{path.relative_to(source).as_posix()}", role)
+                _record_file(path, f"{prefix.rstrip('/')}/{path.relative_to(source).as_posix()}", role,
+                             staged_sha256=staged_sha256)
             )
     if not records:
         raise RemoteBundleError(f"Required package directory is empty: {source}")
@@ -1444,7 +1453,8 @@ def prepare_remote_bundle(
 
     verify_approved_native_inputs(job, runtime_references, input_hashes)
     verify_selected_preparation_inputs(native_invocation.execution_plan, input_hashes)
-    source_records = _records_for_source(source_root, "source", "source")
+    source_records = _records_for_source(source_root, "source", "source",
+                                         source_archive_sha256=source_archive_sha256)
     remote_results = f"{remote_attempt}/results"
     bindings_transfer, bindings_record = _write_portable_bindings(
         staging_root=staging_root, remote_attempt=remote_attempt,
