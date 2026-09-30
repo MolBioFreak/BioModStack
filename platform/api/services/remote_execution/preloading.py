@@ -87,14 +87,10 @@ class TargetSnapshot:
     managed_inventory: object | None = None
 
     @classmethod
-    def capture(cls, target, *, inventory=True):
+    def capture(cls, target):
         from .managed_inventory import project_inventory
-        # Planning uses the retained inventory; transport only needs its backend.
-        capabilities = target.capabilities or {}
-        return cls(target.id, *endpoint(target),
-                   deepcopy(capabilities if inventory else {
-                       'critical_runtime_binding': capabilities.get('critical_runtime_binding', {})}),
-                   deepcopy(project_inventory(target)) if inventory else None)
+        return cls(target.id, *endpoint(target), deepcopy(target.capabilities or {}),
+                   deepcopy(project_inventory(target)))
 
 
 def admission_clause(target):
@@ -390,8 +386,14 @@ class PreloadController:
             if progress.selection is not None:
                 from .cache import provision_cache
                 async with self.session_factory() as session:
-                    target = TargetSnapshot.capture(await get_target(session, target_id),
-                                                    inventory=admitted_plan is None)
+                    if admitted_plan is None:
+                        target = TargetSnapshot.capture(await get_target(session, target_id))
+                    else:
+                        binding = await session.scalar(select(func.json_extract(
+                            ExecutionTarget.capabilities, '$.critical_runtime_binding'
+                        )).where(ExecutionTarget.id == target_id))
+                        target = TargetSnapshot(target_id, *expected_endpoint,
+                            capabilities={'critical_runtime_binding': json.loads(binding or '{}')})
                 if admitted_plan is None:
                     preview, entries = await self._preview(progress.selection, target, compiled_plan=compiled_plan)
                     digest = preview.preview_sha256

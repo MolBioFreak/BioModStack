@@ -74,18 +74,35 @@ async def test_preview_repeated_cancel_keeps_slot_until_thread_finishes(monkeypa
     assert controller.preview_slots._value == 2
 
 
-def test_transport_snapshot_does_not_project_inventory(monkeypatch):
-    from services.remote_execution import managed_inventory
-    def forbidden(*args):
-        pytest.fail('Transport snapshot projected inventory')
-    monkeypatch.setattr(managed_inventory, 'project_inventory', forbidden)
-    from types import SimpleNamespace
-    target = SimpleNamespace(id='vast:1', host='host', port=22, username='root', remote_root='/remote',
-        host_key_sha256='a'*64, capabilities={'critical_runtime_binding':{'environment':{'BMS_CONTAINER_BACKEND':'udocker'}},
-        'unrelated': ['large']*1000})
-    snapshot = p.TargetSnapshot.capture(target, inventory=False)
-    assert snapshot.managed_inventory is None
-    assert snapshot.capabilities == {'critical_runtime_binding': target.capabilities['critical_runtime_binding']}
+@pytest.mark.asyncio
+async def test_admitted_transport_never_loads_full_target_or_projects_inventory(store, monkeypatch):
+    from services.remote_execution import managed_inventory, cache
+    from services.remote_execution.contracts import PreloadProgress, ProvisionSelection
+    from services.remote_execution.transport import RemoteConnection
+    from datetime import datetime
+    progress = PreloadProgress(operation_id='admitted', selection=ProvisionSelection(kind='image',model_id='boltz2'),
+        source_revision='a'*40,source_tree='b'*40,request_sha256='d'*64,phase='checking',message='Planning',
+        started_at=datetime.utcnow(),updated_at=datetime.utcnow())
+    async with store() as session:
+        target = await session.get(ExecutionTarget,'vast:1')
+        target.provider_metadata = {**target.provider_metadata,'preload':progress.model_dump(mode='json')}
+        target.capabilities = {'critical_runtime_binding':{'environment':{'BMS_CONTAINER_BACKEND':'udocker'}}}
+        connection, expected = RemoteConnection.from_target(target), p.endpoint(target)
+        await session.commit()
+    def forbidden(*args, **kwargs):
+        pytest.fail('Admitted transport loaded full target or projected inventory')
+    monkeypatch.setattr(p,'get_target',forbidden)
+    monkeypatch.setattr(managed_inventory,'project_inventory',forbidden)
+    async def provision(**kwargs):
+        assert kwargs['backend'] == 'udocker'
+        await kwargs['check_fence']()
+        await kwargs['progress']({'phase':'transferring','message':'Progress'})
+        return []
+    monkeypatch.setattr(cache,'provision_cache',provision)
+    controller = p.PreloadController(store)
+    await controller._run('vast:1',progress,None,None,connection,expected,admitted_plan=('d'*64,()))
+    async with store() as session:
+        assert (await session.get(ExecutionTarget,'vast:1')).provider_metadata['preload']['phase'] == 'source_download_ready'
 
 
 def test_warm_archive_one_read_same_size_corruption_rejected(tmp_path, monkeypatch):
