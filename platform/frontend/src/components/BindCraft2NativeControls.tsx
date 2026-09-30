@@ -14,6 +14,7 @@ export function BC2Number({ label, value, onChange, integer = false, range, unit
       onChange={event => onChange(Number(event.currentTarget.value))} />}
     <input className={range ? '!w-28 shrink-0 tabular-nums' : 'tabular-nums'} type="number" aria-label={label} step={integer ? 1 : 'any'} value={draft}
       onChange={event => { const text = event.currentTarget.value; setDraft(text); if (text === '') onChange(undefined); else if (Number.isFinite(Number(text))) onChange(Number(text)); }} />
+    {value === null && <span className="text-xs">Explicit null / native-derived</span>}
     {unit && <span className="shrink-0 text-xs text-[var(--text-secondary)]">{unit}</span>}
   </div>;
 }

@@ -20,7 +20,7 @@ export const BC2_HELP: Record<string, string> = {
   "harden_steps": "Optimise a discrete sequence.",
   "mutate_steps": "Try substitutions that improve the result.",
   "number_of_final_designs": "How many accepted sequences you want.",
-  "max_trajectories": "Optional attempt limit. Leave unset to keep working toward the requested count.",
+  "max_trajectories": "Required finite positive integer attempt limit; caps attempts rather than accepted designs. No native default. Clear while authoring, then supply an explicit limit before preview.",
   "campaign_seed": "Choose a new set of random trajectories or reproduce the same draws.",
   "resume": "Continue the same experiment in its existing folder; false refuses a non-empty folder instead.",
   "trajectory_only": "Explore gradient designs without ProteinMPNN acceptance; specify an attempt limit.",

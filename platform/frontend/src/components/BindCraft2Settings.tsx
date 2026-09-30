@@ -1,5 +1,6 @@
 import { BindCraft2SourcePicker } from './BindCraft2SourcePicker';
 import { useState, type ReactNode } from 'react';
+import { bc2DisplaySelectors, bc2SelectorSignature, type BC2LeafDisplay } from '../lib/bc2LeafDisplay';
 import { BindCraft2ListEditor } from './BindCraft2ListEditor';
 import { BC2Number, BC2PresetPicker } from './BindCraft2NativeControls';
 import { BindCraft2MetricEditor } from './BindCraft2MetricEditor';
@@ -17,9 +18,12 @@ export type BC2Field = {
   runtime_fallback?: unknown
   applicable_when?: Record<string, unknown>
   fallback_authority?: string
+  source_evidence?: string
+  items?: { type?: string };
   status: 'typed' | 'unresolved'
 }
 export type BC2Inventory = {
+  display?: BC2LeafDisplay;
   upstream_commit: string
   fields: Record<string, BC2Field>
   presets: Record<string, Record<string, unknown>>
@@ -35,21 +39,33 @@ const defaultSummary = (value: unknown) => value !== null && typeof value === 'o
   : JSON.stringify(value)
 
 
-export function BindCraft2Settings({ inventory, value, onChange, structureInputs, section }: {
-  inventory: BC2Inventory; value: BC2Request; onChange: (next: BC2Request) => void; launchAvailable?: boolean; structureInputs?: ReactNode; section?: BC2Section
+export function BindCraft2Settings({ inventory, value, onChange, structureInputs, section, inherited, effectiveSettings }: {
+  inventory: BC2Inventory; inherited?: BC2LeafDisplay; effectiveSettings?: Record<string, unknown>; value: BC2Request; onChange: (next: BC2Request) => void; launchAvailable?: boolean; structureInputs?: ReactNode; section?: BC2Section
 }) {
   const [search, setSearch] = useState('');
+  // The shell supplies only preview values whose captured scientific revision is current.
+  const effective = effectiveSettings;
+  const candidate = inherited ?? inventory.display;
+  const display = candidate && bc2SelectorSignature(candidate.selectors) === bc2SelectorSignature(bc2DisplaySelectors(value)) ? candidate : undefined;
+  const inheritedValue = (key: string, field: BC2Field): unknown => {
+    if (key === 'max_trajectories') return undefined;
+    if (display && Object.hasOwn(display.values, key)) return display.values[key];
+    const applies = !field.applicable_when || Object.entries(field.applicable_when).every(([name, expected]) => (Object.hasOwn(value, name) ? value[name] : effective && Object.hasOwn(effective, name) ? effective[name] : display && Object.hasOwn(display.values, name) ? display.values[name] : inventory.fields[name]?.native_default) === expected);
+    if (applies && field.runtime_fallback !== undefined && (field.fallback_authority || field.source_evidence) && (key !== 'oligomer_tie' || field.applicable_when)) return field.runtime_fallback;
+    return field.has_native_default ? field.native_default : undefined;
+  };
+  const shown = (key: string, field: BC2Field) => Object.hasOwn(value, key) ? value[key] : key !== 'max_trajectories' && effective && Object.hasOwn(effective, key) ? effective[key] : inheritedValue(key, field);
   const set = (key: string, next: unknown) => { const copy = { ...value }; if (next === undefined) delete copy[key]; else copy[key] = next; onChange(copy); };
   const control = (key: string, field: BC2Field) => {
     const type = field.observed_types[0]
-    const current = Object.hasOwn(value, key) ? value[key] : (field.has_native_default ? field.native_default : undefined)
+    const current = shown(key, field)
     const choices = field.choices ?? BC2_CHOICES[key];
     if (choices) return <select aria-label={key} value={current as string ?? ''} onChange={event => set(key, event.currentTarget.value || undefined)}>
       <option value="">Native / profile choice</option>{Array.from(new Set([...choices, ...(typeof current === 'string' ? [current] : [])])).map(choice => <option value={choice} key={choice}>{bc2Label(choice)}</option>)}
     </select>;
     if (selectors.has(key)) return <BC2PresetPicker label={key} value={current} singular choices={Object.keys(inventory.presets[key] ?? {}).filter(name => !(key === 'core' && ['default', 'reference'].includes(name)))} onChange={next => set(key, next)} />;
     if (key === 'paratope_conformations') return <BC2PresetPicker label={key} value={current} choices={inventory.paratope_conformations} onChange={next => set(key, next)} />;
-    if (key === 'binder_lengths') return <div className="space-y-2"><BindCraft2ListEditor label={key} value={Array.isArray(current) ? current : []} onChange={next => set(key, next)} numericOnly /><small>Two values define an inclusive range; one or more than two define discrete lengths. Residues per binder copy; a scaffold overrides length selection.</small></div>;
+    if (key === 'binder_lengths') return <div className="space-y-2"><BindCraft2ListEditor label={key} value={Array.isArray(current) ? current : []} onChange={next => set(key, next)} numericOnly integer /><small>Two values define an inclusive range; one or more than two define discrete lengths. Residues per binder copy; a scaffold overrides length selection.</small></div>;
     if (key === 'parameter_sweep') return <BC2SweepEditor inventory={inventory} value={value[key]} onChange={next => set(key, next)} />;
     if (key === 'multitarget_rounds_per_target') return <BC2PresetPicker label={key} value={current} choices={['screen', 'refine', 'anneal', 'harden', 'mutate']} onChange={next => set(key, next)} />;
     if (key === 'binder_shapes') {
@@ -82,8 +98,8 @@ export function BindCraft2Settings({ inventory, value, onChange, structureInputs
       return <div className="grid grid-cols-4 gap-3 sm:grid-cols-5">{Array.from('ACDEFGHIKLMNPQRSTVWY').map(residue => <label key={residue}>{residue}<input aria-label={`aa_bias.${residue}`} type="number" step="any" value={bias[residue] ?? ''}
         onChange={event => { const next = { ...bias }; if (event.currentTarget.value === '') delete next[residue]; else next[residue] = Number(event.currentTarget.value); set(key, next) }} /></label>)}</div>
     }
-    if ((key === 'filters' || key === 'losses') && type === 'object') return <BindCraft2MetricEditor kind={key} inventory={inventory} value={current} onChange={next => set(key, next)} />;
-    if (type === 'array') return <BindCraft2ListEditor label={key} value={Array.isArray(current) ? current : []} onChange={next => set(key, next)} />;
+    if ((key === 'filters' || key === 'losses') && type === 'object') return <BindCraft2MetricEditor kind={key} inventory={inventory} value={value[key]} inherited={inheritedValue(key, field)} effective={effective?.[key]} weights={Object.fromEntries(Object.entries(inventory.fields).filter(([name]) => name.startsWith('weights_')).map(([name, descriptor]) => [name, shown(name, descriptor)]))} onWeightChange={set} onChange={next => set(key, next)} />;
+    if (type === 'array') return <BindCraft2ListEditor label={key} value={Array.isArray(current) ? current : []} integer={field.items?.type === 'integer'} numericOnly={field.items?.type === 'integer' || field.items?.type === 'number'} onChange={next => set(key, next)} />;
     return <p className="text-sm text-[var(--text-secondary)]">Native type metadata is unavailable for this setting. Existing saved values are retained.</p>;
   }
 
@@ -94,28 +110,33 @@ export function BindCraft2Settings({ inventory, value, onChange, structureInputs
     const field = inventory.fields[key];
     if (!field || internal.has(key) || delegated.has(key)) return null;
     const explicit = Object.hasOwn(value, key);
-    const help = bc2Help(key);
+    const help = key === 'max_trajectories' ? 'Required finite positive integer attempt limit. This caps attempts, not accepted designs; there is no native default. Clearing is allowed while authoring, but preview requires an explicit limit.' : bc2Help(key);
     return <div key={key} data-bc2-field={key} className={`min-w-0 space-y-2 ${['targets', 'losses', 'filters', 'parameter_sweep', 'aa_bias', 'binder_shapes'].includes(key) ? 'col-span-full' : ''}`}>
       <div className="flex items-start justify-between gap-2">
         <span className="text-sm font-medium text-[var(--text-primary)]">{bc2Label(key)}</span>
-        {explicit ? <button type="button" className="!border-0 !p-0 text-xs text-[var(--accent-primary)]" aria-label={`Reset ${key}`} onClick={() => set(key, undefined)}>Use native default</button> : <span className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">Native / profile</span>}
+        {explicit ? <button type="button" className="!border-0 !p-0 text-xs text-[var(--accent-primary)]" aria-label={`Reset ${key}`} onClick={() => set(key, undefined)}>{key === 'max_trajectories' ? 'Clear explicit attempt limit (required)' : inheritedValue(key, field) !== undefined ? 'Restore inherited value' : 'Clear value'}</button> : <span className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">Native / profile</span>}
       </div>
       {help && <p className="text-xs leading-relaxed text-[var(--text-secondary)]">{help}</p>}
       {control(key, field)}
+      <small>{explicit ? 'Explicit override' : key === 'max_trajectories' ? 'Required · unconfigured · no native default' : effective && Object.hasOwn(effective, key) ? 'Compiler effective value (read-only authority)' : display && Object.hasOwn(display.values, key) ? `Inherited · ${display.origins?.[key] ?? 'selected native profile'}` : field.runtime_fallback !== undefined && inheritedValue(key, field) !== undefined ? `Native runtime fallback · ${field.fallback_authority ?? field.source_evidence}` : field.applicable_when ? 'Inactive retained setting' : field.has_native_default ? 'Native baseline · selected inheritance unavailable' : 'Inherited value unavailable'}</small>
       {explicit && value[key] === null && <small>Explicit null is retained.</small>}
+      {!explicit && shown(key, field) === null && <small>Native-derived / null; no numeric value is invented.</small>}
+      {field.applicable_when && !Object.entries(field.applicable_when).every(([name, expected]) => inventory.fields[name] ? shown(name, inventory.fields[name]) === expected : value[name] === expected) && <small>Inactive retained settings; this stage is off.</small>}
       <details className="text-xs text-[var(--text-secondary)]"><summary className="cursor-pointer">{explicit ? 'Override' : 'Default'} · native reference</summary>
         <code className="block mt-1 break-all">{key}</code>
+        {display && Object.hasOwn(display.values, key) && key !== 'max_trajectories' && <p>Selected inheritance: {defaultSummary(display.values[key])} · {display.origins?.[key] ?? 'model-owned native profile'}</p>}
+        {effective && Object.hasOwn(effective, key) && <p>Compiler effective (read-only): {defaultSummary(effective[key])}. Editing the control creates a requested override; it does not edit this result.</p>}
         {field.has_native_default && <p>Native default: {defaultSummary(field.native_default)}. Selected presets may override this baseline.</p>}
         {!field.has_native_default && field.runtime_fallback !== undefined && <p>{field.fallback_authority ? 'Native relaxation fallback when omitted' : 'Native runtime fallback when omitted'}: {defaultSummary(field.runtime_fallback)}</p>}
         {field.applicable_when && <p>Applies when {Object.entries(field.applicable_when).map(([name, next]) => `${name} is ${next === true ? 'enabled' : String(next)}`).join(', ')}; omission retains native behavior.</p>}
-        {!field.has_native_default && field.runtime_fallback === undefined && <p>No baseline default supplied. Omission leaves this to selected presets and native resolution.</p>}
+        {!field.has_native_default && field.runtime_fallback === undefined && <p>{key === 'max_trajectories' ? 'No native default. An explicit positive integer is required.' : 'No baseline default supplied. Omission leaves this to selected presets and native resolution.'}</p>}
       </details>
     </div>;
   };
   const grid = 'grid min-w-0 grid-cols-1 gap-x-6 gap-y-5 md:grid-cols-2';
   const expert = Object.keys(inventory.fields).filter(key => !internal.has(key) && !primaryKeys.has(key) && !delegated.has(key));
   return <section aria-label="BindCraft2 settings" className="space-y-5 [overflow-wrap:anywhere] text-[var(--text-primary)] [&_fieldset]:min-w-0 [&_fieldset]:space-y-2 [&_label]:block [&_small]:block [&_small]:text-xs [&_small]:text-[var(--text-secondary)] [&_input:not([type=checkbox]):not([type=range])]:w-full [&_input]:min-w-0 [&_input:not([type=checkbox]):not([type=range])]:rounded-lg [&_input:not([type=checkbox]):not([type=range])]:border [&_input:not([type=checkbox]):not([type=range])]:border-[var(--border-color)] [&_input:not([type=checkbox]):not([type=range])]:bg-[var(--bg-primary)] [&_input:not([type=checkbox]):not([type=range])]:px-3 [&_input:not([type=checkbox]):not([type=range])]:py-2 [&_select]:w-full [&_select]:min-w-0 [&_select]:rounded-lg [&_select]:border [&_select]:border-[var(--border-color)] [&_select]:bg-[var(--bg-primary)] [&_select]:p-2 [&_button]:max-w-full [&_button]:rounded-md [&_button]:border [&_button]:border-[var(--border-color)] [&_button]:px-2 [&_button]:py-1 [&_button]:text-sm [&_button:hover]:bg-[var(--bg-tertiary)] [&_button:disabled]:opacity-40 [&_input]:accent-[var(--accent-primary)] [&_input:focus-visible]:outline-[var(--accent-primary)] [&_select:focus-visible]:outline-[var(--accent-primary)]">
-    <p className="text-xs leading-relaxed text-[var(--text-secondary)]">Native defaults are shown without writing them into the campaign. Explicit edits override presets; “Use native default” removes only that edit. Preview resolves the selected profiles.</p>
+    <p className="text-xs leading-relaxed text-[var(--text-secondary)]">Inherited and current compiler values are display-only. Explicit edits override inheritance; reset removes only that edit. Preview remains the effective authority.</p>
     <div hidden={section !== undefined && section !== 'sources'} className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4 sm:p-5">
       <h3 className="mb-1 font-semibold">Sources & structures</h3>
       <p className="mb-4 text-xs text-[var(--text-secondary)]">Choose a shipped target preset or prepare explicit target structures and sequences.</p>
