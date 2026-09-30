@@ -7,11 +7,13 @@ import os
 import re
 import stat
 import statistics
+from copy import deepcopy
+from types import SimpleNamespace
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import Any, BinaryIO, Mapping, Protocol
+from typing import Any, BinaryIO, Mapping, Protocol, cast
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
@@ -278,7 +280,7 @@ def _job_root(job: MDJobRecord) -> Path:
     return root
 
 
-def _load_inventory(job: MDJobRecord, *, include_analysis: bool = True) -> tuple[Path, dict[str, Any], list[ResolvedMDArtifact]]:
+def _load_inventory(job: MDJobRecord, *, include_analysis: bool = True, _digests=None) -> tuple[Path, dict[str, Any], list[ResolvedMDArtifact]]:
     root = _job_root(job)
     aggregate = _load_json(root / "manifest.json", "MD_RESULTS_ABSENT")
     if aggregate.get("schema") != "bms.md.aggregate.v1" or aggregate.get("job_id") != job.id:
@@ -348,13 +350,13 @@ def _load_inventory(job: MDJobRecord, *, include_analysis: bool = True) -> tuple
                 409,
             )
     if include_analysis:
-        inventory += _analysis_inventory(root, aggregate, job)
+        inventory += _analysis_inventory(root, aggregate, job, _digests=_digests)
         if len(inventory) > MAX_ARTIFACTS:
             raise MDResultError("MD_MANIFEST_INVALID", "MD artifact inventory exceeds its bound")
     return root, aggregate, inventory
 
 
-def _analysis_inventory(root: Path, aggregate: Mapping[str, Any], job: MDJobRecord) -> list[ResolvedMDArtifact]:
+def _analysis_inventory(root: Path, aggregate: Mapping[str, Any], job: MDJobRecord, *, _digests=None) -> list[ResolvedMDArtifact]:
     inventory: list[ResolvedMDArtifact] = []
     analysis_root = root / "analysis"
     for aggregate_replica in aggregate["replicas"]:
@@ -368,7 +370,9 @@ def _analysis_inventory(root: Path, aggregate: Mapping[str, Any], job: MDJobReco
             sidecar.get("schema") != "bms.md.analysis-artifacts.v1"
             or sidecar.get("job_id") != job.id
             or sidecar.get("replica") != replica_index
-            or sidecar.get("input_manifest_sha256") != _digest(replica_manifest)
+            or sidecar.get("input_manifest_sha256") != (
+                _invocation_digest(replica_manifest, _digests) if _digests is not None
+                else _digest(replica_manifest))
         ):
             raise MDResultError("MD_ANALYSIS_ARTIFACT_MANIFEST_INVALID", "MD analysis artifact lineage is invalid")
         records = sidecar.get("artifacts")
@@ -477,9 +481,19 @@ def _open_artifact_beneath(root: Path, path: Path) -> int:
         os.close(directory_descriptor)
 
 
+def result_record(job: MDJobRecord) -> MDJobRecord:
+    """Detach only plain reader inputs before sending filesystem work to a thread."""
+    return cast(MDJobRecord, SimpleNamespace(**{key: deepcopy(getattr(job, key, None)) for key in (
+        'id', 'model_id', 'output_dir', 'child_output_dir', 'params', 'provenance',
+    )}))
+
+
 def open_verified_artifact(job: MDJobRecord, artifact_id: str) -> tuple[ResolvedMDArtifact, BinaryIO]:
     artifact = resolve_artifact(job, artifact_id, verify=False)
-    root = _job_root(job)
+    return _open_verified_descriptor(_job_root(job), artifact)
+
+
+def _open_verified_descriptor(root: Path, artifact: ResolvedMDArtifact) -> tuple[ResolvedMDArtifact, BinaryIO]:
     descriptor = _open_artifact_beneath(root, artifact.path)
     try:
         file_stat = os.fstat(descriptor)
@@ -528,8 +542,21 @@ def artifact_inventory(job: MDJobRecord) -> dict[str, Any]:
     }
 
 
-def analysis_report(job: MDJobRecord) -> dict[str, Any]:
-    root, aggregate, inventory = _load_inventory(job)
+def _invocation_digest(path: Path, digests: dict) -> str:
+    identity = path.stat()
+    key = (path, identity.st_dev, identity.st_ino, identity.st_size,
+           identity.st_mtime_ns, identity.st_ctime_ns)
+    if key not in digests:
+        digests[key] = _digest(path)
+    return digests[key]
+
+
+def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict[str, Any]:
+    digests = _digests if _digests is not None else {}
+    root, aggregate, inventory = (_inventory if _inventory is not None
+        else _load_inventory(job, _digests=digests))
+    def digest(path):
+        return _invocation_digest(path, digests)
     reports: list[dict[str, Any]] = []
     states: list[dict[str, Any]] = []
     for replica in aggregate["replicas"]:
@@ -542,7 +569,7 @@ def analysis_report(job: MDJobRecord) -> dict[str, Any]:
             (item for item in inventory if item.replica_index == index and item.semantic_role == "md_analysis_report"),
             None,
         )
-        if report_artifact is None or path != report_artifact.path or path.stat().st_size != report_artifact.bytes or _digest(path) != report_artifact.sha256:
+        if report_artifact is None or path != report_artifact.path or path.stat().st_size != report_artifact.bytes or digest(path) != report_artifact.sha256:
             raise MDResultError("MD_ANALYSIS_REPORT_STALE", "MD analysis report does not match its immutable artifact manifest", 409)
         report = _load_json(path, "MD_ANALYSIS_REPORT_INVALID")
         report_identity = report.get("analysis_identity_sha256")
@@ -582,7 +609,7 @@ def analysis_report(job: MDJobRecord) -> dict[str, Any]:
             raise MDResultError("MD_ANALYSIS_REPORT_INVALID", "MD analysis report exceeds its residue-metric bound")
         manifest_path = root / "replicas" / f"replica_{index}" / "manifest.json"
         inputs = report.get("inputs")
-        if not isinstance(inputs, Mapping) or inputs.get("manifest_sha256") != _digest(manifest_path):
+        if not isinstance(inputs, Mapping) or inputs.get("manifest_sha256") != digest(manifest_path):
             raise MDResultError("MD_ANALYSIS_REPORT_STALE", "MD analysis report is not bound to the current replica manifest", 409)
         if report.get("status") == "completed":
             tool = report.get("tool")
@@ -636,8 +663,13 @@ def analysis_report(job: MDJobRecord) -> dict[str, Any]:
     }
 
 
-def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
-    root, aggregate, inventory = _load_inventory(job)
+def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict[str, Any]:
+    digests = _digests if _digests is not None else {}
+    root, aggregate, inventory = (_inventory if _inventory is not None
+        else _load_inventory(job, _digests=digests))
+    id_map = {item.artifact_id: item for item in inventory}
+    def digest(path):
+        return _invocation_digest(path, digests)
     replica_indices = [int(item["replica_index"]) for item in aggregate["replicas"]]
     if (
         aggregate.get("status") != "completed"
@@ -709,7 +741,7 @@ def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
         if not required_roles.issubset(roles_by_replica[index]):
             raise MDResultError("MD_COMPLETION_BLOCKED", f"MD replica {index} is missing required artifact roles", 409)
         replica_seeds.add(seed)
-        replica_hashes[index] = _digest(manifest_path)
+        replica_hashes[index] = digest(manifest_path)
 
     collection_path = root / "analysis" / "manifest.json"
     collection = _load_json(collection_path, "MD_ANALYSIS_COLLECTION_INVALID")
@@ -728,7 +760,7 @@ def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
         collection.get("schema") != "bms.md.analysis-collection.v1"
         or collection.get("status") != "completed"
         or collection.get("job_id") != job.id
-        or collection.get("aggregate_manifest_sha256") != _digest(root / "manifest.json")
+        or collection.get("aggregate_manifest_sha256") != digest(root / "manifest.json")
         or collection.get("replica_manifest_set_sha256") != replica_manifest_set_sha256
         or collection.get("required_analysis_children") != len(replica_indices)
         or collection.get("completed_analysis_children") != len(replica_indices)
@@ -742,7 +774,7 @@ def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
     ):
         raise MDResultError("MD_COMPLETION_BLOCKED", "MD analysis collection is incomplete or inconsistent", 409)
 
-    report_set = analysis_report(job)
+    report_set = analysis_report(job, _inventory=(root, aggregate, inventory), _digests=digests)
     reports = report_set.get("reports") or []
     if report_set.get("status") != "completed" or len(reports) != len(replica_indices):
         raise MDResultError("MD_COMPLETION_BLOCKED", "Required MD analysis reports are not complete", 409)
@@ -754,13 +786,13 @@ def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
         if not isinstance(report, Mapping) or report.get("replica") != expected_index:
             raise MDResultError("MD_COMPLETION_BLOCKED", "MD analysis report replica lineage is invalid", 409)
 
-    for artifact in inventory:
-        _artifact, handle = open_verified_artifact(job, artifact.artifact_id)
+    for artifact in id_map.values():
+        _artifact, handle = _open_verified_descriptor(root, artifact)
         handle.close()
 
     barrier = _load_json(root / "md_completion_barrier.json", "MD_COMPLETION_BARRIER_INVALID")
-    aggregate_sha256 = _digest(root / "manifest.json")
-    analysis_sha256 = _digest(collection_path)
+    aggregate_sha256 = digest(root / "manifest.json")
+    analysis_sha256 = digest(collection_path)
     if (
         barrier.get("schema") != "bms.md.completion-barrier.v1"
         or barrier.get("status") != "completed"
@@ -775,7 +807,7 @@ def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
         "aggregate_manifest_sha256": aggregate_sha256,
         "replica_manifest_set_sha256": replica_manifest_set_sha256,
         "analysis_manifest_sha256": analysis_sha256,
-        "completion_barrier_sha256": _digest(root / "md_completion_barrier.json"),
+        "completion_barrier_sha256": digest(root / "md_completion_barrier.json"),
     }
     if isinstance(prior_md, Mapping):
         for key in ("aggregate_manifest_sha256", "replica_manifest_set_sha256"):
@@ -794,15 +826,17 @@ def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
         "aggregate_manifest_sha256": aggregate_sha256,
         "replica_manifest_set_sha256": replica_manifest_set_sha256,
         "analysis_manifest_sha256": analysis_sha256,
-        "completion_barrier_sha256": _digest(root / "md_completion_barrier.json"),
+        "completion_barrier_sha256": digest(root / "md_completion_barrier.json"),
         "replica_child_ids": list(replica_child_ids),
         "analysis_child_ids": list(analysis_child_ids),
         "replica_count": len(replica_indices),
     }
 
 
-def apply_completion_barrier(job: MDJobRecord) -> dict[str, Any]:
-    snapshot = completion_barrier(job)
+def apply_completion_barrier(job: MDJobRecord, *, _snapshot=None) -> dict[str, Any]:
+    if getattr(job, "status", None) == "cancelled" or getattr(job, "awaiting_input", False):
+        raise MDResultError("MD_COMPLETION_CONFLICT", "MD cancellation or review owns the parent", 409)
+    snapshot = _snapshot if _snapshot is not None else completion_barrier(job)
     provenance = dict(getattr(job, "provenance", None) or {})
     completed_at = (getattr(job, "completed_at", None)
                     if provenance.get("md") == snapshot else None)

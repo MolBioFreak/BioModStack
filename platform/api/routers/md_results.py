@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -16,7 +17,9 @@ from schemas import JobCreate
 from scripts.bms_md.aggregate_children import publish_json_immutable
 from scripts.bms_md.spawn_analysis import QUALIFIED_RUNTIME_SHA256
 from services.md.lifecycle import reconcile_md_analysis_parent
-from services.md.results import MDResultError, analysis_report, artifact_inventory, open_verified_artifact, summary
+from services.md.results import MDResultError, analysis_report, artifact_inventory, open_verified_artifact, result_record, summary
+
+from services.remote_execution.executor import _joined_thread, _join_mutation
 
 router = APIRouter()
 MD_AUTHORIZATION_SCOPE = "job-bound/no-authenticated-principal"
@@ -67,7 +70,7 @@ def _raise(error: MDResultError) -> None:
 @router.get("/{job_id}/md/summary", description=f"Authorization scope: {MD_AUTHORIZATION_SCOPE}")
 async def get_md_summary(job_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     try:
-        return summary(await _job(job_id, session))
+        return await _joined_thread(summary, result_record(await _job(job_id, session)))
     except MDResultError as exc:
         _raise(exc)
 
@@ -75,7 +78,7 @@ async def get_md_summary(job_id: str, session: AsyncSession = Depends(get_sessio
 @router.get("/{job_id}/md/artifacts", description=f"Authorization scope: {MD_AUTHORIZATION_SCOPE}")
 async def get_md_artifacts(job_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     try:
-        return artifact_inventory(await _job(job_id, session))
+        return await _joined_thread(artifact_inventory, result_record(await _job(job_id, session)))
     except MDResultError as exc:
         _raise(exc)
 
@@ -84,7 +87,7 @@ async def get_md_artifacts(job_id: str, session: AsyncSession = Depends(get_sess
 async def get_md_analysis(job_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     try:
         job = await _job(job_id, session)
-        report = analysis_report(job)
+        report = await _joined_thread(analysis_report, result_record(job))
         children = list(
             (
                 await session.execute(
@@ -116,7 +119,7 @@ async def get_md_analysis(job_id: str, session: AsyncSession = Depends(get_sessi
         md = (job.provenance or {}).get("md") if isinstance(job.provenance, dict) else None
         accepted_set = md.get("replica_manifest_set_sha256") if isinstance(md, dict) else None
         lifecycle_retrying = isinstance(md, dict) and md.get("analysis_state") == "retrying"
-        generation_matches = _generation_matches_accepted(job)
+        generation_matches = await _joined_thread(_generation_matches_accepted, result_record(job))
         eligible = bool(
             report.get("status") != "completed"
             and failed_or_missing
@@ -147,11 +150,15 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
     if parent is None:
         raise HTTPException(status_code=404, detail="Job not found")
     try:
-        summary(parent)
+        await _joined_thread(summary, result_record(parent))
     except MDResultError as exc:
         _raise(exc)
     if parent.model_id != "molecular_dynamics" or parent.mode != "simulate" or parent.parent_job_id is not None:
         raise HTTPException(status_code=409, detail={"code": "MD_PARENT_REQUIRED", "message": "MD parent job is required"})
+    await session.refresh(parent)
+    if parent.status == "cancelled" or parent.awaiting_input:
+        raise HTTPException(status_code=409, detail={"code": "MD_ANALYSIS_RETRY_NOT_ELIGIBLE",
+            "message": "MD cancellation or review owns the parent"})
     current_md = (parent.provenance or {}).get("md") if isinstance(parent.provenance, dict) else None
     if isinstance(current_md, dict) and current_md.get("analysis_state") == "retrying":
         raise HTTPException(
@@ -188,7 +195,8 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
         )
 
     try:
-        parent_root, aggregate, manifest_records, current_aggregate_sha256, manifest_set_sha256 = _current_dynamics_generation(parent)
+        parent_root, aggregate, manifest_records, current_aggregate_sha256, manifest_set_sha256 = await _joined_thread(
+            _current_dynamics_generation, result_record(parent))
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=409,
@@ -216,7 +224,9 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
     if isinstance(current_md, dict) and isinstance(current_md.get("replica_manifest_set_sha256"), str):
         accepted_sets.add(current_md["replica_manifest_set_sha256"])
     if (
-        not _generation_matches_accepted(parent)
+        not isinstance(current_md, dict)
+        or current_md.get("aggregate_manifest_sha256") != current_aggregate_sha256
+        or current_md.get("replica_manifest_set_sha256") != manifest_set_sha256
         or len(accepted_sets) != 1
         or manifest_set_sha256 not in accepted_sets
     ):
@@ -236,6 +246,45 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
                     and (row.get('expansion_json') or {}).get('child_stage') == 'md_analysis'
                     for row in templates)):
             raise HTTPException(status_code=409, detail='Remote MD analysis retry requires its retained approved analysis expansion')
+
+    if approved is not None:
+        from services.remote_execution.executor import retry_component_execution
+        # The retained shared owner persists its own exact-operation intent and
+        # reacquires the original target. Never submit a scheduler-visible leaf.
+        source = next((latest[index] for index in retry_indices if index in latest), None)
+        component_id = str(source.id) if source is not None else f"{job_id}:md_analysis"
+        operation_id = "md-analysis:" + hashlib.sha256(json.dumps(
+            [job_id, parent.remote_attempt_id, manifest_set_sha256, retry_indices,
+             [str(latest[index].id) if index in latest else None for index in retry_indices]],
+            separators=(",", ":"),
+        ).encode()).hexdigest()
+        try:
+            receipt = await retry_component_execution(session, parent,
+                component_id=component_id, operation_id=operation_id,
+                actor="md-analysis-retry:" + job_id, failure_code="execution_failed")
+        except Exception as exc:
+            # The shared outbox remains the uncertainty owner. No replacement
+            # Jobs, fallback leaf admission or automatic replay is introduced.
+            raise HTTPException(status_code=409, detail={
+                "code": "MD_ANALYSIS_RETRY_ACTUATION_UNCERTAIN",
+                "message": "Retained shared analysis retry requires explicit same-operation recovery",
+            }) from exc
+        await session.refresh(parent)
+        if parent.status == "cancelled" or parent.awaiting_input:
+            return {"schema": "bms.md.analysis-retry.v1", "status": "cancelled",
+                "created_child_ids": []}
+        provenance = dict(parent.provenance or {})
+        md = dict(provenance.get("md") or {})
+        md.update(schema="bms.md.lifecycle.v1", dynamics_state="completed",
+            analysis_state="retrying", result_state="partial",
+            aggregate_manifest_sha256=current_aggregate_sha256,
+            replica_manifest_set_sha256=manifest_set_sha256)
+        provenance["md"] = md
+        parent.provenance = provenance
+        await session.commit()
+        child_id = receipt.get("child_job_id") or receipt.get("component_id")
+        return {"schema": "bms.md.analysis-retry.v1", "status": "scheduled",
+            "created_child_ids": [str(child_id)] if child_id else []}
 
     provenance = dict(parent.provenance or {})
     md = dict(provenance.get("md") or {})
@@ -274,7 +323,7 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
                 "replica_manifest_set_sha256": manifest_set_sha256,
             }
             work_item_path = work_item_dir / f"replica_{replica}.json"
-            publish_json_immutable(work_item, work_item_path)
+            await _joined_thread(publish_json_immutable, work_item, work_item_path)
             child_request = JobCreate(
                     name=f"{parent.name} - MD analysis retry replica {replica}",
                     model_id="molecular_dynamics",
@@ -294,17 +343,7 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
                     pinned_gpu=None,
                     sequence_length=None,
                 )
-            handoff = {}
-            if approved is not None:
-                from component_runtime import canonical_bytes
-                from routers.jobs import ApprovedExecutionPlan
-                child_request.execution_target_id = parent.execution_target_id
-                handoff['_approved_execution_plan'] = ApprovedExecutionPlan(
-                    canonical_bytes(child_request.model_dump(mode='json')),
-                    canonical_bytes({'approval_digest': approved['approval_digest'],
-                        'plan': approved['plan'], 'admissible': True,
-                        'deferred_preparation': [], 'blockers': []}))
-            response = await create_job(child_request, BackgroundTasks(), session, **handoff)
+            response = await create_job(child_request, BackgroundTasks(), session)
             created_ids.append(str(response.id))
     except Exception as exc:
         await session.rollback()
@@ -403,7 +442,15 @@ def _stream_verified_artifact(handle: BinaryIO, *, name: str, size: int, request
 @router.get("/{job_id}/md/artifacts/{artifact_id}/content", description=f"Authorization scope: {MD_AUTHORIZATION_SCOPE}")
 async def get_md_artifact_content(job_id: str, artifact_id: str, request: Request, session: AsyncSession = Depends(get_session)):
     try:
-        artifact, handle = open_verified_artifact(await _job(job_id, session), artifact_id)
+        record = result_record(await _job(job_id, session))
+        task = asyncio.create_task(asyncio.to_thread(open_verified_artifact, record, artifact_id))
+        try:
+            artifact, handle = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await _join_mutation(task)
+            if not task.cancelled() and task.exception() is None:
+                task.result()[1].close()
+            raise
         return _stream_verified_artifact(handle, name=artifact.name, size=artifact.bytes, request=request)
     except MDResultError as exc:
         _raise(exc)
