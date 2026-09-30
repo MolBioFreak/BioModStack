@@ -5,7 +5,7 @@ import math
 import re
 from typing import Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, OnErrorOmit, RootModel, StrictBool, StrictFloat, StrictInt, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, OnErrorOmit, RootModel, StrictBool, StrictFloat, StrictInt, ValidationError, field_validator, model_serializer, model_validator
 
 ActionKind = Literal["primitive", "meta"]
 ActionSafety = Literal["read_only", "service", "motion", "stop", "emergency"]
@@ -3547,10 +3547,37 @@ class PipetteReceipt(BaseModel):
     truth: PipetteReceiptTruth
     runtime_binding: dict[str, JsonValue]
     ownership_epoch: StrictInt
-    source_identity: PipetteReceiptSourceIdentity
-    deployment_identity: PipetteReceiptDeploymentIdentity
+    # Both native source shapes stay closed; supplied release metadata is validated
+    # by the same strict owner as direct responses, never dropped to fit legacy.
+    source_identity: "PipetteReceiptSourceIdentity | PipetteDirectSourceIdentity"
+    # Successful passive observations intentionally retain release attribution in
+    # source_identity only. Preserve absence, rather than publishing a fake/null
+    # deployment. Full current and historical summary identities remain strict.
+    deployment_identity: "PipetteReceiptDeploymentIdentity | PipetteDirectReleaseIdentity | None" = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     response: dict[str, JsonValue] | None = None
     stage_receipts: list[dict[str, JsonValue]] = Field(default_factory=list, max_length=256)
+
+    @field_validator("deployment_identity", mode="before")
+    @classmethod
+    def validate_supplied_deployment_identity(cls, value):
+        if value is None:
+            raise ValueError("supplied deployment_identity must be an identity object")
+        return value
+
+    @model_validator(mode="after")
+    def validate_compact_deployment_omission(self):
+        if "deployment_identity" not in self.model_fields_set and not (
+            self.operation == "tip_status"
+            and self.result.get("ok") is True
+            and self.truth.semantic_query_response_verified is True
+            and self.runtime_binding.get("entrypoint_id")
+                == "hardware.snapshot.park_tip_observation"
+            and isinstance(self.result.get("collection_source"), dict)
+        ):
+            raise ValueError("deployment_identity omission requires the native compact passive receipt")
+        return self
 
 
 class OperatorDashboardPipetteChannel(BaseModel):
@@ -3900,7 +3927,7 @@ class PipetteDirectRuntimeReceipt(BaseModel):
 
 
 class PipetteDirectReleaseIdentity(BaseModel):
-    """Private producer envelope, validated then omitted, never public authority."""
+    """Strict native packet; direct POST response metadata remains private."""
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_name: Literal["bioxp.runtime.release_identity.v1"] = Field(alias="schema")
     status: Literal["verified", "unverified"]
@@ -3913,6 +3940,25 @@ class PipetteDirectReleaseIdentity(BaseModel):
     binding: PipetteDirectReleaseBinding
     runtime_release_receipt: PipetteDirectRuntimeReceipt | None
     observation: PipetteDirectReleaseObservation
+
+    @model_serializer(mode="wrap")
+    def preserve_supplied_identity_fields(self, handler):
+        # Native release packets predate optional host/launcher observations.
+        # Preserve their supplied fields (including explicit null), not invented
+        # default metadata, when retained receipts expose the validated packet.
+        serialized = handler(self)
+
+        def supplied_only(model, value):
+            if not isinstance(model, BaseModel) or not isinstance(value, dict):
+                return value
+            return {
+                key: supplied_only(getattr(model, key), item)
+                for key, item in value.items() if key in model.model_fields_set
+            }
+
+        for name in ("source", "binding", "observation"):
+            serialized[name] = supplied_only(getattr(self, name), serialized[name])
+        return serialized
 
 
 class PipetteDirectSourceIdentity(PipetteReceiptSourceIdentity):
@@ -4666,8 +4712,10 @@ class OperatorLegacyHistoryPipetteReceipt(BaseModel):
     truth: OperatorLegacyPipetteReceiptTruth
     runtime_binding: dict[str, JsonValue]
     ownership_epoch: StrictInt
-    source_identity: PipetteReceiptSourceIdentity
-    deployment_identity: PipetteReceiptDeploymentIdentity
+    # Pre-semantic-query history keeps its required deployment field; accept
+    # either existing strict identity shape without rewriting retained rows.
+    source_identity: PipetteReceiptSourceIdentity | PipetteDirectSourceIdentity
+    deployment_identity: PipetteReceiptDeploymentIdentity | PipetteDirectReleaseIdentity
     response: dict[str, JsonValue]
     stage_receipts: list[dict[str, JsonValue]] = Field(max_length=256)
     status: str = Field(min_length=1, max_length=80)
