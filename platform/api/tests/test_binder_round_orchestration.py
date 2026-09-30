@@ -328,8 +328,10 @@ async def test_multi_designers_each_sequence_each_validator_real_queue_and_repla
         predictions = list(await session.scalars(select(Job).where(Job.model_id.in_(['boltz2', 'esmfold2']))))
         assert len(predictions) == 8, result
         assert len(result['steps']) == 10
+        from services.analysis_autorun import _is_binder_round_prediction
         for child in predictions:
             meta = child.provenance[rounds.STEP]
+            assert _is_binder_round_prediction(child)
             assert meta['backbone_design_id'] == 'd0'
             assert meta['model_id'] == child.model_id
             assert meta['designer_model_id'] in {'proteinmpnn', 'caliby_binder'}

@@ -177,7 +177,7 @@ async def _plan(session, root, progress, request, *, retry=False):
                                 'target_state': target_source.get('name') if target_source else None,
                                 'binder_chains': binder, 'target_chains': target, 'sample_index': sample}
                             if multi:
-                                metadata.update(schema_version=2, model_id=settings.model_id,
+                                metadata.update(model_id=settings.model_id,
                                     designer_model_id=settings.model_id if is_backbone else (prior or {}).get('model_id'))
                             if base_request is None:
                                 # Resolve immutable inputs only when this pair needs work.
