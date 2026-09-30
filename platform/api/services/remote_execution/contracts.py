@@ -434,7 +434,7 @@ class RemoteAttemptStatus(StrictModel):
     attempt_id: str
     job_id: str
     state: Literal[
-        "prepared", "running", "awaiting_input", "cancelling", "cancelled", "succeeded", "failed", "lost"
+        "prepared", "running", "paused", "awaiting_input", "cancelling", "cancelled", "succeeded", "failed", "lost"
     ]
     supervisor_pid: int | None = None
     supervisor_start_ticks: int | None = None

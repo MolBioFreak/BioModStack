@@ -608,6 +608,65 @@ def component_retry_control(attempt_dir: Path, *, attempt_id: str, expected_boot
         return {**edge, "worker_status": status(attempt_dir)}
 
 
+def md_production_control(attempt_dir: Path, *, attempt_id: str, expected_boot_id: str,
+                          lease_id: str, operation_id: str, resume: bool = False,
+                          pause_operation_id: str | None = None,
+                          continuation_lease_id: str | None = None,
+                          resources: dict | None = None, checkpoints: dict | None = None) -> dict:
+    """Existing attempt command receiver for production stop and continuation."""
+    with (attempt_dir / 'start.lock').open('a+b') as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        current = status(attempt_dir)
+        if (current['attempt_id'] != attempt_id or current['boot_id'] != expected_boot_id
+                or expected_boot_id != boot_id()):
+            raise RuntimeError('MD control attempt/boot conflicts')
+        envelope = load_json(envelope_path(attempt_dir))
+        runtime = _component_checkpoint_runtime(envelope)
+        if runtime is None or runtime.lease_id != lease_id:
+            raise RuntimeError('MD control original lease conflicts')
+        if not resume:
+            runtime.request_md_pause(operation_id, boot_id=expected_boot_id)
+            return runtime.root_state()
+        claim = attempt_dir / ('md-resume-launch-' + hashlib.sha256(operation_id.encode()).hexdigest() + '.json')
+        binding = dict(operation_id=operation_id, attempt_id=attempt_id,
+                       boot_id=expected_boot_id, continuation_lease_id=continuation_lease_id)
+        if claim.exists():
+            state = runtime.root_state()
+            edge = state.get('continuation_edge', {})
+            if (load_json(claim) != binding or edge.get('pause_operation_id') != pause_operation_id
+                    or edge.get('resources') != resources
+                    or (checkpoints is not None and edge.get('md_resume') != checkpoints)):
+                raise RuntimeError('MD continuation launch identity conflicts')
+            return state
+        if current.get('state') != 'paused' or not current.get('quiescent'):
+            raise RuntimeError('MD continuation requires paused worker ownership')
+        if (attempt_dir / CANCEL_REQUEST_FILE).exists():
+            raise RuntimeError('Cancelled attempt cannot continue')
+        from scripts.lib.component_adapter import resume_md_workflow
+        state = resume_md_workflow(Path(envelope['environment']['BMS_COMPONENT_CONTEXT']),
+            operation_id=operation_id, pause_operation_id=pause_operation_id,
+            boot_id=expected_boot_id, continuation_lease_id=continuation_lease_id,
+            resources=resources, checkpoints=checkpoints)
+        edge = state['continuation_edge']
+        with status_path(attempt_dir).with_suffix('.json.lock').open('a+b') as status_lock:
+            fcntl.flock(status_lock.fileno(), fcntl.LOCK_EX)
+            latest = load_json(status_path(attempt_dir))
+            if latest != current or (attempt_dir / CANCEL_REQUEST_FILE).exists():
+                raise RuntimeError('MD continuation status changed during authorization')
+            latest.update(state='prepared', supervisor_pid=None, supervisor_start_ticks=None,
+                workflow_pid=None, workflow_start_ticks=None, quiescent=False,
+                continuation_lease_id=continuation_lease_id, exit_code=None, completed_at=None,
+                started_at=None, result_manifest_sha256=None, error=None, control_group=None,
+                diagnostic_offsets=None, generation=state['generation'], plan_sha256=edge['plan_sha256'],
+                native_output_directory=edge['parent_snapshot']['output_dir'])
+            _write_atomic_json(status_path(attempt_dir), latest)
+        atomic_json(claim, binding)
+        with (attempt_dir / 'supervisor.log').open('ab', buffering=0) as log:
+            subprocess.Popen([sys.executable, os.path.realpath(__file__), 'supervise', '--attempt-dir', str(attempt_dir)],
+                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True, start_new_session=True)
+        return state
+
+
 def _generation_envelope(envelope: dict, runtime: Any) -> dict:
     """Project native output only; transport retains the whole attempt root."""
     root = runtime.root_state() if runtime is not None else None
@@ -883,6 +942,12 @@ def _supervise_owned(attempt_dir: Path) -> int:
                 from scripts.open_stage_gate import component_checkpoint_projection
                 checkpoints = component_checkpoint_projection(runtime)
                 root_state = runtime.root_state() or {}
+                if root_state.get('state') == 'paused' and root_state.get('md_pause'):
+                    latest = load_json(status_path(attempt_dir))
+                    latest.update(state='paused', quiescent=True, exit_code=exit_code,
+                                  result_manifest_sha256=None, error=None)
+                    atomic_json(status_path(attempt_dir), latest)
+                    return 0
                 if checkpoints:
                     if root_state.get("state") != "paused":
                         raise RuntimeError("Pending checkpoint has no durable paused root")
@@ -1149,7 +1214,7 @@ def status(attempt_dir: Path) -> dict[str, Any]:
             if rebooted:
                 value.update(state="lost", quiescent=True, completed_at=utc_now(),
                              error="Worker rebooted; explicit supported recovery required")
-            elif cancellation_requested and value.get("state") == "awaiting_input":
+            elif cancellation_requested and value.get("state") in {"awaiting_input", "paused"}:
                 # The former subreaper sealed the pause after joining every writer.
                 # Keep that proof; absence of a supervisor alone is insufficient.
                 runtime = _component_checkpoint_runtime(envelope)
@@ -1241,6 +1306,14 @@ def parser() -> argparse.ArgumentParser:
     cancel_command = sub.add_parser("cancel")
     cancel_command.add_argument("--attempt-dir", required=True)
     cancel_command.add_argument("--timeout-seconds", type=float, default=30.0)
+    for name in ('md-pause', 'md-resume'):
+        control = sub.add_parser(name)
+        for field in ('attempt-dir', 'attempt-id', 'expected-boot-id', 'lease-id', 'operation-id'):
+            control.add_argument('--' + field, required=True)
+        if name == 'md-resume':
+            for field in ('pause-operation-id', 'continuation-lease-id', 'resources-json'):
+                control.add_argument('--' + field, required=True)
+            control.add_argument('--checkpoints-json')
     for name in ("checkpoint-resume", "checkpoint-status"):
         checkpoint = sub.add_parser(name)
         for field in ("attempt-dir", "attempt-id", "expected-boot-id", "lease-id", "checkpoint-id",
@@ -1278,6 +1351,14 @@ def main() -> int:
         result = status(attempt_dir)
     elif args.command == "cancel":
         result = cancel(attempt_dir, args.timeout_seconds)
+    elif args.command in {'md-pause', 'md-resume'}:
+        resume = args.command == 'md-resume'
+        result = md_production_control(attempt_dir, attempt_id=args.attempt_id,
+            expected_boot_id=args.expected_boot_id, lease_id=args.lease_id, operation_id=args.operation_id,
+            resume=resume, pause_operation_id=args.pause_operation_id if resume else None,
+            continuation_lease_id=args.continuation_lease_id if resume else None,
+            resources=json.loads(args.resources_json) if resume else None,
+            checkpoints=json.loads(args.checkpoints_json) if resume and args.checkpoints_json else None)
     elif args.command in {"checkpoint-resume", "checkpoint-status"}:
         result = checkpoint_control(attempt_dir, attempt_id=args.attempt_id,
             expected_boot_id=args.expected_boot_id, lease_id=args.lease_id,

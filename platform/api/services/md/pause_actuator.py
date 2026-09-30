@@ -281,6 +281,98 @@ async def _register_checkpoint(
     return checkpoint
 
 
+async def _pause_shared_run(session: AsyncSession, *, run: MdRun, parent: Job,
+                            expected_version: int, idempotency_key: str,
+                            receipt_timeout_seconds: float) -> MdRun:
+    from services.remote_execution.executor import pause_md_production
+    from .state import append_event_cas
+    await request_pause(session, job_id=run.job_id, expected_version=expected_version,
+                        idempotency_key=idempotency_key)
+    await session.commit()
+    observation = await pause_md_production(session, parent, operation_id=idempotency_key,
+                                          timeout_seconds=receipt_timeout_seconds)
+    replicas = list((await session.scalars(select(MdReplicaRun).where(
+        MdReplicaRun.md_job_id == run.job_id, MdReplicaRun.active.is_(True)))).all())
+    by_component = {}
+    for replica in replicas:
+        child = await session.get(Job, replica.child_job_id) if replica.child_job_id else None
+        if child:
+            by_component[(child.provenance or {}).get('component_id')] = (replica, child)
+    for identity, checkpoint in observation['md_checkpoints'].items():
+        if identity not in by_component:
+            raise MdStateError('MD_PAUSE_ACTUATION_FAILED', 'paused native replica projection is not yet registered')
+        replica, child = by_component[identity]
+        segment = await _active_segment(session, replica.id)
+        native = Path(checkpoint['local_output_dir'] if 'local_output_dir' in checkpoint
+                      else checkpoint['md_resume_output_dir'])
+        payload, path, relative = _checkpoint_receipt([native])
+        if payload != checkpoint['receipt']:
+            raise MdStateError('MD_PAUSE_CHECKPOINT_INVALID', 'returned checkpoint receipt changed')
+        await _register_checkpoint(session, run=run, replica=replica, segment=segment,
+            child=child, payload=payload, checkpoint_path=path, relative_path=relative)
+        segment.state = replica.state = 'paused'
+        segment.end_step = payload['step']; segment.end_time_ps = float(payload['time_ps'])
+        child.status = child.queue_status = 'paused'
+        child.paused = True; child.assigned_gpu = None
+        await session.commit()
+    run = await session.get(MdRun, run.job_id, populate_existing=True)
+    parent = await session.get(Job, parent.id, populate_existing=True)
+    if run.phase != 'checkpointing' or parent.status == 'cancelled' or parent.queue_status == 'cancelling':
+        raise MdStateError('MD_PAUSE_TRANSITION_INVALID', 'pause ownership changed during native stop')
+    # Queued serialized siblings never had production writers. Keep them queued
+    # in the existing component ledger; only root ownership controls dispatch.
+    parent.status = parent.queue_status = 'paused'
+    parent.paused = True; parent.assigned_gpu = None
+    provenance = dict(parent.provenance or {})
+    provenance['md_production_pause'] = dict(operation_id=idempotency_key, observation=observation)
+    parent.provenance = provenance
+    await session.flush()
+    return await append_event_cas(session, job_id=run.job_id,
+        idempotency_key=idempotency_key + ':complete', event_type='pause_completed',
+        expected_version=run.state_version, next_phase='paused', block_controls=False)
+
+
+async def resume_shared_md_run(session: AsyncSession, *, job_id: str,
+                               expected_version: int, idempotency_key: str) -> list[MdAttemptSegment]:
+    """Parent state.resume_run seam: durable segments before root continuation."""
+    from .state import _replay_event, append_event_cas, resume_replica
+    from .artifacts import resolve_resume_checkpoint_artifacts
+    from services.remote_execution.executor import resume_md_production
+    event = await _replay_event(session, job_id=job_id, idempotency_key=idempotency_key,
+                               event_type='resume_requested', expected_version=expected_version)
+    parent = await session.get(Job, job_id)
+    if event:
+        ids = event.payload['segment_ids']
+        segments = [await session.get(MdAttemptSegment, identity) for identity in ids]
+        mapping = event.payload['component_segments']
+    else:
+        run = await session.get(MdRun, job_id)
+        if run is None or run.phase != 'paused' or run.controls_blocked:
+            raise MdStateError('MD_RESUME_UNAVAILABLE', 'run is not durably paused')
+        replicas = list((await session.scalars(select(MdReplicaRun).where(
+            MdReplicaRun.md_job_id == job_id, MdReplicaRun.active.is_(True)))).all())
+        paused = [replica for replica in replicas if replica.state == 'paused']
+        resolved = await resolve_resume_checkpoint_artifacts(session, job_id=job_id, replicas=paused)
+        segments = []; mapping = {}
+        for replica in paused:
+            checkpoint, _ = resolved[replica.id]
+            child = await session.get(Job, replica.child_job_id)
+            identity = (child.provenance or {}).get('component_id')
+            segment = await resume_replica(session, job_id=job_id, replica_run_id=replica.id,
+                                          checkpoint_id=checkpoint.id)
+            segments.append(segment)
+            mapping[identity] = {'md_resume_segment_id':segment.id}
+            child.paused = False
+            # Component descendants are processless projections, not fleet work.
+            child.queue_status = 'completed'
+        await append_event_cas(session, job_id=job_id, idempotency_key=idempotency_key,
+            event_type='resume_requested', expected_version=expected_version, next_phase='replicas_queued',
+            payload={'segment_ids':[segment.id for segment in segments], 'component_segments':mapping})
+        await session.commit()
+    await resume_md_production(session, parent, operation_id=idempotency_key, checkpoints=mapping)
+    return segments
+
+
 async def pause_running_md_run(
     session: AsyncSession,
     *,
@@ -298,6 +390,14 @@ async def pause_running_md_run(
             session, job_id=job_id, expected_version=expected_version,
             idempotency_key=idempotency_key,
         )
+
+    parent = await session.get(Job, job_id)
+    provenance = (parent.provenance or {}) if parent else {}
+    remote_context = (provenance.get('remote_execution_receipt') or {}).get('component_context_identity')
+    if parent and (provenance.get('component_context_path') or remote_context):
+        return await _pause_shared_run(session, run=run, parent=parent,
+            expected_version=expected_version, idempotency_key=idempotency_key,
+            receipt_timeout_seconds=receipt_timeout_seconds)
 
     recovering_checkpointing = run.phase == "checkpointing"
     replicas = list((await session.scalars(select(MdReplicaRun).where(

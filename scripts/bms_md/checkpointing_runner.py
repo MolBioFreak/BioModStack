@@ -32,6 +32,23 @@ def _wait_for_process_group_exit(process_group: int, *, timeout_seconds: float) 
         time.sleep(0.05)
 
 
+def _receipt_config_path(config_path: Path) -> Path:
+    """Shared plan identity is the retained replica request, not GPU rebinding.
+
+    The scientific command still consumes its native runtime config. Only the
+    checkpoint receipt's existing plan/compatibility identity uses the original
+    launch-bound normalized document, like the durable replica segment owner.
+    Historical independent workers keep their supplied config unchanged.
+    """
+    if os.environ.get('BMS_COMPONENT_CONTEXT') is None:
+        return config_path
+    from scripts.lib.component_adapter import runtime_from_environment
+    runtime = runtime_from_environment()
+    assert runtime is not None
+    request = runtime.request(os.environ['BMS_COMPONENT_JOB_ID'])
+    return Path(request.payload['params']['md_job_config']).resolve(strict=True)
+
+
 def run_checkpointable_command(
     *,
     command: Sequence[str],
@@ -85,7 +102,7 @@ def run_checkpointable_command(
         assert stop_deadline is not None
         _wait_for_process_group_exit(process_group, timeout_seconds=max(0.0, stop_deadline - time.monotonic()))
         write_checkpoint_receipt(
-            config_path=config_path,
+            config_path=_receipt_config_path(config_path),
             output_dir=output_dir,
             gmx_binary=gmx_binary,
             minimum_mtime_ns=pause_requested_at_ns,
