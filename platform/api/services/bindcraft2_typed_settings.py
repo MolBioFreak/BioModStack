@@ -55,9 +55,9 @@ def _namespace(data: dict) -> dict:
         for name, entry in data['registered_metrics'][block].items():
             def metric():
                 pass
-            metric.__signature__ = inspect.Signature([
+            setattr(metric, '__signature__', inspect.Signature([
                 inspect.Parameter(key, inspect.Parameter.KEYWORD_ONLY)
-                for key in entry['params']])
+                for key in entry['params']]))
             registry[name] = metric
         return registry
 

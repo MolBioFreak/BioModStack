@@ -99,10 +99,12 @@ def test_catalog_list_detail_preserve_parameter_metadata(client, monkeypatch):
         model_config = ConfigDict(extra='allow')
     registry = get_registry()
     model = registry.get_model('protenix')
+    assert model is not None
     field = next(p for p in model.params if p.name == 'protenix_n_step')
-    enriched = PresentationParameter(**field.model_dump(), label='Diffusion steps', step=1,
-        ui_control='slider', group='sampling', units='steps', applicability={'use_msa': True},
-        accepted_types=['integer'])
+    enriched = PresentationParameter.model_validate({**field.model_dump(),
+        'label': 'Diffusion steps', 'step': 1, 'ui_control': 'slider',
+        'group': 'sampling', 'units': 'steps', 'applicability': {'use_msa': True},
+        'accepted_types': ['integer']})
     monkeypatch.setattr(model, 'params', [enriched if p.name == field.name else p for p in model.params])
     detail = client.get('/api/models/protenix').json()
     listed = next(m for m in client.get('/api/models').json() if m['id'] == 'protenix')
