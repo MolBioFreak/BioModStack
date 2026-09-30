@@ -286,12 +286,16 @@ def snapshot(path):
 
 
 def copy_input(source, target, guest, direct_images, *, writable=False):
-    """Private CoW projection over pinned ancestry; no shared writable binds."""
+    """Return source snapshot from the checked private CoW projection walk."""
     directories = []
+    identities, cloned = {}, {}
     for parent, name, relative, info in views._walk_tree(source):
+        link = os.readlink(name, dir_fd=parent) if stat.S_ISLNK(info.st_mode) else None
+        identities[relative] = views._identity(info) + (link,)
         destination = target if relative == '.' else target / relative
         if stat.S_ISLNK(info.st_mode):
-            os.symlink(os.readlink(name, dir_fd=parent), destination)
+            assert link is not None
+            os.symlink(link, destination)
         elif stat.S_ISDIR(info.st_mode):
             destination.mkdir(mode=0o700)
             directories.append((destination, stat.S_IMODE(info.st_mode) | (0o200 if writable else 0)))
@@ -305,14 +309,20 @@ def copy_input(source, target, guest, direct_images, *, writable=False):
             with views._member(parent, name) as (fd, before):
                 if not views._same(info, before):
                     raise ValueError('declared input changed during projection')
+                key = (before.st_dev, before.st_ino)
+                if key in cloned:
+                    os.link(cloned[key], destination, follow_symlinks=False)
+                    continue
                 out = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 try:
                     fcntl.ioctl(out, views.FICLONE, fd)
                     os.fchmod(out, stat.S_IMODE(before.st_mode) | (0o200 if writable else 0))
+                    cloned[key] = destination
                 finally:
                     os.close(out)
     for directory, mode in reversed(directories):
         directory.chmod(mode)
+    return identities
 
 
 def inherited_fds():
@@ -389,15 +399,14 @@ def execute(invocation, identity):
             if mode == 'rw' and not protected:
                 volumes.append((str(source), target))
                 continue
-            before = snapshot(source)
             projected = inputs / str(index)
             # PRoot can temporarily chmod frozen 0444/0555 inputs even for a
             # read. Normalize only the PRIVATE CoW view before its strict ro
             # baseline; shared originals and write-and-restore detection stay.
             if protected:
-                copy_input(source, projected, target, direct_images, writable=True)
+                before = copy_input(source, projected, target, direct_images, writable=True)
             else:
-                copy_input(source, projected, target, direct_images)
+                before = copy_input(source, projected, target, direct_images)
             if snapshot(source) != before:
                 raise ValueError('declared input changed during projection')
             guarded.append((source, before, projected, snapshot(projected) if mode == "ro" else None))
