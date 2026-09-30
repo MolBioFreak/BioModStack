@@ -135,6 +135,20 @@ async def test_public_authenticated_continuation_import_preserves_checkpoint_seg
     assert runtime.claim_root(owner_id='owner', boot_id=boot)
     runtime.set_root_state('running', owner_id='owner', boot_id=boot, quiescent=False, **generation)
     assert runtime.claim(child, owner_id='owner', boot_id=boot)
+    request = runtime.request(child)
+    resumed_context = dict(runtime.context, child_id=child, child_output_dir=checkpoint['output_dir'],
+        md_resume=native)
+    resumed_invocation = nextflow.compile_component_nextflow_invocation(request, resumed_context)
+    resumed_snapshot = nextflow.component_native_parent_snapshot(resumed_invocation, request, resumed_context)
+    runtime.bind_native_parent(child, resumed_snapshot, owner_id='owner', boot_id=boot)
+    assert runtime.native_parent(child)==snapshot
+    from copy import deepcopy
+    for changed_key in ('md_replica_seed', 'md_resume_checkpoint_sha256'):
+        conflicting = deepcopy(resumed_snapshot)
+        conflicting['params'][changed_key] = 999 if changed_key == 'md_replica_seed' else 'f'*64
+        with pytest.raises(ValueError, match='immutable native parent snapshot conflicts'):
+            runtime.bind_native_parent(child, conflicting, owner_id='owner', boot_id=boot)
+        assert runtime.native_parent(child)==snapshot
     output = Path(checkpoint['output_dir'])
     if outcome=='completed':
         runtime.execution_finished(child, owner_id='owner', boot_id=boot, output_dir=str(output), exit_code=0)
@@ -387,6 +401,12 @@ async def test_public_pause_running_adapter_process_import_and_resume(store, ret
         invocation = real_compile(request, ctx)
         output = Path(ctx['child_output_dir'])
         native = Path(invocation.native_parameters['md_resume_output_dir'])
+        if ctx.get('md_resume'):
+            resumed = ctx['md_resume'].get(request.component_id)
+            command = [sys.executable, '-c',
+                "from pathlib import Path;import sys;p=sys.argv[1];assert not p or Path(p).read_bytes()==b'inert public production bytes';Path(sys.argv[2]).write_bytes(b'inert continued result')",
+                resumed['md_resume_checkpoint'] if resumed else '', str(output/'inert-result')]
+            return replace(invocation, command=tuple(command))
         gmx = output/'inert-gmx'
         gmx.write_text('#!'+sys.executable+'\nprint("step = 20 t = 0.04")\n')
         gmx.chmod(0o755)
@@ -437,6 +457,45 @@ while True: time.sleep(.02)
             segment=await session.get(MdAttemptSegment,response.json()['segment_ids'][0])
             assert segment.source_checkpoint_id==accepted.id
             assert parent.status=='queued' and projected.queue_status=='completed'
+        real_collector = nextflow.compile_component_retry_invocation
+        collector = '''import time
+from pathlib import Path
+from scripts.lib.component_adapter import runtime_from_environment
+from component_runtime import ResultReference,file_identity
+r=runtime_from_environment()
+while True:
+    rows=r.children()
+    for row in rows:
+        if row['status']=='execution_finished':
+            p=Path(row['output_dir'])/'inert-result'
+            sha,size=file_identity(p)
+            r.complete_validated_child(row['id'],result={'output_dir':row['output_dir']},
+                references=[ResultReference(row['id'],p.relative_to(r.artifact_root).as_posix(),sha,size,'inert')])
+    if all(row['status']=='completed' for row in r.children()):break
+    time.sleep(.02)
+'''
+        def inert_collector(*args, **kwargs):
+            invocation = real_collector(*args, **kwargs)
+            return replace(invocation, command=(sys.executable, '-c', collector))
+        monkeypatch.setattr(nextflow, 'compile_component_retry_invocation', inert_collector)
+        intent = parent.provenance['component_md_resume']
+        adapter.resume_md_workflow(path, operation_id=intent['operation_id'],
+            pause_operation_id=intent['pause_operation_id'], boot_id=worker.boot_id(),
+            continuation_lease_id=intent['continuation_lease_id'], resources=resources,
+            checkpoints=intent['checkpoints'])
+        process = multiprocessing.get_context('fork').Process(target=_pump,args=(path,))
+        process.start()
+        for _ in range(500):
+            if not process.is_alive():break
+            await asyncio.sleep(.02)
+        process.join(1)
+        assert not process.is_alive() and process.exitcode==0
+        assert runtime.root_state()['state']=='completed' and runtime.root_state()['generation']==1
+        await nextflow._project_local_components(parent, session, str(path))
+        await session.commit()
+        assert projected.provenance['component_projection']['state']=='completed'
+        assert segment.state=='completed'
+        assert Path(artifact.storage_path).read_bytes()==b'inert public production bytes'
     finally:
         if process.is_alive(): process.terminate(); process.join(5)
 

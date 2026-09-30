@@ -947,7 +947,27 @@ class ComponentRuntime(GroupingLedger):
             row = db.execute('SELECT snapshot FROM component_native_parents WHERE component=?',
                              (component_id,)).fetchone()
             if row is not None and row[0] != payload:
-                raise ValueError('immutable native parent snapshot conflicts')
+                # The same MD replica keeps its original compiler snapshot.
+                # Continuation-only system parameters belong to the authorized
+                # root edge, not a rewritten scientific request/native parent.
+                root = db.execute('SELECT detail FROM root_execution').fetchone()
+                continuation = (((json.loads(root[0]) if root else {}).get('continuation_edge')
+                                 or {}).get('md_resume') or {}).get(component_id)
+                retained = json.loads(row[0])
+                candidate = json.loads(payload)
+                if (continuation and retained.get('model_id') == 'molecular_dynamics'
+                        and retained.get('mode') == 'replica'):
+                    for key, value in continuation.items():
+                        if not key.startswith('md_resume_'):
+                            continue
+                        if candidate['params'].get(key) != value:
+                            raise ValueError('immutable native parent snapshot conflicts')
+                        if key in retained['params']:
+                            candidate['params'][key] = retained['params'][key]
+                        else:
+                            candidate['params'].pop(key, None)
+                if canonical_bytes(candidate) != row[0]:
+                    raise ValueError('immutable native parent snapshot conflicts')
             db.execute('INSERT OR IGNORE INTO component_native_parents VALUES (?,?)',
                        (component_id, payload))
 
