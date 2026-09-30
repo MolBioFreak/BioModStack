@@ -164,7 +164,8 @@ async def test_generic_recovery_cannot_fail_durable_owned_simulate_root(store, p
             'chemistry': {'profile_id': 'inert-profile', 'profile_sha256': 'a' * 64, 'assurance': 'smoke_fixture'}})
         durable.phase = phase
         await session.commit()
-        root.status = root.queue_status = 'failed'
+        gpu._reconcile_terminal_history_without_process(root, history_status='ERR', gate_present=False,
+            age_seconds=301, stale_fail_after_seconds=300)
         assert await gpu._commit_reconciled_job_mutations(session) == 0
         await session.commit()
         current = await session.get(Job, 'root')
@@ -223,6 +224,35 @@ async def test_scheduler_reprojects_legacy_cpu_root_and_claims_one_gpu(store, tm
         assert root.vram_estimate_mb > 0
         assert root.queue_status == 'running'
         assert len(list((await session.scalars(select(Job))).all())) == 1
+
+
+@pytest.mark.asyncio
+async def test_lost_child_terminal_cas_cannot_resurrect_cancelled_parent(store, monkeypatch):
+    async with store() as session:
+        parent = Job(id='root', name='MD', model_id='molecular_dynamics', mode='simulate',
+            status='running', queue_status='running', params={})
+        child = Job(id='analysis', name='analysis', model_id='molecular_dynamics', mode='analyze',
+            status='running', queue_status='running', params={}, parent_job_id='root')
+        session.add_all([parent, child])
+        await session.commit()
+        snapshot = nextflow.capture_terminal_job_publication_snapshot(child)
+        async with store() as operator:
+            await operator.execute(update(Job).where(Job.id.in_(['root', 'analysis'])).values(
+                status='cancelled', queue_status='cancelled'))
+            await operator.commit()
+        session.expunge(child)
+        assert await nextflow.publish_terminal_job_changes(session, job_id='analysis', snapshot=snapshot,
+            changes={'status': 'completed', 'queue_status': 'completed'}) == 0
+        await session.commit()
+        finalizer = AsyncMock()
+        monkeypatch.setattr(lifecycle, 'reconcile_md_analysis_parent', finalizer)
+        for _ in range(2):
+            session.expire_all()
+            assert await nextflow.reconcile_md_analysis_parent_if_current('root', session) == {'status': 'preserved'}
+            await session.commit()
+        finalizer.assert_not_awaited()
+        assert (await session.get(Job, 'root')).status == 'cancelled'
+        assert (await session.get(Job, 'analysis')).status == 'cancelled'
 
 
 @pytest.mark.asyncio
