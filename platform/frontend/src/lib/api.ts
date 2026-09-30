@@ -538,6 +538,10 @@ export interface ObservedArtifactInventory {
     scientific_ready: false;
 }
 
+export interface ObservedArtifactInventoryDetails extends Omit<ObservedArtifactInventory, 'artifact_count'> {
+    artifacts: CachedArtifactReceipt[];
+}
+
 export type PreloadArtifactReceipt = CachedArtifactReceipt & { state: 'pending' | 'transferring' | 'verifying' | 'verified' | 'interrupted' };
 export interface ArtifactSummary {
     total_count: number;
@@ -746,8 +750,8 @@ export const fetchExecutionTargetRuntimeInventory = async (targetId: string): Pr
 export const refreshExecutionTargetRuntimeInventory = async (targetId: string): Promise<ManagedRuntimeInventory> =>
     (await api.post<ManagedRuntimeInventory>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory/refresh`)).data;
 
-export const fetchExecutionTargetArtifactInventory = async (targetId: string): Promise<ObservedArtifactInventory | null> =>
-    (await api.get<ObservedArtifactInventory | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/artifact-inventory`)).data;
+export const fetchExecutionTargetArtifactInventory = async (targetId: string): Promise<ObservedArtifactInventoryDetails | null> =>
+    (await api.get<ObservedArtifactInventoryDetails | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/artifact-inventory`)).data;
 
 export const fetchExecutionTargetInventoryArtifacts = async (targetId: string, offset = 0, signal?: AbortSignal): Promise<ArtifactPage> =>
     (await api.get<ArtifactPage>(`/api/execution-targets/${encodeURIComponent(targetId)}/artifact-inventory/artifacts`, { params: { offset, limit: 100 }, signal })).data;
