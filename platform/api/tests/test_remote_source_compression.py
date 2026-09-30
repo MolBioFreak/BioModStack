@@ -41,8 +41,9 @@ async def test_real_source_launch_prewarm_lossless_and_cache_reuse(package, loca
     monkeypatch.setattr(cache, 'current_source_identity', bundle.current_source_identity)
     prewarm_dir = tmp_path / 'prewarm'
     prewarm_dir.mkdir()
-    prewarmed = cache._prewarm_plan(job, command, job.execution_source_revision,
-        job.execution_source_tree, prewarm_dir, native_invocation=job.native_invocation)
+    monkeypatch.setattr(cache, 'get_code_root', lambda: roots['repo'])
+    prewarmed = [cache._workflow_source_archive(prewarm_dir,
+        (job.execution_source_revision, job.execution_source_tree))]
     launch_source, = [a for a in bundle.cache_transfer_artifacts(prepared) if a.role == 'source']
     warm_source, = [a for a in prewarmed if a.role == 'source']
     # One revision-keyed shared archive, privately staged for both consumers.

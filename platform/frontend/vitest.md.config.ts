@@ -20,6 +20,7 @@ export default defineConfig({
             './tests/vitest/bindcraft2Settings*.test.tsx',
             './tests/vitest/bindcraft2AuthoringUpgrade*.test.tsx',
             './tests/vitest/bindcraft2JobMounted.test.tsx',
+            './tests/vitest/ui-integrationReceivingMounted.test.tsx',
             './tests/vitest/binderAuthoringMounted.test.tsx',
             './tests/vitest/binderProjectAuthoringCompletionMounted.test.tsx',
             './tests/vitest/binderResultsCompletionMounted.test.tsx',

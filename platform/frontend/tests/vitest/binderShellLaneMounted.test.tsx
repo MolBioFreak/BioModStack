@@ -55,7 +55,7 @@ it('late failed A preview cannot label scientific B or clear its newer spinner; 
     expect(document.body.textContent).not.toContain('obsolete A'); expect(document.body.textContent).toContain('Compiling native preview…');
     await act(async () => rejectB({ response: { data: { detail: 'BC2 native compilation timed out after 120 seconds' } } }));
     expect(document.body.textContent).toContain('BC2 native compilation timed out after 120 seconds'); await click('Open campaign settings');
-    expect(document.querySelector('[aria-label="Campaign workspace sections"] button[aria-pressed="true"]')?.textContent).toBe('Campaign');
+    expect(document.querySelector('[aria-label="Campaign workspace sections"] button[aria-pressed="true"]')?.textContent).toBe('Generation');
 });
 it('late success is discarded after editing away and back', async () => {
     let resolve!: (v: any) => void;
@@ -66,7 +66,7 @@ it('late success is discarded after editing away and back', async () => {
 });
 it('round-only OFF/ON edits preserve the current native compiler preview and exact sparse settings', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { preview_digest: 'current', effective_settings: { max_trajectories: 2 } } });
-    await mount(bc2); await click('Preview native campaign'); await click('Campaign');
+    await mount(bc2); await click('Preview native campaign'); await click('Generation');
     const preview = document.querySelector('[aria-label="Compiled native campaign preview"]'); expect(preview).not.toBeNull();
     const enabled = document.querySelector<HTMLInputElement>('[aria-label="Automatic blind complex prediction"]')!;
     await act(async () => enabled.click());
@@ -80,7 +80,7 @@ it('round-only OFF/ON edits preserve the current native compiler preview and exa
 it('round belongs only to Generation/Campaign and reflects actual designer and predictor', async () => {
     await mount(bc2);
     const flow = document.querySelector('[aria-label="Initial generation flow"]')!;
-    expect(flow.parentElement?.hidden).toBe(true); await click('Campaign'); expect(flow.parentElement?.hidden).toBe(false);
+    expect(flow.parentElement?.hidden).toBe(true); await click('Generation'); expect(flow.parentElement?.hidden).toBe(false);
     expect(flow.textContent).toContain('FA-MPNN'); expect(flow.textContent).toContain('Protenix'); expect(flow.textContent).toContain('backbone-only');
     await click('Sources'); expect(document.querySelector('[aria-label="Initial generation flow"]')).toBe(flow);
 });
@@ -92,7 +92,7 @@ it('unrestricted saved collection browses first and unrelated Load stays open, t
     await click('Load in its own workflow'); expect(load).toHaveBeenCalledWith(mocks.templates[0]);
 });
 it('save is separate from browse and keeps the full typed campaign draft', async () => {
-    await mount(bc2); await click('Save current campaign');
+    await mount(bc2); await click('Save campaign draft');
     expect(document.body.textContent).toContain('Save as Template');
     const input = document.querySelector<HTMLInputElement>('[placeholder="e.g., My Boltz Config"]')!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Saved typed campaign'); input.dispatchEvent(new Event('input', { bubbles: true })); });

@@ -49,7 +49,7 @@ import { BindCraft2Settings, type BC2Inventory, type BC2Request, type BC2Section
 import { BindCraft2Campaign } from './BindCraft2Campaign';
 import { BinderRoundSettings } from './BinderRoundSettings';
 import { RFantibodyGeneration } from './RFantibodyGeneration';
-import { bc2DisplaySelectors, useBC2LeafDiscovery } from '../lib/bc2LeafDisplay';
+import { bc2DisplaySelectors, bc2SelectorSignature, useBC2LeafDiscovery } from '../lib/bc2LeafDisplay';
 import { hydrateBinderRound } from '../lib/binderRound';
 import { BindCraft2StructureInputs } from './BindCraft2StructureInputs';
 import type { BC2InitialSources } from '../lib/bindcraft2StructureInputs';
@@ -3133,6 +3133,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             name={jobName} onNameChange={setJobName} onBack={onBack}
             generatorChooser={<BinderGeneratorChooser generator={deNovoGenerator} onSelect={selectDeNovoGenerator} onOpenNativeRoute={openNativeRoute} />}
             requestedSettings={bc2Settings} preview={activeBc2Preview}
+            inheritedSettings={bc2Inventory?.display && bc2SelectorSignature(bc2Inventory.display.selectors) === bc2SelectorSignature(bc2DisplaySelectors(bc2Settings, bc2Inventory)) ? bc2Inventory.display.values : undefined}
+            inheritedOrigins={bc2Inventory?.display && bc2SelectorSignature(bc2Inventory.display.selectors) === bc2SelectorSignature(bc2DisplaySelectors(bc2Settings, bc2Inventory)) ? bc2Inventory.display.origins : undefined}
             roundSettings={<div hidden={bc2Section !== 'campaign'}><ol aria-label="Initial generation flow">{initialRoundSteps(deNovoGenerator, roundDraft.binder_round).map(step => <li key={step.title}><strong>{step.title}</strong> — {step.detail}</li>)}</ol><BinderRoundSettings values={roundDraft} onChange={setRoundDraft} /></div>}
             section={bc2Section} onSectionChange={setBc2Section}
             previewBusy={bc2PreviewBusy} submitting={submitMutation.isPending}
@@ -3162,7 +3164,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 }
             }}
             onOpenLibrary={() => { setTemplateIntent('browse'); setShowTemplateManager(true); }}
-            {...{ onSaveCampaign: () => { setTemplateIntent('save'); setShowTemplateManager(true); } }}
+            onSaveCampaign={() => { setTemplateIntent('save'); setShowTemplateManager(true); }}
             executionTarget={<ExecutionTargetPicker workflowRequest={bc2CampaignRequest} />}
             library={<><TemplateManagerModal isOpen={showTemplateManager} onClose={() => { if (keepLibraryOpen.current) { keepLibraryOpen.current = false; return; } setShowTemplateManager(false); setIncompatibleTemplate(null); }}
                 onSelect={template => {
@@ -3179,7 +3181,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         ? params.bindcraft2_settings : {});
                 }}
                 currentParams={templateIntent === 'save' ? { ...authoringDraft, job_name: jobName, denovo_generator: 'bindcraft2', bindcraft2_settings: bc2Settings } : undefined}
-                currentModelId="bindcraft2" currentMode="campaign" baseTemplateId="antibody_denovo" />
+                currentModelId="bindcraft2" currentMode="campaign" baseTemplateId="antibody_denovo" initialIntent={templateIntent} />
                 {showTemplateManager && incompatibleTemplate && <div role="alert" className="fixed bottom-4 left-4 right-4 z-[60] rounded-xl border bg-[var(--bg-secondary)] p-4">
                     <p>{incompatibleTemplate.name} belongs to another workflow. The current campaign is unchanged.</p>
                     {onLoadTemplate && <button type="button" onClick={() => onLoadTemplate(incompatibleTemplate)}>Load in its own workflow</button>}
@@ -3200,7 +3202,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 <button type="button" onClick={() => { const full = bc2SourceHandoff(bc2Settings, retainedDraft.bc2_source_references); const sources: ReturnType<typeof bc2SourceHandoff> = { bc2: full.bc2 }; onOpenNativeRoute?.({ ...pendingNativeRoute, sources }); setPendingNativeRoute(null); }}>Continue with destination sources</button>
                 <button type="button" onClick={() => setPendingNativeRoute(null)}>Cancel engine handoff</button>
             </section>}
-            <button type="button" onClick={() => { setTemplateIntent('save'); setShowTemplateManager(true); }}>Save current campaign</button>
             {bc2SubmitError && <button type="button" onClick={() => {
                 const failure = bc2ErrorLocation ?? binderShellError({ message: bc2SubmitError });
                 setBc2Section(failure.section);

@@ -176,7 +176,14 @@ def test_c01_saved_download_launch_only_coupling_reproduced(tmp_path, monkeypatc
     def forbidden(*args, **kwargs):
         pytest.fail('Coupling probe must not stage source or inputs')
     monkeypatch.setattr(cache,'_staged_source_archive',forbidden)
-    with pytest.raises(bundle.RemoteBundleError, match='complete selected native execution plan'):
+    class SelectedClosureReached(Exception):
+        pass
+    def selected_assets(*args, native_invocation, **kwargs):
+        assert native_invocation.execution_plan is plan
+        raise SelectedClosureReached
+    monkeypatch.setattr(cache, '_runtime_assets', selected_assets)
+    # The launch-only blocker must not stop the selected download closure.
+    with pytest.raises(SelectedClosureReached):
         cache._prewarm_plan(SimpleNamespace(model_id=model,mode=mode), list(invocation.command),
             'a'*40,'b'*40,tmp_path,native_invocation=invocation)
     # Actual launch keeps exactly this existing refusal.

@@ -113,12 +113,12 @@ def test_prewarm_plan_forwards_actual_invocation_before_assets(tmp_path, monkeyp
     monkeypatch.setattr(cache, 'current_source_identity', lambda repo: ('a' * 40, 'b' * 40))
     class DependencyBoundaryReached(Exception):
         pass
-    def dependencies(model_id, mode, command, *, native_invocation):
+    def dependencies(model_id, mode, params, *, native_invocation, publication, resolved):
         assert (model_id, mode) == ('boltz2', 'predict')
         assert native_invocation is invocation
-        assert tuple(command) == invocation.command
+        assert params == invocation.native_parameters
         raise DependencyBoundaryReached
-    monkeypatch.setattr(cache, 'compile_remote_dependencies', dependencies)
+    monkeypatch.setattr(cache, '_runtime_assets', dependencies)
     with pytest.raises(DependencyBoundaryReached):
         cache._prewarm_plan(SimpleNamespace(model_id='boltz2', mode='predict'),
             list(invocation.command), 'a' * 40, 'b' * 40, tmp_path,
@@ -449,7 +449,7 @@ def test_workflow_preview_forwards_shared_plan_and_scrubs_worker_manifest(tmp_pa
         return invocation
     asset = tmp_path / 'model.pt'
     asset.write_bytes(b'controlled dependency fixture')
-    def runtime_assets(model, mode, params, *, include_support, selected_plan):
+    def runtime_assets(model, mode, params, *, include_support, selected_plan, publication, resolved):
         assert selected_plan is plan
         assert (model, mode, params, include_support) == ('protenix', 'predict', {'science': 17}, False)
         return [(asset, 'weights/model.pt'), (asset, 'weights/model.pt')]

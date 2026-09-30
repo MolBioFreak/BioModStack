@@ -93,7 +93,7 @@ it('actual BC2 authoring previews server payload, submits digest, and reopens un
     expect(document.querySelector('[aria-label="Compiled native campaign preview"]')?.textContent).toContain('native notice');
     await click('Launch BindCraft2 campaign');
     expect(mocks.submit.mock.calls[0][0]).toMatchObject({ model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: settings, bc2_preview_digest: 'compiled-digest' } });
-    await click('Save current campaign');
+    await click('Save campaign draft');
     const saved = JSON.parse(document.querySelector('[data-saved]')!.textContent!);
     expect(saved.bindcraft2_settings).toEqual(settings);
     await act(async () => mocks.select({ name: 'reopened', model_id: 'bindcraft2', mode: 'campaign', params: saved }));
