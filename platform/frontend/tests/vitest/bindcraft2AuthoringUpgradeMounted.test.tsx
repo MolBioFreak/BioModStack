@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 // Only transport and the WebGL renderer are replaced. Target/source widgets,
 // sequence selection, the Mol* compatibility boundary and campaign composition are real.
-const state = vi.hoisted(() => ({ submit: vi.fn(async (_request: unknown) => ({ data: {} })), load: null as null | ((template: any) => void), scenes: [] as any[] }));
+const state = vi.hoisted(() => ({ submit: vi.fn(async (_request: unknown) => ({ data: {} })), load: null as null | ((template: any) => void), scenes: [] as any[], draft: undefined as any }));
 vi.mock('../../src/lib/api', async original => ({
     ...await original<typeof import('../../src/lib/api')>(),
     materializeStructureTarget: vi.fn(async (source: { file?: File; path?: string; name: string }) => source.path || `inputs/campaign/${source.file?.name || source.name}`),
@@ -50,16 +50,17 @@ const inventory = {
 };
 let root: Root | undefined;
 let client: QueryClient;
-function saved() { return JSON.parse(document.querySelector('[data-campaign-saved]')!.textContent!); }
+function saved() { return state.draft; }
+async function settleDraft() { await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); expect(state.draft).toBeDefined(); }); }
 function getButton(text: string) { return [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === text); }
-async function click(text: string) { const button = getButton(text); expect(button, text).toBeTruthy(); await act(async () => button!.click()); }
+async function click(text: string) { const button = getButton(text); expect(button, text).toBeTruthy(); await act(async () => button!.click()); await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); }
 async function mount(initialValues?: Record<string, unknown>) {
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/submit']}><AntibodyDenovoTemplate onBack={() => {}} initialValues={initialValues} /></MemoryRouter></QueryClientProvider>));
+    await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/submit']}><AntibodyDenovoTemplate onBack={() => {}} initialValues={initialValues} onDraftChange={draft => { state.draft = draft; }} /></MemoryRouter></QueryClientProvider>));
 }
 beforeEach(() => {
-    state.scenes = [];
+    state.scenes = []; state.draft = undefined;
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => String(url).includes('/native-settings')
         ? { ok: true, json: async () => ({ model_id: 'bindcraft2', launch_available: true, settings: inventory }) }
         : { ok: true, text: async () => PDB, blob: async () => new Blob([PDB], { type: 'chemical/x-pdb' }), json: async () => ({}) }));
@@ -98,7 +99,14 @@ it('reopens source-bound native values and the custom mask without inventing ove
     const settings = { modality: ['binder'], max_trajectories: 2, trajectory_only: false, targets: [{ name: 'saved target', target_path: 'inputs/saved.pdb', chains: 'A', hotspots: 'A2', coldspots: '', objective: 'bind', weight: 0 }], losses: { induced_fit_interface: { params: { interface_mask: [0, 0.25, 1] } } } };
     await mount({ model_id: 'bindcraft2', mode: 'campaign', job_name: 'saved native campaign', bindcraft2_settings: settings });
     await vi.waitFor(() => expect(document.querySelector('[aria-label="BindCraft2 settings"]')).not.toBeNull());
+    await settleDraft();
     expect(saved().bindcraft2_settings).toEqual(settings);
+    // Browse deliberately carries no Save payload. The real deferred draft
+    // remains observable, and Save supplies that same scientific state.
+    await click('Saved campaigns');
+    expect(document.querySelector('[data-campaign-saved]')!.textContent).toBe('');
+    await click('Save campaign draft');
+    expect(JSON.parse(document.querySelector('[data-campaign-saved]')!.textContent!).bindcraft2_settings).toEqual(settings);
     await click('Preview native campaign');
     expect(api.post).toHaveBeenLastCalledWith('/api/models/bindcraft2/campaign/preview', { model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: settings } });
     await act(async () => state.load?.({ name: 'reopened', model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: settings } }));
@@ -108,7 +116,7 @@ it('reopens source-bound native values and the custom mask without inventing ove
     // remains valid while the same scientific request is shown in another section.
     const budget = document.querySelector('[aria-label="max_trajectories"]')!;
     expect(budget.closest('[hidden]')).not.toBeNull();
-    await click('Campaign');
+    await click('Generation');
     expect(budget.closest('[hidden]')).toBeNull();
     await click('Objectives');
     expect(document.querySelector('[aria-label="Design objectives"]')?.hasAttribute('hidden')).toBe(false);
@@ -153,6 +161,7 @@ it('native CIF URL handoff retains author chains, model bytes and derived source
     expect(saved().bc2_source_references['target:0']).toMatchObject({ path: 'inputs/campaign/model-2.cif', source: { modelNumber: 2, derivedFrom: { path: 'inputs/native.cif' } } });
     const draft = saved();
     await act(async () => state.load?.({ name: 'Reopened CIF', model_id: 'bindcraft2', mode: 'campaign', params: draft }));
-    expect(saved().bc2_source_references).toEqual(draft.bc2_source_references);
+    await settleDraft();
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); expect(saved().bc2_source_references).toEqual(draft.bc2_source_references); });
     expect(saved().bindcraft2_settings).toEqual(draft.bindcraft2_settings);
 });

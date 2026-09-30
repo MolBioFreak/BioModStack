@@ -90,7 +90,7 @@ it.each([undefined, { target_pdb: '' }])('native handoff inherits only untouched
     await mount();
     await act(async () => mocks.authoring.onOpenNativeRoute({ modelId: 'boltzgen', mode: 'protein_binder', initialDraft,
         sources: { target: { path: 'inputs/materialized-target.cif', name: 'Saved target', chain: 'a', residues: ['a42A'] } } }));
-    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); expect(document.body.textContent).toContain('Protein Binder Generation'); });
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); expect(document.querySelector('[aria-label="Native binder job name"]')).not.toBeNull(); expect(document.body.textContent).toContain('Protein Binder Generation'); }, { timeout: 5000 });
     expect(document.querySelector('[data-authoring]')).toBeNull();
     expect(document.body.textContent).toContain('Protein Binder Generation');
     const target = document.querySelector<HTMLInputElement>('input[placeholder="Target structure"]');

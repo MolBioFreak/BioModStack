@@ -55,7 +55,7 @@ it('does zero collapsed inventory GETs and keeps one attachment query across ten
     await render();
   }
   expect(gets.filter(url => url.endsWith('/runtime-inventory/summary'))).toHaveLength(1);
-  expect(client.getQueryCache().findAll({queryKey:['managed-runtime-inventory']})).toHaveLength(1);
+  expect(client.getQueryCache().findAll({queryKey:['managed-runtime-inventory-summary']})).toHaveLength(1);
   target = {...target,preload:{...target.preload!,phase:'source_download_ready'}};
   await render();
   await act(async () => { await wait(); });

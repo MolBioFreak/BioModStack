@@ -90,6 +90,7 @@ describe('shared full inspection and source lifecycle', () => {
         await click(residue());
         expect(residue().getAttribute('aria-pressed')).toBe('true');
         expect((request.targets as any[])[0]).toMatchObject({ hotspots: 'A11', coldspots: 'B20' });
+        await settle(() => viewer.props.residueSelections?.some((row: any) => row.authSeqId === 11));
         expect(viewer.props.controlledResidueSelection).toBe(true);
         expect(viewer.props.residueSelections).toEqual([{ documentId: 'primary', authAsymId: 'A', authSeqId: 11, insertionCode: undefined }]);
         await click(residue());

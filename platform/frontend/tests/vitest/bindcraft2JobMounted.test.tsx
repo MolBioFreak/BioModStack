@@ -2,10 +2,11 @@ import React from 'react';
 import { readFileSync } from 'node:fs';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { JobDetailsPanel } from '../../src/components/JobDetailsPanel';
-import { BindCraft2NativeActions } from '../../src/components/BindCraft2JobResults';
+import { ResultsViewer } from '../../src/components/ResultsViewer';
+import { BindCraft2JobResults, BindCraft2NativeActions } from '../../src/components/BindCraft2JobResults';
 import { submitBindCraft2Lifecycle } from '../../src/lib/bindcraft2Lifecycle';
 import * as apiModule from '../../src/lib/api';
 import * as approvalModule from '../../src/components/ExecutionPlanApproval';
@@ -44,14 +45,15 @@ it('mounts verified BC2-native pages without a generic Design results link', asy
   const job = { id: 'bc2', model_id: 'bindcraft2', mode: 'native', status: 'completed',
     name: 'Native campaign', output_dir: '/results/bc2', design_count: 0 } as unknown as Job;
   await act(async () => { mounted = create(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <MemoryRouter><table><tbody><JobDetailsPanel job={job} onClose={() => {}} /></tbody></table></MemoryRouter>
+    <MemoryRouter><JobDetailsPanel job={job} onClose={() => {}} /><BindCraft2JobResults jobId={job.id} resultsAvailable={job.status === 'completed'} /></MemoryRouter>
   </QueryClientProvider>); });
   expect(paths).toHaveLength(2);
   expect(paths).toContain('/api/models/bindcraft2/campaign/jobs/bc2/settings');
   expect(paths.find(path => path.includes('/bindcraft2-results?'))).not.toContain('arm=');
   await vi.waitFor(() => expect(text(mounted!.root)).toContain('native-1'));
   expect(text(mounted!.root)).not.toContain('Selection unavailable');
-  expect(text(mounted!.root)).not.toContain('Open in Results Viewer');
+  expect(mounted!.root.findAllByType('a').some(a => a.props.href === '/designs/bc2')).toBe(true);
+  expect(text(mounted!.root.findByType(BindCraft2JobResults))).not.toContain('Open in Results Viewer');
   await act(async () => mounted!.root.findByProps({ 'aria-label': 'Native records' }).props.onChange({ target: { value: 'attempt' } }));
   await vi.waitFor(() => expect(paths.at(-1)).toContain('stage=attempt'));
   expect(paths.at(-1)).toContain('arm=native_arm');
@@ -97,7 +99,7 @@ it('keeps zero yield and missing native settings independently readable and open
     : { ok: true, json: async () => ({ ...base, rows: [], total: 0 }) }));
   const job = { id: 'job', model_id: 'bindcraft2', mode: 'campaign', status: 'completed', name: 'Fixture', output_dir: '/results/job', design_count: 1 } as Job;
   await act(async () => { mounted = create(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <MemoryRouter><table><tbody><JobDetailsPanel job={job} onClose={() => {}} /></tbody></table></MemoryRouter>
+    <MemoryRouter><JobDetailsPanel job={job} onClose={() => {}} /><BindCraft2JobResults jobId={job.id} resultsAvailable={job.status === 'completed'} /></MemoryRouter>
   </QueryClientProvider>); });
   await vi.waitFor(() => expect(text(mounted!.root)).toContain('0 records; showing 0–0'));
   expect(text(mounted!.root)).toContain('Native compilation settings are not available');
@@ -114,7 +116,7 @@ it('reads saved requested and effective settings during execution without pollin
   vi.stubGlobal('fetch', fetcher);
   const job = { id: 'running', model_id: 'bindcraft2', mode: 'campaign', status: 'running', name: 'Fixture', output_dir: '/results/running', design_count: 0 } as Job;
   await act(async () => { mounted = create(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <MemoryRouter><table><tbody><JobDetailsPanel job={job} onClose={() => {}} /></tbody></table></MemoryRouter>
+    <MemoryRouter><JobDetailsPanel job={job} onClose={() => {}} /><BindCraft2JobResults jobId={job.id} resultsAvailable={job.status === 'completed'} /></MemoryRouter>
   </QueryClientProvider>); });
   await vi.waitFor(() => expect(text(mounted!.root)).toContain('Compiled effective settings'));
   expect(fetcher).toHaveBeenCalledTimes(1);
@@ -184,17 +186,25 @@ it.each([null, 'explicit-destination'])('Jobs lifecycle reaches real submission 
     url.endsWith('/native-settings') ? { settings: { native_actions: actions } }
       : url.endsWith('/settings') ? { requested_settings: {}, effective_settings: {} } : base })));
   apiModule.api.defaults.adapter = async config => {
+    if (config.method === 'get') {
+      const data = config.url === '/api/jobs/source-job' ? sourceJob
+        : config.url === '/api/jobs' ? { jobs: [sourceJob], total: 1 }
+        : config.url === '/api/designs' ? { designs: [], total: 0 } : [];
+      return { data, status: 200, statusText: 'OK', headers: {}, config };
+    }
     expect(config.url).toBe('/api/jobs');
     requests.push({ body: JSON.parse(config.data), contextHeader: config.headers.get('X-BMS-Launch-Context-ID') });
     return { data: { id: 'destination-child' }, status: 200, statusText: 'OK', headers: {}, config };
   };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  try {
-    const job = { id: 'source-job', model_id: 'bindcraft2', mode: 'campaign', status: 'completed', name: 'Source',
+  const sourceJob = { id: 'source-job', model_id: 'bindcraft2', mode: 'campaign', status: 'completed', name: 'Source',
       design_count: 0, params: { launch_context_id: 'not-the-destination' }, launch_context_id: 'source-project-context' } as unknown as Job;
+  try {
     await act(async () => { mounted = create(<QueryClientProvider client={client}><MemoryRouter initialEntries={[
-      `/jobs/source-job${destination ? `?launch_context_id=${destination}` : ''}`,
-    ]}><table><tbody><JobDetailsPanel job={job} onClose={() => {}} /></tbody></table></MemoryRouter></QueryClientProvider>); });
+      `/designs/source-job${destination ? `?launch_context_id=${destination}` : ''}`,
+    ]}><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></MemoryRouter></QueryClientProvider>); });
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); expect(mounted!.root.findAllByType('button').some(button => text(button) === 'Native campaign actions')).toBe(true); });
+    expect(mounted!.root.findByType(BindCraft2JobResults).props.launchContextId).toBe(destination);
     await act(async () => mounted!.root.findAllByType('button').find(button => text(button) === 'Native campaign actions')!.props.onClick());
     await vi.waitFor(() => expect(mounted!.root.findByProps({ 'aria-label': 'Native operation' }).findAllByType('option').length).toBeGreaterThan(1));
     await act(async () => mounted!.root.findByProps({ 'aria-label': 'Native operation' }).props.onChange({ target: { value: 'resume' } }));
