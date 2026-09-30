@@ -195,4 +195,3 @@ for (const [identity, inventory] of Object.entries(nativeInventories)) {
         }
     });
 }
-

@@ -45,6 +45,16 @@ class ModelParameter(BaseModel):
     hidden: bool = False  # Advanced params hidden by default
     preset_type: Optional[str] = None  # pdb, sequence, ligand - for enhanced UI
     file_type: Optional[str] = None  # pdb, sdf, cif - file extension hint
+    # Discovery-only presentation; not additional scientific admission rules.
+    accepted_types: Optional[List[str]] = None
+    label: Optional[str] = None
+    units: Optional[str] = None
+    group: Optional[str] = None
+    ui_control: Optional[str] = None
+    step: Optional[float] = None
+    applicability: Optional[Dict[str, Any]] = None
+    required_when: Optional[Dict[str, Any]] = None
+    nullable_when: Optional[Dict[str, Any]] = None
 
 
 class ModelMode(BaseModel):

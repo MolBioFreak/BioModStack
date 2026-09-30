@@ -9,7 +9,7 @@ import sys
 from schemas import BinderRoundRequest, JobCreate
 
 MODES = {'proteinmpnn': 'design', 'fampnn': 'binder_design', 'caliby_binder': 'design',
-         'protenix': 'complex', 'boltz2': 'complex', 'esmfold2': 'complex'}
+         'protenix': 'complex', 'boltz2': 'complex', 'esmfold2': 'predict'}
 
 
 BLIND_FIXED_PARAMETERS = {'protenix_use_template', 'colabfold_use_templates',
