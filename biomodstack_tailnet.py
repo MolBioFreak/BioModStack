@@ -950,7 +950,6 @@ def _install_adapter_control_policy(
         "[Service]\n"
         f"Environment={systemd_value('BMS_HOME=' + str(root))}\n"
         f"Environment=BMS_TAILNET_CONTROL_SOURCE_REVISION={revision}\n"
-        f"Environment=BMS_BUILD_SHA={runtime_revision}\n"
         f"Environment=BMS_MANAGED_API_IMAGE_ID={api_image_id}\n"
         f"Environment=BMS_MANAGED_WEB_IMAGE_ID={web_image_id}\n"
         "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1\n"

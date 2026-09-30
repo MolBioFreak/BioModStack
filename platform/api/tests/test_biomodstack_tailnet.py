@@ -149,11 +149,19 @@ def test_adapter_policy_pins_and_verifies_loopback_binding(monkeypatch, tmp_path
     web_image_id = "sha256:" + "2" * 64
     monkeypatch.setenv("BMS_MANAGED_API_IMAGE_ID", api_image_id)
     monkeypatch.setenv("BMS_MANAGED_WEB_IMAGE_ID", web_image_id)
-    tailnet._install_adapter_control_policy(tmp_path, "b" * 40)
     dropin = systemd_dir / f"{tailnet.WORKFLOW_ADAPTER_SERVICE}.d" / "99-tailnet-canonical-source.conf"
+    dropin.parent.mkdir(parents=True)
+    dropin.write_text("[Service]\nEnvironment=BMS_BUILD_SHA=" + "c" * 40 + "\n")
+    unit = systemd_dir / tailnet.WORKFLOW_ADAPTER_SERVICE
+    unit_text = "[Service]\nEnvironment=BMS_BUILD_SHA=" + "b" * 40 + "\n"
+    unit.write_text(unit_text)
+    tailnet._install_adapter_control_policy(tmp_path, "b" * 40)
     dropin_text = dropin.read_text()
     assert "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1" in dropin_text
-    assert f"Environment=BMS_BUILD_SHA={'b' * 40}" in dropin_text
+    assert "BMS_BUILD_SHA=" not in dropin_text
+    assert unit.read_text() == unit_text
+    assert "Environment=BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS=owner@example.com" in dropin_text
+    assert "Environment=BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS=127.0.0.1,::1" in dropin_text
     assert f"Environment=BMS_MANAGED_API_IMAGE_ID={api_image_id}" in dropin_text
     assert f"Environment=BMS_MANAGED_WEB_IMAGE_ID={web_image_id}" in dropin_text
 
