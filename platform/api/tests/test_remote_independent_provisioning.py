@@ -181,10 +181,16 @@ def test_model_requires_weights_image_does_not_and_preview_binds_bytes(assets, t
     with pytest.raises(bundle.RemoteBundleError, match='empty'):
         cache.independent_plan(selection)
     assert len(cache.independent_plan(ProvisionSelection(kind='image',model_id='protenix'))) == 1
-    (assets[0]/'protenix.sif').unlink()
-    (assets[0]/'protenix.sif').symlink_to('/etc/passwd')
+    # Conventional image aliases (including outside this directory) are an
+    # established compatibility path, separately covered by image-alias tests.
+    # Retain the real containment negative on weights, not a new image gate.
+    outside = tmp_path / 'outside-weights'
+    outside.mkdir()
+    (outside / 'model.pt').write_bytes(b'uncontained fixture weights')
+    (assets[1] / 'protenix').rmdir()
+    (assets[1] / 'protenix').symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match='contained'):
-        cache.independent_plan(ProvisionSelection(kind='image',model_id='protenix'))
+        cache.independent_plan(selection)
 
 
 @pytest.mark.asyncio

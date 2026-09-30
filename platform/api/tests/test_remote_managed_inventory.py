@@ -370,8 +370,18 @@ async def test_download_completes_without_managed_install_or_audit(mounted, stor
     preview = await provision(client, controller, 'model')
     progress = (await client.get('')).json()[0]['preload']
     assert progress['phase'] == 'source_download_ready'
-    assert progress['message'] == 'Downloads complete'
-    assert progress['artifacts'] == preview['artifacts']
+    assert progress['message'] == 'Downloads complete; source cached and 1 shared weight layouts prepared'
+    selected = [row for row in progress['artifacts'] if not row['name'].startswith('source/')]
+    assert selected == preview['artifacts']
+    source, = [row for row in progress['artifacts'] if row['name'].startswith('source/')]
+    assert source['name'] == 'source/.bms-source.tar.gz'
+    source_object = worker / 'cache/artifacts/v1/objects/sha256' / source['sha256'][:2] / source['sha256']
+    assert source_object.stat().st_size == source['size_bytes']
+    assert hashlib.sha256(source_object.read_bytes()).hexdigest() == source['sha256']
+    weight, = [row for row in selected if row['name'].startswith('weights/')]
+    weight_object = worker / 'cache/artifacts/v1/objects/sha256' / weight['sha256'][:2] / weight['sha256']
+    leaf, = (worker / 'cache/artifacts/v1/weights').rglob('model.pt')
+    assert (leaf.stat().st_dev, leaf.stat().st_ino) == (weight_object.stat().st_dev, weight_object.stat().st_ino)
     assert (await client.get('/vast:1/artifact-inventory')).json()['state'] == 'download_verified'
     assert not any(c['action'] in {'boot', 'admit', 'install', 'activate', 'bounded_check', 'native_check'}
                    for c in calls[start_calls:])
