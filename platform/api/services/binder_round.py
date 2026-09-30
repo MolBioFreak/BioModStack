@@ -25,9 +25,15 @@ STEP = 'binder_round_step'
 logger = logging.getLogger(__name__)
 
 
-def identity(root_id, stage, design_id, target, sample=0):
-    value = json.dumps([root_id, stage, design_id, target, sample], sort_keys=True, separators=(',', ':'))
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms:binder-round:v1:' + value))
+def identity(root_id, stage, design_id, target, sample=0, *, model_id=None):
+    # Historical v1 children must keep their exact deterministic identity.
+    parts = [root_id, stage, design_id, target, sample]
+    version = 1
+    if model_id is not None:
+        parts.append(model_id)
+        version = 2
+    value = json.dumps(parts, sort_keys=True, separators=(',', ':'))
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f'bms:binder-round:v{version}:' + value))
 
 
 async def lock_root(session, root_id):
@@ -146,41 +152,56 @@ async def _plan(session, root, progress, request, *, retry=False):
                                  or backbone_id in t['source_design_ids']]
                 if not stage_targets:
                     raise ValueError('No independently declared target input is available for this candidate')
-            settings = request if general else (request.sequence_design if is_backbone else request.prediction)
-            samples = settings.params.get('num_parallel_jobs', 1) or 1
-            for target_source in stage_targets:
-                base_request = None
-                binding = {}
-                for sample in range(samples):
-                    step_id = identity(root.id, stage, design.id, target_source, sample)
-                    if step_id in progress['steps']:
-                        continue
-                    metadata = {'schema_version': 1, 'step_id': step_id, 'stage': stage,
-                        'root_job_id': root.id, 'source_job_id': owner.id, 'source_design_id': design.id,
-                        'backbone_design_id': backbone_id,
-                        'candidate_key': (prior or {}).get('candidate_key') or
-                            (design.provenance or {}).get('candidate_key') or
-                            (design.provenance or {}).get('producer_candidate_key'),
-                        'target_state': target_source.get('name') if target_source else None,
-                        'binder_chains': binder, 'target_chains': target, 'sample_index': sample}
-                    if base_request is None:
-                        # Resolve immutable inputs only when this pair needs work.
-                        # Outputs/step identity stay private to every child below.
-                        if general:
-                            from services.sequence_round_inputs import design_request as general_design_request
-                            base_request, binding = general_design_request(root, owner, design, request)
-                        elif is_backbone:
-                            base_request = design_request(root, owner, design, request, binder, target)
-                        else:
-                            base_request, binding = prediction_request(root, owner, design, request, binder, target, target_source)
-                    child_request = base_request.model_copy(deep=True)
-                    metadata.update(deepcopy(binding))
-                    child_request.name = f'binder-round-{step_id}'
-                    child_request.params['num_parallel_jobs'] = 1
-                    child_request.binder_round_step = BinderRoundStepReference(root_job_id=root.id, step_id=step_id)
-                    child_request = normalize_job_request(child_request)
-                    progress['steps'][step_id] = {'metadata': metadata,
-                        'request': child_request.model_dump(mode='json'), 'state': 'prepared', 'job_id': None}
+            multi = not general and request.schema_version == 2
+            stages = [request] if general else (request.design_stages if is_backbone else request.prediction_stages)
+            for settings in stages:
+                samples = settings.params.get('num_parallel_jobs', 1) or 1
+                for target_source in stage_targets:
+                    base_request = None
+                    binding = {}
+                    for sample in range(samples):
+                        step_id = identity(root.id, stage, design.id, target_source, sample,
+                                model_id=settings.model_id if multi else None)
+                        error_key = step_id if multi else design.id
+                        if error_key in progress['errors'] and not retry:
+                            continue
+                        if step_id in progress['steps']:
+                            continue
+                        try:
+                            metadata = {'schema_version': 1, 'step_id': step_id, 'stage': stage,
+                                'root_job_id': root.id, 'source_job_id': owner.id, 'source_design_id': design.id,
+                                'backbone_design_id': backbone_id,
+                                'candidate_key': (prior or {}).get('candidate_key') or
+                                    (design.provenance or {}).get('candidate_key') or
+                                    (design.provenance or {}).get('producer_candidate_key'),
+                                'target_state': target_source.get('name') if target_source else None,
+                                'binder_chains': binder, 'target_chains': target, 'sample_index': sample}
+                            if multi:
+                                metadata.update(schema_version=2, model_id=settings.model_id,
+                                    designer_model_id=settings.model_id if is_backbone else (prior or {}).get('model_id'))
+                            if base_request is None:
+                                # Resolve immutable inputs only when this pair needs work.
+                                # Outputs/step identity stay private to every child below.
+                                if general:
+                                    from services.sequence_round_inputs import design_request as general_design_request
+                                    base_request, binding = general_design_request(root, owner, design, request)
+                                elif is_backbone:
+                                    base_request = design_request(root, owner, design, request, binder, target, settings=settings)
+                                else:
+                                    base_request, binding = prediction_request(root, owner, design, request, binder, target, target_source, settings=settings)
+                            child_request = base_request.model_copy(deep=True)
+                            metadata.update(deepcopy(binding))
+                            child_request.name = f'binder-round-{step_id}'
+                            child_request.params['num_parallel_jobs'] = 1
+                            child_request.binder_round_step = BinderRoundStepReference(root_job_id=root.id, step_id=step_id)
+                            child_request = normalize_job_request(child_request)
+                            progress['steps'][step_id] = {'metadata': metadata,
+                                'request': child_request.model_dump(mode='json'), 'state': 'prepared', 'job_id': None}
+                            progress['errors'].pop(error_key, None)
+                        except (ValueError, OSError, HTTPException) as exc:
+                            if not multi:
+                                raise
+                            progress['errors'][error_key] = f'{settings.model_id}: {exc.detail if isinstance(exc, HTTPException) else exc}'
             progress['errors'].pop(design.id, None)
         except (ValueError, OSError, HTTPException) as exc:
             progress['errors'][design.id] = str(exc.detail if isinstance(exc, HTTPException) else exc)

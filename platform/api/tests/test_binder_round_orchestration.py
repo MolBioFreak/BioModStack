@@ -263,6 +263,141 @@ async def test_partial_submission_failure_retries_only_missing_child(selected, s
         assert (await session.get(Job, 'root')).status == 'completed'
 
 
+def multi_envelope():
+    return envelope(schema_version=2,
+        sequence_design=[
+            {'model_id': 'proteinmpnn', 'params': {'seqs_per_design': 3, 'mpnn_relax_max_cycles': 0, 'fixed_positions': None}},
+            {'model_id': 'caliby_binder', 'params': {'caliby_num_seqs_per_pdb': 2}}],
+        prediction=[
+            {'model_id': 'boltz2', 'params': {'boltz_use_msa': False, 'boltz_diffusion_samples': 2}},
+            {'model_id': 'esmfold2', 'params': {}}])
+
+
+def test_multi_contract_preserves_v1_and_validates_versioned_arrays():
+    import json
+    import uuid
+    legacy = envelope()
+    assert isinstance(legacy['sequence_design'], dict)
+    assert isinstance(legacy['prediction'], dict)
+    parts = ['root', 'prediction', 'd0', {'name': 'state'}, 0]
+    expected = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms:binder-round:v1:' +
+        json.dumps(parts, sort_keys=True, separators=(',', ':'))))
+    assert rounds.identity(*parts) == expected
+    multi = multi_envelope()
+    assert BinderRoundRequest.model_validate(multi).model_dump(mode='json') == multi
+    assert multi['sequence_design'][0]['params']['mpnn_relax_max_cycles'] == 0
+    assert multi['sequence_design'][0]['params']['fixed_positions'] is None
+    for role in ('sequence_design', 'prediction'):
+        bad = deepcopy(multi)
+        for value in ([], multi[role][0], [multi[role][0], multi[role][0]]):
+            bad[role] = value
+            with pytest.raises(ValueError):
+                BinderRoundRequest.model_validate(bad)
+    with pytest.raises(ValueError):
+        BinderRoundRequest.model_validate({**multi, 'schema_version': 1})
+    multi['prediction'].append({'model_id': 'protenix', 'params': {'protenix_use_template': True}})
+    with pytest.raises(ValueError, match='pose conditioning'):
+        normalize_request(multi)
+
+
+@pytest.mark.asyncio
+async def test_multi_designers_each_sequence_each_validator_real_queue_and_replay(selected, setup_store):
+    session, root, tmp = await fixture_root(selected, backbone=True)
+    request = multi_envelope()
+    root.provenance = {rounds.REQUEST: request}
+    await session.commit()
+    async with setup_store() as experiments:
+        first = await rounds.reconcile_round(session, experiments, root.id)
+        designers = [await session.get(Job, step['job_id']) for step in first['steps'].values()]
+        assert {child.model_id for child in designers} == {'proteinmpnn', 'caliby_binder'}, first
+        for child in designers:
+            assert child.params.get('num_parallel_jobs', 1) == 1
+            if child.model_id == 'proteinmpnn':
+                assert child.params['seqs_per_design'] == 3
+                assert child.params['mpnn_relax_max_cycles'] == 0
+            else:
+                assert child.params['caliby_num_seqs_per_pdb'] == 2
+            child.status = 'completed'
+            for index in range(2):
+                path = tmp / f'{child.model_id}-{index}.pdb'
+                path.write_text(PDB.replace('ALA', 'GLY' if index else 'SER'))
+                session.add(Design(id=f'{child.model_id}-{index}', name='same', job_id=child.id,
+                    parent_design_id='d0', pdb_path=str(path)))
+        await session.commit()
+        result = await rounds.reconcile_round(session, experiments, root.id)
+        predictions = list(await session.scalars(select(Job).where(Job.model_id.in_(['boltz2', 'esmfold2']))))
+        assert len(predictions) == 8, result
+        assert len(result['steps']) == 10
+        for child in predictions:
+            meta = child.provenance[rounds.STEP]
+            assert meta['backbone_design_id'] == 'd0'
+            assert meta['model_id'] == child.model_id
+            assert meta['designer_model_id'] in {'proteinmpnn', 'caliby_binder'}
+            source = await session.get(Job, meta['source_job_id'])
+            assert source.model_id == meta['designer_model_id']
+            assert meta['source_design_id'].startswith(meta['designer_model_id'])
+            assert child.params.get('num_parallel_jobs', 1) == 1
+            if child.model_id == 'boltz2':
+                assert child.params['boltz_use_msa'] is False
+                assert child.params['boltz_diffusion_samples'] == 2
+        before = {child.id for child in predictions}
+        # Ordering affects authoring/readback, never model/candidate identity.
+        reordered = deepcopy(request)
+        reordered['sequence_design'].reverse()
+        reordered['prediction'].reverse()
+        root.provenance = {**root.provenance, rounds.REQUEST: reordered}
+        await session.commit()
+        again = await rounds.reconcile_round(session, experiments, root.id)
+        assert set(again['steps']) == set(result['steps'])
+        assert set(await session.scalars(select(Job.id).where(Job.model_id.in_(['boltz2', 'esmfold2'])))) == before
+
+
+@pytest.mark.asyncio
+async def test_legacy_single_validator_real_queue_keeps_identity_and_replay(selected, setup_store):
+    session, root, _ = await fixture_root(selected)
+    root.provenance = {rounds.REQUEST: envelope(prediction={'model_id': 'boltz2',
+        'params': {'boltz_use_msa': False, 'boltz_diffusion_samples': 2}})}
+    await session.commit()
+    async with setup_store() as experiments:
+        result = await rounds.reconcile_round(session, experiments, root.id)
+        assert len(result['steps']) == 1 and result['state'] == 'running', result
+        step_id, step = next(iter(result['steps'].items()))
+        child = await session.get(Job, step['job_id'])
+        from services.binder_diagnostic_selection import declared_targets
+        target = (await declared_targets(root, session))[0]
+        assert step_id == rounds.identity(root.id, 'prediction', 'd0', target)
+        assert child.model_id == 'boltz2' and child.params['boltz_diffusion_samples'] == 2
+        assert step['metadata']['schema_version'] == 1 and 'model_id' not in step['metadata']
+        assert (await rounds.reconcile_round(session, experiments, root.id))['steps'] == result['steps']
+
+
+@pytest.mark.asyncio
+async def test_multi_branch_preparation_failure_keeps_sibling_and_explicit_retry(selected, setup_store, monkeypatch):
+    from services import binder_round_inputs
+    session, root, _ = await fixture_root(selected)
+    root.provenance = {rounds.REQUEST: multi_envelope()}
+    await session.commit()
+    original = binder_round_inputs.prediction_request
+    def fail_boltz(*args, settings=None, **kwargs):
+        if settings.model_id == 'boltz2':
+            raise ValueError('fixture branch preparation failure')
+        return original(*args, settings=settings, **kwargs)
+    monkeypatch.setattr(binder_round_inputs, 'prediction_request', fail_boltz)
+    async with setup_store() as experiments:
+        result = await rounds.reconcile_round(session, experiments, root.id)
+        assert result['state'] == 'needs_retry'
+        assert len(result['errors']) == 1
+        assert 'boltz2' in next(iter(result['errors'].values()))
+        sibling = next(iter(result['steps'].values()))['job_id']
+        assert (await session.get(Job, sibling)).model_id == 'esmfold2'
+        assert (await rounds.reconcile_round(session, experiments, root.id))['errors'] == result['errors']
+        monkeypatch.setattr(binder_round_inputs, 'prediction_request', original)
+        result = await rounds.reconcile_round(session, experiments, root.id, retry=True)
+        assert not result['errors'] and len(result['steps']) == 2, result
+        assert sibling in {step['job_id'] for step in result['steps'].values()}
+        assert len(list(await session.scalars(select(Job).where(Job.model_id.in_(['boltz2', 'esmfold2']))))) == 2
+
+
 def test_residue_mapping_keeps_author_number_and_insertion_without_conditioning(tmp_path):
     from services.binder_round_inputs import source_components
     path = tmp_path / 'insertions.pdb'

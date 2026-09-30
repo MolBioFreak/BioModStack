@@ -65,12 +65,34 @@ class BinderRoundPrediction(BaseModel):
 
 class BinderRoundRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     enabled: bool = True
-    sequence_design: BinderRoundDesign
-    prediction: BinderRoundPrediction
+    sequence_design: BinderRoundDesign | list[BinderRoundDesign]
+    prediction: BinderRoundPrediction | list[BinderRoundPrediction]
     binder_chains: list[str] = Field(default_factory=list)
     target_chains: list[str] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def versioned_stages(self):
+        for role in ('sequence_design', 'prediction'):
+            value = getattr(self, role)
+            if self.schema_version == 1:
+                if isinstance(value, list):
+                    raise ValueError(f'Binder round v1 {role} must be a scalar settings document')
+            else:
+                if not isinstance(value, list) or not value:
+                    raise ValueError(f'Binder round v2 {role} must be a nonempty settings array')
+                if len({stage.model_id for stage in value}) != len(value):
+                    raise ValueError(f'Binder round v2 {role} model IDs must be unique')
+        return self
+
+    @property
+    def design_stages(self) -> list[BinderRoundDesign]:
+        return self.sequence_design if isinstance(self.sequence_design, list) else [self.sequence_design]
+
+    @property
+    def prediction_stages(self) -> list[BinderRoundPrediction]:
+        return self.prediction if isinstance(self.prediction, list) else [self.prediction]
 
 
 class BinderRoundStepReference(BaseModel):
