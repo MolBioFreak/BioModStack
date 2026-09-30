@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -9,14 +10,23 @@ from routers import workflow_adapter
 from workflow_adapter_app import app
 
 
-@pytest.fixture(autouse=True)
-def explicit_development_adapter_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.fixture
+def tailnet_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClient]:
+    """Exercise HTTP routes and authorization, not database startup/reconciliation."""
     state_root = tmp_path / "development"
     monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_LANE", "development")
     monkeypatch.setenv("BMS_STATE_DIR", str(state_root))
     monkeypatch.setenv("BMS_DB_PATH", str(state_root / "biomodstack.db"))
     monkeypatch.setenv("BMS_WORK", str(state_root / "work"))
     monkeypatch.setenv("BMS_RESULTS_DIR", str(state_root / "results"))
+
+    # Entering TestClient starts the adapter using its import-time database
+    # engine. Route-only tests must not open an unrelated ambient database.
+    client = TestClient(app, base_url="https://compute-node.taileb3a90.ts.net")
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 def _enable_operator(monkeypatch) -> dict[str, str]:
@@ -25,7 +35,7 @@ def _enable_operator(monkeypatch) -> dict[str, str]:
     return {"Tailscale-User-Login": "operator@example.com"}
 
 
-def test_tailnet_control_base_indexes_current_selection(monkeypatch) -> None:
+def test_tailnet_control_base_indexes_current_selection(monkeypatch, tailnet_client: TestClient) -> None:
     monkeypatch.setattr(
         workflow_adapter,
         "current_tailnet_environment",
@@ -35,13 +45,12 @@ def test_tailnet_control_base_indexes_current_selection(monkeypatch) -> None:
         },
     )
     headers = _enable_operator(monkeypatch)
-    with TestClient(app, base_url="https://compute-node.taileb3a90.ts.net") as client:
-        response = client.get("/", headers=headers)
+    response = tailnet_client.get("/", headers=headers)
     assert response.status_code == 200
     assert response.json()["selected_environment"] == "development"
 
 
-def test_tailnet_control_selects_only_allowed_environment(monkeypatch) -> None:
+def test_tailnet_control_selects_only_allowed_environment(monkeypatch, tailnet_client: TestClient) -> None:
     selected: list[str] = []
     monkeypatch.setattr(
         workflow_adapter,
@@ -52,30 +61,27 @@ def test_tailnet_control_selects_only_allowed_environment(monkeypatch) -> None:
         },
     )
     headers = _enable_operator(monkeypatch)
-    with TestClient(app, base_url="https://compute-node.taileb3a90.ts.net") as client:
-        response = client.post("/select", headers=headers, json={"environment": "production"})
-        invalid = client.post("/select", headers=headers, json={"environment": "staging"})
+    response = tailnet_client.post("/select", headers=headers, json={"environment": "production"})
+    invalid = tailnet_client.post("/select", headers=headers, json={"environment": "staging"})
     assert response.status_code == 200
     assert invalid.status_code == 422
     assert selected == ["production"]
 
 
-def test_tailnet_control_requires_allowed_tailscale_identity(monkeypatch) -> None:
+def test_tailnet_control_requires_allowed_tailscale_identity(monkeypatch, tailnet_client: TestClient) -> None:
     monkeypatch.setenv("BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS", "testclient")
     monkeypatch.setenv("BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS", "operator@example.com")
-    with TestClient(app, base_url="https://compute-node.taileb3a90.ts.net") as client:
-        missing = client.get("/")
-        forbidden = client.get("/", headers={"Tailscale-User-Login": "intruder@example.com"})
+    missing = tailnet_client.get("/")
+    forbidden = tailnet_client.get("/", headers={"Tailscale-User-Login": "intruder@example.com"})
     assert missing.status_code == 401
     assert forbidden.status_code == 403
 
 
-def test_tailnet_forwarded_control_surface_hides_nested_adapter_routes(monkeypatch) -> None:
+def test_tailnet_forwarded_control_surface_hides_nested_adapter_routes(monkeypatch, tailnet_client: TestClient) -> None:
     headers = _enable_operator(monkeypatch)
-    with TestClient(app, base_url="https://compute-node.taileb3a90.ts.net") as client:
-        response = client.post(
-            "/api/workflow-adapter/runtime/restart",
-            headers=headers,
-            json={"runtime": "container"},
-        )
+    response = tailnet_client.post(
+        "/api/workflow-adapter/runtime/restart",
+        headers=headers,
+        json={"runtime": "container"},
+    )
     assert response.status_code == 404
