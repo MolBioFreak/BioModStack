@@ -89,8 +89,11 @@ def adopt(preview: dict, manifests: list[dict]) -> Path:
             os.close(directory)
             directory = next_fd
         info = os.fstat(directory)
-        if info.st_uid != os.getuid() or info.st_mode & 0o022:
-            raise ValueError('Archive publication directory is not owner-controlled')
+        if info.st_uid != os.getuid():
+            raise ValueError('Archive publication directory belongs to another owner')
+        # Adoption is the explicit publication write: secure its existing
+        # directory here, rather than making legacy metadata modes a new gate.
+        os.fchmod(directory, info.st_mode & 0o777 & ~0o022)
         temporary = '.index-' + os.urandom(12).hex()
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
         try:

@@ -120,8 +120,10 @@ def test_preview_digest_binds_named_modes_and_endpoint(publication, monkeypatch)
     assert changed.preview_sha256 != mode_changed.preview_sha256
 
 
-def test_adoption_uses_retained_manifest_modes_and_not_asset_files(publication, monkeypatch):
+@pytest.mark.parametrize('directory_mode', [0o700, 0o775])
+def test_adoption_uses_retained_manifest_modes_and_not_asset_files(publication, monkeypatch, directory_mode):
     p = publication
+    p.path.parent.chmod(directory_mode)
     script = Path(__file__).resolve().parents[3] / 'scripts/adopt_hf_archive_index.py'
     spec = importlib.util.spec_from_file_location('adopt_index', script)
     owner = importlib.util.module_from_spec(spec)

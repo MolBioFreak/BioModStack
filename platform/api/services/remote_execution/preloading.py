@@ -362,14 +362,13 @@ class PreloadController:
                 if digest != progress.request_sha256:
                     raise ExecutionTargetError("Provision preview changed; preview again")
                 remote_started = True
-                pack_options = (dict(selection=progress.selection,
+                download_options = dict(selection=progress.selection,
                     source_identity=(progress.source_revision, progress.source_tree),
                     backend=(target.capabilities or {}).get('critical_runtime_binding', {})
                         .get('environment', {}).get('BMS_CONTAINER_BACKEND'))
-                    if progress.selection.kind == 'workflow_pack' else {})
                 prepared = await provision_cache(connection=connection, entries=entries,
                     operation_id=progress.operation_id, progress=publish, check_fence=check_fence,
-                    **pack_options)
+                    **download_options)
                 receipt = dict(source_revision=progress.source_revision, source_tree=progress.source_tree,
                     artifacts=prepared['artifacts'] if isinstance(prepared, dict) else prepared)
                 if isinstance(prepared, dict) and 'preparation' in prepared:
