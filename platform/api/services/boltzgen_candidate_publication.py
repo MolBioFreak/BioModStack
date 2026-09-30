@@ -238,6 +238,23 @@ def generation_workbench(result, publication, *, offset=0, limit=100):
             'offset': offset, 'limit': limit, 'publication': publication, 'artifacts': page['artifacts']}
 
 
+def _candidate_lineage_fields(job, candidate_key, artifact_id, payload):
+    """Existing native lineage projection, shared by full and addressed readback."""
+    fields = {'lineage_root_job_id': job.lineage_root_job_id or job.id, 'origin_job_id': job.id,
+              'stage_family': 'boltzgen', 'stage_mode': job.mode,
+              'provenance': {'schema': 'boltzgen.candidate-lineage.v1', 'candidate_key': candidate_key,
+                             'primary_artifact_id': artifact_id, 'validation_state': 'unvalidated'}}
+    mapping = payload.get('target_residue_mapping')
+    if isinstance(mapping, str):
+        try:
+            mapping = json.loads(mapping)
+        except (ValueError, TypeError):
+            mapping = None
+    if isinstance(mapping, (dict, list)) and mapping:
+        fields['provenance']['target_residue_mapping'] = copy.deepcopy(mapping)
+    return fields
+
+
 async def _generation_publication(job, output, session, *, publish=False, offset=0, limit=100, _prepared=None):
     """Wrap existing native accounting authority; do not re-rank or invent joins."""
     import asyncio
@@ -312,18 +329,7 @@ async def _generation_publication(job, output, session, *, publish=False, offset
         publication['candidates'].append({'design_id': design.id, 'candidate_key': design.name,
             'structures': [{'artifact_id': artifact.id, 'logical_path': artifact.logical_path,
                             'path': path, 'sha256': artifact.sha256, 'primary': True, 'target_state': None}]})
-        fields = {'lineage_root_job_id': job.lineage_root_job_id or job.id, 'origin_job_id': job.id,
-                  'stage_family': 'boltzgen', 'stage_mode': job.mode,
-                  'provenance': {'schema': 'boltzgen.candidate-lineage.v1', 'candidate_key': design.name,
-                                 'primary_artifact_id': artifact.id, 'validation_state': 'unvalidated'}}
-        mapping = prepared[design.name]['payload'].get('target_residue_mapping')
-        if isinstance(mapping, str):
-            try:
-                mapping = json.loads(mapping)
-            except (ValueError, TypeError):
-                mapping = None
-        if isinstance(mapping, (dict, list)) and mapping:
-            fields['provenance']['target_residue_mapping'] = copy.deepcopy(mapping)
+        fields = _candidate_lineage_fields(job, design.name, artifact.id, prepared[design.name]['payload'])
         if previous is None:
             for key, value in fields.items():
                 setattr(design, key, value)
@@ -412,9 +418,8 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
             block = scalar_block(item, design.id)
             if (design.confidence_metrics or {}).get('core_protein_scientific') != block:
                 raise ValueError('BoltzGen persisted native scalars changed')
-            expected = {'lineage_root_job_id': job.lineage_root_job_id or job.id, 'origin_job_id': job.id,
-                        'stage_family': 'boltzgen', 'stage_mode': job.mode}
-            if any(getattr(design, k) != v for k, v in expected.items()) or (design.provenance or {}).get('primary_artifact_id') != artifact.id:
+            expected = _candidate_lineage_fields(job, design.name, artifact.id, payload)
+            if any(getattr(design, k) != v for k, v in expected.items()):
                 raise ValueError('BoltzGen persisted candidate lineage changed')
             record = {**record, 'native_metrics': block}
             bindings.append(binding)

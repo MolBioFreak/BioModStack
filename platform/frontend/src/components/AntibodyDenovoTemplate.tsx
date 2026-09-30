@@ -3254,8 +3254,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             if (!targetLoadControllerRef.current.isCurrent(token)) return;
                             const file = new File([prepared.document.content], 'target.pdb', { type: 'chemical/x-pdb' });
                             setTargetPdb(file); uploadedFileRef.current = file; setUploadedPath(prepared.path);
-                            setTargetSource({ ...portableNativeSource(prepared.document.source || source), name: source.name, type: source.designId ? 'run' : 'upload', path: prepared.path });
-                            setSelectedChain(null); setSelectedResidues(new Set()); setSelectedTargetModel(1);
+                            const modelNumber = prepared.document.models[0]?.number ?? source.modelNumber ?? 1;
+                            setTargetSource({ ...portableNativeSource(prepared.document.source || source), name: source.name, type: source.designId ? 'run' : 'upload', path: prepared.path, modelNumber });
+                            setSelectedChain(null); setSelectedResidues(new Set()); setSelectedTargetModel(modelNumber);
                         } catch (error) { if (targetLoadControllerRef.current.isCurrent(token)) setRfSourceHandoffError(error instanceof Error ? error.message : String(error)); }
                     }}>Use BC2 target {index + 1}: {target.name || path || 'Choose native source'}</button>;
                 })}
@@ -3267,7 +3268,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         const prepared = await preparePdbStructureSource({ ...source, path: bc2Settings.binder_scaffold as string });
                         if (!frameworkLoadControllerRef.current.isCurrent(token)) return;
                         setFrameworkType('custom'); setCustomFrameworkPath(prepared.path);
-                        setCustomFrameworkSource({ ...portableNativeSource(prepared.document.source || source), name: source.name, path: prepared.path, type: 'upload' });
+                        setCustomFrameworkSource({ ...portableNativeSource(prepared.document.source || source), name: source.name, path: prepared.path, type: 'upload', modelNumber: prepared.document.models[0]?.number ?? source.modelNumber });
                         setCustomFrameworkFile(new File([prepared.document.content], 'framework.pdb', { type: 'chemical/x-pdb' }));
                         setParsedFrameworkChains(prepared.document.models[0]?.chains ?? []); setDetectedCDRs(null);
                         replaceFrameworkPdbUrl(buildFilesApiUrl('download', prepared.path));

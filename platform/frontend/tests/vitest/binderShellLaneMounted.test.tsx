@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ submit: vi.fn(async () => ({ data: {} })), templates: [] as any[], save: vi.fn(async () => ({ data: {} })) }));
+const mocks = vi.hoisted(() => ({ submit: vi.fn(async (_payload: any) => ({ data: {} })), templates: [] as any[], save: vi.fn(async () => ({ data: {} })) }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(),
     fetchModelById: vi.fn(async (id: string) => ({ data: { id, params: [] } })), fetchInputPresets: vi.fn(async () => ({ data: [] })),
     listCachedRcsbPdbs: vi.fn(async () => ({ data: { cached: [] } })), fetchExecutionTargets: vi.fn(async () => ({ data: [] })),
@@ -15,6 +15,7 @@ vi.mock('../../src/components/useLiveGpuCatalog', () => ({ useLiveGpuCatalog: ()
 vi.mock('../../src/components/ModelIntegrationControl', () => ({ ModelIntegrationControl: () => null, useModelIntegrationConfig: () => ({ data: { workflows: {} }, isFetching: false, isError: false }) }));
 vi.mock('../../src/components/EpitopeMolstarViewer', () => ({ default: () => <output>Structure renderer</output> }));
 import { api } from '../../src/lib/api';
+import * as apiTransport from '../../src/lib/api';
 import { AntibodyDenovoTemplate } from '../../src/components/AntibodyDenovoTemplate';
 import { initialRoundSteps, bc2SourceHandoff, adoptShellSourcePath } from '../../src/lib/binderShell';
 import { hydrateBinderRound } from '../../src/lib/binderRound';
@@ -24,8 +25,8 @@ let root: Root; let client: QueryClient;
 const inventory = { upstream_commit: 'pin', fields: { max_trajectories: { native_key: 'max_trajectories', observed_types: ['integer'], has_native_default: false, native_default: null, status: 'typed' } }, presets: {}, paratope_conformations: [], registered_metrics: { filters: {}, losses: {} } };
 function Route() { return <output data-route>{useLocation().search}</output>; }
 afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); localStorage.clear(); sessionStorage.clear(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); mocks.templates = []; });
-async function mount(values?: any, props: any = {}, entry = '/submit?template=antibody_denovo&project_id=kept&return_uri=%2Fprojects%2Fkept') {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ model_id: 'bindcraft2', launch_available: true, settings: inventory }) })));
+async function mount(values?: any, props: any = {}, entry = '/submit?template=antibody_denovo&project_id=kept&return_uri=%2Fprojects%2Fkept', retainedPdb = '') {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => retainedPdb, blob: async () => new Blob([retainedPdb], { type: 'chemical/x-pdb' }), json: async () => ({ model_id: 'bindcraft2', launch_available: true, settings: inventory }) })));
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[entry]}><AntibodyDenovoTemplate onBack={() => {}} initialValues={values} {...props} /><Route /></MemoryRouter></QueryClientProvider>));
@@ -35,6 +36,53 @@ async function settle() { await act(async () => { await new Promise(resolve => s
 async function click(label: string) { const button = [...document.querySelectorAll('button')].find(el => el.textContent?.trim() === label); expect(button, label).toBeTruthy(); await act(async () => button!.click()); }
 async function edit(label: string, value: string) { const input = document.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!; expect(input).not.toBeNull(); await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); }); }
 const bc2 = { denovo_generator: 'bindcraft2', bindcraft2_settings: { max_trajectories: 2, targets: [] } };
+const firstAtom = 'ATOM      1  CA  ALA A  42       7.000   2.000   3.000  1.00 20.00           C  ';
+const secondAtom = firstAtom.replace('ALA', 'GLY').replace('7.000', '9.000');
+const secondChainAtom = 'ATOM      2  CA  VAL B  55      11.000   2.000   3.000  1.00 20.00           C  ';
+const selectedPdb = `MODEL        2\n${secondAtom}\n${secondChainAtom}\nENDMDL\nEND\n`;
+const multiPdb = `MODEL        1\n${firstAtom}\nENDMDL\n${selectedPdb}`;
+const multiCif = `data_fixture
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_seq_id
+_atom_site.auth_asym_id
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.pdbx_PDB_model_num
+ATOM 1 C CA ALA A 1 A 42 ALA ? 7 2 3 1
+ATOM 2 C CA GLY A 1 A 42 GLY ? 9 2 3 2
+ATOM 3 C CA VAL B 1 B 55 VAL ? 11 2 3 2
+#
+`;
+function fileTextSupport() {
+    vi.stubGlobal('File', class extends File { text() { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsText(this); }); } });
+}
+function sourceTransport(original: string, derived: string, format: 'pdb' | 'cif' = 'pdb') {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true,
+        text: async () => String(url).includes('selected.pdb') ? derived : original,
+        json: async () => ({ model_id: 'bindcraft2', settings: inventory }) })));
+    return vi.spyOn(api, 'post').mockImplementation(async (url, payload: any) => {
+        expect(url).toBe('/api/files/materialize-structure');
+        expect(payload).toMatchObject({ output_format: 'pdb', model_number: 2 });
+        return { data: { path: 'inputs/selected.pdb', format: 'pdb', sha256: 'fixture-selected',
+            native_path: payload.path, native_format: format, native_sha256: 'fixture-original',
+            model_numbers: [1, 2], model_number: 2, author_residues: [], source_identity: {}, source_path: payload.path } } as any;
+    });
+}
+async function switchToRf() {
+    const format = document.querySelector<HTMLSelectElement>('[aria-label="Binder format / objective"]')!;
+    await act(async () => { format.value = 'antibody'; format.dispatchEvent(new Event('change', { bubbles: true })); });
+    await click('RFantibody Stack'); await settle();
+}
 it('ordinary untouched entry opens the existing four-engine chooser; saved BC2 restores URL and context', async () => {
     await mount();
     const chooser = document.querySelector('[aria-label="Binder modality and generation engine"]')!;
@@ -143,4 +191,54 @@ it('dedicated direct link canonicalization preserves context and all supported a
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     await act(async () => root.render(<MemoryRouter initialEntries={['/submit?project_id=P']}><BindCraft2Tab actions={['resume', 'validate']} /></MemoryRouter>));
     expect(document.querySelector<HTMLAnchorElement>('a')?.href).toContain('template=antibody_denovo'); expect(document.body.textContent).toContain('resume');
+});
+
+it.each(['pdb', 'cif'] as const)('BC2 model-2 %s target preserves exact conformation through RF draft reopen and submission', async format => {
+    fileTextSupport();
+    const draft = vi.fn(); const original = format === 'pdb' ? multiPdb : multiCif;
+    // PDB selection can retain MODEL 2; checked CIF conversion can emit an implicit MODEL 1.
+    const derived = format === 'pdb' ? selectedPdb : `${secondAtom}\n${secondChainAtom}\nEND\n`;
+    const model = format === 'pdb' ? 2 : 1; const path = `inputs/two-models.${format}`;
+    await mount({ denovo_generator: 'bindcraft2', bindcraft2_settings: { targets: [{ target_path: path, name: 'Model two' }] },
+        bc2_source_references: { 'target:0': { path, source: { name: 'Model two', path, modelNumber: 2 } } } }, { onDraftChange: draft });
+    const post = sourceTransport(original, derived, format);
+    await switchToRf(); await click('Use BC2 target 1: Model two');
+    await vi.waitFor(async () => { await settle(); expect(draft.mock.lastCall?.[0]).toMatchObject({ target_pdb: 'inputs/selected.pdb', target_model_number: model }); });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith('/api/files/materialize-structure', expect.objectContaining({ path, model_number: 2 }));
+    expect(draft.mock.lastCall![0].target_source).toMatchObject({ path: 'inputs/selected.pdb', modelNumber: model, derivedFrom: { path, modelNumber: 2 } });
+    await vi.waitFor(async () => { await settle(); expect([...document.querySelectorAll('button')].some(node => node.textContent?.trim() === 'Chain A (1 aa)')).toBe(true); });
+    await click('Chain A (1 aa)');
+    const residue = document.querySelector<HTMLButtonElement>('[aria-label="A42 (GLY)"]');
+    expect(residue).not.toBeNull(); expect(document.querySelector('[aria-label="A42 (ALA)"]')).toBeNull();
+    await act(async () => residue!.click());
+    await vi.waitFor(async () => { await settle(); expect(draft.mock.lastCall![0].selected_residues).toEqual(['A42']); });
+    const saved = JSON.parse(JSON.stringify(draft.mock.lastCall![0]));
+    await act(async () => root.unmount()); client.clear(); document.body.replaceChildren();
+    await mount(saved, { onDraftChange: draft }, undefined, derived);
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="A42 (GLY)"]')?.getAttribute('aria-pressed')).toBe('true'); });
+    expect(draft.mock.lastCall![0].target_model_number).toBe(model);
+    expect(post).toHaveBeenCalledTimes(1); // Reopen uses retained bytes, not native rematerialization.
+    const extraction = vi.spyOn(apiTransport, 'extractChain').mockResolvedValue({ data: { output_path: 'inputs/selected-A.pdb' } } as any);
+    const launch = [...document.querySelectorAll<HTMLButtonElement>('button')].find(node => /^Launch (RFantibody Batch|De Novo Nanobody Pipeline)/.test(node.textContent?.trim() || ''))!;
+    expect(launch.disabled).toBe(false); await act(async () => launch.click());
+    await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
+    expect(extraction).toHaveBeenCalledExactlyOnceWith('inputs/selected.pdb', 'A', undefined, model);
+    expect(mocks.submit.mock.calls[0][0]).toMatchObject({ params: { target_pdb: 'inputs/selected-A.pdb', target_model_number: model, epitope_residues: 'A42' } });
+});
+
+it('BC2 model-2 PDB scaffold is extracted once and retained as the actual RF framework', async () => {
+    fileTextSupport(); const draft = vi.fn(); const path = 'inputs/two-models.pdb';
+    await mount({ denovo_generator: 'bindcraft2', bindcraft2_settings: { binder_scaffold: path },
+        bc2_source_references: { scaffold: { path, source: { name: 'Model two scaffold', path, modelNumber: 2 } } } }, { onDraftChange: draft });
+    const post = sourceTransport(multiPdb, selectedPdb);
+    await switchToRf(); await click('Use BC2 scaffold as RF framework');
+    await vi.waitFor(async () => { await settle(); expect(draft.mock.lastCall?.[0]).toMatchObject({ framework_pdb: 'inputs/selected.pdb', custom_framework_path: 'inputs/selected.pdb' }); });
+    expect(draft.mock.lastCall![0].custom_framework_source).toMatchObject({ path: 'inputs/selected.pdb', modelNumber: 2, derivedFrom: { path, modelNumber: 2 } });
+    expect(post).toHaveBeenCalledTimes(1);
+    const saved = JSON.parse(JSON.stringify(draft.mock.lastCall![0]));
+    await act(async () => root.unmount()); client.clear(); document.body.replaceChildren();
+    await mount(saved, { onDraftChange: draft }, undefined, selectedPdb);
+    await settle(); expect(draft.mock.lastCall![0].custom_framework_path).toBe('inputs/selected.pdb');
+    expect(post).toHaveBeenCalledTimes(1);
 });

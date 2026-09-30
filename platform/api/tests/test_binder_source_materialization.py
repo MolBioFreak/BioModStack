@@ -202,6 +202,28 @@ async def test_real_project_resource_browse_exact_document_materialization(sourc
 
 
 @pytest.mark.asyncio
+async def test_explicit_pdb_model_selection_retains_only_chosen_conformation(source_api):
+    client, _, _, root = source_api
+    atom = 'ATOM      1  CA  ALA A  42       7.000   2.000   3.000  1.00 20.00           C  '
+    selected_atom = atom.replace('ALA', 'GLY').replace('7.000', '9.000')
+    raw = f'MODEL        1\n{atom}\nENDMDL\nMODEL        2\n{selected_atom}\nENDMDL\nEND\n'.encode()
+    original = root / 'inputs/two-models.pdb'
+    original.write_bytes(raw)
+    response = await client.post('/api/files/materialize-structure', json={
+        'path': 'inputs/two-models.pdb', 'output_format': 'pdb', 'model_number': 2})
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result['model_numbers'] == [1, 2] and result['model_number'] == 2
+    assert result['native_sha256'] == hashlib.sha256(raw).hexdigest()
+    retained = await client.get('/api/files/download/' + result['path'])
+    assert retained.status_code == 200
+    assert selected_atom in retained.text and atom not in retained.text
+    assert original.read_bytes() == raw
+    original.unlink()
+    assert (await client.get('/api/files/download/' + result['path'])).content == retained.content
+
+
+@pytest.mark.asyncio
 async def test_native_inspection_metadata_failure_is_not_a_native_source_gate(source_api):
     client, _, _, root = source_api
     raw = b'data_native\n_custom.native_field retained\n'

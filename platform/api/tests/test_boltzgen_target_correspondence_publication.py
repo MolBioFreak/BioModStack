@@ -144,3 +144,103 @@ async def test_compiled_wrapper_dependencies_survive_remote_source_archive(tmp_p
     for relative in expected:
         assert (returned / relative).read_bytes() == (root / relative).read_bytes()
     assert not (tmp_path / 'output').exists()
+
+
+def _lineage_output(output, mapping, *, count=2):
+    """Synthetic sealed metrics; no native sampling or correspondence claims."""
+    from test_policy_completion_publication import boltz_output
+    boltz_output(output, count)
+    root = output / 'collected/boltzgen_filtered'
+    manifest = root / 'filter_summary.json'
+    report = json.loads(manifest.read_text())
+    for declaration in report['publication'].values():
+        metrics = root / declaration['metrics']['path']
+        payload = json.loads(metrics.read_text())
+        if mapping != 'absent':
+            payload['target_residue_mapping'] = mapping
+        metrics.write_text(json.dumps(payload))
+        declaration['metrics']['sha256'] = hashlib.sha256(metrics.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(report))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mutation', ['candidate_key', 'validation_state', 'target_residue_mapping'])
+async def test_addressed_lineage_rejects_fresh_persisted_mutation(stores, mutation):
+    root, _, factory = stores
+    output = root / 'results/lineage'
+    output.mkdir(parents=True)
+    _lineage_output(output, json.dumps([{'source_sha256': 'a' * 64, 'residues': []}]))
+    async with factory() as db:
+        job = Job(id='lineage', name='inert', model_id='boltzgen', mode='protein_binder',
+                  params={}, output_dir=str(output), provenance={'core_protein_scientific_contract': 1})
+        db.add(job)
+        await db.flush()
+        await publication.ingest(job, output, db)
+    async with factory() as db:
+        design = await db.scalar(select(Design).where(Design.job_id == 'lineage', Design.name == 'candidate-000'))
+        changed = {'candidate_key': 'foreign', 'validation_state': 'validated',
+                   'target_residue_mapping': [{'source_sha256': 'b' * 64, 'residues': []}]}[mutation]
+        design.provenance = {**design.provenance, mutation: changed}
+        await db.commit()
+    for reader in [publication.read_published_generation_page, publication.read_published_generation_results]:
+        async with factory() as db:
+            job = await db.get(Job, 'lineage')
+            with pytest.raises(ValueError, match='persisted candidate lineage changed'):
+                await reader(job, db, limit=1)
+    # The unaddressed mutation must not require a campaign-wide read or refusal.
+    async with factory() as db:
+        job = await db.get(Job, 'lineage')
+        page = await publication.read_published_generation_page(job, db, offset=1, limit=1)
+        assert page['records'][0]['candidate_id'] == 'candidate-001'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mapping,expected', [
+    pytest.param('absent', None, id='absent'),
+    pytest.param('{invalid', None, id='malformed-json'),
+    pytest.param('null', None, id='json-null'),
+    pytest.param([], None, id='empty-list'),
+    pytest.param({}, None, id='empty-dict'),
+    pytest.param(7, None, id='non-mapping'),
+    pytest.param({'observed': 'value'}, {'observed': 'value'}, id='dict'),
+    pytest.param([{'observed': 'value'}], [{'observed': 'value'}], id='list'),
+    pytest.param('[{"observed": "value"}]', [{'observed': 'value'}], id='encoded-list'),
+])
+async def test_addressed_optional_mapping_and_exact_artifact_reads(stores, monkeypatch, mapping, expected):
+    from services import bindcraft2_publication
+    root, _, factory = stores
+    output = root / 'results/optional'
+    output.mkdir(parents=True)
+    _lineage_output(output, mapping)
+    async with factory() as db:
+        job = Job(id='optional', name='inert', model_id='boltzgen', mode='protein_binder',
+                  params={}, output_dir=str(output), provenance={'core_protein_scientific_contract': 1})
+        db.add(job)
+        await db.flush()
+        await publication.ingest(job, output, db)
+    async with factory() as db:
+        job = await db.get(Job, 'optional')
+        full = await publication.read_published_generation_results(job, db)
+        assert await publication.ingest(job, output, db) == 0
+        design = await db.scalar(select(Design).where(Design.job_id == job.id, Design.name == 'candidate-001'))
+        assert design.provenance.get('target_residue_mapping') == expected
+        assert ('target_residue_mapping' in design.provenance) == (expected is not None)
+    opened = []
+    regular = bindcraft2_publication._regular
+    def observe(root, name, **kwargs):
+        opened.append((name, kwargs.get('byte_range')))
+        return regular(root, name, **kwargs)
+    monkeypatch.setattr(bindcraft2_publication, '_regular', observe)
+    async with factory() as db:
+        job = await db.get(Job, 'optional')
+        page = await publication.read_published_generation_page(job, db, offset=1, limit=1)
+        assert page['records'] == full['records'][1:2]
+        assert (page['total'], page['offset'], page['limit']) == (2, 1, 1)
+        binding = page['publication']['candidates'][0]
+        structure_path = binding['structures'][0]['path']
+        metrics_path = full['receipt']['publication'][binding['candidate_key']]['metrics']['path']
+        assert [name for name, _ in opened] == ['filter_summary.json', structure_path, metrics_path]
+        assert opened[0][1] is not None and all(span is None for _, span in opened[1:])
+        opened.clear()
+        assert (await publication.read_published_generation_page(job, db, offset=2, limit=1))['records'] == []
+        assert opened == []
