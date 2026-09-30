@@ -383,8 +383,14 @@ async def pause_running_md_run(
         child.paused = True
         child.assigned_gpu = None
         child.error_message = None
+        # Each accepted checkpoint is recoverable before the next replica's
+        # external stop/receipt wait. Never carry SQLite writer ownership there.
+        await session.commit()
 
-    parent = await session.get(Job, job_id)
+    run = await session.get(MdRun, job_id, populate_existing=True)
+    if run is None or run.phase != "checkpointing":
+        raise MdStateError("MD_PAUSE_TRANSITION_INVALID", "pause ownership changed during checkpoint waits")
+    parent = await session.get(Job, job_id, populate_existing=True)
     if parent is not None:
         parent.status = "paused"
         parent.queue_status = "paused"

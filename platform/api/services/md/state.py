@@ -51,12 +51,20 @@ def canonical_sha256(payload: Any) -> str:
 
 
 async def create_md_run(session: AsyncSession, *, job: Job, normalized_request: dict[str, Any]) -> MdRun:
-    if normalized_request.get("schema") != "bms.md.job.v2":
-        raise MdStateError("MD_CONTRACT_UNSUPPORTED", "durable lifecycle requires bms.md.job.v2")
-    chemistry = normalized_request["chemistry"]
-    assurance = chemistry.get("assurance")
-    if not isinstance(assurance, str) or not assurance:
-        raise MdStateError("MD_CONTRACT_INVALID", "normalized chemistry assurance is missing")
+    schema = normalized_request.get("schema")
+    if schema == "bms.md.job.v1":
+        # Legacy chemistry claims, when present, stay in preparation unchanged.
+        # There is no v2 chemistry envelope: explicit sentinels satisfy the
+        # retained non-null columns without inventing v2 assurance or a digest.
+        chemistry = {"profile_id": "legacy_unavailable", "profile_sha256": "unavailable"}
+        assurance = "legacy_unavailable"
+    elif schema == "bms.md.job.v2":
+        chemistry = normalized_request["chemistry"]
+        assurance = chemistry.get("assurance")
+        if not isinstance(assurance, str) or not assurance:
+            raise MdStateError("MD_CONTRACT_INVALID", "normalized chemistry assurance is missing")
+    else:
+        raise MdStateError("MD_CONTRACT_UNSUPPORTED", "durable lifecycle requires a supported MD job contract")
     run = MdRun(
         job_id=job.id,
         normalized_request=normalized_request,
