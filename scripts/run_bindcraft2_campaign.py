@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import types
@@ -38,6 +39,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--native-source", required=True, type=Path, help="exact pinned upstream checkout")
     parser.add_argument("--execute", action="store_true", help="invoke native GPU campaign after CPU preparation")
     args = parser.parse_args(argv)
+    # Native env overrides outrank the compiled settings; only the scheduler's
+    # CUDA_VISIBLE_DEVICES placement is permitted outside the typed request.
+    overrides = ("BINDCRAFT_BINDER_LENGTHS", "BINDCRAFT_WORKERS_PER_GPU",
+                 "BINDCRAFT_MAX_WORKERS_PER_GPU", "BINDCRAFT_DESIGN_WORKERS",
+                 "BINDCRAFT_WORKER_LAUNCH_STAGGER", "BINDCRAFT_GPU_IDS",
+                 "BINDCRAFT_MPNN_WEIGHTS")
+    conflicting = [name for name in overrides if os.environ.get(name)]
+    if conflicting:
+        parser.error("unbound native overrides: " + ", ".join(conflicting))
     source = args.native_source.resolve()
     revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
     if revision != PIN:

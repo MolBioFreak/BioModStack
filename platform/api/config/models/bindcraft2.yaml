@@ -1,0 +1,24 @@
+# Runtime asset declaration only. The native inventory is not yet a complete
+# typed operator/browser contract; no public job or agent route is enabled.
+id: bindcraft2
+name: BindCraft2
+version: "1.0.1+d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f"
+category: generative_design
+description: >
+  Pinned native BindCraft2 campaign runtime. Not launchable until the global
+  typed settings, artifact publication and local/remote bridge are integrated.
+container: bindcraft2.sif
+inputs:
+  - cif
+  - pdb
+  - fasta
+  - json
+outputs:
+  - cif
+  - csv
+  - json
+modes: []
+params: []
+enabled: false
+experimental: true
+public_launch: false
