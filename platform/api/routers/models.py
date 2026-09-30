@@ -9,6 +9,7 @@ from database import get_session, Job
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from model_registry import get_registry, ModelDefinition
+from services.model_registry import serialize_parameter
 from services.frustrampnn.settings import (
     FrustraMPNNRequestedSettings,
     complete_requested_settings_schema,
@@ -334,19 +335,7 @@ async def list_models(
                 for mode in m.modes
             ],
             **({} if compact else {"params": [
-                {
-                    "name": p.name,
-                    "type": p.type,
-                    "description": p.description,
-                    "required": p.required,
-                    "default": p.default,
-                    "enum": p.enum,
-                    "minimum": p.minimum,
-                    "maximum": p.maximum,
-                    "hidden": p.hidden,
-                    "preset_type": getattr(p, 'preset_type', None),
-                    "file_type": getattr(p, 'file_type', None),
-                }
+                serialize_parameter(p)
                 for p in m.params
             ]}),
             "enabled": m.enabled,
@@ -366,7 +355,7 @@ async def list_categories():
 
 
 @router.get("/bindcraft2/native-settings")
-async def get_bindcraft2_native_settings():
+async def get_bindcraft2_native_settings(selectors: Optional[str] = None):
     """Discover pinned BC2 controls without granting launch authority.
 
     The operator and agent adapters can read the same typed inventory while the
@@ -374,10 +363,18 @@ async def get_bindcraft2_native_settings():
     """
     from services.bindcraft2_typed import schema
 
+    settings = schema()
+    if selectors is not None:
+        import json
+        from services.bindcraft2_typed_settings import display_projection
+        try:
+            settings['display'] = display_projection(json.loads(selectors), settings)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=f'BC2 inherited display unavailable: {exc}') from exc
     return {
         "model_id": "bindcraft2",
         "launch_available": get_registry().get_model("bindcraft2") is not None,
-        "settings": schema(),
+        "settings": settings,
     }
 
 
@@ -472,19 +469,7 @@ async def get_model(model_id: str):
             for mode in model.modes
         ],
         "params": [
-            {
-                "name": p.name,
-                "type": p.type,
-                "description": p.description,
-                "required": p.required,
-                "default": p.default,
-                "enum": p.enum,
-                "minimum": p.minimum,
-                "maximum": p.maximum,
-                "hidden": p.hidden,
-                "preset_type": getattr(p, 'preset_type', None),
-                "file_type": getattr(p, 'file_type', None),
-            }
+            serialize_parameter(p)
             for p in model.params
         ],
         "ntp_templates": [
