@@ -13,6 +13,8 @@ from services.bioxp.operator_models import (
     OperatorActionHistory,
     OperatorActionInvokeRequest,
     OperatorLiveActionReceipt,
+    OperatorLookupActionReceipt,
+    OperatorCanonicalCommandReceiptV1,
     OperatorAdmission,
     OperatorAdmissionRequest,
     OperatorAssessmentRequest,
@@ -1068,17 +1070,17 @@ async def operator_action_history(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    page = _validate(OperatorActionHistory, payload)
+    page = _validate(OperatorActionHistory, _normalize_interrupt_evidence(payload))
     if page.limit != limit:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched history page limit")
     return page
 
 
-@router.get("/operator-controls/receipts/{command_id}", response_model=OperatorLiveActionReceipt)
+@router.get("/operator-controls/receipts/{command_id}", response_model=OperatorLookupActionReceipt)
 async def operator_action_receipt(
     command_id: str,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> OperatorLiveActionReceipt:
+) -> OperatorLookupActionReceipt:
     generation = runtime.connection.generation
     try:
         payload = await runtime.connection.request_active_query(
@@ -1089,7 +1091,10 @@ async def operator_action_receipt(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate_live_action_receipt(payload)
+    if isinstance(payload, dict) and payload.get("schema_version") == "bioxp.operator_command_receipt.v1":
+        receipt = _validate(OperatorCanonicalCommandReceiptV1, payload)
+    else:
+        receipt = _validate_live_action_receipt(payload)
     if receipt.command_id != command_id:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched command receipt")
     return receipt

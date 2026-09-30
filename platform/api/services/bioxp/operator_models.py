@@ -5423,6 +5423,52 @@ class OperatorDeckMovementReceiptV1(BaseModel):
     stages: list[OperatorDeckStageV1] = Field(default_factory=list)
 
 
+class OperatorCanonicalCommandReceiptV1(BaseModel):
+    """Canonical legacy lookup envelope; evidence only, not live admission.
+
+    Preserve the command reader's numeric timestamps and recorded booleans.
+    Its schema is not the older operator_action_receipt.v1 mutation response.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+    schema_version: Literal["bioxp.operator_command_receipt.v1"]
+    robot_identity: str = Field(min_length=1, max_length=160)
+    command_id: str = Field(min_length=1, max_length=160)
+    method_id: str | None = Field(min_length=1, max_length=160)
+    method_sequence: NonnegativeStrictInt | None
+    stream_sequence: NonnegativeStrictInt
+    action_id: str = Field(min_length=1, max_length=160)
+    status: CommandStatusV2
+    ownership_generation: NonnegativeStrictInt
+    requested_inputs: dict[str, JsonValue]
+    effective_inputs: dict[str, JsonValue]
+    accepted_at: StrictFloat | StrictInt
+    queued_at: StrictFloat | StrictInt
+    dispatched_at: StrictFloat | StrictInt | None
+    finished_at: StrictFloat | StrictInt | None
+    source_noop: StrictBool
+    source_noop_reason: str | None
+    remote_acknowledged: StrictBool
+    controller_acknowledged: StrictBool
+    physical_effect_verified: StrictBool
+    terminal_evidence: dict[str, JsonValue] | None
+    sequence: NonnegativeStrictInt
+    state_version: NonnegativeStrictInt
+    expected_board_epoch_by_board: dict[str, NonnegativeStrictInt]
+    terminal_receipt_id: str | None
+    completion_class: str | None
+    transition_sequence: NonnegativeStrictInt | None
+    deck_movement: OperatorDeckMovementReceiptV1 | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    response: dict[str, JsonValue] | None = None
+    stage_receipts: list[dict[str, JsonValue]] = Field(default_factory=list)
+
+
+# Lookup compatibility must not widen the live invocation/assessment contracts.
+OperatorLookupActionReceipt = OperatorLiveActionReceipt | OperatorCanonicalCommandReceiptV1
+
+
 class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
     # Verbatim retained JSON is evidence only, never a current command/admission
     # contract. Applying today's mutation models would reject incomplete older
