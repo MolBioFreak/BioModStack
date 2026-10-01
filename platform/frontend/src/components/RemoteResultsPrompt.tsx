@@ -3,6 +3,11 @@ import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-quer
 import { pullRemoteJobResults } from '../lib/api';
 import { remotePullError, remoteResultQueryKeys, remoteResultsState, type RemoteResultsJob } from './remoteResultsState';
 
+const resultQueryKeys = (jobId: string) => [
+    ...remoteResultQueryKeys(jobId),
+    ...['md-run', 'md-summary', 'md-artifacts', 'md-analysis', 'md-trajectory-frame-map'].map(family => [family, jobId]),
+];
+
 export function RemoteResultsPrompt({ job }: { job: RemoteResultsJob }) {
     const queryClient = useQueryClient();
     const clickInFlight = useRef(false);
@@ -14,7 +19,7 @@ export function RemoteResultsPrompt({ job }: { job: RemoteResultsJob }) {
         if (state) wasAwaitingResults.current = true;
         if (wasAwaitingResults.current && job.status === 'completed') {
             wasAwaitingResults.current = false;
-            for (const queryKey of remoteResultQueryKeys(job.id)) {
+            for (const queryKey of resultQueryKeys(job.id)) {
                 void queryClient.invalidateQueries({ queryKey });
             }
         }
@@ -24,7 +29,7 @@ export function RemoteResultsPrompt({ job }: { job: RemoteResultsJob }) {
         mutationFn: () => pullRemoteJobResults(job.id),
         retry: false, // Retrying a transfer always requires a new operator click.
         onSettled: async () => {
-            await Promise.all(remoteResultQueryKeys(job.id).map(queryKey => queryClient.invalidateQueries({ queryKey })));
+            await Promise.all(resultQueryKeys(job.id).map(queryKey => queryClient.invalidateQueries({ queryKey })));
         },
     });
     if (!state) return null;

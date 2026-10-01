@@ -73,7 +73,7 @@ from runtime_policy import (
     workflow_launch_block_detail,
     workflow_launches_allowed,
 )
-from schemas import ExecutionPolicy, JobCreate, JobResponse, JobList, JobStatus
+from schemas import ExecutionPolicy, JobCreate, JobResponse, JobList, JobSummaryResponse, JobSummaryList, JobStatus
 from services.job_control import cancel_job_lineage, reject_generic_md_lifecycle_control
 from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
 from services.ont_barcode_units import load_barcode_units
@@ -2737,8 +2737,8 @@ async def _validate_selected_design_owners(
             raise HTTPException(status_code=422, detail="Selected design source job is missing.")
         if owner_id == source_job.id or (root_job is not None and owner_id == root_job.id):
             if owner.model_id == 'bindcraft2':
-                from services.bindcraft2_publication import read_published_native_results
-                await read_published_native_results(owner, session)
+                from services.bindcraft2_publication import verify_selected_native_designs
+                await verify_selected_native_designs(owner, session, [d for d in designs if d.job_id == owner_id])
             owner_roots[owner_id] = root_job.id if root_job is not None else source_job.id
             continue
         if root_job is None:
@@ -2750,8 +2750,8 @@ async def _validate_selected_design_owners(
         if owner_root.id != root_job.id:
             raise HTTPException(status_code=422, detail="Selected design belongs to another lineage root.")
         if owner.model_id == 'bindcraft2':
-            from services.bindcraft2_publication import read_published_native_results
-            await read_published_native_results(owner, session)
+            from services.bindcraft2_publication import verify_selected_native_designs
+            await verify_selected_native_designs(owner, session, [d for d in designs if d.job_id == owner_id])
         owner_roots[owner_id] = owner_root.id
 
 
@@ -5363,7 +5363,7 @@ def _is_protein_local_redesign_job(job: Job) -> bool:
     )
 
 
-@router.get("", response_model=JobList)
+@router.get("", response_model=JobList | JobSummaryList)
 async def list_jobs(
     status: Optional[JobStatus] = None,
     q: Optional[str] = None,
@@ -5371,6 +5371,8 @@ async def list_jobs(
     mode: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    model_ids: Optional[list[str]] = Query(None),
+    q_ignore_case_id: bool = False,  # NGS historically searches IDs case-insensitively
     exclude_ngs: bool = False,  # Dashboard Show NGS Jobs filter, before paging/count
     include_children: bool = False,  # New param: show child jobs if True
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
@@ -5432,24 +5434,6 @@ async def list_jobs(
         Job.provenance[("remote_execution_assignment", "resources", "components")].label("stage_assigned_components"),
         Job.provenance["stage_terminal_states"].label("stage_terminal_states"),
     )
-    selected_entities = summary_columns if summary else (Job,)
-    design_counts = (
-        select(
-            Design.job_id.label("job_id"),
-            func.count(Design.id).label("design_count"),
-        )
-        .group_by(Design.job_id)
-        .subquery()
-    )
-    query = (
-        select(
-            *selected_entities,
-            func.coalesce(design_counts.c.design_count, 0).label("design_count"),
-        )
-        .outerjoin(design_counts, design_counts.c.job_id == Job.id)
-        .order_by(Job.created_at.desc())
-    )
-    
     # Use identical predicates for the bounded page and its total. These are
     # presentation filters, not changes to execution/status authority.
     filters = []
@@ -5462,12 +5446,23 @@ async def list_jobs(
         filters.append(status_filter)
     if model_id:
         filters.append(Job.model_id == model_id)
+    if isinstance(model_ids, list) and model_ids:
+        filters.append(Job.model_id.in_(model_ids))
     if mode:
         filters.append(Job.mode == mode)
     if q:
         # Dashboard search was a literal substring, not a SQL wildcard pattern.
         escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        filters.append(or_(Job.name.ilike(f"%{escaped}%", escape="\\"), func.instr(Job.id, q) > 0))
+        if q_ignore_case_id:
+            # SQLite lower/NOCASE only handles ASCII. Preserve the NGS browser's
+            # Unicode lowercase literal search without materializing history.
+            connection = await session.connection()
+            await connection.run_sync(lambda conn: conn.connection.dbapi_connection.create_function(
+                "ngs_lower", 1, lambda value: str(value or "").lower(), deterministic=True))
+            filters.append(or_(func.instr(func.ngs_lower(Job.name), q.lower()) > 0,
+                               func.instr(func.ngs_lower(Job.id), q.lower()) > 0))
+        else:
+            filters.append(or_(Job.name.ilike(f"%{escaped}%", escape="\\"), func.instr(Job.id, q) > 0))
     if exclude_ngs:
         # Match ngsResultRouting.isNgsJob, including legacy missing-model rows.
         ngs_models = ("nanopore", "ont_basecall_dna", "ont_basecall_rna", "ont_plasmid_qc",
@@ -5487,9 +5482,25 @@ async def list_jobs(
         filters.append(~or_(model_identity.in_(ngs_models), and_(
             model_identity == "", or_(workflow_identity.in_(ngs_workflows),
                                       mode_identity.in_((*ngs_workflows, "nanopore_methylation"))))))
-    query = query.where(*filters)
-
-    query = query.limit(limit).offset(offset)
+    if summary:
+        # Bound the Jobs scope before counting Designs. The existing job_id
+        # index serves one exact count per displayed row, not a global GROUP BY
+        # over retained scientific history on every recurring/conditional read.
+        page = select(*summary_columns).where(*filters).order_by(
+            Job.created_at.desc()).limit(limit).offset(offset).subquery()
+        page_design_count = select(func.count(Design.id)).where(
+            Design.job_id == page.c.id).correlate(page).scalar_subquery()
+        query = select(page, page_design_count.label("design_count")).order_by(page.c.created_at.desc())
+    else:
+        design_counts = (
+            select(Design.job_id.label("job_id"), func.count(Design.id).label("design_count"))
+            .group_by(Design.job_id).subquery()
+        )
+        query = (
+            select(Job, func.coalesce(design_counts.c.design_count, 0).label("design_count"))
+            .outerjoin(design_counts, design_counts.c.job_id == Job.id)
+            .where(*filters).order_by(Job.created_at.desc()).limit(limit).offset(offset)
+        )
     result = await session.execute(query)
     if summary:
         rows = [
@@ -5525,11 +5536,15 @@ async def list_jobs(
             for job_id, request_id in cm_request_rows.all()
         }
     child_design_count_by_parent: dict[str, int] = {}
-    if listed_job_ids:
+    child_count_ids = (listed_job_ids if not summary else [
+        job.id for job, design_count in rows
+        if not design_count and job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}
+    ])
+    if child_count_ids:
         child_count_result = await session.execute(
             select(Job.parent_job_id, func.count(Design.id))
             .join(Design, Design.job_id == Job.id)
-            .where(Job.parent_job_id.in_(listed_job_ids))
+            .where(Job.parent_job_id.in_(child_count_ids))
             .group_by(Job.parent_job_id)
         )
         child_design_count_by_parent = {
@@ -5547,23 +5562,21 @@ async def list_jobs(
     for job, design_count in rows:
         frustrampnn_result_count = frustrampnn_count_by_job.get(job.id, 0)
         completed_stages = _dedupe_preserve_order(list(job.completed_stages or []))
-        stage_outputs = {} if summary else dict(job.stage_outputs or {})
         if not summary and job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
             review_count = _review_candidate_count_cached(job)
             if (design_count or 0) == 0 and review_count is not None:
                 design_count = review_count
-            if (design_count or 0) == 0:
-                child_design_count = child_design_count_by_parent.get(job.id)
-                if child_design_count:
-                    design_count = child_design_count
+        if (design_count or 0) == 0 and job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
+            child_design_count = child_design_count_by_parent.get(job.id)
+            if child_design_count:
+                design_count = child_design_count
         
-        job_responses.append(JobResponse(
+        public_fields: dict[str, Any] = dict(
             id=job.id,
             name=job.name,
             status=job.status,
             model_id=job.model_id,
             mode=job.mode,
-            params={} if summary else _public_job_params(job),
             execution_policy=ExecutionPolicy.from_params(
                 {"remote_result_policy": job.remote_result_policy} if summary else job.params
             ),
@@ -5573,7 +5586,6 @@ async def list_jobs(
             output_dir=_public_job_output_dir(job),
             error_message=job.error_message,
             design_count=design_count,  # Now joined from DB
-            requested_design_count=None if summary else _resolve_requested_design_count(job),
             batch_id=job.batch_id,
             batch_name=job.batch_name,
             parent_job_id=job.parent_job_id,
@@ -5584,16 +5596,12 @@ async def list_jobs(
             source_stage_job_id=job.source_stage_job_id,
             source_stage_family=job.source_stage_family,
             source_stage_mode=job.source_stage_mode,
-            source_selection_manifest_path=None if summary else job.source_selection_manifest_path,
             source_selection_count=job.source_selection_count,
             selected_input_artifact_class=job.selected_input_artifact_class,
             selected_input_schema_version=job.selected_input_schema_version,
             selection_source_type=job.selection_source_type,
             selection_source_job_id=job.selection_source_job_id,
             selection_dataset_name=job.selection_dataset_name,
-            selected_loop_scope=None if summary else job.selected_loop_scope,
-            provenance=None if summary else job.provenance,
-            saved_selection_sets=None if summary else _serialized_saved_review_filter_sets(job),
             pinned_gpu=job.pinned_gpu,
             execution_target_id=job.execution_target_id,
             execution_source_revision=job.execution_source_revision,
@@ -5604,20 +5612,32 @@ async def list_jobs(
             execution_stages=project_execution_stages(job),
             current_stage=job.current_stage,
             completed_stages=completed_stages,
-            stage_outputs={} if summary else stage_outputs,
             awaiting_input=job.awaiting_input,
             awaiting_stage=job.awaiting_stage,
-            awaiting_payload={} if summary else job.awaiting_payload,
-            decision_history=[] if summary else job.decision_history,
             frustrampnn_result_count=frustrampnn_result_count,
             frustrampnn_reopen_destination=(
                 {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
                 if frustrampnn_result_count else None
             ),
             conformational_mapping_request_id=conformational_mapping_request_id_by_job.get(str(job.id)),
-        ))
+        )
+        if summary:
+            job_responses.append(JobSummaryResponse(**public_fields))
+        else:
+            job_responses.append(JobResponse(
+                **public_fields,
+                params=_public_job_params(job),
+                requested_design_count=_resolve_requested_design_count(job),
+                source_selection_manifest_path=job.source_selection_manifest_path,
+                selected_loop_scope=job.selected_loop_scope,
+                provenance=job.provenance,
+                saved_selection_sets=_serialized_saved_review_filter_sets(job),
+                stage_outputs=dict(job.stage_outputs or {}),
+                awaiting_payload=job.awaiting_payload,
+                decision_history=job.decision_history,
+            ))
     
-    result = JobList(jobs=job_responses, total=total)
+    result = (JobSummaryList if summary else JobList)(jobs=job_responses, total=total)
     if summary and request is not None:
         # Validate/project every request before comparing: counts, removals and
         # all visible fields participate, with no stale server-side cache.
@@ -5991,9 +6011,10 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
                 if field.default is not None:
                     job_data.params.setdefault(field.name, deepcopy(field.default))
     if (normalized_model_id, normalized_mode) == ('bindcraft2', 'campaign'):
-        from services.bindcraft2_typed import validate_request
+        from services.bindcraft2_typed import normalize_new_campaign_request
         try:
-            validate_request(job_data.params.get('bindcraft2_settings'))
+            job_data.params['bindcraft2_settings'] = normalize_new_campaign_request(
+                job_data.params.get('bindcraft2_settings'))
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     if normalized_model_id == 'bindcraft2' and normalized_mode != 'campaign':
@@ -7062,7 +7083,7 @@ async def _create_job(
     if bc2_action_source is not None and normalized_mode != 'resume':
         vram_estimate = 0
         job_data.pinned_gpu = None
-    if job_data.model_id == "molecular_dynamics" and job_data.mode in {"simulate", "analyze"}:
+    if job_data.model_id == "molecular_dynamics" and job_data.mode == "analyze":
         vram_estimate = 0
         job_data.pinned_gpu = None
         logger.info(f"[QUEUE] MD {job_data.mode} job '{job_data.name}': CPU-only, vram_estimate=0")
@@ -7282,6 +7303,9 @@ async def _create_job(
                 )
                 _raise_md_launch_http_error(exc)
             job_params["job_name"] = job_name
+            from services.gpu_orchestrator import md_root_vram_estimate
+            vram_estimate = md_root_vram_estimate(job_params, vram_estimate,
+                selected_plan=execution_preview['plan'] if execution_preview is not None else None)
 
         if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
             try:
@@ -7608,7 +7632,7 @@ async def _create_job(
                     request_json=local_request,
                 )
             )
-        if is_md_launch and job_params.get("md_job_spec", {}).get("schema") == "bms.md.job.v2":
+        if is_md_launch:
             await create_md_run(
                 session,
                 job=job,
@@ -9316,13 +9340,13 @@ async def get_native_generation_results(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.model_id == "boltzgen" and job.mode in {"protein_binder", "nanobody_binder", "peptide_binder"}:
-        from services.boltzgen_candidate_publication import read_published_generation_results
+        from services.boltzgen_candidate_publication import read_published_generation_page
     elif job.model_id == "ppiflow" and job.mode in {"protein_binder", "antibody_binder", "nanobody_binder"}:
-        from services.ppiflow_generation import read_published_generation_results
+        from services.ppiflow_generation import read_published_generation_page
     else:
         raise HTTPException(status_code=400, detail="Job is not a supported native generation mode")
     try:
-        return await read_published_generation_results(job, session, offset=offset, limit=limit)
+        return await read_published_generation_page(job, session, offset=offset, limit=limit)
     except (ValueError, RuntimeError, OSError) as exc:
         logger.warning("Native generation results unavailable for job %s: %s", job_id, exc)
         raise HTTPException(status_code=409, detail="Native generation results unavailable") from exc

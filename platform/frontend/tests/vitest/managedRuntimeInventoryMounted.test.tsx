@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ManagedRuntimeInventoryPanel } from '../../src/components/dashboard/ManagedRuntimeInventoryPanel';
+import { RemotePreloadPanel } from '../../src/components/dashboard/RemotePreloadPanel';
 import { api, type ExecutionTarget, type ManagedRuntimeInventory } from '../../src/lib/api';
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
@@ -22,15 +23,25 @@ const openFiles = async (label = 'model protenix installed artifacts') => {
   const summary = [...container.querySelectorAll('summary')].find(item => item.textContent?.startsWith(label))!;
   if (!(summary.parentElement as HTMLDetailsElement).open) {
     await act(async () => { summary.click(); await settle(); });
+    await act(async () => { await settle(); });
   }
 };
 beforeEach(() => {
   saved = observation(); target = { ...ready }; requests = [];
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
-  api.defaults.adapter = async config => { requests.push({ method: config.method, url: config.url, data: config.data }); return response(saved); };
+  api.defaults.adapter = async config => {
+    requests.push({ method: config.method, url: config.url, data: config.data });
+    if (config.url?.endsWith('/runtime-inventory/artifacts')) {
+      const release = saved!.releases.find(r => r.release_sha256 === config.params.release_sha256)!;
+      return response({ observation_id: config.params.observation_id, release_sha256: release.release_sha256,
+        offset: config.params.offset, limit: 100, total: release.artifacts.length,
+        artifacts: release.artifacts.slice(config.params.offset, config.params.offset + 100) });
+    }
+    return response(saved && { ...saved, observation_id: 'observation-1', releases: saved.releases.map(({ artifacts, ...release }) => ({ ...release, artifact_count: artifacts.length })) });
+  };
 });
-afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); api.defaults.adapter = adapter; vi.restoreAllMocks(); });
+afterEach(async () => { vi.useRealTimers(); await act(async () => root.unmount()); client.clear(); container.remove(); api.defaults.adapter = adapter; vi.restoreAllMocks(); });
 
 it('accepts the actual critical-runtime boolean and compatibility shape, without promoting stale readiness', async () => {
   saved!.critical_runtime_ready = true;
@@ -77,7 +88,7 @@ it.each(['passed', 'failed'] as const)('retains scoped native %s evidence across
 });
 it('GETs saved cumulative image/model evidence without POST, keeping freshness distinct from asset state/readiness', async () => {
   await render();
-  expect(requests).toEqual([{ method: 'get', url: '/api/execution-targets/vast%3A123/runtime-inventory', data: undefined }]);
+  expect(requests).toEqual([{ method: 'get', url: '/api/execution-targets/vast%3A123/runtime-inventory/summary', data: undefined }]);
   await openFiles();
   for (const text of ['Fresh observation (current)', 'model · protenix · Release state: partial', 'image · esmfold2 · Release state: verified', 'Artifact state: missing', '2026-09-07T15:00:00Z', 'Critical runtime ready: false', 'Scientific ready: false', '1,234 bytes', 'd'.repeat(64), 'boot-identity']) expect(container.textContent).toContain(text);
   await act(async () => { await client.invalidateQueries(); await settle(); });
@@ -101,8 +112,14 @@ it('keeps a full worker inventory collapsed through polling and scrolls only exp
   const viewport = container.querySelector('[role="region"][aria-label="model protenix installed artifacts"]')!;
   expect(viewport.classList.contains('max-h-64')).toBe(true);
   expect(viewport.classList.contains('overflow-auto')).toBe(true);
-  expect(viewport.querySelectorAll('li')).toHaveLength(18000);
-  expect(viewport.textContent).toContain('support-python/file-17999.py');
+  expect(viewport.querySelectorAll('li')).toHaveLength(100);
+  expect(viewport.textContent).toContain('support-python/file-99.py');
+  await click('Next');
+  expect(viewport.querySelectorAll('li')).toHaveLength(100);
+  expect(viewport.textContent).not.toContain('support-python/file-0.py');
+  expect(viewport.textContent).toContain('support-python/file-199.py');
+  await click('Previous');
+  expect(viewport.textContent).toContain('support-python/file-0.py');
   saved = { ...saved!, state: 'stale' };
   await act(async () => { await client.invalidateQueries(); await settle(); });
   expect((summary.parentElement as HTMLDetailsElement).open).toBe(true);
@@ -194,7 +211,7 @@ it.each(['cancelling', 'recovery_blocked', 'cancelled'] as const)('does not prom
     source_revision: '3'.repeat(40), source_tree: '4'.repeat(40), state: 'verified', artifacts: [],
     bounded_readiness: 'verified_assets_and_critical_runtime', readiness_scope: 'asset_integrity_and_critical_compatibility_only' });
   await render(); expect(container.textContent).toContain('Critical runtime ready: true');
-  target = { ...target, preload: { operation_id: 'recovering', selection: { kind: 'model', model_id: 'boltz2' },
+  target = { ...target, preload: { artifact_summary: { total_count: 0, verified_count: 0, total_bytes: 0, verified_bytes: 0 }, cached_artifact_count: 0, operation_id: 'recovering', selection: { kind: 'model', model_id: 'boltz2' },
     source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64), phase,
     recovery_required: true, artifact: null, message: 'Transport quiescence unknown', started_at: 'now', updated_at: 'now' } };
   await render();
@@ -202,4 +219,128 @@ it.each(['cancelling', 'recovery_blocked', 'cancelled'] as const)('does not prom
   expect(container.textContent).toContain('Asset integrity: stale');
   expect(button().disabled).toBe(true);
   expect(requests.every(request => request.method === 'get')).toBe(true);
+});
+
+it('owns the observer only while both actual ancestor disclosures are open, retaining chooser drafts', async () => {
+  vi.useFakeTimers();
+  const original = api.defaults.adapter as (config: any) => Promise<any>;
+  const signals: AbortSignal[] = [];
+  api.defaults.adapter = async config => {
+    if (config.url?.includes('/runtime-inventory/')) {
+      signals.push(config.signal as AbortSignal);
+      return original(config);
+    }
+    return response([]);
+  };
+  const flush = async (milliseconds = 100) => {
+    await act(async () => { await vi.advanceTimersByTimeAsync(milliseconds); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+  };
+  const remote = async () => {
+    await act(async () => { root.render(<QueryClientProvider client={client}><RemotePreloadPanel target={target} jobs={[]} onChanged={() => {}} /></QueryClientProvider>); });
+    await flush();
+  };
+  const toggle = async (prefix: string) => {
+    await act(async () => { [...container.querySelectorAll('summary')].find(s => s.textContent?.startsWith(prefix))!.click(); });
+    await flush();
+  };
+  const reads = () => requests.filter(r => r.url?.endsWith('/runtime-inventory/summary')).length;
+  await remote(); await flush(60_000); expect(reads()).toBe(0);
+  await toggle('Prepare worker'); await flush(60_000); expect(reads()).toBe(0);
+  const chooser = container.querySelector<HTMLSelectElement>('[aria-label="Preparation workflow"]')!;
+  const draft = chooser.options[1].value;
+  await act(async () => { chooser.value = draft; chooser.dispatchEvent(new Event('change', { bubbles: true })); });
+  await toggle('Evidence'); expect(reads()).toBe(1);
+  await flush(30_000); expect(reads()).toBe(2);
+  await toggle('Prepare worker'); const closed = reads(); await flush(60_000); expect(reads()).toBe(closed);
+  expect(container.querySelector('[aria-label="Managed runtime inventory"]')).toBeNull();
+  await toggle('Prepare worker'); expect(reads()).toBe(closed + 1);
+  expect(container.querySelector('[aria-label="Preparation workflow"]')).toBe(chooser);
+  expect(chooser.value).toBe(draft);
+  await toggle('Evidence'); const innerClosed = reads(); await flush(60_000); expect(reads()).toBe(innerClosed);
+  expect(signals.every(signal => signal instanceof AbortSignal)).toBe(true);
+  let resolve!: (value: ReturnType<typeof response>) => void;
+  let pendingSignal!: AbortSignal;
+  vi.spyOn(api, 'get').mockImplementationOnce((_url, config) => {
+    pendingSignal = config!.signal as AbortSignal;
+    return new Promise(r => { resolve = r; });
+  });
+  await toggle('Evidence');
+  await toggle('Prepare worker');
+  expect(pendingSignal.aborted).toBe(true);
+  await act(async () => { resolve(response({ ...observation(), observation_id: 'late', releases: [] })); });
+  await flush();
+  expect(container.querySelector('[aria-label="Managed runtime inventory"]')).toBeNull();
+});
+
+it('progress timestamps do not rekey saved observations, but endpoint and lifecycle changes do', async () => {
+  target.preload = { request_sha256: 'c'.repeat(64), operation_id: 'same', phase: 'source_download_ready', source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+    started_at: 'then', updated_at: 'now', artifact: null, message: 'done',
+    artifact_summary: { total_count: 0, total_bytes: 0, verified_count: 0, verified_bytes: 0 }, cached_artifact_count: 0 };
+  await render();
+  const initial = requests.length;
+  for (const updated_at of ['later1', 'later2', 'later3']) { target = { ...target, preload: { ...target.preload!, updated_at } }; await render(); }
+  expect(requests).toHaveLength(initial);
+  expect(client.getQueryCache().findAll({ queryKey: ['managed-runtime-inventory-summary'] })).toHaveLength(1);
+  target = { ...target, preload: { ...target.preload!, phase: 'failed' } }; await render();
+  expect(requests).toHaveLength(initial + 1);
+  target = { ...target, host: 'different' }; await render(); expect(requests).toHaveLength(initial + 2);
+});
+
+it('aborts an in-flight page on collapse, isolates late bytes, and reloads page errors', async () => {
+  await render();
+  let resolve!: (value: ReturnType<typeof response>) => void;
+  let signal!: AbortSignal;
+  const originalGet = api.get.bind(api);
+  const get = vi.spyOn(api, 'get').mockImplementationOnce((_url, config) => {
+    signal = config!.signal as AbortSignal;
+    return new Promise(r => { resolve = r; });
+  });
+  await openFiles();
+  const disclosure = [...container.querySelectorAll('summary')].find(s => s.textContent?.startsWith('model protenix installed artifacts'))!;
+  await act(async () => { disclosure.click(); await settle(); });
+  expect(signal.aborted).toBe(true);
+  await act(async () => { resolve(response({ observation_id: 'observation-1', release_sha256: 'a'.repeat(64), offset: 0, limit: 100, total: 1,
+    artifacts: [{ name: 'late-hidden', size_bytes: 1, sha256: 'd'.repeat(64), state: 'verified' }] })); await settle(); });
+  expect(container.textContent).not.toContain('late-hidden');
+  get.mockRejectedValueOnce(new Error('Page unavailable'));
+  await openFiles(); expect(container.textContent).toContain('Page unavailable');
+  get.mockImplementation(originalGet); await click('Reload installed artifacts');
+  expect(container.textContent).toContain('weights/model.pt');
+  expect(container.textContent).not.toContain('late-hidden');
+});
+
+it('keeps explicit refresh pending and single-flight while returning only summary transport', async () => {
+  await render();
+  let resolve!: (value: ReturnType<typeof response>) => void;
+  const post = vi.spyOn(api, 'post').mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+  await act(async () => { button().click(); button().click(); await settle(); });
+  expect(post).toHaveBeenCalledTimes(1);
+  expect(post.mock.calls[0][2]).toEqual({ params: { summary: true } });
+  expect(button('Observing installed assets…').disabled).toBe(true);
+  expect(container.textContent).not.toContain('weights/model.pt');
+  await act(async () => { resolve(response({ ...observation(), observation_id: 'new', releases: [] })); await settle(); });
+  expect(button().disabled).toBe(false);
+});
+
+it('replaces a pending page when observation identity changes without accepting its late rows', async () => {
+  saved!.releases[0].artifacts = Array.from({ length: 250 }, (_, i) => ({ name: `file-${i}`, size_bytes: 1, sha256: 'd'.repeat(64), state: 'verified' }));
+  await render(); await openFiles();
+  let resolve!: (value: ReturnType<typeof response>) => void;
+  let signal!: AbortSignal;
+  vi.spyOn(api, 'get').mockImplementationOnce((_url, config) => {
+    signal = config!.signal as AbortSignal;
+    return new Promise(r => { resolve = r; });
+  });
+  await click('Next');
+  expect(container.textContent).not.toContain('file-0');
+  const query = client.getQueryCache().find({ queryKey: ['managed-runtime-inventory-summary'], exact: false })!;
+  await act(async () => { client.setQueryData(query.queryKey, { ...(query.state.data as object), observation_id: 'replacement-observation' }); await settle(); });
+  await act(async () => { await settle(); });
+  expect(signal.aborted).toBe(true);
+  expect(container.textContent).toContain('file-0');
+  await act(async () => { resolve(response({ observation_id: 'observation-1', release_sha256: 'a'.repeat(64), offset: 100, limit: 100, total: 250,
+    artifacts: [{ name: 'late-old-observation', size_bytes: 1, sha256: 'd'.repeat(64), state: 'verified' }] })); await settle(); });
+  expect(container.textContent).not.toContain('late-old-observation');
+  expect(container.querySelectorAll('[role="region"] li')).toHaveLength(100);
 });

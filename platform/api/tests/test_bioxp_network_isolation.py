@@ -62,7 +62,9 @@ def test_default_lane_is_inside_an_os_network_namespace() -> None:
     assert network_policy.default_network_namespace_active() is True
     routes = Path("/proc/net/route").read_text(encoding="utf-8").splitlines()
     assert all(line.startswith("Iface") for line in routes)
-    assert Path("/proc/net/if_inet6").read_text(encoding="utf-8") == ""
+    ipv6 = Path("/proc/net/if_inet6")
+    # Kernels without IPv6 omit this file; they have no IPv6 interfaces.
+    assert not ipv6.exists() or ipv6.read_text(encoding="utf-8") == ""
 
 
 def test_default_bioxp_test_lane_blocks_child_processes() -> None:

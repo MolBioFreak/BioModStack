@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { IndependentProvisionPanel } from './IndependentProvisionPanel';
+import { PagedArtifactDetails } from './PagedArtifactDetails';
 import { isAxiosError } from 'axios';
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
 import { preloadExecutionTarget, provisionSelectionLabel, type ExecutionTarget } from '../../lib/api';
@@ -16,6 +17,7 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
   // A closed optional menu must not fetch catalogs/inventory for every worker.
   // Retain the chooser after first opening so collapsing preserves its draft.
   const [preparationOpened, setPreparationOpened] = useState(false);
+  const [preparationVisible, setPreparationVisible] = useState(false);
   const queryClient = useQueryClient();
   const mutationKey = ['remote-preload', target.id];
   const activePreloads = useIsMutating({ mutationKey });
@@ -37,12 +39,12 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
     mutation.mutate(jobId);
   }
   return <section aria-label="Remote preload and activity" className="space-y-3 rounded-lg border border-[var(--border-primary)] p-3">
-    <details onToggle={event => { if (event.currentTarget.open) setPreparationOpened(true); }}>
+    <details onToggle={event => { setPreparationVisible(event.currentTarget.open); if (event.currentTarget.open) setPreparationOpened(true); }}>
       <summary className="cursor-pointer rounded py-1 text-sm font-medium focus-visible:outline focus-visible:outline-2">
-        Prepare worker <span className="font-normal text-[var(--text-muted)]">— optional dependency downloads{preload ? ` · ${preload.phase}` : ''}</span>
+        Prepare worker <span className="font-normal text-[var(--text-muted)]">— optional dependency downloads{preload ? ` · ${preload.phase === 'source_download_ready' ? 'Downloads complete' : preload.phase}` : ''}</span>
       </summary>
       <div className="mt-3 space-y-3">
-    {preparationOpened && <IndependentProvisionPanel target={target} onChanged={onChanged} />}
+    {preparationOpened && <IndependentProvisionPanel target={target} onChanged={onChanged} inventoryVisible={preparationVisible} />}
     <h4 className="font-medium">Preload source and runtime files</h4>
     <p className="text-xs text-[var(--text-muted)]">Use a saved Job as the exact dependency recipe. This does not submit a Job or transfer biological inputs, results, or secrets. Downloads ready does not mean scientific Ready.</p>
     <label className="block text-sm">Saved Job recipe
@@ -58,8 +60,13 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
     </details>
     {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
     {preload && <div role="status" aria-label="Preload progress" className="text-sm">
-      {preload.phase === 'source_download_ready' && <p>Source/download ready — not scientific Ready</p>}
+      {preload.phase === 'source_download_ready' && <p>Downloads complete</p>}
       <p>{preload.message}</p>
+      <p>{preload.artifact_summary.verified_count} of {preload.artifact_summary.total_count} artifacts complete or cached · {preload.artifact_summary.verified_bytes.toLocaleString()} bytes complete or cached of {preload.artifact_summary.total_bytes.toLocaleString()} bytes declared. Transfer progress and rate are not reported.</p>
+      {!preload.selection && <>
+        <PagedArtifactDetails targetId={target.id} operationId={preload.operation_id} collection="progress" count={preload.artifact_summary.total_count} sequence={preload.sequence} />
+        <PagedArtifactDetails targetId={target.id} operationId={preload.operation_id} collection="cached" count={preload.cached_artifact_count} sequence={preload.sequence} />
+      </>}
       {preload.artifact && <p className="break-all font-mono">{preload.artifact}</p>}
       <p className="text-xs text-[var(--text-muted)]">{preload.selection ? `${preload.selection.kind} ${provisionSelectionLabel(preload.selection)}` : `Recipe ${preload.job_id}`} · Source {preload.source_revision.slice(0, 12)} · Updated {preload.updated_at}</p>
     </div>}

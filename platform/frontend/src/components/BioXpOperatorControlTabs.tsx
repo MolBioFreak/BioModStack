@@ -12,7 +12,6 @@ import {
     useAssessBioXpOperatorAction,
     useBioXpOperatorActionAdmission,
     useBioXpOperatorControlCatalog,
-    useBioXpOperatorDashboard,
     useInvokeBioXpOperatorAction,
 } from '../lib/bioxpClient';
 import { bioXpReceiptFailureText, bioXpReceiptIsMoveTimeoutReport, bioXpReceiptStatusText } from '../lib/bioxpEvidencePresentation';
@@ -116,8 +115,6 @@ function ReceiptCard({ receipt, generation = 0, connected = false }: {
             : false;
     const durationMs = 'duration_ms' in receipt ? receipt.duration_ms : null;
     const operatorNote = 'operator_note' in receipt ? receipt.operator_note : null;
-    const stageReceipts = 'stage_receipts' in receipt ? receipt.stage_receipts : [];
-    const response = 'response' in receipt ? receipt.response : null;
     return (
         <article className={`rounded border p-3 text-xs ${report ? 'border-amber-700/60' : terminalPass ? 'border-emerald-700/60' : terminalFail ? 'border-red-700/60' : 'border-slate-700'}`}>
             <div className="flex flex-wrap justify-between gap-2">
@@ -128,12 +125,6 @@ function ReceiptCard({ receipt, generation = 0, connected = false }: {
             <p className="mt-1 text-slate-300">remote_acknowledged={String(remoteAcknowledged)} · physical_effect_verified={String(physicalEffectVerified)} · duration_ms={durationMs ?? 'unknown'}</p>
             {bioXpReceiptFailureText(receipt) && <p className={report ? "mt-1 text-amber-300" : "mt-1 text-red-300"}>{bioXpReceiptFailureText(receipt)}</p>}
             {operatorNote && <p className="mt-1 text-slate-300">Operator: {operatorNote}</p>}
-            {stageReceipts.length > 0 && (
-                <details className="mt-2"><summary>Stage receipts ({stageReceipts.length})</summary><pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify(stageReceipts, null, 2)}</pre></details>
-            )}
-            {response && (
-                <details className="mt-2"><summary>Bounded response</summary><pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify(response, null, 2)}</pre></details>
-            )}
         </article>
     );
 }
@@ -142,15 +133,17 @@ function isCurrentActionReceipt(receipt: BioXpOperatorHistoryReceipt): boolean {
     return receipt.history.source === 'direct' && receipt.history.source_schema === 'bioxp.operator_action_receipt.v1';
 }
 
-export function BioXpOperatorControlTabs({ generation, connected }: { generation: number; connected: boolean }) {
+export function BioXpOperatorControlTabs({ generation, connected, zTargetSteps, catalogObservation }: {
+    generation: number; connected: boolean; zTargetSteps?: number;
+    catalogObservation?: ReturnType<typeof useBioXpOperatorControlCatalog>;
+}) {
     const [pane, setPane] = useState<Pane>('primitive');
     const historyPagination = useBioXpHistoryPagination(connected ? generation : 0, 100);
-    const dashboardQuery = useBioXpOperatorDashboard(generation, connected);
-    const catalogQuery = useBioXpOperatorControlCatalog(
-        generation,
-        connected,
-        dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
-    );
+    // The mounted cockpit owns the observation cadence. Standalone Advanced
+    // retains its own owner; two visible surfaces must not create two timers.
+    const ownCatalogQuery = useBioXpOperatorControlCatalog(generation, connected && !catalogObservation, null, zTargetSteps);
+    const catalogQuery = catalogObservation ?? ownCatalogQuery;
+    const dashboard = catalogQuery.data?.dashboard;
     const historyQuery = useBioXpOperatorActionHistory(generation, connected, 100, pane === 'logs' ? historyPagination.cursor : null);
     const invoke = useInvokeBioXpOperatorAction();
     // Published stop/emergency actions retain their own request and receipt owner.
@@ -217,16 +210,19 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         authoritativeCatalog?.ownership_generation ?? 0,
         normalizedForAdmission,
         connected,
-        dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
+        dashboard?.x_axis?.provider?.lifecycle?.state ?? dashboard?.x_axis?.provider?.state ?? null,
     );
-    const actionEnabled = admission.error ? false : (admission.data?.enabled ?? (selected ? selected.enabled : false));
-    const disabledReason = admission.data?.disabled_reason ?? (selected ? selected.disabled_reason : null) ?? 'Robot did not admit this action.';
-    const dependencies = admission.data?.dependencies ?? (selected ? selected.dependencies : []);
+    // A failed preview is not a robot denial. The query key binds successful
+    // data to the exact action, normalized inputs and both generations.
+    const preview = admission.isSuccess ? admission.data : undefined;
+    const actionEnabled = preview?.enabled ?? selected?.enabled ?? false;
+    const disabledReason = preview?.disabled_reason ?? selected?.disabled_reason ?? 'Robot did not admit this action.';
+    const dependencies = preview?.dependencies ?? selected?.dependencies ?? [];
     const latestReceipt = connected && authoritativeCatalog && authoritativeHistory
         ? invoke.data ?? authoritativeHistory.items.find(isCurrentActionReceipt)
         : undefined;
     const latestReceiptCommandId = latestReceipt?.command_id ?? null;
-    const xLifecycle = dashboardQuery.data?.x_axis?.provider?.lifecycle ?? null;
+    const xLifecycle = dashboard?.x_axis?.provider?.lifecycle ?? null;
     const awaitingXObservationReceiptId = xLifecycle?.state === 'awaiting_operator_observation'
         ? xLifecycle.awaiting_observation_receipt_id ?? null
         : null;

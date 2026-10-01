@@ -38,6 +38,37 @@ def parameter_contract(mode: str) -> list[dict]:
 def ppiflow_generation_inventory(mode: str) -> dict:
     """Typed controls plus visible checkpoint-owned architecture and native limits."""
     fields = parameter_contract(mode)
+    # Discovery-only projection of the existing normalization branches below.
+    # parameter_contract remains unchanged: this metadata never validates inputs.
+    by_name = {field['name']: field for field in fields}
+    if mode == 'protein_binder':
+        by_name['target_pdb'].update(
+            required_when={'field': 'input_csv', 'operator': 'falsy'},
+            applicability={'field': 'input_csv', 'operator': 'falsy'},
+            required_help='Specify exactly one target PDB or input CSV. CSV input does not require a target PDB.')
+        by_name['input_csv'].update(
+            required_when={'field': 'target_pdb', 'operator': 'falsy'},
+            applicability={'field': 'target_pdb', 'operator': 'falsy'},
+            required_help='Alternative to target PDB; each row supplies its native processed input.')
+        by_name['binder_chain'].update(
+            required_when={'field': 'target_pdb', 'operator': 'truthy'},
+            applicability={'field': 'target_pdb', 'operator': 'truthy'},
+            required_help='Required for native PDB preprocessing as the virtual binder identity; not required for CSV input.')
+        by_name['specified_hotspots'].update(
+            required_when={'any': [
+                {'field': 'sample_hotspot_rate_min', 'operator': 'not_equals', 'value': 0.2},
+                {'field': 'sample_hotspot_rate_max', 'operator': 'not_equals', 'value': 0.5}]},
+            required_help='Explicit hotspots are required when either hotspot rate differs from the native 0.2–0.5 interval. Null retains native hotspot sampling.')
+    else:
+        for key in ('target_pdb', 'framework_pdb', 'antigen_chain', 'heavy_chain', 'specified_hotspots'):
+            by_name[key].update(required=True, nullable=False,
+                                required_help='Required by the native antibody/nanobody generator; no inherited null value.')
+        if 'light_chain' in by_name:
+            by_name['light_chain'].update(
+                required=mode == 'antibody_binder', nullable=mode == 'nanobody_binder',
+                applicability=mode == 'antibody_binder',
+                required_help=('Required for the native antibody operation.' if mode == 'antibody_binder'
+                               else 'Inactive for heavy-only nanobody generation; must remain null.'))
     model = yaml.safe_load(MODEL_YAML.read_text())
     return {"schema_version": SCHEMA_VERSION, "mode": mode, "parameters": fields,
             "profile": model["native_profiles"][mode], "assets": selected_assets(mode),
@@ -46,6 +77,7 @@ def ppiflow_generation_inventory(mode: str) -> dict:
                 "global_seed": "No native global seed control; dataset_seed is not a global seed",
                 "antibody_retry_limit": 20 if mode != "protein_binder" else None,
                 "antibody_native_retention": "rmsd_framework < 1 and no backbone clash" if mode != "protein_binder" else None,
+                "light_chain": "inactive; heavy-only operation, no light-chain input" if mode == "nanobody_binder" else "required" if mode == "antibody_binder" else "not applicable",
                 "chain_case": "Native preprocessing uppercases structural dictionary keys; BMS does not rewrite requests",
             }}
 
@@ -396,6 +428,10 @@ def _publication_input(job, output):
                    "root": str(output), "campaign_root": "ppiflow_generation",
                    "attempt": job.retry_count or 0, "remote_attempt_id": job.remote_attempt_id,
                    "files": files}
+    previous = (job.provenance or {}).get(PUBLICATION_KEY)
+    if previous is None or 'record_index' in previous:
+        from services.core_protein_result_contract import native_record_index
+        publication['record_index'] = native_record_index(samples)
     return root, result, publication
 
 
@@ -482,7 +518,58 @@ async def publish_generation_results(job, output, session, *, commit=False):
 
 
 async def read_published_generation_results(job, session, *, offset=0, limit=100):
-    """Verified native receipt/metrics plus exact existing Design/document handles."""
+    """Explicit whole-publication custody, including finalization and replay."""
     result, publication = await _generation_custody(job, session)
     from services.boltzgen_candidate_publication import generation_workbench
     return generation_workbench(result, publication, offset=offset, limit=limit)
+
+
+async def read_published_generation_page(job, session, *, offset=0, limit=100):
+    """Routine pages verify addressed snapshots; explicit audits retain full custody."""
+    from services.core_protein_result_contract import native_page_root, read_addressed_native_file
+    from services.boltzgen_candidate_publication import generation_workbench
+    from database import Design, JobArtifact
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 1000:
+        raise ValueError('Invalid native result page')
+    publication = (job.provenance or {}).get(PUBLICATION_KEY)
+    if not isinstance(publication, dict) or 'record_index' not in publication:
+        result, publication = await _generation_custody(job, session)
+        return generation_workbench(result, publication, offset=offset, limit=limit)
+    if job.model_id != 'ppiflow' or job.mode not in MODES:
+        raise ValueError('Not an initial PPIFlow generation Job')
+    root = native_page_root(job, publication, schema='ppiflow.generation-publication.v1', campaign_root='ppiflow_generation')
+    async def read(name, **kwargs):
+        return await read_addressed_native_file(job, session, publication, root, name, 'ppiflow_generation/', **kwargs)
+    receipt = json.loads(await read('generation_receipt.json'))
+    index = publication['record_index']
+    if (receipt.get('emitted_samples') != len(index) or receipt.get('mode') != job.mode
+            or receipt.get('model') != 'ppiflow' or receipt.get('operation') != 'initial_generation'
+            or receipt.get('schema_version') != SCHEMA_VERSION):
+        raise ValueError('PPIFlow producer receipt identity differs')
+    records = []
+    for position, entry in enumerate(index[offset:offset + limit], start=offset):
+        record = json.loads(await read('samples.jsonl', record=entry))
+        binding = publication['candidates'][position]
+        if binding['candidate_key'] != record['candidate_key']:
+            raise ValueError('PPIFlow candidate binding changed')
+        structure = binding['structures'][0]
+        if structure['path'] != record['path'] or structure['sha256'] != record['sha256']:
+            raise ValueError('PPIFlow native sample pairing changed')
+        data = await read(record['path'])
+        from services.core_protein_result_contract import _structure_confidence
+        _structure_confidence(data, str(root / record['path']))
+        if json.loads(await read(record['path'] + '.sample.json')) != record:
+            raise ValueError('PPIFlow sample sidecar differs')
+        artifact = await session.get(JobArtifact, structure['artifact_id'])
+        design = await session.get(Design, binding['design_id'])
+        if artifact is None or design is None or any(getattr(design, k) != v for k, v in _generation_design_fields(job, record, artifact).items()):
+            raise ValueError('PPIFlow persisted candidate lineage changed')
+        if artifact.logical_path != structure['logical_path'] or artifact.sha256 != structure['sha256']:
+            raise ValueError('PPIFlow candidate artifact binding changed')
+        records.append(record)
+    # Decoration is page-local; the total comes from the sealed native row index.
+    subset = {**publication, 'record_index': index[offset:offset + limit], 'candidates': publication['candidates'][offset:offset + limit],
+              'files': {name: publication['files'][name] for name in ['generation_receipt.json', *(['samples.jsonl'] if 'samples.jsonl' in publication['files'] else []),
+                       *(n for r in records for n in (r['path'], r['path'] + '.sample.json'))]}}
+    page = generation_workbench({'receipt': receipt, 'records': records}, subset, limit=limit)
+    return {**page, 'total': len(index), 'offset': offset, 'publication': subset}

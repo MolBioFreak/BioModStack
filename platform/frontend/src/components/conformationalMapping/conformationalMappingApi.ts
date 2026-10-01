@@ -25,6 +25,9 @@ export interface CmSource {
     bytes: number;
     metadata: Record<string, unknown>;
     managed_checkpoint?: boolean;
+    /** Summary-only display hints, never scientific authority. */
+    summary?: boolean;
+    rcsb_source?: boolean;
     authority_receipt?: {
         schema_name: 'cm_source_authority_receipt';
         schema_version: 1;
@@ -520,6 +523,27 @@ export const cmApiError = (value: unknown, fallback: string): string => {
 
 export const listCmSources = async (): Promise<CmSource[]> =>
     (await api.get<{ sources: CmSource[] }>('/api/conformational-mapping/sources')).data.sources;
+
+export type CmSourceSummary = Omit<CmSource, 'metadata' | 'authority_receipt' | 'submission_policy' | 'summary'> & {
+    summary: true;
+    metadata: Record<string, never>;
+};
+export interface CmSourcePage {
+    sources: CmSourceSummary[];
+    next_cursor: string | null;
+    managed_source: CmSourceSummary | null;
+}
+export interface CmSourcePageQuery {
+    after?: string;
+    source_kind?: CmSourceKind;
+    search?: string;
+}
+export const listCmSourcePage = async (query: CmSourcePageQuery): Promise<CmSourcePage> =>
+    (await api.get<CmSourcePage>('/api/conformational-mapping/sources', {
+        params: { ...query, summary: true, limit: 50 },
+    })).data;
+export const getCmSource = async (sourceId: string): Promise<CmSource> =>
+    (await api.get<CmSource>(`/api/conformational-mapping/sources/${encodeURIComponent(sourceId)}`)).data;
 
 export const inspectCmFrustrampnnSource = async (
     sourceId: string,

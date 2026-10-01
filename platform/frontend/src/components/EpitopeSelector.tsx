@@ -116,15 +116,16 @@ export function EpitopeSelector({
             {/* Selection Controls */}
             <div className="flex justify-between items-center">
                 <div className="flex items-center gap-4">
-                    <span className="text-sm text-slate-400">
+                    <span className="text-sm text-[var(--text-secondary)]">
                         <span className="text-emerald-400 font-bold">{selectedResidues.size}</span> residues selected
                     </span>
-                    <div className="text-xs text-slate-500">
+                    <div className="text-xs text-[var(--text-secondary)]">
                         Click: toggle • Shift+Click: range • Ctrl+Click: add/remove
                     </div>
                 </div>
                 {selectedResidues.size > 0 && (
                     <button
+                        type="button"
                         onClick={handleClearSelection}
                         className="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded hover:bg-red-500/10 transition-colors"
                     >
@@ -167,7 +168,7 @@ export function EpitopeSelector({
                                 (residues {firstResNum}–{chain.residues[chain.residues.length - 1]?.resNum ?? firstResNum})
                             </span>
                         </div>
-                        <div className="flex max-h-[52vh] flex-wrap gap-x-0.5 gap-y-4 overflow-auto rounded-lg border border-slate-800 bg-slate-900/50 px-3 pb-3 pt-5 pr-2 font-mono text-sm leading-none">
+                        <div className="flex max-h-[52vh] flex-wrap gap-x-0.5 gap-y-4 overflow-auto rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 pb-3 pt-5 pr-2 font-mono text-sm leading-none">
                             {chain.residues.map((residue) => {
                                 const key = getResKey(residue);
                                 const isSelected = selectedResidues.has(key);
@@ -175,15 +176,18 @@ export function EpitopeSelector({
                                 return (
                                     <div key={key} className="relative group">
                                         {/* Position Marker - shows PDB residue number for every AA */}
-                                        <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 text-[8px] text-slate-600 select-none whitespace-nowrap">
+                                        <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 text-[9px] text-[var(--text-secondary)] select-none whitespace-nowrap">
                                             {residue.resNum}{residue.iCode || ''}
                                         </div>
 
                                         <button
+                                            type="button"
+                                            aria-label={`${chain.id}${residue.resNum}${residue.iCode || ''} (${residue.resName})`}
+                                            aria-pressed={isSelected}
                                             onClick={(e) => handleResidueClick(residue, e)}
-                                            className={`w-5 h-5 flex items-center justify-center rounded text-[10px] transition-all border ${isSelected
-                                                ? `${colors.bg} ${colors.border} ${colors.text} scale-110 shadow-lg ring-1 ring-current/50`
-                                                : 'bg-slate-800 border-transparent text-slate-400 hover:bg-slate-700 hover:border-slate-600'
+                                            className={`w-6 h-6 flex items-center justify-center rounded text-xs transition-colors border ${isSelected
+                                                ? 'bg-accent border-accent text-[var(--text-on-accent)] ring-1 ring-accent'
+                                                : 'bg-[var(--surface-control)] border-transparent text-[var(--text-primary)] hover:border-accent'
                                                 }`}
                                             title={`${chain.id}${residue.resNum}${residue.iCode || ''} (${residue.resName})`}
                                         >
@@ -209,8 +213,8 @@ export function EpitopeSelector({
 
             {/* Selected Residues Summary */}
             {selectedResidues.size > 0 && (
-                <div className="bg-slate-900/50 rounded-lg p-3 border border-slate-800">
-                    <div className="text-xs text-slate-400 mb-2">{selectedLabel}:</div>
+                <div className="bg-[var(--bg-primary)] rounded-lg p-3 border border-[var(--border-color)]">
+                    <div className="text-xs text-[var(--text-secondary)] mb-2">{selectedLabel}:</div>
                     <div className="flex flex-wrap gap-1">
                         {Array.from(selectedResidues).sort().map(key => {
                             const chainId = key[0];

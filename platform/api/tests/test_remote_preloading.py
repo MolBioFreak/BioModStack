@@ -113,12 +113,12 @@ def test_prewarm_plan_forwards_actual_invocation_before_assets(tmp_path, monkeyp
     monkeypatch.setattr(cache, 'current_source_identity', lambda repo: ('a' * 40, 'b' * 40))
     class DependencyBoundaryReached(Exception):
         pass
-    def dependencies(model_id, mode, command, *, native_invocation):
+    def dependencies(model_id, mode, params, *, native_invocation, publication, resolved):
         assert (model_id, mode) == ('boltz2', 'predict')
         assert native_invocation is invocation
-        assert tuple(command) == invocation.command
+        assert params == invocation.native_parameters
         raise DependencyBoundaryReached
-    monkeypatch.setattr(cache, 'compile_remote_dependencies', dependencies)
+    monkeypatch.setattr(cache, '_runtime_assets', dependencies)
     with pytest.raises(DependencyBoundaryReached):
         cache._prewarm_plan(SimpleNamespace(model_id='boltz2', mode='predict'),
             list(invocation.command), 'a' * 40, 'b' * 40, tmp_path,
@@ -227,7 +227,7 @@ async def test_mounted_post_only_progress_and_no_job_mutation(store):
         await settle(controller)
         rows = (await client.get('/execution-targets')).json()
         assert rows[0]['preload']['phase'] == 'source_download_ready'
-        assert 'launch still prepares support Python' in rows[0]['preload']['message']
+        assert rows[0]['preload']['message'] == 'Downloads complete'
     async with store() as s:
         assert p.recipe_digest(await s.get(Job,'recipe')) == before
         assert (await s.get(ExecutionTarget,'vast:1')).leased_job_id is None
@@ -449,7 +449,7 @@ def test_workflow_preview_forwards_shared_plan_and_scrubs_worker_manifest(tmp_pa
         return invocation
     asset = tmp_path / 'model.pt'
     asset.write_bytes(b'controlled dependency fixture')
-    def runtime_assets(model, mode, params, *, include_support, selected_plan):
+    def runtime_assets(model, mode, params, *, include_support, selected_plan, publication, resolved):
         assert selected_plan is plan
         assert (model, mode, params, include_support) == ('protenix', 'predict', {'science': 17}, False)
         return [(asset, 'weights/model.pt'), (asset, 'weights/model.pt')]
@@ -555,7 +555,11 @@ async def test_cancel_retains_artifact_evidence_and_blocks_until_quiescent(store
         assert response.preload.recovery_required is (not quiet)
         assert response.preload.cancel_requested
         assert response.preload.sequence >= 3
-        assert [row.state for row in response.preload.artifact_progress] == ['verified', 'interrupted']
+        assert response.preload.artifact_summary.model_dump() == dict(
+            total_count=2, verified_count=1, total_bytes=11, verified_bytes=4)
+        from services.remote_execution.targets import artifact_page
+        page = await artifact_page(session, 'vast:1', operation_id=operation, collection='progress')
+        assert [row.state for row in page.items] == ['verified', 'interrupted']
         if not quiet:
             with pytest.raises(ExecutionTargetError):
                 await controller.start(session, 'vast:1', PreloadRequest(job_id='recipe'))

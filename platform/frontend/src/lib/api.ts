@@ -479,7 +479,7 @@ export interface CatalogProvisionSelection {
 }
 export interface WorkflowPackSelection {
     kind: 'workflow_pack';
-    workflow_id: 'structure_prediction';
+    workflow_id: 'structure_prediction' | 'antibody_denovo';
 }
 export interface MdLaunchPreviewRequest {
     schema_version: 'bms.md.launch-preview-request.v1';
@@ -521,7 +521,7 @@ export interface ProvisionPreview {
     artifacts: CachedArtifactReceipt[];
     total_bytes: number;
     scientific_ready: false;
-    scope: 'managed_asset_activation';
+    scope: 'download_only' | 'managed_asset_activation';
 }
 
 export type ProvisionRequest = ProvisionSelection & {
@@ -532,21 +532,40 @@ export interface ObservedArtifactInventory {
     operation_id: string;
     selection: ProvisionSelection;
     observed_at: string;
-    artifacts: CachedArtifactReceipt[];
+    artifact_count: number;
     scope: 'last_independent_provision';
     state: 'download_verified' | 'stale';
     scientific_ready: false;
 }
 
+export interface ObservedArtifactInventoryDetails extends Omit<ObservedArtifactInventory, 'artifact_count'> {
+    artifacts: CachedArtifactReceipt[];
+}
+
+export type PreloadArtifactReceipt = CachedArtifactReceipt & { state: 'pending' | 'transferring' | 'verifying' | 'verified' | 'interrupted' };
+export interface ArtifactSummary {
+    total_count: number;
+    verified_count: number;
+    total_bytes: number;
+    verified_bytes: number;
+}
+export interface ArtifactPage<T = CachedArtifactReceipt> {
+    items: T[];
+    total_count: number;
+    offset: number;
+    limit: number;
+    operation_id: string | null;
+    sequence?: number;
+}
 export interface RemotePreloadProgress {
-    artifact_progress?: Array<CachedArtifactReceipt & { state: 'pending' | 'transferring' | 'verifying' | 'verified' | 'interrupted' }>;
+    artifact_summary: ArtifactSummary;
+    cached_artifact_count: number;
     sequence?: number;
     cancel_requested?: boolean;
     recovery_required?: boolean;
     operation_id: string;
     job_id?: string | null;
     selection?: ProvisionSelection | null;
-    artifacts?: CachedArtifactReceipt[];
     source_revision: string;
     source_tree: string;
     request_sha256: string;
@@ -726,13 +745,37 @@ export interface ManagedRuntimeInventory {
     critical_runtime_ready: boolean;
     blockers: Array<'critical_release_not_verified' | 'scientific_readiness_not_checked'>;
 }
+export interface ManagedRuntimeInventorySummary extends Omit<ManagedRuntimeInventory, 'releases'> {
+    observation_id: string;
+    releases: Array<Omit<ManagedRuntimeRelease, 'artifacts'> & { artifact_count: number }>;
+}
+export interface ManagedRuntimeArtifactPage {
+    observation_id: string;
+    release_sha256: string;
+    offset: number;
+    limit: number;
+    total: number;
+    artifacts: ManagedRuntimeArtifact[];
+}
+export const fetchExecutionTargetRuntimeInventorySummary = async (targetId: string, signal?: AbortSignal): Promise<ManagedRuntimeInventorySummary | null> =>
+    (await api.get<ManagedRuntimeInventorySummary | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory/summary`, { signal })).data;
+export const fetchExecutionTargetRuntimeInventoryArtifacts = async (targetId: string, observationId: string, releaseSha256: string, offset = 0, signal?: AbortSignal): Promise<ManagedRuntimeArtifactPage> =>
+    (await api.get<ManagedRuntimeArtifactPage>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory/artifacts`, { params: { observation_id: observationId, release_sha256: releaseSha256, offset, limit: 100 }, signal })).data;
+export const refreshExecutionTargetRuntimeInventorySummary = async (targetId: string): Promise<ManagedRuntimeInventorySummary | null> =>
+    (await api.post<ManagedRuntimeInventorySummary | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory/refresh`, undefined, { params: { summary: true } })).data;
 export const fetchExecutionTargetRuntimeInventory = async (targetId: string): Promise<ManagedRuntimeInventory | null> =>
     (await api.get<ManagedRuntimeInventory | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory`)).data;
 export const refreshExecutionTargetRuntimeInventory = async (targetId: string): Promise<ManagedRuntimeInventory> =>
     (await api.post<ManagedRuntimeInventory>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory/refresh`)).data;
 
-export const fetchExecutionTargetArtifactInventory = async (targetId: string): Promise<ObservedArtifactInventory | null> =>
-    (await api.get<ObservedArtifactInventory | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/artifact-inventory`)).data;
+export const fetchExecutionTargetArtifactInventory = async (targetId: string): Promise<ObservedArtifactInventoryDetails | null> =>
+    (await api.get<ObservedArtifactInventoryDetails | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/artifact-inventory`)).data;
+
+export const fetchExecutionTargetInventoryArtifacts = async (targetId: string, offset = 0, signal?: AbortSignal): Promise<ArtifactPage> =>
+    (await api.get<ArtifactPage>(`/api/execution-targets/${encodeURIComponent(targetId)}/artifact-inventory/artifacts`, { params: { offset, limit: 100 }, signal })).data;
+
+export const fetchExecutionTargetPreloadArtifacts = async (targetId: string, operationId: string, collection: 'progress' | 'cached', offset = 0, signal?: AbortSignal): Promise<ArtifactPage<PreloadArtifactReceipt | CachedArtifactReceipt>> =>
+    (await api.get<ArtifactPage<PreloadArtifactReceipt | CachedArtifactReceipt>>(`/api/execution-targets/${encodeURIComponent(targetId)}/preload/${encodeURIComponent(operationId)}/artifacts`, { params: { collection, offset, limit: 100 }, signal })).data;
 
 export const fetchExecutionTargets = () =>
     api.get<ExecutionTarget[]>('/api/execution-targets');
@@ -876,6 +919,8 @@ export const fetchJobs = async (params?: {
     status?: string;
     q?: string;
     model_id?: string;
+    model_ids?: string[];
+    q_ignore_case_id?: boolean;
     mode?: string;
     limit?: number;
     offset?: number;
@@ -886,6 +931,7 @@ export const fetchJobs = async (params?: {
     const etag = previous?.headers.etag;
     const response = await api.get<{ jobs: Job[]; total: number }>('/api/jobs', {
         signal, timeout: 10_000,
+        paramsSerializer: { indexes: null },
         params: {
             ...params,
             limit: Math.min(500, Math.max(1, params?.limit ?? 100)),
@@ -897,6 +943,25 @@ export const fetchJobs = async (params?: {
     // The validator and payload belong to the caller's exact query entry.
     // Keep ordinary auth/network failures rejected, never serve stale-on-error.
     if (response.status === 304 && previous) return { ...response, data: previous.data };
+    if (params?.summary ?? true) {
+        // Detail-only wire defaults are omitted by the bounded owner. Keep the
+        // established Job consumer shape, without another cache or detail read.
+        response.data = { ...response.data, jobs: response.data.jobs.map(job => Object.assign({
+            source_structure: null, sequence_design: null, binder_round: null,
+            params: {}, requested_design_count: null, source_selection_manifest_path: null,
+            selected_loop_scope: null, provenance: null, saved_selection_sets: null,
+            assigned_gpu: null, vram_estimate_mb: null, stage_outputs: {},
+            awaiting_payload: {}, decision_history: [], launch_context_id: null,
+            launch_context_binding: null, return_uri: null,
+            result_summary: {
+                stage_id: null, state: 'unavailable', partial: false,
+                requested_count: null, generated_count: null, rejected_count: null,
+                failed_count: null, unevaluable_count: null,
+                expected_publication_count: null, persisted_count: null,
+                reason: null, dispositions: null,
+            },
+        }, job)) };
+    }
     return response;
 };
 // Bound live telemetry requests so a half-open connection cannot permanently
@@ -1231,6 +1296,7 @@ export const completeCurrentLaunchContext = async (responseData: unknown): Promi
 export interface ShapeGeometrySummary {
     geometry_id: string;
     source_id: string;
+    original_filename?: string | null;
     geometry_sha256: string;
     manifest_sha256: string;
     source_sha256: string;
@@ -1258,19 +1324,37 @@ export interface ShapeLengthPolicy {
     allocation_policy_sha256?: string | null;
 }
 
-export type ShapeSequenceEngine = 'proteinmpnn' | 'fampnn';
-export type ShapeSequenceSettings = Record<string, number | string | boolean>;
+export type ShapeSequenceEngine = 'proteinmpnn' | 'fampnn' | 'caliby_experimental';
+export type ShapeSequenceSettings = Record<string, unknown>;
+export type ShapePredictor = 'boltz2' | 'esmfold2' | 'protenix_v2';
 
-// Wire projection of global registry metadata, not a separate settings schema.
+// Wire projection of model-owned metadata, never a second settings authority.
 export interface ShapeSequenceSettingsDefinition {
     engine: ShapeSequenceEngine;
     model_version: string;
     schema_sha256: string;
-    params: Array<{ name: string; type: string; default: number | string | boolean; [metadata: string]: unknown }>;
+    params: Array<{ name: string; type: string; default?: unknown; [metadata: string]: unknown }>;
     initial_values: ShapeSequenceSettings;
     contextual_defaults: ShapeSequenceSettings;
     contextual_default_reason: string;
+    json_schema?: Record<string, unknown>;
+    input_settings_schema?: Record<string, unknown>;
 }
+
+export interface ShapeNativeSettingsDefinition extends Omit<ShapeSequenceSettingsDefinition, 'engine'> {
+    model_id: string;
+    mode: string;
+}
+
+export interface ShapeSettingsDefinition {
+    schema: 'bms_shape_settings_v1';
+    rfd3: ShapeNativeSettingsDefinition;
+    sequence_engines: ShapeSequenceEngine[];
+    validators: Record<ShapePredictor, ShapeNativeSettingsDefinition>;
+}
+
+export const fetchShapeSettings = () =>
+    api.get<ShapeSettingsDefinition>('/api/shape-blueprint/settings');
 
 export const fetchShapeSequenceSettings = (engine: ShapeSequenceEngine, sequenceCount: number) =>
     api.get<ShapeSequenceSettingsDefinition>(`/api/shape-blueprint/sequence-settings/${engine}`, {
@@ -1279,6 +1363,7 @@ export const fetchShapeSequenceSettings = (engine: ShapeSequenceEngine, sequence
 
 export interface ShapeLaunchRequest extends ExecutionPlacement {
     execution_plan_approval?: string | null;
+    launch_context_id?: string | null;
     client_request_id: string;
     name: string;
     geometry_id: string;
@@ -1293,7 +1378,10 @@ export interface ShapeLaunchRequest extends ExecutionPlacement {
     sequence_policy?: 'auto' | 'skip' | 'external';
     sequence_engine?: ShapeSequenceEngine;
     sequence_settings?: ShapeSequenceSettings;
-    validator_suite?: Array<'boltz2' | 'esmfold2' | 'protenix_v2'>;
+    sequence_input_settings?: Record<string, unknown>;
+    rfd3_settings?: Record<string, unknown>;
+    validator_settings?: Partial<Record<ShapePredictor, Record<string, unknown>>>;
+    validator_suite?: ShapePredictor[];
     guidance_profile: 'rfd3_unguided_control_v1' | 'rfd3_ca_shape_transfer_control_v1';
 }
 
@@ -1308,13 +1396,26 @@ export const uploadShapeGeometry = (file: File, unit: string) => {
 };
 
 export const submitShapeBlueprint = (request: ShapeLaunchRequest) => {
-    const payload = structuredClone(prepareExecutionPlacement(request));
-    type Response = { request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean } & Required<ExecutionPlacement>;
+    // Explicit destination (including null/standalone) wins over ambient Project
+    // navigation. Snapshot the same body/header context through remote review.
+    const launchContextId = request.launch_context_id === undefined && typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('launch_context_id')
+        : request.launch_context_id;
+    const payload = structuredClone(prepareExecutionPlacement({
+        ...request, launch_context_id: launchContextId ?? null,
+    }));
+    const contextConfig = jobLaunchContextConfig(payload, { launchContext: false });
+    type Response = {
+        request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean;
+        launch_context_id?: string | null; return_uri?: string | null;
+        launch_context_binding?: Record<string, unknown> | null;
+    } & Required<ExecutionPlacement>;
     return submitPreparedJobAction(
-        () => api.post<Response>('/api/shape-blueprint/requests', payload),
+        () => api.post<Response>('/api/shape-blueprint/requests', payload, contextConfig),
         approved => api.post<Response>('/api/shape-blueprint/requests', {
             ...payload, execution_plan_approval: approved.execution_plan_approval,
-        }),
+        }, contextConfig),
+        { launchContext: false },
     );
 };
 
@@ -1668,6 +1769,7 @@ export interface LaunchAntibodyIterationResponse {
 async function submitPreparedJobAction<T>(
     action: () => Promise<import('axios').AxiosResponse<T>>,
     submitApproved?: (request: Partial<Job>) => Promise<import('axios').AxiosResponse<T>>,
+    options: { launchContext?: boolean } = {},
 ) {
     try {
         return await action();
@@ -1677,7 +1779,7 @@ async function submitPreparedJobAction<T>(
         if (detail?.code !== 'remote_prepared_job_review_required'
                 || !detail.job_request?.execution_target_id || detail.job_request.execution_plan_approval) throw error;
         // Native request owners such as Shape must bind their own row during insertion.
-        if (submitApproved) return submitApproved(await approveJobExecutionPlan(structuredClone(detail.job_request)));
+        if (submitApproved) return submitApproved(await approveJobExecutionPlan(structuredClone(detail.job_request), options));
         // Never repeat the mutation endpoint: review and submit the exact
         // once-prepared request through the ordinary shared canonical path.
         const submitted = await submitJob(detail.job_request, { launchContext: false });
@@ -2228,7 +2330,12 @@ export interface Design {
     review_contract_source?: string | null;
     review_artifact_manifest?: {
         schema?: string;
-        artifacts?: Record<string, { kind?: string; state?: 'ready' | 'missing' | 'invalid'; path?: string | null; reason?: string | null }>;
+        artifacts?: Record<string, {
+            kind?: string; state?: 'ready' | 'missing' | 'invalid'; path?: string | null; reason?: string | null;
+            artifact_id?: string; target_state?: string; format?: string; sha256?: string;
+            download_url?: string; model_number?: number; source_structure?: StructureSourceSelection;
+            predictor?: string; validator?: string; native_sample_key?: string; source_sequence_key?: string;
+        }>;
         roles?: Record<string, unknown> & { has_binder?: boolean };
     } | null;
     review_role_map?: Record<string, unknown> | null;

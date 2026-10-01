@@ -21,9 +21,10 @@ vi.mock('../../src/components/ProteinLocalRedesignTemplate', () => ({ ProteinLoc
 vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: () => null }));
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
-const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }, { kind: 'workflow_pack', workflow_id: 'structure_prediction' }];
+const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }, { kind: 'workflow_pack', workflow_id: 'structure_prediction' }, { kind: 'workflow_pack', workflow_id: 'antibody_denovo' }];
+const compactEmpty = { artifact_summary: { total_count: 0, verified_count: 0, total_bytes: 0, verified_bytes: 0 }, cached_artifact_count: 0 };
 const artifacts = [{ name: 'runtime/protenix.sif', sha256: 'a'.repeat(64), size_bytes: 1234 }];
-const preview = (selection: ProvisionSelection): ProvisionPreview => ({ selection, artifacts, total_bytes: 1234, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'managed_asset_activation' });
+const preview = (selection: ProvisionSelection): ProvisionPreview => ({ selection, artifacts, total_bytes: 1234, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'download_only' });
 const ready: ExecutionTarget = { id: 'vast:123', provider: 'vast', provider_instance_id: '123', name: 'Worker', state: 'ready', active: true, host: 'host', port: 22, username: 'root', remote_root: '/opt/bms', host_key_sha256: 'c'.repeat(64), capabilities: {}, pricing: {}, last_error: null, last_seen_at: null, activated_at: null };
 const adapter = api.defaults.adapter;
 let container: HTMLDivElement;
@@ -48,6 +49,7 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
   api.defaults.adapter = async config => {
+    if (config.method === 'get' && config.url?.endsWith('/artifacts')) return response({ items: [{ ...artifacts[0], state: 'interrupted' }], total_count: 1, offset: 0, limit: 100, operation_id: target.preload?.operation_id, sequence: target.preload?.sequence });
     if (config.method === 'get') return response(config.url === '/api/models' ? [{ id: 'boltz2', name: 'Boltz-2' }, { id: 'protenix', name: 'Protenix' }, { id: 'esmfold2', name: 'ESMFold2' }, { id: 'foldcp', name: 'FoldCP' }, { id: 'unsupported', name: 'Other registered model' }] : config.url === '/api/templates' ? [{ id: 'molecular_dynamics', name: 'Molecular Dynamics' }] : config.url?.endsWith('/catalog') ? catalog : config.url?.endsWith('/runtime-inventory') ? null : [target]);
     const body = config.data ? JSON.parse(String(config.data)) : undefined;
     posts.push({ url: String(config.url), body });
@@ -61,6 +63,7 @@ afterEach(async () => { await act(async () => root.unmount()); client.clear(); c
 
 it('prepares the entire workflow from one explicit click using its fresh digest, without a Job', async () => {
   await render();
+  const invalidate = vi.spyOn(client, 'invalidateQueries');
   await select('Preparation workflow', 'structure_prediction');
   expect(posts).toEqual([]);
   expect(button('Prepare entire workflow')).toBeTruthy();
@@ -71,8 +74,22 @@ it('prepares the entire workflow from one explicit click using its fresh digest,
     { url: '/api/execution-targets/vast%3A123/provision', body: { kind: 'workflow_pack', workflow_id: 'structure_prediction', preview_sha256: 'b'.repeat(64) } },
   ]);
   expect(button('Prepare entire workflow').disabled).toBe(true);
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(posts.some(post => post.url.endsWith('/runtime-inventory/refresh'))).toBe(false);
   await act(async () => { await client.invalidateQueries(); await settle(); });
   expect(posts).toHaveLength(2);
+});
+
+it('prepares all de novo binder dependencies in one click, without substituting a configured generator', async () => {
+  await render();
+  await select('Preparation workflow', 'antibody_denovo');
+  expect(container.textContent).toContain('binder generators, sequence designers, validators');
+  expect(container.querySelector('a[href*="template=antibody_denovo"]')).toBeNull();
+  await click('Prepare entire workflow', true);
+  expect(posts).toEqual([
+    { url: '/api/execution-targets/vast%3A123/provision/preview', body: { kind: 'workflow_pack', workflow_id: 'antibody_denovo' } },
+    { url: '/api/execution-targets/vast%3A123/provision', body: { kind: 'workflow_pack', workflow_id: 'antibody_denovo', preview_sha256: 'b'.repeat(64) } },
+  ]);
 });
 
 it('keeps whole-workflow missing-asset details visible without starting an incomplete pack', async () => {
@@ -138,7 +155,7 @@ it('keeps optional preparation closed on load and polling, retaining a form choi
 });
 
 it('shows persisted worker activity outside closed preparation controls without posting', async () => {
-  target = { ...ready, preload: { operation_id: 'op', job_id: 'recipe', source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+  target = { ...ready, preload: { ...compactEmpty, operation_id: 'op', job_id: 'recipe', source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
     request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: 'runtime/image', message: 'Downloading runtime',
     started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z' },
     progress: { operation_id: 'run', job_id: 'job', phase: 'running', artifact: 'inputs/sample', message: 'Staging inputs', updated_at: '2026-09-20T23:56:14Z' } };
@@ -211,10 +228,10 @@ it('renders the actual blocked route wire with unknown bytes and no start', asyn
 });
 
 it('uses operation-bound cancellation and keeps uncertain recovery blocked', async () => {
-  target.preload = { operation_id: 'op/1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+  target.preload = { ...compactEmpty, operation_id: 'op/1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
     request_sha256: 'c'.repeat(64), phase: 'recovery_blocked', artifact: artifacts[0].name, message: 'Quiescence unknown',
     started_at: 'now', updated_at: 'now', recovery_required: true, cancel_requested: true, sequence: 4,
-    artifact_progress: [{ ...artifacts[0], state: 'interrupted' }] };
+    artifact_summary: { total_count: 1, verified_count: 0, total_bytes: 1234, verified_bytes: 0 } };
   await render();
   expect(container.textContent).toContain('Sequence 4');
   expect(container.textContent).not.toContain('interrupted');
@@ -228,7 +245,7 @@ it('uses operation-bound cancellation and keeps uncertain recovery blocked', asy
 });
 
 it('retries a stopped operation only with a fresh preview of its persisted selection', async () => {
-  target.preload = { operation_id: 'op1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+  target.preload = { ...compactEmpty, operation_id: 'op1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
     request_sha256: 'c'.repeat(64), phase: 'cancelled', artifact: null, message: 'Stopped', started_at: 'now', updated_at: 'now' };
   await render();
   const operation = container.querySelector('[aria-label="Provision operation"]')!;
@@ -254,9 +271,9 @@ it('mounts in the real worker panel without Jobs; previews exact bytes then star
   expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('1,234 bytes');
   expect(container.textContent).toContain(artifacts[0].name);
   expect(container.textContent).toContain(artifacts[0].sha256);
-  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('additional installed copy');
-  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('retains prior release generations');
-  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('not a missing-byte transfer estimate');
+  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).not.toContain('additional installed copy');
+  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).not.toContain('retains prior release generations');
+  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('Reuses cached assets and downloads missing files');
   expect(container.textContent).toContain('b'.repeat(64));
   await click('Start provision', true);
   expect(posts).toHaveLength(2);
@@ -277,7 +294,7 @@ it('invalidates preview on model, image scope, endpoint and observed source chan
   expect(container.querySelector('[aria-label="Provision preview"]')).toBeNull();
   expect(button('Start provision')).toBeUndefined();
   await select('Provision model', 'protenix'); await click('Preview artifact downloads');
-  target = { ...target, preload: { operation_id: 'another', selection: catalog[0], source_revision: 'd'.repeat(40), source_tree: 'e'.repeat(40), request_sha256: 'f'.repeat(64), phase: 'source_download_ready', artifact: null, message: 'Previous cache ready', started_at: '2026-01-01', updated_at: '2026-01-01' } }; await render();
+  target = { ...target, preload: { ...compactEmpty, operation_id: 'another', selection: catalog[0], source_revision: 'd'.repeat(40), source_tree: 'e'.repeat(40), request_sha256: 'f'.repeat(64), phase: 'source_download_ready', artifact: null, message: 'Previous cache ready', started_at: '2026-01-01', updated_at: '2026-01-01' } }; await render();
   expect(button('Start provision')).toBeUndefined();
   expect(container.querySelector('[aria-label="Provision preview"]')).toBeNull();
   await select('Provision model', 'protenix'); await click('Preview artifact downloads');
@@ -308,7 +325,17 @@ it('discards a late preview after selection change and requires explicit preview
   expect(button('Start provision').disabled).toBe(true);
 });
 
-it('rejects the retired cache-only preview scope before enabling provision', async () => {
+it.each(['download_only', 'managed_asset_activation'] as const)('accepts %s preview wire compatibility without promising activation', async scope => {
+  await render(); await select('Provision model', 'protenix');
+  vi.spyOn(api, 'post').mockResolvedValueOnce(response(JSON.parse(JSON.stringify({ ...preview(catalog[0]), scope }))));
+  await click('Preview artifact downloads');
+  expect(button('Start provision').disabled).toBe(false);
+  expect(container.textContent).toContain('no separate managed installation or native runtime probe');
+  await click('Start provision');
+  expect(posts).toEqual([{ url: '/api/execution-targets/vast%3A123/provision', body: { ...catalog[0], preview_sha256: 'b'.repeat(64) } }]);
+});
+
+it('rejects unknown preview scopes before enabling provision', async () => {
   await render(); await select('Provision model', 'protenix');
   vi.spyOn(api, 'post').mockResolvedValueOnce(response({ ...preview(catalog[0]), scope: 'cache_download_only' }));
   await click('Preview artifact downloads');
@@ -317,7 +344,7 @@ it('rejects the retired cache-only preview scope before enabling provision', asy
 });
 
 it('restores only the persisted last receipt and displays stale/failed status without auto-provision', async () => {
-  target = { ...target, artifact_inventory: { operation_id: 'receipt', selection: catalog[0], artifacts, observed_at: '2026-01-01T00:00:00Z', state: 'download_verified', scope: 'last_independent_provision', scientific_ready: false } };
+  target = { ...target, artifact_inventory: { operation_id: 'receipt', selection: catalog[0], artifact_count: artifacts.length, observed_at: '2026-01-01T00:00:00Z', state: 'download_verified', scope: 'last_independent_provision', scientific_ready: false } };
   await render();
   expect(container.textContent).toContain('Cache downloads verified at observation');
   expect(container.textContent).toContain('Cache downloads only, and separate from the installed inventory below');
@@ -325,7 +352,7 @@ it('restores only the persisted last receipt and displays stale/failed status wi
   await act(async () => root.render(null)); await render();
   expect(container.textContent).toContain('2026-01-01T00:00:00Z');
   target = { ...target, artifact_inventory: { ...target.artifact_inventory!, state: 'stale' } }; await render();
-  expect(container.textContent).toContain('Stale cache observation');
+  expect(container.textContent).toContain('Historical cache observation');
   expect(posts).toEqual([]);
 });
 
@@ -357,7 +384,7 @@ it('does not restore an old target preview when its request resolves after endpo
 it.each(['busy', 'running', 'inactive'])('blocks provisioning when worker is %s', async state => {
   if (state === 'inactive') target = { ...target, active: false };
   if (state === 'running') target = { ...target, progress: { operation_id: 'run', job_id: 'job', phase: 'running', artifact: null, message: 'Running', updated_at: 'now' } };
-  if (state === 'busy') target = { ...target, preload: { operation_id: 'op', job_id: 'job', source_revision: 'a'.repeat(40), source_tree: 'a'.repeat(40), request_sha256: 'a'.repeat(64), phase: 'transferring', artifact: null, message: 'Transferring', started_at: 'now', updated_at: 'now' } };
+  if (state === 'busy') target = { ...target, preload: { ...compactEmpty, operation_id: 'op', job_id: 'job', source_revision: 'a'.repeat(40), source_tree: 'a'.repeat(40), request_sha256: 'a'.repeat(64), phase: 'transferring', artifact: null, message: 'Transferring', started_at: 'now', updated_at: 'now' } };
   await render(); await select('Provision model', 'protenix');
   expect(button('Preview artifact downloads').disabled).toBe(true);
   expect(button('Start provision').disabled).toBe(true);
@@ -366,7 +393,7 @@ it.each(['busy', 'running', 'inactive'])('blocks provisioning when worker is %s'
 
 
 it.each(['cancelling', 'recovery_blocked', 'cancelled'] as const)('fences saved-Job preloading during %s with unresolved recovery and labels workflow receipts', async phase => {
-  target.preload = { operation_id: 'owned', selection: { kind: 'workflow', workflow_request: { name: 'Draft', model_id: 'boltz2', mode: 'predict', params: { sequence: 'ACDE' } } },
+  target.preload = { ...compactEmpty, operation_id: 'owned', selection: { kind: 'workflow', workflow_request: { name: 'Draft', model_id: 'boltz2', mode: 'predict', params: { sequence: 'ACDE' } } },
     source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64), phase, recovery_required: true,
     artifact: null, message: 'Recovery pending', started_at: 'now', updated_at: 'now' };
   await act(async () => { root.render(<QueryClientProvider client={client}><RemotePreloadPanel target={target} jobs={[{ id: 'saved', model_id: 'boltz2' }]} onChanged={changed} /></QueryClientProvider>); await settle(); });
@@ -379,7 +406,7 @@ it.each(['cancelling', 'recovery_blocked', 'cancelled'] as const)('fences saved-
 it('does not resurrect an approved workflow preview after a cancellation/recovery transition', async () => {
   const request = { name: 'Draft', model_id: 'boltz2', mode: 'predict', params: { sequence: 'ACDE' } };
   const mount = async () => { await act(async () => { root.render(<QueryClientProvider client={client}><WorkflowProvisionPanel target={target} workflowRequest={request} onChanged={changed} /></QueryClientProvider>); await settle(); }); };
-  target.preload = { operation_id: 'old', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64), phase: 'source_download_ready', artifact: null, message: '', started_at: 'now', updated_at: 'now' };
+  target.preload = { ...compactEmpty, operation_id: 'old', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64), phase: 'source_download_ready', artifact: null, message: '', started_at: 'now', updated_at: 'now' };
   await mount(); await click('Preview artifact downloads'); expect(button('Start provision').disabled).toBe(false);
   target = { ...target, preload: { ...target.preload!, phase: 'cancelling', recovery_required: true } }; await mount();
   target = { ...target, preload: { ...target.preload!, phase: 'cancelled', recovery_required: false } }; await mount();
@@ -416,6 +443,7 @@ it('the real de-novo typed form provisions the same unsaved request as launch an
 
 it.each(['start', 'retry', 'cancel'] as const)('refreshes the target once after provision %s', async action => {
   if (action !== 'start') target.preload = {
+    ...compactEmpty,
     operation_id: 'owned', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
     request_sha256: 'c'.repeat(64), phase: action === 'cancel' ? 'transferring' : 'cancelled',
     artifact: null, message: '', started_at: 'now', updated_at: 'now',
@@ -479,8 +507,8 @@ it('discovers the shared launcher workflows and full model registry without gran
   expect(container.textContent).toContain('De Novo Binder Design');
   expect(container.textContent).toContain('De Novo Design');
   expect(container.textContent).toContain('Molecular Dynamics');
-  await select('Preparation workflow', 'antibody_denovo');
-  expect(container.querySelector('a')?.getAttribute('href')).toBe('/submit?template=antibody_denovo');
+  await select('Preparation workflow', 'molecular_dynamics');
+  expect(container.querySelector('a')?.getAttribute('href')).toBe('/submit?template=molecular_dynamics');
   expect(container.textContent).toContain('Unsaved preparation is available only where that form has “Preview artifact downloads”');
   expect(container.textContent).toContain('use an existing job as its dependency recipe without rerunning it');
   expect(container.textContent).not.toContain('No saved Job required');
@@ -504,15 +532,14 @@ it('lazily discloses exact dependency files without hiding blockers or posting',
 
 it('leads with the running preparation, its verified bytes and the stop control', async () => {
   const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-20T23:56:14Z'));
-  target.preload = { operation_id: 'live1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+  target.preload = { ...compactEmpty, operation_id: 'live1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
     request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: 'weights/protenix.bin', message: 'Downloading artifact from Hugging Face',
     started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z', sequence: 3,
-    artifact_progress: [{ ...artifacts[0], state: 'verified' },
-      { name: 'weights/protenix.bin', sha256: 'd'.repeat(64), size_bytes: 2000, state: 'transferring' }] };
+    artifact_summary: { total_count: 2, verified_count: 1, total_bytes: 3234, verified_bytes: 1234 } };
   await render();
   expect(container.textContent).toContain('Downloading assets');
-  expect(container.textContent).toContain('1 of 2 artifacts verified');
-  expect(container.textContent).toContain('1,234 bytes verified of 3,234 bytes declared');
+  expect(container.textContent).toContain('1 of 2 artifacts complete or cached');
+  expect(container.textContent).toContain('1,234 bytes complete or cached of 3,234 bytes declared');
   expect(container.textContent).toContain('Transfer progress and rate are not reported');
   expect(container.textContent).toContain('2m 0s elapsed');
   clock.mockReturnValue(Date.parse('2026-09-20T23:57:14Z'));
@@ -537,29 +564,38 @@ it('states the preparation caveat once and keeps the technical evidence collapse
 
 it('pairs a stale installed observation with the control that refreshes it', async () => {
   const originalGet = api.get.bind(api);
-  vi.spyOn(api, 'get').mockImplementation((url, config) => String(url).endsWith('/runtime-inventory')
+  vi.spyOn(api, 'get').mockImplementation((url, config) => String(url).endsWith('/runtime-inventory/summary')
     ? Promise.resolve(response({ scope: 'managed_independent_asset_releases', state: 'stale', observed_at: '2026-09-20T00:00:00Z',
         boot_id: 'boot', critical_runtime_ready: true, scientific_ready: false, blockers: [], releases: [] }))
     : originalGet(url, config));
-  target.preload = { operation_id: 'done1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+  target.preload = { ...compactEmpty, operation_id: 'done1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
     request_sha256: 'c'.repeat(64), phase: 'verifying', artifact: null, message: 'Artifact cache identities verified',
-    started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z', artifact_progress: [{ ...artifacts[0], state: 'verified' }] };
+    started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z', artifact_summary: { total_count: 1, verified_count: 1, total_bytes: 1234, verified_bytes: 1234 } };
   await render();
+  await disclose('Evidence');
   const stale = [...container.querySelectorAll('p')].find(item => item.textContent?.includes('Stale observation'))!;
   expect(stale).toBeTruthy();
   expect(stale.nextElementSibling?.textContent).toContain('Refresh installed observation');
 });
 
-it('refreshes the target and installed evidence once as a running preparation settles', async () => {
-  target.preload = { operation_id: 'settle1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+it('does not refresh or invalidate installed inventory as downloads settle or complete', async () => {
+  const invalidate = vi.spyOn(client, 'invalidateQueries');
+  target.preload = { ...compactEmpty, operation_id: 'settle1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
     request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: artifacts[0].name, message: 'Downloading artifact from Hugging Face',
     started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z',
-    artifact_progress: [{ ...artifacts[0], state: 'transferring' }] };
+    artifact_summary: { total_count: 1, verified_count: 0, total_bytes: 1234, verified_bytes: 0 } };
   await render();
   changed.mockClear();
   target = { ...target, preload: { ...target.preload!, phase: 'verifying', message: 'Artifact cache identities verified',
-    artifact_progress: [{ ...artifacts[0], state: 'verified' }] } };
+    artifact_summary: { total_count: 1, verified_count: 1, total_bytes: 1234, verified_bytes: 1234 } } };
   await render();
-  expect(changed).toHaveBeenCalledTimes(1);
-  expect(posts.filter(post => post.url.includes('/provision'))).toEqual([]);
+  expect(changed).not.toHaveBeenCalled();
+  target = { ...target, preload: { ...target.preload!, phase: 'source_download_ready' } };
+  await render(); await render();
+  expect(container.textContent).toContain('Downloads complete');
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(changed).not.toHaveBeenCalled();
+  // Saved GET projections may remount; the explicit audit POST never runs.
+  expect(posts.some(post => post.url.endsWith('/runtime-inventory/refresh'))).toBe(false);
+  expect(posts).toEqual([]);
 });

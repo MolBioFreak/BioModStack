@@ -34,6 +34,8 @@ export interface StructureViewerHostProps extends MolstarViewerProps {
     readonly onFiltersChange?: (filters: StructureFilterState) => void;
     readonly onMetricSelection?: (selection: MetricSelection) => void;
     readonly residueSelections?: readonly ResidueRef[];
+    /** Source editors own selection; clicks must not leave a second local highlight. */
+    readonly controlledResidueSelection?: boolean;
     readonly structureData?: string;
     readonly showMeasurements?: boolean;
     readonly showComplexWorkbench?: boolean;
@@ -102,6 +104,7 @@ export default function StructureViewerHost({
     onFiltersChange,
     onMetricSelection,
     residueSelections = [],
+    controlledResidueSelection = false,
     structureData,
     measurements: controlledMeasurements,
     onMeasurementsChange,
@@ -237,7 +240,7 @@ export default function StructureViewerHost({
         labelAtomIds:ref.labelAtomId ? [ref.labelAtomId] : undefined, authAtomIds:ref.authAtomId ? [ref.authAtomId] : undefined, altLoc:ref.altLoc,
     });
     const residues = useMemo(() => selectedResidues(selection), [selection]);
-    const selectedResidueKeys = useMemo(() => new Set(residues.map(canonicalSpatialRefKey)), [residues]);
+    const selectedResidueKeys = useMemo(() => new Set([...residues, ...residueSelections].map(canonicalSpatialRefKey)), [residues, residueSelections]);
     const linkedSelections: NonNullable<MolstarViewerProps['selections']> = residues.flatMap((residue) => {
         if ((residue as AtomRef).labelAtomId || (residue as AtomRef).authAtomId) return [];
         const chain = residue.labelAsymId;
@@ -337,7 +340,7 @@ export default function StructureViewerHost({
             authSeqId: residue.authSeqId,
             insertionCode: residue.insertionCode || undefined,
         };
-        commitSelection({ metricId: activeLayer?.descriptor.id ?? 'structure-selection', identities: [identity], origin: 'canvas' });
+        if (!controlledResidueSelection) commitSelection({ metricId: activeLayer?.descriptor.id ?? 'structure-selection', identities: [identity], origin: 'canvas' });
         callerResidueClick?.(residue);
     };
     const scenePresentation = useMemo<StructureScenePresentation>(() => ({
@@ -350,14 +353,17 @@ export default function StructureViewerHost({
             opacity: layerOpacity,
             order: 0,
         }] : [],
-        selection: residues.length > 0 ? [{ selectionSetId: 'linked-selection', label: 'Linked selection', residues }] : [],
+        selection: [
+            ...(residues.length > 0 ? [{ selectionSetId: 'linked-selection', label: 'Linked selection', residues }] : []),
+            ...(residueSelections.length > 0 ? [{ selectionSetId: 'source-selection', label: 'Source selection', residues: residueSelections }] : []),
+        ],
         filters,
         measurements,
         colorQueries,
         tooltipQueries,
         hiddenQueries,
         nonSelectedColor: residueMetricLayer?.nonSelectedColor ?? (legacyColors?.selections.length ? { r: 68, g: 68, b: 68 } : undefined),
-    }), [activeLayer, colorQueries, filters, hiddenQueries, layerOpacity, layerVisible, legacyColors, measurements, residueMetricLayer, residues, restoredPresentation, tooltipQueries]);
+    }), [activeLayer, colorQueries, filters, hiddenQueries, layerOpacity, layerVisible, legacyColors, measurements, residueMetricLayer, residueSelections, residues, restoredPresentation, tooltipQueries]);
 
     const residueLayer = filteredLayer && ['residue-scalar', 'atom-scalar'].includes(filteredLayer.descriptor.dimension) ? filteredLayer : undefined;
     const pairLayer = filteredLayer?.descriptor.dimension === 'residue-pair-matrix'
@@ -385,16 +391,20 @@ export default function StructureViewerHost({
             value:entry.missingness === undefined ? entry.value : null,missingness:entry.missingness ?? null}));
     }), [registry]);
     const hasWorkbenchContent = Boolean(metricDetails || showM6Workbench || activeLayer || structureSummaryLayers.length > 0 || showMeasurements || (showComplexWorkbench && hasComplexAnalysis));
+    const renderWorkbench = (showMetricWorkbench || showLinkedSequence || (showM6Workbench && !onMetricWorkbenchVisibilityChange)) && hasWorkbenchContent;
 
-    const hostHeight = typeof viewerProps.height === 'number' ? `${viewerProps.height}px` : viewerProps.height;
+    const hostHeight = typeof viewerProps.height === 'number' ? `${viewerProps.height}px` : (viewerProps.height ?? '500px');
 
     return (
         <div
-            className={`relative w-full ${hostHeight ? '' : 'h-full'}`}
+            className={`bms-structure-workspace relative w-full ${hostHeight ? '' : 'h-full'}`}
             style={hostHeight ? { height: hostHeight } : undefined}
             data-bms-structure-viewer-host="direct-4.5.0"
         >
-            <MolstarViewerImpl {...viewerProps} artifactJobId={artifactJobId} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} measurements={measurements} scenePresentation={scenePresentation} cameraResetToken={cameraResetToken} onResidueClick={handleResidueClick} onControllerReady={handleControllerReady} />
+            <div className="bms-structure-workspace-layout" data-workbench-visible={Boolean(renderWorkbench && !workbenchCollapsed)}>
+            <div className="bms-structure-canvas">
+                <MolstarViewerImpl {...viewerProps} height="100%" artifactJobId={artifactJobId} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} measurements={measurements} scenePresentation={scenePresentation} cameraResetToken={cameraResetToken} onResidueClick={handleResidueClick} onControllerReady={handleControllerReady} />
+            </div>
             {!showMetricWorkbench && hasWorkbenchContent && onMetricWorkbenchVisibilityChange && (
                 <button
                     type="button"
@@ -404,8 +414,8 @@ export default function StructureViewerHost({
                     Show metrics
                 </button>
             )}
-            {(showMetricWorkbench || showLinkedSequence || (showM6Workbench && !onMetricWorkbenchVisibilityChange)) && hasWorkbenchContent && (
-                <aside hidden={workbenchCollapsed} className="absolute bottom-2 right-14 z-30 max-h-[55%] w-[min(28rem,calc(100%-4rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : showM6Workbench ? 'Structure reproducibility workbench' : 'Linked sequence overlay'}>
+            {renderWorkbench && (
+                <aside hidden={workbenchCollapsed} className="bms-structure-workbench min-h-0 min-w-0 space-y-2 overflow-auto rounded border border-border-primary bg-bg-secondary p-2 text-text-primary" aria-label={showMetricWorkbench ? 'Structure metric workbench' : showM6Workbench ? 'Structure reproducibility workbench' : 'Linked sequence tools'}>
                     {showMetricWorkbench && (
                         <div className="flex items-center justify-between border-b border-slate-700/70 pb-2 text-xs font-semibold text-slate-200">
                             <span>Metrics</span>
@@ -465,6 +475,7 @@ export default function StructureViewerHost({
                     {showMetricWorkbench && (registryState.issues.length > 0 || (projected && projected.status !== 'ok')) && <div role="alert" className="rounded bg-red-950/80 p-2 text-xs text-red-200">{[...registryState.issues, ...(projected && projected.status !== 'ok' ? [projected.status === 'error' ? projected.error.message : projected.reason] : [])].join(' · ')}</div>}
                 </aside>
             )}
+            </div>
         </div>
     );
 }

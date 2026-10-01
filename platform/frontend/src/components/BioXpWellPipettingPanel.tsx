@@ -125,22 +125,22 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             else setDispenseSpeed(String(step.speed));
         }
     };
-    return <section aria-label="Well pipetting" className="mt-4 space-y-3 rounded border border-cyan-700 p-4">
+    return <section aria-label="Well pipetting" className="mt-4 min-w-0 space-y-3 rounded border border-slate-700 p-4 [&_select]:max-w-full [&_select]:rounded [&_select]:bg-slate-950 [&_select]:p-2 [&_input[type=number]]:min-w-0 [&_input[type=number]]:rounded [&_input[type=number]]:bg-slate-950 [&_input[type=number]]:p-2">
         <h3 className="font-semibold">Well pipetting</h3>
         <p className="text-sm">Move uses the selected block and well. Lower, Lift and liquid strokes act in place; changing a well does not move the head.</p>
-        <p className="text-sm text-amber-200">Alignment is owned by the robot’s actual source TipLocation, not the plunger checkboxes. With four tips, the well is the head reference and the other channels retain fixed spacing. Selecting one plunger does not realign it. Tip alignment/presence is not established by this panel alone: source-selected loading below can establish robot-owned alignment; a matching-tip early return retains the previous alignment.</p>
-        <p className="text-xs">Calibration: robot PositionTable {positionTableRevision ?? '(revision unavailable)'}. The grid is an address selector, not proof every well is usable at every station.</p>
+        <p className="text-sm text-amber-200">Choose which pipettes aspirate, dispense or mix. This does not load tips or change tip alignment. Use Load selected tips for physical loading. With four tips, the selected well positions the head; the tips keep their fixed spacing.</p>
+        <details className="text-xs text-slate-300"><summary>Position details</summary><p>Calibration revision: {positionTableRevision ?? 'unavailable'}. Not every well is usable at every station.</p></details>
         <div className="grid gap-3 sm:grid-cols-3">
             <label>Block<select aria-label="Block" className="block w-full bg-slate-950 p-2" value={destinations.some(d => String(d.location_id) === location) ? location : ''} onChange={e => setLocation(e.target.value)}>
-                <option value="">Select catalog block</option>
-                {destinations.map(d => <option key={d.target} value={d.location_id}>{d.label} · locationID {d.location_id}</option>)}
+                <option value="">Select a block</option>
+                {destinations.map(d => <option key={d.target} value={d.location_id}>{d.label}</option>)}
             </select></label>
-            <label>Canonical locationID<input aria-label="Canonical locationID" className="block w-full bg-slate-950 p-2" type="number" step="1" value={location} onChange={e => setLocation(e.target.value)} /></label>
+            <label>Location number<input aria-label="Location number" className="block w-full bg-slate-950 p-2" type="number" step="1" value={location} onChange={e => setLocation(e.target.value)} /></label>
             <label>Move Z position<select aria-label="Move Z position" className="block w-full bg-slate-950 p-2" value={flag} onChange={e => setFlag(e.target.value)}>
-                <option value="">Select source flag</option><option value="0">0 · source pseudo-home</option><option value="1">1 · calibrated high</option><option value="2">2 · calibrated low</option>
+                <option value="">Select height</option><option value="0">Clearance height</option><option value="1">Calibrated high</option><option value="2">Calibrated low</option>
             </select></label>
         </div>
-        <fieldset><legend>Reference well: {well || 'not selected'}</legend>
+        <fieldset className="min-w-0"><legend>Reference well: {well || 'not selected'}</legend>
             <div className="grid grid-cols-12 gap-1 overflow-x-auto" aria-label="Reference well grid">
                 {wells.map(value => <button key={value} type="button" aria-label={`Reference well ${value}`} aria-pressed={well === value}
                     className={`min-w-7 rounded border p-1 text-xs ${well === value ? 'border-cyan-300 bg-cyan-800' : 'border-slate-700 bg-slate-950'}`} onClick={() => setWell(value)}>{value}</button>)}
@@ -148,34 +148,45 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         </fieldset>
         <div className="grid gap-3 sm:grid-cols-3">
             <label>Lift target<select aria-label="Lift target" className="block w-full bg-slate-950 p-2" value={liftMode} onChange={e => setLiftMode(e.target.value)}>
-                <option value="">Select calibrated target</option><option value="high">Calibrated zHigh (null height)</option><option value="height">zLow − explicit height steps</option>
+                <option value="">Select calibrated target</option><option value="high">Calibrated high</option><option value="height">Height above calibrated low</option>
             </select></label>
             {liftMode === 'height' && <label>Lift height (steps)<input aria-label="Lift height (steps)" type="number" step="1" value={height} onChange={e => setHeight(e.target.value)} className="block w-full bg-slate-950 p-2" /></label>}
-            <p className="text-sm">Lower uses calibrated zLow at the selected locationID. Lift and Lower do not reposition XY.</p>
+            <p className="text-sm">Lower and Lift move vertically at the current position, not to the selected well.</p>
         </div>
-        <fieldset className="space-y-2"><legend>Manual physical pipette actions</legend>
-            <label>Tip tray<select aria-label="Tip tray" value={tray} onChange={e => setTray(e.target.value)}>{[1,2,3,4,5].map(n => <option key={n}>{n}</option>)}</select></label>
-            <label>Tip well<select aria-label="Tip well" value={tipWell} onChange={e => setTipWell(e.target.value)}>{wells.filter(w => /^[AB]/.test(w)).map(w => <option key={w}>{w}</option>)}</select></label>
-            <label><input aria-label="Overpress" type="checkbox" checked={overpress} onChange={e => setOverpress(e.target.checked)} />Overpress</label>
-            <label><input aria-label="Lift Z after pickup" type="checkbox" checked={liftZ} onChange={e => setLiftZ(e.target.checked)} />Lift Z after pickup</label>
-            <label>Detection speed<input aria-label="Detection speed" type="number" step="1" value={detectionSpeed} onChange={e => setDetectionSpeed(e.target.value)} /></label>
-            <label>Offset scan plate<select aria-label="Offset scan plate" value={scanPlate} onChange={e => setScanPlate(e.target.value as typeof scanPlate)}>{(['TC', 'MS', 'OC', 'RC', 'STRIP', 'OCMS'] as const).map(plate => <option key={plate}>{plate}</option>)}</select></label>
-            <label><input aria-label="Prefill scan plate" type="checkbox" checked={scanPrefill} onChange={e => setScanPrefill(e.target.checked)} />Prefill from trough (OEM)</label>
-            <label>Sample every N wells<input aria-label="Sample every N wells" type="number" min="1" step="1" value={scanSpacing} onChange={e => setScanSpacing(e.target.value)} /></label>
-            <p className="text-xs">Load tip performs native XY/Z pickup and query. Measure fluid height acts at the current well. OEM fluid offset scan samples one chosen plate and may transfer liquid when Prefill is selected. OEM Detect Fluid moves the pool plate, scans five stations and Parks on success. Neither diagnostic saves calibration.</p>
-            <p className="text-xs">OEM calibrate with fluid saves and applies station calibration in-process through the robot owner, including partial saves. Compare the run below; acceptance is separate from source-body completion. Reject restores the FULL pre-run calibration, replacing any later calibration edits. No restart or home is requested by these controls.</p>
-        </fieldset>
-        <fieldset><legend>Liquid plunger channels only</legend><div className="flex flex-wrap gap-4">
-            {[0, 1, 2, 3].map(channel => <label key={channel}><input type="checkbox" aria-label={`Plunger ${channel + 1}`} checked={channels.includes(channel)} onChange={e => setChannels(current => e.target.checked ? [...current, channel].sort() : current.filter(c => c !== channel))} /> Plunger {channel + 1} (ID {channel})</label>)}
+        <fieldset><legend>Pipettes for liquid strokes</legend><div className="flex flex-wrap gap-4">
+            {[0, 1, 2, 3].map(channel => <label key={channel}><input type="checkbox" aria-label={`Plunger ${channel + 1}`} checked={channels.includes(channel)} onChange={e => setChannels(current => e.target.checked ? [...current, channel].sort() : current.filter(c => c !== channel))} /> Pipette {channel + 1}</label>)}
         </div></fieldset>
         <div className="grid gap-3 sm:grid-cols-4">
             {([['Volume (µL)', volume, setVolume], ['Aspirate speed', aspirateSpeed, setAspirateSpeed], ['Dispense speed', dispenseSpeed, setDispenseSpeed], ['Mix cycles', cycles, setCycles]] as const).map(([name, value, setter]) =>
                 <label key={name}>{name}<input aria-label={name} className="block w-full bg-slate-950 p-2" type="number" step={name === 'Mix cycles' ? '1' : 'any'} value={value} onChange={e => setter(e.target.value)} /></label>)}
         </div>
-        <p className="text-xs">Speeds are native explicit-channel speed values. Mix repeats the chosen aspiration/dispense strokes (1–50 cycles); it is not OEM scientific mmix/mixAll. Basic moves and strokes have no implicit lifecycle; OEM scans run their source-native sequences.</p>
-        <div className="flex flex-wrap gap-2">{operations.map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>
+        <p className="text-xs">Mix repeats the selected aspiration and dispense strokes (1–50 cycles). Speeds use controller units.</p>
+        <div className="flex flex-wrap gap-2">{operations.filter(op => ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'].includes(op)).map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>
+        <details className="rounded border border-slate-700 p-3">
+            <summary className="cursor-pointer font-semibold">Tips: tray pickup</summary>
+            <p className="my-2 text-sm">Picks up a tip from the selected tray and well. This moves the head.</p>
+            <div className="my-3 grid gap-3 sm:grid-cols-2">
+            <label>Tip tray<select aria-label="Tip tray" value={tray} onChange={e => setTray(e.target.value)}>{[1,2,3,4,5].map(n => <option key={n}>{n}</option>)}</select></label>
+            <label>Tip well<select aria-label="Tip well" value={tipWell} onChange={e => setTipWell(e.target.value)}>{wells.filter(w => /^[AB]/.test(w)).map(w => <option key={w}>{w}</option>)}</select></label>
+            <label><input aria-label="Overpress" type="checkbox" checked={overpress} onChange={e => setOverpress(e.target.checked)} />Overpress</label>
+            <label><input aria-label="Lift Z after pickup" type="checkbox" checked={liftZ} onChange={e => setLiftZ(e.target.checked)} />Lift Z after pickup</label>
+            </div>
+            <div className="flex flex-wrap gap-2">{(['load_tip'] as Operation[]).map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>
+        </details>
+        <details className="rounded border border-slate-700 p-3">
+            <summary className="cursor-pointer font-semibold">Fluid diagnostics & calibration</summary>
+            <div className="my-3 grid gap-3 sm:grid-cols-2">
+            <label>Detection speed<input aria-label="Detection speed" type="number" step="1" value={detectionSpeed} onChange={e => setDetectionSpeed(e.target.value)} /></label>
+            <label>Offset scan plate<select aria-label="Offset scan plate" value={scanPlate} onChange={e => setScanPlate(e.target.value as typeof scanPlate)}>{(['TC', 'MS', 'OC', 'RC', 'STRIP', 'OCMS'] as const).map(plate => <option key={plate}>{plate}</option>)}</select></label>
+            <label><input aria-label="Prefill scan plate" type="checkbox" checked={scanPrefill} onChange={e => setScanPrefill(e.target.checked)} />Prefill from trough (OEM)</label>
+            <label>Sample every N wells<input aria-label="Sample every N wells" type="number" min="1" step="1" value={scanSpacing} onChange={e => setScanSpacing(e.target.value)} /></label>
+            </div>
+            <p className="my-2 text-sm">Measure height at the current well, or scan the selected plate. Prefill transfers liquid. Detect Fluid moves the pool plate, scans five stations and parks on success. Neither diagnostic saves calibration.</p>
+            <p className="my-2 text-sm">Calibrate with fluid saves and applies calibration, including partial results. Reject restores the FULL pre-run calibration, replacing later edits. These controls do not restart or home the robot.</p>
+            <div className="flex flex-wrap gap-2">{(['measure_fluid_height', 'source_fluid_offset', 'diagnostic_detect_fluid', 'source_calwith_fluid'] as Operation[]).map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>
+        </details>
         <BioXpSourcePipettingEditor drafts={sourceDrafts} onChange={updateSource} enabled={enabled} run={op => void run(op)} />
-        <fieldset className="space-y-2 rounded border border-slate-700 p-3"><legend>Ordered well-to-well program</legend>
+        <details className="space-y-2 rounded border border-slate-700 p-3"><summary className="cursor-pointer font-semibold">Ordered well-to-well program</summary>
             <p className="text-sm">Author each step explicitly. For a transfer: Move → Lower → Aspirate → Lift, then select the destination and add Move → Lower → Dispense → Lift. Adding, copying and reordering do not move hardware.</p>
             <label>Step to append<select aria-label="Step to append" value={operation} onChange={e => setOperation(e.target.value as Operation)} className="ml-2 bg-slate-950 p-2">{allOperations.map(op => <option key={op} value={op}>{label(op)}</option>)}</select></label>
             <button type="button" onClick={append} className="ml-2 rounded border px-3 py-2">Append step</button>
@@ -187,8 +198,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
                 <button type="button" aria-label={`Remove step ${index + 1}`} onClick={() => setSteps(current => current.filter((_, i) => i !== index))}>Remove</button>
             </li>)}</ol>
             <button type="button" disabled={!enabled} onClick={() => void run()} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">Run ordered steps</button>
-        </fieldset>
-        {pending && <p role="status">Submitting native pipetting program…</p>}
+        </details>
+        {pending && <p role="status">Submitting pipetting program…</p>}
         {attempt && <p className="break-all text-xs">Job {attempt.id} · request {attempt.key}</p>}
         {!sameConnection && <p role="alert">Connection changed. Earlier job belongs to connection {attempt?.generation}.</p>}
         {mismatch && <p role="alert">Job identity mismatch; check robot status.</p>}
@@ -200,7 +211,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             pipetteResults(result).flatMap(value => value.run_id ? [value.run_id] : [])))].map(runId =>
             <BioXpCalibrationRun key={`${attempt?.generation}:${runId}`} runId={runId}
                 generation={attempt?.generation ?? generation} connected={connected && sameConnection} />)}
-        <BioXpCalibrationRun key={`recover:${generation}`} generation={generation} connected={connected} />
+        <details className="rounded border border-slate-700 p-3"><summary className="cursor-pointer font-semibold">Review a calibration run</summary><BioXpCalibrationRun key={`recover:${generation}`} generation={generation} connected={connected} /></details>
         {error && <p role="alert">{error}</p>}
     </section>;
 }

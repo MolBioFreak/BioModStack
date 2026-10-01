@@ -7,6 +7,6 @@ test('gripper uses finite home/open/close positions only', () => {
   assert.match(source, /label: 'Gripper'/);
   for (const op of ["'commission-home'", "'open'", "'close'", "'open-wide'"]) assert.match(source, new RegExp(op));
   for (const forbidden of ['current_ma', 'current_a', 'motor_current', 'Current (mA)', 'Current (A)']) {
-    assert.doesNotMatch(source, new RegExp(forbidden, 'i'));
+    assert.ok(!source.toLowerCase().includes(forbidden.toLowerCase()), `Unexpected current control: ${forbidden}`);
   }
 });

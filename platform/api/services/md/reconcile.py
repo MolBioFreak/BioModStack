@@ -79,6 +79,8 @@ def _project_child(job: Job) -> str:
             return state
         if state == 'execution_finished':
             return 'running'
+        if state == 'uncertain':
+            return 'orphaned'
     status = str(job.status)
     if status in {"completed", "failed", "cancelled"}:
         return status
@@ -147,21 +149,46 @@ async def acquire_reconciler_lease(
 async def reconcile_md_state(
     session: AsyncSession, *, owner_id: str, apply: bool = False,
 ) -> dict:
-    if apply and not await acquire_reconciler_lease(session, owner_id=owner_id):
-        raise RuntimeError("MD_RECONCILER_LEASE_UNAVAILABLE")
     stale_segment_runs = (
         select(MdReplicaRun.md_job_id)
         .join(MdAttemptSegment, MdAttemptSegment.replica_run_id == MdReplicaRun.id)
         .where(~MdAttemptSegment.state.in_(_TERMINAL_REPLICA_STATES | {"paused"}))
     )
-    runs = list((await session.scalars(select(MdRun).where(or_(
+    candidates = or_(
         ~MdRun.phase.in_(TERMINAL_PHASES),
         MdRun.job_id.in_(stale_segment_runs),
-    )))).all())
+    )
+    # Probe the full existing recovery selection, including unfinished segments
+    # of terminal runs. Do not renew a global write lease for an empty sweep.
+    has_work = await session.scalar(select(MdRun.job_id).where(candidates).limit(1)) is not None
+    if apply and has_work:
+        probe = await reconcile_md_state(session, owner_id=owner_id, apply=False)
+        # Pending command/retry ownership is work even before it has a visible
+        # projection delta. Stable paused observations are not lease renewals.
+        pending_retry_runs = select(MdEvent.md_job_id).where(
+            MdEvent.event_type == 'retry_requested',
+            MdEvent.payload['source_child_job_id'].as_string().is_not(None),
+            MdEvent.payload['shared_retry_receipt'].as_string().is_(None),
+        )
+        pending = await session.scalar(select(MdRun.job_id).where(candidates, or_(
+            MdRun.phase == 'checkpointing', MdRun.job_id.in_(pending_retry_runs),
+        )).limit(1))
+        if not probe['change_count'] and pending is None:
+            probe['dry_run'] = False
+            probe['plan_sha256'] = hashlib.sha256(json.dumps(
+                {key: value for key, value in probe.items() if key != 'plan_sha256'},
+                sort_keys=True, separators=(",", ":"),
+            ).encode()).hexdigest()
+            probe['applied'] = True
+            return probe
+        if not await acquire_reconciler_lease(session, owner_id=owner_id):
+            raise RuntimeError("MD_RECONCILER_LEASE_UNAVAILABLE")
+    # Re-read under the existing lease; the probe is not mutation authority.
+    runs = list((await session.scalars(select(MdRun).where(candidates).execution_options(populate_existing=True))).all()) if has_work else []
     changes: list[dict] = []
     planned: list[tuple[MdRun, Job | None, list[tuple[MdReplicaRun, MdAttemptSegment | None, str]], str]] = []
     for run in runs:
-        parent = await session.get(Job, run.job_id)
+        parent = await session.get(Job, run.job_id, populate_existing=True)
         retry_events = list((await session.scalars(select(MdEvent).where(
             MdEvent.md_job_id == run.job_id, MdEvent.event_type == 'retry_requested',
         ))).all())
@@ -181,17 +208,19 @@ async def reconcile_md_state(
             continue
         replicas = list((await session.scalars(select(MdReplicaRun).where(
             MdReplicaRun.md_job_id == run.job_id
-        ).order_by(MdReplicaRun.replica_index, MdReplicaRun.attempt))).all())
+        ).order_by(MdReplicaRun.replica_index, MdReplicaRun.attempt)
+            .execution_options(populate_existing=True))).all())
         latest_by_index = {replica.replica_index: replica.id for replica in replicas}
         projections: list[tuple[MdReplicaRun, MdAttemptSegment | None, str]] = []
         effective: list[str] = []
         for replica in replicas:
-            child = await session.get(Job, replica.child_job_id) if replica.child_job_id else None
+            child = await session.get(Job, replica.child_job_id, populate_existing=True) if replica.child_job_id else None
             projected = _project_child(child) if child is not None else replica.state
             segment = await session.scalar(
                 select(MdAttemptSegment)
                 .where(MdAttemptSegment.replica_run_id == replica.id)
                 .order_by(MdAttemptSegment.segment_index.desc())
+                .execution_options(populate_existing=True)
             )
             if latest_by_index[replica.replica_index] == replica.id:
                 effective.append(projected)
@@ -237,7 +266,9 @@ async def reconcile_md_state(
             and not parent.execution_target_id
             and not (parent.provenance or {}).get("component_context_path")
             and next_phase in _ACTIVE_PARENT_PHASES
-            and (parent.status != "running" or parent.queue_status != "running")
+            and parent.status != "cancelled" and not parent.awaiting_input
+            and (parent.status != "running" or parent.queue_status != "running"
+                 or parent.error_message is not None or parent.completed_at is not None)
         ):
             changes.append({"kind": "parent_job_projection", "job_id": run.job_id,
                             "from": [parent.status, parent.queue_status],
@@ -250,6 +281,7 @@ async def reconcile_md_state(
         return receipt
     for run, parent, projections, next_phase in planned:
         if (parent is not None and next_phase in _ACTIVE_PARENT_PHASES
+                and parent.status != "cancelled" and not parent.awaiting_input
                 and not parent.execution_target_id
                 and not (parent.provenance or {}).get("component_context_path")):
             parent.status = "running"
@@ -260,7 +292,7 @@ async def reconcile_md_state(
             replica.state = state
             if state in _TERMINAL_REPLICA_STATES:
                 if replica.failure is None:
-                    child = await session.get(Job, replica.child_job_id) if replica.child_job_id else None
+                    child = await session.get(Job, replica.child_job_id, populate_existing=True) if replica.child_job_id else None
                     replica.failure = _failure_from_child(child, state)
                 replica.active = False
                 replica.completed_at = datetime.utcnow()
@@ -268,7 +300,12 @@ async def reconcile_md_state(
                     segment.state = state
                     segment.completed_at = datetime.utcnow()
                     if state == "completed":
-                        bounds = _completed_segment_bounds(parent, replica)
+                        from types import SimpleNamespace
+                        from services.remote_execution.executor import _joined_thread
+                        parent_record = (SimpleNamespace(id=parent.id, output_dir=parent.output_dir)
+                            if parent is not None else None)
+                        bounds = await _joined_thread(_completed_segment_bounds, parent_record,
+                            SimpleNamespace(replica_index=replica.replica_index))
                         if bounds is not None:
                             segment.end_step, segment.end_time_ps = bounds
         if run.phase == "checkpointing":

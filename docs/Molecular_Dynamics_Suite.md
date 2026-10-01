@@ -70,11 +70,29 @@ The prepared-system compatibility lane remains available only for explicitly pre
 
 For typed automatic preparation, the API validates the raw `bms.md.launch-intent.v1`, resolves and snapshots the admitted source bytes, compiles one authoritative `bms.md.job.v2` effective request, and binds the launch to the preview digest. Existing direct `bms.md.job.v1` / `md_job_config` handling is retained only for bounded compatibility. `build_nextflow_command` derives `md_input_root` from the server-materialized document's parent directory, allowing only server-owned relative structure/topology paths to be bound into the runtime.
 
-The workflow has three bounded processes:
+The supported simulate root is `workflows/experimental/molecular_dynamics/orchestrator.nf`. It owns one preparation generation, singleton replica child Jobs, parent result collection, singleton CPU-analysis children, and the durable completion barrier. The former composed `workflow.nf` has been retired; it is not a second root or an execution fallback.
 
-1. `MD_NORMALIZE_CONFIG` (`MolecularDynamicsCpu`, 1 CPU) validates, resolves input paths, and publishes `inputs/md/md_job.normalized.json`.
-2. `MD_RUN_REPLICA` (`MolecularDynamics`, 1 GPU) scatters one task per deterministic replica and publishes `replicas/replica_<index>/`.
-3. `MD_FINALIZE_RESULTS` (`MolecularDynamicsCpu`, 1 CPU) validates completed manifests and publishes `md_result.json` using schema `bms.md.aggregate.v1`.
+1. Preparation publishes a normalized request and a preparation bundle once.
+2. Replica children run `replica.nf` with a deterministic replica index and seed, one inherited scheduler assignment, and engine-owned controls.
+3. The parent collects published child manifests beneath `replicas/replica_<index>/` and produces `md_result.json` (`bms.md.aggregate.v1`).
+4. Analysis children run `analyze.nf` on CPU using parent-contained, SHA-bound work items produced by `scripts.bms_md.spawn_analysis`.
+5. Collection and the MD completion barrier publish the durable result generation. Generic Job completion is not a replacement owner.
+
+Accepted normalized v1 and v2 request documents use the same durable run initializer; legacy v1 does not fabricate a modern chemistry profile. Worker placement, GPU policy, and checkpoint integrity policy remain unchanged.
+
+### Controls and analysis-only retry
+
+The server reports allowed actions on the durable MD root. Public pause, resume, cancel, and re-orchestrate commands carry that root Job identity, its expected state version, and an operation key. Replaying an operation returns the committed result, including after cancellation or replacement. A stale version does not actuate the worker or publish a replacement.
+
+Failed analysis can be retried on the same parent without rerunning preparation or replicas. The retry uses existing immutable replica identities and work items; its native graph contains only analysis dispatch, wait, collection, assertion, and completion. Simulation generation and artifacts are unchanged. This is a durable command, not the retired API helper’s advisory `retryable` flag.
+
+A re-orchestrated typed Project launch carries its existing Project destination and requested source/settings through the normal completion owner. Standalone launch remains standalone. No MD-specific alternate Project-completion authority is introduced.
+
+### Result reads and playback
+
+Mutable control state comes from durable MD rows; immutable scientific manifests remain artifact identity. Result polling settles at terminal control state and refreshes when a later publication/retry/import changes the publication identity. Missing or unreadable analysis is reported independently of readable simulation artifacts.
+
+Playback is explicitly activated and uses paged frame maps and the shared viewer. It does not allocate every frame on summary reads or recalculate unchanged publication totals on ordinary player ticks. Atom order, source trajectory SHA, frame bounds, and final-structure identity remain enforced by their existing scientific owners.
 
 GPU identity is deliberately split at the container boundary: `execution.scheduler_gpu_id` records the physical device selected by BioModStack, while `execution.gpu_id` is `0` inside the single-device `CUDA_VISIBLE_DEVICES` namespace. This prevents physical IDs such as `2` from being incorrectly forwarded to GROMACS when the container exposes one logical GPU.
 
@@ -95,7 +113,7 @@ GPU identity is deliberately split at the container boundary: `execution.schedul
 
 Each stage has an atomic state ledger with artifact checksums. Completed stages are skipped only when every recorded output still exists and matches its checksum. An interrupted stage resumes from its `.cpt` file using `-cpi ... -append`. A real RTX 5090 test interrupted GROMACS with SIGINT after 8 seconds, wrote a valid checkpoint, resumed from step 20,961, appended to the existing outputs, and completed.
 
-## Phase-1 acceptance gates
+## Historical Phase-1 qualification requirements
 
 | Gate | Requirement |
 |---|---|
@@ -112,7 +130,7 @@ Each stage has an atomic state ledger with artifact checksums. Completed stages 
 
 - Validate a selected protein–DNA force-field combination (for example protein Amber + nucleic-acid OL15/OL21) as an installed, versioned topology set rather than assuming the stock force-field directory is sufficient.
 - Add ligand/covalent-template intake and explicit refusal paths when parameters are absent.
-- Add scientific replica analysis: RMSD/RMSF, radius of gyration, secondary structure, contact/interaction metrics, energy/density/temperature/pressure diagnostics, and convergence/stationarity checks. Artifact/manifest aggregation is already implemented by `MD_FINALIZE_RESULTS`.
+- Qualify analysis coverage for the intended campaign, including scientific interpretation and any additional required metrics. The supported analysis children and artifact aggregation are already implemented; this does not establish target-specific convergence or biological validity.
 - Validate DRT4 accession, sequence boundaries, chain mapping, numbering, state, DNA, metals/ligands, protonation, and the Tyr125-linked nucleotide topology before any DRT4 production campaign.
 
 ## Runtime builds

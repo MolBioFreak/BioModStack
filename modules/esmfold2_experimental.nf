@@ -122,6 +122,7 @@ process ESMFold2Predict {
     tuple val(producer_meta), path('esmfold2_results/*.cif'), emit: typed_cifs
     path "esmfold2_results/*.metrics.json", emit: metrics
     tuple val(sequence_name), path('esmfold2_results/*.cif'), path('esmfold2_results/*.metrics.json'), emit: shape_result
+    tuple val(sequence_name), path('esmfold2_results'), emit: shape_bundle
     path "esmfold2_results/*.telemetry.json", emit: telemetry
     path "esmfold2_results/manifest.json", emit: manifest
     path "esmfold2_results/summary.tsv", emit: summary
@@ -136,6 +137,35 @@ process ESMFold2Predict {
         return "'" + (value == null ? '' : value.toString()).replace("'", "'\"'\"'") + "'"
     }
     def shapeMode = params.modification_mode == 'shape_blueprint'
+    if (shapeMode && producer_meta.shape_settings instanceof Map) {
+        def request = new LinkedHashMap(producer_meta.shape_settings)
+        request.core_protein_scientific_contract = 1
+        request.esmf_sequence = sequence.toString()
+        request.esmf_sequence_name = sequence_name.toString()
+        def payload = groovy.json.JsonOutput.toJson(request).bytes.encodeBase64().toString()
+        return """
+        set -euo pipefail
+        python3 - <<'SHAPE_ESMF'
+import base64, json, os, sys, subprocess
+from pathlib import Path
+sys.path.insert(0, '${params.code_root}/scripts')
+from run_esmfold2_inference import compile_workflow_request
+from lib.portable_inputs import resolve_input_path
+request = json.loads(base64.b64decode('${payload}'))
+sources = {}
+for key in ('msa_path', 'esmf_msa_path'):
+    if request.get(key):
+        sources[request[key]] = resolve_input_path(request[key])
+argv, receipt = compile_workflow_request(request, sources)
+Path('esmfold2_results').mkdir(exist_ok=True)
+Path('esmfold2_results/effective_settings.json').write_text(json.dumps(receipt, allow_nan=False, sort_keys=True))
+subprocess.run(['python3', '${params.code_root}/scripts/bms_gpu_run_telemetry.py',
+    '--label', 'ESMFold2Predict', '--output-json', 'esmfold2_results/runtime.telemetry.json', '--',
+    'python3', '${params.code_root}/scripts/run_esmfold2_inference.py'] + argv, check=True,
+    env=dict(os.environ, BMS_ESMFOLD2_EFFECTIVE_SETTINGS=str(Path('esmfold2_results/effective_settings.json').resolve())))
+SHAPE_ESMF
+        """
+    }
     def modelVariant = shapeMode ? (params.get('shape_esmf_model_variant') ?: 'fast') : (params.get('esmf_model_variant') ?: params.get('model_variant') ?: 'fast')
     def modelIdOrPath = params.get('esmf_model_id_or_path') ?: params.get('model_id_or_path') ?: ''
     def localFilesOnly = boolString(params.get('esmf_local_files_only') ?: params.get('local_files_only'), true)

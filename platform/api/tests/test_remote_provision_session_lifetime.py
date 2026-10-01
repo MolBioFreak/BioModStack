@@ -1,6 +1,5 @@
 """Isolated one-connection pool regressions; local helper, never SSH/provider."""
 import asyncio
-import json
 import threading
 from datetime import datetime
 
@@ -98,23 +97,20 @@ async def test_hashing_releases_request_connection_and_endpoint_cas(small_pool, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('change', ['none', 'endpoint', 'operation', 'lease', 'source'])
-async def test_final_readback_has_no_connection_and_completion_fails_closed(
+async def test_download_completion_has_no_connection_and_preserves_existing_fences(
         small_pool, assets, local_transport, monkeypatch, change):
     engine, factory = small_pool
     controller = p.PreloadController(factory)
     entered, release = asyncio.Event(), asyncio.Event()
-    original = cache.run_remote
-    probes = 0
-    async def blocked(connection, command, **kwargs):
-        nonlocal probes
-        payload = kwargs.get('input_bytes', b'')
-        if '--root' in command and payload and json.loads(payload).get('action') == 'probe':
-            probes += 1
-            if probes == 2:  # Initial cache probe, then actual final readback.
-                entered.set()
-                await release.wait()
-        return await original(connection, command, **kwargs)
-    monkeypatch.setattr(cache, 'run_remote', blocked)
+    original = cache.provision_cache
+    async def blocked(**kwargs):
+        # Pause the current download owner before the controller's completion
+        # fence, not a redundant second cache probe removed from production.
+        receipt = await original(**kwargs)
+        entered.set()
+        await release.wait()
+        return receipt
+    monkeypatch.setattr(cache, 'provision_cache', blocked)
     selection = ProvisionSelection(kind='model', model_id='protenix')
     async with factory() as session:
         preview = await controller.preview(session, 'vast:1', selection)
@@ -149,7 +145,11 @@ async def test_final_readback_has_no_connection_and_completion_fails_closed(
                     assert metadata['preload']['operation_id'] == 'replacement'
                     assert metadata['preload']['phase'] in p.PRELOAD_ACTIVE_PHASES
                 else:
-                    assert metadata['preload']['phase'] == 'failed'
+                    # The inert transport fixture supplies no quiescence hook.
+                    # Existing recovery ownership must remain explicit, not be
+                    # reclassified as a verified stopped/terminal failure.
+                    assert metadata['preload']['phase'] == 'recovery_blocked'
+                    assert metadata['preload']['recovery_required'] is True
     finally:
         release.set()
         await controller.close()

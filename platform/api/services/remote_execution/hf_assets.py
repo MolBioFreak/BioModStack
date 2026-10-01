@@ -153,6 +153,79 @@ def weights_archive() -> tuple[str, int] | None:
         raise HFAssetError(ERROR_MESSAGES['weights_archive']) from None
 
 
+NAMED_INDEX_SCHEMA = 'bms.named-assets.v1'
+
+
+def publication_index_path() -> Path | None:
+    from paths import get_data_root
+    archive = weights_archive()
+    return (get_data_root() / 'remote-execution/hf-archives' / archive[0] / 'index.json'
+            if archive else None)
+
+
+def publication_index() -> dict | None:
+    """Read the controlled archive publication, with legacy adoption fallback.
+
+    Coverage names are registry dependency roots, not inferred directory contents.
+    This metadata is installed by the publication/adoption command, never fetched
+    from a request or written by preview. Malformed/old evidence is information,
+    not a new download or launch gate.
+    """
+    path = publication_index_path()
+    if path is None:
+        return None
+    try:
+        with os.fdopen(_open_regular(path), 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if info.st_uid != os.getuid() or info.st_mode & 0o022 or info.st_nlink != 1:
+                return None
+            index = json.load(stream)
+        digest, size = weights_archive()
+        if (index.get('schema') != NAMED_INDEX_SCHEMA
+                or index['archive'] != dict(sha256=digest, size_bytes=size)
+                or not isinstance(index.get('dependencies'), list)
+                or not all(isinstance(name, str) for name in index['dependencies'])
+                or not isinstance(index.get('artifacts'), list)):
+            return None
+        return index
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, HFAssetError):
+        return None
+
+
+def published_asset_rows(prefix: str, *, index=None, resolved=None) -> list[dict] | None:
+    if resolved is not None and prefix in resolved:
+        return resolved[prefix]
+    rows = _published_asset_rows(prefix, index=index)
+    if resolved is not None:
+        resolved[prefix] = rows
+    return rows
+
+
+def _published_asset_rows(prefix: str, *, index=None) -> list[dict] | None:
+    if index is None:
+        index = publication_index()
+    if not index or not any(prefix == name or prefix.startswith(name + '/')
+                            for name in index['dependencies']):
+        return None
+    try:
+        rows = [row for row in index['artifacts']
+                if row['name'] == prefix or row['name'].startswith(prefix + '/')]
+        if not rows:
+            return None
+        # Reuse the transport record's contained-name/type validation. The
+        # publication owner additionally validates complete weight link layouts.
+        from .contracts import RemoteFileRecord
+        for row in rows:
+            RemoteFileRecord(relative_path=row['name'], sha256=row['sha256'],
+                size_bytes=row['size_bytes'], mode=row['mode'], role='runtime',
+                link_target=row.get('target'))
+        if len({row['name'] for row in rows}) != len(rows):
+            return None
+        return rows
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, HFAssetError):
+        return None
+
+
 def readiness() -> Readiness:
     configured = any(key in os.environ for key in _KEYS)
     result: Readiness = {'configured': configured, 'available': False, 'bucket': None,

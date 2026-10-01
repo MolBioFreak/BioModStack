@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from typing import Any, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
@@ -95,71 +95,31 @@ class ShapeRequestError(ValueError):
         self.code = code
 
 
-# Capability projection only: definitions, bounds and defaults stay global.
-_SEQUENCE_SETTING_KEYS = {
-    "proteinmpnn": ("mpnn_temperature", "mpnn_omitAAs", "mpnn_checkpoint_type",
-                   "mpnn_checkpoint_model", "mpnn_backbone_noise"),
-    "fampnn": ("fampnn_temperature", "fampnn_seq_only", "fampnn_repack_last",
-              "fampnn_num_steps", "fampnn_batch_size", "fampnn_exclude_cys",
-              "fampnn_psce_threshold"),
-}
+def shape_settings_definition() -> dict[str, Any]:
+    from services.shape_native_settings import settings_definition
+    return settings_definition()
 
 
 def sequence_settings_definition(engine: str, sequence_count: int = 1) -> dict[str, Any]:
-    from model_registry import get_registry
-
-    if engine not in _SEQUENCE_SETTING_KEYS:
+    from services.shape_native_settings import SEQUENCE_ENGINES, sequence_definition
+    if engine not in SEQUENCE_ENGINES:
         raise ShapeRequestError("sequence_engine_invalid", "unsupported Shape sequence engine")
-    model = get_registry().get_internal_model_definition(engine)
-    if model is None or not model.enabled:
-        raise ShapeRequestError("sequence_engine_unavailable", "Shape sequence model is unavailable")
-    by_name = {param.name: param for param in model.params}
-    params = [by_name[key].model_dump(mode="json") for key in _SEQUENCE_SETTING_KEYS[engine]]
-    definition = {"engine": engine, "model_version": model.version, "params": params}
-    initial_values = {param["name"]: param["default"] for param in params}
-    contextual_defaults = {}
-    if engine == "fampnn":
-        # Preserve the existing direct Shape lane, not the general FAMPNN
-        # workflow defaults. These are visible, editable initial values only.
-        contextual_defaults = {
-            "fampnn_seq_only": True,
-            "fampnn_repack_last": False,
-            "fampnn_exclude_cys": False,
-            "fampnn_batch_size": sequence_count,
-        }
-        initial_values.update(contextual_defaults)
-    return {
-        **definition,
-        "schema_sha256": hashlib.sha256(_canonical_json(definition)).hexdigest(),
-        "initial_values": initial_values,
-        "contextual_defaults": contextual_defaults,
-        "contextual_default_reason": "Preserve existing Shape direct sequence lane behavior; operator values take precedence.",
-    }
+    try:
+        return sequence_definition(engine, sequence_count)
+    except ValueError as exc:
+        raise ShapeRequestError("sequence_engine_unavailable", str(exc)) from exc
 
 
-def _sequence_settings(engine: str, requested: Mapping[str, object], sequence_count: int) -> tuple[dict[str, object], dict[str, object]]:
-    from model_registry import get_registry
-
-    definition = sequence_settings_definition(engine, sequence_count)
-    if set(requested) - set(_SEQUENCE_SETTING_KEYS[engine]):
-        raise ValueError("unsupported Shape sequence setting for selected engine")
-    effective = dict(definition["initial_values"])
-    effective.update(requested)
-    # The backbone is produced internally, not an operator-selected input.
-    errors = get_registry().validate_job_params(engine, "design", {"input_pdb": "shape_backbone.pdb", **effective})
-    if errors:
-        raise ValueError("; ".join(errors))
-    return effective, {
-        **{key: definition[key] for key in ("engine", "model_version", "schema_sha256")},
-        "initial_values": definition["initial_values"],
-        "contextual_defaults": definition["contextual_defaults"],
-        "contextual_default_reason": definition["contextual_default_reason"],
-    }
+def _sequence_settings(engine: str, requested: Mapping[str, object], sequence_count: int) -> tuple[dict, dict]:
+    from services.shape_native_settings import resolve_sequence
+    effective, _, identity = resolve_sequence(engine, requested, sequence_count)
+    return effective, identity
 
 
 class SubmittedShapeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    launch_context_id: str | None = Field(default=None, min_length=1, max_length=160)
     execution_target_id: str | None = Field(default=None, min_length=1, max_length=160)
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     execution_plan_approval: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -177,9 +137,12 @@ class SubmittedShapeRequest(BaseModel):
     seed: int = Field(default=0, ge=0, le=2_147_483_647)
     generator: Literal["rfd3"] = "rfd3"
     sequence_policy: Literal["auto", "skip", "external"] = "auto"
-    sequence_engine: Literal["proteinmpnn", "fampnn"] | None = None
-    sequence_engines: tuple[Literal["proteinmpnn", "fampnn"], ...] = ()
-    sequence_settings: dict[str, StrictBool | StrictInt | StrictFloat | StrictStr] = Field(default_factory=dict)
+    sequence_engine: Literal["proteinmpnn", "fampnn", "caliby_experimental"] | None = None
+    sequence_engines: tuple[Literal["proteinmpnn", "fampnn", "caliby_experimental"], ...] = ()
+    rfd3_settings: dict[str, JsonValue] = Field(default_factory=dict)
+    sequence_settings: dict[str, JsonValue] = Field(default_factory=dict)
+    sequence_input_settings: dict[str, JsonValue] = Field(default_factory=dict)
+    validator_settings: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
     predictor: Literal["esmfold2"] = "esmfold2"
     validator_suite: tuple[Literal["boltz2", "esmfold2", "protenix_v2"], ...] = (
         "boltz2",
@@ -210,13 +173,17 @@ class SubmittedShapeRequest(BaseModel):
             raise ValueError("sequence_policy=skip requires sequences_per_backbone=0")
         if self.sequence_policy == "external" and self.sequences_per_backbone == 0:
             raise ValueError("sequence_policy=external requires sequences_per_backbone > 0")
-        if any(engine not in {"proteinmpnn", "fampnn"} for engine in self.sequence_engines):
-            raise ValueError("only ProteinMPNN and FAMPNN are supported for Shape sequence design")
+        if any(engine not in {"proteinmpnn", "fampnn", "caliby_experimental"} for engine in self.sequence_engines):
+            raise ValueError("unsupported Shape sequence engine")
         if self.sequence_policy == "skip" or self.sequences_per_backbone == 0:
-            if self.sequence_settings:
+            if self.sequence_settings or self.sequence_input_settings:
                 raise ValueError("sequence settings require an enabled sequence lane")
         else:
-            _sequence_settings(self.sequence_engine or "proteinmpnn", self.sequence_settings, self.sequences_per_backbone)
+            from services.shape_native_settings import resolve_sequence
+            resolve_sequence(self.sequence_engine or "proteinmpnn", self.sequence_settings,
+                             self.sequences_per_backbone, self.sequence_input_settings)
+        from services.shape_native_settings import resolve_native
+        resolve_native(self.rfd3_settings, self.validator_settings, self.validator_suite, self.seed)
         return self
 
 
@@ -236,6 +203,7 @@ def shape_job_request(staged: StagedShapeRequest, submitted: SubmittedShapeReque
     return JobCreate(
         name=staged.name, model_id=staged.model_id, mode=staged.mode,
         params=staged.launch_params,
+        launch_context_id=submitted.launch_context_id,
         execution_target_id=submitted.execution_target_id,
         execution_policy=submitted.execution_policy,
         execution_plan_approval=submitted.execution_plan_approval,
@@ -314,13 +282,23 @@ async def materialize_shape_request(
     if length_policy.get("allocation_policy_sha256") not in {None, allocation_policy_sha256}:
         raise ShapeRequestError("allocation_policy_hash_mismatch", "Shape allocation policy hash does not match the canonical registry")
     length_policy["allocation_policy_sha256"] = allocation_policy_sha256
-    effective_settings, settings_identity = ({}, None)
+    from services.shape_native_settings import resolve_native, resolve_sequence
+    effective_settings, effective_inputs, settings_identity = {}, {}, None
     if submitted.sequence_policy != "skip" and submitted.sequences_per_backbone > 0:
-        effective_settings, settings_identity = _sequence_settings(
-            submitted.sequence_engine or "proteinmpnn", submitted.sequence_settings, submitted.sequences_per_backbone
-        )
+        effective_settings, effective_inputs, settings_identity = resolve_sequence(
+            submitted.sequence_engine or "proteinmpnn", submitted.sequence_settings,
+            submitted.sequences_per_backbone, submitted.sequence_input_settings)
+    effective_rfd3, effective_validators, native_identity = resolve_native(
+        submitted.rfd3_settings, submitted.validator_settings, submitted.validator_suite, submitted.seed)
     spec = {
-        "schema": "bms_shape_design_request_v2",
+        "schema": "bms_shape_design_request_v3",
+        "requested_rfd3_settings": dict(submitted.rfd3_settings),
+        "rfd3_settings": effective_rfd3,
+        "requested_sequence_input_settings": dict(submitted.sequence_input_settings),
+        "sequence_input_settings": effective_inputs,
+        "requested_validator_settings": dict(submitted.validator_settings),
+        "validator_settings": effective_validators,
+        "native_settings_identity": native_identity,
         "requested_sequence_settings": dict(submitted.sequence_settings),
         "sequence_settings": effective_settings,
         "sequence_settings_identity": settings_identity,
@@ -350,13 +328,15 @@ async def materialize_shape_request(
         "guidance_profile": profile,
         "guidance_profile_registry_sha256": RFD3_PROFILE_REGISTRY_SHA256,
     }
-    request_sha256 = hashlib.sha256(_canonical_json(spec)).hexdigest()
     request_id = str(spec["request_id"])
+    existing = await session.get(ShapeDesignRequest, request_id)
+    native_payloads = _materialize_native_files(
+        spec, data_root=data_root, retained=existing.request_spec if existing is not None else None)
+    request_sha256 = hashlib.sha256(_canonical_json(spec)).hexdigest()
     spec = {**spec, "request_sha256": request_sha256}
 
-    existing = await session.get(ShapeDesignRequest, request_id)
     if existing is not None:
-        if existing.request_sha256 != request_sha256:
+        if existing.request_sha256 != request_sha256 and not _historical_v2_replay(existing, spec):
             raise ShapeRequestError("request_id_conflict", "client request ID is already bound to different scientific intent")
         return _staged(existing, data_root=data_root, name=submitted.name)
 
@@ -387,6 +367,7 @@ async def materialize_shape_request(
         "faces.u32le": faces,
         "points.f32le": points,
         "sdf.f32le": sdf,
+        **native_payloads,
     }
     row = ShapeDesignRequest(
         request_id=request_id,
@@ -431,8 +412,88 @@ async def materialize_shape_request(
     return _staged(row, data_root=data_root, name=submitted.name)
 
 
+def _native_file_slots(spec: dict):
+    from services.shape_native_settings import sequence_definition, validator_definition
+    if spec["sequence_settings"]:
+        definition = sequence_definition(spec.get("sequence_engine") or "proteinmpnn", spec["sequences_per_backbone"])
+        for param in definition["params"]:
+            if param["type"] == "file" and spec["sequence_settings"].get(param["name"]):
+                yield ("sequence_settings", param["name"])
+    for validator, values in spec["validator_settings"].items():
+        for param in validator_definition(validator)["params"]:
+            if param["type"] == "file" and values.get(param["name"]):
+                yield ("validator_settings", validator, param["name"])
+
+
+def _materialize_native_files(spec: dict, *, data_root: Path, retained: dict | None) -> dict[str, bytes]:
+    """Snapshot typed files into the existing immutable request, once.
+
+    Relative effective references travel with request.json; requested paths are
+    provenance only. Replay binds retained bytes without opening those paths.
+    """
+    from paths import get_allowed_roots, get_weights_root
+    from scripts.lib.portable_inputs import _contained
+    slots = list(_native_file_slots(spec))
+    ledger, payloads = [], {}
+    prior = retained.get("native_input_sources", []) if retained is not None else []
+    for index, selector in enumerate(slots):
+        values = spec
+        for key in selector[:-1]:
+            values = values[key]
+        original = values[selector[-1]]
+        if retained is not None:
+            matches = [entry for entry in prior if entry.get("selector") == list(selector)
+                       and entry.get("source_path") == original]
+            if len(matches) != 1:
+                raise ShapeRequestError("request_id_conflict", "client request ID is already bound to different native inputs")
+            entry = dict(matches[0])
+        else:
+            roots = get_allowed_roots()
+            source = Path(original).expanduser()
+            if not source.is_absolute():
+                root = roots.get(source.parts[0])
+                if root is None:
+                    raise ValueError("native input alias root is not allowed")
+                source = root.joinpath(*source.parts[1:])
+            source = _contained(source, [data_root.resolve(), get_weights_root().resolve(),
+                                        *(root.resolve() for root in roots.values())])
+            if not source.is_file() or source.stat().st_nlink != 1:
+                raise ValueError("native input must be a regular, single-link file")
+            data = source.read_bytes()
+            relative = f"native-input-{index:04d}{source.suffix}"
+            entry = {"selector": list(selector), "source_path": original, "path": relative,
+                     "sha256": hashlib.sha256(data).hexdigest(), "size_bytes": len(data)}
+            payloads[relative] = data
+        values[selector[-1]] = entry["path"]
+        ledger.append(entry)
+    spec["native_input_sources"] = ledger
+    return payloads
+
+
+def _historical_v2_replay(row: ShapeDesignRequest, current: dict) -> bool:
+    """Compare historical intent without upgrading or rewriting sealed evidence."""
+    old = row.request_spec
+    if old.get("schema") != "bms_shape_design_request_v2":
+        return False
+    if old.get("requested_sequence_settings", {}) != current.get("requested_sequence_settings", {}):
+        return False
+    if any(current.get(key) for key in ("requested_rfd3_settings",
+            "requested_sequence_input_settings", "requested_validator_settings")):
+        return False
+    unhashed = {key: value for key, value in old.items() if key != "request_sha256"}
+    if (hashlib.sha256(_canonical_json(unhashed)).hexdigest() != row.request_sha256
+            or old.get("request_sha256") != row.request_sha256):
+        return False
+    # Settings definitions/defaults may have expanded since v2. Its sealed
+    # effective values and identity remain authoritative for an exact replay.
+    derived = {"schema", "request_sha256", "sequence_settings", "sequence_settings_identity"}
+    return all(current.get(key) == value for key, value in old.items() if key not in derived)
+
+
 def _staged(row: ShapeDesignRequest, *, data_root: Path, name: str) -> StagedShapeRequest:
     stage = (data_root / "shape_blueprint" / row.stage_relative_path).resolve()
+    for source in row.request_spec.get("native_input_sources", []):
+        _checked_artifact(stage, source["path"], source["sha256"])
     params: dict[str, object] = {
         "modification_mode": "shape_blueprint",
         "shape_request_id": row.request_id,
@@ -464,6 +525,11 @@ def _staged(row: ShapeDesignRequest, *, data_root: Path, name: str) -> StagedSha
         "shape_guidance_profile": row.request_spec["guidance_profile"]["id"],
         "shape_guidance_profile_registry_sha256": row.request_spec["guidance_profile_registry_sha256"],
     }
+    if row.request_spec.get("schema") == "bms_shape_design_request_v3":
+        for key in ("rfd3_settings", "requested_rfd3_settings", "sequence_input_settings",
+                    "requested_sequence_input_settings", "validator_settings",
+                    "requested_validator_settings", "native_settings_identity"):
+            params["shape_" + key] = row.request_spec[key]
     return StagedShapeRequest(
         request_id=row.request_id,
         request_sha256=row.request_sha256,

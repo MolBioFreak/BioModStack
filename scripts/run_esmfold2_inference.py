@@ -284,6 +284,7 @@ def parse_pdb_polymer_components(
     *,
     chain_ids: str | Sequence[str] | None = None,
     include_dna_rna: bool = True,
+    _author_residue_rows: dict | None = None,
 ) -> list[dict[str, Any]]:
     """Extract protein/DNA/RNA sequence components from a local PDB file.
 
@@ -303,13 +304,25 @@ def parse_pdb_polymer_components(
 
     chains: dict[str, list[tuple[str, str]]] = {}
     seen_residues: set[tuple[str, str, str]] = set()
-    for line in pdb_path.read_text(encoding="utf-8", errors="replace").splitlines():
+    # The round author's former second read was strict UTF-8. Keep that input
+    # behavior for the opt-in projection, without changing the default bridge.
+    errors = "strict" if _author_residue_rows is not None else "replace"
+    for line in pdb_path.read_text(encoding="utf-8", errors=errors).splitlines():
         if not (line.startswith("ATOM  ") or line.startswith("HETATM")):
             continue
         chain_id = (line[21:22].strip() or "_") if len(line) >= 22 else "_"
         if selected is not None and chain_id not in selected:
             continue
         residue_name = line[17:20].strip().upper() if len(line) >= 20 else ""
+        # Optional observation for the source owner; keep its historical author
+        # deduplication separate from sequence classification and fallback IDs.
+        # Convert author numbers only after that owner's chain validation.
+        if (_author_residue_rows is not None and chain_id in _author_residue_rows
+                and _map_residue_to_letter(residue_name, "protein")):
+            _author_residue_rows[chain_id].setdefault(
+                (line[22:27].strip(), residue_name),
+                {'chain_id': chain_id, 'residue_number': line[22:26],
+                 'insertion_code': line[26:27].strip()})
         residue_id = (line[22:27].strip() or str(len(chains.get(chain_id, [])) + 1)) if len(line) >= 27 else str(len(chains.get(chain_id, [])) + 1)
         key = (chain_id, residue_id, residue_name)
         if key in seen_residues:

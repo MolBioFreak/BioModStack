@@ -25,7 +25,7 @@ let mounted: ReactTestRenderer | undefined;
 let client: QueryClient;
 const calls: Array<{ url: string; params: any; body: any }> = [];
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
-const flush = async () => { for (let i = 0; i < 10; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
+const flush = async () => { for (let i = 0; i < 10; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); }); };
 const button = (label: string) => mounted!.root.findAllByType('button').find(node => text(node) === label)!;
 const doc = { artifact_id: 'alternate', target_state: 'state B', logical_path: 'native/exact.pdb', download_url: '/api/files/download/exact.pdb' };
 const record = { candidate_key: 'producer-key', design_id: 'exact', metrics: { native_zero: 0, missing: null }, structures: [doc] };
@@ -65,6 +65,10 @@ function transport(job = baseJob, zero = false, designFailure = false) {
         else if (url === '/api/ligandmpnn/interface-context/selected') data = { job: { id: 'interface-child' } };
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
+}
+async function openCandidateOperations() {
+    const details = mounted!.root.findAllByType('details').find(node => text(node.findAllByType('summary')[0]).startsWith('Selected candidate operations'))!;
+    await act(async () => details.props.onToggle({ currentTarget: { open: true } })); await flush();
 }
 function LocationProbe() { const location = useLocation(); return <span data-location={location.pathname + location.search} />; }
 async function mount(element: React.ReactNode, route?: string) {
@@ -114,7 +118,10 @@ it('pages and reopens published native metrics with exact native document naviga
     expect(mounted!.root.findByProps({ 'aria-label': 'Sort by native_zero' })).toBeDefined();
     expect(mounted!.root.findAllByType('td').map(text)).toContain('0');
     expect(text(mounted!.root)).toContain('Explicit null');
+    expect(mounted!.root.findAllByType(StructureWorkbench)).toHaveLength(0);
+    await act(async () => button('Structure').props.onClick()); await flush();
     expect(mounted!.root.findAllByType('a').map(a => a.props.href)).toContain('/designs/parent?design_id=exact&artifact_id=alternate&target_state=state+B');
+    await act(async () => button('Dashboard').props.onClick());
     await act(async () => button('Next native records').props.onClick()); await flush();
     expect(text(mounted!.root)).toContain('page-two');
     expect(calls.filter(call => call.url.endsWith('/generation-results'))).toHaveLength(1); // Table pages do not refetch the publication.
@@ -128,6 +135,8 @@ it('exact native URL restores selection and destination, never loads primary doc
     transport(); const fetcher = vi.fn(async (_url: string) => ({ ok: false, status: 404 })); vi.stubGlobal('fetch', fetcher);
     await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>, '/designs/parent?design_id=exact&artifact_id=alternate&target_state=state+B&launch_context_id=destination');
     expect(readBinderCandidateDocuments('parent')).toEqual({ exact: { artifact_id: 'alternate', target_state: 'state B' } });
+    expect(mounted!.root.findAllByType(BinderSelectedControls)).toHaveLength(0);
+    await openCandidateOperations();
     const selected = mounted!.root.findByType(BinderSelectedControls);
     expect(selected.props.selectedDesignIds).toContain('exact');
     expect(selected.props.launchContextId).toBe('destination');
@@ -141,6 +150,7 @@ it('exact native URL restores selection and destination, never loads primary doc
     expect(request.params).not.toHaveProperty('launch_context_id');
     await act(async () => mounted!.unmount()); client.clear();
     await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>, '/designs/parent?design_id=exact&artifact_id=alternate&target_state=state+B&launch_context_id=destination');
+    await openCandidateOperations();
     expect(mounted!.root.findByType(BinderSelectedControls).props.selectedDesignIds).toContain('exact');
     expect(mounted!.root.findByProps({ 'aria-label': 'Document for exact' }).props.value).toBe(JSON.stringify({ artifact_id: 'alternate', target_state: 'state B' }));
     expect(fetcher.mock.calls.map(call => call[0])).toEqual(['/api/files/download/exact.pdb', '/api/files/download/exact.pdb']);
@@ -230,12 +240,14 @@ it.each(['ppiflow', 'boltzgen'])('Results %s uses the native workbench and share
         return { config, data, status: 200, statusText: 'OK', headers: {} };
     };
     await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>, '/designs/parent?launch_context_id=destination');
-    expect(mounted!.root.findByType(StructureWorkbench).props.structureUrl).toBe(rows[0].structures[0].download_url);
-    expect(mounted!.root.findByType(BinderSelectedControls).props.selectedDesignIds).toEqual([]);
+    expect(mounted!.root.findAllByType(StructureWorkbench)).toHaveLength(0);
+    expect(mounted!.root.findAllByType(BinderSelectedControls)).toHaveLength(0);
     expect(button('Overview')).toBeUndefined();
     expect(text(mounted!.root)).not.toContain('Average pLDDT');
     expect(mounted!.root.findAllByType('details').filter(node => ['Native receipt and accounting', 'Native files and provenance', 'Selected record: complete native readback', 'Selected candidate operations (0)'].includes(text(node.findAllByType('summary')[0]))).every(node => !node.props.open)).toBe(true);
+    await act(async () => button('Structure').props.onClick()); await flush();
     expect(mounted!.root.findByType(StructureWorkbench).props.workbenchCollapsed).toBe(true);
+    await openCandidateOperations();
     const native = () => mounted!.root.findByType(NativeBinderGenerationResults);
     await act(async () => native().props.onInspectDocument(rows[6])); await flush();
     expect(mounted!.root.findByType(StructureWorkbench).props.structureUrl).toBe(rows[6].structures[0].download_url);

@@ -48,12 +48,16 @@ import { BinderWorkflowWorkspace } from './BinderWorkflowWorkspace';
 import { BindCraft2Settings, type BC2Inventory, type BC2Request, type BC2Section } from './BindCraft2Settings';
 import { BindCraft2Campaign } from './BindCraft2Campaign';
 import { BinderRoundSettings } from './BinderRoundSettings';
+import { RFantibodyGeneration } from './RFantibodyGeneration';
+import { bc2DisplaySelectors, bc2SelectorSignature, useBC2LeafDiscovery } from '../lib/bc2LeafDisplay';
 import { hydrateBinderRound } from '../lib/binderRound';
 import { BindCraft2StructureInputs } from './BindCraft2StructureInputs';
 import type { BC2InitialSources } from '../lib/bindcraft2StructureInputs';
 import { BinderGeneratorChooser, type BinderNativeRoute } from './BinderGeneratorChooser';
 import { previewBindCraft2Campaign, type BC2CampaignPreview } from '../lib/bindcraft2AuthoringApi';
 import { portableNativeSource } from '../lib/nativeBinderAuthoring';
+import { bc2SourceHandoff, binderEngineSearch, initialRoundSteps, createShellPreviewAttempt } from '../lib/binderShell';
+import { binderShellError } from '../lib/launchRecipeErrors';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { createLatestAsyncResourceController } from '../lib/latestAsyncResource';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
@@ -74,6 +78,7 @@ export interface AntibodyDenovoTemplateProps {
     initialEngineChooserOpen?: boolean;
     initialValues?: Record<string, UntypedApiValue>;
     onOpenNativeRoute?: (route: BinderNativeRoute) => void;
+    onLoadTemplate?: (template: import('../lib/api').UserTemplate) => void;
     initialDraft?: Record<string, UntypedApiValue>;
     onDraftChange?: (draft: Record<string, UntypedApiValue>) => void;
     onSubmitRequest?: (request: UntypedApiValue, draft: Record<string, UntypedApiValue>) => ReturnType<typeof submitJob>;
@@ -242,7 +247,7 @@ const buildAvailableResidueKeySet = (chains: Chain[]) =>
 
 const hydrateDeNovoStageSelection = hydrateInitialStageSelection;
 
-export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues: savedValues, initialDraft, onDraftChange, onOpenNativeRoute, onSubmitRequest, initialEngineChooserOpen = false }) => {
+export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues: savedValues, initialDraft, onDraftChange, onOpenNativeRoute, onLoadTemplate, onSubmitRequest, initialEngineChooserOpen = false }) => {
     const initialValues = useMemo(() => initialDraft ? { ...savedValues, ...initialDraft } : savedValues, [savedValues, initialDraft]);
     const [retainedDraft, setRetainedDraft] = useState(initialValues ?? {});
     const [roundDraft, setRoundDraft] = useState(() => hydrateBinderRound(initialValues));
@@ -250,6 +255,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [workspaceSection, setWorkspaceSection] = useState('sources');
     useEffect(() => { setRetainedDraft(initialValues ?? {}); }, [initialValues]);
     const location = useLocation();
+    const navigate = useNavigate();
     const { gpuOptions } = useLiveGpuCatalog();
     const refinementQueryEnabled = useMemo(
         () => new URLSearchParams(location.search).get('refinement') === '1',
@@ -312,13 +318,21 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         const engine = isRefinementMode ? null : new URLSearchParams(location.search).get('engine');
         return resolveExistingDeNovoGenerator(initialValues ?? (engine ? { denovo_generator: engine } : undefined));
     });
+    const [showRfSourceHandoff, setShowRfSourceHandoff] = useState(false);
+    const [rfSourceHandoffError, setRfSourceHandoffError] = useState<string | null>(null);
+    const [pendingNativeRoute, setPendingNativeRoute] = useState<BinderNativeRoute | null>(null);
+    const [nativeScaffoldHandoff, setNativeScaffoldHandoff] = useState(false);
     const selectDeNovoGenerator = (generator: DeNovoGenerator) => {
+        if (deNovoGenerator === 'bindcraft2' && generator === 'rfantibody') { setShowRfSourceHandoff(true); setWorkspaceSection('sources'); }
         setDeNovoGenerator(generator);
-        const query = new URLSearchParams(location.search);
-        query.set('template', 'antibody_denovo');
-        query.set('engine', generator);
-        navigate({ pathname: location.pathname, search: `?${query}`, hash: location.hash }, { replace: true, state: location.state });
+        navigate({ pathname: location.pathname, search: binderEngineSearch(location.search, generator), hash: location.hash }, { replace: true, state: location.state });
     };
+    // Re-entry must restore the retained engine URL, without selecting a fresh default.
+    useEffect(() => {
+        if (isRefinementMode || !deNovoGenerator || !initialValues?.denovo_generator && initialValues?.model_id !== 'bindcraft2') return;
+        const search = binderEngineSearch(location.search, deNovoGenerator);
+        if (search !== location.search) navigate({ pathname: location.pathname, search, hash: location.hash }, { replace: true, state: location.state });
+    }, [deNovoGenerator, initialValues, isRefinementMode, location.search, location.pathname, location.hash, location.state, navigate]);
     const [bc2Settings, setBc2Settings] = useState<BC2Request>(() =>
         initialValues?.bindcraft2_settings && typeof initialValues.bindcraft2_settings === 'object' && !Array.isArray(initialValues.bindcraft2_settings)
             ? initialValues.bindcraft2_settings as BC2Request : {});
@@ -327,31 +341,34 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [bc2LaunchAvailable, setBc2LaunchAvailable] = useState<boolean | undefined>(undefined);
     const [bc2DiscoveryError, setBc2DiscoveryError] = useState<string | null>(null);
     const [bc2SubmitError, setBc2SubmitError] = useState<string | null>(null);
+    const [bc2ErrorLocation, setBc2ErrorLocation] = useState<ReturnType<typeof binderShellError> | null>(null);
     const [bc2Preview, setBc2Preview] = useState<{ identity: string; revision: number; data: BC2CampaignPreview } | null>(null);
     const [bc2PreviewBusy, setBc2PreviewBusy] = useState(false);
-    const bc2RequestIdentity = JSON.stringify(bc2Settings);
+    const previewAttempts = useRef(createShellPreviewAttempt());
+    const [templateIntent, setTemplateIntent] = useState<'browse' | 'save'>('browse');
+    const [incompatibleTemplate, setIncompatibleTemplate] = useState<import('../lib/api').UserTemplate | null>(null);
+    const keepLibraryOpen = useRef(false);
+    // Materialize only the new-campaign recommendation at the existing request /
+    // draft owner. Native profile inheritance stays sparse; saved explicit values win.
+    const requestedBc2Settings: BC2Request = { subbatch_size: null, ...bc2Settings };
+    const bc2RequestIdentity = JSON.stringify(requestedBc2Settings);
     const currentBc2Request = useRef({ identity: bc2RequestIdentity, revision: 0 });
     if (currentBc2Request.current.identity !== bc2RequestIdentity) {
         currentBc2Request.current = { identity: bc2RequestIdentity, revision: currentBc2Request.current.revision + 1 };
     }
+    useEffect(() => { setBc2SubmitError(null); setBc2ErrorLocation(null); setBc2PreviewBusy(false); }, [bc2RequestIdentity]);
     const activeBc2Preview = bc2Preview?.identity === bc2RequestIdentity && bc2Preview.revision === currentBc2Request.current.revision ? bc2Preview.data : null;
+    const bc2Discovery = useBC2LeafDiscovery<BC2Inventory>(
+        deNovoGenerator === 'bindcraft2', bc2DisplaySelectors(bc2Settings, bc2Inventory));
     useEffect(() => {
-        if (deNovoGenerator !== 'bindcraft2') return;
-        const controller = new AbortController();
-        fetch('/api/models/bindcraft2/native-settings', { signal: controller.signal })
-            .then(async response => {
-                if (!response.ok) throw new Error(`Native settings discovery unavailable (${response.status})`);
-                return response.json();
-            })
-            .then(data => {
-                if (!data.settings?.fields || data.model_id !== 'bindcraft2') throw new Error('Invalid BindCraft2 settings discovery');
-                setBc2Inventory(data.settings as BC2Inventory);
-                setBc2LaunchAvailable(data.launch_available === true);
-                setBc2DiscoveryError(null);
-            })
-            .catch(error => { if (!controller.signal.aborted) setBc2DiscoveryError(String(error)); });
-        return () => controller.abort();
-    }, [deNovoGenerator]);
+        if (bc2Discovery?.inventory) {
+            setBc2Inventory(bc2Discovery.inventory);
+            setBc2LaunchAvailable(bc2Discovery.launchAvailable);
+            setBc2DiscoveryError(null);
+        } else if (bc2Discovery?.error) {
+            setBc2DiscoveryError(bc2Discovery.error);
+        }
+    }, [bc2Discovery]);
     const [deNovoStageSelection, setDeNovoStageSelection] = useState<Record<DeNovoOrchestrationStage, boolean>>(() => hydrateDeNovoStageSelection(initialValues));
 
     useEffect(() => {
@@ -822,10 +839,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     // Debug mode settings - hidden by default
     const [showDebugSettings, setShowDebugSettings] = useState(false);
-    const [skipRFantibody, setSkipRFantibody] = useState(false);
-    const [rfantibodyInputPdbs, setRfantibodyInputPdbs] = useState<string>('');
-    const [skipFampnn, setSkipFampnn] = useState(false);
-    const [fampnnCollectedPdbs, setFampnnCollectedPdbs] = useState<string>('');
+    const [skipRFantibody, setSkipRFantibody] = useState(initialValues?.skip_rfantibody === true);
+    const [rfantibodyInputPdbs, setRfantibodyInputPdbs] = useState<string>(typeof initialValues?.rfantibody_input_pdbs === 'string' ? initialValues.rfantibody_input_pdbs : '');
+    const [skipFampnn, setSkipFampnn] = useState(initialValues?.skip_fampnn === true);
+    const [fampnnCollectedPdbs, setFampnnCollectedPdbs] = useState<string>(typeof initialValues?.fampnn_collected_pdbs === 'string' ? initialValues.fampnn_collected_pdbs : '');
     const [customOutputDir, setCustomOutputDir] = useState<string>(initialValues?.out_dir || '');
     const [refinementPreset, setRefinementPreset] = useState<RefinementPreset>(isRefinementMode ? 'full_loop' : 'custom');
     const [useManualMutagenesis, setUseManualMutagenesis] = useState(false);
@@ -1074,7 +1091,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         setTargetPdb(file);
     }, [buildFilesApiUrl, loadPdbFileFromUrl]);
 
-    const navigate = useNavigate();
+
     const queryClient = useQueryClient();
 
     const submitMutation = useMutation({
@@ -1087,7 +1104,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     });
     const bc2CampaignRequest = {
         name: jobName, model_id: 'bindcraft2', mode: 'campaign',
-        params: { bindcraft2_settings: bc2Settings },
+        params: { bindcraft2_settings: requestedBc2Settings },
         binder_round: roundDraft.binder_round,
     };
 
@@ -2392,7 +2409,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const authoringDraft: Record<string, UntypedApiValue> = {
                     ...retainedDraft,
                     ...(!isRefinementMode ? roundDraft : {}),
-                    bindcraft2_settings: bc2Settings,
+                    bindcraft2_settings: requestedBc2Settings,
                     model_id: deNovoGenerator === null ? retainedDraft.model_id : deNovoGenerator === 'bindcraft2' ? 'bindcraft2' : deNovoGenerator === 'boltzgen' ? 'boltzgen' : 'antibody_denovo',
                     mode: deNovoGenerator === null ? retainedDraft.mode : deNovoGenerator === 'bindcraft2' ? 'campaign' : deNovoGenerator === 'boltzgen' ? 'nanobody_binder' : deNovoGenerator === 'ppiflow' ? 'generator_backbone_refine' : ANTIBODY_DENOVO_PIPELINE_MODE,
                     openmm_enabled: physicsSettings.enabled,
@@ -2571,7 +2588,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     lock_gpus: lockGpus,
                     out_dir: customOutputDir.trim() || undefined,
                     // Quality settings
-                    ...Object.fromEntries(Object.entries(qualitySettings).filter(([key]) => key.startsWith('caliby_'))),
+                    ...Object.fromEntries(Object.entries(qualitySettings).filter(([key]) => key.startsWith('caliby_') || key.startsWith('rfantibody_'))),
                     ...(seqDesigner === 'caliby' ? { caliby_num_seqs_per_pdb: seqsPerDesign } : {}),
                     quality_settings: qualitySettings,
                     sabdab_framework: sabdabFramework ? {
@@ -2610,6 +2627,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     }, [serializedDraft, onDraftChange]);
 
     const openNativeRoute = onOpenNativeRoute ? (route: BinderNativeRoute) => {
+        if (deNovoGenerator === 'bindcraft2') {
+            if (route.sources) onOpenNativeRoute(route);
+            else { setNativeScaffoldHandoff(false); setPendingNativeRoute(route); }
+            return;
+        }
         const path = targetSource?.path || uploadedPath;
         const frameworkPath = sabdabFramework?.filePath || customFrameworkPath;
         onOpenNativeRoute({ ...route, sources: route.sources ?? {
@@ -2773,7 +2795,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         />
                                     </label>
     </div>;
+    const launchReasons: Array<{ missing: boolean; label: string; section: string }> = [
+        { missing: effectiveSeqDesigner === 'fampnn' && Boolean(fampnnError), label: 'Correct the FA-MPNN settings error', section: 'operations' },
+        { missing: submitMutation.isPending || launchMutagenesisMutation.isPending, label: 'Submission is in progress', section: 'generation' },
+        { missing: isUploading, label: 'Wait for the structure upload', section: 'sources' },
+        { missing: isRefinementMode && !refinementHasLaunchSource, label: 'Choose refinement source outputs', section: 'sources' },
+        { missing: !(isRefinementMode || deNovoGenerator === 'ppiflow' || (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn))) && !(targetPdb || targetSource?.path || uploadedPath), label: 'Choose a target structure', section: 'sources' },
+        { missing: !(isRefinementMode || deNovoGenerator === 'ppiflow' || (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn))) && selectedResidues.size === 0, label: 'Select target hotspots', section: 'sources' },
+        { missing: !isRefinementMode && deNovoGenerator === 'rfantibody' && skipRFantibody && !rfantibodyInputPdbs.trim(), label: 'Supply existing RFantibody input structures', section: 'expert' },
+        { missing: !isRefinementMode && deNovoGenerator === 'rfantibody' && skipFampnn && !fampnnCollectedPdbs.trim(), label: 'Supply collected sequence-design structures', section: 'expert' },
+        { missing: !isRefinementMode && deNovoGenerator === 'ppiflow' && !hasPpiFlowSeedLaunchInput, label: 'Choose a PPIFlow seed', section: 'sources' },
+        { missing: isRefinementMode && !useManualMutagenesis && effectiveSeqDesigner === 'none' && !anyPpiFlowStageEnabled && !effectiveRunStructureValidation && !effectiveRunFrustrampnn, label: 'Enable a refinement operation', section: 'operations' },
+    ];
     const submitControls = <>
+            {launchReasons.some(reason => reason.missing) && <ul aria-label="Missing launch requirements" className="mt-4 text-sm text-[var(--text-secondary)]">
+                {launchReasons.filter(reason => reason.missing).map(reason => <li key={reason.label}><button type="button" onClick={() => { setWorkspaceSection(reason.section); if (reason.section === 'expert') setShowDebugSettings(true); }}>{reason.label} →</button></li>)}
+            </ul>}
             {/* Submit Button */}
             <div className="mt-8 flex justify-end gap-3">
                 {/* Template Manager Button */}
@@ -3098,8 +3135,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         <BindCraft2Campaign
             name={jobName} onNameChange={setJobName} onBack={onBack}
             generatorChooser={<BinderGeneratorChooser generator={deNovoGenerator} onSelect={selectDeNovoGenerator} onOpenNativeRoute={openNativeRoute} />}
-            requestedSettings={bc2Settings} preview={activeBc2Preview}
-            roundSettings={<BinderRoundSettings values={roundDraft} onChange={setRoundDraft} />}
+            requestedSettings={requestedBc2Settings} preview={activeBc2Preview}
+            inheritedSettings={bc2Inventory?.display && bc2SelectorSignature(bc2Inventory.display.selectors) === bc2SelectorSignature(bc2DisplaySelectors(bc2Settings, bc2Inventory)) ? bc2Inventory.display.values : undefined}
+            inheritedOrigins={bc2Inventory?.display && bc2SelectorSignature(bc2Inventory.display.selectors) === bc2SelectorSignature(bc2DisplaySelectors(bc2Settings, bc2Inventory)) ? bc2Inventory.display.origins : undefined}
+            roundSettings={<div hidden={bc2Section !== 'campaign'}><ol aria-label="Initial generation flow">{initialRoundSteps(deNovoGenerator, roundDraft.binder_round).map(step => <li key={step.title}><strong>{step.title}</strong> — {step.detail}</li>)}</ol><BinderRoundSettings values={roundDraft} onChange={setRoundDraft} /></div>}
             section={bc2Section} onSectionChange={setBc2Section}
             previewBusy={bc2PreviewBusy} submitting={submitMutation.isPending}
             launchAvailable={bc2LaunchAvailable} error={bc2SubmitError}
@@ -3107,14 +3146,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 setBc2SubmitError(null);
                 setBc2PreviewBusy(true);
                 const { identity, revision } = currentBc2Request.current;
+                const attempt = previewAttempts.current.begin();
+                const current = () => previewAttempts.current.isCurrent(attempt) && currentBc2Request.current.revision === revision && currentBc2Request.current.identity === identity;
                 try {
-                    const data = await previewBindCraft2Campaign(bc2Settings);
-                    if (currentBc2Request.current.revision === revision) setBc2Preview({ identity, revision, data });
+                    const data = await previewBindCraft2Campaign(requestedBc2Settings);
+                    if (current()) setBc2Preview({ identity, revision, data });
                 } catch (error) {
-                    const failed = error as { response?: { data?: { detail?: unknown } }; message?: string };
-                    const detail = failed.response?.data?.detail;
-                    setBc2SubmitError(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : failed.message ?? 'Campaign preview failed');
-                } finally { setBc2PreviewBusy(false); }
+                    if (current()) { const failure = binderShellError(error); setBc2ErrorLocation(failure); setBc2SubmitError(failure.message); }
+                } finally { if (current()) setBc2PreviewBusy(false); }
             }}
             onLaunch={async () => {
                 if (!activeBc2Preview) return;
@@ -3127,23 +3166,58 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     setBc2SubmitError(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : failed.message ?? 'Campaign submission failed');
                 }
             }}
-            onOpenLibrary={() => setShowTemplateManager(true)}
+            onOpenLibrary={() => { setTemplateIntent('browse'); setShowTemplateManager(true); }}
+            onSaveCampaign={() => { setTemplateIntent('save'); setShowTemplateManager(true); }}
             executionTarget={<ExecutionTargetPicker workflowRequest={bc2CampaignRequest} />}
-            library={<TemplateManagerModal isOpen={showTemplateManager} onClose={() => setShowTemplateManager(false)}
+            library={<><TemplateManagerModal isOpen={showTemplateManager} onClose={() => { if (keepLibraryOpen.current) { keepLibraryOpen.current = false; return; } setShowTemplateManager(false); setIncompatibleTemplate(null); }}
                 onSelect={template => {
                     const params = template.params || {};
-                    if (resolveExistingDeNovoGenerator({ ...params, model_id: template.model_id, mode: template.mode }) !== 'bindcraft2') return;
+                    if (resolveExistingDeNovoGenerator({ ...params, model_id: template.model_id, mode: template.mode }) !== 'bindcraft2') {
+                        keepLibraryOpen.current = true;
+                        setIncompatibleTemplate(template);
+                        return;
+                    }
                     setRetainedDraft(params);
                     setRoundDraft(hydrateBinderRound(params));
                     setJobName(params.job_name ?? template.name);
                     setBc2Settings(params.bindcraft2_settings && typeof params.bindcraft2_settings === 'object' && !Array.isArray(params.bindcraft2_settings)
                         ? params.bindcraft2_settings : {});
                 }}
-                currentParams={{ ...authoringDraft, job_name: jobName, denovo_generator: 'bindcraft2', bindcraft2_settings: bc2Settings }}
-                currentModelId="bindcraft2" currentMode="campaign" baseTemplateId="antibody_denovo" />}
+                currentParams={templateIntent === 'save' ? { ...authoringDraft, job_name: jobName, denovo_generator: 'bindcraft2', bindcraft2_settings: requestedBc2Settings } : undefined}
+                currentModelId="bindcraft2" currentMode="campaign" baseTemplateId="antibody_denovo" initialIntent={templateIntent} />
+                {showTemplateManager && incompatibleTemplate && <div role="alert" className="fixed bottom-4 left-4 right-4 z-[60] rounded-xl border bg-[var(--bg-secondary)] p-4">
+                    <p>{incompatibleTemplate.name} belongs to another workflow. The current campaign is unchanged.</p>
+                    {onLoadTemplate && <button type="button" onClick={() => onLoadTemplate(incompatibleTemplate)}>Load in its own workflow</button>}
+                    <button type="button" onClick={() => setIncompatibleTemplate(null)}>Continue browsing</button>
+                </div>}</>}
         >
+            {pendingNativeRoute && <section aria-label="Choose destination sources" className="space-y-3 rounded-xl border p-4" style={themedPanelStyle}>
+                <h3>Choose sources for the destination engine</h3>
+                <p>The full BindCraft2 source context will be retained. Destination settings, including explicit clears, take precedence. Chains and hotspots must be chosen in the destination's native controls.</p>
+                {Boolean(bc2Settings.binder_scaffold) && <label className="block"><input type="checkbox" checked={nativeScaffoldHandoff} onChange={event => setNativeScaffoldHandoff(event.target.checked)} /> Also reuse the BC2 scaffold where compatible</label>}
+                {(Array.isArray(bc2Settings.targets) ? bc2Settings.targets : []).map((target, index) => <button type="button" key={index} onClick={() => {
+                    const references = retainedDraft.bc2_source_references ?? {};
+                    const selected = bc2SourceHandoff({ ...bc2Settings, targets: [target] }, { ...references, 'target:0': references[`target:${index}`] });
+                    const full = bc2SourceHandoff(bc2Settings, references);
+                    const sources: ReturnType<typeof bc2SourceHandoff> = { ...selected, framework: nativeScaffoldHandoff ? selected.framework : undefined, bc2: full.bc2 };
+                    onOpenNativeRoute?.({ ...pendingNativeRoute, sources }); setPendingNativeRoute(null);
+                }}>Use BC2 target {index + 1}: {target.name || target.target_path || 'native source'}</button>)}
+                <button type="button" onClick={() => { const full = bc2SourceHandoff(bc2Settings, retainedDraft.bc2_source_references); const sources: ReturnType<typeof bc2SourceHandoff> = { bc2: full.bc2 }; onOpenNativeRoute?.({ ...pendingNativeRoute, sources }); setPendingNativeRoute(null); }}>Continue with destination sources</button>
+                <button type="button" onClick={() => setPendingNativeRoute(null)}>Cancel engine handoff</button>
+            </section>}
+            {bc2SubmitError && <button type="button" onClick={() => {
+                const failure = bc2ErrorLocation ?? binderShellError({ message: bc2SubmitError });
+                setBc2Section(failure.section);
+                requestAnimationFrame(() => {
+                    const card = [...document.querySelectorAll<HTMLElement>('[data-bc2-field]')].find(node => node.dataset.bc2Field === failure.field);
+                    for (let node: HTMLElement | null = card ?? null; node; node = node.parentElement) if (node instanceof HTMLDetailsElement) node.open = true;
+                    card?.scrollIntoView?.({ block: 'nearest' }); card?.querySelector<HTMLElement>('input,select,button')?.focus();
+                });
+            }}>Open {bc2ErrorLocation?.field ?? binderShellError({ message: bc2SubmitError }).field ?? 'campaign'} settings</button>}
+            {bc2DiscoveryError && bc2Inventory && <p role="status" className="text-sm text-[var(--text-secondary)]">{bc2DiscoveryError} Explicit settings and launch behavior are unchanged.</p>}
             {bc2Inventory ? <BindCraft2Settings inventory={bc2Inventory} value={bc2Settings} onChange={setBc2Settings} launchAvailable={bc2LaunchAvailable} section={bc2Section}
-                structureInputs={<BindCraft2StructureInputs value={bc2Settings} onChange={setBc2Settings} inventory={bc2Inventory} initialSources={bc2InitialSources}
+                {...{ effectiveSettings: activeBc2Preview?.effective_settings }}
+                structureInputs={<BindCraft2StructureInputs value={bc2Settings} onChange={setBc2Settings} inventory={bc2Inventory} initialSources={bc2InitialSources} sourceReferences={retainedDraft.bc2_source_references}
                     onSourcePrepared={entry => setRetainedDraft(previous => ({ ...previous, bc2_source_references: { ...(previous.bc2_source_references || {}), [entry.role === 'target' ? `target:${entry.targetIndex}` : 'scaffold']: { path: entry.path, source: portableNativeSource(entry.source) } } }))} />} />
                 : <div className="rounded-xl border p-6" style={themedPanelStyle}><p role={bc2DiscoveryError ? 'alert' : 'status'}>{bc2DiscoveryError ?? 'Loading BindCraft2 settings…'}</p></div>}
         </BindCraft2Campaign>
@@ -3158,13 +3232,54 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             description={<><button type="button" onClick={onBack}>← Back</button><span className="ml-3">Model-native settings; optional operations remain explicit.</span></>}
             sections={isRefinementMode ? [] : workspaceSections}
             activeSection={workspaceSection} onSectionChange={setWorkspaceSection}
-            initialEngineChooserOpen={initialEngineChooserOpen}
+            initialEngineChooserOpen={initialEngineChooserOpen || (!isRefinementMode && !initialValues?.denovo_generator && !initialValues?.model_id && !new URLSearchParams(location.search).get('engine'))}
             engineChooser={!isRefinementMode && <BinderGeneratorChooser generator={deNovoGenerator} onSelect={selectDeNovoGenerator} onOpenNativeRoute={openNativeRoute} />}
             summary={<span>{deNovoGenerator ?? 'Unrecognized saved generator'} · {jobName || 'Unnamed request'}</span>}
             executionControls={<ExecutionTargetPicker workflowRequest={workflowRequest} />}
             submitControls={submitControls} library={!bc2Workspace && library}
         >
-            {!isRefinementMode && !bc2Workspace && <BinderRoundSettings values={roundDraft} onChange={setRoundDraft} />}
+            {!isRefinementMode && deNovoGenerator === 'rfantibody' && <div hidden={sectionHidden('generation')}>
+                <RFantibodyGeneration settings={qualitySettings} onSettingsChange={setQualitySettings} />
+            </div>}
+            {!isRefinementMode && !bc2Workspace && <div hidden={sectionHidden('generation')}><BinderRoundSettings values={roundDraft} onChange={setRoundDraft} /></div>}
+            {showRfSourceHandoff && deNovoGenerator === 'rfantibody' && <section hidden={sectionHidden('sources')} aria-label="BindCraft2 source handoff" className="mb-4 space-y-3 rounded-xl border p-4" style={themedPanelStyle}>
+                <h3>Reuse BindCraft2 sources</h3>
+                <p>Choose a source deliberately. Existing RFantibody sources and selections are kept until you replace them; select RF chains and hotspots in the target workspace.</p>
+                {(Array.isArray(bc2Settings.targets) ? bc2Settings.targets : []).map((target, index) => {
+                    const path = typeof target.target_path === 'string' ? target.target_path : '';
+                    return <button type="button" key={index} onClick={async () => {
+                        setRfSourceHandoffError(null);
+                        const token = targetLoadControllerRef.current.begin();
+                        try {
+                            const entry = retainedDraft.bc2_source_references?.[`target:${index}`];
+                            const source = entry?.path === path ? entry.source : { name: target.name || `Target ${index + 1}`, path };
+                            const prepared = await preparePdbStructureSource({ ...source, path });
+                            if (!targetLoadControllerRef.current.isCurrent(token)) return;
+                            const file = new File([prepared.document.content], 'target.pdb', { type: 'chemical/x-pdb' });
+                            setTargetPdb(file); uploadedFileRef.current = file; setUploadedPath(prepared.path);
+                            const modelNumber = prepared.document.models[0]?.number ?? source.modelNumber ?? 1;
+                            setTargetSource({ ...portableNativeSource(prepared.document.source || source), name: source.name, type: source.designId ? 'run' : 'upload', path: prepared.path, modelNumber });
+                            setSelectedChain(null); setSelectedResidues(new Set()); setSelectedTargetModel(modelNumber);
+                        } catch (error) { if (targetLoadControllerRef.current.isCurrent(token)) setRfSourceHandoffError(error instanceof Error ? error.message : String(error)); }
+                    }}>Use BC2 target {index + 1}: {target.name || path || 'Choose native source'}</button>;
+                })}
+                {typeof bc2Settings.binder_scaffold === 'string' && bc2Settings.binder_scaffold && <button type="button" onClick={async () => {
+                    const token = frameworkLoadControllerRef.current.begin(); setRfSourceHandoffError(null);
+                    try {
+                        const entry = retainedDraft.bc2_source_references?.scaffold;
+                        const source = entry?.path === bc2Settings.binder_scaffold ? entry.source : { name: 'BC2 scaffold', path: bc2Settings.binder_scaffold };
+                        const prepared = await preparePdbStructureSource({ ...source, path: bc2Settings.binder_scaffold as string });
+                        if (!frameworkLoadControllerRef.current.isCurrent(token)) return;
+                        setFrameworkType('custom'); setCustomFrameworkPath(prepared.path);
+                        setCustomFrameworkSource({ ...portableNativeSource(prepared.document.source || source), name: source.name, path: prepared.path, type: 'upload', modelNumber: prepared.document.models[0]?.number ?? source.modelNumber });
+                        setCustomFrameworkFile(new File([prepared.document.content], 'framework.pdb', { type: 'chemical/x-pdb' }));
+                        setParsedFrameworkChains(prepared.document.models[0]?.chains ?? []); setDetectedCDRs(null);
+                        replaceFrameworkPdbUrl(buildFilesApiUrl('download', prepared.path));
+                    } catch (error) { if (frameworkLoadControllerRef.current.isCurrent(token)) setRfSourceHandoffError(error instanceof Error ? error.message : String(error)); }
+                }}>Use BC2 scaffold as RF framework</button>}
+                <button type="button" onClick={() => { targetLoadControllerRef.current.begin(); frameworkLoadControllerRef.current.begin(); setShowRfSourceHandoff(false); }}>Keep RF sources / finish source selection</button>
+                {rfSourceHandoffError && <p role="alert">{rfSourceHandoffError}</p>}
+            </section>}
             <DeNovoModalityNotice generator={deNovoGenerator} />
             <ModelDocumentationLinks
                 topics={['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2']}
@@ -3213,13 +3328,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     ? 'Initial PPIFlow pass; refinement opens from shortlisted outputs.'
                                 : deNovoGenerator === 'boltzgen'
                                     ? 'Initial BoltzGen pass; refinement opens from shortlisted outputs.'
-                                    : 'Initial de novo pass starts generator-only; enable downstream stages above.'}
+                                    : roundDraft.binder_round.enabled ? 'Initial generation followed by the configured candidate round.' : 'Initial generation only; the candidate round is off.'}
                         </p>
                     </div>
                     <div className="flex flex-wrap justify-end gap-2 text-[11px]">
-                        <span className="rounded-full border px-2.5 py-1" style={themedMutedInsetStyle}>
+                        {isRefinementMode && <span className="rounded-full border px-2.5 py-1" style={themedMutedInsetStyle}>
                             Validator: <span className="font-medium text-[var(--accent-primary)]">{structureValidator === 'protenix' ? 'Protenix' : structureValidator === 'esmfold2' ? 'ESMFold2' : 'Boltz2'}</span>
-                        </span>
+                        </span>}
                         {interactiveWorkflow && (
                             <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--warning)')}>
                                 Review Gate: {deNovoGenerator === 'boltzgen' && !isRefinementMode
@@ -3237,7 +3352,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 </div>
                 <div className="flex flex-wrap items-stretch gap-2">
                     {(() => {
-                        const steps: Array<{ title: string; detail: string; accent?: string; muted?: boolean; optional?: boolean }> = [
+                        const steps: Array<{ title: string; detail: string; accent?: string; muted?: boolean; optional?: boolean }> = !isRefinementMode ? initialRoundSteps(deNovoGenerator, roundDraft.binder_round) : [
                             {
                                 title: isRefinementMode ? 'Selected Inputs' : (deNovoGenerator === 'boltzgen' ? 'BoltzGen' : deNovoGenerator === 'ppiflow' ? 'PPIFlow Seeded' : 'RFantibody'),
                                 detail: isRefinementMode
@@ -5561,7 +5676,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         onSettingsChange={setQualitySettings}
                         structureValidator={structureValidator}
                         allowPostPpiFlowRetry={refinementSourceIsPpiFlow}
-                        showRfantibodySettings={showRfQualitySettings}
+                        showRfantibodySettings={isRefinementMode && showRfQualitySettings}
                         showStructureValidationSettings={showStructureValidationQualitySettings}
                         showFampnnSettings={showFampnnQualitySettings}
                         showCalibySettings={showCalibyQualitySettings}
@@ -5965,7 +6080,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 }`}
                         >
                             <div className="flex items-center gap-2">
-                                <span className="font-medium">Debug &amp; Overrides</span>
+                                <span className="font-medium">Legacy recovery &amp; path overrides</span>
                                 {(skipRFantibody || skipFampnn || customOutputDir || boltzgenReuseExisting) && (
                                     <span className="px-2 py-0.5 text-xs bg-amber-600 text-white rounded">ACTIVE</span>
                                 )}

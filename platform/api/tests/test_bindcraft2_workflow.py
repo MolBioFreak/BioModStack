@@ -26,7 +26,8 @@ def test_native_leaf_has_one_runtime_and_pinned_image():
     assert "--native-source /opt/bindcraft --execute" in module
     assert "run_bindcraft2_campaign.py" in module
     assert "CUDA_VISIBLE_DEVICES=" in module
-    assert "ext { containerOptions" in module
+    assert "ext containerOptions:" in module
+    assert "ext { containerOptions" not in module
     assert "JAX_COMPILATION_CACHE_DIR=/cache/bindcraft2/compile" in module
     assert "BINDCRAFT_AF2_PARAMS=${params.weights_root}/alphafold/params" in module
     assert "bindcraft2.sif" in module

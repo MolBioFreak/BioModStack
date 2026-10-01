@@ -3046,6 +3046,7 @@ async def get_binder_evidence(
     job_id: str,
     offset: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
+    source_design_id: str | None = Query(None, min_length=1, pattern=r"^[^\s/]+$"),
     session: AsyncSession = Depends(get_session),
 ):
     from services.binder_evidence import binder_evidence
@@ -3053,7 +3054,11 @@ async def get_binder_evidence(
     job = await session.get(Job, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return await binder_evidence(session, job, offset=offset, limit=limit)
+    try:
+        return await binder_evidence(session, job, offset=offset, limit=limit,
+                                     source_design_id=source_design_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/by-job/{job_id}", response_model=DesignList)

@@ -9,6 +9,7 @@ include {
     BuildRFD3Aggregate
     RunShapeProteinMPNN
     RunShapeFAMPNN
+    RunShapeCaliby
     EvaluateShapeCandidate
     RunShapeBoltzValidator
     RunShapeProtenixValidator
@@ -22,7 +23,7 @@ include { ESMFold2Predict } from '../modules/esmfold2_experimental'
 
 def loadShapeSequenceRecords(bundle, engine) {
     def payload = new groovy.json.JsonSlurper().parse(new File(bundle.toString(), 'sequence_records.json'))
-    if (payload.schema != 'bms_shape_sequences_v1' || !(payload.records instanceof Collection)) {
+    if (!(payload.schema in ['bms_shape_sequences_v1', 'bms_shape_sequences_v2']) || !(payload.records instanceof Collection)) {
         error "${engine} emitted an invalid Shape sequence record bundle"
     }
     payload.records.collect { record ->
@@ -79,7 +80,7 @@ workflow {
     if (!(sequencePolicy in ['auto', 'skip', 'external'])) {
         error "unsupported Shape sequence policy: ${sequencePolicy}"
     }
-    if (sequenceEnabled && !(sequenceEngine in ['proteinmpnn', 'fampnn'])) {
+    if (sequenceEnabled && !(sequenceEngine in ['proteinmpnn', 'fampnn', 'caliby_experimental'])) {
         error "Shape sequence engine ${sequenceEngine} is not implemented for ordinary-protein RFD3"
     }
     if (sequencePolicy == 'external' && !sequenceEnabled) {
@@ -126,55 +127,64 @@ workflow {
         }
         if (sequenceEngine == 'proteinmpnn') {
             RunShapeProteinMPNN(shapeBackbones, sequenceCount, seed, requestFile)
-        } else {
+        } else if (sequenceEngine == 'fampnn') {
             RunShapeFAMPNN(shapeBackbones, sequenceCount, seed, requestFile)
+        } else {
+            RunShapeCaliby(shapeBackbones, sequenceCount, seed, requestFile)
         }
         def sequenceBundles = sequenceEngine == 'proteinmpnn'
             ? RunShapeProteinMPNN.out.bundle
-            : RunShapeFAMPNN.out.bundle
+            : sequenceEngine == 'fampnn' ? RunShapeFAMPNN.out.bundle : RunShapeCaliby.out.bundle
         def shapeSequences = sequenceBundles.flatMap { bundle ->
             loadShapeSequenceRecords(bundle, sequenceEngine)
         }
         ESMFold2Predict(shapeSequences.map { producerMeta, sequence, name, source ->
+            if (shapeRequest.schema == 'bms_shape_design_request_v3') {
+                producerMeta = producerMeta + [shape_settings: shapeRequest.validator_settings.esmfold2]
+            }
             tuple(producerMeta, sequence, name)
         })
-        def validatorInputs = ESMFold2Predict.out.shape_result.join(
-            shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, sequence) },
-            failOnDuplicate: true, failOnMismatch: true
-        )
+        // Manifest rows bind the actual native sample to its exact two files.
+        // Preserve the established native sample-000 baseline; the full
+        // native manifest is retained by the validator suite as alternate samples.
+        def esmSamples = ESMFold2Predict.out.shape_bundle.flatMap { name, bundle ->
+            def manifest = new groovy.json.JsonSlurper().parse(new File(bundle.toString(), 'manifest.json'))
+            manifest.samples.findAll { sample -> sample.sample_id.toString() == name.toString() + "_000" }.collect { sample ->
+                tuple(name, sample.sample_id.toString(), bundle.resolve(sample.cif.toString()), bundle.resolve(sample.metrics.toString()))
+            }
+        }
         def nativeValidatorInputs = shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, sequence) }
-        def suiteInputs = validatorInputs.map { name, structure, metrics, sequence ->
-            tuple(name, structure, metrics, sequence, [])
+        def suiteInputs = esmSamples.combine(nativeValidatorInputs, by: 0).map { name, sampleId, structure, metrics, sequence ->
+            tuple(name, sampleId, structure, metrics, sequence, [])
         }
         if ('boltz2' in validatorSuite) {
-            RunShapeBoltzValidator(nativeValidatorInputs, seed)
-            suiteInputs = suiteInputs.join(
-                RunShapeBoltzValidator.out.evidence, failOnDuplicate: true, failOnMismatch: true
-            ).map { name, structure, metrics, sequence, peers, evidence ->
-                tuple(name, structure, metrics, sequence, peers + [evidence])
-            }
+            RunShapeBoltzValidator(nativeValidatorInputs, seed, requestFile)
+            suiteInputs = suiteInputs.combine(RunShapeBoltzValidator.out.evidence, by: 0)
+                .map { name, sampleId, structure, metrics, sequence, peers, evidence ->
+                    tuple(name, sampleId, structure, metrics, sequence, peers + [evidence])
+                }
         }
         if ('protenix_v2' in validatorSuite) {
-            RunShapeProtenixValidator(nativeValidatorInputs, seed)
-            suiteInputs = suiteInputs.join(
-                RunShapeProtenixValidator.out.evidence, failOnDuplicate: true, failOnMismatch: true
-            ).map { name, structure, metrics, sequence, peers, evidence ->
-                tuple(name, structure, metrics, sequence, peers + [evidence])
-            }
+            RunShapeProtenixValidator(nativeValidatorInputs, seed, requestFile)
+            suiteInputs = suiteInputs.combine(RunShapeProtenixValidator.out.evidence, by: 0)
+                .map { name, sampleId, structure, metrics, sequence, peers, evidence ->
+                    tuple(name, sampleId, structure, metrics, sequence, peers + [evidence])
+                }
         }
-        AggregateShapeValidatorEvidence(suiteInputs, validatorSuite, seed)
-        def evaluatedInputs = ESMFold2Predict.out.shape_result.join(
-            shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, source) },
-            failOnDuplicate: true, failOnMismatch: true
-        )
-        EvaluateShapeCandidate(
-            evaluatedInputs,
-            requestFile,
-            manifestFile,
-            pointsFile,
-            sdfFile,
-        )
-        def attachInputs = EvaluateShapeCandidate.out.bundle.join(AggregateShapeValidatorEvidence.out.evidence, failOnDuplicate: true, failOnMismatch: true)
+        AggregateShapeValidatorEvidence(suiteInputs.combine(ESMFold2Predict.out.shape_bundle, by: 0), validatorSuite, seed, requestFile)
+        def evaluatedInputs = esmSamples.combine(
+            shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, source) }, by: 0
+        ).map { name, sampleId, structure, metrics, source -> tuple(sampleId, name, structure, metrics, source) }
+        EvaluateShapeCandidate(evaluatedInputs, requestFile, manifestFile, pointsFile, sdfFile)
+        def sequenceSources = sequenceBundles.flatMap { bundle ->
+            def payload = new groovy.json.JsonSlurper().parse(new File(bundle.toString(), 'sequence_records.json'))
+            payload.records.collect { record -> tuple(record.sequence_name.toString(), bundle) }
+        }
+        def sampleSources = esmSamples.combine(sequenceSources, by: 0)
+            .map { name, sampleId, structure, metrics, bundle -> tuple(sampleId, bundle) }
+        def attachInputs = EvaluateShapeCandidate.out.bundle
+            .join(AggregateShapeValidatorEvidence.out.evidence, failOnDuplicate: true, failOnMismatch: true)
+            .join(sampleSources, failOnDuplicate: true, failOnMismatch: true)
         AttachShapePostRefold(attachInputs, requestFile, manifestFile, pointsFile, sdfFile)
         candidateBundles = AttachShapePostRefold.out.bundle.map { sequenceName, bundle -> bundle }
     } else {

@@ -136,6 +136,11 @@ def spawn_analysis(
             }
         )
 
+    if component_runtime_enabled():
+        from scripts.lib.component_adapter import runtime_from_environment
+        runtime_from_environment().register_group(
+            f"{parent_job_id}:md_analysis", [child["id"] for child in created])
+
     return {
         "schema": "bms.md.analysis-spawn.v1",
         "parent_job_id": parent_job_id,
@@ -144,6 +149,72 @@ def spawn_analysis(
         "analysis_count": total,
         "children": created,
     }
+
+
+def prepare_analysis_retry(runtime, *, component_id: str, operation_id: str,
+                           failure_code: str):
+    """Adapt retained analysis requests to the existing exact-component retry."""
+    from component_runtime import ComponentRequest, digest
+    from .contract import RETRYABLE_INFRASTRUCTURE_FAILURES
+
+    # Analysis was already explicitly operator-retryable after an execution
+    # failure; replica infrastructure-only retry policy remains unchanged.
+    if failure_code not in RETRYABLE_INFRASTRUCTURE_FAILURES | {'execution_failed'} or not operation_id:
+        raise ValueError("MD analysis retry requires an explicit execution failure and operation")
+    original = runtime.request(component_id)
+    if (original.stage != 'md_analysis' or original.parent_job_id != runtime.root_job_id
+            or original.payload.get('model_id') != 'molecular_dynamics'
+            or original.payload.get('mode') != 'analyze'):
+        raise ValueError("MD analysis retry requires its original native component request")
+    replacement = ComponentRequest.capture(parent_job_id=original.parent_job_id,
+        stage=original.stage, child_key='retry:' + digest([component_id, operation_id]),
+        payload=original.payload, required=original.required)
+    ids = tuple(child['id'] for child in runtime.children(runtime.root_job_id, 'md_analysis')
+                if child['required'])
+    expected = replacement.component_id if runtime.retry_status(operation_id) else component_id
+    if expected not in ids:
+        raise ValueError("retry component is not in the current required analysis set")
+    children, manifests, parent_roots = [], [], set()
+    for identity in ids:
+        request = replacement if identity == expected else runtime.request(identity)
+        params = request.payload['params']
+        item = json.loads(Path(params['md_analysis_work_item']).read_bytes())
+        index = params['md_replica_index']
+        manifest = Path(item['manifest']).resolve(strict=True)
+        manifest_hash = _sha256(manifest)
+        if (request.stage != 'md_analysis' or request.parent_job_id != runtime.root_job_id
+                or item.get('schema') != 'bms.md.analysis-work-item.v1'
+                or item.get('job_id') != runtime.root_job_id or type(index) is not int
+                or index < 0 or item.get('replica_index') != index
+                or manifest_hash != item.get('manifest_sha256')
+                or manifest_hash != params.get('md_replica_manifest_sha256')
+                or item.get('replica_manifest_set_sha256') != params.get('md_replica_manifest_set_sha256')):
+            raise ValueError('retained MD analysis work-item or dynamics identity changed')
+        parent_root = manifest.parent.parent.parent
+        if manifest != parent_root / 'replicas' / f'replica_{index}' / 'manifest.json':
+            raise ValueError('retained analysis manifest is not a native replica')
+        parent_roots.add(parent_root)
+        manifests.append((index, manifest_hash))
+        children.append(dict(id=request.component_id, name=request.payload.get('name', ''),
+            replica_index=index, manifest_sha256=manifest_hash, status='queued'))
+    if len(parent_roots) != 1 or len({index for index, _hash in manifests}) != len(manifests):
+        raise ValueError('retry requires one exact retained dynamics generation')
+    root = parent_roots.pop()
+    aggregate_path = root / 'manifest.json'
+    aggregate = json.loads(aggregate_path.read_bytes())
+    indices = sorted(row['replica_index'] for row in aggregate['replicas'])
+    manifest_set = _manifest_set_sha256(sorted(manifests))
+    if (aggregate.get('schema') != 'bms.md.aggregate.v1' or aggregate.get('status') != 'completed'
+            or aggregate.get('job_id') != runtime.root_job_id
+            or sorted(index for index, _hash in manifests) != indices
+            or any(runtime.request(identity).payload['params']['md_replica_manifest_set_sha256']
+                   != manifest_set for identity in ids)):
+        raise ValueError('retry requires the complete immutable analysis roster')
+    children.sort(key=lambda row: row['replica_index'])
+    return replacement, dict(schema='bms.md.analysis-spawn.v1',
+        parent_job_id=runtime.root_job_id, aggregate_manifest_sha256=_sha256(aggregate_path),
+        replica_manifest_set_sha256=manifest_set, analysis_count=len(children), children=children,
+        aggregate_manifest=str(aggregate_path), artifact_root=str(runtime.artifact_root))
 
 
 def main() -> None:

@@ -1,7 +1,9 @@
 """Operator API for attaching an already-running execution target."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_session
@@ -10,7 +12,7 @@ from services.remote_execution.contracts import (
     PreloadRequest, ProvisionRequest, ProvisionSelection, ProvisionPreview, ObservedArtifactInventory,
     WorkflowProvisionSelection, WorkflowProvisionRequest, WorkflowPackSelection, WorkflowPackRequest,
     ExecutionTargetInventoryResponse,
-    ExecutionTargetResponse,
+    ExecutionTargetResponse, ExecutionTargetDetails, CachedArtifactPage, PreloadArtifactPage,
     HFAssetLinkStatus,
     HFAssetLinkCheckRequest,
 )
@@ -19,10 +21,13 @@ from services.remote_execution.targets import (
     active_remote_telemetry,
     deactivate_target,
     list_targets, get_target, observed_artifact_inventory,
-    refresh_vast_targets,
+    refresh_vast_targets, target_status, artifact_page, _target_response,
 )
 
-from services.remote_execution.managed_inventory import ManagedInventory, project_inventory
+from services.remote_execution.managed_inventory import (
+    ManagedInventory, project_inventory, ManagedInventorySummary, ManagedInventoryArtifactPage,
+    read_inventory_summary, read_inventory_artifacts,
+)
 
 router = APIRouter()
 
@@ -49,13 +54,36 @@ async def runtime_inventory(execution_target_id: str, session: AsyncSession = De
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post('/{execution_target_id}/runtime-inventory/refresh', response_model=ManagedInventory)
+@router.get('/{execution_target_id}/runtime-inventory/summary', response_model=ManagedInventorySummary | None)
+async def runtime_inventory_summary(execution_target_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        return await read_inventory_summary(session, execution_target_id)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get('/{execution_target_id}/runtime-inventory/artifacts', response_model=ManagedInventoryArtifactPage)
+async def runtime_inventory_artifacts(execution_target_id: str,
+    observation_id: str = Query(pattern=r'^[0-9a-f]{64}$'),
+    release_sha256: str = Query(pattern=r'^[0-9a-f]{64}$'),
+    offset: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=250),
+    session: AsyncSession = Depends(get_session)):
+    try:
+        return await read_inventory_artifacts(session, execution_target_id, observation_id, release_sha256, offset, limit)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post('/{execution_target_id}/runtime-inventory/refresh', response_model=ManagedInventory | ManagedInventorySummary | None)
 async def refresh_runtime_inventory(execution_target_id: str, http_request: Request,
+                                    summary: bool = Query(default=False),
                                     session: AsyncSession = Depends(get_session)):
     controller = getattr(http_request.app.state, 'preload_controller', None)
     if controller is None:
         raise HTTPException(status_code=503, detail='Preload service is unavailable')
     try:
+        if summary:
+            return await controller.refresh_inventory(session, execution_target_id, summary=True)
         return await controller.refresh_inventory(session, execution_target_id)
     except ExecutionTargetError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -129,7 +157,8 @@ async def provision_catalog():
         for kind, models in (("model", INDEPENDENT_RUNTIME_MODELS), ("image", INDEPENDENT_RUNTIME_IMAGES))
         for model_id in sorted(models)
         if get_registry().get_model(model_id) is not None] + [
-            WorkflowPackSelection(kind="workflow_pack", workflow_id="structure_prediction")]
+            WorkflowPackSelection(kind="workflow_pack", workflow_id=workflow_id)
+            for workflow_id in ("structure_prediction", "antibody_denovo")]
 
 
 @router.post("/{execution_target_id}/provision/preview", response_model=ProvisionPreview)
@@ -195,3 +224,41 @@ async def execution_target_telemetry(
     execution_target_id: str | None = None,
 ):
     return await active_remote_telemetry(session, since, execution_target_id)
+
+
+@router.get("/{execution_target_id}", response_model=ExecutionTargetResponse)
+async def execution_target_status(execution_target_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        return await target_status(session, execution_target_id)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{execution_target_id}/details", response_model=ExecutionTargetDetails)
+async def execution_target_details(execution_target_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        return _target_response(await get_target(session, execution_target_id), details=True)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{execution_target_id}/artifact-inventory/artifacts", response_model=CachedArtifactPage)
+async def inventory_artifacts(execution_target_id: str, offset: int = Query(default=0, ge=0),
+                              limit: int = Query(default=100, ge=1, le=250),
+                              session: AsyncSession = Depends(get_session)):
+    try:
+        return await artifact_page(session, execution_target_id, offset=offset, limit=limit)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{execution_target_id}/preload/{operation_id}/artifacts", response_model=PreloadArtifactPage)
+async def preload_artifacts(execution_target_id: str, operation_id: str,
+                            collection: Literal["progress", "cached"] = "progress",
+                            offset: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=250),
+                            session: AsyncSession = Depends(get_session)):
+    try:
+        return await artifact_page(session, execution_target_id, operation_id=operation_id,
+                                   collection=collection, offset=offset, limit=limit)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -67,7 +67,9 @@ def test_bad_image_and_size_rejected(prepared, backend):
     assert not calls
     path = cache.image_path(item)
     path.chmod(0o600)
-    path.write_bytes(b'bad image!')
+    # Preparation reuses the publication envelope, not a same-size body audit.
+    # Real size/type/mode failures remain refused for either backend.
+    path.write_bytes(b'truncated')
     path.chmod(0o400)
     with pytest.raises((ValueError, RuntimeError)):
         cache.prepare_runtime_image(item, backend, operation)
@@ -95,7 +97,9 @@ def test_shared_weights_existing_api_warm_is_metadata_only(tmp_path, monkeypatch
     with cache.objects(item) as fd:
         assert os.stat(item['sha256'], dir_fd=fd).st_ino == leaf.stat().st_ino
     leaf.chmod(0o644)
+    assert cache.weights(rows, install=True) == cold
+    # Per-leaf checking is retained only for the explicit maintenance audit.
     with pytest.raises(ValueError, match='weight_identity_changed'):
-        cache.weights(rows, install=True)
+        cache.weights(rows, install=True, full=True)
     for folder, _, _ in os.walk(tmp_path):
         os.chmod(folder, 0o700)

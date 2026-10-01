@@ -138,6 +138,16 @@ def parameter_contract(mode: str) -> list[dict]:
                             'object': 'source-selector', 'string': 'text'}[field['type']]
         if 'enum' in field:
             field['control'] = 'select'
+        field.setdefault('label', field['native_mapping'].replace('_', ' ').capitalize())
+        field.setdefault('ui_control', field['control'])
+        if field['name'] == 'boltzgen_alpha':
+            # Navigation precision only; never round/clamp the requested number.
+            field.update(label='Quality / diversity tradeoff', ui_control='slider', step=0.01)
+        if field['name'] == 'boltzgen_min_plddt':
+            field.update(ui_control='unavailable', read_only=True,
+                         unavailable_reason='Native pLDDT is unavailable on the CSV/NPZ producer path; retain historical values for inspection or explicitly clear to null.')
+        if field['name'] == 'boltzgen_nanobody_scaffold_specs':
+            field['items'] = {'type': 'string'}
         fields.append(field)
     return fields
 

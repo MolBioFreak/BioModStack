@@ -198,9 +198,10 @@ function NumberField({
 export function MolecularDynamicsTemplate({
     onBack,
     initialValues,
-    launchContextId = null,
+    launchContextId: routeLaunchContextId = null,
 }: MolecularDynamicsTemplateProps) {
     const navigate = useNavigate();
+    const launchContextId = routeLaunchContextId ?? (typeof initialValues?.md_destination_launch_context_id === 'string' ? initialValues.md_destination_launch_context_id : null);
     const queryClient = useQueryClient();
     const chemistryCatalogQuery = useQuery({
         queryKey: ['molecular-dynamics', 'chemistry-profiles'],
@@ -257,6 +258,10 @@ export function MolecularDynamicsTemplate({
     const [designId, setDesignId] = useState(cloneSource?.kind === 'design' ? cloneSource.id : '');
     const [priorMdJobId, setPriorMdJobId] = useState(cloneSource?.kind === 'prior_md_input' ? cloneSource.id : '');
     const [serverSearch, setServerSearch] = useState('');
+    const [serverCursor, setServerCursor] = useState<string | null>(null);
+    const [sequenceOffset, setSequenceOffset] = useState(0);
+    const [requestedPredictionJobId, setRequestedPredictionJobId] = useState('');
+    const [predictionCursor, setPredictionCursor] = useState<string | null>(null);
     const [preview, setPreview] = useState<MolecularDynamicsLaunchPreview | null>(null);
     const [previewAuthorityIdentity, setPreviewAuthorityIdentity] = useState<string | null>(null);
     const [previewRequestAuthorityIdentity, setPreviewRequestAuthorityIdentity] = useState<string | null>(null);
@@ -317,21 +322,43 @@ export function MolecularDynamicsTemplate({
     currentPreviewAuthorityIdentityRef.current = currentPreviewAuthorityIdentity;
 
     const serverFilesQuery = useQuery({
-        queryKey: ['molecular-dynamics', 'starting-structures', 'server-files', serverSearch],
-        queryFn: async (): Promise<MolecularDynamicsServerFilePage> => parseMolecularDynamicsServerFilePage(
-            (await api.get<unknown>('/api/molecular-dynamics/starting-structures/server-files', { params: { search: serverSearch, limit: 24 } })).data,
+        queryKey: ['molecular-dynamics', 'starting-structures', 'server-files', serverSearch, serverCursor],
+        queryFn: async ({ signal }): Promise<MolecularDynamicsServerFilePage> => parseMolecularDynamicsServerFilePage(
+            (await api.get<unknown>('/api/molecular-dynamics/starting-structures/server-files', { signal, params: { search: serverSearch, limit: 24, cursor: serverCursor ?? undefined } })).data,
         ),
         enabled: sourceMode === 'server_file',
         retry: false,
     });
     const savedSequencesQuery = useQuery({
-        queryKey: ['molecular-dynamics', 'user-sequences'],
-        queryFn: async () => parseMolecularDynamicsHandoffUserSequencePage(
-            (await api.get<unknown>('/api/user-sequences', { params: { limit: 100, offset: 0 } })).data,
+        queryKey: ['molecular-dynamics', 'user-sequences', sequenceOffset],
+        queryFn: async ({ signal }) => parseMolecularDynamicsHandoffUserSequencePage(
+            (await api.get<unknown>('/api/user-sequences', { signal, params: { limit: 24, offset: sequenceOffset } })).data,
         ),
-        enabled: sourceMode === 'prediction',
+        enabled: sourceMode === 'prediction' && sequenceSource === 'saved',
         retry: false,
     });
+    const predictionQuery = useQuery({
+        queryKey: ['molecular-dynamics', 'prediction-candidates', requestedPredictionJobId, predictionCursor],
+        queryFn: async ({ signal }) => parseMolecularDynamicsPredictionSourceCandidates((await api.get<unknown>(
+            `/api/molecular-dynamics/prediction-jobs/${requestedPredictionJobId}/source-candidates`,
+            { signal, params: { limit: 24, cursor: predictionCursor ?? undefined } },
+        )).data, requestedPredictionJobId),
+        enabled: sourceMode === 'prediction' && Boolean(requestedPredictionJobId),
+        retry: false,
+        refetchInterval: query => sourceMode === 'prediction' && query.state.data && !['completed', 'failed', 'cancelled'].includes(query.state.data.job.status) ? 5_000 : false,
+    });
+    useEffect(() => {
+        if (predictionQuery.data) setPredictionPage(predictionQuery.data);
+    }, [predictionQuery.data]);
+
+    useEffect(() => {
+        for (const [family, active] of [['prediction-candidates', sourceMode === 'prediction'], ['user-sequences', sourceMode === 'prediction' && sequenceSource === 'saved'], ['starting-structures', sourceMode === 'server_file']] as const) {
+            if (!active) void queryClient.cancelQueries({ queryKey: ['molecular-dynamics', family] });
+        }
+    }, [sourceMode, sequenceSource, queryClient]);
+    useEffect(() => () => {
+        for (const family of ['prediction-candidates', 'user-sequences', 'starting-structures']) void queryClient.cancelQueries({ queryKey: ['molecular-dynamics', family] });
+    }, [queryClient]);
 
     const invalidatePreview = () => {
         previewRequestGenerationRef.current += 1;
@@ -482,21 +509,14 @@ export function MolecularDynamicsTemplate({
 
     const loadPredictionCandidates = async () => {
         const normalizedJobId = predictionJobId.trim();
-        setSourceBusy(true);
-        setSourceError('');
+        if (normalizedJobId === requestedPredictionJobId && predictionCursor === null) {
+            await predictionQuery.refetch();
+            return;
+        }
         setPredictionPage(null);
         setSelectedPredictionCandidate(null);
-        try {
-            const result = await api.get<unknown>(
-                `/api/molecular-dynamics/prediction-jobs/${normalizedJobId}/source-candidates`,
-                { params: { limit: 24 } },
-            );
-            setPredictionPage(parseMolecularDynamicsPredictionSourceCandidates(result.data, normalizedJobId));
-        } catch (error) {
-            setSourceError(displayError(error, 'Prediction candidates could not be loaded.'));
-        } finally {
-            setSourceBusy(false);
-        }
+        setPredictionCursor(null);
+        setRequestedPredictionJobId(normalizedJobId);
     };
 
     useEffect(() => {
@@ -522,7 +542,8 @@ export function MolecularDynamicsTemplate({
         try {
             let sequenceId = savedSequenceId;
             if (sequenceSource === 'saved') {
-                const selected = savedSequencesQuery.data?.find((candidate) => candidate.id === savedSequenceId);
+                const selected = savedSequencesQuery.data?.find((candidate) => candidate.id === savedSequenceId)
+                    ?? (savedSequenceId ? parseMolecularDynamicsHandoffUserSequence((await api.get<unknown>(`/api/user-sequences/${savedSequenceId}`)).data, savedSequenceId) : null);
                 if (!selected) throw new Error('Select one available saved sequence before opening Structure Prediction.');
                 sequenceId = selected.id;
             } else {
@@ -543,6 +564,7 @@ export function MolecularDynamicsTemplate({
                 },
                 selectedProfileId,
                 selectedProfileDigest,
+                destinationLaunchContextId: launchContextId,
             });
             navigate(buildMolecularDynamicsPredictionRoute(sequenceId, draftId));
         } catch (error) {
@@ -662,6 +684,11 @@ export function MolecularDynamicsTemplate({
         params: { md_job_spec: buildMolecularDynamicsJobSpec(form) },
     });
 
+    // Typed launches use GROMACS; prepared systems use the selected engine.
+    // Chemistry runtime_version identifies preparation, not a simulator version.
+    const activeEngine = form.inputMode === 'prepared' ? form.engine : 'gromacs';
+    const activeEngineLabel = activeEngine === 'openmm' ? 'OpenMM' : 'GROMACS';
+
     const launchPreparedCompatibility = async () => {
         setSubmitError('');
         setIsSubmitting(true);
@@ -706,12 +733,12 @@ export function MolecularDynamicsTemplate({
             <ExecutionTargetPicker workflowRequest={form.inputMode === 'prepared'
                 ? formErrors.length === 0 ? buildPreparedWorkflowRequest() : null
                 : nativeProvisionRequest ? { workflow_type: 'molecular_dynamics', request: nativeProvisionRequest } : null} />
-            {form.inputMode !== 'prepared' && <p className="text-xs text-slate-400">Dependency provisioning uses the exact typed starting-structure intent without server preparation. Scientific preview binds the selected execution target and return policy; final launch revalidates the same intent.</p>}
+
             <header className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                     <button type="button" onClick={onBack} className="mb-3 rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">← Back to workflows</button>
                     <div className="flex items-center gap-3"><h1 className="text-2xl font-bold text-slate-100">Molecular Dynamics</h1><span className="rounded-full border border-orange-400/30 bg-orange-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-orange-300">Experimental alpha</span></div>
-                    <p className="mt-2 max-w-3xl text-sm text-slate-400">Choose immutable starting coordinates first, select a chemistry profile, then preview the server-compiled GROMACS request. A static prediction is a starting hypothesis—not molecular dynamics.</p>
+                    <p className="mt-2 max-w-3xl text-sm text-slate-400">Select a starting structure and chemistry, then preview and launch.</p>
                 </div>
                 <ModelDocumentationLinks topics={['gromacs', 'openmm']} title="MD references" compact summary="Product scope, engine references, and chemistry limits remain visible before launch." />
             </header>
@@ -720,10 +747,11 @@ export function MolecularDynamicsTemplate({
             <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
                 <div className="space-y-5">
                     <section className={panelClass}>
-                        <SectionTitle children="Choose a starting structure" note="Discovery, immutable inspection, exact profile admission, and Job materialization remain separate." />
+                        <SectionTitle children="Starting structure" note="Inspect and select exact coordinates." />
                         <label className={labelClass}>Job name<input className={inputClass} value={form.jobName} onChange={(event) => update('jobName', event.target.value)} /></label>
                         <div className="mt-4"><Gen2StructureSourceSelector active={activeSourceTab} onChange={changeSourceTab} /></div>
-                        {sourceMode !== 'prediction' && <button type="button" onClick={() => setSourceMode('prediction')} className="mt-4 w-full rounded-xl border border-violet-500/30 bg-violet-500/10 p-4 text-left"><span className="block text-sm font-semibold text-violet-100">Predict structure from sequence</span><span className="mt-1 block text-xs text-violet-200/70">Sequence is a prerequisite path and opens the complete Structure Prediction workflow.</span></button>}
+                        {activeSourceTab === 'runs' && <label className={`${labelClass} mt-3`}>Existing source<select aria-label="Existing source" className={inputClass} value={sourceMode} onChange={event => setSourceMode(event.target.value as SourceMode)}><option value="prediction">Prediction Job</option><option value="design">Design</option><option value="prior_md_input">Prior MD input</option><option value="server_file">Governed server file</option></select></label>}
+                        {sourceMode !== 'prediction' && <button type="button" onClick={() => setSourceMode('prediction')} className="mt-4 w-full rounded-xl border border-violet-500/30 bg-violet-500/10 p-4 text-left"><span className="block text-sm font-semibold text-violet-100">Predict structure from sequence</span><span className="mt-1 block text-xs text-violet-200/70">Open Structure Prediction with your sequence.</span></button>}
 
                         <div className="mt-4 grid gap-4 xl:grid-cols-2">
                             <div className="rounded-xl border border-slate-800 bg-slate-950/45 p-4">
@@ -733,7 +761,7 @@ export function MolecularDynamicsTemplate({
                                 {sourceMode === 'prediction' && <div className="space-y-4">
                                     <div>
                                         <h3 className="text-sm font-semibold text-slate-200">Predict structure from sequence</h3>
-                                        <p className="mt-1 text-xs text-slate-500">Open the canonical Structure Prediction workflow; predictor choice and model-native settings remain there.</p>
+                                        <p className="mt-1 text-xs text-slate-500">Choose the predictor and its settings in Structure Prediction.</p>
                                         <div className="mt-3 flex gap-2">
                                             <button type="button" aria-pressed={sequenceSource === 'new'} onClick={() => setSequenceSource('new')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200">Enter new sequence</button>
                                             <button type="button" aria-pressed={sequenceSource === 'saved'} onClick={() => setSequenceSource('saved')} className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200">Use saved sequence</button>
@@ -748,7 +776,7 @@ export function MolecularDynamicsTemplate({
                                 </div>}
                                 {sourceMode === 'design' && <div><label className={labelClass}>Completed Design ID<input className={inputClass} value={designId} onChange={(event) => setDesignId(event.target.value)} /></label><button type="button" disabled={sourceBusy || !designId.trim()} onClick={() => void inspectSource({ kind: 'design', id: designId.trim() })} className="mt-3 rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">Inspect Design</button></div>}
                                 {sourceMode === 'prior_md_input' && <div><label className={labelClass}>Prior MD Job ID<input className={inputClass} value={priorMdJobId} onChange={(event) => setPriorMdJobId(event.target.value)} /></label><p className="mt-2 text-xs text-slate-500">Reopen the prior Job-owned immutable input; browser-visible host paths are never reused.</p><button type="button" disabled={sourceBusy || !priorMdJobId.trim()} onClick={() => void inspectSource({ kind: 'prior_md_input', id: priorMdJobId.trim() })} className="mt-3 rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">Inspect prior MD input</button></div>}
-                                {sourceMode === 'server_file' && <div><label className={labelClass}>Search governed server files<input className={inputClass} value={serverSearch} onChange={(event) => setServerSearch(event.target.value)} /></label>{serverFilesQuery.isError && <p className="mt-3 text-xs text-amber-300">The policy-controlled server-file browser is unavailable.</p>}<div className="mt-3 max-h-64 space-y-2 overflow-auto">{serverFilesQuery.data?.items.map((item) => <button key={item.id} type="button" onClick={() => void inspectSource({ kind: 'server_file', id: item.id })} className="block w-full rounded border border-slate-700 p-2 text-left text-xs text-slate-300"><span className="font-semibold">{item.label}</span><span className="ml-2 text-slate-500">{item.format.toUpperCase()} · {item.bytes.toLocaleString()} bytes</span></button>)}</div></div>}
+                                {sourceMode === 'server_file' && <div><label className={labelClass}>Search governed server files<input className={inputClass} value={serverSearch} onChange={(event) => { setServerSearch(event.target.value); setServerCursor(null); }} /></label>{serverFilesQuery.isError && <p className="mt-3 text-xs text-amber-300">The policy-controlled server-file browser is unavailable.</p>}<div className="mt-3 max-h-64 space-y-2 overflow-auto">{serverFilesQuery.data?.items.map((item) => <button key={item.id} type="button" onClick={() => void inspectSource({ kind: 'server_file', id: item.id })} className="block w-full rounded border border-slate-700 p-2 text-left text-xs text-slate-300"><span className="font-semibold">{item.label}</span><span className="ml-2 text-slate-500">{item.format.toUpperCase()} · {item.bytes.toLocaleString()} bytes</span></button>)}</div></div>}
                                 {sourceMode === 'prediction' && predictionPage && <Gen2PredictionReturnBridge
                                     page={predictionPage}
                                     selectedId={selectedPredictionCandidate?.source_ref.id ?? null}
@@ -756,8 +784,12 @@ export function MolecularDynamicsTemplate({
                                         setSelectedPredictionCandidate(candidate);
                                         void inspectSource(candidate.source_ref);
                                     }}
-                                    onRunAnother={() => { setPredictionPage(null); setPredictionJobId(''); setSelectedPredictionCandidate(null); }}
+                                    onRunAnother={() => { setRequestedPredictionJobId(''); setPredictionCursor(null); setPredictionPage(null); setPredictionJobId(''); setSelectedPredictionCandidate(null); }}
                                 />}
+                                {sourceMode === 'server_file' && <div className="mt-3 flex gap-3"><button type="button" disabled={!serverCursor || serverFilesQuery.isFetching} onClick={() => setServerCursor(null)}>First files</button><button type="button" disabled={!serverFilesQuery.data?.next_cursor || serverFilesQuery.isFetching} onClick={() => setServerCursor(serverFilesQuery.data!.next_cursor)}>Next files</button></div>}
+                                {sourceMode === 'prediction' && sequenceSource === 'saved' && <div className="mt-3 flex gap-3"><button type="button" disabled={sequenceOffset === 0 || savedSequencesQuery.isFetching} onClick={() => setSequenceOffset(offset => Math.max(0, offset - 24))}>Previous sequences</button><button type="button" disabled={savedSequencesQuery.data?.length !== 24 || savedSequencesQuery.isFetching} onClick={() => setSequenceOffset(offset => offset + 24)}>Next sequences</button></div>}
+                                {sourceMode === 'prediction' && predictionPage && <div className="mt-3 flex gap-3"><button type="button" disabled={!predictionCursor || predictionQuery.isFetching} onClick={() => setPredictionCursor(null)}>First candidates</button><button type="button" disabled={!predictionPage.next_cursor || predictionQuery.isFetching} onClick={() => setPredictionCursor(predictionPage.next_cursor)}>Next candidates</button><button type="button" disabled={predictionQuery.isFetching} onClick={() => void predictionQuery.refetch()}>Refresh candidates</button></div>}
+                                {predictionQuery.isError && sourceMode === 'prediction' && <p role="alert">{displayError(predictionQuery.error, 'Prediction candidates could not be loaded.')}</p>}
                                 {sourceBusy && <p className="mt-3 text-xs text-cyan-300">Inspecting immutable starting-structure bytes…</p>}
                                 {sourceError && <p role="alert" className="mt-3 rounded border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-200">{sourceError}</p>}
                             </div>
@@ -785,20 +817,23 @@ export function MolecularDynamicsTemplate({
                     </section>
 
                     <section className={panelClass}>
-                        <SectionTitle children="Typed scientific controls" note="Every operator-owned value is sent through bms.md.launch-intent.v1. Profile-owned values are visible and read-only." />
-                        <div className="grid gap-4 md:grid-cols-3">
+                        <SectionTitle children="Simulation" note="Profile-fixed values remain visible; editable values are preserved in the request." />
+                        <h3 className="mb-3 text-sm text-slate-300">Run</h3><div className="grid gap-4 md:grid-cols-3">
                             <Gen2WorkflowControl label="Independent replicas" value={form.replicas} min={constraints?.replicas ?? 1} max={constraints?.replicas ?? 8} fixed={Boolean(constraints)} onChange={(value) => update('replicas', value)} description="Fixed by the selected validated profile." />
                             <NumberField label="Base random seed" value={form.randomSeed} min={1} max={2147483647} step={1} setting="random_seed" onChange={(value) => update('randomSeed', value)} description="Replica i derives a deterministic independent seed." />
                             <NumberField label="Production per replica" unit="ns" value={form.productionNs} min={0.001} max={constraints ? constraints.max_production_steps * constraints.timestep_fs / 1_000_000 : 100} step={0.001} slider onChange={(value) => update('productionNs', value)} description="Recommended default: 0.001 ns for bounded launch acceptance; scientific campaigns require separate qualification." />
+                        </div><h3 className="my-3 text-sm text-slate-300">Preparation</h3><div className="grid gap-4 md:grid-cols-3">
                             <NumberField label="Box padding" unit="nm" value={form.paddingNm} min={constraints?.padding_nm ?? 0.5} max={constraints?.padding_nm ?? 5} step={0.1} fixed={Boolean(constraints)} onChange={(value) => update('paddingNm', value)} />
                             <NumberField label="Salt" unit="M" value={form.saltMolar} min={constraints?.salt_molar ?? 0} max={constraints?.salt_molar ?? 2} step={0.01} fixed={Boolean(constraints)} onChange={(value) => update('saltMolar', value)} />
-                            <label className={labelClass}>Neutralize system<span className="mt-3 flex items-center gap-2 normal-case tracking-normal text-slate-300"><input type="checkbox" checked={form.neutralize !== false} onChange={(event) => update('neutralize', event.target.checked)} /> Add counterions to neutralize net charge</span><span className="mt-1 block normal-case tracking-normal text-[11px] font-normal text-slate-500">Requested explicitly and persisted in the effective preparation contract.</span></label>
+                            <label className={labelClass}>Neutralize system<span className="mt-3 flex items-center gap-2 normal-case tracking-normal text-slate-300"><input type="checkbox" checked={form.neutralize !== false} disabled /> Add counterions to neutralize net charge · Fixed by profile (on)</span>{form.neutralize === false && <span role="alert" className="block normal-case tracking-normal text-amber-200">Saved OFF conflicts with profile policy. <button type="button" onClick={() => update('neutralize', true)} className="underline">Use profile neutralization</button></span>}</label>
+                        </div><h3 className="my-3 text-sm text-slate-300">Equilibration</h3><div className="grid gap-4 md:grid-cols-3">
                             <NumberField label="Temperature" unit="K" value={form.temperatureK} min={constraints?.temperature_k ?? 1} max={constraints?.temperature_k ?? 500} fixed={Boolean(constraints)} onChange={(value) => update('temperatureK', value)} />
                             <NumberField label="Pressure" unit="bar" value={form.pressureBar} min={constraints?.pressure_bar ?? 0.1} max={constraints?.pressure_bar ?? 100} step={0.1} fixed={Boolean(constraints)} onChange={(value) => update('pressureBar', value)} />
                             <NumberField label="Timestep" unit="fs" value={form.timestepFs} min={constraints?.timestep_fs ?? 0.5} max={constraints?.timestep_fs ?? 4} step={0.5} fixed={Boolean(constraints)} onChange={(value) => update('timestepFs', value)} />
                             <NumberField label="Minimization" unit="steps" value={form.minimizationSteps} min={1} max={constraints?.max_minimization_steps ?? 5_000_000} step={1000} slider onChange={(value) => update('minimizationSteps', value)} />
                             <NumberField label="NVT equilibration" unit="ps" value={form.nvtPs} min={0.002} max={constraints ? constraints.max_nvt_steps * form.timestepFs / 1000 : 10_000} step={1} slider onChange={(value) => update('nvtPs', value)} />
                             <NumberField label="NPT equilibration" unit="ps" value={form.nptPs} min={0.002} max={constraints ? constraints.max_npt_steps * form.timestepFs / 1000 : 10_000} step={1} slider onChange={(value) => update('nptPs', value)} />
+                        </div><h3 className="my-3 text-sm text-slate-300">Output and resources</h3><div className="grid gap-4 md:grid-cols-3">
                             <NumberField label="Trajectory interval" unit="ps" value={form.trajectoryIntervalPs} min={0.002} max={form.productionNs * 1000} step={0.002} slider onChange={(value) => update('trajectoryIntervalPs', value)} />
                             <NumberField label="Energy/log interval" unit="ps" value={form.energyIntervalPs} min={0.002} max={form.productionNs * 1000} step={0.002} slider onChange={(value) => update('energyIntervalPs', value)} />
                             <NumberField label="Checkpoint interval" unit="minutes" value={form.checkpointIntervalMinutes} min={1} max={1440} step={1} slider onChange={(value) => update('checkpointIntervalMinutes', value)} />
@@ -816,12 +851,12 @@ export function MolecularDynamicsTemplate({
                 <aside className="space-y-4 lg:sticky lg:top-5 lg:self-start">
                     <section className={panelClass}>
                         <h2 className="text-sm font-semibold text-slate-200">Launch summary</h2>
-                        <dl className="mt-4 space-y-3 text-xs"><div className="flex justify-between gap-3"><dt className="text-slate-500">Source</dt><dd className="max-w-40 truncate text-right text-slate-200">{inspection?.identity.label ?? 'Not inspected'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Profile admission</dt><dd className={inspection?.admission.state === 'admitted' ? 'text-cyan-300' : 'text-amber-300'}>{inspection?.admission.state ?? 'pending'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Engine</dt><dd className="text-slate-200">GROMACS 2025.3</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">GPU children</dt><dd className="text-slate-200">{form.replicas}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Aggregate simulation</dt><dd className="font-semibold text-cyan-300">{scope.aggregateSimulationNs.toLocaleString()} ns</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Steps / replica</dt><dd className="text-slate-200">{scope.productionStepsPerReplica.toLocaleString()}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Total frames</dt><dd className="text-slate-200">{scope.totalTrajectoryFrames.toLocaleString()}</dd></div></dl>
+                        <dl className="mt-4 space-y-3 text-xs"><div className="flex justify-between gap-3"><dt className="text-slate-500">Source</dt><dd className="max-w-40 truncate text-right text-slate-200">{inspection?.identity.label ?? 'Not inspected'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Profile admission</dt><dd className={inspection?.admission.state === 'admitted' ? 'text-cyan-300' : 'text-amber-300'}>{inspection?.admission.state ?? 'pending'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Engine</dt><dd className="text-slate-200" data-md-active-engine>{activeEngineLabel}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Replicas</dt><dd className="text-slate-200">{form.replicas}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Aggregate simulation</dt><dd className="font-semibold text-cyan-300">{scope.aggregateSimulationNs.toLocaleString()} ns</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Steps / replica</dt><dd className="text-slate-200">{scope.productionStepsPerReplica.toLocaleString()}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Total frames</dt><dd className="text-slate-200">{scope.totalTrajectoryFrames.toLocaleString()}</dd></div></dl>
                     </section>
                     {form.inputMode === 'structure' && formErrors.length > 0 && <section className="rounded-xl border border-red-500/30 bg-red-500/8 p-4"><h2 className="text-xs font-semibold uppercase tracking-wider text-red-300">Resolve before preview</h2><ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-red-200/80">{formErrors.map((error) => <li key={error}>{error}</li>)}</ul></section>}
                     {submitError && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/8 p-3 text-xs text-red-200">{submitError}</div>}
                     {previewIsCurrent && preview && <section className="rounded-xl border border-cyan-500/30 bg-cyan-500/8 p-4 text-xs text-cyan-100"><div className="font-semibold">Effective request digest</div><p className="mt-2">Execution target: {preview.execution_target_id ?? 'Local'} · Successful result return: {preview.execution_policy.remote_result_policy}</p><div className="mt-2 break-all font-mono text-[10px]">{preview.preview_digest}</div>{preview.execution_plan && <p className="mt-2 break-all">Shared plan: {preview.execution_plan.plan_sha256}<br />Source: {preview.execution_plan.source_identity.revision}<br />Components: {[...preview.execution_plan.metadata.static_components, ...preview.execution_plan.metadata.dynamic_templates].map(row => row.component_key).join(', ')}</p>}{preview.blockers.map((blocker) => <div key={blocker.code} className="mt-2 text-red-200">{blocker.message}</div>)}<details className="mt-3"><summary className="cursor-pointer text-cyan-200">Effective JSON</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-[10px] text-slate-300">{JSON.stringify(preview.effective_request, null, 2)}</pre></details></section>}
-                    {form.inputMode === 'structure' && <><button type="button" disabled={!typedReady || previewRequestIsCurrent || isSubmitting} onClick={() => void previewLaunch()} className="w-full rounded-xl border border-cyan-500/50 px-4 py-3 text-sm font-bold text-cyan-200 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500">{previewRequestIsCurrent ? 'Compiling preview…' : 'Preview effective request'}</button><button type="button" disabled={!previewIsCurrent || (preview?.blockers.length ?? 0) > 0 || isSubmitting} onClick={() => void launchTyped()} className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-500">{isSubmitting ? 'Materializing MD job…' : 'Launch typed MD job'}</button></>}
+                    {form.inputMode === 'structure' && <><button type="button" disabled={!typedReady || previewRequestIsCurrent || isSubmitting} onClick={() => void previewLaunch()} className="w-full rounded-xl border border-cyan-500/50 px-4 py-3 text-sm font-bold text-cyan-200 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500">{previewRequestIsCurrent ? 'Compiling preview…' : 'Preview'}</button><button type="button" disabled={!previewIsCurrent || (preview?.blockers.length ?? 0) > 0 || isSubmitting} onClick={() => void launchTyped()} className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-500">{isSubmitting ? 'Materializing MD job…' : 'Launch'}</button></>}
                     <p className="text-center text-[11px] text-slate-600">Launch creates one canonical scheduler-visible Job. Server-owned runtime paths, GPU placement, and materialization never enter browser state.</p>
                 </aside>
             </div>

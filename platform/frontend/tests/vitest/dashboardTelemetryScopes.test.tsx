@@ -103,11 +103,13 @@ describe('Dashboard telemetry source tabs', () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         let target: ExecutionTarget = readyTarget;
         const requests: string[] = [];
+        const auditRequests: string[] = [];
         api.defaults.adapter = async config => {
+            if (config.url?.endsWith('/runtime-inventory/refresh')) auditRequests.push(String(config.url));
             if (config.method === 'post' && config.url === '/api/execution-targets/vast%3A123/preload') {
                 requests.push(String(config.url));
                 expect(JSON.parse(String(config.data))).toEqual({ job_id: 'saved-job' });
-                target = { ...target, preload: { operation_id: 'op', job_id: 'saved-job', source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: 'esmfold2.sif', message: 'Transferring runtime', started_at: '2026-09-06', updated_at: '2026-09-06' } };
+                target = { ...target, preload: { artifact_summary: { total_count: 0, verified_count: 0, total_bytes: 0, verified_bytes: 0 }, cached_artifact_count: 0, operation_id: 'op', job_id: 'saved-job', source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: 'esmfold2.sif', message: 'Transferring runtime', started_at: '2026-09-06', updated_at: '2026-09-06' } };
                 return response(target);
             }
             if (config.method === 'get' && config.url === '/api/execution-targets/vast%3A123/runtime-inventory') return response(null);
@@ -138,7 +140,7 @@ describe('Dashboard telemetry source tabs', () => {
             expect(container.querySelector<HTMLSelectElement>('[aria-label="Saved Job recipe"]')?.disabled).toBe(true);
             target = { ...target, preload: { ...target.preload!, phase: 'source_download_ready' }, progress: { operation_id: 'run', job_id: 'saved-job', phase: 'running', artifact: null, message: 'Scientific workflow running', updated_at: '2026-09-06', activity: { stage: 'protenix', state: 'started', updated_at: '2026-09-06' } } };
             await act(async () => { await client.invalidateQueries({ queryKey: ['execution-targets'] }); await new Promise(resolve => setTimeout(resolve, 20)); });
-            expect(container.textContent).toContain('Source/download ready — not scientific Ready');
+            expect(container.textContent).toContain('Downloads complete');
             expect(container.textContent).toContain('protenix: started');
             expect([...container.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === 'Preload selected worker')?.disabled).toBe(true);
             // Leaving/re-entering the mounted panel restores actual server activity, not a guessed stage.
@@ -147,12 +149,14 @@ describe('Dashboard telemetry source tabs', () => {
             expect(container.querySelector('[aria-label="Worker activity"]')?.textContent).toContain('protenix: started');
             expect(container.querySelector<HTMLSelectElement>('[aria-label="Saved Job recipe"]')?.value).toBe('');
             expect(requests).toHaveLength(1);
+            expect(auditRequests).toEqual([]);
         } finally { await act(async () => root.unmount()); client.clear(); }
     });
 
     it('requires explicit retry after server rejection and preserves failed progress on remount', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         const target: ExecutionTarget = { ...readyTarget, preload: {
+            artifact_summary: { total_count: 0, verified_count: 0, total_bytes: 0, verified_bytes: 0 }, cached_artifact_count: 0,
             operation_id: 'failed-op', job_id: 'saved-job', source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64),
             phase: 'failed', artifact: 'esmfold2.sif', message: 'Artifact verification failed', started_at: '2026-09-06', updated_at: '2026-09-06',
         } };

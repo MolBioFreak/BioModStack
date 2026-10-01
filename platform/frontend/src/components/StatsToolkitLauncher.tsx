@@ -9,13 +9,7 @@ import {
 } from '../runtime/statsToolkitThemeBridge';
 
 interface StatsToolkitStatus {
-  id: string;
-  display_name: string;
   available: boolean;
-  ready: boolean;
-  version: string | null;
-  api_version: string | null;
-  capability_count: number;
   entry_url: string;
   detail: string;
 }
@@ -34,7 +28,10 @@ export function StatsToolkitLauncher() {
   const query = useQuery({
     queryKey: ['stats-toolkit-status'],
     queryFn: fetchStatsToolkitStatus,
-    refetchInterval: 15_000,
+    // Discover the service on entry; browsing never polls readiness or capabilities.
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const status = query.data;
   const entryUrl = useMemo(
@@ -80,7 +77,7 @@ export function StatsToolkitLauncher() {
     return <div className="flex min-h-[24rem] items-center justify-center text-sm text-[var(--text-secondary)]">Connecting to BioModStack Stats Toolkit…</div>;
   }
 
-  if (!status || !status.available || !status.ready) {
+  if (query.isError || !status || !status.available) {
     return (
       <div className="mx-auto max-w-3xl p-6 text-[var(--text-primary)]">
         <section className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-6">

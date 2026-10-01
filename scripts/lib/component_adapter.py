@@ -236,6 +236,7 @@ def retry_component_workflow(context_path: Path, *, component_id: str,
     from services.nextflow import (compile_component_retry_invocation,
                                    component_checkpoint_parent_snapshot)
     from scripts.bms_md.spawn_replicas import prepare_replica_retry
+    from scripts.bms_md.spawn_analysis import prepare_analysis_retry
 
     runtime = runtime_from_environment(context_path)
     if runtime is None:
@@ -264,12 +265,15 @@ def retry_component_workflow(context_path: Path, *, component_id: str,
                         or file_identity(path) != (reference['sha256'], reference['size_bytes'])):
                     raise ValueError('retained retry compiler input changed')
             context = dict(runtime.context, **prior['retry_context'])
+            context['native_runtime'] = prior['retry_context'].get('native_runtime',
+                prior['retry_context']['parent']['params'])
             key = digest([component_id, operation_id])
             invocation = compile_component_retry_invocation(context, component_id=component_id,
                 operation_id=operation_id, generation=prior['generation'],
                 output_dir=prior['parent_snapshot']['output_dir'],
                 working_directory=str(Path(context['working_directory']) / 'component-retries' / key),
-                spawn_receipt=json.loads(Path(prior['native_parameters']['md_retry_spawn_receipt']).read_bytes()))
+                spawn_receipt=json.loads(Path(prior['native_parameters'].get('md_analysis_retry_spawn_receipt')
+                    or prior['native_parameters']['md_retry_spawn_receipt']).read_bytes()))
             if (list(invocation.command) != prior['command']
                     or invocation.execution_plan.plan_sha256 != prior['plan_sha256']
                     or [item.reference for item in invocation.generated_inputs] != prior['generated_inputs']):
@@ -277,7 +281,9 @@ def retry_component_workflow(context_path: Path, *, component_id: str,
             native_invocations.append(invocation)
         return prior
     context = dict(runtime.context, resources=renewed_resources)
-    replacement, receipt = prepare_replica_retry(runtime, component_id=component_id,
+    prepare_retry = (prepare_analysis_retry if runtime.request(component_id).stage == 'md_analysis'
+                     else prepare_replica_retry)
+    replacement, receipt = prepare_retry(runtime, component_id=component_id,
         operation_id=operation_id, failure_code=failure_code)
     generation = int((runtime.root_state() or {}).get('generation', 0)) + 1
     key = digest([component_id, operation_id])
@@ -302,8 +308,85 @@ def retry_component_workflow(context_path: Path, *, component_id: str,
     return runtime.retry_component(component_id, replacement=replacement,
         operation_id=operation_id, actor=actor, boot_id=boot_id, invocation=invocation,
         continuation_lease_id=continuation_lease_id, parent_snapshot=parent, resources=renewed_resources,
-        retry_context={key: context[key] for key in
-            ("parent", "native_runtime", "execution_plan", "plan_sha256", "resources", "generation") if key in context})
+        retry_context={**{key: context[key] for key in
+            ("parent", "execution_plan", "plan_sha256", "resources", "generation") if key in context},
+            "native_runtime": context.get("native_runtime", context["parent"]["params"])})
+
+
+def resume_md_workflow(context_path: Path, *, operation_id: str, pause_operation_id: str,
+                       boot_id: str, continuation_lease_id: str, resources: Mapping[str, Any],
+                       checkpoints: Mapping[str, Any] | None = None, native_invocations: list | None = None) -> dict[str, Any]:
+    """Native production continuation on the retained attempt and replica roster."""
+    from component_runtime import digest
+    from services.nextflow import compile_component_retry_invocation, component_checkpoint_parent_snapshot
+    runtime = runtime_from_environment(context_path)
+    if runtime is None:
+        raise ValueError('MD continuation requires retained component owner')
+    state = runtime.root_state() or {}
+    prior = state.get('continuation_edge', {})
+    if prior.get('operation_id') == operation_id:
+        if (prior.get('pause_operation_id') != pause_operation_id
+                or prior.get('continuation_lease_id') != continuation_lease_id
+                or prior.get('resources') != dict(resources)
+                or (checkpoints is not None and prior.get('md_resume') != dict(checkpoints))):
+            raise ValueError('MD continuation replay conflicts')
+        if native_invocations is not None:
+            invocation = compile_component_retry_invocation(prior['md_compiler_context'],
+                component_id=runtime.root_job_id, operation_id=operation_id, generation=state['generation'],
+                output_dir=prior['parent_snapshot']['output_dir'],
+                working_directory=str(Path(prior['native_parameters']['work_dir']).parent),
+                spawn_receipt=json.loads(Path(prior['native_parameters']['md_retry_spawn_receipt']).read_bytes()))
+            if (list(invocation.command) != prior['command']
+                    or invocation.execution_plan.plan_sha256 != prior['plan_sha256']):
+                raise ValueError('MD continuation compiler replay changed')
+            native_invocations.append(invocation)
+        return state
+    ids = runtime.group_children(f'{runtime.root_job_id}:md_replica')
+    rows = []
+    retained = {}
+    for identity in ids:
+        request = runtime.request(identity)
+        params = request.payload['params']
+        status = runtime.child_status(identity)
+        if status['status'] == 'paused':
+            retained[identity] = status['result']
+        elif status['status'] not in {'queued', 'completed', 'execution_finished'}:
+            raise ValueError('MD continuation has unresolved replica evidence')
+        rows.append(dict(id=identity, name=request.payload.get('name', ''),
+            replica_index=params['md_replica_index'], replica_seed=params['md_replica_seed'],
+            attempt=params.get('md_attempt', 0), status=status['status']))
+    rows.sort(key=lambda row: row['replica_index'])
+    if not rows or [row['replica_index'] for row in rows] != list(range(params['md_replica_count'])):
+        raise ValueError('MD continuation requires the original complete replica roster')
+    supplied = dict(checkpoints) if checkpoints is not None else retained
+    for identity in supplied:
+        unknown = set(supplied[identity]) - set(retained[identity]) - {'md_resume_segment_id'}
+        if unknown:
+            raise ValueError('MD continuation cannot override science')
+    previous = runtime.context['resources']
+    if resources.get('execution_target_id') != runtime.target_id or resources.get('gpu_ids') != previous.get('gpu_ids'):
+        raise ValueError('MD continuation target/GPU ownership conflicts')
+    context = dict(runtime.context, resources=dict(resources))
+    key = digest([runtime.root_job_id, operation_id])
+    invocation = compile_component_retry_invocation(context, component_id=runtime.root_job_id,
+        operation_id=operation_id, generation=int(state.get('generation', 0)) + 1,
+        output_dir=str(runtime.artifact_root / 'generations' / ('resume-' + key)),
+        working_directory=str(Path(context['working_directory']) / 'component-resumes' / key),
+        spawn_receipt=dict(schema='bms.md.replica-spawn.v1', parent_job_id=runtime.root_job_id,
+            engine=params['md_engine'], replica_count=len(rows), children=rows))
+    from types import SimpleNamespace
+    from services.remote_execution.targets import selected_plan_target_resources
+    selected = selected_plan_target_resources(SimpleNamespace(id=runtime.target_id),
+        invocation.execution_plan, gpu_ids=resources['gpu_ids'], scratch_bytes=0)
+    for budget in ('required', 'compute', 'coordinator_overlap'):
+        if any(selected[budget][key] > resources[budget][key] for key in ('cpus', 'memory_bytes')):
+            raise ValueError('MD continuation exceeds renewed root resources')
+    if native_invocations is not None:
+        native_invocations.append(invocation)
+    return runtime.resume_md_production(operation_id=operation_id, pause_operation_id=pause_operation_id,
+        boot_id=boot_id, continuation_lease_id=continuation_lease_id, invocation=invocation,
+        parent_snapshot=component_checkpoint_parent_snapshot(invocation, context),
+        resources=resources, checkpoints=supplied, compiler_context=context)
 
 
 def run_component_workflow(context_path: Path) -> int:
@@ -345,6 +428,9 @@ def run_component_workflow(context_path: Path) -> int:
     def publish(state: str, **detail: Any) -> None:
         if edge is not None:
             detail['continuation_edge'] = edge
+        pause = (runtime.root_state() or {}).get('md_pause')
+        if pause:
+            detail['md_pause'] = pause
         runtime.set_root_state(state, owner_id=owner, boot_id=boot, generation=generation, **detail)
         durable_write(state_path, canonical_bytes(dict(attempt_id=runtime.attempt_id,
             target_id=runtime.target_id, lease_id=runtime.lease_id, **runtime.root_state())))
@@ -432,12 +518,48 @@ def run_component_workflow(context_path: Path) -> int:
                         reason="cancellation requested; native writers reconciled" if quiet else "native writers remain")
                 return 130
 
+            pause = (runtime.root_state() or {}).get('md_pause')
+            if pause:
+                from services.md.pause_actuator import _pause_boundary
+                for child_id, process, output_dir in active:
+                    if child_id in pause['component_ids'] and process.poll() is None:
+                        native = Path(runtime.native_parent(child_id)['params']['md_resume_output_dir'])
+                        native.mkdir(parents=True, exist_ok=True)
+                        _pause_boundary(native, idempotency_key=pause['operation_id'], reuse_existing=True)
+
             for child_id, process, output_dir in tuple(active):
                 code = process.poll()
                 if code is not None and not _owned_group_writers(process):
-                    runtime.execution_finished(child_id, owner_id=owner, boot_id=boot,
-                        output_dir=str(output_dir), exit_code=code)
+                    if pause and child_id in pause['component_ids'] and code != 0:
+                        from services.md.pause_actuator import (_checkpoint_receipt, _snapshot_checkpoint)
+                        native = Path(runtime.native_parent(child_id)['params']['md_resume_output_dir'])
+                        boundary = native / '.bms-pause-boundary.json'
+                        receipt, checkpoint, relative = _checkpoint_receipt([native],
+                            minimum_mtime_ns=boundary.stat().st_mtime_ns)
+                        params = runtime.request(child_id).payload['params']
+                        if (receipt['execution_plan_sha256'] != params['md_execution_plan_sha256']
+                                or receipt['compatibility_key'] != params['md_compatibility_key']):
+                            raise ValueError('MD pause receipt science identity conflicts')
+                        snapshot, _, _ = _snapshot_checkpoint(checkpoint_path=checkpoint,
+                            source_relative_path=relative, segment_id=__import__('hashlib').sha256(pause['operation_id'].encode()).hexdigest(),
+                            sha256=receipt['sha256'])
+                        runtime.md_execution_paused(child_id, owner_id=owner, boot_id=boot, checkpoint=dict(
+                            md_resume_checkpoint=str(snapshot), md_resume_checkpoint_sha256=receipt['sha256'],
+                            md_resume_output_dir=str(native), receipt=receipt,
+                            receipt_bytes=(native / 'md-checkpoint-receipt.json').stat().st_size, output_dir=str(output_dir)))
+                    else:
+                        runtime.execution_finished(child_id, owner_id=owner, boot_id=boot,
+                            output_dir=str(output_dir), exit_code=code)
                     active.remove((child_id, process, output_dir))
+
+            if pause and not active:
+                quiet = _stop_processes([root])
+                publish('paused' if quiet else 'uncertain', quiescent=quiet,
+                        md_checkpoints={identity: runtime.child_status(identity)['result']
+                            for identity in pause['component_ids']
+                            if runtime.child_status(identity)['status'] == 'paused'},
+                        reason='MD production checkpoint stop' if quiet else 'native root writers remain')
+                return 75 if quiet else 1
 
             root_code = root.poll()
             if root_code is not None:
@@ -466,7 +588,7 @@ def run_component_workflow(context_path: Path) -> int:
                 # siblings stay serialized without a fleet of idle JVMs.
                 pending = tuple(child for child in pending
                     if runtime.request(child).parent_job_id == active[-1][0])
-            if pending:
+            if pending and not pause:
                 child_id = pending[0]
                 child_dir = child_id.replace(":", "-")
                 output_dir = output_root / child_dir
@@ -475,7 +597,8 @@ def run_component_workflow(context_path: Path) -> int:
                 child_work.mkdir(parents=True, exist_ok=True)
                 child_context = dict(context, child_id=child_id,
                     child_output_dir=str(output_dir), child_working_directory=str(child_work),
-                    native_runtime=context.get('native_runtime', context.get('parent', {}).get('params', {})))
+                    native_runtime=context.get('native_runtime', context.get('parent', {}).get('params', {})),
+                    md_resume=(edge or {}).get('md_resume', {}))
                 request = runtime.request(child_id)
                 if request.parent_job_id != runtime.root_job_id:
                     child_context['parent'] = runtime.native_parent(request.parent_job_id)
@@ -485,9 +608,10 @@ def run_component_workflow(context_path: Path) -> int:
                     invocation = compile_component_nextflow_invocation(request, child_context)
                     if not isinstance(invocation, NativeInvocation):
                         raise ValueError("native compiler must return NativeInvocation")
-                    runtime.bind_native_parent(child_id,
-                        component_native_parent_snapshot(invocation, request, child_context),
-                        owner_id=owner, boot_id=boot)
+                    if child_id not in child_context['md_resume']:
+                        runtime.bind_native_parent(child_id,
+                            component_native_parent_snapshot(invocation, request, child_context),
+                            owner_id=owner, boot_id=boot)
                     return invocation
 
                 def launch_native(invocation, request, owner_runtime):

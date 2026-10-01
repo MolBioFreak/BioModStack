@@ -145,16 +145,16 @@ describe('mounted BioXP four-channel pipette panel', () => {
             .map(node => `${node.textContent} ${node.getAttribute('title') ?? ''}`).join(' ')).not.toMatch(/\bOEM\b/);
         expect(container.textContent).toContain('Channel 1');
         expect(container.textContent).toContain('Channel 4');
-        expect(cards[1].textContent).toContain('Unavailable — channel missing from projection');
-        expect(cards[3].textContent).toContain('Unavailable — channel missing from projection');
+        expect(cards[1].textContent).toContain('Unavailable — no channel report');
+        expect(cards[3].textContent).toContain('Unavailable — no channel report');
         expect(cards[0].textContent).toContain('Hardware tip readback: not loaded');
         expect(cards[0].textContent).toContain('Hardware pressure: 12.5');
         expect(cards[2].textContent).toContain('No valid hardware readback');
-        expect(cards[0].textContent).toContain('Software shadow: initialized; tip loaded');
+        expect(cards[0].textContent).toContain('Software record: initialized; tip loaded');
         expect(container.textContent).not.toContain('"position"');
         expect(container.textContent).not.toContain('999');
 
-        expect(container.textContent).toContain('Cached projection');
+        expect(container.textContent).toContain('Cached report');
         expect(container.textContent).toContain('Stale snapshot · age 41.25 s');
         expect(container.textContent).toContain('Group error: channel 3 · code 17');
         expect(container.textContent).toContain('Last transaction: condition_or_status_failed');

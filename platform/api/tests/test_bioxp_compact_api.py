@@ -16,9 +16,6 @@ EXPECTED = {
     ('GET', '/camera/stream/state'),
     ('GET', '/jobs'),
     ('GET', '/jobs/{job_id}'),
-    ('GET', '/oem-full-lifecycle/contract'),
-    ('GET', '/oem-full-lifecycle/runs/{run_id}'),
-    ('GET', '/oem-full-lifecycle/runs/{run_id}/ledger'),
     ('GET', '/operator-controls/audit-health'),
     ('GET', '/operator-controls/catalog'),
     ('GET', '/operator-controls/dashboard'),
@@ -55,10 +52,14 @@ EXPECTED = {
     ('GET', '/protocols/jobs/{job_id}'),
     ('GET', '/status'),
     ('GET', '/calibration-settings'),
+    ('GET', '/calibration-settings/runs/{run_id}'),
+    ('POST', '/calibration-settings/manual-tip-set'),
+    ('POST', '/calibration-settings/runs/{run_id}/decision'),
+    ('GET', '/operation-parameters'),
+    ('PATCH', '/operation-parameters'),
     ('GET', '/camera/illumination/state'),
     ('POST', '/camera/illumination'),
     ('POST', '/camera/rgb'),
-    ('GET', '/protocols/transfer-preflight'),
     ('PATCH', '/calibration-settings'),
     ('POST', '/camera/snapshot'),
     ('POST', '/camera/stream/start'),
@@ -66,8 +67,6 @@ EXPECTED = {
     ('POST', '/connection/connect'),
     ('POST', '/connection/disconnect'),
     ('POST', '/connection/probe'),
-    ('POST', '/oem-full-lifecycle/runs'),
-    ('POST', '/oem-full-lifecycle/runs/{run_id}/cancel'),
     ('POST', '/operator-controls/actions/{action_id}'),
     ('POST', '/operator-controls/actions/{action_id}/admission'),
     ('POST', '/operator-controls/pipettes/application/plan'),
@@ -77,7 +76,6 @@ EXPECTED = {
     ('POST', '/operator-controls/v2/actions/{action_id}'),
     ('POST', '/operator-controls/v2/interrupts/{action_id}'),
     ('POST', '/operator-controls/v2/methods'),
-    ('POST', '/protocols/compile'),
     ('POST', '/protocols/jobs/{job_id}/control'),
     ('POST', '/protocols/jobs/{job_id}/review'),
     ('POST', '/protocols/submit'),
@@ -108,7 +106,7 @@ def _inventory() -> set[tuple[str, str]]:
 
 def test_compact_api_inventory_is_exact_and_bounded() -> None:
     assert _inventory() == EXPECTED
-    assert len(_inventory()) == 73
+    assert len(_inventory()) == 71
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:

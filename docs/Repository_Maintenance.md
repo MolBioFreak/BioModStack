@@ -70,12 +70,17 @@ reviewed retention/distribution decision; remove its exception and update the
 artifact documentation in the same change. No blanket archive/weight suffix
 purge is safe: some scientific fixtures deliberately use those formats.
 
-## Rebind every final source tree
+## Explicit NGS source-audit binding
 
-The existing Development admission validator binds the whole committed source
-tree with `runtime_implementation_v2.json` removed. Documentation, tests, CI,
-ignore-rule changes, and rebases therefore require rebinding too. Do not hand-edit
-hashes, alter acceptance fields, or weaken the validator to admit a cleanup.
+The NGS source-audit record binds its reviewed committed source tree with
+`runtime_implementation_v2.json` removed. It is evidence for that frozen review,
+not admission for ordinary Development deployment, successor installation, or
+rollback. The managed synchronizer preserves its clean-tree, fast-forward,
+pause, active-work, source-identity and rollback checks without requiring an
+unrelated BioXP, UI, documentation or test change to regenerate the NGS record.
+
+When an explicit NGS source audit is being updated, rebind its final reviewed
+tree with the procedure below. Do not hand-edit hashes or acceptance fields.
 
 After final source edits and focused checks, in the isolated worktree:
 
@@ -113,8 +118,9 @@ Validate the final bound commit using
 [scripts/biomodstack_dev_sync.py](../scripts/biomodstack_dev_sync.py), and run the
 locked runtime-record tests and applicable existing review lane. Invoke only
 that read-only validator, not the synchronizer's service/deployment entrypoint.
-Any further source change requires a new binding. Preserve external build/test
-evidence until review is complete; do not commit it as local runtime output.
+Any further source change invalidates that exact audit-tree claim, not general
+deployment eligibility. Preserve external build/test evidence until review is
+complete; do not commit it as local runtime output.
 
 The hygiene workflow is read-only. Making its check required is a separate
 repository-administration decision; a workflow file alone does not enforce

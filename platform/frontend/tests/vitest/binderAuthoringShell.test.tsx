@@ -90,7 +90,7 @@ it.each([undefined, { target_pdb: '' }])('native handoff inherits only untouched
     await mount();
     await act(async () => mocks.authoring.onOpenNativeRoute({ modelId: 'boltzgen', mode: 'protein_binder', initialDraft,
         sources: { target: { path: 'inputs/materialized-target.cif', name: 'Saved target', chain: 'a', residues: ['a42A'] } } }));
-    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); expect(document.body.textContent).toContain('Protein Binder Generation'); });
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); expect(document.querySelector('[aria-label="Native binder job name"]')).not.toBeNull(); expect(document.body.textContent).toContain('Protein Binder Generation'); }, { timeout: 5000 });
     expect(document.querySelector('[data-authoring]')).toBeNull();
     expect(document.body.textContent).toContain('Protein Binder Generation');
     const target = document.querySelector<HTMLInputElement>('input[placeholder="Target structure"]');
@@ -171,7 +171,7 @@ it('advertised native generation submits only its model-mode fields, preserving 
     const launch = [...document.querySelectorAll('button')].find(button => button.textContent === 'Launch Experiment')!;
     expect(launch.disabled).toBe(false);
     await act(async () => launch.click());
-    expect(mocks.submit).toHaveBeenCalledWith({ name: 'native generation', model_id: 'boltzgen', mode: 'protein_binder', params: { target_pdb: '' }, binder_round: { schema_version: 1, enabled: true, sequence_design: { model_id: 'fampnn', params: {} }, prediction: { model_id: 'protenix', params: {} }, binder_chains: [], target_chains: [] } }, { launchContext: false });
+    expect(mocks.submit).toHaveBeenCalledWith({ name: 'native generation', model_id: 'boltzgen', mode: 'protein_binder', params: { target_pdb: '' }, execution_target_id: null, source_structure: undefined, binder_round: { schema_version: 1, enabled: true, sequence_design: { model_id: 'fampnn', params: {} }, prediction: { model_id: 'protenix', params: {} }, binder_chains: [], target_chains: [] } }, { launchContext: false });
 });
 
 

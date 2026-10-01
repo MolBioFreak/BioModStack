@@ -58,7 +58,7 @@ async def test_completion_ingests_validated_playback_inventory_idempotently(
 ) -> None:
     parent = Job(
         id="md-ingest-parent", name="MD", status="completed",
-        model_id="molecular_dynamics", mode="simulate", params={},
+        model_id="molecular_dynamics", mode="simulate", params={"md_job_spec": _request()},
     )
     child = Job(
         id="md-ingest-replica", name="MD replica 0", status="completed",
@@ -112,7 +112,7 @@ async def test_completion_ingests_validated_playback_inventory_idempotently(
             selection_method=None, source_frame=None, time_ps=None,
             source_trajectory_sha256=(trajectory_sha if roles[logical] == "trajectory_frame_map" else None),
         ))
-    monkeypatch.setattr(completion_module, "_load_inventory", lambda _job: (root, {}, inventory))
+    monkeypatch.setattr(completion_module, "_load_inventory", lambda _job: (root, {"lineage": {"child_ids": [child.id]}}, inventory))
 
     await completion_module._ingest_durable_artifacts(parent, session)
     await completion_module._ingest_durable_artifacts(parent, session)

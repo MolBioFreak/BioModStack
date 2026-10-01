@@ -1,0 +1,130 @@
+{
+  "purpose": "Documentation-only implementation ownership; not loaded by BMS at runtime",
+  "baseline": "f9bd7c729aa6c225e1c4ef54aabf08da14bc9d24",
+  "rule": "Each exact path has one writer. Any unlisted file or ownership transfer returns to Integrator I before edits. Presence in this map is not a requirement to edit an otherwise working file.",
+  "owners": {
+    "I": {
+      "role": "Integrator: shared contract, Project and publication boundaries",
+      "paths": [
+        "platform/api/config/models/rfdiffusion.yaml",
+        "nextflow_schema.json",
+        "nextflow.config",
+        "platform/api/tests/test_shape_geometry.py",
+        "platform/api/config/models/esmfold2.yaml",
+        "platform/api/config/models/boltz2.yaml",
+        "platform/api/config/models/protenix.yaml",
+        "platform/api/services/shape_requests.py",
+        "platform/api/routers/shape_blueprint.py",
+        "platform/api/routers/jobs.py",
+        "platform/api/services/nextflow.py",
+        "platform/api/native_components.py",
+        "platform/api/services/result_contracts.py",
+        "platform/api/services/result_ingester.py",
+        "platform/api/services/result_state_integrity.py",
+        "platform/api/services/global_experiments/launch_contexts.py",
+        "platform/api/services/workflow_adapter_registry.py",
+        "platform/api/services/caliby_native.py",
+        "platform/api/services/remote_execution/contracts.py",
+        "platform/api/config/models/proteinmpnn.yaml",
+        "platform/api/config/models/fampnn.yaml",
+        "platform/api/config/models/caliby_experimental.yaml",
+        "modules/esmfold2_experimental.nf",
+        "modules/caliby_native.nf",
+        "scripts/run_caliby_experimental.py",
+        "platform/frontend/src/lib/api.ts",
+        "platform/frontend/vitest.md.config.ts",
+        "platform/api/tests/test_shape_submission.py",
+        "platform/api/tests/test_shape_remote_preparation.py",
+        "platform/api/tests/test_shape_result_ingestion.py"
+      ],
+      "planned_new_paths": [
+        "platform/api/tests/test_shape_project_launch.py"
+      ],
+      "acceptance": [
+        "A02",
+        "A03",
+        "A04",
+        "A05",
+        "A06",
+        "A07",
+        "A09",
+        "A10",
+        "A11",
+        "A12"
+      ]
+    },
+    "B": {
+      "role": "Execution: Shape graph and native producers",
+      "paths": [
+        "workflows/shape_blueprint_design.nf",
+        "modules/shape_blueprint.nf",
+        "scripts/shape_blueprint/run_shape_rfd3.py",
+        "scripts/shape_blueprint/run_shape_sequence.py",
+        "scripts/shape_blueprint/run_shape_validator_suite.py",
+        "scripts/shape_blueprint/validate_bundle.py",
+        "scripts/shape_blueprint/plan_rfd3_batches.py",
+        "scripts/shape_blueprint/prepare_shape_backbone.py",
+        "scripts/shape_blueprint/build_rfd3_aggregate.py",
+        "scripts/shape_blueprint/build_shape_result.py",
+        "scripts/shape_blueprint/build_shape_skip_bundle.py",
+        "scripts/shape_blueprint/attach_shape_post_refold.py",
+        "platform/api/tests/test_shape_scientific.py",
+        "platform/api/tests/test_shape_result_builder.py"
+      ],
+      "planned_new_paths": [
+        "scripts/shape_blueprint/tests/test_settings_transport.py"
+      ],
+      "acceptance": [
+        "A02",
+        "A03",
+        "A04",
+        "A07",
+        "A12"
+      ]
+    },
+    "C": {
+      "role": "Authoring: approved workspace and retained draft",
+      "paths": [
+        "platform/frontend/src/components/ShapeBlueprintTemplate.tsx",
+        "platform/frontend/src/components/CanonicalMeshPreview.tsx",
+        "platform/frontend/src/components/ProteinDesignWorkflow.tsx",
+        "platform/frontend/src/components/ProteinModificationTemplate.tsx",
+        "platform/frontend/src/components/JobSubmission.tsx",
+        "platform/frontend/src/components/SequenceDesignerSettings.tsx",
+        "platform/frontend/tests/shapeBlueprintLauncherBehavior.test.ts"
+      ],
+      "planned_new_paths": [
+        "platform/frontend/src/components/ShapeNativeSettings.tsx",
+        "platform/frontend/tests/vitest/shapeAuthoringCompletionMounted.test.tsx"
+      ],
+      "acceptance": [
+        "A01",
+        "A02",
+        "A03",
+        "A04",
+        "A05",
+        "A10",
+        "A11"
+      ]
+    },
+    "D": {
+      "role": "Results: cohort workspace and exact-document continuation",
+      "paths": [
+        "platform/frontend/src/components/ResultsViewer.tsx",
+        "platform/frontend/src/components/StructureViewerPane.tsx",
+        "platform/frontend/src/components/AnalyticsDashboard.tsx",
+        "platform/frontend/tests/shapeMetricsLayout.test.ts"
+      ],
+      "planned_new_paths": [
+        "platform/frontend/src/lib/shapeResultsView.ts",
+        "platform/frontend/tests/vitest/shapeResultsCompletionMounted.test.tsx"
+      ],
+      "acceptance": [
+        "A07",
+        "A08",
+        "A09",
+        "A11"
+      ]
+    }
+  }
+}

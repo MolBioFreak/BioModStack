@@ -20,7 +20,7 @@ test('BioXP cockpit is a compact OEM operator surface', () => {
         'BioXP 3200',
         'Connection',
         'Controller Activation & Recovery',
-        'Activate 24 V / Prepare Motion',
+        'Enable controllers',
         'Non-homing Recovery',
         'Manual Controls',
         'Camera',

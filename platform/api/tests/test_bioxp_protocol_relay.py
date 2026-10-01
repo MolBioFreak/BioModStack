@@ -149,15 +149,15 @@ def test_review_is_separate_bound_request(monkeypatch):
     response = client.post(BASE + f'/jobs/{JOB}/review', json=body)
     assert response.status_code == 200, response.text
     assert runtime.connection.client.calls[0][0] == 'protocol_review'
-    assert runtime.connection.active_request_calls[0]['require_fresh'] is True
+    assert runtime.connection.active_request_calls[0]['require_fresh'] is False
 
 
-def test_control_retains_its_existing_freshness_policy(monkeypatch):
+def test_control_lease_does_not_add_observation_admission(monkeypatch):
     client, runtime = make_client(monkeypatch)
     runtime.connection.client.responses['protocol_control'] = control_receipt()
     response = client.post(BASE + f'/jobs/{JOB}/control', json=control_body(action='abort'))
     assert response.status_code == 200, response.text
-    assert runtime.connection.active_request_calls[0]['require_fresh'] is True
+    assert runtime.connection.active_request_calls[0]['require_fresh'] is False
 
 
 def test_timeout_has_one_attempt_and_preserves_uncertainty(monkeypatch):
@@ -228,20 +228,20 @@ def test_live_workflow_reads_and_execute_use_active_connection(tmp_path, observa
                 assert result['route_name'] == route
                 with pytest.raises(ConnectionStateError):
                     await service.request_active_v2_query(route, expected_generation=generation + 1)
-            with pytest.raises(ConnectionStateError):
-                await service.request_active('protocol_control', expected_generation=generation, json_data={})
+            control = await service.request_active('protocol_control', expected_generation=generation, json_data={})
+            assert control['route_name'] == 'protocol_control'
             result = await service.request_active('protocol_execute', expected_generation=generation,
                                                   require_fresh=False, json_data={'idempotency_key': KEY})
             assert result['kwargs']['json_data'] == {'idempotency_key': KEY}
             with pytest.raises(ConnectionStateError):
                 await service.request_active('protocol_execute', expected_generation=generation + 1,
                                              require_fresh=False, json_data={})
-            assert len(clients[0].request_calls) == 3
+            assert len(clients[0].request_calls) == 4
             await service.disconnect()
             with pytest.raises(ConnectionStateError):
                 await service.request_active('protocol_execute', expected_generation=service.snapshot().generation,
                                              require_fresh=False, json_data={})
-            assert len(clients[0].request_calls) == 3
+            assert len(clients[0].request_calls) == 4
         finally:
             await service.close()
     asyncio.run(scenario())

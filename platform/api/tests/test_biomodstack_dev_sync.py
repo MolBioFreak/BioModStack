@@ -451,7 +451,7 @@ def test_deployment_failure_receipt_states_are_truthful(error: str, expected: st
     assert sync._deployment_failure_state(exception) == expected
 
 
-def test_deploy_transaction_validates_before_fast_forward(tmp_path: Path, monkeypatch) -> None:
+def test_deploy_transaction_ignores_stale_ngs_audit_before_fast_forward(tmp_path: Path, monkeypatch) -> None:
     sync = load_module()
     calls: list[tuple[str, ...]] = []
     local = "a" * 40
@@ -460,7 +460,7 @@ def test_deploy_transaction_validates_before_fast_forward(tmp_path: Path, monkey
     monkeypatch.setattr(
         sync,
         "validate_candidate_runtime_authority",
-        lambda _root, revision: calls.append(("validate", revision)) or {"candidate_revision": revision},
+        lambda *_args: pytest.fail("NGS audit must not gate ordinary Development deployment"),
     )
     monkeypatch.setattr(sync, "_git", lambda _root, *args, **_kwargs: calls.append(tuple(args)) or "")
     monkeypatch.setattr(sync, "_run", lambda _root, *args, **_kwargs: calls.append(tuple(args)))
@@ -470,12 +470,16 @@ def test_deploy_transaction_validates_before_fast_forward(tmp_path: Path, monkey
     source = tmp_path / "scripts" / "biomodstack_dev_sync.py"
     source.parent.mkdir()
     source.write_bytes(b"new stable synchronizer\n")
-    monkeypatch.setattr(sync, "_git_blob", lambda _root, _revision, _path: source.read_bytes())
 
+    def candidate_blob(_root, _revision, path):
+        assert path == "scripts/biomodstack_dev_sync.py"
+        return source.read_bytes()
+
+    monkeypatch.setattr(sync, "_git_blob", candidate_blob)
     result = sync._deploy_candidate(tmp_path, tmp_path / "state", "fast-forward-deploy", local, remote, local)
 
-    assert result["runtime_authority"] == {"candidate_revision": remote}
-    assert calls.index(("validate", remote)) < calls.index(("merge", "--ff-only", "refs/remotes/origin/test"))
+    assert result["candidate_revision"] == remote
+    assert ("merge", "--ff-only", "refs/remotes/origin/test") in calls
     assert installed.read_bytes() == source.read_bytes()
 
 
@@ -632,7 +636,7 @@ def test_atomic_write_flushes_executable_mode_before_replace(tmp_path: Path, mon
     assert events.index("replace") < events.index("directory-fsync")
 
 
-def test_bootstrap_successor_installs_self_attested_sync_while_paused(tmp_path: Path, monkeypatch) -> None:
+def test_bootstrap_successor_installs_self_attested_sync_without_ngs_audit(tmp_path: Path, monkeypatch) -> None:
     sync = load_module()
     revision = "c" * 40
     (tmp_path / ".git").write_text("gitdir: /tmp/fake-git\n", encoding="utf-8")
@@ -655,7 +659,7 @@ def test_bootstrap_successor_installs_self_attested_sync_while_paused(tmp_path: 
     monkeypatch.setattr(
         sync,
         "validate_candidate_runtime_authority",
-        lambda _root, target: {"candidate_revision": target},
+        lambda *_args: pytest.fail("NGS audit must not gate a Git-byte-attested successor"),
     )
 
     result = sync.bootstrap_successor_sync(tmp_path, tmp_path / "state", revision)

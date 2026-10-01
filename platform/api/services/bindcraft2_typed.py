@@ -49,6 +49,16 @@ def schema() -> dict:
         field["source_evidence"] = descriptor["source"]
         if "items" in descriptor:
             field["items"] = descriptor["items"]
+        for key in ("control", "recommended_default", "recommended_default_reason"):
+            if key in descriptor:
+                field[key] = descriptor[key]
+    # BMS initial-request policy is distinct from the unmodified native presets.
+    # Explicit values and persisted compilation receipts keep their own meaning.
+    data["recommended_defaults"] = {
+        name: descriptor["recommended_default"]
+        for name, descriptor in evidence.get("top_level_request_types", {}).items()
+        if "recommended_default" in descriptor
+    }
     data["unresolved_fields"] = sorted(k for k, v in data["fields"].items() if v["status"] != "typed")
     for group, metrics in data["registered_metrics"].items():
         for metric, entry in metrics.items():
@@ -82,6 +92,10 @@ def schema() -> dict:
                 else:
                     descriptor["unresolved_reason"] = "No source-backed JSON type"
     data["typed_evidence"] = evidence
+    from services.bindcraft2_typed_settings import FEATURE_SELECTORS
+    data["display_selector_fields"] = sorted(
+        {"core", "modality", "target"} | set(data["presets"]["property"]) | FEATURE_SELECTORS
+    )
     data["nested_control_schemas"] = nested_control_schemas(data)
     from services.bindcraft2_runtime import action_schema
     data["native_actions"] = action_schema()
@@ -219,6 +233,9 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
         if field["status"] != "typed":
             raise ValueError(f"{name}: unresolved native type")
         _check(value, field["observed_types"], name)
+        if name == "subbatch_size" and value is not None and value != "auto":
+            if type(value) is not int or value < 1:
+                raise ValueError("subbatch_size: expected null (off), 'auto', or a positive integer")
         if "choices" in field and value not in field["choices"]:
             raise ValueError(f"{name}: unknown native choice {value!r}")
         if isinstance(value, dict):
@@ -310,6 +327,18 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
     if not isinstance(request.get("max_trajectories"), int) or isinstance(request.get("max_trajectories"), bool) or request["max_trajectories"] < 1:
         raise ValueError("max_trajectories: explicit positive integer required")
     return request
+
+
+def normalize_new_campaign_request(request: dict, data: dict | None = None) -> dict:
+    """Apply approved BMS defaults only at new public campaign boundaries.
+
+    Compiler, historical readback and native lifecycle replay do not call this;
+    old omissions continue to resolve through their original native contract.
+    """
+    from copy import deepcopy
+    data = data or schema()
+    validated = validate_request(request, data)
+    return {**deepcopy(data.get("recommended_defaults", {})), **deepcopy(validated)}
 
 
 def compile_typed(request: dict, project_folder: Path, resolve=None, sweep_arms=None, *, resume=False) -> dict:

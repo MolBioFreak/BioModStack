@@ -24,7 +24,7 @@ from paths import get_code_root, get_container_dir, get_data_root, get_weights_r
 from services.result_contracts import resolve_result_contract
 
 from .contracts import RemoteExecutionEnvelope, RemoteFileRecord
-from .images import IMAGE_SELECTORS, resolve_image
+from .images import IMAGE_SELECTORS, resolve_image, image_reference
 
 
 class RemoteBundleError(RuntimeError):
@@ -237,6 +237,8 @@ def _record_file(
     path: Path,
     relative_path: str,
     role: Literal["source", "input", "runtime", "result", "log", "receipt"],
+    *,
+    staged_sha256: str | None = None,
 ) -> RemoteFileRecord:
     if path.is_symlink() or not path.is_file():
         raise RemoteBundleError(f"Package input is not one regular file: {path}")
@@ -250,7 +252,7 @@ def _record_file(
         from .images import verify_image
         digest = verify_image(path, path.parent.name)['sha256']
     else:
-        digest = _sha256_file(path)
+        digest = staged_sha256 if staged_sha256 is not None else _sha256_file(path)
     return RemoteFileRecord(
         relative_path=relative_path,
         size_bytes=path.stat().st_size,
@@ -276,6 +278,8 @@ def _records_for_source(
     source: Path,
     prefix: str,
     role: Literal["source", "input", "runtime", "result", "log", "receipt"],
+    *,
+    source_archive_sha256: str | None = None,
 ) -> list[RemoteFileRecord]:
     if source.is_symlink():
         if role != "runtime":
@@ -301,8 +305,13 @@ def _records_for_source(
             records.append(_record_runtime_symlink(path, relative))
             continue
         if path.is_file():
+            # Only the archive just verified while staging can reuse its digest.
+            # Extracted leaves and all other inventory retain their body checks.
+            staged_sha256 = (source_archive_sha256
+                if role == "source" and path == source / '.bms-source.tar.gz' else None)
             records.append(
-                _record_file(path, f"{prefix.rstrip('/')}/{path.relative_to(source).as_posix()}", role)
+                _record_file(path, f"{prefix.rstrip('/')}/{path.relative_to(source).as_posix()}", role,
+                             staged_sha256=staged_sha256)
             )
     if not records:
         raise RemoteBundleError(f"Required package directory is empty: {source}")
@@ -391,10 +400,59 @@ def verify_selected_preparation_inputs(plan, observed=None):
             raise RemoteBundleError('Native preparation input changed or is missing: ' + path)
 
 
+def _published_runtime_records(source: Path, prefix: str, *, publication=None, resolved=None):
+    """Reuse declared shared assets only at their existing installation binding.
+
+    Attempt source/inputs and custom weight overrides retain their byte inventory.
+    """
+    from .hf_assets import published_asset_rows
+    from .images import image_reference
+    logical = prefix.removeprefix('runtime/')
+    if logical.startswith('weights/'):
+        expected = get_weights_root().resolve() / logical.removeprefix('weights/')
+        if source != expected:
+            return None
+        rows = published_asset_rows(logical, index=publication, resolved=resolved)
+    elif logical.startswith('containers/'):
+        name = logical.removeprefix('containers/')
+        path, digest = image_reference(name, get_container_dir().resolve())
+        if source != path.resolve():
+            if name not in IMAGE_SELECTORS:
+                return None
+            path, digest = image_reference(name, get_container_dir().resolve(),
+                {IMAGE_SELECTORS[name][0]: str(source)})
+            if source != path.resolve():
+                return None
+        rows = published_asset_rows(logical, index=publication, resolved=resolved)
+        if digest is not None:
+            rows = [r for r in rows or [] if r['sha256'] == digest]
+            if not rows:
+                info = path.stat(follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode):
+                    raise RemoteBundleError('Selected runtime image is not regular')
+                rows = [dict(name=logical, sha256=digest, size_bytes=info.st_size,
+                             mode=stat.S_IMODE(info.st_mode))]
+        elif rows and any(Path(r.get('source', str(path.resolve()))) != source for r in rows):
+            return None
+    else:
+        return None
+    if rows is None:
+        return None
+    return [RemoteFileRecord(relative_path=('runtime/' if prefix.startswith('runtime/') else '') + r['name'],
+        sha256=r['sha256'], size_bytes=r['size_bytes'], mode=r['mode'], role='runtime',
+        link_target=r.get('target')) for r in rows]
+
+
+def _runtime_records(source: Path, prefix: str, *, publication=None, resolved=None):
+    rows = _published_runtime_records(source, prefix, publication=publication, resolved=resolved)
+    return rows if rows is not None else _records_for_source(source, prefix, 'runtime')
+
+
 def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
                     include_support=False, native_invocation: NativeInvocation | None = None,
                     selected_plan: SelectedExecutionPlan | None = None,
-                    only_kinds: frozenset[str] | None = None) -> list[tuple[Path, str]]:
+                    only_kinds: frozenset[str] | None = None, publication=None,
+                    resolved=None) -> list[tuple[Path, str]]:
     """Materialize the shared selected dependency projection, never reselect science.
 
     The native compiler owns conditional stage selection. This boundary only
@@ -449,8 +507,14 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
         relative = dependency.relative_path
         selected = params.get(dependency.selector) if dependency.selector else None
         if dependency.kind == 'image' and relative:
-            path = (resolve_image(relative, root, params) if relative in IMAGE_SELECTORS or not selected
-                    else Path(str(selected)).expanduser())
+            if relative in IMAGE_SELECTORS or not selected:
+                path, digest = image_reference(relative, root, params)
+                from .hf_assets import published_asset_rows
+                if digest is None and published_asset_rows('containers/' + relative, index=publication,
+                                                           resolved=resolved) is None:
+                    path = resolve_image(relative, root, params)
+            else:
+                path = Path(str(selected)).expanduser()
         else:
             path = Path(str(selected)).expanduser() if selected else root / relative if relative else None
         if dependency.selector_subpath is not None:
@@ -722,6 +786,14 @@ def _input_assets(
         # arbitrary historical campaigns nor rewrite sealed compilation bytes.
         root = Path(params['bc2_compilation']).parent
         selected[root] = 'bindcraft2'
+    if (native_invocation.model_id, native_invocation.mode) == ('protein_modification_experimental', 'shape_blueprint'):
+        # Geometry and typed native inputs share the existing immutable request
+        # directory. Keep that layout intact without rewriting the sealed JSON.
+        request_path = Path(params['shape_request_path']).resolve()
+        root = request_path.parent
+        if not any(root != allowed and _under(root, allowed) for allowed in input_roots):
+            raise RemoteBundleError('Shape request directory is outside managed inputs')
+        selected[root] = f"shape-request/{hashlib.sha256(str(root).encode()).hexdigest()[:16]}"
     # A selected input directory already owns its contained generated files.
     # Do not transfer/hash the same bytes again as standalone child inputs.
     selected = {path: relative for path, relative in selected.items()
@@ -852,7 +924,7 @@ def compile_remote_dependencies(
             # The default is inventoried/verified below; no override to compile.
             continue
         try:
-            selected = str(resolve_image(name, get_container_dir().resolve(), params))
+            selected = str(image_reference(name, get_container_dir().resolve(), params)[0])
         except (OSError, RuntimeError, ValueError, KeyError) as exc:
             raise RemoteBundleError(f"Selected runtime image is unavailable: {name}") from exc
         if (flag not in params and selected == str(get_container_dir().resolve() / name)):
@@ -1057,7 +1129,7 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
         expected = _SOURCE_ARCHIVE_DIGESTS.get(key)
         if archive.is_symlink() or (archive.exists() and not archive.is_file()):
             raise RemoteBundleError('Unsafe cached source archive')
-        if not archive.exists() or not expected or _sha256_file(archive) != expected:
+        if not archive.exists() or not expected:
             temporary = cache_root / ('.archive-' + uuid.uuid4().hex)
             try:
                 with temporary.open('xb') as output:
@@ -1082,6 +1154,8 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
                 destination.write(chunk)
                 staged_digest.update(chunk)
         if staged_digest.hexdigest() != expected:
+            # Retry regenerates through Git; never extract mismatched private bytes.
+            _SOURCE_ARCHIVE_DIGESTS.pop(key, None)
             raise RemoteBundleError('Cached source archive changed during staging')
         os.utime(archive, None, follow_symlinks=False)
         _prune_source_archives(cache_root)
@@ -1185,8 +1259,12 @@ def prepare_remote_bundle(
         if (not bound_paths.get('nextflow_container') or not bound_environment.get('BMS_NEXTFLOW_EXECUTABLE')
                 or bound_paths.get('nextflow') != bound_environment['BMS_NEXTFLOW_EXECUTABLE']):
             raise RemoteBundleError('Managed Nextflow container runtime needs updating; reattach the target')
+    from .hf_assets import publication_index
+    publication = publication_index() or {}
+    resolved = {}
     runtime_assets = _runtime_assets(str(job.model_id), str(job.mode), effective_params,
-                                    include_support=not bool(binding), native_invocation=native_invocation)
+                                    include_support=not bool(binding), native_invocation=native_invocation,
+                                    publication=publication, resolved=resolved)
     runtime_paths = {path.resolve() for path, _ in runtime_assets}
     runtime_references: dict[str, dict[str, Any]] = {}
     runtime_records: list[RemoteFileRecord] = []
@@ -1230,7 +1308,7 @@ def prepare_remote_bundle(
             source = _relocate_python_runtime(path, staging_root / "support-python", destination)
             lexical_runtime = Path(os.getenv("BMS_CM_API_RUNTIME_DIR", str(data_root / "runtime" / "cm-api-python")))
             runtime_path_map[str(lexical_runtime / "current")] = destination
-        recorded = _records_for_source(source, f"runtime/{relative}", "runtime")
+        recorded = _runtime_records(source, f"runtime/{relative}", publication=publication, resolved=resolved)
         (weight_records if relative.startswith("weights/") else runtime_records).extend(recorded)
         runtime_hashes.update({record.relative_path.removeprefix("runtime/"): record.sha256
                                for record in recorded if record.link_target is None})
@@ -1375,7 +1453,8 @@ def prepare_remote_bundle(
 
     verify_approved_native_inputs(job, runtime_references, input_hashes)
     verify_selected_preparation_inputs(native_invocation.execution_plan, input_hashes)
-    source_records = _records_for_source(source_root, "source", "source")
+    source_records = _records_for_source(source_root, "source", "source",
+                                         source_archive_sha256=source_archive_sha256)
     remote_results = f"{remote_attempt}/results"
     bindings_transfer, bindings_record = _write_portable_bindings(
         staging_root=staging_root, remote_attempt=remote_attempt,

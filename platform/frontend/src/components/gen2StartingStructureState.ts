@@ -146,6 +146,10 @@ export const buildMolecularDynamicsHandoffInitialValues = (
             chemistry_profile_sha256: selectedProfileDigest,
         };
     }
+    // Destination belongs to MD, never to the predictor's source/stage context.
+    if (typeof savedDraft?.destinationLaunchContextId === 'string') {
+        result.md_destination_launch_context_id = savedDraft.destinationLaunchContextId;
+    }
     if (route.sourcePredictionJobId) result.source_prediction_job_id = route.sourcePredictionJobId;
     if (route.sourceDesignId) result.source_design_id = route.sourceDesignId;
     return result;

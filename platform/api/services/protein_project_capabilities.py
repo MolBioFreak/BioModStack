@@ -714,6 +714,31 @@ for _model_id, _modes in _NATIVE_BINDER_SETUP_PAIRS.items():
             receipt_contracts=[], project_setup_destination=_destination, project_native_owner_id=_owner))
 
 
+# Shape authoring retains its submitted request, not browser-created staged paths.
+# The setup owner materializes it through the existing Shape request service.
+SHAPE_SETUP_CAPABILITY_ID = 'protein.native.protein_modification_experimental.shape_blueprint'
+_shape_schema = _schema(SHAPE_SETUP_CAPABILITY_ID, 'Shape editor draft', {
+    'shape_submitted_request': {'type': 'object', 'description': 'SubmittedShapeRequest; validated and materialized by the Shape owner.'},
+    'editor_state': {'type': 'object', 'default': {'modification_mode': 'shape_blueprint'},
+                     'description': 'Reopenable editor state; never scheduler parameters.'},
+}, ['shape_submitted_request'], authority='project_manager_typed_launcher_handoff')
+_shape_schema['x-bms-native-editor-draft'] = True
+_PARAMETER_SCHEMAS[SHAPE_SETUP_CAPABILITY_ID] = _shape_schema
+_PARAMETER_SCHEMA_BY_ID[_shape_schema['$id']] = _shape_schema
+_CAPABILITIES.append(_capability(
+    SHAPE_SETUP_CAPABILITY_ID, label='RFD3 Shape / CAD', family='de_novo_design',
+    category='generative_design', role='shape_conditioned_generation', allowed_modes=['design', 'exploration'],
+    plannable=True, exposure_state='accepted', availability_state='operational', availability_reason=None,
+    workflow_family='typed_core_job', workflow_adapter_id='bms.core-job.protein_modification_experimental.adapter.v1',
+    launch_mode='typed_launcher_handoff', destination='/submit?template=protein_modification_experimental&mode=shape_blueprint',
+    model_modes=[{'model_id': 'protein_modification_experimental', 'mode': 'shape_blueprint'}],
+    result_adapter_ids=['bms.core-job.protein_modification_experimental.adapter.v1'],
+    result_contracts=['typed_core_job_result'], viewer_id='job_results', accepted_source_roles=[], receipt_contracts=[],
+    project_setup_destination='/submit?template=protein_modification_experimental&mode=shape_blueprint',
+    project_native_owner_id='protein_modification_experimental',
+))
+
+
 _CAPABILITY_BY_ID = {record["capability_id"]: record for record in _CAPABILITIES}
 if len(_CAPABILITY_BY_ID) != len(_CAPABILITIES):
     raise RuntimeError("duplicate Protein Project capability ID")
@@ -791,9 +816,14 @@ def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | N
         raise ProteinProjectCapabilityError("native child workflow adapter disagrees")
     capability_id = f"protein.native.{request.model_id}.{request.mode}"
     if setup_capability_id is not None:
+        supported_pair = (
+            pair == ('protein_modification_experimental', 'shape_blueprint')
+            if setup_capability_id == SHAPE_SETUP_CAPABILITY_ID
+            else request.mode in _NATIVE_BINDER_SETUP_PAIRS.get(request.model_id, ())
+        )
         if (not _PARAMETER_SCHEMAS.get(setup_capability_id, {}).get("x-bms-native-editor-draft")
-                or request.mode not in _NATIVE_BINDER_SETUP_PAIRS.get(request.model_id, ())):
-            raise ProteinProjectCapabilityError("native setup request must use a supported binder editor")
+                or not supported_pair):
+            raise ProteinProjectCapabilityError("native setup request must use its supported editor")
         capability_id = setup_capability_id
     schema_id = f"bms.workflow-parameters.{capability_id}.v1"
     params = copy.deepcopy(request.params)

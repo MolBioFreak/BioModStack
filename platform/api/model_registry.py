@@ -45,6 +45,16 @@ class ModelParameter(BaseModel):
     hidden: bool = False  # Advanced params hidden by default
     preset_type: Optional[str] = None  # pdb, sequence, ligand - for enhanced UI
     file_type: Optional[str] = None  # pdb, sdf, cif - file extension hint
+    # Discovery-only presentation; not additional scientific admission rules.
+    accepted_types: Optional[List[str]] = None
+    label: Optional[str] = None
+    units: Optional[str] = None
+    group: Optional[str] = None
+    ui_control: Optional[str] = None
+    step: Optional[float] = None
+    applicability: Optional[Dict[str, Any]] = None
+    required_when: Optional[Dict[str, Any]] = None
+    nullable_when: Optional[Dict[str, Any]] = None
 
 
 class ModelMode(BaseModel):
@@ -102,7 +112,7 @@ class RuntimeDependencyRef(BaseModel):
 INDEPENDENT_RUNTIME_MODELS = frozenset({
     "protenix", "esmfold2", "esmfold2_experimental", "fampnn", "frustrampnn",
     "boltz2", "af2", "proteinmpnn", "unidock", "protein_modification_experimental",
-    "caliby_binder", "caliby_experimental", "ligandmpnn",
+    "caliby_binder", "caliby_experimental", "ligandmpnn", "bindcraft2",
 })
 
 
@@ -137,6 +147,10 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
     if model_id == 'protein_modification_experimental':
         return _denovo_runtime_dependencies()
     refs = [RuntimeDependencyRef(kind="image", relative_path=model.container)]
+    if model_id == 'bindcraft2':
+        # Native campaign bind in scripts/run_bindcraft2.py; image-owned MPNN
+        # plus the selected AlphaFold parameter tree.
+        refs.append(RuntimeDependencyRef(kind='weights', relative_path='alphafold/params'))
     if model_id == 'caliby_experimental':
         from services.caliby_native import SUPPORTED_MODES, selected_assets
         # Union of the two public native tasks' declared default checkpoints;
@@ -179,12 +193,14 @@ def _denovo_runtime_dependencies() -> tuple[RuntimeDependencyRef, ...]:
             refs.append(RuntimeDependencyRef(kind='weights', relative_path=weights))
     # Family preload retains the complete managed DISCO tree.
     refs.append(RuntimeDependencyRef(kind='weights', relative_path='disco'))
-    # Both designers ship their default checkpoints inside their images.
+    # ProteinMPNN and FA-MPNN ship defaults inside their images; Shape's
+    # ordinary Caliby design uses its model-owned managed checkpoint.
     for peer in ('fampnn', 'proteinmpnn', 'esmfold2'):
         refs.extend(model_runtime_dependencies(peer))
+    refs.extend(model_image_dependencies('caliby_experimental'))
     refs.extend(model_image_dependencies('protenix'))
     refs.extend(model_image_dependencies('boltz2'))
-    for process in ('RunRFD3', 'RunShapeRFD3', 'RunLaProteina',
+    for process in ('RunRFD3', 'RunShapeRFD3', 'RunLaProteina', 'RunShapeCaliby',
                     'RunShapeBoltzValidator', 'RunShapeProtenixValidator'):
         dependencies, _ = native_checkpoint_dependencies(process, {})
         refs.extend(RuntimeDependencyRef(kind=dep.kind, relative_path=dep.relative_path)
@@ -195,10 +211,31 @@ def _denovo_runtime_dependencies() -> tuple[RuntimeDependencyRef, ...]:
 def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
     """Input-free consumer layouts; preparation never selects scientific settings.
 
-    ESMFold fast/full share the managed tree (including its HF assets). Protenix
-    uses native member metadata for ordinary, anchored and template consumers.
+    ESMFold fast/full share the managed tree (including its HF assets). Binder
+    validation uses Protenix without generic template search; its target-anchored
+    mode constructs a task-local CIF, not a bulk mmCIF corpus.
     FrustraMPNN checkpoints are image-owned and add no shared weight members.
     """
+    if workflow_id == 'antibody_denovo':
+        from services.ppiflow_generation import MODES
+        boltzgen, blockers = native_checkpoint_dependencies('RunBoltzGen', {
+            'boltzgen_checkpoint_mode': 'both', 'boltzgen_protocol': 'protein-small_molecule'})
+        if blockers:
+            raise ValueError('Native BoltzGen pack dependencies are unresolved')
+        groups = {
+            'bindcraft2': ('alphafold/params',),
+            'rfantibody': ('rfantibody',),
+            'boltzgen': tuple(dep.relative_path for dep in boltzgen),
+            'caliby_binder': tuple(dep.relative_path for dep in
+                native_checkpoint_dependencies('RunCalibyBinder', {})[0]),
+            'boltz2': ('boltz',),
+            'esmfold2': ('esmfold2',),
+        }
+        groups.update({'ppiflow_' + mode: ('ppiflow/' + fields[2],)
+                       for mode, fields in MODES.items()})
+        groups['protenix'] = tuple(dep.relative_path for dep in
+            native_checkpoint_dependencies('ProtenixPredict', {})[0])
+        return groups
     if workflow_id != 'structure_prediction':
         raise ValueError('Workflow pack binding is not available')
     boltz, _ = native_checkpoint_dependencies('RunBoltz', {})
@@ -220,14 +257,29 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
 
 
 def workflow_pack_dependencies(workflow_id: str):
-    """All supported Structure assets, not a synthetic scientific request.
-
-    Reuse public predictor/image bindings and the trusted embedded FrustraMPNN
-    binding. Boltz API is an external service: no image, credentials or MSA
-    acquisition belongs to this pack. Shared references are deduplicated before
-    filesystem inventory, not after hashing the same tree for each predictor.
-    """
-    workflow_pack_weight_groups(workflow_id)  # closed supported workflow identity
+    """Input-free union of the selected workflow's declared managed assets."""
+    groups = workflow_pack_weight_groups(workflow_id)  # closed supported identity
+    if workflow_id == 'antibody_denovo':
+        from native_components import LABEL_ASSETS
+        registry = get_registry()
+        bindcraft2 = registry.get_model('bindcraft2')
+        if bindcraft2 is None or not bindcraft2.enabled:
+            raise ValueError('BindCraft2 runtime binding is unavailable')
+        # RFANTIBODY is a process-level container in modules/antibody_denovo.nf.
+        # All other labels are the native nextflow.config process bindings.
+        images = {bindcraft2.container, 'rfantibody.sif'}
+        images.update(LABEL_ASSETS[label][0] for label in (
+            'BoltzGen', 'PPIFlow', 'MPNN', 'FAMPNN', 'Caliby',
+            'pyrosetta_tools', 'Foundry', 'MolecularDynamicsPreparation',
+            'MolecularDynamicsGromacs', 'MolecularDynamicsAnalysis'))
+        images.update(ref.relative_path for model_id in ('protenix', 'boltz2', 'esmfold2')
+                      for ref in model_image_dependencies(model_id))
+        images.update(ref.relative_path for ref in model_runtime_dependencies('frustrampnn', internal=True)
+                      if ref.kind == 'image')
+        refs = [RuntimeDependencyRef(kind='image', relative_path=path) for path in sorted(images)]
+        refs.extend(RuntimeDependencyRef(kind='weights', relative_path=member)
+                    for members in groups.values() for member in members)
+        return tuple(dict.fromkeys(refs))
     refs = []
     for model_id in ('boltz2', 'protenix', 'esmfold2'):
         refs.extend(ref for ref in model_runtime_dependencies(model_id)
@@ -300,9 +352,14 @@ def native_checkpoint_dependencies(process: str, params: dict):
             relative = 'caliby/model_params/' + member
             dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
                 'scripts/caliby_runtime.py:resolve_expected_caliby_checkpoint; MODEL_PARAMS_DIR'))
-    elif process == 'RunCalibyNative':
+    elif process in {'RunCalibyNative', 'RunShapeCaliby'}:
         from services.caliby_native import selected_assets
-        assets = selected_assets(params['task'], params)
+        if process == 'RunShapeCaliby':
+            request = params.get('shape_request') or {}
+            settings = request.get('sequence_settings', params.get('shape_sequence_settings', {}))
+            assets = selected_assets('ensemble_design', settings)
+        else:
+            assets = selected_assets(params['task'], params)
         relative = assets['model_params_subdir'] + '/' + assets['checkpoint']
         dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
             'services.caliby_native:selected_assets; MODEL_PARAMS_DIR'))
@@ -318,9 +375,15 @@ def native_checkpoint_dependencies(process: str, params: dict):
         members = ['checkpoint/protenix-v2.pt', 'common/components.cif',
                    'common/components.cif.rdkit_mol.pkl',
                    'common/clusters-by-entity-40.txt', 'common/obsolete_release_date.csv']
-        enabled = lambda key: params.get(key) in (True, 'true')
+        selected_params = params
+        if process == 'RunShapeProtenixValidator':
+            request = params.get('shape_request') or {}
+            # Historical Shape always disables templates. Only this workflow's
+            # retained native settings opt in, never unrelated global defaults.
+            selected_params = request.get('validator_settings', {}).get('protenix_v2', {})
+        enabled = lambda key: selected_params.get(key) in (True, 'true')
         anchored = process in {'ProtenixFromComplex', 'BatchProtenixValidation'} and enabled('protenix_anchor_target')
-        templates = process != 'RunShapeProtenixValidator' and (enabled('protenix_use_template') or anchored)
+        templates = enabled('protenix_use_template') or anchored
         if templates:
             members.extend(('common/obsolete_to_successor.json', 'common/release_date_cache.json'))
             # Anchored consumers generate mmcif from their declared target input.

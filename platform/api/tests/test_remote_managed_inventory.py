@@ -3,7 +3,6 @@ import asyncio
 import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import uuid
@@ -80,26 +79,69 @@ async def provision(client, controller, kind='model'):
     response = await client.post('/vast:1/provision/preview', json=selection)
     assert response.status_code == 200, response.text
     preview = response.json()
-    assert preview['scope'] == 'managed_asset_activation'
+    assert preview['scope'] == 'download_only'
     response = await client.post('/vast:1/provision', json=selection | {'preview_sha256': preview['preview_sha256']})
     assert response.status_code == 202, response.text
     await settle(controller)
     return preview
 
 
+@pytest.fixture
+def historical_release(store, assets):
+    """Seed a real historical generation independently of DOWNLOAD."""
+    from tools import bms_artifact_cache as helper, bms_managed_runtime as runtime
+    from services.remote_execution.transport import RemoteConnection
+
+    async def seed(kind='image'):
+        async with store() as session:
+            target = await session.get(ExecutionTarget, 'vast:1')
+            worker = Path(target.remote_root)
+            connection = RemoteConnection.from_target(target)
+            manifests = mi.saved_manifests(target)
+        storage = helper.Cache(worker / 'cache/artifacts/v1')
+        rows = []
+        sources = [('containers/protenix.sif', assets[0] / 'protenix.sif', 'runtime_image')]
+        if kind == 'model':
+            sources.append(('weights/protenix/model.pt', assets[1] / 'protenix/model.pt', None))
+        for name, source, artifact_kind in sources:
+            data = source.read_bytes()
+            row = dict(name=name, sha256=hashlib.sha256(data).hexdigest(),
+                       size_bytes=len(data), mode=0o644)
+            if artifact_kind:
+                row['kind'] = artifact_kind
+            incoming = Path(storage.incoming_batch(str(uuid.uuid4()), uuid.uuid4().hex, create=True)) / 'asset'
+            incoming.write_bytes(data)
+            storage.ingest(row, incoming)
+            rows.append(row)
+        manifest = dict(selection=dict(kind=kind, model_id='protenix'),
+                        source_revision='a'*40, source_tree='b'*40, artifacts=rows)
+        runtime.install(worker / 'managed-assets/v1', manifest, runtime.boot_id(), helper)
+        manifests = [m for m in manifests if m['selection'] != manifest['selection']] + [manifest]
+        observed = await mi.observe_releases(connection, manifests, cache._noop)
+        async with store() as session:
+            target = await session.get(ExecutionTarget, 'vast:1')
+            target.provider_metadata = copy.deepcopy(target.provider_metadata) | dict(
+                managed_boot_id=str(observed.boot_id), managed_inventory=dict(
+                    manifests=manifests, observation=observed.model_dump(mode='json'),
+                    endpoint_sha256=mi.endpoint_digest(target)))
+            await session.commit()
+        return manifest
+    return seed
+
+
 @pytest.mark.asyncio
-async def test_cumulative_inventory_rehashes_without_host_assets(mounted, assets):
+async def test_cumulative_inventory_rehashes_without_host_assets(mounted, assets, historical_release):
     client, controller, worker, (calls, uploads) = mounted
     assert (await client.get('/vast:1/runtime-inventory')).json() is None
-    await provision(client, controller, 'model')
-    await provision(client, controller, 'image')
+    await historical_release('model')
+    await historical_release('image')
     response = await client.get('/vast:1/runtime-inventory')
     inventory = response.json()
     assert inventory['state'] == 'current'
     assert len(inventory['releases']) == 2
     assert not inventory['scientific_ready'] and not inventory['critical_runtime_ready']
     assert all(r['state'] == 'verified' for r in inventory['releases'])
-    assert len(uploads) == 2
+    assert not uploads
     # Both selections share precisely one independently verified immutable SIF.
     images = list(worker.rglob('*.sif'))
     assert len(images) == 1
@@ -126,16 +168,16 @@ async def test_cumulative_inventory_rehashes_without_host_assets(mounted, assets
     refreshed = response.json()
     assert refreshed['state'] == 'current'
     assert [r['state'] for r in refreshed['releases']] == ['partial', 'verified']
-    assert len(uploads) == 2
+    assert not uploads
     assert not (worker / 'attempts').exists()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('damage,expected', [('corrupt', 'corrupt'), ('mode', 'corrupt'),
     ('symlink', 'corrupt'), ('marker', 'unverified'), ('missing', 'missing')])
-async def test_observation_reports_real_damage(mounted, damage, expected):
+async def test_observation_reports_real_damage(mounted, historical_release, damage, expected):
     client, controller, worker, _ = mounted
-    await provision(client, controller, 'image')
+    await historical_release('image')
     result = (await client.get('/vast:1/runtime-inventory')).json()['releases'][0]
     path = worker / 'cache/runtime-images/objects/sha256' / result['artifacts'][0]['sha256'] / 'runtime.sif'
     if damage in {'symlink', 'missing'}:
@@ -163,9 +205,9 @@ async def test_observation_reports_real_damage(mounted, damage, expected):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('change', ['expired', 'future', 'endpoint', 'host_key', 'root', 'boot', 'inactive', 'provider_stopped'])
-async def test_managed_projection_stale_identities(mounted, store, change):
+async def test_managed_projection_stale_identities(mounted, store, historical_release, change):
     client, controller, _, (calls, _) = mounted
-    await provision(client, controller, 'image')
+    await historical_release('image')
     async with store() as session:
         row = await session.get(ExecutionTarget, 'vast:1')
         metadata = copy.deepcopy(row.provider_metadata)
@@ -191,9 +233,9 @@ async def test_managed_projection_stale_identities(mounted, store, change):
 
 
 @pytest.mark.asyncio
-async def test_readback_failure_invalidates_but_preserves_previous(mounted, monkeypatch):
+async def test_readback_failure_invalidates_but_preserves_previous(mounted, historical_release, monkeypatch):
     client, controller, _, _ = mounted
-    await provision(client, controller, 'image')
+    await historical_release('image')
     before = (await client.get('/vast:1/runtime-inventory')).json()
     original = cache.run_remote
     async def unavailable(*args, **kwargs):
@@ -213,9 +255,9 @@ async def test_readback_failure_invalidates_but_preserves_previous(mounted, monk
 
 
 @pytest.mark.asyncio
-async def test_endpoint_changes_during_readback_cannot_publish(mounted, store, monkeypatch):
+async def test_endpoint_changes_during_readback_cannot_publish(mounted, store, historical_release, monkeypatch):
     client, controller, _, _ = mounted
-    await provision(client, controller, 'image')
+    await historical_release('image')
     original = mi.observe_releases
     async def replaced(*args):
         observed = await original(*args)
@@ -230,290 +272,169 @@ async def test_endpoint_changes_during_readback_cannot_publish(mounted, store, m
 
 
 @pytest.mark.asyncio
-async def test_incomplete_activation_preserves_previous_release(mounted, assets, monkeypatch):
-    client, controller, worker, _ = mounted
-    await provision(client, controller, 'image')
+async def test_incomplete_activation_preserves_previous_release(mounted, historical_release):
+    from tools import bms_artifact_cache as helper, bms_managed_runtime as runtime
+    client, _, worker, _ = mounted
+    manifest = await historical_release('image')
     marker = worker / 'managed-assets/v1/active/image-protenix.json'
     prior = marker.read_bytes()
-    (assets[0] / 'protenix.sif').write_bytes(b'new approved local image')
-    original = mi.helper_call
-    async def incomplete(connection, request, fence):
-        if request['action'] == 'install':
-            digest = request['manifest']['artifacts'][0]['sha256']
-            path = worker / 'cache/runtime-images/objects/sha256' / digest / 'runtime.sif'
-            path.parent.chmod(0o700)
-            path.unlink()
-        return await original(connection, request, fence)
-    monkeypatch.setattr(mi, 'helper_call', incomplete)
-    await provision(client, controller, 'image')
+    replacement = copy.deepcopy(manifest)
+    replacement['artifacts'][0]['sha256'] = hashlib.sha256(b'absent replacement').hexdigest()
+    replacement['artifacts'][0]['size_bytes'] = len(b'absent replacement')
+    with pytest.raises(ValueError, match='incomplete_shared_image'):
+        runtime.install(worker / 'managed-assets/v1', replacement, runtime.boot_id(), helper)
     assert marker.read_bytes() == prior
-    listing = (await client.get('')).json()
-    assert listing[0]['preload']['phase'] == 'recovery_blocked'
-    assert listing[0]['preload']['recovery_required'] is True
-    assert (await client.get('/vast:1/runtime-inventory')).json()['state'] == 'stale'
-    # Uncertain writers retain ownership: even refresh cannot bypass recovery.
-    assert (await client.post('/vast:1/runtime-inventory/refresh')).status_code == 409
-    assert marker.read_bytes() == prior
-    retained = (await client.get('/vast:1/runtime-inventory')).json()['releases'][0]
-    assert retained['state'] == 'verified' and retained['bounded_readiness'] == 'stale'
-    for artifact in retained['artifacts']:
-        cached = worker / 'cache/runtime-images/objects/sha256' / artifact['sha256'] / 'runtime.sif'
-        assert hashlib.sha256(cached.read_bytes()).hexdigest() == artifact['sha256']
+    assert (await client.get('/vast:1/runtime-inventory')).json()['releases'][0]['state'] == 'verified'
 
 
 @pytest.mark.asyncio
-async def test_boot_change_before_activation_fails_closed(mounted, monkeypatch):
-    client, controller, worker, _ = mounted
-    original = mi.helper_call
-    async def reboot(connection, request, fence):
-        if request['action'] == 'install':
-            request = request | {'boot_id': str(uuid.uuid4())}
-        return await original(connection, request, fence)
-    monkeypatch.setattr(mi, 'helper_call', reboot)
-    await provision(client, controller, 'image')
-    assert not (worker / 'managed-assets/v1/active/image-protenix.json').exists()
-    progress = (await client.get('')).json()[0]['preload']
-    assert progress['phase'] == 'recovery_blocked'
-    assert progress['recovery_required'] is True
+async def test_boot_change_before_activation_fails_closed(mounted, historical_release):
+    from tools import bms_artifact_cache as helper, bms_managed_runtime as runtime
+    _, _, worker, _ = mounted
+    manifest = await historical_release('image')
+    marker = worker / 'managed-assets/v1/active/image-protenix.json'
+    prior = marker.read_bytes()
+    with pytest.raises(ValueError, match='worker_boot_changed'):
+        runtime.install(worker / 'managed-assets/v1', manifest, str(uuid.uuid4()), helper)
+    assert marker.read_bytes() == prior
 
 
 @pytest.mark.asyncio
-async def test_cancel_before_activation_retains_cache_not_readiness(mounted, monkeypatch):
+async def test_cancel_during_acquisition_retains_cache_not_readiness(mounted, monkeypatch):
     client, controller, worker, _ = mounted
-    reached = asyncio.Event()
-    original = mi.helper_call
-    async def blocked(connection, request, fence):
-        if request['action'] == 'install':
+    reached, image_published = asyncio.Event(), asyncio.Event()
+    original = cache.rsync_to_remote
+    remote = cache.run_remote
+    async def readback(connection, argv, input_bytes=None, **kwargs):
+        result = await remote(connection, argv, input_bytes=input_bytes, **kwargs)
+        if input_bytes and '-c' not in argv:
+            request = json.loads(input_bytes)
+            if request['action'] == 'ingest' and request['artifact'].get('kind') == 'runtime_image':
+                image_published.set()
+        return result
+    async def blocked(connection, source, destination, **kwargs):
+        # Acquisition fan-out is concurrent; let the image publish before
+        # cancelling the still-blocked weight batch, not by assuming ordering.
+        if Path(source).is_dir():
+            await image_published.wait()
             reached.set()
             await asyncio.Event().wait()
-        return await original(connection, request, fence)
-    monkeypatch.setattr(mi, 'helper_call', blocked)
-    selection = dict(kind='image', model_id='protenix')
+        return await original(connection, source, destination, **kwargs)
+    monkeypatch.setattr(cache, 'run_remote', readback)
+    monkeypatch.setattr(cache, 'rsync_to_remote', blocked)
+    selection = dict(kind='model', model_id='protenix')
     preview = (await client.post('/vast:1/provision/preview', json=selection)).json()
-    assert (await client.post('/vast:1/provision', json=selection | {
-        'preview_sha256': preview['preview_sha256']})).status_code == 202
+    response = await client.post('/vast:1/provision', json=selection | {
+        'preview_sha256': preview['preview_sha256']})
+    assert response.status_code == 202, response.text
     await asyncio.wait_for(reached.wait(), timeout=10)
     await controller.close()
     progress = (await client.get('')).json()[0]['preload']
     assert progress['phase'] == 'recovery_blocked'
-    assert progress['recovery_required'] is True
-    assert not (worker / 'managed-assets/v1/active/image-protenix.json').exists()
+    assert progress['cancel_requested'] and progress['recovery_required']
+    assert not (worker / 'managed-assets').exists()
     assert (await client.get('/vast:1/runtime-inventory')).json() is None
-    digest = preview['artifacts'][0]['sha256']
-    assert (worker / 'cache/runtime-images/objects/sha256' / digest / 'runtime.sif').exists()
+    image = next(r for r in preview['artifacts'] if r['name'].endswith('.sif'))
+    assert (worker / 'cache/runtime-images/objects/sha256' / image['sha256'] / 'runtime.sif').exists()
+    weight = next(r for r in preview['artifacts'] if r['name'].endswith('model.pt'))
+    assert not (worker / 'cache/artifacts/v1/objects/sha256' / weight['sha256'][:2] / weight['sha256']).exists()
+    assert (await client.get('/vast:1/artifact-inventory')).json() is None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('damage', ['nonobject', 'bad_time', 'manifest_identity', 'false_ready',
-                                  'image_owner', 'image_size', 'image_missing', 'image_extra'])
-async def test_malformed_managed_metadata_is_not_readiness(mounted, store, damage):
-    client, controller, _, _ = mounted
-    await provision(client, controller, 'image')
-    async with store() as session:
-        row = await session.get(ExecutionTarget, 'vast:1')
-        metadata = copy.deepcopy(row.provider_metadata)
-        raw = metadata['managed_inventory']
-        if damage == 'nonobject': metadata['managed_inventory'] = ['invalid']
-        elif damage == 'bad_time': raw['observation']['observed_at'] = 'invalid'
-        elif damage == 'manifest_identity': raw['manifests'][0]['source_tree'] = 'f'*40
-        elif damage == 'false_ready': raw['observation']['releases'][0]['artifacts'][0]['state'] = 'missing'
-        else:
-            release = raw['observation']['releases'][0]
-            reference = release['image_reference']
-            if damage == 'image_owner': reference['owner'] = 'managed-release:' + 'f'*64
-            elif damage == 'image_size': next(iter(reference['identities'].values()))['size'] += 1
-            elif damage == 'image_missing': release['image_reference'] = None
-            else: reference['unapproved'] = True
-        row.provider_metadata = metadata
-        await session.commit()
-        before = copy.deepcopy(metadata)
-    assert (await client.get('/vast:1/runtime-inventory')).json() is None
-    async with store() as session:
-        assert (await session.get(ExecutionTarget, 'vast:1')).provider_metadata == before
-
-
-@pytest.mark.asyncio
-async def test_legacy_copied_image_metadata_cannot_certify_shared_storage(mounted, store):
-    client, controller, _, _ = mounted
-    await provision(client, controller, 'image')
+@pytest.mark.parametrize('legacy', [False, True])
+async def test_download_completes_without_managed_install_or_audit(mounted, store, historical_release, monkeypatch, legacy):
+    client, controller, worker, (calls, _) = mounted
+    if legacy:
+        await historical_release('image')
+        async with store() as session:
+            target = await session.get(ExecutionTarget, 'vast:1')
+            metadata = copy.deepcopy(target.provider_metadata)
+            metadata['managed_inventory']['observation']['observed_at'] = (
+                datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            target.provider_metadata = metadata
+            await session.commit()
     async with store() as session:
         target = await session.get(ExecutionTarget, 'vast:1')
-        metadata = copy.deepcopy(target.provider_metadata)
-        saved = metadata['managed_inventory']
-        legacy = saved['manifests'][0]
-        del legacy['artifacts'][0]['kind']
-        saved['observation']['releases'][0]['release_sha256'] = mi.release_digest(legacy)
-        target.provider_metadata = metadata
-        await session.commit()
-    assert (await client.get('/vast:1/runtime-inventory')).json() is None
-    assert (await client.post('/vast:1/runtime-inventory/refresh')).status_code == 409
-
-
-@pytest.mark.asyncio
-async def test_space_preflight_failure_happens_before_asset_upload(mounted, monkeypatch):
-    client, controller, worker, (_, uploads) = mounted
-    original = mi.helper_call
-    actions = []
-    async def low_space(connection, request, fence):
-        actions.append(request['action'])
-        if request['action'] == 'admit':
-            raise OSError(28, 'private worker diagnostic')
-        return await original(connection, request, fence)
-    monkeypatch.setattr(mi, 'helper_call', low_space)
-    await provision(client, controller, 'image')
-    assert actions == ['boot', 'admit']
-    assert uploads == []
+        previous = copy.deepcopy(target.provider_metadata.get('managed_inventory'))
+        prior_boot = target.provider_metadata.get('managed_boot_id')
+    before = (await client.get('/vast:1/runtime-inventory')).json()
+    if legacy:
+        assert before['state'] == 'stale'
+    async def forbidden(*args, **kwargs):
+        pytest.fail('DOWNLOAD must not install, activate or audit managed releases')
+    monkeypatch.setattr(mi, 'helper_call', forbidden)
+    monkeypatch.setattr(mi, 'activate_release', forbidden)
+    monkeypatch.setattr(mi, 'observe_releases', forbidden)
+    start_calls = len(calls)
+    preview = await provision(client, controller, 'model')
     progress = (await client.get('')).json()[0]['preload']
-    assert progress['phase'] == 'recovery_blocked'
-    assert progress['recovery_required'] is True
-    assert not (worker / 'managed-assets/v1/active/image-protenix.json').exists()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('native', [None, {'state': 'ready'}, 'invalid'])
-async def test_optional_native_readiness_never_hides_asset_inventory(mounted, store, native):
-    client, controller, _, _ = mounted
-    await provision(client, controller, 'model')
+    assert progress['phase'] == 'source_download_ready'
+    assert progress['message'] == 'Downloads complete; source cached and 1 shared weight layouts prepared'
+    receipts = (await client.get(f"/vast:1/preload/{progress['operation_id']}/artifacts",
+        params={'collection': 'cached', 'offset': 0, 'limit': 100})).json()['items']
+    assert progress['artifact_summary']['total_count'] == len(preview['artifacts'])
+    assert progress['cached_artifact_count'] == len(preview['artifacts'])
+    assert receipts == preview['artifacts']
+    weight, = [row for row in receipts if row['name'].startswith('weights/')]
+    objects = worker / 'cache/artifacts/v1/objects/sha256'
+    weight_object = objects / weight['sha256'][:2] / weight['sha256']
+    # Source is a preparation object, not another selected-asset receipt.
+    source_object, = [p for p in objects.glob('*/*') if p.name != weight['sha256']]
+    assert hashlib.sha256(source_object.read_bytes()).hexdigest() == source_object.name
+    import tarfile
+    with tarfile.open(source_object, 'r:gz') as archive:
+        assert archive.getnames() == ['fixture.txt']
+        source = archive.extractfile('fixture.txt')
+        assert source is not None
+        with source:
+            assert source.read() == b'inert offline source fixture'
+    leaf, = (worker / 'cache/artifacts/v1/weights').rglob('model.pt')
+    assert (leaf.stat().st_dev, leaf.stat().st_ino) == (weight_object.stat().st_dev, weight_object.stat().st_ino)
+    assert (await client.get('/vast:1/artifact-inventory')).json()['state'] == 'download_verified'
+    assert not any(c['action'] in {'boot', 'admit', 'install', 'activate', 'bounded_check', 'native_check'}
+                   for c in calls[start_calls:])
+    assert (await client.get('/vast:1/runtime-inventory')).json() == before
     async with store() as session:
         target = await session.get(ExecutionTarget, 'vast:1')
-        metadata = copy.deepcopy(target.provider_metadata)
-        release = metadata['managed_inventory']['observation']['releases'][0]
-        if native is None:
-            release.pop('native_readiness', None)
-        else:
-            release['native_readiness'] = native
-        target.provider_metadata = metadata
-        await session.commit()
-    inventory = (await client.get('/vast:1/runtime-inventory')).json()
-    assert inventory['state'] == 'current'
-    release = inventory['releases'][0]
-    assert release['state'] == 'verified'  # Provisioning is not scientific admission.
-    assert release['native_readiness']['state'] == 'blocked'
-    assert release['native_readiness']['blockers'] == ['critical_release_not_verified']
-    assert 'selected_image_native_preflight_binding' in release['native_readiness']['missing_authorities']
-    assert inventory['scientific_ready'] is False
+        assert target.provider_metadata.get('managed_inventory') == previous
+        assert target.provider_metadata.get('managed_boot_id') == prior_boot
+    assert not list((worker / 'managed-assets').rglob('model.pt'))
+    if not legacy:
+        assert not (worker / 'managed-assets').exists()
 
 
-def test_native_readiness_uses_shared_dependencies_without_certifying_models():
-    from model_registry import INDEPENDENT_RUNTIME_MODELS, get_registry, model_runtime_dependencies
-    for model_id in sorted(INDEPENDENT_RUNTIME_MODELS):
-        model = get_registry().get_model(model_id)
-        if model is None or not model.enabled or not model.public_launch:
-            with pytest.raises(ValueError):
-                model_runtime_dependencies(model_id)
-            continue  # Preserve actual public admission; parent-native closure is distinct.
-        dependencies = model_runtime_dependencies(model_id)
-        artifacts = [dict(name=('containers/' + d.relative_path if d.kind == 'image' else
-                                'weights/' + d.relative_path + '/fixture.bin'),
-                          sha256='a' * 64, size_bytes=1, state='verified') for d in dependencies]
-        release = mi.ManagedRelease.model_validate(dict(selection=dict(kind='model', model_id=model_id),
-            release_sha256='b' * 64, source_revision='c' * 40, source_tree='d' * 40,
-            state='verified', artifacts=artifacts))
-        ready = mi.project_native_readiness(release, current=True, critical_ready=True)
-        assert ready.state == 'unverified', model_id
-        assert not ready.blockers
-        assert ready.missing_authorities == ['selected_image_native_preflight_binding']
-        assert mi.project_native_readiness(release, current=False, critical_ready=True).state == 'stale'
-        release.artifacts.pop()
-        blocked = mi.project_native_readiness(release, current=True, critical_ready=True)
-        assert blocked.state == 'blocked', model_id
-        assert any(b.startswith('dependency_not_verified:') for b in blocked.blockers)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('damage', [None, 'boot', 'image', 'source', 'failed', 'cancel', 'reported_gpu', 'no_gpu'])
-async def test_explicit_native_probe_uses_native_script_and_bound_readback(monkeypatch, damage, critical_package):
-    from types import SimpleNamespace
-    from services import nextflow
-    from services.remote_execution import bundle, transport
-    source = Path(__file__).resolve().parents[3]
-    manifest = dict(selection=dict(kind='workflow', model_id='e' * 64),
-        source_revision='a' * 40, source_tree='b' * 40,
-        artifacts=[dict(name='containers/rfantibody.sif', kind='runtime_image',
-                        sha256='c' * 64, size_bytes=1, mode=0o444)])
-    digest = mi.release_digest(manifest)
+@pytest.mark.parametrize('outcome', ['passed', 'failed'])
+def test_historical_typed_native_probe_remains_projectable(outcome):
     boot = uuid.uuid4()
-    identity = dict(sha256='c' * 64, size=1, device=1, inode=1, mtime_ns=1, ctime_ns=1)
-    observed = mi.ManagedInventory.model_validate(dict(observed_at=datetime.now(timezone.utc),
-        boot_id=boot, releases=[dict(selection=manifest['selection'], release_sha256=digest,
-            source_revision=manifest['source_revision'], source_tree=manifest['source_tree'],
-            state='verified', artifacts=[dict(name='containers/rfantibody.sif',
-                sha256='c' * 64, size_bytes=1, state='verified')],
-            image_reference=dict(store_root='/worker/cache/runtime-images',
-                owner='managed-release:' + digest, lease_token='d' * 32, identities={'c' * 64: identity}))]))
-    critical, _, requirements, _ = critical_package
-    manifests = [manifest, critical]
-    observed.releases.append(mi.ManagedRelease.model_validate(dict(
-        selection=critical['selection'], release_sha256=mi.release_digest(critical),
-        source_revision=critical['source_revision'], source_tree=critical['source_tree'],
-        state='verified', artifacts=[{k: row[k] for k in ('name', 'sha256', 'size_bytes')} |
-            {'state': 'verified'} for row in critical['artifacts']],
-        critical=dict(requirements=critical['critical']['requirements'],
-                      observed=requirements | dict(backend='udocker', cuda='BMS_CUDA_OK'), compatible=True))))
-    calls, reads, identities = [], [], []
-    monkeypatch.setattr(nextflow, 'get_code_root', lambda: source)
-    def source_identity(root):
-        identities.append(root)
-        return ('f' * 40, 'b' * 40) if damage == 'source' and len(identities) > 1 else ('a' * 40, 'b' * 40)
-    monkeypatch.setattr(bundle, 'current_source_identity', source_identity)
-    async def readback(connection, manifests, fence):
-        await fence()
-        reads.append(manifests)
-        result = observed.model_copy(deep=True)
-        if len(reads) > 1:
-            if damage == 'boot': result.boot_id = uuid.uuid4()
-            if damage == 'image':
-                reference = result.releases[0].image_reference
-                assert reference is not None
-                reference.identities['c' * 64].inode += 1
-        return result
-    monkeypatch.setattr(mi, 'observe_releases', readback)
-    async def command(connection, argv, **kwargs):
-        calls.append((connection, argv, kwargs))
-        if damage == 'cancel': raise asyncio.CancelledError()
-        if argv[0] == 'nvidia-smi':
-            return SimpleNamespace(returncode=0, stdout='' if damage == 'no_gpu' else
-                '7, GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n')
-        return SimpleNamespace(returncode=1 if damage == 'failed' else 0, stdout='[RFA-PREFLIGHT] OK\n')
-    monkeypatch.setattr(transport, 'run_remote', command)
-    async def fence(): pass
-    connection = SimpleNamespace(provision_operation_id='owned-provision', remote_root='/worker')
-    if damage in {'boot', 'image', 'source', 'cancel'}:
-        with pytest.raises(asyncio.CancelledError if damage == 'cancel' else ValueError):
-            await mi.run_native_readiness_check(connection, manifest, fence, gpu_id=0, manifests=manifests)
-    else:
-        result = await mi.run_native_readiness_check(connection, manifest, fence,
-            gpu_id=None if damage in {'reported_gpu', 'no_gpu'} else 0, manifests=manifests)
-        release = result.releases[0]
-        assert release.native_readiness is not None
-        probe = release.native_readiness.probe
-        if damage == 'no_gpu':
-            assert probe is None and result.scientific_ready is False
-            assert release.state == 'verified'
-            assert 'native_probe_gpu_identity_not_reported' in release.native_readiness.missing_authorities
-            assert len(calls) == 1 and calls[0][1][0] == 'nvidia-smi'
-            return
-        assert probe is not None
-        assert probe.outcome == ('failed' if damage == 'failed' else 'passed') and probe.boot_id == boot
-        assert probe.gpu_id == (7 if damage == 'reported_gpu' else 0)
-        assert probe.observed_at == result.observed_at
-        assert release.state == 'verified'  # Native failure does not erase installed assets.
-        assert probe.release_sha256 == digest and probe.image_sha256 == 'c' * 64
-        assert result.scientific_ready is False
-        projection = mi.project_native_readiness(release, current=True, critical_ready=True, boot=boot)
-        assert projection.state == ('blocked' if damage == 'failed' else 'unverified') and projection.probe == probe
-        assert mi.project_native_readiness(release, current=True, critical_ready=True, boot=uuid.uuid4()).probe is None
-    assert len(calls) == (2 if damage == 'reported_gpu' else 1)
-    _, argv, kwargs = calls[-1]
-    device = 'GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' if damage == 'reported_gpu' else '0'
-    assert argv[0] == 'env'
-    assert 'BMS_CONTAINER_BACKEND=udocker' in argv
-    executable_index = argv.index('exec') - 1
-    assert argv[executable_index].endswith('/bin/bms-container')
-    assert argv[executable_index + 1:] == ['exec', '--nv', '--env', 'CUDA_DEVICE_ORDER=PCI_BUS_ID',
-                    '--env', f'CUDA_VISIBLE_DEVICES={device}', '--writable-tmpfs',
-                    '/worker/cache/runtime-images/objects/sha256/' + 'c' * 64 + '/runtime.sif', 'python3', '-']
-    assert kwargs == dict(timeout=120, input_bytes=(source / 'scripts/check_rfantibody_runtime.py').read_bytes())
+    release = mi.ManagedRelease(selection=dict(kind='model', model_id='rfantibody'),
+        release_sha256='a'*64, source_revision='b'*40, source_tree='c'*40,
+        state='verified', artifacts=[dict(name='containers/rfantibody.sif', sha256='d'*64,
+                                        size_bytes=1, state='verified')])
+    probe = mi.NativeProbeEvidence(authority='scripts/check_rfantibody_runtime.py:run_preflight',
+        outcome=outcome, gpu_id=0, gpu_uuid='historical-fixture-gpu',
+        observed_at=datetime.now(timezone.utc), release_sha256=release.release_sha256,
+        image_sha256='d'*64, script_sha256='e'*64, source_revision=release.source_revision,
+        source_tree=release.source_tree, boot_id=boot)
+    release.native_readiness = mi.NativeReadiness(state='unverified',
+        authority=probe.authority, probe=probe)
+    # Exercise serialized historical evidence, not a new provisioning probe.
+    retained = mi.ManagedRelease.model_validate_json(release.model_dump_json())
+    result = mi.project_native_readiness(retained, current=True, critical_ready=True, boot=boot)
+    assert result.probe == probe
+    assert ('native_runtime_preflight_failed' in result.blockers) == (outcome == 'failed')
+    stale = mi.project_native_readiness(retained, current=False, critical_ready=True, boot=boot)
+    assert stale.state == 'stale' and stale.probe == probe
+    rebooted = mi.project_native_readiness(retained, current=True, critical_ready=True, boot=uuid.uuid4())
+    assert rebooted.probe is None
+
+
+def test_removed_download_probe_keeps_native_task_script():
+    assert not hasattr(mi, 'run_native_readiness_check')
+    root = Path(__file__).resolve().parents[3]
+    native = (root / 'modules/rfantibody.nf').read_text()
+    assert 'check_rfantibody_runtime.py' not in native  # Optional diagnostic, not production admission.
+    assert (root / 'scripts/check_rfantibody_runtime.py').is_file()
 
 
 def test_helper_rejects_unsafe_manifest_and_symlink_parent(tmp_path):
@@ -538,3 +459,26 @@ def test_helper_rejects_unsafe_manifest_and_symlink_parent(tmp_path):
         bad['artifacts'][0]['name'] = path
         with pytest.raises(ValueError):
             runtime.validate_manifest(bad, helper)
+
+
+@pytest.mark.asyncio
+async def test_explicit_refresh_summary_keeps_full_readback_compatible(mounted, historical_release):
+    client, controller, worker, (calls, _) = mounted
+    await historical_release('model')
+    before = (await client.get('/vast:1/runtime-inventory/summary')).json()
+    previous_calls = len(calls)
+    response = await client.post('/vast:1/runtime-inventory/refresh', params={'summary': True})
+    assert response.status_code == 200, response.text
+    summary = response.json()
+    assert len(response.content) < 3000
+    assert summary['observation_id'] != before['observation_id']
+    assert summary['releases'][0]['artifact_count'] == 2
+    assert 'artifacts' not in summary['releases'][0]
+    assert any(c['action'] == 'bounded_check' for c in calls[previous_calls:])
+    assert (await client.get('/vast:1/runtime-inventory/summary')).json() == summary
+    full = (await client.get('/vast:1/runtime-inventory')).json()
+    assert full['observed_at'] == summary['observed_at']
+    assert full['releases'][0]['native_readiness'] == summary['releases'][0]['native_readiness']
+    assert len(full['releases'][0]['artifacts']) == 2
+    legacy = await client.post('/vast:1/runtime-inventory/refresh')
+    assert legacy.status_code == 200 and len(legacy.json()['releases'][0]['artifacts']) == 2

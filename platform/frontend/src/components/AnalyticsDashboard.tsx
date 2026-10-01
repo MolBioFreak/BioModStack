@@ -1,4 +1,6 @@
 import { ScientificAnalytics } from './ScientificAnalytics';
+import { CohortAnalytics } from './CohortAnalytics';
+import type { ComponentProps } from 'react';
 import { parseScientificPoint } from '../lib/scientificAnalytics';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -428,7 +430,13 @@ function pearson(valuesX: number[], valuesY: number[]): number {
     return denominator === 0 ? 0 : numerator / denominator;
 }
 
-export function AnalyticsDashboard(props: AnalyticsDashboardProps) {
+export function AnalyticsDashboard(props: AnalyticsDashboardProps & { nativeCohort?: ComponentProps<typeof CohortAnalytics> }) {
+    // Native publications already carry their metric authority. Do not query or
+    // reinterpret them through the legacy binder Design score adapter.
+    return props.nativeCohort ? <CohortAnalytics {...props.nativeCohort} /> : <GovernedAnalyticsDashboard {...props} />;
+}
+
+function GovernedAnalyticsDashboard(props: AnalyticsDashboardProps) {
     const { designs, jobId } = props;
     const ids = designs.map(design => design.id);
     const {data, isPending, error} = useQuery({

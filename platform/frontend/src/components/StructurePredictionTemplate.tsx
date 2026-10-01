@@ -153,7 +153,6 @@ const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
 export function StructurePredictionTemplate({ onBack, initialValues, onDraftChange, onOpenTemplateManager, sourceSequenceId = null, mdDraftId = null, returnTemplate = null }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const { gpuOptions, executionTargetId, telemetryRefusal, refreshGpuTelemetry } = useLiveGpuCatalog({ followExecutionTarget: true, requireFresh: true });
     const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn', fetchFrustraMpnnIntegration);
     const normalizeProtenixModel = (_model?: string) => 'protenix-v2';
     const initialPrimaryProteinComponent = resolveInitialPrimaryProteinComponent(initialValues);
@@ -169,6 +168,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         .find(Boolean) || 'A';
 
     const launchConfig = resolveStructureLaunchConfig(initialValues);
+    // Predictor selection
+    const [predictor, setPredictor] = useState<StructurePredictorSelection>(
+        (launchConfig.forcedPredictor || initialValues?.pred_method as StructurePredictorSelection | undefined) || 'boltz'
+    );
+    const { gpuOptions, executionTargetId, telemetryRefusal, refreshGpuTelemetry } = useLiveGpuCatalog({
+        followExecutionTarget: true, requireFresh: true, enabled: predictor !== 'boltz_api',
+    });
     const initialBoltzCpSizeCp = Number.parseInt(String(initialValues?.size_cp ?? initialValues?.bcp_size_cp ?? 4), 10);
     const initialBoltzCpSeed = initialValues?.seed ?? initialValues?.bcp_seed;
 
@@ -261,11 +267,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         const parsed = Number(raw);
         return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
     });
-
-    // Predictor selection
-    const [predictor, setPredictor] = useState<StructurePredictorSelection>(
-        (launchConfig.forcedPredictor || initialValues?.pred_method as StructurePredictorSelection | undefined) || 'boltz'
-    );
 
     // Boltz-2 parameters
     const initialBoltzUseMsa = launchConfig.showMsaControls ? (initialValues?.boltz_use_msa ?? true) : false;

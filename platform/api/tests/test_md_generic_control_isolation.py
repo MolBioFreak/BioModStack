@@ -93,7 +93,7 @@ async def test_every_targeted_generic_mutation_rejects_md_owner(session) -> None
         lambda: force_launch_job(parent.id, ForceLaunchRequest(gpu_id=0), session),
         lambda: delete_job_permanently(parent.id, session),
         lambda: resubmit_job(parent.id, request, Response(), session),
-        lambda: resume_job(parent.id, request, Response(), session=session),
+        lambda: resume_job(parent.id, request, Response(), request=None, session=session),
         lambda: force_run_job(parent.id, ForceRunRequest(gpu_id=0), session),
         lambda: open_stage_gate(parent.id, "generic-review", None, session),
         lambda: report_stage_complete(parent.id, request, "generic-stage", [], session),

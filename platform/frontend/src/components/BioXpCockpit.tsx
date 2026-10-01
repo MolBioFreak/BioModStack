@@ -15,8 +15,8 @@ import {
 
     useBioXpOperatorActionHistory,
     useBioXpOperatorControlCatalog,
-    useBioXpOperatorControlCatalogV2,
     useBioXpOperatorReceiptV2,
+    useBioXpOperatorReceiptDetailV2,
     useInterruptBioXpOperatorActionV1,
     useInvokeBioXpOperatorActionV2,
     useInvokeBioXpDeckActionV2,
@@ -251,10 +251,10 @@ function InterruptOutcome({ label, receipt, error, pending, generation, connecte
         <p>Source call completed: {truth(evidence?.source_call_completed)} · Source return OK: {truth(evidence?.source_return_ok)}</p>
         <p>Controller stop ACK: {truth(evidence?.controller_stop_acknowledged)} · Controller terminal state verified: {truth(evidence?.controller_terminal_state_verified)} · Physical effect unverified</p>
         <p>Receipt persistence: {evidence?.persistence_state ?? 'unknown'}</p>
+        <p>First stop ACK: {truth(evidence?.first_stop_acknowledged)} · Second stop ACK: {truth(evidence?.second_stop_acknowledged)}</p>
         {uncertain && <p>Outcome or persistence unresolved. Do not resubmit this command; reconcile the retained command identity.</p>}
         {error != null && <p>{bioXpErrorText(error)}</p>}
         {query.error != null && <p>Receipt lookup: {bioXpErrorText(query.error)}</p>}
-        <details><summary>Actual robot stop evidence, components and latch</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap">{JSON.stringify(current ?? bioXpErrorPresentation(error), null, 2)}</pre></details>
     </div>;
 }
 
@@ -263,10 +263,10 @@ export function BioXpCockpit() {
     const status = statusQuery.data;
     const connection = status?.connection;
     const active = connection?.active === true;
-    const displayConnected = active && connection?.reachable !== false;
-    const linkConnected = !statusQuery.isError && displayConnected;
-    const robotControlReady = linkConnected
-        && connection?.runtime_ready === true;
+    const displayConnected = active;
+    const linkConnected = active;
+    const linkHealthy = active && !statusQuery.isError && connection?.reachable !== false;
+    const robotControlReady = active;
     const configured = connection?.configured === true;
     const generation = connection?.generation ?? 0;
     const currentGenerationRef = useRef(generation);
@@ -289,32 +289,33 @@ export function BioXpCockpit() {
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(8);
     const [reportsOpen, setReportsOpen] = useState(false);
     const [workflowOpen, setWorkflowOpen] = useState(false);
+    const [workflowVisible, setWorkflowVisible] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [cameraOpen, setCameraOpen] = useState(true);
-    const [pipettesOpen, setPipettesOpen] = useState(false);
+    const [controlTab, setControlTab] = useState<'robot' | 'pipettes'>('robot');
+    const [pipettesOpened, setPipettesOpened] = useState(false);
     const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'z' | 'g', number>>({ x: 60, z: 65000, g: 0 });
-    const catalogV2Query = useBioXpOperatorControlCatalogV2(generation, active);
-    // One catalog snapshot owns admission and its embedded dashboard. Cache
-    // receipt time never renews the upstream observation's freshness budget.
-    const [authorityNow, setAuthorityNow] = useState(Date.now);
-    useEffect(() => {
-        const timer = window.setInterval(() => setAuthorityNow(Date.now()), 1000);
-        return () => window.clearInterval(timer);
-    }, []);
+    const operatorCatalog = useBioXpOperatorControlCatalog(
+        generation,
+        linkConnected,
+        null,
+        Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined,
+    );
+    const catalogV2Query = { ...operatorCatalog, data: operatorCatalog.data?.canonical };
+    // Observation age is presentation, not a second host admission policy.
+    const authorityNow = Date.now();
     const upstreamGeneratedAt = catalogV2Query.data?.dashboard.generated_at;
     const upstreamAgeMs = typeof upstreamGeneratedAt === 'number'
         ? Math.max(0, authorityNow - upstreamGeneratedAt * 1000) : Infinity;
     const localAgeMs = Math.max(0, authorityNow - catalogV2Query.dataUpdatedAt);
-    const currentCatalogV2 = linkConnected && !catalogV2Query.isError
-        && localAgeMs < 15_000 && upstreamAgeMs < 15_000
-        ? catalogV2Query.data : undefined;
+    const currentCatalogV2 = active ? catalogV2Query.data : undefined;
     const currentDashboardV2 = currentCatalogV2?.dashboard;
-    const currentTelemetry = currentDashboardV2?.telemetry ?? undefined;
     // Presentation retains the observation in this connection's query key.
-    // Admission still requires currentCatalogV2 and its unchanged expiry.
+    // The generation-keyed catalog preserves actual robot action denials.
     const displayDashboardV2 = displayConnected ? catalogV2Query.data?.dashboard : undefined;
     const displayTelemetry = displayDashboardV2?.telemetry ?? undefined;
-    const showingLastKnown = displayTelemetry != null && currentTelemetry == null;
+    const showingLastKnown = displayTelemetry != null && (catalogV2Query.isError
+        || localAgeMs >= 15_000 || upstreamAgeMs >= 15_000 || connection?.hardware_fresh !== true);
     const [yCommandId, setYCommandId] = useState<string | null>(null);
     const [zHomeCommandId, setZHomeCommandId] = useState<string | null>(null);
     const [lifecycleCommandId, setLifecycleCommandId] = useState<string | null>(null);
@@ -345,7 +346,7 @@ export function BioXpCockpit() {
         ?? yAxisV2?.active_command?.command_id
         ?? yAxisV2?.latest_compact_receipt?.command_id
         ?? null;
-    const yReceiptQuery = useBioXpOperatorReceiptV2(yReceiptCommandId, generation, active);
+    const yReceiptQuery = useBioXpOperatorReceiptDetailV2(yReceiptCommandId, generation, active);
     const zHomeReceiptQuery = useBioXpOperatorReceiptV2(currentZHomeCommandId, generation, active);
     const lifecycleReceiptQuery = useBioXpOperatorReceiptV2(currentLifecycleCommandId, generation, linkConnected);
     const [reconciledDeckPredecessor, setReconciledDeckPredecessor] = useState<{ commandId: string; generation: number } | null>(null);
@@ -364,7 +365,7 @@ export function BioXpCockpit() {
     const effectiveDeckCommandId = active
         ? (deckMutationGeneration === generation ? deckCommandId : null) ?? dashboardDeckReceipt?.command_id ?? null
         : null;
-    const deckReceiptQuery = useBioXpOperatorReceiptV2(effectiveDeckCommandId, generation, active);
+    const deckReceiptQuery = useBioXpOperatorReceiptDetailV2(effectiveDeckCommandId, generation, active);
     const invokeLifecycleActionMutation = useInvokeBioXpOperatorActionV2();
     const invokeYAction = useInvokeBioXpOperatorActionV2();
     const [axisSubmission, setAxisSubmission] = useState<{ generation: number; commandId: string; actionId: string; receipt: BioXpOperatorReceiptV2 | null } | null>(null);
@@ -375,8 +376,6 @@ export function BioXpCockpit() {
             && axisReceiptQuery.data.action_id === currentAxisSubmission.actionId ? axisReceiptQuery.data : currentAxisSubmission.receipt;
     const axisOutcomeUnresolved = currentAxisSubmission != null
         && (axisReceipt == null || !axisReceipt.terminal || axisReceipt.status === 'ambiguous');
-    const axisAmbiguousError = isDispatchedOutcomeAmbiguous(invokeYAction.error)
-        && !(axisReceipt?.terminal && axisReceipt.status !== 'ambiguous');
     const invokeDeckAction = useInvokeBioXpDeckActionV2(generation, active);
     const interruptXStop = useInterruptBioXpOperatorActionV1();
     const interruptYStop = useInterruptBioXpOperatorActionV1();
@@ -391,7 +390,7 @@ export function BioXpCockpit() {
     const xyOutcomeUnresolved = currentXYSubmission != null && (xyReceipt == null || !xyReceipt.terminal || xyReceipt.status === 'ambiguous');
     const currentXYInvokeError = isDispatchedOutcomeAmbiguous(invokeXYAction.error)
         && xyReceipt?.terminal && xyReceipt.status !== 'ambiguous' ? null : invokeXYAction.error;
-    const xyPending = invokeXYAction.isPending || xyOutcomeUnresolved || isDispatchedOutcomeAmbiguous(currentXYInvokeError);
+    const xyPending = invokeXYAction.isPending;
     const acceptXYSubmission = (receipt: BioXpOperatorReceiptV2) => {
         if (currentGenerationRef.current !== generation) return;
         setXYSubmission({ generation, commandId: receipt.command_id, receipt });
@@ -405,12 +404,7 @@ export function BioXpCockpit() {
     const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected, historyLimit, historyPagination.cursor);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
-    const operatorCatalog = useBioXpOperatorControlCatalog(
-        generation,
-        linkConnected,
-        null,
-        Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined,
-    );
+
     const invokeOperatorAction = useInvokeBioXpOperatorAction();
     const componentStop = useInvokeBioXpOperatorAction('stop');
 
@@ -430,7 +424,7 @@ export function BioXpCockpit() {
         g: 10000,
     });
 
-    const catalog = !linkConnected || operatorCatalog.isError ? undefined : operatorCatalog.data;
+    const catalog = active ? operatorCatalog.data : undefined;
     const dashboard = displayTelemetry;
     const zTargetProvider = catalog?.dashboard.ownership_generation === currentDashboardV2?.ownership_generation
         && currentCatalogV2 != null ? catalog?.dashboard.z_axis?.provider : undefined;
@@ -442,9 +436,7 @@ export function BioXpCockpit() {
     const ownershipLabel = ownership
         ? `${ownership.transport ?? 'unknown'} / ${ownership.usb ?? 'unknown'} / ${ownership.router ?? 'unknown'}`
         : 'Unavailable';
-    const motionControlsAvailable = currentTelemetry === undefined || connection?.hardware_fresh !== true
-        ? undefined
-        : typeof currentTelemetry.motion.enabled === 'boolean' ? currentTelemetry.motion.enabled : undefined;
+    const motionControlsAvailable = displayTelemetry?.motion.enabled;
     const telemetryUnavailableReason = !linkConnected ? 'Connect to view robot state.'
         : !robotControlReady ? 'Robot runtime is not ready; telemetry is unavailable.'
             : catalogV2Query.error != null ? `Robot state request failed: ${bioXpErrorText(catalogV2Query.error)}`
@@ -452,10 +444,9 @@ export function BioXpCockpit() {
                     ? 'Robot did not report telemetry; motion availability is unknown.'
                     : catalogV2Query.isLoading ? 'Loading robot state; motion availability is unknown.'
                         : currentCatalogV2 == null ? 'Robot state is missing or stale; waiting for a fresh observation.'
-                            : connection?.hardware_fresh !== true ? 'Hardware observation is stale or not reported; motion availability is unknown.'
-                                : null;
+                            : null;
     const motionLabel = motionControlsAvailable === true
-        ? 'Available — robot controls ready'
+        ? 'Controllers enabled — not a homing or reference confirmation'
         : motionControlsAvailable === false
             ? `Blocked${dashboard?.motion.reason ? ` — ${dashboard.motion.reason}` : ''}`
             : `Unknown — ${telemetryUnavailableReason ?? 'Telemetry is unavailable.'}`;
@@ -506,7 +497,7 @@ export function BioXpCockpit() {
     };
     const interruptPending = (actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.abort_all') => interruptMutation(actionId).isPending;
     const interruptAnyPending = interruptXStop.isPending || interruptYStop.isPending || interruptZStop.isPending || interruptAggregateAbort.isPending || componentStop.isPending;
-    const busy = axisOutcomeUnresolved || axisAmbiguousError || invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || xyPending || interruptAnyPending || componentStop.isPending;
+    const busy = invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || xyPending || interruptAnyPending || componentStop.isPending;
     const latestOperatorReceipt = interruptAggregateAbort.data ?? interruptZStop.data ?? interruptYStop.data ?? interruptXStop.data ?? invokeDeckAction.data ?? invokeLifecycleActionMutation.data ?? invokeYAction.data ?? xyReceipt ?? invokeOperatorAction.data;
     const latestReceiptQuery = useBioXpOperatorReceiptV2(latestOperatorReceipt?.command_id ?? null, generation, linkConnected);
     const displayedLatestReceipt = latestReceiptQuery.data?.command_id === latestOperatorReceipt?.command_id
@@ -537,11 +528,7 @@ export function BioXpCockpit() {
         : undefined;
     const deckAction = v2NormalActionById('oem.deck.move_to_location');
     const dashboardDeck = currentDashboardV2?.deck;
-    const deckAuthorityCoherent = v2AuthorityCoherent
-        && deckAction !== undefined
-        && dashboardDeck != null
-        && deckAction.destination_catalog_revision === dashboardDeck.destination_catalog_revision
-        && deckAction.position_table_revision === dashboardDeck.position_table_revision;
+    const deckAuthorityCoherent = v2AuthorityCoherent && deckAction !== undefined;
     // Retained options are intent only, never retained motion authority. Empty
     // prerequisite projections do not mean the finite robot catalog was deleted.
     const selectionAction = catalogV2Query.data?.actions.find((action) => action.action_id === 'oem.deck.move_to_location');
@@ -650,8 +637,6 @@ export function BioXpCockpit() {
     const currentLifecycleInvokeError = lifecycleMutationGeneration === generation && lifecycleReceipt?.terminal !== true
         ? invokeLifecycleActionMutation.error
         : null;
-    const lifecycleStatusRecoveryPending = isDispatchedOutcomeAmbiguous(currentLifecycleInvokeError)
-        || (lifecycleReceipt !== undefined && lifecycleReceipt.terminal !== true);
 
     const v2ActionDisabledReason = (actionId: string): string | null => {
         const queryOnlyRefresh = actionId === 'oem.deck.collect_authority';
@@ -659,15 +644,15 @@ export function BioXpCockpit() {
         if (!queryOnlyRefresh && !v2AuthorityCoherent) return 'Current robot control state is unavailable.';
         // Installed CCI handlers: X absolute and XYZ relative/Home wait inline;
         // only manual Y absolute is explicitly nonwaiting (ui-inventory UI-01/02).
-        // Hold HTTP submission and genuinely unresolved receipts, not historical
+        // Hold only HTTP submission, not unresolved or historical
         // dashboard busy flags or a source-return terminal Y receipt.
         // A cached enabled row is not reserved admission or an OEM submission queue.
         // Keep independent Stop buttons outside this normal-action check.
         const pendingReadOnly = operatorActionById(invokeOperatorAction.variables?.actionId ?? '')?.safety_class === 'read_only';
-        const conflictingSubmission = normalSubmissionRef.current !== null || axisOutcomeUnresolved || axisAmbiguousError || interruptAnyPending || componentStop.isPending || xyPending || invokeLifecycleActionMutation.isPending || lifecycleStatusRecoveryPending || lifecycleReceipt?.status === 'ambiguous'
+        const conflictingSubmission = normalSubmissionRef.current !== null || interruptAnyPending || componentStop.isPending || xyPending || invokeLifecycleActionMutation.isPending
             || invokeDeckAction.isPending || invokeYAction.isPending
             || (invokeOperatorAction.isPending && !pendingReadOnly);
-        if (conflictingSubmission) return 'A command is pending; wait for its receipt before another normal action.';
+        if (conflictingSubmission) return 'A command submission is in flight; wait for its response.';
         // An explicitly requested query can refresh expired observations. Its
         // same-generation published identity is not permission for motion.
         const action = queryOnlyRefresh ? catalogV2Query.data?.actions.find(row =>
@@ -743,6 +728,8 @@ export function BioXpCockpit() {
         if (v2ActionDisabledReason(actionId) !== null) return;
         const envelope = v2NormalEnvelope();
         if (!envelope) return;
+        const releaseSubmission = reserveNormalSubmission();
+        if (!releaseSubmission) return;
         const submittedGeneration = generation;
         const submittedOwnershipGeneration = envelope.expected_ownership_generation;
         setLifecycleMutationGeneration(submittedGeneration);
@@ -752,12 +739,12 @@ export function BioXpCockpit() {
         setLifecycleDashboardBaselineAt(currentDashboardV2?.generated_at ?? null);
         invokeLifecycleActionMutation.mutate({ request: { ...envelope, action_id: actionId, inputs: {} } }, {
             onSuccess: (receipt) => {
-                if (currentGenerationRef.current !== submittedGeneration) return;
+                if (!releaseSubmission() || currentGenerationRef.current !== submittedGeneration) return;
                 if (receipt.ownership_generation !== submittedOwnershipGeneration) return;
                 setLifecycleCommandId(receipt.command_id);
             },
             onError: (error) => {
-                if (currentGenerationRef.current !== submittedGeneration) return;
+                if (!releaseSubmission() || currentGenerationRef.current !== submittedGeneration) return;
                 const identity = bioXpPostDispatchCommandIdentity(error);
                 if (identity !== null) setLifecycleCommandId(identity.commandId);
             },
@@ -962,30 +949,29 @@ export function BioXpCockpit() {
         || deckReceipt?.error?.code === 'reconciliation_required'
         || deckReceipt?.completion_class === 'recovery_required'));
 
-    // Deck movement is gated only by live, fresh authority: catalog/dashboard
-    // coherence, the robot's own action admission, destination authority, and
-    // the robot-reported deck semantic state. Retained ambiguous or
+    // Robot action/destination denials and input validation remain authoritative.
+    // Host age, reference and semantic projections are not admission. Retained ambiguous or
     // recovery-required receipts are history: they stay observable (receipt
     // polling, recovery panel) but never disable a new movement. The robot's
     // admission re-evaluates current state on every submission, so a stale
     // record cannot wedge the deck lane.
-    const deckDisabledReason = (!v2AuthorityCoherent
-        ? 'Fresh v2 catalog or dashboard authority is unavailable.'
+    const deckDisabledReason = (invokeDeckAction.isPending
+        ? 'A deck command submission is in flight; wait for its response.'
+        : !v2AuthorityCoherent
+        ? 'Robot action catalog is unavailable.'
         : !deckAuthorityCoherent
-            ? 'Fresh matching catalog and dashboard deck authority is unavailable.'
+            ? 'Robot deck action is unavailable.'
         : deckAction == null
             ? 'Robot deck movement action is unavailable.'
             : deckAction.enabled !== true
                 ? deckAction.disabled_reason ?? 'Robot deck movement action is unavailable.'
-                : dashboardDeck?.ambiguity_state !== 'none'
-                    ? `Robot deck ambiguity: ${dashboardDeck?.ambiguity_state ?? 'unknown'}.`
-                    : selectedDeckDestination == null
+                : selectedDeckDestination == null
                         ? 'Robot destination catalog is empty.'
                         : currentDeckDestination?.enabled !== true
-                            ? currentDeckDestination?.disabled_reason ?? 'Fresh selected destination authority is unavailable.'
+                            ? currentDeckDestination?.disabled_reason ?? 'Selected robot destination is unavailable.'
                             : null);
     const invokeDeckMove = () => {
-        if (deckDisabledReason !== null || selectedDeckDestination == null || deckAction?.expected_board_epoch_by_board == null) return;
+        if (deckDisabledReason !== null || selectedDeckDestination == null) return;
         const envelope = v2NormalEnvelope();
         if (!envelope) return;
         // Only an explicit new user action may supersede this reconciled
@@ -996,7 +982,7 @@ export function BioXpCockpit() {
         submitDeckV2({
             ...envelope,
             action_id: 'oem.deck.move_to_location',
-            expected_board_epoch_by_board: deckAction.expected_board_epoch_by_board,
+            expected_board_epoch_by_board: deckAction?.expected_board_epoch_by_board ?? {},
             inputs: { target: selectedDeckDestination.target, camera_offset: currentDeckDestination?.camera_offset_option === true && deckCameraOffset },
         });
     };
@@ -1096,16 +1082,16 @@ export function BioXpCockpit() {
                         <p className={`text-sm ${active ? 'text-emerald-300' : 'text-slate-400'}`}>
                             {connectedLabel}
                         </p>
-                        {statusQuery.isError && <p role="status" className="mt-1 text-sm text-amber-200">Connection status refresh failed; checking again. Motion controls are unavailable until status recovers.</p>}
+                        {statusQuery.isError && <p role="status" className="mt-1 text-sm text-amber-200">Connection status refresh failed; showing last-known observations. The robot checks each request.</p>}
                         {connection?.last_error && <p className="mt-1 break-words text-sm text-red-300">{connection.last_error}</p>}
                     </div>
                     <div className="flex gap-2">
                         <button
                             type="button"
-                            disabled={!configured || linkConnected || connect.isPending || disconnect.isPending}
+                            disabled={!configured || linkHealthy || connect.isPending || disconnect.isPending}
                             onClick={() => connect.mutate(undefined)}
                             className={actionClass}
-                        >{linkConnected ? 'BMS Link Connected' : active ? 'Reconnect BMS Link' : 'Connect BMS Link'}</button>
+                        >{linkHealthy ? 'BMS Link Connected' : active ? 'Reconnect BMS Link' : 'Connect BMS Link'}</button>
                         <button
                             type="button"
                             disabled={!active || connect.isPending || disconnect.isPending}
@@ -1122,6 +1108,7 @@ export function BioXpCockpit() {
                     <div className="rounded bg-slate-900/70 p-3">
                         <dt className="text-slate-400">Motion</dt>
                         <dd className={`mt-1 break-words ${motionControlsAvailable === false ? 'text-amber-200' : 'text-slate-100'}`}>{motionLabel}</dd>
+                        <dd className="text-sm text-slate-400">Hardware observation: {connection?.hardware_fresh === true ? 'fresh' : connection?.hardware_fresh === false ? 'stale' : 'unknown'}{showingLastKnown ? ' · showing last-known robot state' : ''}. References are reported separately below.</dd>
                     </div>
                     <div className="rounded bg-slate-900/70 p-3">
                         <dt className="text-slate-400">Last robot observation</dt>
@@ -1130,10 +1117,10 @@ export function BioXpCockpit() {
                 </dl>
             </section>
 
-            <details onToggle={event => { if (event.currentTarget.open) setWorkflowOpen(true); }}>
+            <details onToggle={event => { setWorkflowVisible(event.currentTarget.open); if (event.currentTarget.open) setWorkflowOpen(true); }}>
                 <summary className="cursor-pointer text-lg font-semibold">Prepared workflows</summary>
                 {workflowOpen && <BioXpWorkflowControls key={generation} generation={generation} connected={active}
-                    controlsEnabled={robotControlReady} />}
+                    controlsEnabled={robotControlReady} visible={workflowVisible} />}
             </details>
 
             <BioXpQuickDashboard
@@ -1153,18 +1140,18 @@ export function BioXpCockpit() {
 
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
                 <h2 className="text-lg font-semibold">Controller Activation & Recovery</h2>
-                <p className="mt-1 text-sm text-slate-400">Prepare the controller for motion, or recover it without homing.</p>
+                <p className="mt-1 text-sm text-slate-400">Prepares controllers without homing or moving the axes.</p>
                 <div className="mt-3 flex flex-wrap gap-3">
                     <button
                         type="button"
-                        disabled={!linkConnected || v2ActionDisabledReason('meta.activate_motion') !== null || busy || lifecycleStatusRecoveryPending}
-                        title={v2ActionDisabledReason('meta.activate_motion') ?? 'Activate the robot controller'}
+                        disabled={!linkConnected || v2ActionDisabledReason('meta.activate_motion') !== null || busy}
+                        title={v2ActionDisabledReason('meta.activate_motion') ?? 'Prepares controllers without homing or moving the axes.'}
                         onClick={claimTransport}
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
-                    >Activate 24 V / Prepare Motion</button>
+                    >Enable controllers</button>
                     <button
                         type="button"
-                        disabled={!linkConnected || v2ActionDisabledReason('meta.recover_motion_non_homing') !== null || busy || lifecycleStatusRecoveryPending}
+                        disabled={!linkConnected || v2ActionDisabledReason('meta.recover_motion_non_homing') !== null || busy}
                         title={v2ActionDisabledReason('meta.recover_motion_non_homing') ?? 'Robot-authoritative non-homing recovery'}
                         onClick={recoverMotionNonHoming}
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
@@ -1197,6 +1184,38 @@ export function BioXpCockpit() {
                 <YOperatorError label="Activation / recovery receipt" error={lifecycleReceiptQuery.error} />
             </section>
 
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded bg-slate-950 p-2">
+                <div role="tablist" aria-label="Robot controls" className="flex gap-2">
+                    {(['robot', 'pipettes'] as const).map(tab => <button key={tab} type="button" role="tab"
+                        id={`control-tab-${tab}`} aria-controls={`control-panel-${tab}`} aria-selected={controlTab === tab}
+                        tabIndex={controlTab === tab ? 0 : -1}
+                        onKeyDown={event => {
+                            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                            event.preventDefault();
+                            const next = event.key === 'Home' ? 'robot' : event.key === 'End' ? 'pipettes' : tab === 'robot' ? 'pipettes' : 'robot';
+                            setControlTab(next); if (next === 'pipettes') setPipettesOpened(true);
+                            document.getElementById(`control-tab-${next}`)?.focus();
+                        }}
+                        onClick={() => { setControlTab(tab); if (tab === 'pipettes') setPipettesOpened(true); }}
+                        className={`rounded px-4 py-2 font-semibold ${controlTab === tab ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-200'}`}>
+                        {tab === 'robot' ? 'Robot controls' : 'Pipettes'}
+                    </button>)}
+                </div>
+                <div aria-label="Stop controls" className="flex flex-wrap gap-2">
+                    {(['x', 'y', 'z'] as const).map(axis => <button key={axis} type="button"
+                        disabled={!linkConnected || generation <= 0 || interruptPending(`oem.${axis}.stop`)}
+                        title={`Immediate ${axis.toUpperCase()} stop`}
+                        onClick={() => axis === 'y' ? interruptY() : stopAxis(axis)} className="rounded bg-red-800 px-3 py-2 text-sm disabled:opacity-35">Stop {axis.toUpperCase()}</button>)}
+                    <button type="button" disabled={!linkConnected || generation <= 0 || operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true || operatorActionForPath('/motion/diagnostics/stop')?.safety_class !== 'stop' || componentStop.isPending}
+                        onClick={() => stopAxis('g')} className="rounded bg-red-800 px-3 py-2 text-sm disabled:opacity-35">Stop gripper</button>
+                    <button type="button" disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all') || v2InterruptActionById('oem.abort_all')?.enabled !== true}
+                        title={v2InterruptActionById('oem.abort_all')?.disabled_reason ?? 'Software Abort cancels waiters only; motors may continue. Use Stop for motors.'}
+                        onClick={abortXAggregate} className="rounded bg-red-950 px-3 py-2 text-sm ring-1 ring-red-600 disabled:opacity-35">Software Abort (cancel waiters)</button>
+                </div>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
+            <div className="min-w-0">
+            <div role="tabpanel" id="control-panel-robot" aria-labelledby="control-tab-robot" hidden={controlTab !== 'robot'} className="space-y-4">
             <section data-testid="oem-deck-movement" className="rounded-xl border border-teal-700/60 bg-teal-950/20 p-4">
                 <h2 className="text-lg font-semibold">Deck Movement</h2>
                 <p className="mt-1 text-sm text-slate-300">Travel only: moves the tool to a destination. It does not pick up or transfer a plate or cover.</p>
@@ -1226,8 +1245,8 @@ export function BioXpCockpit() {
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current location</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_location ?? '—'}</dd></div>
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current well</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_well ?? '—'}</dd></div>
                 </dl>
-                <p className={`mt-3 text-sm ${deckDisabledReason ? 'text-amber-200' : 'text-emerald-300'}`}>
-                    {deckDisabledReason ? bioXpDeckReadinessText(deckDisabledReason) : 'Ready to move to the selected destination.'}
+                <p className={`mt-3 text-sm ${deckDisabledReason ? 'text-amber-200' : 'text-slate-300'}`}>
+                    {deckDisabledReason ? bioXpDeckReadinessText(deckDisabledReason) : 'Select a destination, then Move. The robot checks readiness when you send the command.'}
                 </p>
                 <button
                     type="button"
@@ -1236,6 +1255,12 @@ export function BioXpCockpit() {
                     onClick={invokeDeckMove}
                     className="mt-3 rounded bg-teal-700 px-4 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-35"
                 >Move to destination</button>
+                <p role="status" data-testid="deck-current-command" className="mt-2 text-sm">
+                    Current command: {invokeDeckAction.isPending ? 'submitting' : deckReceipt?.status ?? (deckReceiptUnavailable ? 'outcome uncertain' : 'none')}
+                    {effectiveDeckCommandId ? ` · ${effectiveDeckCommandId}` : ''}
+                    {bioXpReceiptFailureText(deckReceipt)}
+                    {' · Command state is not an observation of physical motion.'}
+                </p>
                 <button
                     type="button"
                     disabled={v2ActionDisabledReason('oem.deck.collect_authority') !== null}
@@ -1284,13 +1309,13 @@ export function BioXpCockpit() {
                 </dl>
                 </details>
                 <YOperatorError label="Deck enqueue" error={currentDeckInvokeError} />
-                {deckResolution && <p className="text-sm text-slate-300">Earlier move reconciled. Historical outcome remains {deckReceipt?.status}; this does not retry the command. {deckRecoveryResolved ? 'New movement still requires fresh robot authority.' : 'Awaiting current robot authority at or after the recovery revision.'}</p>}
+                {deckResolution && <p className="text-sm text-slate-300">Earlier move reconciled. Historical outcome remains {deckReceipt?.status}; this does not retry the command. {deckRecoveryResolved ? 'The robot checks each new request.' : 'Current recovery revision is not yet observed.'}</p>}
                 <YOperatorError label="Deck receipt" error={deckReceiptQuery.error} />
                 <BioXpTransferControls key={`${generation}:${active}`} generation={generation} connected={linkConnected} />
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
+                <div className="grid gap-4">
                 <div className="min-w-0">
                 <h2 className="text-lg font-semibold">Manual Controls</h2>
                 <p className="mt-1 text-sm text-slate-400">Relative moves use a number of steps. Home, Open and Close use the selected axis controls.</p>
@@ -1365,18 +1390,12 @@ export function BioXpCockpit() {
                             <details className="mt-2 text-xs">
                                 <summary className="cursor-pointer text-slate-400">Y command details{yReceiptQuery.data.physical_effect_verified ? ' · physically observed' : ' · physical arrival not verified'}</summary>
                             <div className="mt-3 grid gap-2 text-xs lg:grid-cols-2">
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Requested</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.requested_values, null, 2)}</pre></div>
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Effective</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.effective_values, null, 2)}</pre></div>
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Observed, terminal position/speed, discrepancy</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.observed_values, null, 2)}</pre></div>
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Completion</strong><p className="mt-1">class={yReceiptQuery.data.completion_class ?? 'not reported'} · terminal position={String(yReceiptQuery.data.observed_values.terminal_position_steps ?? 'not reported')} · terminal speed={String(yReceiptQuery.data.observed_values.terminal_speed_steps_s ?? 'not reported')} · discrepancy={String(yReceiptQuery.data.observed_values.discrepancy_steps ?? 'not reported')}</p></div>
+                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Completion</strong><p className="mt-1">class={yReceiptQuery.data.completion_class ?? 'not reported'} · terminal position={String(yReceiptQuery.data.observed_values?.terminal_position_steps ?? 'not reported')} · terminal speed={String(yReceiptQuery.data.observed_values?.terminal_speed_steps_s ?? 'not reported')} · discrepancy={String(yReceiptQuery.data.observed_values?.discrepancy_steps ?? 'not reported')}</p></div>
                                 <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><strong>Independent physical observation</strong><p className="mt-1">physical_effect_verified={String(yReceiptQuery.data.physical_effect_verified)}</p></div>
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Controller completion evidence</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.controller_evidence, null, 2)}</pre></div>
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Raw return layers</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.raw_return_layers, null, 2)}</pre></div>
-                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2 lg:col-span-2"><strong>Transport artifacts</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.transport_artifacts, null, 2)}</pre></div>
                             </div>
                             </details>
                         )}
-                        {interruptYStop.data && <details className="mt-2 text-xs"><summary>Latest independent Y STOP receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(interruptYStop.data, null, 2)}</pre></details>}
+                        {interruptYStop.data && <p role="status">Latest independent Y STOP receipt: {interruptYStop.data.command_id} · {interruptYStop.data.status}{bioXpReceiptFailureText(interruptYStop.data)}</p>}
                         {yReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-red-300">Y receipt unavailable: {bioXpErrorText(yReceiptQuery.error)}</p>}
                     </article>
                     <article data-testid="serial206-xy-oem-panel" style={{ order: 1 }} className="rounded-lg border border-cyan-700/60 bg-cyan-950/20 p-3 lg:col-span-2">
@@ -1407,13 +1426,12 @@ export function BioXpCockpit() {
                         <YOperatorError label="XY command" error={currentXYInvokeError} reconcileAmbiguousOutcome />
                         {xyMoveDisabledReason && <p className="mt-1 text-xs text-amber-200">XY move: {xyMoveDisabledReason}</p>}
                         {xyHomeDisabledReason && <p className="mt-1 text-xs text-amber-200">XY home: {xyHomeDisabledReason}</p>}
-                        {xyPending && <p role="status" className="mt-2 text-sm text-amber-200">XY command pending · {xyReceipt?.status ?? 'submitting'} · Do not retry.</p>}
-                        {xyReceipt && !xyPending && <p role="status" className="mt-2 text-sm">{bioXpReceiptStatusText(xyReceipt, `XY command ${xyReceipt.status}`)}{xyReceipt.status === 'ambiguous' ? '; outcome unknown; do not resubmit' : ''}</p>}
+                        {(xyPending || xyOutcomeUnresolved) && <p role="status" className="mt-2 text-sm text-amber-200">XY command pending · {xyReceipt?.status ?? 'submitting'} · Do not retry.</p>}
+                        {xyReceipt && !xyPending && !xyOutcomeUnresolved && <p role="status" className="mt-2 text-sm">{bioXpReceiptStatusText(xyReceipt, `XY command ${xyReceipt.status}`)}{xyReceipt.status === 'ambiguous' ? '; outcome unknown; do not resubmit' : ''}</p>}
                         {xyReceipt && bioXpReceiptFailureText(xyReceipt) && <p role="status" className="mt-2 text-sm text-amber-200">{bioXpReceiptFailureText(xyReceipt)}</p>}
                         {currentXYSubmission && xyReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-amber-200">XY command status unavailable: {bioXpErrorText(xyReceiptQuery.error)}. {xyOutcomeUnresolved ? 'Do not retry until the outcome is reconciled.' : 'The received terminal outcome is retained.'}</p>}
-                        {xyReceipt && <details className="mt-2 text-xs"><summary>Latest XY command receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(xyReceipt, null, 2)}</pre></details>}
                     </article>
-                    {linkConnected && componentStop.data && <details data-testid="component-stop-receipt"><summary>Independent component Stop receipt</summary><pre>{JSON.stringify(componentStop.data, null, 2)}</pre></details>}
+                    {linkConnected && componentStop.data && <p role="status" data-testid="component-stop-receipt">Independent component Stop receipt: {componentStop.data.command_id} · {componentStop.data.status}{bioXpReceiptFailureText(componentStop.data)}</p>}
                     {linkConnected && componentStop.error && <p role="alert">Component Stop: {bioXpErrorText(componentStop.error)}</p>}
                     {AXES.map(({ axis, label, controls }) => (
                         <article key={axis} style={{ order: axis === 'x' ? 3 : axis === 'z' ? 4 : axis === 'g' ? 5 : 6 }} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
@@ -1511,8 +1529,8 @@ export function BioXpCockpit() {
                                                 <button type="button" className="rounded bg-red-800 px-3 py-2 text-sm font-semibold hover:bg-red-700 disabled:opacity-35" disabled={!linkConnected || generation <= 0 || interruptPending('oem.x.stop')} title="Immediate X stop" onClick={() => stopAxis('x')}>Stop X</button>
                                                 <button type="button" className="rounded bg-red-950 px-3 py-2 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35" disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all') || v2InterruptActionById('oem.abort_all')?.enabled !== true} title="Software Abort cancels waiters only; motors may continue" onClick={abortXAggregate}>Software Abort (cancel waiters)</button>
                                             </div>
-                                            {xLastFailure != null && <details className="mt-2"><summary className="cursor-pointer text-red-200">Last X failure</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(xLastFailure, null, 2)}</pre></details>}
-                                            {xReceipt != null && <details className="mt-2"><summary className="cursor-pointer">Latest X authority receipt</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-sky-200/80">{JSON.stringify(xReceipt, null, 2)}</pre></details>}
+                                             {xLastFailure != null && <p className="text-red-200">Last X failure: {bioXpReceiptFailureText({ error: xLastFailure }) || bioXpErrorText(xLastFailure)}</p>}
+                                             {xReceipt != null && <p>Latest X authority receipt: {String(xReceipt.command_id ?? "unknown")} · {String(xReceipt.status ?? "unknown")} · {bioXpReceiptFailureText(xReceipt)}</p>}
                                         </details>
                                         )}
                                         {axis === 'z' && (
@@ -1541,7 +1559,7 @@ export function BioXpCockpit() {
                                                     }}
                                                 >Z Clear (automatic position)</button>
                                             </div>
-                                            {dashboard?.z_axis?.last_failure != null && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(dashboard.z_axis.last_failure, null, 2)}</pre>}
+                                             {dashboard?.z_axis?.last_failure != null && <p className="text-red-200">Last Z failure: {bioXpReceiptFailureText({ error: dashboard.z_axis.last_failure }) || bioXpErrorText(dashboard.z_axis.last_failure)}</p>}
                                         </details>
                                     )}
                                 </div>
@@ -1629,24 +1647,33 @@ export function BioXpCockpit() {
                         </article>
                     ))}
                 </div>
+                </div>
+                </div>
+            </section>
+            </div>
+            <div role="tabpanel" id="control-panel-pipettes" aria-labelledby="control-tab-pipettes" hidden={controlTab !== 'pipettes'}>
+                {pipettesOpened && <>
+                <BioXpPipetteControlPanel
+                    generation={generation}
+                    connected={robotControlReady && operatorCatalog.data !== undefined}
+                    pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined}
+                    freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
+                    actions={catalog?.actions}
+                    catalogLoading={operatorCatalog.isLoading}
+                    invokePending={invokeOperatorAction.isPending}
+                    invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
+                />
                 <BioXpWellPipettingPanel key={`well:${generation}:${active}`} generation={generation} connected={linkConnected}
                     destinations={selectionAction?.destination_options ?? []}
                     positionTableRevision={selectionAction?.position_table_revision} />
-                <BioXpCalibrationSettings key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
-                <BioXpPipetteSettings key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
-                <details className="mt-4 rounded border border-slate-800 bg-slate-950/60 p-3" open={pipettesOpen} onToggle={(event) => setPipettesOpen(event.currentTarget.open)}>
-                    <summary className="cursor-pointer text-sm font-semibold">Pipette controls</summary>
-                    {pipettesOpen && <BioXpPipetteControlPanel
-                        generation={generation}
-                        connected={robotControlReady && operatorCatalog.data !== undefined}
-                        pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined}
-                        freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
-                        actions={catalog?.actions}
-                        catalogLoading={operatorCatalog.isLoading}
-                        invokePending={invokeOperatorAction.isPending}
-                        invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
-                    />}
+                <details className="mt-4 rounded border border-slate-700 p-3">
+                    <summary className="cursor-pointer font-semibold">Settings & calibration</summary>
+                    <BioXpPipetteSettings key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
+                    <BioXpCalibrationSettings key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
                 </details>
+                </>}
+            </div>
+            <section aria-label="Latest command" className="space-y-3">
                 {invokeOperatorAction.error && (
                     <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-sm text-red-300">{bioXpErrorText(invokeOperatorAction.error)}</p>
                 )}
@@ -1657,20 +1684,20 @@ export function BioXpCockpit() {
                 {linkConnected && displayedLatestReceipt && (
                     <details className="mt-3 rounded border border-slate-800 bg-slate-900/60 p-3">
                         <summary className="cursor-pointer text-sm font-semibold">Action receipt details · {bioXpReceiptStatusText(displayedLatestReceipt, displayedLatestReceipt.status)}</summary>
-                        <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{JSON.stringify(displayedLatestReceipt, null, 2)}</pre>
+                         <p>{displayedLatestReceipt.command_id} · {displayedLatestReceipt.completion_class ?? "completion not reported"} · physical effect verified={String(displayedLatestReceipt.physical_effect_verified)}</p>
                     </details>
                 )}
-                </div>
-                <details className="order-first w-full max-w-xs self-start rounded-lg border border-slate-800 bg-slate-950/70 p-2 xl:sticky xl:top-4 xl:order-last" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
+            </section>
+            </div>
+                <details className="w-full max-w-xs self-start rounded-lg border border-slate-800 bg-slate-950/70 p-2 xl:sticky xl:top-4 xl:order-last" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
                     <summary className="cursor-pointer text-sm font-semibold">Camera</summary>
                     {cameraOpen && <div className="mt-2"><BioXpCameraPanel connected={active} connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>}
                 </details>
-                </div>
-            </section>
+            </div>
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
-                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">Additional service, recovery and diagnostic controls.</p><div className="mt-4"><BioXpOperatorControlTabs generation={generation} connected={robotControlReady} /></div></>}
+                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">Additional service, recovery and diagnostic controls.</p><div className="mt-4"><BioXpOperatorControlTabs generation={generation} connected={robotControlReady} catalogObservation={operatorCatalog} zTargetSteps={Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined} /></div></>}
             </details>
 
             <section className="rounded-xl border border-red-800/70 bg-red-950/30 p-4">

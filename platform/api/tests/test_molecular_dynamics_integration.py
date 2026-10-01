@@ -59,6 +59,8 @@ def test_api_routes_md_job_to_bounded_experimental_workflow(tmp_path, monkeypatc
     monkeypatch.setattr(paths, "get_inputs_dir", lambda: tmp_path)
     config = tmp_path / "md-job.json"
     config.write_text(json.dumps({"engine": "gromacs", "replicas": 1}))
+    original = config.read_bytes()
+    output_dir = tmp_path / "results"
     entrypoint = "workflows/experimental/molecular_dynamics/orchestrator.nf"
     assert resolve_nextflow_entrypoint(
         effective_profile="molecular_dynamics", model_id="molecular_dynamics", mode="simulate", params={}
@@ -66,11 +68,12 @@ def test_api_routes_md_job_to_bounded_experimental_workflow(tmp_path, monkeypatc
     command = build_nextflow_command(
         model_id="molecular_dynamics", mode="simulate",
         params={"md_job_config": str(config), "gpu_id": 2},
-        output_dir="/tmp/md-results", job_id="job-md-1",
+        output_dir=str(output_dir), job_id="job-md-1",
     )
     assert command[command.index("run") + 1] == entrypoint
     assert _flag_value(command, "-profile") == "molecular_dynamics_coordinator,workstation_ryzen7960x"
-    assert _flag_value(command, "--md_job_config") == str(config)
+    assert _flag_value(command, "--md_job_config") == str(output_dir / "inputs" / "md_execution_config.json")
+    assert config.read_bytes() == original
     assert _flag_value(command, "--md_input_root") == str(tmp_path)
     assert _flag_value(command, "--gpu_id") == "2"
     assert _flag_value(command, "--job_id") == "job-md-1"
@@ -103,7 +106,8 @@ def test_api_routes_md_job_to_bounded_experimental_workflow(tmp_path, monkeypatc
 def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
     workflow_root = REPO_ROOT / "workflows" / "experimental" / "molecular_dynamics"
     module_root = REPO_ROOT / "modules" / "experimental" / "molecular_dynamics"
-    for name in ("prepare.nf", "replica.nf", "finalize.nf", "workflow.nf", "orchestrator.nf"):
+    assert not (workflow_root / "workflow.nf").exists()
+    for name in ("prepare.nf", "replica.nf", "finalize.nf", "orchestrator.nf"):
         assert (workflow_root / name).is_file()
     for name in ("prepare.nf", "gromacs_replica.nf", "openmm_replica.nf", "finalize.nf"):
         assert (module_root / name).is_file()

@@ -16,56 +16,28 @@ const hookSource = (start: string, end: string): string => {
     return client.slice(from, to);
 };
 
-test('static BioXP metadata hooks are request-driven rather than timer-polled', () => {
-    for (const [start, end] of [
-        ['export const useBioXpOperatorControlCatalog', 'export const useBioXpOperatorDashboard'],
-        ['export const useBioXpCameraStatus', 'export async function fetchBioXpCameraFrame'],
-        ['export const useBioXpOemFullLifecycleContract', 'export const useBioXpOemFullLifecycleRun'],
-    ]) {
-        const source = hookSource(start, end);
-        assert.doesNotMatch(source, /refetchInterval/u, `${start} must not create unsolicited polling`);
-    }
-    const catalog = hookSource(
-        'export const useBioXpOperatorControlCatalog',
-        'export const useBioXpOperatorDashboard',
-    );
-    assert.match(catalog, /queryKey:\s*\[\.\.\.operatorCatalogKey, connectionGeneration, enabled, lifecycleState \?\? null\]/u);
-    assert.match(catalog, /enabled:\s*enabled && connectionGeneration > 0/u);
+test('one catalog owns live enablement and embedded dashboards; camera status is request-driven', () => {
+    const catalog = hookSource('export const useBioXpOperatorControlCatalog', 'export const BIOXP_Y_RELATIVE_MIN_STEPS');
+    assert.match(catalog, /operatorCatalogKey, connectionGeneration, enabled, lifecycleState \?\? null, zTargetSteps/);
+    assert.match(catalog, /cached_projection_stale/);
+    assert.match(catalog, /1_000 : 5_000/);
+    assert.match(catalog, /signal, timeout: 12_000/);
+    assert.match(catalog, /refetchIntervalInBackground: false/);
+    assert.doesNotMatch(client, /export const useBioXpOperatorDashboard|export const useBioXpOperatorControlCatalogV2/);
+    assert.match(hookSource('export const useBioXpCameraStatus', 'export const useBioXpCameraStreamState'), /refetchInterval: enabled \? 2_000 : false/);
 });
 
-test('cockpit keeps bounded status and compact dashboard freshness loops', () => {
-    const status = hookSource('export const useBioXpStatus', 'export const useBioXpOperatorControlCatalog');
-    const dashboard = hookSource('export const useBioXpOperatorDashboard', 'export const useBioXpOperatorActionHistory');
-
-    assert.match(status, /refetchInterval:\s*enabled\s*\?\s*10_000\s*:\s*false/u);
-    assert.match(dashboard, /queryKey:\s*\[\.\.\.operatorDashboardKey, connectionGeneration, enabled\]/u);
-    assert.match(dashboard, /refetchInterval:\s*enabled && connectionGeneration > 0\s*\?\s*15_000\s*:\s*false/u);
-    assert.match(dashboard, /refetchIntervalInBackground:\s*false/u);
-    // R5: a single compact V2 catalog owns its embedded dashboard; a second
-    // dashboard request would break coherent admission/observation identity.
-    const snapshot = hookSource('export const useBioXpOperatorControlCatalogV2', 'export const BIOXP_Y_RELATIVE_MIN_STEPS');
-    assert.match(snapshot, /queryKey:\s*\[\.\.\.operatorV2CatalogKey, connectionGeneration, authorityVersion\]/u);
-    assert.match(snapshot, /refetchInterval:\s*enabled && connectionGeneration > 0\s*\?\s*10_000\s*:\s*false/u);
-    assert.match(snapshot, /refetchIntervalInBackground:\s*false/u);
-    assert.match(snapshot, /staleTime:\s*15_000/u);
-    assert.match(snapshot, /signal, timeout: 12_000/u);
-    assert.match(snapshot, /retry:\s*false/u);
-    const snapshotConsumers = `${cockpit}\n${quickDashboard}`.match(/useBioXpOperatorControlCatalogV2\(/gu) ?? [];
-    assert.equal(snapshotConsumers.length, 1);
-    assert.doesNotMatch(`${cockpit}\n${quickDashboard}`, /useBioXpOperatorDashboard(?:V2)?\(/u);
-    assert.match(cockpit, /useBioXpOperatorControlCatalogV2\(generation, linkConnected\)/u);
-    assert.match(cockpit, /const currentDashboardV2 = currentCatalogV2\?\.dashboard/u);
-    assert.match(cockpit, /const currentTelemetry = currentDashboardV2\?\.telemetry \?\? undefined/u);
-    assert.match(cockpit, /localAgeMs < 15_000 && upstreamAgeMs < 15_000/u);
-    assert.match(cockpit, /!robotControlReady \|\| catalogV2Query\.isError \? undefined : currentTelemetry/u);
-    assert.match(quickDashboard, /\{connected && data && \(/u);
-    assert.match(quickDashboard, /Last-known observation/u);
-    assert.match(quickDashboard, /\{connected && !isLoading && error == null && !data && \(/u);
-    assert.match(quickDashboard, /Robot did not report telemetry; motion availability is unknown/);
-    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected, historyLimit\)/u);
-    assert.match(cockpit, /!linkConnected \|\| operatorCatalog\.isError \? undefined/u);
-    assert.match(cockpit, /!displayConnected \? \[\]/u);
-    assert.doesNotMatch(cockpit, /historyQuery\.isError \? \[\]/u);
+test('cockpit keeps one bounded catalog loop and uses age only as presentation', () => {
+    assert.match(hookSource('export const useBioXpStatus', 'export const useBioXpOperatorControlCatalog'), /refetchInterval: enabled \? 10_000 : false/);
+    assert.equal((cockpit.match(/useBioXpOperatorControlCatalog\(/g) ?? []).length, 1);
+    assert.match(cockpit, /data: operatorCatalog.data\?\.canonical/);
+    assert.match(cockpit, /const currentDashboardV2 = currentCatalogV2\?\.dashboard/);
+    assert.match(cockpit, /const displayTelemetry = displayDashboardV2\?\.telemetry/);
+    assert.match(cockpit, /localAgeMs >= 15_000 \|\| upstreamAgeMs >= 15_000/);
+    assert.doesNotMatch(cockpit, /setInterval/);
+    assert.match(quickDashboard, /Last-known observation/);
+    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected, historyLimit, historyPagination.cursor\)/);
+    assert.match(cockpit, /!displayConnected \? \[\]/);
 });
 
 test('user-triggered camera reads refresh status without a network polling timer', () => {
@@ -94,15 +66,13 @@ test('operator receipt type strictly exposes startup reconciliation and durable 
     }
 });
 
-test('operator mutations fence history races and refresh every authority projection', () => {
-    const invoke = hookSource('export const useInvokeBioXpOperatorAction', 'export const useAssessBioXpOperatorAction');
-    const assess = hookSource('export const useAssessBioXpOperatorAction', 'export const usePlanBioXpOemFullLifecycle');
-    assert.match(invoke, /invalidateQueries\(\{ queryKey: operatorCatalogKey \}\)/u);
+test('operator mutations invalidate canonical history and the shared authority projection', () => {
+    const invoke = hookSource('export const useInvokeBioXpOperatorAction =', 'export const useAssessBioXpOperatorAction');
+    const assess = client.slice(client.indexOf('export const useAssessBioXpOperatorAction'));
     for (const source of [invoke, assess]) {
-        assert.match(source, /cancelQueries\(\{ queryKey: operatorHistoryKey \}\)/u);
-        assert.match(source, /updateBioXpHistoryCaches\(queryClient, variables.connectionGeneration, receipt\)/u);
-        for (const key of ['operatorDashboardKey']) {
-            assert.match(source, new RegExp(`invalidateQueries\\(\\{ queryKey: ${key} \\}\\)`));
-        }
+        assert.match(source, /cancelQueries\(\{ queryKey: operatorHistoryKey \}\)/);
+        assert.match(source, /invalidateQueries\(\{ queryKey: operatorCatalogKey \}\)/);
+        assert.match(source, /refreshBioXpHistoryCaches\(queryClient, variables.connectionGeneration\)/);
+        assert.doesNotMatch(source, /updateBioXpHistoryCaches/);
     }
 });

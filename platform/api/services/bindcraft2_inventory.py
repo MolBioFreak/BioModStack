@@ -45,7 +45,8 @@ def inventory(root: Path) -> dict:
             keys = sorted(set(data) - {"description"})
             preset_keys.update(keys)
             presets[tier][path.stem] = {"sha256": _sha(path), "keys": keys,
-                                         "nested": {k: sorted(v) for k, v in data.items() if isinstance(v, dict)}}
+                                         "nested": {k: sorted(v) for k, v in data.items() if isinstance(v, dict)},
+                                         "values": {k: v for k, v in data.items() if k != "description"}}
     registries = {}
     for block, filename, decorator in (("losses", "loss.py", "loss"),
                                        ("filters", "filters.py", "filter_metric")):
@@ -132,6 +133,7 @@ def inventory(root: Path) -> dict:
     nested["targets"] = {"fields": sorted(literals["TARGET_SETTING_NAMES"])}
     nested["parameter_sweep"] = {"fields": ["axes", "levels", "max_arms", "block_trajectories", "multiplier"]}
     return {
+        "display_resolver": pure_configuration_source(root),
         "upstream_commit": PIN,
         "source_sha256": _sha(source),
         "registry_sha256": {name: _sha(root / "bindcraft" / name) for name in ("loss.py", "filters.py", "parameter_sweep.py")},
@@ -151,6 +153,43 @@ def inventory(root: Path) -> dict:
         "unresolved_fields": sorted(key for key, field in return_fields.items() if field["status"] != "typed"),
         "coverage_status": "INCOMPLETE: source observations are not validated types/defaults; UI/API/runtime acceptance pending",
     }
+
+
+def pure_configuration_source(root: Path) -> dict:
+    """Extract the pinned pure resolver's dependency closure, not merge rules.
+
+    File-backed layers and registered metric signatures are supplied by inventory
+    at discovery; no protein coordinates or accelerator modules are imported.
+    """
+    external = {'read_preset', 'shipped_preset_names', 'DEFAULT_SETTINGS',
+                'DEFAULT_LOSSES', 'CORE_DEFAULTS', 'REGISTERED_LOSSES',
+                'REGISTERED_FILTER_METRICS', 'CAMPAIGN_PRESETS'}
+    nodes = {}
+    for filename in ('settings.py', 'loss.py', 'protein.py'):
+        for node in ast.parse((root / 'bindcraft' / filename).read_text()).body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                nodes.setdefault(node.name, (filename, node))
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        nodes.setdefault(target.id, (filename, node))
+    selected = {}
+    def visit(name):
+        if name in selected or name in external or name not in nodes:
+            return
+        filename, node = nodes[name]
+        selected[name] = (filename, node)
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                visit(child.id)
+    visit('load_settings')
+    ordered = sorted(selected.values(), key=lambda item: (
+        {'protein.py': 0, 'loss.py': 1, 'settings.py': 2}[item[0]], item[1].lineno))
+    source = '\n\n'.join(ast.unparse(node) for _, node in ordered)
+    return {'source': source, 'sha256': hashlib.sha256(source.encode()).hexdigest(),
+            'source_files': {name: _sha(root / 'bindcraft' / name)
+                             for name in ('settings.py', 'loss.py', 'protein.py')},
+            'symbols': sorted(selected)}
 
 
 def main() -> None:

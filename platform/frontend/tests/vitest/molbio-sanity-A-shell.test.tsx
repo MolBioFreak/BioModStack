@@ -4,7 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
-    input: {} as any, header: {} as any, annotation: {} as any, visibility: {} as any, orfs: vi.fn(),
+    digest: {} as any, input: {} as any, header: {} as any, annotation: {} as any, visibility: {} as any, orfs: vi.fn(),
     create: vi.fn(), update: vi.fn(), get: vi.fn(), catalog: vi.fn(), products: vi.fn(), analyze: vi.fn(), tmOptions: vi.fn(), demos: vi.fn(), annotationDownload: vi.fn(),
 }));
 vi.mock('../../src/components/MolBioToolkit/SequenceViewer', () => ({SequenceViewer:()=>null}));
@@ -14,7 +14,7 @@ vi.mock('../../src/components/MolBioToolkit/GCContentTrack', () => ({GCContentTr
 vi.mock('../../src/components/MolBioToolkit/SequenceHeader', () => ({SequenceHeader:(props:any)=>{mocks.header=props;return null}}));
 vi.mock('../../src/components/MolBioToolkit/MolecularInputModal', () => ({MolecularInputModal:(props:any)=>{mocks.input=props;return null}}));
 vi.mock('../../src/components/MolBioToolkit/AutoAnnotatePanel', () => ({AutoAnnotatePanel:(props:any)=>{mocks.annotation=props;return null}}));
-vi.mock('../../src/components/MolBioToolkit/panels', () => Object.fromEntries(['AlignmentPanel','AssemblyPanel','DigestPanel','HistoryPanel','PCRPanel','PrimerPanel','RnaStructurePanel','FeaturePanel','EditPanel','SearchPanel'].map(name=>[name,()=>null])));
+vi.mock('../../src/components/MolBioToolkit/panels', () => Object.fromEntries(['AlignmentPanel','AssemblyPanel','DigestPanel','HistoryPanel','PCRPanel','PrimerPanel','RnaStructurePanel','FeaturePanel','EditPanel','SearchPanel'].map(name=>[name,(props:any)=>{if(name==='DigestPanel')mocks.digest=props;return null}])));
 vi.mock('../../src/components/MolBioToolkit/RnaStructureViewer', () => ({RnaStructureViewer:()=>null}));
 vi.mock('../../src/components/MolBioToolkit/demoConstructs', () => ({loadDemoPlasmids:mocks.demos}));
 vi.mock('../../src/components/experiments/GlobalExperimentContext', async () => {
@@ -31,6 +31,7 @@ vi.mock('../../src/components/experiments/GlobalExperimentContext', async () => 
 vi.mock('../../src/components/MolBioToolkit/utils/annotationSources', async (original) => ({...await original<any>(),fetchAnnotationSourceStatus:vi.fn().mockResolvedValue({}),retrieveNcbiAnnotationSource:mocks.annotationDownload}));
 vi.mock('../../src/lib/restrictionAnalysis', async (original) => ({...await original<any>(),fetchRestrictionCatalog:mocks.catalog,fetchRestrictionProducts:mocks.products,fetchRestrictionAnalysisBatch:mocks.analyze}));
 vi.mock('../../src/lib/api', async (original) => ({...await original<any>(),fetchNucleotideSequences:vi.fn().mockResolvedValue({data:[]}),fetchNucleotideSequence:mocks.get,createNucleotideSequence:mocks.create,updateNucleotideSequence:mocks.update,fetchPrimerTmOptions:mocks.tmOptions}));
+import { RECEIPT, RECORD } from './molBioRestrictionCatalogFixture';
 import { MolBioToolkitV2 } from '../../src/components/MolBioToolkit/MolBioToolkitV2';
 let root:Root, host:HTMLDivElement, client:QueryClient;
 function RouteProbe(){const location=useLocation();return <output data-route-search>{location.search}</output>}
@@ -107,13 +108,58 @@ it('save completion never steals another editable tab and retains inactive post-
 });
 it('release fetch counts stay constant across construct edits and switch; hidden work and demos stay idle',async()=>{
  await create();await create('B');
- expect(mocks.catalog).toHaveBeenCalledTimes(1);expect(mocks.products).toHaveBeenCalledTimes(1);expect(mocks.tmOptions).toHaveBeenCalledTimes(1);expect(mocks.analyze).not.toHaveBeenCalled();expect(mocks.orfs).not.toHaveBeenCalled();expect(mocks.demos).not.toHaveBeenCalled();
+ expect(mocks.catalog).not.toHaveBeenCalled();expect(mocks.products).not.toHaveBeenCalled();expect(mocks.tmOptions).toHaveBeenCalledTimes(1);expect(mocks.analyze).not.toHaveBeenCalled();expect(mocks.orfs).not.toHaveBeenCalled();expect(mocks.demos).not.toHaveBeenCalled();
  await act(async()=>mocks.visibility.onChange('translations'));expect(mocks.orfs).toHaveBeenCalledTimes(1);
- await act(async()=>mocks.visibility.onChange('cutsites'));expect(mocks.analyze).toHaveBeenCalledTimes(1);
+ await act(async()=>mocks.visibility.onChange('cutsites'));expect(mocks.analyze).toHaveBeenCalledTimes(1);expect(mocks.catalog).toHaveBeenCalledTimes(1);expect(mocks.products).toHaveBeenCalledTimes(1);
  await act(async()=>mocks.input.onCreateSequence({name:'RNA',sequence:'ACGU'.repeat(30),sequenceType:'rna',circular:false}));
  expect(mocks.tmOptions).toHaveBeenCalledTimes(1);expect(mocks.catalog).toHaveBeenCalledTimes(1);expect(mocks.products).toHaveBeenCalledTimes(1);
  await act(async()=>mocks.input.onDemoIntent());expect(mocks.demos).toHaveBeenCalledTimes(1);
 });
+
+it('empty View makes zero release calls; Digest demands every continuation and retains the exact full catalog', async () => {
+ expect(mocks.catalog).not.toHaveBeenCalled();expect(mocks.products).not.toHaveBeenCalled();
+ const actual = await vi.importActual<typeof import('../../src/lib/restrictionAnalysis')>('../../src/lib/restrictionAnalysis');
+ const records = Array.from({length:123}, (_, i) => ({...RECORD, enzyme_id:`Enzyme${i}`, canonical_name:`Enzyme${i}`}));
+ const receipt = {...RECEIPT, counts:{...RECEIPT.counts,total:records.length,geometry_ready:records.length,commercial_geometry_ready:records.length}};
+ const transport = vi.fn(async (input:RequestInfo | URL) => {
+   const url = new URL(String(input), 'https://fixture.invalid');
+   const offset = Number(url.searchParams.get('cursor') ?? 0);
+   return {ok:true,json:async()=>({schema:'bms.molbio.restriction-catalog-page.v1',catalog:receipt,items:records.slice(offset,offset+50),next_cursor:offset+50<records.length?String(offset+50):null})} as Response;
+ });
+ mocks.catalog.mockImplementation(({signal})=>actual.fetchRestrictionCatalog({signal,transport}));
+ await create();
+ expect(mocks.catalog).not.toHaveBeenCalled();
+ const digest=[...host.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent?.trim()==='Digest');
+ expect(digest).toBeTruthy();await act(async()=>digest!.click());
+ expect(transport).toHaveBeenCalledTimes(3);
+ expect(transport.mock.calls.map(([url])=>new URL(String(url),'https://fixture.invalid').searchParams.get('cursor'))).toEqual([null,'50','100']);
+ expect(mocks.digest.catalogRecords).toEqual(records);
+ expect(mocks.catalog).toHaveBeenCalledTimes(1);expect(mocks.products).toHaveBeenCalledTimes(1);
+ await create('B');expect(mocks.catalog).toHaveBeenCalledTimes(1);
+});
+
+
+it('late catalog completion after leaving Digest stays cached and does not replace a newer construct', async () => {
+ const response=deferred<any>();mocks.catalog.mockReturnValueOnce(response.promise);
+ await create();
+ const tool=(label:string)=>[...host.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent?.trim()===label)!;
+ await act(async()=>tool('Digest').click());expect(mocks.catalog).toHaveBeenCalledTimes(1);
+ await act(async()=>tool('View').click());
+ await create('Newer');
+ const page={catalog:RECEIPT,items:[RECORD]};
+ await act(async()=>response.resolve(page));
+ expect(mocks.header.sequenceData.name).toBe('Newer');
+ expect(client.getQueryData(['molbio-restriction-catalog'])).toBe(page);
+ await act(async()=>tool('Digest').click());
+ expect(mocks.digest.catalogRecords).toEqual([RECORD]);expect(mocks.catalog).toHaveBeenCalledTimes(1);
+ expect(mocks.header.sequenceData.name).toBe('Newer');
+ await act(async()=>tool('View').click());
+ await act(async()=>client.invalidateQueries({queryKey:['molbio-restriction-catalog']}));
+ mocks.catalog.mockResolvedValueOnce(page);
+ await act(async()=>tool('Digest').click());expect(mocks.catalog).toHaveBeenCalledTimes(2);
+ expect(mocks.catalog.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal);
+});
+
 it('annotation retrieval is invalidated by edit generation before parsing or applying',async()=>{
  await create();const response=deferred<any>();mocks.annotationDownload.mockReturnValueOnce(response.promise);
  let result!:Promise<string>;await act(async()=>{result=mocks.annotation.onRetrieveNcbi('TEST');result.catch(()=>{})});

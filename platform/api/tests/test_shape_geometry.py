@@ -496,6 +496,7 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             body = uploaded.json()
             assert body["vertex_count"] == 8 and body["point_count"] == 4096
             assert body["source_format"] == "obj"
+            assert body["original_filename"] == "cube.obj"
             assert body["source_parser"] == "obj_triangle_v2"
             assert body["source_unit"] == "angstrom"
             assert len(body["preview_obj_sha256"]) == 64
@@ -504,6 +505,18 @@ async def test_shape_geometry_http_upload_list_and_preview(tmp_path: Path, monke
             listed = await client.get("/api/shape-blueprint/geometries")
             assert listed.status_code == 200
             assert [row["geometry_id"] for row in listed.json()["geometries"]] == [body["geometry_id"]]
+            assert listed.json()["geometries"][0]["original_filename"] == "cube.obj"
+            reopened = await client.get(f"/api/shape-blueprint/geometries/{body['geometry_id']}")
+            assert reopened.status_code == 200
+            assert reopened.json() == body
+
+            # A filename is a retained source label, not a new geometry identity.
+            renamed = await client.post(
+                "/api/shape-blueprint/geometries", data={"unit": "angstrom"},
+                files={"file": ("renamed.obj", CUBE_OBJ, "text/plain")},
+            )
+            assert renamed.status_code == 201
+            assert renamed.json() == body
 
             async with factory() as session:
                 legacy = await session.get(database.ShapeDesignGeometry, body["geometry_id"])

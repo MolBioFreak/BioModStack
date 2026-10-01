@@ -51,12 +51,20 @@ def canonical_sha256(payload: Any) -> str:
 
 
 async def create_md_run(session: AsyncSession, *, job: Job, normalized_request: dict[str, Any]) -> MdRun:
-    if normalized_request.get("schema") != "bms.md.job.v2":
-        raise MdStateError("MD_CONTRACT_UNSUPPORTED", "durable lifecycle requires bms.md.job.v2")
-    chemistry = normalized_request["chemistry"]
-    assurance = chemistry.get("assurance")
-    if not isinstance(assurance, str) or not assurance:
-        raise MdStateError("MD_CONTRACT_INVALID", "normalized chemistry assurance is missing")
+    schema = normalized_request.get("schema")
+    if schema == "bms.md.job.v1":
+        # Legacy chemistry claims, when present, stay in preparation unchanged.
+        # There is no v2 chemistry envelope: explicit sentinels satisfy the
+        # retained non-null columns without inventing v2 assurance or a digest.
+        chemistry = {"profile_id": "legacy_unavailable", "profile_sha256": "unavailable"}
+        assurance = "legacy_unavailable"
+    elif schema == "bms.md.job.v2":
+        chemistry = normalized_request["chemistry"]
+        assurance = chemistry.get("assurance")
+        if not isinstance(assurance, str) or not assurance:
+            raise MdStateError("MD_CONTRACT_INVALID", "normalized chemistry assurance is missing")
+    else:
+        raise MdStateError("MD_CONTRACT_UNSUPPORTED", "durable lifecycle requires a supported MD job contract")
     run = MdRun(
         job_id=job.id,
         normalized_request=normalized_request,
@@ -152,7 +160,13 @@ async def request_pause(session: AsyncSession, *, job_id: str, expected_version:
     if existing is not None:
         return run
     if run.phase not in {"replicas_queued", "replicas_running", "checkpointing"}:
-        raise MdStateError("MD_PAUSE_UNAVAILABLE", "run cannot be paused in its current phase")
+        parent = await session.get(Job, job_id)
+        provenance = (parent.provenance or {}) if parent else {}
+        shared_running = bool(parent and parent.status == "running" and (
+            provenance.get("component_context_path") or
+            (provenance.get("remote_execution_receipt") or {}).get("component_context_identity")))
+        if not shared_running or run.phase not in {"validating", "preparing"}:
+            raise MdStateError("MD_PAUSE_UNAVAILABLE", "run cannot be paused in its current phase")
     return await append_event_cas(
         session, job_id=job_id, idempotency_key=idempotency_key, event_type="pause_requested",
         expected_version=expected_version, next_phase="checkpointing", block_controls=True,
@@ -238,6 +252,13 @@ async def resume_replica(
 async def resume_run(
     session: AsyncSession, *, job_id: str, expected_version: int, idempotency_key: str,
 ) -> list[MdAttemptSegment]:
+    parent = await session.get(Job, job_id)
+    provenance = (parent.provenance or {}) if parent else {}
+    if (provenance.get("component_context_path") or
+            (provenance.get("remote_execution_receipt") or {}).get("component_context_identity")):
+        from .pause_actuator import resume_shared_md_run
+        return await resume_shared_md_run(session, job_id=job_id,
+            expected_version=expected_version, idempotency_key=idempotency_key)
     existing_event = await _replay_event(
         session, job_id=job_id, idempotency_key=idempotency_key,
         event_type="resume_requested", expected_version=expected_version,
@@ -509,6 +530,15 @@ async def reconcile_component_projection(session: AsyncSession, parent: Job,
             raise MdStateError('MD_STATE_CORRUPT', 'native attempt already belongs to another projected child')
         replica.child_job_id = child.id
         control = (child.provenance or {}).get('component_projection') or {}
+        latest_segment = await session.scalar(select(MdAttemptSegment).where(
+            MdAttemptSegment.replica_run_id == replica.id
+        ).order_by(MdAttemptSegment.segment_index.desc()).limit(1))
+        if (latest_segment is not None and latest_segment.segment_index > 0
+                and control.get('state') == 'paused'
+                and control.get('md_resume_segment_id') != latest_segment.id):
+            # Reopening the prior paused sidecar after committing a continuation
+            # must not turn its new queued segment back into the old pause.
+            continue
         raw_state = control.get('state', child.status)
         replica.state = ({'execution_finished': 'running', 'uncertain': 'orphaned'}
                          .get(raw_state, raw_state))
@@ -535,8 +565,7 @@ async def reconcile_component_projection(session: AsyncSession, parent: Job,
         elif (segment.execution_plan_sha256, segment.compatibility_key) != (plan_sha, compatibility):
             raise MdStateError('MD_STATE_CORRUPT', 'native segment identity changed on projection replay')
         # Never rewrite earlier checkpoint segments; latest segment owns progress.
-        latest = await session.scalar(select(MdAttemptSegment).where(
-            MdAttemptSegment.replica_run_id == replica.id).order_by(MdAttemptSegment.segment_index.desc()).limit(1))
+        latest = latest_segment or segment
         if latest is not None:
             latest.state = replica.state
             if replica.state in TERMINAL_REPLICA_STATES:

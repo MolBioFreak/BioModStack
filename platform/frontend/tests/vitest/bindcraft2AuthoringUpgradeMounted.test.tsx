@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 // Only transport and the WebGL renderer are replaced. Target/source widgets,
 // sequence selection, the Mol* compatibility boundary and campaign composition are real.
-const state = vi.hoisted(() => ({ submit: vi.fn(async (_request: unknown) => ({ data: {} })), load: null as null | ((template: any) => void), scenes: [] as any[] }));
+const state = vi.hoisted(() => ({ submit: vi.fn(async (_request: unknown) => ({ data: {} })), load: null as null | ((template: any) => void), scenes: [] as any[], draft: undefined as any }));
 vi.mock('../../src/lib/api', async original => ({
     ...await original<typeof import('../../src/lib/api')>(),
     materializeStructureTarget: vi.fn(async (source: { file?: File; path?: string; name: string }) => source.path || `inputs/campaign/${source.file?.name || source.name}`),
@@ -37,6 +37,7 @@ const field = (native_key: string, type: string, native_default?: unknown) => ({
 const inventory = {
     upstream_commit: 'ui-fixture',
     fields: {
+    subbatch_size: { native_key: 'subbatch_size', observed_types: ['string', 'integer', 'null'], has_native_default: true, native_default: 'auto', recommended_default: null, recommended_default_reason: 'No chunking by default for new BMS campaigns; uses more VRAM.', status: 'typed' as const },
         modality: field('modality', 'array'), core: field('core', 'array'), target: field('target', 'array'),
         targets: field('targets', 'array'), binder_scaffold: field('binder_scaffold', 'string'),
         max_trajectories: field('max_trajectories', 'integer'), trajectory_only: field('trajectory_only', 'boolean', true),
@@ -50,16 +51,17 @@ const inventory = {
 };
 let root: Root | undefined;
 let client: QueryClient;
-function saved() { return JSON.parse(document.querySelector('[data-campaign-saved]')!.textContent!); }
+function saved() { return state.draft; }
+async function settleDraft() { await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); expect(state.draft).toBeDefined(); }); }
 function getButton(text: string) { return [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === text); }
-async function click(text: string) { const button = getButton(text); expect(button, text).toBeTruthy(); await act(async () => button!.click()); }
+async function click(text: string) { const button = getButton(text); expect(button, text).toBeTruthy(); await act(async () => button!.click()); await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); }
 async function mount(initialValues?: Record<string, unknown>) {
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/submit']}><AntibodyDenovoTemplate onBack={() => {}} initialValues={initialValues} /></MemoryRouter></QueryClientProvider>));
+    await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/submit']}><AntibodyDenovoTemplate onBack={() => {}} initialValues={initialValues} onDraftChange={draft => { state.draft = draft; }} /></MemoryRouter></QueryClientProvider>));
 }
 beforeEach(() => {
-    state.scenes = [];
+    state.scenes = []; state.draft = undefined;
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => String(url).includes('/native-settings')
         ? { ok: true, json: async () => ({ model_id: 'bindcraft2', launch_available: true, settings: inventory }) }
         : { ok: true, text: async () => PDB, blob: async () => new Blob([PDB], { type: 'chemical/x-pdb' }), json: async () => ({}) }));
@@ -95,10 +97,17 @@ it('keeps an actual source and residue selection when moving from the existing w
 });
 
 it('reopens source-bound native values and the custom mask without inventing overrides', async () => {
-    const settings = { modality: ['binder'], max_trajectories: 2, trajectory_only: false, targets: [{ name: 'saved target', target_path: 'inputs/saved.pdb', chains: 'A', hotspots: 'A2', coldspots: '', objective: 'bind', weight: 0 }], losses: { induced_fit_interface: { params: { interface_mask: [0, 0.25, 1] } } } };
+    const settings = { subbatch_size: null, modality: ['binder'], max_trajectories: 2, trajectory_only: false, targets: [{ name: 'saved target', target_path: 'inputs/saved.pdb', chains: 'A', hotspots: 'A2', coldspots: '', objective: 'bind', weight: 0 }], losses: { induced_fit_interface: { params: { interface_mask: [0, 0.25, 1] } } } };
     await mount({ model_id: 'bindcraft2', mode: 'campaign', job_name: 'saved native campaign', bindcraft2_settings: settings });
     await vi.waitFor(() => expect(document.querySelector('[aria-label="BindCraft2 settings"]')).not.toBeNull());
+    await settleDraft();
     expect(saved().bindcraft2_settings).toEqual(settings);
+    // Browse deliberately carries no Save payload. The real deferred draft
+    // remains observable, and Save supplies that same scientific state.
+    await click('Saved campaigns');
+    expect(document.querySelector('[data-campaign-saved]')!.textContent).toBe('');
+    await click('Save campaign draft');
+    expect(JSON.parse(document.querySelector('[data-campaign-saved]')!.textContent!).bindcraft2_settings).toEqual(settings);
     await click('Preview native campaign');
     expect(api.post).toHaveBeenLastCalledWith('/api/models/bindcraft2/campaign/preview', { model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: settings } });
     await act(async () => state.load?.({ name: 'reopened', model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: settings } }));
@@ -108,7 +117,7 @@ it('reopens source-bound native values and the custom mask without inventing ove
     // remains valid while the same scientific request is shown in another section.
     const budget = document.querySelector('[aria-label="max_trajectories"]')!;
     expect(budget.closest('[hidden]')).not.toBeNull();
-    await click('Campaign');
+    await click('Generation');
     expect(budget.closest('[hidden]')).toBeNull();
     await click('Objectives');
     expect(document.querySelector('[aria-label="Design objectives"]')?.hasAttribute('hidden')).toBe(false);
@@ -120,6 +129,48 @@ it('reopens source-bound native values and the custom mask without inventing ove
     expect(document.querySelector('[aria-label="max_trajectories"]')).toBe(budget);
     expect(saved().bindcraft2_settings).toEqual(settings);
     expect(getButton('Launch BindCraft2 campaign')?.disabled).toBe(false);
+});
+
+
+
+it('materializes only the Off recommendation in fresh save/preview/launch, and chunking edits invalidate preview', async () => {
+    await mount({ model_id: 'bindcraft2', mode: 'campaign', bindcraft2_settings: { max_trajectories: 3 } });
+    await settleDraft();
+    const expected = { subbatch_size: null, max_trajectories: 3 };
+    expect(saved().bindcraft2_settings).toEqual(expected);
+    await click('Generation');
+    const select = document.querySelector<HTMLSelectElement>('[aria-label="subbatch_size.mode"]')!;
+    expect(select.value).toBe('off'); expect(select.closest('[hidden]')).toBeNull();
+    await click('Save campaign draft');
+    const draft = JSON.parse(document.querySelector('[data-campaign-saved]')!.textContent!);
+    expect(draft.bindcraft2_settings).toEqual(expected);
+    await click('Preview native campaign');
+    expect(api.post).toHaveBeenLastCalledWith('/api/models/bindcraft2/campaign/preview', { model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: expected } });
+    expect(getButton('Launch BindCraft2 campaign')?.disabled).toBe(false);
+    await act(async () => { select.value = 'auto'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    await settleDraft();
+    expect(saved().bindcraft2_settings).toEqual({ ...expected, subbatch_size: 'auto' });
+    expect(getButton('Launch BindCraft2 campaign')?.disabled).toBe(true);
+    await act(async () => state.load?.({ name: 'Reopened Off', model_id: 'bindcraft2', mode: 'campaign', params: draft }));
+    await settleDraft();
+    expect(saved().bindcraft2_settings).toEqual(expected);
+    expect(saved().binder_round).toEqual(draft.binder_round);
+    await click('Preview native campaign'); await click('Launch BindCraft2 campaign');
+    expect(state.submit).toHaveBeenLastCalledWith(expect.objectContaining({ params: { bindcraft2_settings: expected, bc2_preview_digest: 'ui-preview' }, binder_round: draft.binder_round }));
+});
+
+it.each(['auto', 4096, null])('clone hydration preserves explicit chunking %j and round/source settings through save and preview', async subbatch_size => {
+    const settings = { subbatch_size, max_trajectories: 4, trajectory_only: false, targets: [{ name: 'clone source', target_path: 'inputs/saved.pdb', chains: 'A', hotspots: 'A2' }] };
+    await mount({ model_id: 'bindcraft2', mode: 'campaign', bindcraft2_settings: settings });
+    await settleDraft(); expect(saved().bindcraft2_settings).toEqual(settings);
+    const round = saved().binder_round;
+    await click('Save campaign draft');
+    const draft = JSON.parse(document.querySelector('[data-campaign-saved]')!.textContent!);
+    expect(draft.bindcraft2_settings).toEqual(settings);
+    await act(async () => state.load?.({ name: 'Clone reopened', model_id: 'bindcraft2', mode: 'campaign', params: draft }));
+    await settleDraft(); expect(saved().bindcraft2_settings).toEqual(settings); expect(saved().binder_round).toEqual(round);
+    await click('Preview native campaign');
+    expect(api.post).toHaveBeenLastCalledWith('/api/models/bindcraft2/campaign/preview', { model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: settings } });
 });
 
 it('native CIF URL handoff retains author chains, model bytes and derived source identity through campaign save/reopen', async () => {
@@ -153,6 +204,7 @@ it('native CIF URL handoff retains author chains, model bytes and derived source
     expect(saved().bc2_source_references['target:0']).toMatchObject({ path: 'inputs/campaign/model-2.cif', source: { modelNumber: 2, derivedFrom: { path: 'inputs/native.cif' } } });
     const draft = saved();
     await act(async () => state.load?.({ name: 'Reopened CIF', model_id: 'bindcraft2', mode: 'campaign', params: draft }));
-    expect(saved().bc2_source_references).toEqual(draft.bc2_source_references);
+    await settleDraft();
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); expect(saved().bc2_source_references).toEqual(draft.bc2_source_references); });
     expect(saved().bindcraft2_settings).toEqual(draft.bindcraft2_settings);
 });

@@ -44,6 +44,12 @@ def test_warm_weights_reuse_same_installed_bytes_without_copy_or_rehash(installe
         return verified(fd, item, *args, **kwargs)
     monkeypatch.setattr(module, 'verified', metadata_only)
     monkeypatch.setattr(cache, '_publish_copy', lambda *a, **k: pytest.fail('warm weight copy'))
+    monkeypatch.setattr(module.os, 'listdir', lambda *a, **k: pytest.fail('warm layout walk'))
+    original_open = module.os.open
+    def marker_only(path, flags, *args, **kwargs):
+        assert str(path) != 'model.pt', 'warm leaf open'
+        return original_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(module.os, 'open', marker_only)
     for _ in range(3):
         assert cache.weights(rows, install=True)['root'] == str(root)
         assert model.stat().st_ino == original.st_ino
@@ -102,6 +108,7 @@ def test_invalid_alias_not_published(installed, target):
 
 
 def test_execution_verifies_weights_before_starting_command(installed, tmp_path, monkeypatch):
+    """Execution checks publication; full=True is now the explicit byte audit."""
     cache, rows, root, data = installed
     runtime = tmp_path / 'attempt/runtime'
     runtime.mkdir(parents=True)
@@ -113,16 +120,26 @@ def test_execution_verifies_weights_before_starting_command(installed, tmp_path,
     monkeypatch.setenv('BMS_SHARED_WEIGHTS_ROOT', '')
     monkeypatch.setattr(os, 'execvp', lambda *args: calls.append(args))
     digest = hashlib.sha256(payload).hexdigest()
-    cache.execute_runtime(manifest, ['true'], digest)
+    with monkeypatch.context() as warm:
+        warm.setattr(module.os, 'listdir', lambda *a, **k: pytest.fail('execution layout walk'))
+        verified = module.verified
+        def marker_only(fd, item, *args, **kwargs):
+            assert item['sha256'] != rows[0]['sha256'], 'execution weight body audit'
+            return verified(fd, item, *args, **kwargs)
+        warm.setattr(module, 'verified', marker_only)
+        cache.execute_runtime(manifest, ['true'], digest)
     assert calls == [('true', ['true'])]
     assert os.environ['BMS_SHARED_WEIGHTS_ROOT'] == str(root)
     path = root / rows[0]['name']
     path.chmod(0o644)
     path.write_bytes(b'z' * len(data))
     path.chmod(0o444)
+    # Approved warm-use policy: arbitrary later silent corruption is no longer
+    # sought on each launch. An explicit audit still authenticates selected bytes.
+    cache.execute_runtime(manifest, ['true'], digest)
+    assert len(calls) == 2
     with pytest.raises(ValueError, match='weight_hash_mismatch'):
-        cache.execute_runtime(manifest, ['true'], digest)
-    assert len(calls) == 1
+        cache.weights(rows, full=True)
 
 
 def test_missing_content_never_publishes_a_partial_layout(tmp_path):

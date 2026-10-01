@@ -32,7 +32,7 @@ import {
 } from '../runtime/tailnetEnvironment';
 import { ThemeSelector } from './ThemeSelector';
 import { ProjectReturnBanner } from './project-manager/ProjectReturnBanner';
-import { DevIssueLedger } from './DevIssueLedger';
+import { MobilePreflightSettings } from './MobilePreflightSettings';
 import { buildIdentity } from '../lib/buildIdentity';
 
 import { usePowerControl, useFanControl } from '../lib/useControlState';
@@ -667,7 +667,7 @@ export function Layout({ children }: LayoutProps) {
                 <ProjectReturnBanner />
                 {children}
             </main>
-            <DevIssueLedger />
+            <MobilePreflightSettings />
         </div>
     );
 }

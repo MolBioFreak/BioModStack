@@ -67,7 +67,7 @@ function SourceChooser({ scaffold, onSelect, onClose }: { scaffold: boolean; onS
 }
 
 type Cache = Map<string, BC2Document>;
-function useSourceDocument(path: string, cache: Cache, session: ReturnType<typeof createBC2SourceSession>) {
+function useSourceDocument(path: string, cache: Cache, session: ReturnType<typeof createBC2SourceSession>, source?: BC2Source) {
     const [loaded, setLoaded] = useState<{ path: string; document: BC2Document }>();
     const [failure, setFailure] = useState<{ path: string; error: string }>();
     const [retry, setRetry] = useState(0);
@@ -80,7 +80,11 @@ function useSourceDocument(path: string, cache: Cache, session: ReturnType<typeo
         }).catch(error => { if (!cancelled) setFailure({ path, error: message(error) }); });
         return () => { cancelled = true; };
     }, [path, cache, retry, session]);
-    return { document: cache.get(path) || (loaded?.path === path ? loaded.document : undefined), error: failure?.path === path ? failure.error : '', retry: () => { setFailure(undefined); setRetry(old => old + 1); } };
+    const bytes = cache.get(path) || (loaded?.path === path ? loaded.document : undefined);
+    // Provenance decorates already-read bytes. It never participates in the read
+    // effect/cache key, overrides the governed path, or reacquires an ancestor.
+    const document = useMemo(() => bytes && source ? { ...bytes, source: { ...source, path, file: undefined } } : bytes, [bytes, source, path]);
+    return { document, error: failure?.path === path ? failure.error : '', retry: () => { setFailure(undefined); setRetry(old => old + 1); } };
 }
 
 function NativeTargetFields({ target, index, update }: { target: BC2Target; index: number; update: (field: string, next: unknown) => void }) {
@@ -93,8 +97,10 @@ function NativeTargetFields({ target, index, update }: { target: BC2Target; inde
 
 /** The canonical request is the only scientific state. Documents/cache are previews
  * keyed by exact materialized source; asynchronous work never owns the request. */
-export function BindCraft2StructureInputs({ value, onChange, inventory, initialSources, onSourcePrepared }: {
+export function BindCraft2StructureInputs({ value, onChange, inventory, initialSources, sourceReferences, onSourcePrepared }: {
     value: BC2Request; onChange: (next: BC2Request) => void; inventory: BC2Inventory; initialSources?: BC2InitialSources;
+    /** Saved inspection ancestry, applicable only to its exact active role/path. */
+    sourceReferences?: Record<string, { path: string; source: BC2Source }>;
     /** Optional draft provenance handoff; not part of the native scientific request. */
     onSourcePrepared?: (entry: { role: 'target' | 'scaffold'; targetIndex?: number; path: string; source: BC2Source }) => void;
 }) {
@@ -119,6 +125,21 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
     const [error, setError] = useState('');
     const [mode, setMode] = useState<'hotspots' | 'coldspots'>('hotspots');
     const [view, setView] = useState<'structure' | 'sequence'>('structure');
+    const inspectionRef = useRef<HTMLDivElement>(null);
+    const [fullscreen, setFullscreen] = useState(false);
+    useEffect(() => {
+        const sync = () => setFullscreen(globalThis.document.fullscreenElement === inspectionRef.current);
+        globalThis.document.addEventListener('fullscreenchange', sync);
+        return () => globalThis.document.removeEventListener('fullscreenchange', sync);
+    }, []);
+    const toggleFullscreen = async () => {
+        const element = inspectionRef.current;
+        if (!element) return;
+        try {
+            if (globalThis.document.fullscreenElement === element) await globalThis.document.exitFullscreen();
+            else await element.requestFullscreen();
+        } catch (error) { setError(`Unable to open fullscreen: ${message(error)}`); }
+    };
     const sourceEpoch = useRef(0);
     const mounted = useRef(true);
     const emit = (next: BC2Request) => { latest.current = next; change.current(next); };
@@ -157,16 +178,18 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
     const targets = bc2Targets(value);
     const target = typeof active === 'number' ? targets[active] : undefined;
     const activePath = active === 'scaffold' ? textValue(value.binder_scaffold) : textValue(target?.target_path);
-    const loaded = useSourceDocument(activePath, cache, session);
+    const retainedSource = sourceReferences?.[active === 'scaffold' ? 'scaffold' : `target:${active}`];
+    const loaded = useSourceDocument(activePath, cache, session, activePath && retainedSource?.path === activePath ? retainedSource.source : undefined);
     const document = loaded.document;
     const sourceIdentity = document?.source?.derivedFrom || document?.source;
     const modelFamily = modelFamilies.get(activePath) || document;
     const model = document?.models[0];
     const chains = useMemo(() => document?.format === 'fasta' ? fastaChains(document, textValue(target?.chains)) : model?.chains || [], [document, model, target?.chains]);
-    const included = selectedChains(textValue(target?.chains), chains);
-    const visibleChains = active === 'scaffold' ? chains : chains.filter(chain => included.includes(chain.id));
+    const included = useMemo(() => selectedChains(textValue(target?.chains), chains), [target?.chains, chains]);
+    const visibleChains = useMemo(() => active === 'scaffold' ? chains : chains.filter(chain => included.includes(chain.id)), [active, chains, included]);
     const firstChain = included[0] ?? chains[0]?.id ?? 'A';
-    const selected = visualResidues(textValue(target?.[mode]), visibleChains, firstChain);
+    const selected = useMemo(() => visualResidues(textValue(target?.[mode]), visibleChains, firstChain), [target?.[mode], visibleChains, firstChain]);
+    const selectedResidueRefs = useMemo(() => active === 'scaffold' ? [] : visibleChains.flatMap(chain => chain.residues.filter(residue => selected.has(residueKey(residue))).map(residue => ({ documentId: 'primary', authAsymId: residue.chainId, authSeqId: residue.resNum, insertionCode: residue.iCode }))), [active, visibleChains, selected]);
     const [scaffoldChains, setScaffoldChains] = useState<{ path: string; ids: string[] }>();
     const chosenScaffoldChains = scaffoldChains?.path === activePath ? scaffoldChains.ids : chains.map(chain => chain.id);
     const selectSource = async (slot: number | 'scaffold', source: BC2Source, family?: BC2Document, modelNumber?: number) => {
@@ -232,8 +255,8 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
         {chooser !== null && <SourceChooser key={chooser} scaffold={chooser === 'scaffold'} onClose={() => setChooser(null)} onSelect={source => void selectSource(chooser, source)} />}
         {busy !== null && <p role="status" className="text-sm text-accent">Preparing {busy === 'scaffold' ? 'scaffold' : `target ${busy + 1}`} source…</p>}
         {error && <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">{error}</p>}
-        {(target || active === 'scaffold') && <div className={`${surface} min-w-0 overflow-hidden`}>
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-color)] p-4"><div><h4 className="font-semibold">{active === 'scaffold' ? 'Scaffold inspection' : textValue(target?.name) || 'Target inspection'}</h4><p className={small}>{document?.format === 'fasta' ? 'Sequence source · native FASTA record and positions' : 'Structure source · original chain IDs and residue numbering'}</p></div><div className="flex flex-wrap gap-2"><label className="sr-only" htmlFor="bc2-inspection-source">Inspect source</label><select id="bc2-inspection-source" className={`${input} !w-auto max-w-full`} value={active} onChange={event => setActive(event.currentTarget.value === 'scaffold' ? 'scaffold' : Number(event.currentTarget.value))}>{targets.map((row, index) => <option key={index} value={index}>Target: {textValue(row.name) || index + 1}</option>)}<option value="scaffold">Binder scaffold</option></select><button type="button" className={`${button} ${view === 'structure' ? 'text-accent' : ''}`} aria-pressed={view === 'structure'} onClick={() => setView('structure')}>3D + sequence</button><button type="button" className={`${button} ${view === 'sequence' ? 'text-accent' : ''}`} aria-pressed={view === 'sequence'} onClick={() => setView('sequence')}>Sequence</button></div></div>
+        {(target || active === 'scaffold') && <div ref={inspectionRef} aria-label="Source inspection workspace" className={`${surface} min-w-0 overflow-auto ${fullscreen ? 'flex h-screen flex-col bg-[var(--bg-primary)]' : ''}`}>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-color)] p-4"><div><h4 className="font-semibold">{active === 'scaffold' ? 'Scaffold inspection' : textValue(target?.name) || 'Target inspection'}</h4><p className={small}>{document?.format === 'fasta' ? 'Sequence source · native FASTA record and positions' : 'Structure source · original chain IDs and residue numbering'}</p></div><div className="flex flex-wrap gap-2"><button type="button" className={button} aria-pressed={fullscreen} onClick={() => void toggleFullscreen()}>{fullscreen ? 'Exit fullscreen' : 'Fullscreen'}</button><label className="sr-only" htmlFor="bc2-inspection-source">Inspect source</label><select id="bc2-inspection-source" className={`${input} !w-auto max-w-full`} value={active} onChange={event => setActive(event.currentTarget.value === 'scaffold' ? 'scaffold' : Number(event.currentTarget.value))}>{targets.map((row, index) => <option key={index} value={index}>Target: {textValue(row.name) || index + 1}</option>)}<option value="scaffold">Binder scaffold</option></select><button type="button" className={`${button} ${view === 'structure' ? 'text-accent' : ''}`} aria-pressed={view === 'structure'} onClick={() => setView('structure')}>3D + sequence</button><button type="button" className={`${button} ${view === 'sequence' ? 'text-accent' : ''}`} aria-pressed={view === 'sequence'} onClick={() => setView('sequence')}>Sequence</button></div></div>
             <div className="grid min-w-0 gap-5 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
                 <div className="min-w-0 space-y-4">
                     {sourceIdentity && <p className={small} aria-label="Source identity">{sourceIdentity.name} · {document?.format === 'cif' ? 'mmCIF' : document?.format.toUpperCase()}{sourceIdentity.document && <> · source document {sourceIdentity.document.artifact_id} · state {sourceIdentity.document.target_state ?? 'not recorded'}</>}{document?.source?.derivedFrom && <> · derived source{document.source.modelNumber !== undefined ? ` · model ${document.source.modelNumber}` : ''}{document.source.chainIds ? ` · chains ${document.source.chainIds.join(', ')}` : ''}</>}</p>}
@@ -251,7 +274,7 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
                     {!activePath && <p className={small}>Choose a source above to inspect its structure and sequence.</p>}
                 </div>
                 <div className="min-w-0 space-y-4">
-                    {document && document.format !== 'fasta' && <div hidden={view !== 'structure'}><EpitopeMolstarViewer key={`${activePath}:${model?.number}`} pdbData={model?.content || document.content} format={document.format} sourceLabel={active === 'scaffold' ? 'Scaffold' : textValue(target?.name) || 'Target'} height={380} selectedResidueRefs={active === 'scaffold' ? [] : visibleChains.flatMap(chain => chain.residues.filter(residue => selected.has(residueKey(residue))).map(residue => ({ documentId: 'primary', authAsymId: residue.chainId, authSeqId: residue.resNum, insertionCode: residue.iCode })))} onResidueRefClick={residue => { if (active === 'scaffold') return; const candidate = visibleChains.flatMap(chain => chain.residues).find(item => item.chainId === residue.authAsymId && item.resNum === residue.authSeqId && (item.iCode || '') === (residue.insertionCode || '')); if (!candidate) return; const after = new Set(selected); const key = residueKey(candidate); if (after.has(key)) after.delete(key); else after.add(key); applyResidues(after); }} /></div>}
+                    {document && document.format !== 'fasta' && <div hidden={view !== 'structure'}><EpitopeMolstarViewer key={`${activePath}:${model?.number}`} pdbData={model?.content || document.content} format={document.format} sourceLabel={active === 'scaffold' ? 'Scaffold' : textValue(target?.name) || 'Target'} height={fullscreen ? 'min(60vh, 700px)' : 380} selectedResidueRefs={selectedResidueRefs} onResidueRefClick={active === 'scaffold' ? undefined : residue => { const candidate = visibleChains.flatMap(chain => chain.residues).find(item => item.chainId === residue.authAsymId && item.resNum === residue.authSeqId && (item.iCode || '') === (residue.insertionCode || '')); if (!candidate) return; const after = new Set(selected); const key = residueKey(candidate); if (after.has(key)) after.delete(key); else after.add(key); applyResidues(after); }} /></div>}
                     {visibleChains.length > 0 && (active === 'scaffold' ? <ScaffoldSequences chains={chains} /> : <div key={`${activePath}:${mode}`}><EpitopeSelector chains={visibleChains} selectedResidues={selected} onSelectionChange={applyResidues} selectedLabel={mode === 'hotspots' ? 'Hotspots' : 'Coldspots'} /></div>)}
                     {document?.format === 'fasta' && !visibleChains.length && <p className={small}>Choose a FASTA record to inspect its sequence.</p>}
                 </div>

@@ -20,9 +20,10 @@ export interface BinderEvidencePage {
     schema_version: 1; job_id: string; offset: number; limit: number; total: number;
     records: BinderEvidenceRecord[];
 }
-export async function fetchBinderEvidence(jobId: string, offset: number, signal?: AbortSignal): Promise<BinderEvidencePage> {
-    const { data } = await api.get<BinderEvidencePage>(`/api/designs/by-job/${encodeURIComponent(jobId)}/binder-evidence`, { params: { offset, limit: 100 }, signal });
-    if (data.schema_version !== 1 || data.job_id !== jobId || !Array.isArray(data.records)) throw Error('Binder evidence readback unavailable');
+export async function fetchBinderEvidence(jobId: string, offset: number, signal?: AbortSignal, sourceDesignId?: string): Promise<BinderEvidencePage> {
+    const { data } = await api.get<BinderEvidencePage>(`/api/designs/by-job/${encodeURIComponent(jobId)}/binder-evidence`, { params: { offset, limit: 100, ...(sourceDesignId !== undefined ? { source_design_id: sourceDesignId } : {}) }, signal });
+    if (data.schema_version !== 1 || data.job_id !== jobId || data.offset !== offset || data.limit !== 100 || !Array.isArray(data.records)
+        || (sourceDesignId !== undefined && (data.records.length !== 1 || data.records[0].source_design_id !== sourceDesignId))) throw Error('Binder evidence readback unavailable');
     return data;
 }
 export const evidenceText = (value: unknown): string => value == null ? 'Unmeasured' : typeof value === 'object' ? JSON.stringify(value) : String(value);

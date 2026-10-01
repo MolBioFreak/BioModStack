@@ -10,8 +10,10 @@ const LigandMPNNDesignForm = lazy(() => import('./LigandMPNNDesignForm').then(m 
 const NativeBinderGeneration = lazy(() => import('./NativeBinderGeneration').then(m => ({ default: m.NativeBinderGeneration })));
 const BinderRoundSettings = lazy(() => import('./BinderRoundSettings').then(m => ({ default: m.BinderRoundSettings })));
 import { hydrateBinderRound } from '../lib/binderRound';
+import { binderEngineSearch, type BC2ShellSourceHandoff } from '../lib/binderShell';
+import { canonicalBindCraft2Entry } from './tabs/BindCraft2Tab';
 const BindCraft2LifecycleDraft = lazy(() => import('./BindCraft2Campaign').then(m => ({ default: m.BindCraft2LifecycleDraft })));
-import { fetchNativeGenerationInventory, nativeBinderDraft, submitNativeBinderRequest, type NativeBinderModel } from '../lib/nativeBinderAuthoring';
+import { fetchNativeGenerationInventory, nativeBinderDraft, submitNativeBinderRequest, type NativeBinderModel, nativeBinderField } from '../lib/nativeBinderAuthoring';
 import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides, fampnnUserParams } from './FampnnAnalysisControls';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -155,7 +157,23 @@ export function JobSubmission() {
             return { route: null, error: error instanceof Error ? error.message.slice(0, 512) : 'Invalid Molecular Dynamics handoff route.' };
         }
     }, [searchParams]);
-    const launchContextId = searchParams.get('launch_context_id');
+    const mdHandoffInitialValues = useMemo<Record<string, UntypedApiValue> | undefined>(() => {
+        const route = mdHandoff.route;
+        if (!route) return undefined;
+        const savedDraft = route.draftId ? loadMolecularDynamicsDraft(sessionStorage, route.draftId) : null;
+        return buildMolecularDynamicsHandoffInitialValues(route, savedDraft) as Record<string, UntypedApiValue>;
+    }, [mdHandoff.route]);
+    const launchContextId = searchParams.get('launch_context_id')
+        ?? (searchParams.get('template') === 'molecular_dynamics'
+            && typeof mdHandoffInitialValues?.md_destination_launch_context_id === 'string'
+            ? mdHandoffInitialValues.md_destination_launch_context_id : null);
+    useEffect(() => {
+        // Restore only MD's destination. The predictor must not claim the MD stage.
+        if (searchParams.get('template') !== 'molecular_dynamics' || !launchContextId || searchParams.has('launch_context_id')) return;
+        const restored = new URLSearchParams(searchParams);
+        restored.set('launch_context_id', launchContextId);
+        setSearchParams(restored, { replace: true });
+    }, [searchParams, launchContextId, setSearchParams]);
     const launchContextQuery = useQuery({
         queryKey: ['launch-context', launchContextId],
         queryFn: ({ signal }) => getLaunchContext(launchContextId as string, signal),
@@ -171,11 +189,13 @@ export function JobSubmission() {
             if (returnUri) navigate(returnUri);
         });
     }, [launchContextQuery.data?.recovery_job_id, navigate]);
-    const [wizardMode, setWizardMode] = useState<'templates' | 'experimental' | 'manual'>(() => searchParams.has('model') && !isDeNovoModel(searchParams.get('model')) ? 'manual' : 'templates');
+    const bc2DirectEntry = searchParams.get('model') === 'bindcraft2';
+    const bc2DirectMode = searchParams.get('mode') || 'campaign';
+    const [wizardMode, setWizardMode] = useState<'templates' | 'experimental' | 'manual'>(() => searchParams.has('model') && !bc2DirectEntry && !isDeNovoModel(searchParams.get('model')) ? 'manual' : 'templates');
 
     // Read template from URL, allows page refresh and bookmarking
     const urlTemplate = searchParams.get('template');
-    const routeTemplateId = isDeNovoModel(urlTemplate) || isDeNovoModel(searchParams.get('model'))
+    const routeTemplateId = bc2DirectEntry ? 'antibody_denovo' : isDeNovoModel(urlTemplate) || isDeNovoModel(searchParams.get('model'))
         ? DE_NOVO_TEMPLATE
         : urlTemplate === 'confornets_experimental' ? 'conformational_mapping' : urlTemplate;
     const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(routeTemplateId);
@@ -198,8 +218,12 @@ export function JobSubmission() {
         if (canonicalId !== DE_NOVO_TEMPLATE) DE_NOVO_ROUTE_KEYS.forEach(key => next.delete(key));
         setSearchParams(next, { replace: true });
     }, [searchParams, setSearchParams]);
-    const [selectedModelId, setSelectedModelId] = useState<string | null>(() => searchParams.get('model'));
-    const [selectedModeId, setSelectedModeId] = useState<string | null>(() => searchParams.get('mode'));
+    const [selectedModelId, setSelectedModelId] = useState<string | null>(() => bc2DirectEntry ? null : searchParams.get('model'));
+    const [selectedModeId, setSelectedModeId] = useState<string | null>(() => bc2DirectEntry ? null : searchParams.get('mode'));
+    useEffect(() => {
+        const canonical = canonicalBindCraft2Entry(location.search);
+        if (canonical !== location.search) setSearchParams(new URLSearchParams(canonical), { replace: true });
+    }, [location.search, setSearchParams]);
     // Explicit model handoffs and mode changes must reopen the same editor on
     // refresh, without resurrecting the template or the retired model catalog.
     useEffect(() => {
@@ -222,7 +246,7 @@ export function JobSubmission() {
     const setFampnnOverrides = (value: unknown) => setParams(previous => ({ ...previous, fampnn_analysis_overrides: value }));
     let fampnnError = '';
     try { hydrateFampnnOverrides(fampnnOverrides); } catch (error) { fampnnError = String(error); }
-    const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
+
     const [explicitRunFrustrampnn, setExplicitRunFrustrampnn] = useState<boolean | undefined>(undefined);
     const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(() => (
         hydrateFrustraMpnnSettings(undefined)
@@ -234,7 +258,11 @@ export function JobSubmission() {
     const [activeSequenceField, setActiveSequenceField] = useState<string>('sequence');
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
-    const [clonedValues, setClonedValues] = useState<Record<string, UntypedApiValue> | undefined>(undefined);
+    const [clonedValues, setClonedValues] = useState<Record<string, UntypedApiValue> | undefined>(() => bc2DirectEntry ? {
+        model_id: 'bindcraft2', mode: bc2DirectMode, denovo_generator: 'bindcraft2',
+        ...(searchParams.has('bc2_source_job_id') ? { bc2_source_job_id: searchParams.get('bc2_source_job_id') } : {}),
+        ...(searchParams.has('bc2_action_options') ? { bc2_action_options: (() => { try { return JSON.parse(searchParams.get('bc2_action_options')!); } catch { return searchParams.get('bc2_action_options'); } })() } : {}),
+    } : undefined);
     const continuationSource = searchParams.get('source_structure');
     const continuationDestination = searchParams.get('continuation');
     const continuationKey = `${continuationDestination}:${continuationSource}`;
@@ -302,12 +330,6 @@ export function JobSubmission() {
             setParams(draft); setJobName(typeof draft.job_name === 'string' ? draft.job_name : '');
         }
     }, [projectSetup.active, projectSetup.setup?.project_id, projectSetup.setup?.setup_context_id, projectSetup.setup?.generation]);
-    const mdHandoffInitialValues = useMemo<Record<string, UntypedApiValue> | undefined>(() => {
-        const route = mdHandoff.route;
-        if (!route) return undefined;
-        const savedDraft = route.draftId ? loadMolecularDynamicsDraft(sessionStorage, route.draftId) : null;
-        return buildMolecularDynamicsHandoffInitialValues(route, savedDraft) as Record<string, UntypedApiValue>;
-    }, [mdHandoff.route]);
     const molecularDynamicsInitialValues = useMemo<Record<string, UntypedApiValue>>(
         () => ({ ...(clonedValues || {}), ...(mdHandoffInitialValues || {}) }),
         [clonedValues, mdHandoffInitialValues],
@@ -405,6 +427,27 @@ export function JobSubmission() {
             pendingTemplateRoute.current = DE_NOVO_TEMPLATE;
             setSelectedTemplateIdInternal(DE_NOVO_TEMPLATE);
             navigateDeNovo(deNovoNavigation(retainedDeNovo), true);
+            return;
+        }
+        if (templateId === 'antibody_denovo') {
+            const retained = binderDraftRef.current;
+            if (retained?.model_id === 'bindcraft2' && retained.mode && retained.mode !== 'campaign') {
+                setClonedValues(retained); setSelectedTemplateIdInternal(templateId);
+                pendingTemplateRoute.current = templateId;
+                const next = new URLSearchParams(searchParams); next.delete('template'); next.delete('engine');
+                next.set('model', 'bindcraft2'); next.set('mode', retained.mode);
+                setSearchParams(next, { replace: true });
+                return;
+            }
+            if (retained?.denovo_generator) {
+                pendingTemplateRoute.current = templateId;
+                setSelectedTemplateIdInternal(templateId);
+                setEngineChooserOpen(false);
+                setSearchParams(new URLSearchParams(binderEngineSearch(searchParams.toString(), retained.denovo_generator)), { replace: true });
+                return;
+            }
+            setSelectedTemplateId(templateId);
+            setEngineChooserOpen(!retained && !clonedValues && Object.keys(binderNativeDrafts.current).length === 0 && !projectSetup.active && !searchParams.has('engine'));
             return;
         }
         setSelectedTemplateId(templateId);
@@ -623,6 +666,12 @@ export function JobSubmission() {
     }, [routeTemplateId, selectedTemplateId, visibleApiTemplates]);
 
     const routeUserTemplate = (template: UntypedApiValue) => {
+        if (template.model_id === 'bindcraft2' && template.mode && template.mode !== 'campaign') {
+            setWizardMode('templates'); setSelectedTemplateId('antibody_denovo');
+            setClonedValues({ ...template.params, model_id: 'bindcraft2', mode: template.mode });
+            setDedicatedTemplateVersion(version => version + 1);
+            return;
+        }
         if (isDeNovoModel(template.model_id) || isDeNovoModel(template.base_template_id)) {
             const draft = deNovoSavedValues(template.model_id ?? template.base_template_id, template.mode, {
                 ...template.params,
@@ -732,12 +781,7 @@ export function JobSubmission() {
     });
     const templateDetail = selectedTemplateData?.data?.data ?? selectedTemplateData?.data;
 
-    // Fetch ligand presets for dynamic dropdown
-    const { data: ligandPresetsData } = useQuery({
-        queryKey: ['presets', 'ligand'],
-        queryFn: () => fetchInputPresets('ligand'),
-    });
-    const ligandPresets = ligandPresetsData?.data ?? [];
+
 
     const submitBinderRequest = async (jobData: Partial<Job>, draft = projectDraftValues) => {
         if (!projectSetup.active) return submitNativeBinderRequest({ ...jobData, ...(launchContextId ? { launch_context_id: launchContextId } : {}) });
@@ -823,6 +867,9 @@ export function JobSubmission() {
         }
         return resolveFrustraMpnnWorkflowId(modelId, modeId);
     }, [wizardMode, selectedModelId, selectedModeId, selectedTemplateId, templateDetail, params, ligands]);
+    // Dedicated forms own their integration defaults. Only the generic stage
+    // below consumes this parent's copy.
+    const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn', undefined, !!resolvedFrustrampnnWorkflowId);
     const configuredFrustrampnnWorkflow = resolvedFrustrampnnWorkflowId
         ? frustrampnnIntegrationQuery.data?.workflows?.[resolvedFrustrampnnWorkflowId]
         : undefined;
@@ -851,6 +898,15 @@ export function JobSubmission() {
                 definitions.forEach((p: UntypedApiValue) => {
                     if (p.default !== undefined && !(p.aliases || []).some((alias: string) => Object.hasOwn(saved, alias))) defaults[p.name] = p.default;
                 });
+                const handoff = saved.binder_source_handoff as BC2ShellSourceHandoff | undefined;
+                if (selectedModelId === 'boltzgen' && handoff?.framework) {
+                    const field = definitions.find((p: UntypedApiValue) => nativeBinderField(p.name) === 'scaffold_path');
+                    if (field && !Object.hasOwn(saved, field.name) && !(field.aliases || []).some((alias: string) => Object.hasOwn(saved, alias))) {
+                        defaults[field.name] = handoff.framework.path;
+                        const reference = handoff.bc2?.references.scaffold;
+                        if (reference?.path === handoff.framework.path) defaults[`${field.name}_source_reference`] = { ...reference.source, path: reference.path };
+                    }
+                }
                 return { ...defaults, ...saved };
             });
             initializedModelParams.current = { id: selectedModelId, clone: clonedValues };
@@ -1106,6 +1162,16 @@ export function JobSubmission() {
             return param.condition.values.includes(controllingValue);
         });
     }, [templateDetail, params]);
+
+    // Only ParamField's ligand preset selector consumes this inventory.
+    const ligandPresetFields = isTemplateMode && !isDedicatedLauncherTemplate(selectedTemplateId)
+        ? visibleTemplateParams : wizardMode === 'manual' && !isNativeBinderGeneration && !isLigandNative && !isCalibyNative ? visibleParams : [];
+    const { data: ligandPresetsData } = useQuery({
+        queryKey: ['presets', 'ligand'],
+        queryFn: () => fetchInputPresets('ligand'),
+        enabled: ligandPresetFields.some((field: UntypedApiValue) => field.preset_type === 'ligand'),
+    });
+    const ligandPresets = ligandPresetsData?.data ?? [];
 
     const groupedTemplateParams = useMemo(() => {
         const groups: Record<string, UntypedApiValue[]> = {};
@@ -1519,8 +1585,8 @@ export function JobSubmission() {
                     catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
                     finally { setProjectActionBusy(false); }
                 }}>Start run</button>}{projectActionError && <p role="alert">{projectActionError}</p>}<ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
-            {!isNativeBinderGeneration && !(isTemplateMode && ['structure_prediction', 'mutagenesis', 'antibody_denovo', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics'].includes(selectedTemplateId ?? '')) && <ExecutionTargetPicker workflowRequest={workflowRequest} />}
-            {!isNativeBinderGeneration && selectedTemplateId !== DE_NOVO_TEMPLATE && <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />}
+            {!isNativeBinderGeneration && !(isTemplateMode && ['structure_prediction', 'mutagenesis', 'antibody_denovo', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'].includes(selectedTemplateId ?? '')) && <ExecutionTargetPicker workflowRequest={workflowRequest} />}
+            {!isNativeBinderGeneration && selectedTemplateId !== DE_NOVO_TEMPLATE && selectedTemplateId !== 'antibody_denovo' && <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />}
             {launchContextId && (
                 <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
                     {launchContextQuery.isLoading && 'Resolving Project launch destination…'}
@@ -1639,6 +1705,7 @@ export function JobSubmission() {
                                     initialValues={clonedValues}
                                     initialDraft={binderInitialDraft}
                                     initialEngineChooserOpen={engineChooserOpen}
+                                    onLoadTemplate={routeUserTemplate}
                                     onSubmitRequest={submitBinderRequest}
                                     onDraftChange={draft => {
                                         binderDraftRef.current = draft;
@@ -1648,6 +1715,8 @@ export function JobSubmission() {
                                         setBinderInitialDraft(binderDraftRef.current);
                                         const destinationKey = 'templateId' in route ? route.templateId : `${route.modelId}:${route.mode}`;
                                         const inherited: Record<string, UntypedApiValue> = binderDraftRef.current ? hydrateBinderRound(binderDraftRef.current) : {};
+                                        const sources = route.sources as BC2ShellSourceHandoff | undefined;
+                                        if (sources?.bc2) inherited.binder_source_handoff = sources;
                                         // Only native fields shared by these contracts inherit sources.
                                         // Never turn context into a seed complex or infer binder chain roles.
                                         if ('modelId' in route && ['boltzgen', 'ppiflow'].includes(route.modelId) && ['protein_binder', 'antibody_binder', 'nanobody_binder', 'peptide', 'peptide_binder'].includes(route.mode)) {
@@ -1661,16 +1730,26 @@ export function JobSubmission() {
                                                 if (target.chain && route.modelId === 'boltzgen') inherited.target_chains = target.chain;
                                                 if (target.chain && route.modelId === 'ppiflow' && route.mode === 'protein_binder') inherited.target_chain = target.chain;
                                                 if ('residues' in target) inherited.selected_residues = target.residues;
-                                                // A nonprimary model needs a source-owned materialized
-                                                // document; copying the whole file would change intent.
-                                                if (target.modelNumber == null || target.modelNumber === 1) inherited.target_pdb = target.path;
+                                                // Keep the exact governed document; the receiving source
+                                                // owner handles explicit conformation and checked conversion.
+                                                inherited.target_pdb = target.path;
+                                                inherited.target_pdb_source_reference = { name: target.name || target.path, ...target.reference, path: target.path, ...(target.modelNumber == null ? {} : { modelNumber: target.modelNumber }) };
                                             }
                                             if (route.modelId === 'ppiflow' && ['antibody_binder', 'nanobody_binder'].includes(route.mode)) {
-                                                if (route.sources?.framework) inherited.framework_pdb = route.sources.framework.path;
+                                                if (route.sources?.framework) {
+                                                    inherited.framework_pdb = route.sources.framework.path;
+                                                    const reference = sources?.bc2?.references.scaffold;
+                                                    inherited.framework_pdb_source_reference = reference && reference.path === inherited.framework_pdb ? { ...reference.source, path: reference.path } : { name: route.sources.framework.name || 'BC2 scaffold', path: inherited.framework_pdb };
+                                                }
                                                 if (route.sources?.target?.chain) inherited.antigen_chain = route.sources.target.chain;
                                             }
                                         }
                                         const destination = { ...inherited, ...(binderNativeDrafts.current[destinationKey] ?? {}), ...route.initialDraft };
+                                        for (const field of ['target_pdb', 'framework_pdb', 'scaffold_path']) {
+                                            const reference = destination[`${field}_source_reference`];
+                                            if (reference?.path !== destination[field]) delete destination[`${field}_source_reference`];
+                                        }
+                                        if (destination.target_source?.path !== destination.target_pdb) delete destination.target_source;
                                         setClonedValues(destination);
                                         setParams(destination);
                                         if (typeof destination.job_name === 'string') setJobName(destination.job_name);
@@ -1703,6 +1782,7 @@ export function JobSubmission() {
                                 />
                             ) : selectedTemplateId === 'protein_modification_experimental' ? (
                                 <ProteinModificationTemplate
+                                    launchContextId={launchContextId}
                                     key={`de-novo:${dedicatedTemplateVersion}`}
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={deNovoInitialValues}
@@ -1761,6 +1841,7 @@ export function JobSubmission() {
                     )}
 
                 </section>
+                {selectedTemplateId === 'antibody_denovo' && <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />}
 
                 {/* 3. Template Configuration - Only show if template selected and NOT a dedicated template */}
                 {selectedTemplateId && !isDedicatedLauncherTemplate(selectedTemplateId) && templateDetail && (
@@ -1909,8 +1990,7 @@ export function JobSubmission() {
                                             if (isSequenceContinuation && selectedModelId) { switchSequenceModel(selectedModelId, mode); return; }
                                             if (['boltzgen', 'ppiflow'].includes(selectedModelId ?? '')) {
                                                 binderNativeDrafts.current[`${selectedModelId}:${selectedModeId}`] = nativeBinderDraft(params, jobName);
-                                                const sourceContext = Object.fromEntries(['target_pdb', 'target_source', 'target_model_number', 'selected_chain', 'selected_residues']
-                                                    .filter(key => Object.hasOwn(params, key)).map(key => [key, params[key]]));
+                                                const sourceContext = Object.fromEntries(Object.entries(params).filter(([key]) => ['target_pdb', 'target_source', 'target_model_number', 'selected_chain', 'selected_residues', 'binder_source_handoff', 'framework_pdb'].includes(key) || /_source_reference$|_inspection_residues$|_inspection_view$/.test(key)));
                                                 const draft = { ...sourceContext, ...binderNativeDrafts.current[`${selectedModelId}:${mode}`] };
                                                 setClonedValues(draft);
                                                 setParams(draft);
@@ -1947,9 +2027,9 @@ export function JobSubmission() {
                                         setWizardMode('templates'); setSelectedTemplateId('antibody_denovo');
                                         setEngineChooserOpen(true);
                                     }}>Change generation engine</button>
-                                    <BinderRoundSettings values={params} onChange={draft => setParams(previous => ({ ...previous, ...draft }))} />
                                     {nativeGenerationQuery.error && <p role="status" className="text-sm text-amber-500">{nativeGenerationQuery.error.message} Catalog controls remain available; the native inventory may contain additional settings.</p>}
                                     <NativeBinderGeneration key={`${selectedModelId}:${selectedModeId}`} model={selectedModelId as NativeBinderModel} mode={selectedModeId!}
+                                        generationSlot={<BinderRoundSettings values={params} onChange={draft => setParams(previous => ({ ...previous, ...draft }))} />}
                                         parameters={visibleParams} values={params} profile={nativeGenerationInventory ? { profile: nativeGenerationInventory.profile, assets: nativeGenerationInventory.assets } : undefined} nativeBehavior={nativeGenerationInventory?.native_behavior} onBrowse={setShowFileBrowser}
                                         onPatch={patch => setParams(previous => {
                                             const next = { ...previous, ...patch };

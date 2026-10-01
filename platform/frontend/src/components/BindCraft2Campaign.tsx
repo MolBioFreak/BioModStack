@@ -99,6 +99,9 @@ interface BindCraft2CampaignProps {
     onPreview: () => void;
     onLaunch: () => void;
     onOpenLibrary: () => void;
+    onSaveCampaign?: () => void;
+    inheritedSettings?: Record<string, unknown>;
+    inheritedOrigins?: Record<string, string>;
     executionTarget: ReactNode;
     library: ReactNode;
 }
@@ -120,7 +123,7 @@ const action: CSSProperties = {
 };
 const buttonClass = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
 
-function shortValue(value: unknown, fallback = 'Profile default'): string {
+function shortValue(value: unknown, fallback = 'Inherited value unavailable'): string {
     if (value === undefined) return fallback;
     if (value === null) return 'Native automatic';
     if (Array.isArray(value)) return value.length ? value.map(String).join(' · ') : 'Explicit empty selection';
@@ -138,9 +141,19 @@ function messageText(value: unknown): string {
 export function BindCraft2Campaign({
     name, onNameChange, onBack, generatorChooser, children, requestedSettings,
     preview, previewBusy, submitting, launchAvailable, error, onPreview, onLaunch,
-    onOpenLibrary, executionTarget, library, section, onSectionChange, roundSettings,
+    onOpenLibrary, onSaveCampaign, inheritedSettings, inheritedOrigins, executionTarget, library, section, onSectionChange, roundSettings,
 }: BindCraft2CampaignProps) {
-    const display = preview?.effective_settings ?? requestedSettings;
+    const display = { ...inheritedSettings, ...preview?.effective_settings, ...requestedSettings };
+    const attempt = requestedSettings.max_trajectories;
+    const missingAttempt = !(typeof attempt === 'number' && Number.isInteger(attempt) && attempt > 0);
+    const focusAttempt = () => {
+        onSectionChange?.('campaign');
+        requestAnimationFrame(() => {
+            const card = document.querySelector<HTMLElement>('[data-bc2-field="max_trajectories"]');
+            for (let node: HTMLElement | null = card; node; node = node.parentElement) if (node instanceof HTMLDetailsElement) node.open = true;
+            card?.scrollIntoView?.({ block: 'nearest' }); card?.querySelector<HTMLElement>('input,select')?.focus();
+        });
+    };
     const sources = Array.isArray(display.targets) ? display.targets : [];
     const targetNames = sources.map((target: unknown, index: number) => {
         if (target && typeof target === 'object' && 'name' in target && target.name) return String(target.name);
@@ -179,7 +192,7 @@ export function BindCraft2Campaign({
             <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_18rem]">
                 <div className="min-w-0 space-y-4">
                     {onSectionChange && <nav aria-label="Campaign workspace sections" className="flex flex-wrap gap-2 rounded-xl border p-2" style={surface}>
-                        {([['sources', 'Sources'], ['binder', 'Binder design'], ['campaign', 'Campaign'], ['objectives', 'Objectives'], ['expert', 'Expert']] as const).map(([key, label]) =>
+                        {([['sources', 'Sources'], ['binder', 'Binder design'], ['campaign', 'Generation'], ['objectives', 'Objectives'], ['expert', 'Expert']] as const).map(([key, label]) =>
                             <button type="button" key={key} aria-pressed={section === key} onClick={() => onSectionChange(key)} className={`${buttonClass} flex-1`} style={section === key ? action : inset}>{label}</button>)}
                     </nav>}
                     {children}
@@ -198,10 +211,16 @@ export function BindCraft2Campaign({
                             <div><dt style={{ color: 'var(--text-secondary)' }}>Targets</dt><dd className="mt-0.5 font-medium">{targetNames.length ? targetNames.join(' · ') : shortValue(display.target, 'Choose sources or a native target preset')}</dd></div>
                             <div><dt style={{ color: 'var(--text-secondary)' }}>Binder lengths</dt><dd className="mt-0.5 font-medium">{shortValue(display.binder_lengths)}</dd></div>
                             <div className="grid grid-cols-2 gap-3">
-                                <div><dt style={{ color: 'var(--text-secondary)' }}>Attempt budget</dt><dd className="mt-0.5 font-medium">{shortValue(display.max_trajectories, 'Not specified')}</dd></div>
+                                <div><dt style={{ color: 'var(--text-secondary)' }}>Attempt budget</dt><dd className="mt-0.5 font-medium">{missingAttempt ? 'Required: explicit positive integer; no default' : shortValue(attempt)}</dd></div>
                                 <div><dt style={{ color: 'var(--text-secondary)' }}>Retained designs</dt><dd className="mt-0.5 font-medium">{shortValue(display.number_of_final_designs)}</dd></div>
                             </div>
                         </dl>
+                        {missingAttempt && <button type="button" onClick={focusAttempt} className="mt-3 text-sm underline">Set required attempt limit</button>}
+                        <details className="mt-3 text-xs"><summary>Value sources</summary>
+                            <p>Requested: explicit operator settings</p><pre className="overflow-auto whitespace-pre-wrap">{JSON.stringify(requestedSettings, null, 2)}</pre>
+                            <p>Inherited: {inheritedSettings ? 'selected native profile' : 'Inherited value unavailable'}</p><pre className="overflow-auto whitespace-pre-wrap">{JSON.stringify({ values: inheritedSettings, origins: inheritedOrigins }, null, 2)}</pre>
+                            <p>Current effective: {preview ? 'matching native preview' : 'not previewed'}</p>{preview && <pre className="overflow-auto whitespace-pre-wrap">{JSON.stringify(preview.effective_settings, null, 2)}</pre>}
+                        </details>
                         <p className="mt-4 text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{preview ? 'Showing the native compiler’s resolved settings.' : 'Preview resolves your choices against the native profiles.'}</p>
                     </section>
 
@@ -218,7 +237,7 @@ export function BindCraft2Campaign({
                         {launchAvailable === true && <button type="button" disabled={submitting || !preview} onClick={onLaunch} className={`${buttonClass} w-full`} style={action}>
                             {submitting ? 'Submitting campaign…' : 'Launch BindCraft2 campaign'}
                         </button>}
-                        <button type="button" onClick={onOpenLibrary} className={`${buttonClass} w-full`} style={inset}>Save campaign draft</button>
+                        <button type="button" onClick={onSaveCampaign ?? onOpenLibrary} className={`${buttonClass} w-full`} style={inset}>Save campaign draft</button>
                         {!preview && <p role="status" className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>Preview the current native settings before launch. Editing settings refreshes what needs to be previewed.</p>}
                         {launchAvailable === false && <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Campaign execution is unavailable in this installation. You can still edit and save your settings.</p>}
                         {error && <p role="alert" className="rounded-lg border p-3 text-sm" style={{ color: 'var(--error)', borderColor: 'var(--error)' }}>{error}</p>}

@@ -63,7 +63,7 @@ def test_native_xy_failure_survives_strict_receipt_boundary(tmp_path, source):
                 assert result['xy_failure'] == evidence
                 assert result['xy_failure']['controller_failure']['ack']['status'] == 100
                 assert result['xy_failure']['controller_failure']['timeout_position']['position'] == (5 if source == 'actual_y5' else 86000)
-                assert result['error'] == {**receipts['compact']['error'], 'detail': None}
+                assert result['error'] == receipts['compact']['error']
                 if source == 'actual_y5':
                     assert result['error']['code'] == 'route_http_conflict'
                     assert result['xy_failure']['requested']['y'] == 0
@@ -95,7 +95,7 @@ def test_actual_y5_history_preserves_reporting_evidence(monkeypatch):
     assert row['xy_failure'] is None
     assert row['history'] == original['history']
     assert row['status'] == 'failed'
-    assert row['error'] == {**compact['error'], 'detail': None}
+    assert row['error'] == compact['error']
     assert [call[0] for call in runtime.connection.client.calls] == ['operator_action_history']
 
 

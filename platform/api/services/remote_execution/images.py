@@ -27,7 +27,7 @@ IMAGE_SELECTORS = {
 }
 
 
-def resolve_image(name: str, container_root: Path, params: dict | None = None) -> Path:
+def image_reference(name: str, container_root: Path, params: dict | None = None) -> tuple[Path, str | None]:
     """Typed argument > installation selector > current release > legacy name.
 
     CAS validation intentionally runs before resolving symlinks. Legacy names are
@@ -52,13 +52,11 @@ def resolve_image(name: str, container_root: Path, params: dict | None = None) -
         # Central scientific digest remains authoritative, independent of release
         # membership. The central reader also enforces configured path policy.
         path = Path(runtime.validate_configured_container_path(configured or identity.configured_sif_path))
-        with runtime.open_verified_container(path, identity.sif_sha256):
-            pass
-        return path
+        return path, identity.sif_sha256
     state = load_state(root)
     if (configured == str(conventional) and not os.environ.get(selector, '').strip()
             and not any(selector in release['images'] for release in state['releases'].values())):
-        return conventional
+        return conventional, None
     if configured:
         candidates = [release['images'][selector]
                       for release in state['releases'].values()
@@ -75,11 +73,22 @@ def resolve_image(name: str, container_root: Path, params: dict | None = None) -
         release = state['releases'].get(state['current'].get(lane), {})
         image = release.get('images', {}).get(selector)
         if image is None:
-            return conventional
+            return conventional, None
     path = object_path(root, image['sha256'])
     if str(path) != image['path']:
         raise ValueError('Managed image path differs from shared store')
-    verify_image(path, image['sha256'])
+    return path, image['sha256']
+
+
+def resolve_image(name: str, container_root: Path, params: dict | None = None) -> Path:
+    path, digest = image_reference(name, container_root, params)
+    if digest is not None:
+        if name == 'frustrampnn.sif':
+            from services.frustrampnn import runtime
+            with runtime.open_verified_container(path, digest):
+                pass
+        else:
+            verify_image(path, digest)
     return path
 
 

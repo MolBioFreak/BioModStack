@@ -172,7 +172,7 @@ async def _leased_camera_call(
             if not callable(method):
                 raise RobotTransportError("Connected BioXP client does not implement the camera contract")
             payload = await cast(Callable[..., Awaitable[Any]], method)(**(method_kwargs or {}))
-            if runtime.connection.snapshot().generation != expected_generation:
+            if runtime.connection.generation != expected_generation:
                 raise ConnectionStateError("BioXP connection changed during camera request")
             return payload
     except ConnectionStateError as exc:
@@ -368,7 +368,7 @@ async def proxy_camera_mjpeg(
         stream_context = stream_context_factory()
         chunks = await stream_context.__aenter__()
         stream_entered = True
-        if runtime.connection.snapshot().generation != expected_generation:
+        if runtime.connection.generation != expected_generation:
             raise ConnectionStateError("BioXP connection changed during camera stream open")
     except BaseException as exc:
         await cleanup()
@@ -380,7 +380,7 @@ async def proxy_camera_mjpeg(
     async def iterator():
         try:
             async for part in _iter_validated_mjpeg(chunks):
-                if runtime.connection.snapshot().generation != expected_generation:
+                if runtime.connection.generation != expected_generation:
                     break
                 yield part
         finally:

@@ -243,20 +243,53 @@ process RunShapeFAMPNN {
     """
 }
 
+process RunShapeCaliby {
+    tag "${candidate_id}"
+    label 'Caliby'
+    label 'gpu_light'
+    stageInMode 'copy'
+
+    publishDir "${params.out_dir}/run/shape_sequences/caliby_experimental", mode: 'copy'
+
+    input:
+    tuple val(candidate_id), path(backbone)
+    val sequence_count
+    val seed
+    path request_json
+
+    output:
+    path "${candidate_id}_caliby_experimental", emit: bundle
+
+    script:
+    def bundle = "${candidate_id}_caliby_experimental"
+    """
+    set -euo pipefail
+    python3 ${params.code_root}/scripts/shape_blueprint/run_shape_sequence.py \\
+        --engine caliby_experimental \\
+        --candidate-id ${candidate_id} \\
+        --backbone ${backbone} \\
+        --output-dir ${bundle} \\
+        --receipt ${bundle}/runtime_receipt.json \\
+        --count ${sequence_count} \\
+        --seed ${seed} \\
+        --request ${request_json}
+    """
+}
+
 process EvaluateShapeCandidate {
     tag "${sequence_name}"
     label 'ShapeEvaluate'
     stageInMode 'copy'
 
     input:
-    tuple val(sequence_name), path(structure), path(esm_metrics), path(source_backbone)
+    tuple val(sample_id), val(sequence_name), path(structure), path(esm_metrics), path(source_backbone)
     path request_json
     path geometry_manifest
     path point_pool
     path sdf_grid
 
     output:
-    tuple val(sequence_name), path("shape_candidate_bundle_${task.index}"), emit: bundle
+    tuple val(sample_id), path("shape_candidate_bundle_${task.index}"), emit: bundle
 
     script:
     def bundle = "shape_candidate_bundle_${task.index}"
@@ -284,6 +317,7 @@ process RunShapeBoltzValidator {
     input:
     tuple val(sequence_name), val(sequence)
     val seed
+    path request_json
 
     output:
     tuple val(sequence_name), path("boltz_validator_evidence_${sequence_name}"), emit: evidence
@@ -297,7 +331,7 @@ process RunShapeBoltzValidator {
     export TRITON_CACHE_DIR="\$PWD/tmp"
     export HOME="\$PWD/tmp"
     python3 ${params.code_root}/scripts/shape_blueprint/run_shape_validator_suite.py \\
-        --mode native --validator boltz2 \\
+        --mode native --validator boltz2 --request ${request_json} \\
         --sequence '${sequence}' --sequence-name '${sequence_name}' \\
         --seed ${seed as Integer} --code-root ${params.code_root} \\
         --output boltz_validator_evidence_${sequence_name}/shape_validator_records.json
@@ -313,6 +347,7 @@ process RunShapeProtenixValidator {
     input:
     tuple val(sequence_name), val(sequence)
     val seed
+    path request_json
 
     output:
     tuple val(sequence_name), path("protenix_validator_evidence_${sequence_name}"), emit: evidence
@@ -330,7 +365,7 @@ process RunShapeProtenixValidator {
     export PATH="/root/miniconda3/bin:\$PATH"
     mkdir -p "\$XDG_CACHE_HOME" "\$TRITON_CACHE_DIR" "\$MPLCONFIGDIR"
     python3 ${params.code_root}/scripts/shape_blueprint/run_shape_validator_suite.py \\
-        --mode native --validator protenix_v2 \\
+        --mode native --validator protenix_v2 --request ${request_json} \\
         --sequence '${sequence}' --sequence-name '${sequence_name}' \\
         --seed ${seed as Integer} --code-root ${params.code_root} \\
         --output protenix_validator_evidence_${sequence_name}/shape_validator_records.json
@@ -343,12 +378,13 @@ process AggregateShapeValidatorEvidence {
     stageInMode 'copy'
 
     input:
-    tuple val(sequence_name), path(esm_structure), path(esm_metrics), val(sequence), path(peer_evidence)
+    tuple val(sequence_name), val(sample_id), path(esm_structure), path(esm_metrics), val(sequence), path(peer_evidence), path(esm_bundle)
     val validator_suite
     val seed
+    path request_json
 
     output:
-    tuple val(sequence_name), path("validator_evidence_${sequence_name}"), emit: evidence
+    tuple val(sample_id), path("validator_evidence_${sample_id}"), emit: evidence
 
     script:
     def validators = (validator_suite ?: []).join(',')
@@ -357,7 +393,7 @@ process AggregateShapeValidatorEvidence {
     """
     set -euo pipefail
     python3 ${params.code_root}/scripts/shape_blueprint/run_shape_validator_suite.py \\
-        --mode aggregate ${peerArgs} \\
+        --mode aggregate --esm-bundle ${esm_bundle} --request ${request_json} ${peerArgs} \\
         --sequence '${sequence}' \\
         --sequence-name '${sequence_name}' \\
         --esm-metrics ${esm_metrics} \\
@@ -365,7 +401,7 @@ process AggregateShapeValidatorEvidence {
         --validators '${validators}' \\
         --seed ${seed as Integer} \\
         --code-root ${params.code_root} \\
-        --output validator_evidence_${sequence_name}/shape_validator_records.json
+        --output validator_evidence_${sample_id}/shape_validator_records.json
     """
 }
 
@@ -375,7 +411,7 @@ process AttachShapePostRefold {
     stageInMode 'copy'
 
     input:
-    tuple val(sequence_name), path(candidate_bundle), path(validator_records)
+    tuple val(sequence_name), path(candidate_bundle), path(validator_records), path(sequence_bundle)
     path request_json
     path geometry_manifest
     path point_pool
@@ -389,6 +425,7 @@ process AttachShapePostRefold {
     set -euo pipefail
     cp -a ${candidate_bundle} attached_shape_candidate_bundle_${sequence_name}
     python3 ${params.code_root}/scripts/shape_blueprint/attach_shape_post_refold.py \\
+        --sequence-bundle ${sequence_bundle} \\
         --bundle attached_shape_candidate_bundle_${sequence_name} \\
         --validator-records ${validator_records}/shape_validator_records.json \\
         --request ${request_json} \\

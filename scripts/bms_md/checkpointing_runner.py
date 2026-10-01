@@ -32,6 +32,23 @@ def _wait_for_process_group_exit(process_group: int, *, timeout_seconds: float) 
         time.sleep(0.05)
 
 
+def _receipt_config_path(config_path: Path) -> Path:
+    """Shared plan identity is the retained replica request, not GPU rebinding.
+
+    The scientific command still consumes its native runtime config. Only the
+    checkpoint receipt's existing plan/compatibility identity uses the original
+    launch-bound normalized document, like the durable replica segment owner.
+    Historical independent workers keep their supplied config unchanged.
+    """
+    if os.environ.get('BMS_COMPONENT_CONTEXT') is None:
+        return config_path
+    from scripts.lib.component_adapter import runtime_from_environment
+    runtime = runtime_from_environment()
+    assert runtime is not None
+    request = runtime.request(os.environ['BMS_COMPONENT_JOB_ID'])
+    return Path(request.payload['params']['md_job_config']).resolve(strict=True)
+
+
 def run_checkpointable_command(
     *,
     command: Sequence[str],
@@ -45,11 +62,13 @@ def run_checkpointable_command(
     process = subprocess.Popen(list(command), start_new_session=True)
     process_group = process.pid
     pause_requested_at_ns: int | None = None
+    stop_deadline: float | None = None
 
     def request_checkpoint(signum: int, _frame: object) -> None:
-        nonlocal pause_requested_at_ns
+        nonlocal pause_requested_at_ns, stop_deadline
         if pause_requested_at_ns is None:
             pause_requested_at_ns = time.time_ns()
+            stop_deadline = time.monotonic() + stop_timeout_seconds
             try:
                 os.killpg(process_group, signal.SIGTERM)
             except ProcessLookupError:
@@ -65,16 +84,25 @@ def run_checkpointable_command(
                 break
             if pause_requested_at_ns is None and pause_boundary.is_file():
                 pause_requested_at_ns = pause_boundary.stat().st_mtime_ns
+                stop_deadline = time.monotonic() + stop_timeout_seconds
                 try:
                     os.killpg(process_group, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
+            if stop_deadline is not None and time.monotonic() >= stop_deadline:
+                try:
+                    os.killpg(process_group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                raise CheckpointingRunnerError("MD checkpoint process group did not stop before timeout")
             time.sleep(0.05)
         if pause_requested_at_ns is None:
             return returncode
-        _wait_for_process_group_exit(process_group, timeout_seconds=stop_timeout_seconds)
+        assert stop_deadline is not None
+        _wait_for_process_group_exit(process_group, timeout_seconds=max(0.0, stop_deadline - time.monotonic()))
         write_checkpoint_receipt(
-            config_path=config_path,
+            config_path=_receipt_config_path(config_path),
             output_dir=output_dir,
             gmx_binary=gmx_binary,
             minimum_mtime_ns=pause_requested_at_ns,

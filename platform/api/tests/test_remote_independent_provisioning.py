@@ -26,7 +26,39 @@ def assets(tmp_path, monkeypatch):
     (weights / 'protenix' / 'model.pt').write_bytes(b'controlled test weights')
     monkeypatch.setattr(paths, 'get_container_dir', lambda: containers)
     monkeypatch.setattr(paths, 'get_weights_root', lambda: weights)
-    monkeypatch.setattr(cache, 'current_source_identity', lambda: ('a'*40, 'b'*40))
+    # Imported readers must share the same conventional installation root.
+    # Clear ambient selectors; explicit arbitrary paths are not retained authority.
+    from services.remote_execution.images import IMAGE_SELECTORS
+    for _, selector in IMAGE_SELECTORS.values():
+        monkeypatch.delenv(selector, raising=False)
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(tmp_path / 'image-store'))
+    data = tmp_path / 'data'
+    monkeypatch.setenv('BMS_DATA', str(data))
+    monkeypatch.setenv('BMS_STATE_DIR', str(tmp_path / 'state'))
+    monkeypatch.setenv('HF_HOME', str(tmp_path / 'hf'))
+    for module in (paths, bundle, cache):
+        monkeypatch.setattr(module, 'get_data_root', lambda: data)
+    monkeypatch.setattr(bundle, 'get_container_dir', lambda: containers)
+    monkeypatch.setattr(bundle, 'get_weights_root', lambda: weights)
+    identity = ('a'*40, 'b'*40)
+    monkeypatch.setattr(cache, 'current_source_identity', lambda *args: identity)
+    monkeypatch.setattr(preloading, 'current_source_identity', lambda *args: identity)
+    # Deterministic inert source at the archive-owner seam, not a fake ingestion
+    # receipt: real transport and expected-byte verification remain exercised.
+    def archive(repo, data_root, revision, destination, *, extract=False):
+        import gzip, io, tarfile
+        assert revision == identity[0] and not extract
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode='w') as tar:
+            member = tarfile.TarInfo('fixture.txt')
+            payload = b'inert offline source fixture'
+            member.size = len(payload)
+            tar.addfile(member, io.BytesIO(payload))
+        payload = gzip.compress(stream.getvalue(), mtime=0)
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / '.bms-source.tar.gz').write_bytes(payload)
+        return hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(cache, '_staged_source_archive', archive)
     return containers, weights
 
 
@@ -67,7 +99,7 @@ async def test_mounted_independent_readback_reuse_corruption_and_staleness(store
         assert not calls and not uploads
         request = {**selection, 'preview_sha256':preview['preview_sha256']}
         assert (await client.post(prefix + '/provision', json={**request,'preview_sha256':'0'*64})).status_code == 409
-        for expected_uploads in (2, 2, 3):
+        for expected_uploads in (2, 2, 2):
             response = await client.post(prefix + '/provision', json=request)
             assert response.status_code == 202, response.text
             await settle(controller)
@@ -83,9 +115,22 @@ async def test_mounted_independent_readback_reuse_corruption_and_staleness(store
                        if artifact['name'].endswith('.sif') else
                        tmp_path / 'worker/cache/artifacts/v1/objects/sha256' / digest[:2] / digest)
                 assert hashlib.sha256(obj.read_bytes()).hexdigest() == digest
-            if expected_uploads == 2 and len([r for r in calls if r['action'] == 'probe']) >= 4:
-                obj.chmod(0o600)
-                obj.write_bytes(b'corrupt')
+            # A damaged published image fails reuse without remediation. Keep the
+            # mounted failure/retained-inventory contract separate from silent bytes.
+            image = next(a for a in inventory['artifacts'] if a['name'].endswith('.sif'))
+            image_obj = tmp_path / 'worker/cache/runtime-images/objects/sha256' / image['sha256'] / 'runtime.sif'
+            assert image_obj.stat().st_mode & 0o777 == 0o400
+        image_obj.chmod(0o600)
+        image_obj.write_bytes(b'damaged published image')
+        response = await client.post(prefix + '/provision', json=request)
+        assert response.status_code == 202, response.text
+        await settle(controller)
+        async with store() as s:
+            target = await s.get(ExecutionTarget, 'vast:1')
+            assert target.provider_metadata['preload']['phase'] == 'recovery_blocked'
+        assert image_obj.read_bytes() == b'damaged published image'
+        assert len(uploads) == 2
+        assert (await client.get(prefix + '/artifact-inventory')).json()['artifacts'] == preview['artifacts']
         assert not (tmp_path / 'worker/attempts').exists()
         async with store() as s:
             assert await s.scalar(select(func.count()).select_from(Job)) == 0
@@ -96,6 +141,32 @@ async def test_mounted_independent_readback_reuse_corruption_and_staleness(store
             await s.commit()
         assert (await client.get(prefix + '/artifact-inventory')).json()['state'] == 'stale'
     await controller.close()
+
+
+def test_explicit_image_selection_requires_real_retained_reference(assets, tmp_path, monkeypatch):
+    import os
+    from services.remote_execution.images import image_reference
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3] / 'scripts'))
+    from publish_runtime_images import publish_references
+    root = Path(os.environ['BMS_RUNTIME_IMAGE_STORE'])
+    source = assets[0] / 'protenix.sif'
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    monkeypatch.setenv('BMS_PROTENIX_CONTAINER_PATH', str(source))
+    with pytest.raises(ValueError, match='not a retained managed reference'):
+        cache.independent_plan(ProvisionSelection(kind='image', model_id='protenix'))
+    publish_references(root, 'development', {
+        'BMS_PROTENIX_CONTAINER_PATH': {'source': str(source), 'sha256': digest}})
+    selected = root / 'objects/sha256' / digest / 'runtime.sif'
+    monkeypatch.setenv('BMS_PROTENIX_CONTAINER_PATH', str(selected))
+    assert image_reference('protenix.sif', assets[0]) == (selected, digest)
+    entries = cache.independent_plan(ProvisionSelection(kind='image', model_id='protenix'))
+    assert len(entries) == 1 and entries[0].source == selected and entries[0].sha256 == digest
+    selected.parent.chmod(0o700)
+    selected.unlink()
+    selected.symlink_to(source)
+    selected.parent.chmod(0o500)
+    with pytest.raises((ValueError, RuntimeError, OSError)):
+        cache.independent_plan(ProvisionSelection(kind='image', model_id='protenix'))
 
 
 def test_model_requires_weights_image_does_not_and_preview_binds_bytes(assets, tmp_path):
@@ -110,31 +181,61 @@ def test_model_requires_weights_image_does_not_and_preview_binds_bytes(assets, t
     with pytest.raises(bundle.RemoteBundleError, match='empty'):
         cache.independent_plan(selection)
     assert len(cache.independent_plan(ProvisionSelection(kind='image',model_id='protenix'))) == 1
-    (assets[0]/'protenix.sif').unlink()
-    (assets[0]/'protenix.sif').symlink_to('/etc/passwd')
+    # Conventional image aliases (including outside this directory) are an
+    # established compatibility path, separately covered by image-alias tests.
+    # Retain the real containment negative on weights, not a new image gate.
+    outside = tmp_path / 'outside-weights'
+    outside.mkdir()
+    (outside / 'model.pt').write_bytes(b'uncontained fixture weights')
+    (assets[1] / 'protenix').rmdir()
+    (assets[1] / 'protenix').symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match='contained'):
-        cache.independent_plan(ProvisionSelection(kind='image',model_id='protenix'))
+        cache.independent_plan(selection)
 
 
 @pytest.mark.asyncio
-async def test_readback_detects_post_ingest_corruption(assets, local_transport, tmp_path, monkeypatch):
+@pytest.mark.parametrize('corruption', ['bytes', 'size'])
+async def test_cold_ingestion_refuses_wrong_bytes_or_size(assets, local_transport, tmp_path, monkeypatch, corruption):
     from types import SimpleNamespace
     import uuid
+    import subprocess
     connection = SimpleNamespace(remote_root=str(tmp_path / 'worker'))
     entries = cache.independent_plan(ProvisionSelection(kind='image', model_id='protenix'))
-    original = cache._cache_artifacts
-    async def corrupt_after_ingest(**kwargs):
-        receipts = await original(**kwargs)
-        digest = receipts[0]['sha256']
-        obj = Path(connection.remote_root) / 'cache/runtime-images/objects/sha256' / digest / 'runtime.sif'
-        obj.chmod(0o600)
-        obj.write_bytes(b'corrupt after ingest')
-        return receipts
-    monkeypatch.setattr(cache, '_cache_artifacts', corrupt_after_ingest)
-    import subprocess
+    original = cache.rsync_to_remote
+    async def corrupt_upload(connection, source, destination, **kwargs):
+        await original(connection, source, destination, **kwargs)
+        Path(destination).write_bytes(b'x' * (entries[0].size_bytes + (corruption == 'size')))
+    monkeypatch.setattr(cache, 'rsync_to_remote', corrupt_upload)
     with pytest.raises(subprocess.CalledProcessError):
         await cache.provision_cache(connection=connection, entries=entries,
             operation_id=str(uuid.uuid4()), progress=cache._noop, check_fence=cache._noop)
+    obj = tmp_path / 'worker/cache/runtime-images/objects/sha256' / entries[0].sha256 / 'runtime.sif'
+    assert not obj.exists()
+
+
+@pytest.mark.asyncio
+async def test_readback_detects_post_ingest_corruption(assets, local_transport, tmp_path):
+    # Warm reuse is not a recurring byte audit. Explicit maintenance is.
+    from types import SimpleNamespace
+    import uuid
+    from tools import bms_artifact_cache as tool
+    connection = SimpleNamespace(remote_root=str(tmp_path / 'worker'))
+    entries = cache.independent_plan(ProvisionSelection(kind='image', model_id='protenix'))
+    async def download():
+        return await cache.provision_cache(connection=connection, entries=entries,
+            operation_id=str(uuid.uuid4()), progress=cache._noop, check_fence=cache._noop)
+    receipts = await download()
+    store = tool.Cache(tmp_path / 'worker/cache/artifacts/v1')
+    obj = store.image_store / 'objects/sha256' / entries[0].sha256 / 'runtime.sif'
+    inode = obj.stat().st_ino
+    obj.chmod(0o600)
+    obj.write_bytes(b'x' * entries[0].size_bytes)
+    obj.chmod(0o400)
+    assert await download() == receipts
+    assert obj.stat().st_ino == inode and obj.read_bytes() == b'x' * entries[0].size_bytes
+    assert len(local_transport[1]) == 1
+    with pytest.raises(RuntimeError, match='SHA-256'):
+        tool.runtime_images().verify_image(obj, entries[0].sha256)
 
 
 def test_launch_and_independent_resolve_identical_reviewed_assets(assets, monkeypatch, tmp_path):
@@ -172,9 +273,11 @@ async def test_caliby_catalog_and_default_prewarm_match_selected_launch(assets, 
     from routers.execution_targets import provision_catalog
     from component_runtime import SourceIdentity
     from services.nextflow import build_selected_execution_plan
-    catalog = {(row.kind, row.model_id) for row in await provision_catalog()}
+    catalog = {(row.kind, row.model_id) for row in await provision_catalog()
+               if row.kind in {'model', 'image'}}
     assert {('model', 'caliby_binder'), ('image', 'caliby_binder')} <= catalog
-    assert ('model', 'caliby_experimental') not in catalog
+    # The current registry also advertises the retained experimental subtype.
+    assert ('model', 'caliby_experimental') in catalog
     containers, weights = assets
     (containers / 'caliby.sif').write_bytes(b'fixture caliby image; not executable')
     checkpoint = weights / 'caliby/model_params/caliby/soluble_caliby_v1.ckpt'

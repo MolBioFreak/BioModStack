@@ -150,6 +150,11 @@ def native_reference_fields(document, format):
         for i, entry in enumerate(document.get("templates", [])):
             for key in ("cif", "pdb"):
                 yield from field(entry, key, ("templates", i), "template")
+    elif format == "shape-request":
+        # The existing immutable request owns these snapshots. Original paths
+        # and requested_* settings are provenance, never fresh input reads.
+        for i, source in enumerate(document.get("native_input_sources", [])):
+            yield from field(source, "path", ("native_input_sources", i))
     elif format == "protein-cad":
         for section, fields in {"laproteina": ("motif_pdb", "checkpoint_dir", "data_path"),
                                 "disco": ("input_json_path", "compiled_input_json", "ligand_sdf", "checkpoint_path", "hf_cache_path", "cutlass_path")}.items():
@@ -195,6 +200,8 @@ def _format(document, path):
     if isinstance(document, dict):
         if document.get('schema_version') == 1 and 'native_request' in document and 'upstream_commit' in document:
             return 'bc2-compilation'
+        if document.get("schema") in {"bms_shape_design_request_v2", "bms_shape_design_request_v3"}:
+            return "shape-request"
         if str(document.get("schema", "")).startswith("bms.md.job."):
             return "md-job"
         if document.get("schema_name") == "cm_request" and "request_sha256" in document:
@@ -221,6 +228,10 @@ def prepared_generation_source_fields(model_id, mode, params):
     Do not reacquire controller sources on replay; only these model-owned input
     slots are superseded. Other parameters retain existing discovery behavior.
     """
+    if (model_id == 'protein_modification_experimental' and mode == 'shape_blueprint'
+            and params.get('shape_request_path')):
+        return {'shape_requested_sequence_settings', 'shape_requested_rfd3_settings',
+                'shape_requested_sequence_input_settings', 'shape_requested_validator_settings'}
     if (model_id == 'ligandmpnn' and mode in {'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'}
             and params.get('ligandmpnn_design_request') and params.get('ligandmpnn_design_input')):
         return {'target_pdb', 'ligand_pdb'}
@@ -369,6 +380,8 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
             else:
                 for i, state in enumerate(params.get('structures', [])):
                     visit(state['path'], None, ('structures', i, 'path'))
+    if model_id == 'protein_modification_experimental' and mode == 'shape_blueprint':
+        keys.add('shape_request_path')
     if model_id == 'bindcraft2':
         keys.add('bc2_compilation')
     if model_id == 'ppiflow' and mode in {'protein_binder', 'antibody_binder', 'nanobody_binder'}:

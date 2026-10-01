@@ -730,7 +730,7 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
             continue
         if (
             candidate.model_id == "molecular_dynamics"
-            and candidate.mode == "molecular_dynamics"
+            and candidate.mode == "simulate"
         ):
             # The durable MD state machine owns top-level parent projection while
             # active. Once its phase is terminal, generic scheduler reconciliation
@@ -738,7 +738,7 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
             with session.no_autoflush:
                 md_run = await session.get(MdRun, str(candidate.id), populate_existing=True)
             lifecycle_owned_phases = {
-                "replicas_queued", "replicas_running", "checkpointing", "paused",
+                "validating", "preparing", "replicas_queued", "replicas_running", "checkpointing", "paused",
                 "cancelling", "reconciling", "finalizing",
             }
             if md_run is not None and str(md_run.phase) in lifecycle_owned_phases:
@@ -1066,6 +1066,31 @@ def estimate_vram(model_type: str, sequence_length: int, params: Optional[Any] =
     estimated = int((base + scale * length_factor) * runtime_multiplier)
     
     return estimated
+
+
+def md_root_vram_estimate(params, estimate, *, selected_plan=None):
+    """Reserve the selected MD descendants on their single scheduler root.
+
+    The native coordinator is CPU-only, not the attempt it owns. Reuse the
+    selected metadata owner (or retained approved plan), without recompiling
+    commands, probing devices, or changing the scientific request.
+    """
+    if selected_plan is None:
+        from model_registry import selected_execution_metadata
+        from services.nextflow import _native_plan_metadata_settings, MODEL_MODE_WORKFLOW_ENTRYPOINTS
+        metadata = selected_execution_metadata('molecular_dynamics', 'simulate',
+            _native_plan_metadata_settings('molecular_dynamics', params),
+            MODEL_MODE_WORKFLOW_ENTRYPOINTS[('molecular_dynamics', 'simulate')])
+        declarations = [json.loads(row.resources_json) for row in
+                        (*metadata.static_components, *metadata.dynamic_templates)]
+    else:
+        metadata = selected_plan['metadata']
+        declarations = [row['resources_json'] for key in ('static_components', 'dynamic_templates')
+                        for row in metadata[key]]
+    gpu_policies = [row['gpu'] for row in declarations if (row.get('gpu') or {}).get('count', 0)]
+    if not gpu_policies:
+        return 0
+    return max(1, int(estimate or 0), *(int(row.get('gpu_memory_mb', 0)) for row in gpu_policies))
 
 
 def _scheduler_profile(model_type: str) -> Dict[str, int]:
@@ -2746,6 +2771,18 @@ class GPUOrchestrator:
                 rejected_ids = {job.id for job in rejected_analysis_jobs}
                 pending_jobs = [job for job in pending_jobs if job.id not in rejected_ids]
 
+            # Reopen queued roots with their selected descendant resources too;
+            # older persisted roots may still carry the former CPU-only estimate.
+            for job in pending_jobs:
+                if (job.model_id == 'molecular_dynamics' and job.mode == 'simulate'
+                        and job.vram_estimate_mb in (None, 0)):
+                    params = _normalize_job_params(job.params)
+                    approval = (job.provenance or {}).get('execution_plan_approval') or {}
+                    estimate = job.vram_estimate_mb or estimate_vram(
+                        job.model_id, job.sequence_length or 300, params)
+                    job.vram_estimate_mb = md_root_vram_estimate(params, estimate,
+                        selected_plan=approval.get('plan'))
+
             # Remote Jobs retain the canonical queue and launch authority, but
             # consume only the GPU namespace of their persisted execution target.
             remote_jobs = [job for job in pending_jobs if job.execution_target_id]
@@ -3563,10 +3600,11 @@ class GPUOrchestrator:
                                     and getattr(job, "parent_job_id", None)
                                 ):
                                     try:
-                                        await session.flush()
-                                        from services.md.lifecycle import reconcile_md_analysis_parent
+                                        await _commit_reconciled_job_mutations(session)
+                                        from services.nextflow import reconcile_md_analysis_parent_if_current
 
-                                        await reconcile_md_analysis_parent(str(job.parent_job_id), session)
+                                        await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session)
+                                        await session.commit()
                                     except Exception as exc:
                                         logger.warning("[COMPLETION] MD analysis failure reconciliation deferred for %s: %s", job.name, exc)
                                 logger.warning(
@@ -3664,11 +3702,10 @@ class GPUOrchestrator:
                                     and str(getattr(job, "mode", "") or "").strip().lower() == "analyze"
                                     and getattr(job, "parent_job_id", None)
                                 ):
-                                    from services.md.lifecycle import reconcile_md_analysis_parent
+                                    from services.nextflow import reconcile_md_analysis_parent_if_current
 
-                                    await reconcile_md_analysis_parent(str(job.parent_job_id), session)
-                                    if session.dirty:
-                                        await _commit_reconciled_job_mutations(session)
+                                    await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session)
+                                    await session.commit()
                                 try:
                                     if finalization is not None:
                                         logger.info(

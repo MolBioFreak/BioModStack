@@ -2,10 +2,11 @@
 
 Publication copies bytes once (never hardlinks a mutable source), serializes
 cooperating publishers with flock, and atomically exposes a durable read-only
-object directory. Reuse hashes the existing object without repairing or copying
-it. The store must be service-owned: POSIX modes do not protect against its owner
-or root deliberately chmod-ing/replacing files. Consumers should retain and
-compare verification identities at their execution/receipt boundaries.
+object directory. Reuse checks the published generation without repairing,
+copying or rehashing it. The store must be service-owned: POSIX modes do not
+protect against its owner or root deliberately chmod-ing/replacing files.
+Consumers retain and compare publication identities at their use boundaries;
+verify_image remains available for explicit maintenance byte audits.
 
 This module is standard-library-only and does not import the API or launchers.
 """
@@ -136,7 +137,16 @@ def _hash(fd: int) -> str:
     return digest.hexdigest()
 
 
-def verify_image(path: Path, expected_sha256: str) -> dict:
+def image_identity(path: Path, expected_sha256: str) -> dict:
+    """Reuse a canonical publication generation without reading SIF bytes.
+
+    Legacy objects need no new receipt: their immutable canonical path/modes are
+    the publication authority. Explicit verify_image remains the byte audit.
+    """
+    return verify_image(path, expected_sha256, _read_body=False)
+
+
+def verify_image(path: Path, expected_sha256: str, *, _read_body=True) -> dict:
     """Hash a stable no-follow regular object with file0400/parent0500 modes.
 
     Returns sha256, size, device, inode, mtime_ns and ctime_ns. A caller comparing
@@ -152,7 +162,7 @@ def verify_image(path: Path, expected_sha256: str) -> dict:
             raise SharedRuntimeImageError("runtime image must be a single-link readonly file (0400)")
         if stat.S_IMODE(parent_before.st_mode) != 0o500:
             raise SharedRuntimeImageError("runtime image object directory must be readonly (0500)")
-        observed = _hash(fd)
+        observed = _hash(fd) if _read_body else expected
         _check_file(path, fd, parent_fd, before)
         if not _same(parent_before, os.fstat(parent_fd)):
             raise SharedRuntimeImageError("runtime image object directory changed")
@@ -265,7 +275,7 @@ def _recover_publications_locked(root: Path) -> None:
 def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str, *, _receipts=None) -> Path:
     """Publish once, or verify/reuse objects/sha256/<digest>/runtime.sif.
 
-    Source identity and SHA-256 are checked before and after the sole byte copy.
+    Hash/count the sole byte copy; check source descriptor identity before/after.
     A valid existing object is authoritative; reuse does not read the source or
     write/chmod the object. A corrupt/incomplete existing object is never healed.
     The lock serializes publishers on this local filesystem, not remote hosts.
@@ -285,7 +295,7 @@ def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str, 
         except FileNotFoundError:
             pass
         else:
-            receipt = verify_image(result, expected)
+            receipt = image_identity(result, expected)
             if _receipts is not None:
                 _receipts[expected] = receipt
             _check_directory(objects, objects_fd)
@@ -295,10 +305,9 @@ def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str, 
         os.mkdir(stage, 0o700, dir_fd=objects_fd)
         stage_fd = os.open(stage, _DIRECTORY_FLAGS, dir_fd=objects_fd)
         published = False
+        destination_fd = None
         try:
             with _file(source) as (source_fd, source_parent, before):
-                if _hash(source_fd) != expected:
-                    raise SharedRuntimeImageError("source runtime image SHA-256 differs from expected digest")
                 _check_file(source, source_fd, source_parent, before)
                 destination_fd = os.open(
                     "runtime.sif", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -308,15 +317,17 @@ def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str, 
                     copied_digest, size = _copy(source_fd, destination_fd)
                     os.fchmod(destination_fd, 0o400)
                     os.fsync(destination_fd)
-                finally:
+                    copied = os.fstat(destination_fd)
+                except BaseException:
                     os.close(destination_fd)
-                after_digest = _hash(source_fd)
+                    destination_fd = None
+                    raise
                 _check_file(source, source_fd, source_parent, before)
-                if copied_digest != expected or after_digest != expected or size != before.st_size:
-                    raise SharedRuntimeImageError("source runtime image changed during publication")
+                if copied_digest != expected or size != before.st_size or copied.st_size != size:
+                    raise SharedRuntimeImageError("source runtime image SHA-256 or size changed during publication")
             os.fchmod(stage_fd, 0o500)
             os.fsync(stage_fd)
-            verify_image(objects / stage / "runtime.sif", expected)
+            _check_file(objects / stage / "runtime.sif", destination_fd, stage_fd, copied)
             _check_directory(objects, objects_fd)
             # All cooperating writers hold this digest's lock. Never overwrite
             # even an incomplete preexisting object discovered at commit time.
@@ -329,12 +340,19 @@ def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str, 
             os.rename(stage, expected, src_dir_fd=objects_fd, dst_dir_fd=objects_fd)
             published = True
             os.fsync(objects_fd)
-            receipt = verify_image(result, expected)
+            _check_file(result, destination_fd, stage_fd, copied)
+            receipt = image_identity(result, expected)
+            if receipt != {"sha256": copied_digest, "size": copied.st_size,
+                           "device": copied.st_dev, "inode": copied.st_ino,
+                           "mtime_ns": copied.st_mtime_ns, "ctime_ns": copied.st_ctime_ns}:
+                raise SharedRuntimeImageError("published runtime image identity changed")
             if _receipts is not None:
                 _receipts[expected] = receipt
             _check_directory(objects, objects_fd)
             return result
         finally:
+            if destination_fd is not None:
+                os.close(destination_fd)
             if not published:
                 os.fchmod(stage_fd, 0o700)
                 try:

@@ -101,3 +101,50 @@ async def test_bounded_pagination(evidence, query):
 async def test_missing_job(evidence):
     client, *_ = evidence
     assert (await client.get('/api/designs/by-job/missing/binder-evidence')).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_direct_source_large_root_preserves_native_evidence_and_late_children(evidence):
+    client, session, statements, payload = evidence
+    session.add_all([Design(id=f'candidate-{i:05}', job_id='root', name='candidate',
+                            pdb_path='/unread/candidate.pdb') for i in range(3000)])
+    await session.commit()
+    statements.clear()
+    direct = (await client.get('/api/designs/by-job/root/binder-evidence',
+                              params={'source_design_id': 'source-a', 'offset': 2999})).json()
+    assert direct['total'] == 3002 and direct['source_design_id'] == 'source-a'
+    assert len(direct['records']) == 1
+    assert direct['records'][0]['sequences'][0]['predictions'][0]['ipsae'][0]['result'] == payload
+    assert all(stmt.lstrip().upper().startswith('SELECT') for stmt in statements)
+    source_reads = [stmt for stmt in statements if 'from designs' in stmt.lower() and 'where designs.job_id =' in stmt.lower() and 'count(*)' not in stmt.lower()]
+    assert len(source_reads) == 1 and 'designs.id =' in source_reads[0].lower()
+    page = (await client.get('/api/designs/by-job/root/binder-evidence?offset=2900&limit=100')).json()
+    assert page['total'] == 3002
+    assert [r['source_design_id'] for r in page['records']] == [f'candidate-{i:05}' for i in range(2900, 3000)]
+    # Root was already terminal; later prediction publication remains discoverable.
+    session.add(Design(id='late-sample', job_id='pred-3', name='late', pdb_path='/unread/late.pdb'))
+    await session.commit()
+    later = (await client.get('/api/designs/by-job/root/binder-evidence?source_design_id=source-a')).json()
+    assert later['records'][0]['sequences'][1]['predictions'][0]['design_id'] == 'late-sample'
+    step = {'root_job_id': 'root', 'source_design_id': 'source-a',
+            'backbone_design_id': 'source-a', 'stage': 'sequence_design'}
+    session.add(Job(id='late-designer', name='late', model_id='fampnn', mode='design',
+                    status='running', params={}, provenance={'binder_round_step': step}))
+    await session.commit()
+    later = (await client.get('/api/designs/by-job/root/binder-evidence?source_design_id=source-a')).json()
+    late_sequence = next(s for s in later['records'][0]['sequences'] if s['job_id'] == 'late-designer')
+    assert late_sequence['design_id'] is None and late_sequence['status'] == 'running'
+    session.add(Design(id='late-sequence', job_id='late-designer', name='published later', pdb_path='/unread/sequence.pdb'))
+    await session.commit()
+    later = (await client.get('/api/designs/by-job/root/binder-evidence?source_design_id=source-a')).json()
+    assert next(s for s in later['records'][0]['sequences'] if s['job_id'] == 'late-designer')['design_id'] == 'late-sequence'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source,status', [('', 422), ('bad id', 422), ('bad/id', 422),
+                                          ('missing', 404), ('sequence-1', 404), ('unjoined-sample', 404)])
+async def test_direct_source_never_substitutes_foreign_or_malformed(evidence, source, status):
+    client, *_ = evidence
+    response = await client.get('/api/designs/by-job/root/binder-evidence', params={'source_design_id': source})
+    assert response.status_code == status
+    assert 'records' not in response.json()

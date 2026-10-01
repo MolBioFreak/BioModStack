@@ -48,7 +48,7 @@ def test_periodic_and_passive_display_reads_never_post_collect(tmp_path, monkeyp
             if state != "fresh":
                 assert service.snapshot().hardware_ready is None
                 assert service.snapshot().hardware_observation_fresh is not True
-            assert service.snapshot().automatic_snapshot_refresh is None
+            assert "automatic_snapshot_refresh" not in service.snapshot().model_fields
             assert not hasattr(service, "_snapshot_refresh_task")
         finally:
             await service.disconnect()

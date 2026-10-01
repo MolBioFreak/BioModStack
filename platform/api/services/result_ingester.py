@@ -4752,8 +4752,11 @@ async def ingest_component_projection(
         raise ValueError('component projection root/attempt/placement conflicts')
     SourceIdentity(**envelope['source_identity'])
     root_state = envelope.get('root_state')
-    if (not isinstance(root_state, dict) or root_state.get('quiescent') is not True
-            or root_state.get('state') not in {'completed', 'failed', 'cancelled', 'paused'}
+    observing = (job.model_id == 'molecular_dynamics' and job.mode == 'simulate'
+                 and isinstance(root_state, dict) and root_state.get('state') == 'running')
+    if (not isinstance(root_state, dict)
+            or (not observing and (root_state.get('quiescent') is not True
+                or root_state.get('state') not in {'completed', 'failed', 'cancelled', 'paused'}))
             or root_state.get('generation', 0) != envelope['generation']):
         raise ValueError('component publication lacks quiescent generation evidence')
     for key in ('plan_sha256', 'current_plan_sha256'):
@@ -4796,7 +4799,8 @@ async def ingest_component_projection(
         if row.get('component_id') != identity or identity in prepared or identity == str(job.id):
             raise ValueError('duplicate or conflicting deterministic component identity')
         state = row.get('state')
-        if state not in {'execution_finished', 'completed', 'failed', 'cancelled'}:
+        if state not in ({'running', 'execution_finished', 'completed', 'failed', 'cancelled', 'paused'}
+                         if observing else {'execution_finished', 'completed', 'failed', 'cancelled', 'paused'}):
             raise ValueError('only quiescent executed children may be projected')
         failure_receipt = row.get('failure_receipt')
         if failure_receipt is not None and (state != 'failed' or not isinstance(failure_receipt, dict)):
@@ -4828,6 +4832,11 @@ async def ingest_component_projection(
         detail = result.get('result', {})
         if not isinstance(detail, dict) or detail.get('output_dir', snapshot['output_dir']) != snapshot['output_dir']:
             raise ValueError('component result output differs from compiled output')
+        if state == 'paused':
+            checkpoint = (root_state.get('md_checkpoints') or {}).get(identity)
+            if (not isinstance(checkpoint, dict) or detail != checkpoint
+                    or result.get('references') != []):
+                raise ValueError('paused component lacks its native checkpoint custody')
         references = result.get('references', [])
         if not isinstance(references, list) or (state == 'completed' and not references):
             raise ValueError('native completion requires its sealed artifact references')
@@ -4858,9 +4867,11 @@ async def ingest_component_projection(
     for identity, (row, request, snapshot, output, immutable) in ordered:
         child = await session.get(Job, identity)
         control = dict(immutable, state=row['state'], result=row.get('result'),
+                       control_observation=observing,
                        generation=envelope['generation'], lease_id=envelope['lease_id'],
                        plan_sha256=envelope['plan_sha256'], current_plan_sha256=envelope['current_plan_sha256'],
                        failure_receipt=row.get('failure_receipt'), projection_sha256=hashlib.sha256(raw).hexdigest(),
+                       md_resume_segment_id=(((edge or {}).get('md_resume') or {}).get(identity) or {}).get('md_resume_segment_id'),
                        output_relative_path=row['output_relative_path'],
                        projection_relative_path=locator, artifact_root=str(root), error=row.get('error'))
         if child is not None:
@@ -4870,14 +4881,46 @@ async def ingest_component_projection(
                     or child.model_id != snapshot['model_id'] or child.mode != snapshot['mode']
                     or child.execution_target_id != job.execution_target_id):
                 raise ValueError('component projection would overwrite historical identity/settings')
-            if (prior.get('state') != row['state'] or prior.get('result') != row.get('result')
+            progressive = (prior.get('state') == 'running'
+                and envelope['generation'] == prior.get('generation')
+                and prior.get('lease_id') == envelope['lease_id']
+                and prior.get('plan_sha256') == envelope['plan_sha256'])
+            if (prior.get('state') == 'paused'
+                    and envelope['generation'] > prior.get('generation', -1)):
+                retained = (prior.get('result') or {}).get('result') or {}
+                continuation = ((edge or {}).get('md_resume') or {}).get(identity) or {}
+                progressive = (bool(continuation.get('md_resume_segment_id'))
+                    and all(continuation.get(key) == retained.get(key) and retained.get(key)
+                        for key in ('md_resume_checkpoint', 'md_resume_checkpoint_sha256',
+                                    'md_resume_output_dir'))
+                    and prior.get('lease_id') == envelope['lease_id']
+                    and prior.get('plan_sha256') == envelope['plan_sha256'])
+                if not progressive:
+                    raise ValueError('component continuation changed paused checkpoint custody')
+            if not progressive and (prior.get('state') != row['state'] or prior.get('result') != row.get('result')
                     or prior.get('lease_id') != envelope['lease_id']
                     or prior.get('plan_sha256') != envelope['plan_sha256']
                     or prior.get('error') != row.get('error')
                     or (prior.get('generation') == envelope['generation']
+                        and not prior.get('control_observation')
                         and prior.get('projection_sha256') != control['projection_sha256'])
                     or ('failure_receipt' in prior and prior['failure_receipt'] != row.get('failure_receipt'))):
                 raise ValueError('component projection would rewrite sealed execution history')
+            if progressive:
+                child.provenance = {**dict(child.provenance or {}), 'component_projection': control,
+                    **({'failure_receipt': row['failure_receipt']} if row.get('failure_receipt') is not None else {})}
+                child.paused = row['state'] in {'paused', 'execution_finished', 'completed'}
+                child.status = row['state'] if row['state'] in {'running', 'paused', 'failed', 'cancelled'} else 'paused'
+                child.queue_status = 'completed' if row['state'] in {'running', 'execution_finished'} else child.status
+                child.current_stage = 'Production paused' if row['state'] == 'paused' else 'Native validation pending'
+                if row['state'] in {'failed', 'cancelled'}:
+                    child.completed_at = datetime.utcnow()
+                    child.error_message = str(row.get('error') or '')
+                children.append(child)
+                continue
+            if prior.get('control_observation') and not observing:
+                child.provenance = {**dict(child.provenance or {}), 'component_projection': control}
+                prior = control
             # Backfill only authenticated receipt evidence omitted by older
             # importers; never replace existing receipt or artifact custody.
             receipt = row.get('failure_receipt')
@@ -4905,8 +4948,9 @@ async def ingest_component_projection(
                     model_id=snapshot['model_id'], mode=snapshot['mode'], params=snapshot['params'],
                     parent_job_id=request.parent_job_id, lineage_root_job_id=job.lineage_root_job_id or str(job.id),
                     child_stage=request.stage, output_dir=str(output), child_output_dir=str(output),
-                    status=row['state'] if failed else 'paused', queue_status=row['state'] if failed else 'paused',
-                    paused=not failed, assigned_gpu=None, pinned_gpu=None, max_retries=0,
+                    status=row['state'] if failed or row['state'] == 'running' else 'paused',
+                    queue_status='completed' if row['state'] == 'running' else row['state'] if failed else 'paused',
+                    paused=not failed and row['state'] != 'running', assigned_gpu=None, pinned_gpu=None, max_retries=0,
                     completed_at=datetime.utcnow() if failed else None,
                     error_message=str(row.get('error') or '') if failed else None,
                     current_stage='Component failed' if failed else 'Native validation pending',
@@ -5100,9 +5144,8 @@ async def _ingest_job_results(
         from services.bindcraft2_publication import publish_native_results
         return await publish_native_results(current_job, output_path, session, commit=False)
     if current_job is not None and current_job.model_id == "esmfold2" and current_job.mode == "blind_pose":
-        from services.binder_blind_pose_selected import publish_selected, read_selected
+        from services.binder_blind_pose_selected import publish_selected
         await publish_selected(current_job, output_path, session)
-        await read_selected(current_job, session)
         return 0
     if current_job is not None and current_job.model_id == 'ligandmpnn' and current_job.mode == 'interface_context':
         from services.ligandmpnn_interface_publication import publish_selected

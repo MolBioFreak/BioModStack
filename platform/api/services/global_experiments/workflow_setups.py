@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError as JsonSchemaValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from experiment_models import (
@@ -35,6 +35,7 @@ from experiment_services import (
 from services.global_experiments.launch_contexts import create_prepared_launch_context
 from services.protein_project_capabilities import (
     ProteinProjectCapabilityError,
+    SHAPE_SETUP_CAPABILITY_ID,
     protein_capability_record,
     protein_parameter_schema,
 )
@@ -83,7 +84,9 @@ async def _detailed_document(
     capability = contract["capability"]
     draft = json.loads(row.draft_json)
     if contract["parameter_schema"].get("x-bms-native-editor-draft"):
-        draft = {**draft.get("editor_state", {}), **({"native_job_request": draft["native_job_request"]} if "native_job_request" in draft else {})}
+        draft = {**draft.get("editor_state", {}), **{
+            key: draft[key] for key in ("native_job_request", "shape_submitted_request") if key in draft
+        }}
     return {
         **_document(row),
         "schema": "bms.project-workflow-setup.detail.v1",
@@ -222,12 +225,19 @@ def _materialize_draft(schema: dict[str, Any], supplied: dict[str, Any]) -> tupl
         raise ValidationFailure("workflow setup draft must be an object")
     if schema.get("x-bms-native-editor-draft"):
         # UI/source metadata is durable editor state, never native parameters.
+        request_key = "shape_submitted_request" if "shape_submitted_request" in schema["properties"] else "native_job_request"
         if "editor_state" not in supplied:
-            editor = {key: value for key, value in supplied.items() if key != "native_job_request"}
+            editor = {key: value for key, value in supplied.items() if key != request_key}
             if not supplied:
                 editor = copy.deepcopy(schema["properties"]["editor_state"].get("default", {}))
             supplied = {"editor_state": editor,
-                        **({"native_job_request": supplied["native_job_request"]} if "native_job_request" in supplied else {})}
+                        **({request_key: supplied[request_key]} if request_key in supplied else {})}
+        if "shape_submitted_request" in supplied:
+            from services.shape_requests import SubmittedShapeRequest
+            try:
+                SubmittedShapeRequest.model_validate(supplied["shape_submitted_request"])
+            except ValueError as exc:
+                raise ValidationFailure(str(exc)) from exc
         if "native_job_request" in supplied:
             from schemas import JobCreate
             try:
@@ -449,6 +459,7 @@ async def save_workflow_setup_draft(
 async def prepare_workflow_setup_launch(
     session: AsyncSession,
     *,
+    core_session: AsyncSession | None = None,
     project_id: str,
     setup_context_id: str,
     expected_generation: int,
@@ -467,6 +478,22 @@ async def prepare_workflow_setup_launch(
         raise RevisionConflict(
             f"workflow setup generation conflict: expected {expected_generation}, current {row.generation}"
         )
+    # Hold the existing setup generation through preparation. A cached ORM row
+    # must not authorize freezing an older draft after another editor saved it.
+    guarded = await session.execute(
+        update(ExperimentWorkflowSetupContext).where(
+            ExperimentWorkflowSetupContext.setup_context_id == setup_context_id,
+            ExperimentWorkflowSetupContext.project_id == project_id,
+            ExperimentWorkflowSetupContext.generation == expected_generation,
+            ExperimentWorkflowSetupContext.lifecycle_state == "open",
+            ExperimentWorkflowSetupContext.validation_state == "ready",
+        ).values(generation=expected_generation).execution_options(synchronize_session=False)
+    )
+    if guarded.rowcount != 1:
+        await session.refresh(row)
+        raise RevisionConflict(
+            f"workflow setup generation conflict: expected {expected_generation}, current {row.generation}"
+        )
     workflow = await session.get(ExperimentAggregateHead, row.workflow_id)
     if workflow is None or workflow.workspace_id != project_id or workflow.parent_id != row.domain_experiment_id:
         raise ValidationFailure("workflow setup ownership authority is invalid")
@@ -481,6 +508,18 @@ async def prepare_workflow_setup_launch(
     stored_draft = json.loads(row.draft_json)
     native = json.loads(row.capability_contract_json)["parameter_schema"].get("x-bms-native-editor-draft")
     native_request = stored_draft.get("native_job_request") if native else None
+    if row.capability_id == SHAPE_SETUP_CAPABILITY_ID:
+        from paths import get_data_root
+        from services.shape_requests import SubmittedShapeRequest, materialize_shape_request, shape_job_request
+
+        if core_session is None:
+            raise ValidationFailure("Shape setup preparation requires the core session")
+        try:
+            submitted = SubmittedShapeRequest.model_validate(stored_draft["shape_submitted_request"])
+            staged = await materialize_shape_request(core_session, data_root=get_data_root(), submitted=submitted)
+        except ValueError as exc:
+            raise ValidationFailure(str(exc)) from exc
+        native_request = shape_job_request(staged, submitted).model_dump(mode="json")
     authority, plan_contract = await persist_workflow_plan_authority(
         session, workflow_id=row.workflow_id, workspace_id=project_id,
         domain_experiment_id=row.domain_experiment_id,
@@ -505,7 +544,7 @@ async def prepare_workflow_setup_launch(
     await save_workflow_draft(session, row.workflow_id, payload, expected_generation=draft.generation)
     revision = await save_workflow_revision(
         session, row.workflow_id, expected_head_generation=workflow.head_generation,
-        change_summary="Prepared native workflow setup",
+        change_summary="Prepared native workflow setup", reuse_current_revision=True,
     )
     preparation = await prepare_workflow(session, revision.resource_id, {
         "input_dataset_revision_ids": [],

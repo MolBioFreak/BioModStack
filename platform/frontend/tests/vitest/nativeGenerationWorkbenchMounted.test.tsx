@@ -23,7 +23,7 @@ const original = api.defaults.adapter;
 beforeEach(() => { vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))); });
 let tree: ReactTestRenderer;
 let client: QueryClient;
-const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
+const flush = async () => { for (let i = 0; i < 10; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); }); };
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
 const button = (name: string) => tree.root.findAllByType('button').find(node => text(node) === name)!;
 async function mount(props: Partial<React.ComponentProps<typeof NativeBinderGenerationResults>> = {}, rows: NativeGenerationRecord[] = records) {
@@ -34,12 +34,15 @@ async function mount(props: Partial<React.ComponentProps<typeof NativeBinderGene
 }
 afterEach(async () => { await act(async () => tree?.unmount()); client?.clear(); api.defaults.adapter = original; vi.unstubAllGlobals(); });
 
-it('opens the published structure immediately with no confidence or viewer-local artifact invention', async () => {
+it('opens the published structure on first demand with no confidence or viewer-local artifact invention', async () => {
     const selected = vi.fn(); await mount({ onSelectedDesignIdsChange: selected });
+    expect(tree.root.findAllByType(StructureWorkbench)).toHaveLength(0);
+    await act(async () => button('Structure').props.onClick()); await flush();
     const props = tree.root.findByType(StructureWorkbench).props;
     expect(props).toMatchObject({ mode: 'standard', structureUrl: primary.download_url, structureContentSha256: primary.sha256, alphafoldView: false, showSequenceTrack: true, showMeasurements: true, showM6Workbench: true, hideControls: false });
     expect(props).not.toHaveProperty('artifactId'); expect(props).not.toHaveProperty('plddt'); expect(props).not.toHaveProperty('pae');
     expect(selected).not.toHaveBeenCalled();
+    await act(async () => button('Dashboard').props.onClick());
     await act(async () => tree.root.findByProps({ 'aria-label': 'All native metric columns' }).props.onChange({ target: { checked: true } }));
     expect(text(tree.root)).toContain('Explicit null'); expect(text(tree.root)).toContain('false');
     expect(tree.root.findAllByType('details').filter(node => ['Native receipt and accounting', 'Native files and provenance', 'Selected record: complete native readback'].includes(text(node.findByType('summary')))).every(node => !node.props.open)).toBe(true);
@@ -89,11 +92,11 @@ it('does not substitute the primary when the explicit document lacks a download'
     expect(text(tree.root)).toContain('The Design primary structure is not substituted');
 });
 it('supports a single published document without a primary flag', async () => {
-    await mount({}, [records[1]]);
+    await mount({ selectedDesignId: 'd2' }, [records[1]]);
     expect(tree.root.findByType(StructureWorkbench).props.structureUrl).toBe(alternate.download_url);
 });
 it('keeps the shared viewer mounted across chart and tool-panel changes', async () => {
-    await mount(); const viewer = tree.root.findByType(StructureWorkbench);
+    await mount({ selectedDesignId: 'd1' }); const viewer = tree.root.findByType(StructureWorkbench);
     await act(async () => button('Measurements and exports').props.onClick());
     expect(tree.root.findByType(StructureWorkbench)).toBe(viewer);
     expect(viewer.props.workbenchCollapsed).toBe(false);
@@ -134,6 +137,7 @@ it('keeps sequence, prediction sample, native PAE and persisted directional evid
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     await act(async () => { tree = create(<QueryClientProvider client={client}><NativeBinderGenerationResults jobId="job" onSelectedDesignIdsChange={selected} selectedDesignIds={['other-page']} /></QueryClientProvider>); });
     await flush();
+    await act(async () => button('Structure').props.onClick()); await flush();
     const viewer = tree.root.findByType(StructureWorkbench);
     const choose = async (label: string, value: string) => { await act(async () => tree.root.findByProps({ 'aria-label': label }).props.onChange({ target: { value } })); await flush(); };
     expect(tree.root.findByProps({ 'aria-label': 'Evidence sequence' }).props.value).toBe('');

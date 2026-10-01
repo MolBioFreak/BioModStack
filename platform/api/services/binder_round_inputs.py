@@ -9,7 +9,7 @@ import sys
 from schemas import BinderRoundRequest, JobCreate
 
 MODES = {'proteinmpnn': 'design', 'fampnn': 'binder_design', 'caliby_binder': 'design',
-         'protenix': 'complex', 'boltz2': 'complex', 'esmfold2': 'complex'}
+         'protenix': 'complex', 'boltz2': 'complex', 'esmfold2': 'predict'}
 
 
 BLIND_FIXED_PARAMETERS = {'protenix_use_template', 'colabfold_use_templates',
@@ -25,7 +25,7 @@ def normalize_request(request, registry=None):
     from model_registry import get_registry
     registry = registry or get_registry()
     result = BinderRoundRequest.model_validate(request).model_copy(deep=True)
-    for stage in (result.sequence_design, result.prediction):
+    for stage in result.design_stages + result.prediction_stages:
         definition = registry.get_internal_model_definition(stage.model_id)
         if definition is None or not any(m.id == MODES[stage.model_id] for m in definition.modes):
             raise ValueError(f'{stage.model_id} does not support ordinary {MODES[stage.model_id]} execution')
@@ -35,11 +35,11 @@ def normalize_request(request, registry=None):
             raise ValueError(f'Unknown {stage.model_id} settings: {sorted(unknown)}')
         if any(stage.params.get(key) for key in BOUND_INPUTS):
             raise ValueError('Round source inputs are bound from the selected candidate and independent target')
-        if stage is result.prediction and any(stage.params.get(key) for key in BLIND_FIXED_PARAMETERS):
+        if stage in result.prediction_stages and any(stage.params.get(key) for key in BLIND_FIXED_PARAMETERS):
             raise ValueError('Blind prediction does not accept pose conditioning')
         defaults = {field.name: deepcopy(field.default) for field in definition.params
                     if field.default is not None and field.name not in BOUND_INPUTS}
-        if stage is result.prediction:
+        if stage in result.prediction_stages:
             defaults.update({key: False for key in BLIND_FIXED_PARAMETERS if key in known})
         stage.params = {**defaults, **stage.params}
         errors = registry.validate_job_params(stage.model_id, MODES[stage.model_id], stage.params)
@@ -106,50 +106,16 @@ def source_components(path, chain_ids, role):
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
     from run_binder_blind_pose import _source
-    path = Path(path)
-    components = _source(path, chain_ids, role=role)
-    # Retain author identity in the exact sequence extraction order, solely for
-    # later comparison. Neither these rows nor coordinates enter prediction.
-    rows = {chain: {} for chain in chain_ids}
-    if path.suffix.lower() in {'.cif', '.mmcif'}:
-        from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-        cif = MMCIF2Dict(str(path))
-        count = len(cif.get('_atom_site.id', []))
-        columns = {name: cif.get('_atom_site.' + name, [''] * count) for name in (
-            'auth_asym_id', 'group_PDB', 'label_asym_id', 'label_seq_id', 'pdbx_PDB_ins_code', 'auth_seq_id')}
-        def col(name):
-            return columns[name]
-        for i in range(count):
-            chain = col('auth_asym_id')[i]
-            if chain not in rows or col('group_PDB')[i] != 'ATOM':
-                continue
-            key = (col('label_asym_id')[i], col('label_seq_id')[i])
-            insertion = col('pdbx_PDB_ins_code')[i]
-            rows[chain].setdefault(key, {'chain_id': chain, 'residue_number': int(col('auth_seq_id')[i]),
-                'insertion_code': '' if insertion in {'.', '?'} else insertion})
-    else:
-        from run_esmfold2_inference import _map_residue_to_letter
-        for line in path.read_text().splitlines():
-            if not line.startswith(('ATOM  ', 'HETATM')):
-                continue
-            chain, name = line[21:22].strip() or '_', line[17:20].strip().upper()
-            if chain not in rows or not _map_residue_to_letter(name, 'protein'):
-                continue
-            key = (line[22:27].strip(), name)
-            rows[chain].setdefault(key, {'chain_id': chain, 'residue_number': int(line[22:26]),
-                                       'insertion_code': line[26:27].strip()})
-    for component in components:
-        residues = list(rows[component['id']].values())
-        component['source_residues'] = residues if len(residues) == len(component['sequence']) else None
-    return components
+    return _source(Path(path), chain_ids, role=role, include_source_residues=True)
 
 
-def design_request(root, owner, design, request, binder, target):
+def design_request(root, owner, design, request, binder, target, *, settings=None):
     from services.binder_continuation import snapshot_selection, model_request, individual_model_requests
     directory = snapshot_selection(owner, root, [design])
-    model = request.sequence_design.model_id
+    settings = settings or request.design_stages[0]
+    model = settings.model_id
     operation = 'caliby' if model == 'caliby_binder' else model
-    params = deepcopy(request.sequence_design.params)
+    params = deepcopy(settings.params)
     params.update(binder_chains=','.join(binder), target_chains=','.join(target))
     if model in {'proteinmpnn', 'fampnn'}:
         params['design_chain'] = ','.join(binder)
@@ -233,7 +199,7 @@ def _target_correspondence(value, source_hash):
     return _residue_correspondence(matches[0].get('residues')) if len(matches) == 1 else {}
 
 
-def prediction_request(root, owner, design, request, binder, target, target_source):
+def prediction_request(root, owner, design, request, binder, target, target_source, *, settings=None):
     from paths import resolve_runtime_data_path
     path = resolve_runtime_data_path(design.pdb_path)
     reference, binder_mapping, target_mapping = comparison_reference(owner, design, path)
@@ -284,15 +250,21 @@ def prediction_request(root, owner, design, request, binder, target, target_sour
                             'reference_residues': _reference_residues(component,
                                 bound=reference is not None,
                                 mapping=binder_mapping if role == 'binder' else target_correspondence)})
-    params = deepcopy(request.prediction.params)
-    params.update(complex_components=components, sequence=':'.join(c['sequence'] for c in components),
+    settings = settings or request.prediction_stages[0]
+    params = deepcopy(settings.params)
+    # ESM's public admission/summary is a protein sequence, not a colon-delimited
+    # complex. The producer-bound components remain the sole native complex input.
+    summary = (''.join(c['sequence'] for c in binder_components)
+               if settings.model_id == 'esmfold2'
+               else ':'.join(c['sequence'] for c in components))
+    params.update(complex_components=components, sequence=summary,
                   sequence_name=design.id, lineage_root_job_id=root.id,
                   iteration_source_root_job_id=root.id, iteration_source_job_id=owner.id,
                   iteration_source_design_ids=[design.id], source_design_id=design.id,
                   source_stage_job_id=owner.id, selection_source_job_id=owner.id,
                   selection_source_type='selected_designs', source_selection_count=1)
-    child = JobCreate(name=f'predict-{design.id}', model_id=request.prediction.model_id,
-                      mode=MODES[request.prediction.model_id], params=params,
+    child = JobCreate(name=f'predict-{design.id}', model_id=settings.model_id,
+                      mode=MODES[settings.model_id], params=params,
                       execution_target_id=root.execution_target_id)
     binding = {'source_binding': {'job_id': owner.id, 'design_id': design.id,
                                  'sha256': hashlib.sha256(path.read_bytes()).hexdigest()},

@@ -65,12 +65,11 @@ const action = (
 });
 
 vi.mock('../../src/lib/bioxpClient', () => ({
-    useBioXpOperatorControlCatalog: () => state.catalog,
-    useBioXpOperatorDashboard: () => state.dashboard,
+    useBioXpOperatorControlCatalog: () => ({ ...state.catalog, data: { ...state.catalog.data, dashboard: state.dashboard.data } }),
     useBioXpOperatorActionHistory: () => ({ data: { items: [], next_cursor: null, limit: 100 }, error: null }),
     useBioXpOperatorActionAdmission: (...args: unknown[]) => {
         state.admissionArgs = args;
-        state.admissionData ??= { data: { enabled: true, disabled_reason: null, dependencies: [] }, error: null };
+        state.admissionData ??= { data: { enabled: true, disabled_reason: null, dependencies: [] }, error: null, isSuccess: true };
         return state.admissionData;
     },
     useInvokeBioXpOperatorAction: (lane = 'normal') => {
@@ -148,6 +147,15 @@ afterEach(async () => {
 });
 
 describe('mounted BioXP operator critical and exhaustive controls', () => {
+    it.each([true, false])('applies matching denial only for successful preview=%s', async success => {
+        state.admissionData = { isSuccess: success, error: success ? null : new Error('preview lost'),
+            data: { enabled: false, disabled_reason: 'robot conflict', dependencies: [] } };
+        await act(async () => root.render(<BioXpOperatorControlTabs generation={1} connected />));
+        const run = [...container.querySelectorAll('button')].find(button => button.textContent === 'Run exactly this action')!;
+        expect(run.disabled).toBe(success);
+        if (success) expect(container.textContent).toContain('robot conflict');
+        else { await act(async () => run.click()); expect(state.invokeCalls).toHaveLength(1); }
+    });
     it('uses plain headings without generation counters and retains raw source evidence', async () => {
         await act(async () => root.render(<BioXpOperatorControlTabs generation={1} connected />));
         expect(container.querySelector('h2')?.textContent).toBe('Advanced Controls');

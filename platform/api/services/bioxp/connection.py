@@ -141,6 +141,7 @@ class BioXpConnectionService:
         self._v2_query_locks: dict[str, asyncio.Lock] = {}
         self._v2_query_revision = 0
         self._v2_query_cache: dict[str, tuple[int, float, dict[str, Any]]] = {}
+        self._terminal_observations: dict[tuple[int, str], None] = {}
         self._interrupt_lock = asyncio.Lock()
         self._client: RobotClientProtocol | None = None
         self._active_target: ValidatedBioXpTarget | None = None
@@ -156,9 +157,7 @@ class BioXpConnectionService:
         self._hardware_evidence_error: str | None = None
         self._hardware_fresh_for_seconds: float | None = None
         self._hardware_snapshot_identity: tuple[object, ...] | None = None
-        self._automatic_snapshot_refresh: dict[str, Any] | None = None
         self._capabilities: tuple[str, ...] = ()
-        self._startup_lifecycle: dict[str, Any] | None = None
         self._maintenance_state: dict[str, Any] | None = None
         self._ownership: dict[str, Any] | None = None
         self._last_error: str | None = None
@@ -413,8 +412,8 @@ class BioXpConnectionService:
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         # Explicit query-only deck refresh may repair a stale status/readiness
-        # observation. This exact fixed-input alias is not motion admission;
-        # all other enqueue actions retain the fresh-status prerequisite.
+        # observation. Freshness is observational for every enqueue action;
+        # the addressed robot owns admission.
         query_only_refresh = (
             route_name == "invoke_operator_action_v2"
             and path_params == {"action_id": "oem.deck.collect_authority"}
@@ -486,9 +485,8 @@ class BioXpConnectionService:
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        # Passive observations reconcile already-dispatched commands even when
-        # the separate status probe failed. They never renew status/admission
-        # authority. Limit the exemption to these registered GET routes.
+        # These registered GETs are passive observations. Stored status does
+        # not grant or revoke admission; connection identity is checked below.
         passive = route_name in {
             "operator_control_catalog_v2", "operator_dashboard_v2",
             "operator_action_receipt_v2", "operator_command_status_v2",
@@ -522,6 +520,22 @@ class BioXpConnectionService:
                             path_params=path_params,
                             timeout_override=12.0,
                         )
+                        # First exact terminal observation expires the short
+                        # dashboard/catalog cache. No probe or hardware collect.
+                        command_id = payload.get("command_id")
+                        if (route_name in {"operator_action_receipt_v2", "operator_command_status_v2"}
+                            and payload.get("terminal") is True
+                            and isinstance(command_id, str)
+                            and path_params is not None
+                            and command_id == path_params.get("command_id")
+                            and expected_generation == self._generation
+                            and client is self._client):
+                            identity = (expected_generation, command_id)
+                            if identity not in self._terminal_observations:
+                                self._terminal_observations[identity] = None
+                                if len(self._terminal_observations) > 128:
+                                    del self._terminal_observations[next(iter(self._terminal_observations))]
+                                self._invalidate_v2_query_cache()
                         if (
                             cacheable
                             and revision == self._v2_query_revision
@@ -700,10 +714,8 @@ class BioXpConnectionService:
             raise ConnectionStateError("BioXP saved profile is not actively connected")
         if self._generation != expected_generation:
             raise ConnectionStateError("Expected connection generation does not match the active generation")
-        if require_fresh:
-            snapshot = self.snapshot()
-            if snapshot.observation_fresh is not True or snapshot.reachable is not True:
-                raise ConnectionStateError("A fresh reachable process-local BioXP status observation is required")
+        # Kept as a call-site compatibility argument, not admission. Stored
+        # status age/reachability is evidence; the addressed robot owns refusal.
         lease = self._generation_leases.get(self._generation)
         if lease is None or lease.client is not self._client or lease.state != "OPEN":
             lease = _GenerationLease(self._generation, self._client)
@@ -740,11 +752,6 @@ class BioXpConnectionService:
     def _apply_probe_payload(
         self, payload: dict[str, Any], *, request_started_at: datetime | None = None,
     ) -> None:
-        automatic_snapshot_refresh = payload.get("automatic_snapshot_refresh")
-        if isinstance(automatic_snapshot_refresh, dict):
-            self._automatic_snapshot_refresh = copy.deepcopy(automatic_snapshot_refresh)
-        startup = payload.get("startup")
-        self._startup_lifecycle = copy.deepcopy(startup) if isinstance(startup, dict) else None
         found_maintenance, maintenance_state = _find_maintenance_state(payload)
         self._maintenance_state = maintenance_state if found_maintenance else None
         ownership = payload.get("ownership")
@@ -827,13 +834,6 @@ class BioXpConnectionService:
             if client is self._client and generation == self._generation:
                 self._apply_probe_payload(payload, request_started_at=request_started_at)
 
-    @asynccontextmanager
-    async def workflow_lease(self, expected_generation: int):
-        """Hold connection authority stable across one admitted robot workflow."""
-        async with self.active_request_lease(expected_generation=expected_generation, require_fresh=False) as client:
-            async with self._v1_workflow_lock:
-                yield client
-
     async def disconnect(self) -> BioXpSnapshot:
         async with self._transition_lock:
             await self._deactivate_locked(increment=True)
@@ -901,9 +901,7 @@ class BioXpConnectionService:
         self._hardware_snapshot_identity = None
         self._hardware_observation_fresh = None
         self._hardware_evidence_error = None
-        self._automatic_snapshot_refresh = None
         self._capabilities = ()
-        self._startup_lifecycle = None
         self._maintenance_state = None
         self._ownership = None
         self._last_error = None
@@ -948,7 +946,6 @@ class BioXpConnectionService:
             hardware_observation_fresh=hardware_fresh,
             hardware_observation_stale=hardware_fresh is False,
             hardware_evidence_error=hardware_error,
-            automatic_snapshot_refresh=copy.deepcopy(self._automatic_snapshot_refresh),
             capabilities=self._capabilities,
             observed_at=self._observed_at,
             freshness_budget_seconds=self.freshness_budget_seconds,
@@ -958,7 +955,6 @@ class BioXpConnectionService:
             last_observed_runtime_ready=self._last_runtime_ready,
             last_observed_hardware_ready=self._last_hardware_ready,
             last_error=profile_error or self._last_error,
-            startup_lifecycle=copy.deepcopy(self._startup_lifecycle),
             maintenance_state=copy.deepcopy(self._maintenance_state),
             ownership=copy.deepcopy(self._ownership),
         )

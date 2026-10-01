@@ -16,8 +16,8 @@ export function PipetteOutcome({ result }: { result: PipetteResult }) {
     const body = result.body_completed ?? result.completed;
     return <dl className="text-sm space-y-1">
         {result.action && <><dt>OEM diagnostic action</dt><dd>{result.action.replaceAll('_', ' ')}</dd></>}
-        {([['requested_pipette', 'Requested source pipette'], ['tip_location', 'Robot source TipLocation'], ['alignment_published', 'New alignment published'], ['already_matching_tip_type', 'Matching-tip early return'], ['selected_channels', 'Selected source channels'], ['lost_tip_channels', 'Lost-tip channels'], ['cached_tip_channels', 'Cached tipped channels'], ['ejected_channels', 'Ejected channels'], ['controller_outcome_ok', 'Controller outcome'], ['source_return_completed', 'Source caller returned'], ['physical_effect_verified', 'Physical effect verified']] as const).map(([key, label]) => result[key] !== undefined && <Fragment key={key}><dt>{label}</dt><dd><PipetteValue value={result[key]} /></dd></Fragment>)}
-        {result.already_matching_tip_type === true && <><dt>Alignment note</dt><dd>Existing alignment retained; requesting another pipette did not establish new alignment.</dd></>}
+        {([['requested_pipette', 'Requested pipette'], ['tip_location', 'Reported tip alignment'], ['alignment_published', 'New alignment reported'], ['already_matching_tip_type', 'Matching tips already loaded'], ['selected_channels', 'Selected channels'], ['lost_tip_channels', 'Lost-tip channels'], ['cached_tip_channels', 'Cached tipped channels'], ['ejected_channels', 'Ejected channels'], ['controller_outcome_ok', 'Controller outcome'], ['source_return_completed', 'Procedure returned'], ['physical_effect_verified', 'Physical effect verified']] as const).map(([key, label]) => result[key] !== undefined && <Fragment key={key}><dt>{label}</dt><dd><PipetteValue value={result[key]} /></dd></Fragment>)}
+        {result.already_matching_tip_type === true && <><dt>Alignment note</dt><dd>Existing alignment retained; no new alignment was reported.</dd></>}
         {result.channels && <><dt>Diagnostic channel results</dt><dd><PipetteValue value={result.channels.map(row => Object.fromEntries(Object.entries(row).filter(([key]) => ['channel', 'part_number', 'revision', 'firmware', 'data', 'error', 'display', 'diagnosis'].includes(key))))} /></dd></>}
         {result.tests && <><dt>Ordered diagnosis tests</dt><dd><PipetteValue value={result.tests.map(row => ({ number: row.number, label: row.label, channels: Array.isArray(row.channels) ? row.channels.map(channel => { const r = resultRecord(channel); return r ? { channel: r.channel, diagnosis: r.diagnosis, display: r.display } : channel; }) : row.channels }))} /></dd></>}
         {result.attempts && <><dt>Initialize attempts</dt><dd>{result.attempts.length}</dd></>}
@@ -25,7 +25,7 @@ export function PipetteOutcome({ result }: { result: PipetteResult }) {
         {result.detail != null && <><dt>Action detail</dt><dd><PipetteValue value={result.detail} /></dd></>}
         {result.kind && <><dt>Result kind</dt><dd>{result.kind}</dd></>}
         {result.run_id && <><dt>Calibration run</dt><dd className="break-all">{result.run_id}</dd></>}
-        {body !== undefined && <><dt>Source body</dt><dd>{body ? 'Completed' : 'Incomplete / partial result'}</dd></>}
+        {body !== undefined && <><dt>Procedure</dt><dd>{body ? 'Completed' : 'Incomplete / partial result'}</dd></>}
         {result.position_steps !== undefined && <><dt>Measured fluid height (Z steps)</dt><dd>{result.position_steps}</dd></>}
         {result.lost_steps !== undefined && <><dt>Pickup lost steps</dt><dd>{result.lost_steps}{result.lost_steps_warning ? ' · source warning' : ''}</dd></>}
         {result.source_return !== undefined && <><dt>{result.samples ? 'OEM fluid offset (Z steps)' : 'Source return'}</dt><dd><PipetteValue value={result.source_return} /></dd></>}
@@ -38,7 +38,7 @@ export function PipetteOutcome({ result }: { result: PipetteResult }) {
         {'comparison_choice' in result && <><dt>Comparison choice</dt><dd>{result.comparison_choice == null ? 'Not decided' : String(result.comparison_choice)}</dd></>}
         {result.comparison_source && <><dt>Comparison source</dt><dd>{result.comparison_source}</dd></>}
         {result.source && <><dt>OEM source</dt><dd>{result.source}</dd></>}
-        {result.error != null && <><dt>Source / action error</dt><dd role="alert"><PipetteValue value={result.error} /></dd></>}
+        {result.error != null && <><dt>Action error</dt><dd role="alert"><PipetteValue value={result.error} /></dd></>}
         {result.finalization_error != null && <><dt>Finalization error</dt><dd role="alert"><PipetteValue value={result.finalization_error} /></dd></>}
     </dl>;
 }

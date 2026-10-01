@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { ExecutionTargetPicker } from '../ExecutionTargetPicker';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 
 import {
@@ -10,6 +10,8 @@ import {
     compileCmRuntimePolicy,
     inspectCmFrustrampnnSource,
     listCmSources,
+    listCmSourcePage,
+    getCmSource,
     listCmReusableRuns,
     registerCmRcsbSelection,
     registerCmRunArtifact,
@@ -48,6 +50,8 @@ interface Props {
     onDraftChange?: (draft: Record<string, unknown>) => void;
     services?: {
         listSources?: typeof listCmSources;
+        listSourcePage?: typeof listCmSourcePage;
+        getSource?: typeof getCmSource;
         inspectFrustrampnnSource?: typeof inspectCmFrustrampnnSource;
         listReusableRuns?: typeof listCmReusableRuns;
         registerRunArtifact?: typeof registerCmRunArtifact;
@@ -319,6 +323,7 @@ const sourceIdentityContext = (source: CmSource): CmSourceIdentityContext | null
 const sourceCardAuthority = (source: CmSource): string => {
     const identity = sourceIdentityContext(source);
     const receipt = source.authority_receipt;
+    if (source.summary) return `${sourceLabel(source)} · select to read exact authority`;
     if (!identity || !receipt) return 'Authority unavailable';
     const receiptParts = [
         identity.provider && `provider ${metadataText(identity.provider)}`,
@@ -426,11 +431,34 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
         setForm((current) => ({ ...current, [key]: value }));
     useEffect(() => { sessionStorage.setItem(STATE_KEY, JSON.stringify(form)); }, [form]);
 
-    const sources = useQuery({ queryKey: ['cm-sources'], queryFn: services?.listSources || listCmSources });
-    const sourceRegistry = useMemo(() => {
-        const mergedSources = [...(sources.data || []), ...registeredSources];
-        return Array.from(new Map(mergedSources.map((source) => [source.source_id, source])).values());
-    }, [registeredSources, sources.data]);
+    const [inspectedSourceId, setInspectedSourceId] = useState('');
+    const [sourceSearch, setSourceSearch] = useState('');
+    const [sourceFilter, setSourceFilter] = useState<CmSourceKind | ''>('');
+    const [sourceCursors, setSourceCursors] = useState<string[]>([]);
+    const pageQuery = { search: sourceSearch, source_kind: sourceFilter || undefined, after: sourceCursors.at(-1) };
+    // Legacy injected readers remain supported; the production picker only requests summaries.
+    const sources = useQuery({
+        queryKey: ['cm-sources', pageQuery],
+        queryFn: async () => services?.listSources
+            ? { sources: await services.listSources(), next_cursor: null, managed_source: null }
+            : (services?.listSourcePage || listCmSourcePage)(pageQuery),
+    });
+    const demandedIds = Array.from(new Set([
+        inspectedSourceId, form.snapshotId, form.sequenceId, form.checkpointId, form.configId, form.transferId,
+        ...form.importIds, ...form.referenceIds, sources.data?.managed_source?.source_id || '',
+    ].filter(Boolean)));
+    const sourceDetails = useQueries({ queries: demandedIds.map((id) => ({
+        queryKey: ['cm-source-detail', id],
+        queryFn: () => (services?.getSource || getCmSource)(id),
+        enabled: !services?.listSources && !registeredSources.some((source) => source.source_id === id),
+        retry: false,
+    })) });
+    const sourceRegistry: CmSource[] = Array.from(new Map([
+        ...(sources.data?.sources || []),
+        ...(sources.data?.managed_source ? [sources.data.managed_source] : []),
+        ...sourceDetails.flatMap((detail) => detail.data ? [detail.data] : []),
+        ...registeredSources,
+    ].map((source) => [source.source_id, source])).values());
     const byKind = (kind: CmSourceKind) => sourceRegistry.filter((source) => source.source_kind === kind);
     const reusableRuns = useQuery({
         queryKey: ['cm-reusable-runs'],
@@ -446,51 +474,38 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
         [sourceRegistry],
     );
     useEffect(() => {
-        if (!sources.data && !registeredSources.length) return;
-        const admissible = new Set(structureSources.map((source) => source.source_id));
-        setForm((current) => {
-            if (current.backend !== 'external_import') return current;
-            const next = current.importIds.filter((id) => admissible.has(id)).slice(0, 1);
-            if (next.length === current.importIds.length
-                && next.every((id, index) => id === current.importIds[index])) return current;
-            return { ...current, importIds: next };
-        });
-    }, [registeredSources.length, sources.data, structureSources]);
+        const checkpoints = sources.data?.managed_source ? [sources.data.managed_source]
+            : (sources.data?.sources || []).filter((source) => source.source_kind === 'confornets_checkpoint' && source.managed_checkpoint);
+        if (checkpoints.length !== 1) return;
+        setForm((current) => current.checkpointId ? current : { ...current, checkpointId: checkpoints[0].source_id });
+    }, [sources.data, form.checkpointId]);
+    // Page/filter absence is not evidence of deletion. Only an exact 404 removes a saved handle.
     useEffect(() => {
-        if (!sources.data && !registeredSources.length) return;
-        const checkpoints = sourceRegistry.filter((source) =>
-            source.source_kind === 'confornets_checkpoint' && source.managed_checkpoint === true);
-        const admissible = new Set(checkpoints.map((source) => source.source_id));
-        setForm((current) => {
-            if (current.checkpointId && admissible.has(current.checkpointId)) return current;
-            const checkpointId = checkpoints.length === 1 ? checkpoints[0].source_id : '';
-            return checkpointId === current.checkpointId ? current : { ...current, checkpointId };
-        });
-    }, [registeredSources.length, sourceRegistry, sources.data]);
-    useEffect(() => {
-        if (!sources.data && !registeredSources.length) return;
-        const kindById = new Map(sourceRegistry.map((source) => [source.source_id, source.source_kind]));
-        setForm((current) => {
-            const snapshotId = kindById.get(current.snapshotId) === 'complex_snapshot' ? current.snapshotId : '';
-            const sequenceId = kindById.get(current.sequenceId) === 'protein_sequence' ? current.sequenceId : '';
-            const configId = kindById.get(current.configId) === 'confornets_config' ? current.configId : '';
-            const transferId = kindById.get(current.transferId) === 'confornets_state' ? current.transferId : '';
-            const referenceIds = current.referenceIds.filter((id) =>
-                ['structure_upload', 'structure_artifact'].includes(kindById.get(id) || ''));
-            if (snapshotId === current.snapshotId && sequenceId === current.sequenceId
-                && configId === current.configId && transferId === current.transferId
-                && referenceIds.length === current.referenceIds.length) return current;
-            return { ...current, snapshotId, sequenceId, configId, transferId, referenceIds };
-        });
-    }, [registeredSources.length, sourceRegistry, sources.data]);
-    const selectedSnapshot = sourceRegistry.find((source) =>
+        const missing = new Set(demandedIds.filter((_, index) => {
+            const error = sourceDetails[index].error as { response?: { status?: number } } | null;
+            return error?.response?.status === 404;
+        }));
+        if (!missing.size) return;
+        setForm((current) => ({ ...current,
+            snapshotId: missing.has(current.snapshotId) ? '' : current.snapshotId,
+            sequenceId: missing.has(current.sequenceId) ? '' : current.sequenceId,
+            checkpointId: missing.has(current.checkpointId) ? '' : current.checkpointId,
+            configId: missing.has(current.configId) ? '' : current.configId,
+            transferId: missing.has(current.transferId) ? '' : current.transferId,
+            importIds: current.importIds.filter((id) => !missing.has(id)),
+            referenceIds: current.referenceIds.filter((id) => !missing.has(id)),
+        }));
+    }, [sourceDetails.map((detail) => detail.error).join(), demandedIds.join()]);
+    const exactSources = sourceRegistry.filter((source) => !source.summary);
+    const inspectedSource = exactSources.find((source) => source.source_id === inspectedSourceId);
+    const selectedSnapshot = exactSources.find((source) =>
         source.source_id === form.snapshotId && source.source_kind === 'complex_snapshot');
     const frustrampnnRequestedSourceId = form.backend === 'protenix_v2_ensemble'
         ? form.snapshotId
         : form.backend === 'confornets'
             ? form.sequenceId
             : form.importIds[0] || '';
-    const selectedSource = sourceRegistry.find((source) => source.source_id === frustrampnnRequestedSourceId && (
+    const selectedSource = exactSources.find((source) => source.source_id === frustrampnnRequestedSourceId && (
         (form.backend === 'protenix_v2_ensemble' && source.source_kind === 'complex_snapshot')
         || (form.backend === 'confornets' && source.source_kind === 'protein_sequence')
         || (form.backend === 'external_import' && ['structure_upload', 'structure_artifact'].includes(source.source_kind))
@@ -551,16 +566,16 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
         () => selectedSource ? sourceIdentityContext(selectedSource) : null,
         [selectedSource],
     );
-    const selectedCheckpoint = sourceRegistry.find((source) =>
+    const selectedCheckpoint = exactSources.find((source) =>
         source.source_id === form.checkpointId
         && source.source_kind === 'confornets_checkpoint'
         && source.managed_checkpoint === true);
-    const selectedConfig = sourceRegistry.find((source) =>
+    const selectedConfig = exactSources.find((source) =>
         source.source_id === form.configId && source.source_kind === 'confornets_config');
-    const selectedTransfer = sourceRegistry.find((source) =>
+    const selectedTransfer = exactSources.find((source) =>
         source.source_id === form.transferId && source.source_kind === 'confornets_state');
     const referenceSources = form.referenceIds.flatMap((id) => {
-        const source = sourceRegistry.find((candidate) => candidate.source_id === id);
+        const source = exactSources.find((candidate) => candidate.source_id === id);
         return source && ['structure_upload', 'structure_artifact'].includes(source.source_kind) ? [source] : [];
     });
     const availableChainIds = useMemo(() => {
@@ -580,12 +595,13 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
     const tabSources = useMemo(() => compatibleSources.filter((source) => {
         if (activeSourceTab === 'runs') return source.source_kind === 'structure_artifact';
         if (activeSourceTab === 'rcsb') {
+            if (source.summary) return Boolean(source.rcsb_source);
             const identity = sourceIdentityContext(source);
             return source.authority_receipt?.authority_kind === 'rcsb_download'
                 && identity?.provider === 'RCSB'
                 && typeof identity.accession === 'string';
         }
-        if (activeSourceTab === 'cached') return sourceIdentityContext(source) !== null;
+        if (activeSourceTab === 'cached') return source.summary || sourceIdentityContext(source) !== null;
         return false;
     }), [activeSourceTab, compatibleSources]);
     const selectSource = (source: CmSource) => {
@@ -1115,7 +1131,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
                     </section>
 
                     <section className={`${cardClass}`} aria-labelledby="cm-source-browser-heading">
-                        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">3</p><h3 id="cm-source-browser-heading" className="mt-1 font-semibold text-white">Source browser</h3><p className="mt-1 text-xs text-slate-500">Choose an immutable input</p></div><span className="text-xs text-slate-500">{sourceRegistry.length} registered</span></div>
+                        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">3</p><h3 id="cm-source-browser-heading" className="mt-1 font-semibold text-white">Source browser</h3><p className="mt-1 text-xs text-slate-500">Choose an immutable input</p></div><span className="text-xs text-slate-500">{sources.data?.sources.length || 0} on this page</span></div>
                         <div className="mt-4 flex flex-wrap gap-2" role="tablist" aria-label="CM input sources">{SOURCE_TABS.map((tab, index) => <button key={tab.value} id={`cm-source-tab-${tab.value}`} aria-controls={`cm-source-panel-${tab.value}`} type="button" role="tab" aria-selected={activeSourceTab === tab.value} tabIndex={activeSourceTab === tab.value ? 0 : -1} onClick={() => selectSourceTab(tab.value)} onKeyDown={(event) => handleSourceTabKeyDown(event, index)} className={`rounded-lg border px-3 py-2 text-xs font-medium ${activeSourceTab === tab.value ? 'border-orange-400/60 bg-orange-500/10 text-orange-100' : 'border-slate-800 text-slate-400'}`}>{tab.label}</button>)}</div>
                         {activeSourceTab === 'upload' && <div id="cm-source-panel-upload" role="tabpanel" aria-labelledby="cm-source-tab-upload" className="mt-4 space-y-4">
                             <div className="grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Source type<select value={sourceKind} onChange={(event) => setSourceKind(event.target.value as CmSourceKind)} className={inputClass}>{uploadSourceKinds.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Local file<input type="file" accept={sourceAccept} onChange={(event) => { const file = event.target.files?.[0] || null; setSourceFile(file); if (file && form.backend === 'external_import' && sourceKind === 'structure_upload') update('importIds', []); }} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">{sourceKind === 'protein_sequence' ? 'Target ID' : 'Optional source label'}<input value={sourceTargetId} onChange={(event) => setSourceTargetId(event.target.value)} className={inputClass} /></label><button type="button" disabled={!sourceFile || register.isPending} onClick={() => sourceFile && register.mutate({ file: sourceFile, kind: sourceKind })} className="self-end rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-40">Register</button></div>
@@ -1145,6 +1161,16 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
                         </div>}
                         {activeSourceTab === 'cached' && <div id="cm-source-panel-cached" role="tabpanel" aria-labelledby="cm-source-tab-cached" className="mt-4 space-y-2">{tabSources.length ? tabSources.map((source) => <button key={source.source_id} type="button" onClick={() => selectSource(source)} aria-pressed={selectedSourceId === source.source_id} className={`w-full rounded-xl border p-3 text-left ${selectedSourceId === source.source_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30'}`}><span className="block text-sm font-medium text-white">{source.source_id}</span><span className="mt-1 block text-[11px] text-slate-400">{sourceCardAuthority(source)}</span></button>) : <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-sm text-slate-500">No compatible sources are available in this view.</div>}</div>}
                         {sources.isError && <div role="alert" className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{cmApiError(sources.error, 'Unable to load the authenticated source registry.')}</div>}
+                    </section>
+                    <section className={cardClass}>
+                        <div className="mt-4 space-y-3" aria-label="Registered source inventory">
+                            <label className="block text-xs">Search registered source IDs<input aria-label="Search registered source IDs" value={sourceSearch} onChange={(event) => { setSourceSearch(event.target.value); setSourceCursors([]); }} className={inputClass} /></label>
+                            <label className="block text-xs">Inventory source kind<select aria-label="Inventory source kind" value={sourceFilter} onChange={(event) => { setSourceFilter(event.target.value as CmSourceKind | ''); setSourceCursors([]); }} className={inputClass}><option value="">All source kinds</option>{SOURCE_KINDS.map((kind) => <option key={kind.value} value={kind.value}>{kind.label}</option>)}<option value="confornets_checkpoint">Managed checkpoint</option></select></label>
+                            <div className="flex gap-3"><button type="button" disabled={!sourceCursors.length || sources.isFetching} onClick={() => setSourceCursors((current) => current.slice(0, -1))}>Previous sources</button><button type="button" disabled={!sources.data?.next_cursor || sources.isFetching} onClick={() => setSourceCursors((current) => [...current, sources.data!.next_cursor!])}>Next sources</button></div>
+                            <details><summary className="cursor-pointer text-xs">Complete page inventory</summary><ul className="mt-2 space-y-2">{sources.data?.sources.map((source) => <li key={source.source_id} className="text-xs"><span>{source.source_kind} · {sourceLabel(source)}</span><button type="button" className="ml-2" onClick={() => setInspectedSourceId(source.source_id)}>Inspect {source.source_id}</button></li>)}</ul></details>
+                            {inspectedSource && <details open><summary className="text-xs">Exact source detail: {inspectedSource.source_id}</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify({ metadata: inspectedSource.metadata, authority_receipt: inspectedSource.authority_receipt }, null, 2)}</pre></details>}
+                            <p className="text-xs text-slate-500">Selected sources remain available outside the current page and search. Use the native scientific selectors for checkpoints, configurations, references, and transfer states.</p>
+                        </div>
                     </section>
 
                 </div>
@@ -1206,6 +1232,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
                             {!form.defaultRuntime && form.backend === 'protenix_v2_ensemble' && <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Recycling cycles<input type="number" min={1} value={form.nCycle} onChange={(event) => update('nCycle', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Sampling steps<input type="number" min={1} value={form.nStep} onChange={(event) => update('nStep', Number(event.target.value))} className={inputClass} /></label></div>}
                             {form.backend === 'confornets' && <>
                                 {checkpointSources.length > 1 ? <label className="mt-3 block space-y-1 text-xs text-slate-400">Checkpoint authority<select value={form.checkpointId} onChange={(event) => update('checkpointId', event.target.value)} className={inputClass}><option value="">Select…</option>{checkpointSources.map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label> : <div className="mt-3 rounded-lg border border-slate-800 p-3 text-xs"><span className="text-slate-500">Canonical checkpoint</span><div className="mt-1 text-slate-200">{checkpointSources[0] ? sourceLabel(checkpointSources[0]) : 'No registered checkpoint authority'}</div></div>}
+                                <label className="mt-3 block space-y-1 text-xs text-slate-400">Registered ConforNets config<select aria-label="Registered ConforNets config" value={form.configId} onChange={(event) => update('configId', event.target.value)} className={inputClass}><option value="">Installed defaults</option>{byKind('confornets_config').map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label>
                                 <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Recycles<input type="number" min={0} value={form.numRecycles} onChange={(event) => update('numRecycles', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Diffusion steps<input type="number" min={1} value={form.numDiffusionSteps} onChange={(event) => update('numDiffusionSteps', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Learning rate<input type="number" min="0.0000001" step="0.0001" value={form.learningRate} onChange={(event) => update('learningRate', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Gradient clip<input type="number" min="0.0000001" value={form.gradientClip} onChange={(event) => update('gradientClip', Number(event.target.value))} className={inputClass} /></label></div>
                                 <div className="mt-3 grid gap-2 sm:grid-cols-2">{([['skipMsa', 'Skip MSA'], ['computeConfidence', 'Compute confidence'], ['saveFullConfidence', 'Save full confidence'], ['computeEvaluation', 'Compute evaluation']] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form[key]} onChange={(event) => update(key, event.target.checked)} className={checkClass} />{label}</label>)}</div>
                             </>}

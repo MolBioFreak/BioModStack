@@ -88,10 +88,11 @@ test('mounted selected actions submit exact independent subsets and read native 
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
     const opened: string[] = [];
-    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    await act(async () => { renderer = create(<BlindPoseSelectedControls sourceJobId="source" sourceModelId="bindcraft2"
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    client.setQueryData(['execution-targets'], { data: [] });
+    await act(async () => { renderer = create(<QueryClientProvider client={client}><BlindPoseSelectedControls sourceJobId="source" sourceModelId="bindcraft2"
         sourceParams={{ bindcraft2_settings: { targets: [{ name: 'target-1' }, { name: 'target-2' }] } }}
-        selectedDesignIds={['d-2', 'd-1']} onOpenJob={id => opened.push(id)} />); });
+        selectedDesignIds={['d-2', 'd-1']} onOpenJob={id => opened.push(id)} /></QueryClientProvider>); });
     const control = () => renderer!.root;
     const change = async (label: string, value: string) => {
         await act(async () => control().findByProps({ 'aria-label': label }).props.onChange({ target: { value } }));
@@ -108,7 +109,7 @@ test('mounted selected actions submit exact independent subsets and read native 
     await change('Blind pose seed', '17');
     await act(async () => control().findAllByType('button').find(b => text(b) === 'Run selected blind pose')!.props.onClick());
     expect(requests[0]).toEqual({ url: '/api/blind-pose/selected', body: {
-        source_job_id: 'source', target_name: 'target-2', design_ids: ['d-2', 'd-1'],
+        source_job_id: 'source', execution_target_id: null, target_name: 'target-2', design_ids: ['d-2', 'd-1'],
         binder_chains: { 'd-2': ['B', 'C'], 'd-1': ['D'] }, target_chains: ['T'],
         settings: { model_variant: 'full', model_id_or_path: 'checkpoint', num_loops: 4, num_sampling_steps: 83, num_diffusion_samples: 2, seed: 17 },
     } });
@@ -122,17 +123,17 @@ test('mounted selected actions submit exact independent subsets and read native 
     await change('Temperature', '0.5');
     await act(async () => control().findAllByType('button').find(b => text(b) === 'Run selected interface context')!.props.onClick());
     expect(requests[1]).toEqual({ url: '/api/ligandmpnn/interface-context/selected', body: {
-        action: 'ligandmpnn_interface_context', source_job_id: 'source', round_id: 'source',
+        action: 'ligandmpnn_interface_context', source_job_id: 'source', round_id: 'source', execution_target_id: null,
         candidate_ids: ['d-2', 'd-1'], settings: { binder_chain: 'B', target_chain: 'T', target_patch: ['T12', 'T13A'], seed: 21, samples: 3, temperature: 0.5 },
     } });
-    await act(async () => renderer!.update(<BlindPoseSelectedControls sourceJobId="blind-child" sourceModelId="esmfold2"
-        sourceParams={{}} selectedDesignIds={[]} resultJob={{ id: 'blind-child', model_id: 'esmfold2', mode: 'blind_pose', status: 'completed' }} onOpenJob={() => undefined} />));
+    await act(async () => renderer!.update(<QueryClientProvider client={client}><BlindPoseSelectedControls sourceJobId="blind-child" sourceModelId="esmfold2"
+        sourceParams={{}} selectedDesignIds={[]} resultJob={{ id: 'blind-child', model_id: 'esmfold2', mode: 'blind_pose', status: 'completed' }} onOpenJob={() => undefined} /></QueryClientProvider>));
     await flush();
     expect(requests[2].url).toBe('/api/blind-pose/blind-child/result');
     expect(text(control())).toContain('unclassified');
     expect(text(control())).toContain('native');
-    await act(async () => renderer!.update(<BlindPoseSelectedControls sourceJobId="ligand-child" sourceModelId="ligandmpnn"
-        sourceParams={{}} selectedDesignIds={[]} resultJob={{ id: 'ligand-child', model_id: 'ligandmpnn', mode: 'interface_context', status: 'completed' }} onOpenJob={() => undefined} />));
+    await act(async () => renderer!.update(<QueryClientProvider client={client}><BlindPoseSelectedControls sourceJobId="ligand-child" sourceModelId="ligandmpnn"
+        sourceParams={{}} selectedDesignIds={[]} resultJob={{ id: 'ligand-child', model_id: 'ligandmpnn', mode: 'interface_context', status: 'completed' }} onOpenJob={() => undefined} /></QueryClientProvider>));
     await flush();
     expect(requests[3].url).toBe('/api/ligandmpnn/interface-context/ligand-child/result');
     expect(text(control())).toContain('unclassified');
@@ -140,9 +141,10 @@ test('mounted selected actions submit exact independent subsets and read native 
 
 test('mounted selected action shows server rejection without suppressing experimental operation', async () => {
     api.defaults.adapter = async config => { throw new Error(`Selected route unavailable: ${config.url}`); };
-    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    await act(async () => { renderer = create(<BlindPoseSelectedControls sourceJobId="source" sourceModelId="other" sourceParams={{}}
-        selectedDesignIds={['d-1']} onOpenJob={() => undefined} />); });
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    client.setQueryData(['execution-targets'], { data: [] });
+    await act(async () => { renderer = create(<QueryClientProvider client={client}><BlindPoseSelectedControls sourceJobId="source" sourceModelId="other" sourceParams={{}}
+        selectedDesignIds={['d-1']} onOpenJob={() => undefined} /></QueryClientProvider>); });
     await act(async () => renderer!.root.findAllByType('button').find(b => text(b) === 'Run selected interface context')!.props.onClick());
     expect(text(renderer!.root)).toContain('Selected route unavailable: /api/ligandmpnn/interface-context/selected');
     expect(text(renderer!.root)).toContain('Blind pose (experimental)');

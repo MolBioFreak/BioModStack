@@ -191,6 +191,10 @@ params:
     default: "42"
 
   - name: protenix_n_sample
+    label: Diffusion samples per seed
+    ui_control: slider
+    step: 1
+    group: sampling
     type: integer
     description: Number of diffusion samples per seed
     required: false
@@ -199,6 +203,10 @@ params:
     maximum: 16
 
   - name: protenix_n_step
+    label: Diffusion steps
+    ui_control: slider
+    step: 1
+    group: sampling
     type: integer
     description: Number of diffusion steps
     required: false
@@ -207,6 +215,10 @@ params:
     maximum: 1000
 
   - name: protenix_n_cycle
+    label: Recycling cycles
+    ui_control: slider
+    step: 1
+    group: sampling
     type: integer
     description: Number of recycling cycles
     required: false

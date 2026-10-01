@@ -735,15 +735,58 @@ def _server_confornets_identity() -> dict[str, str]:
     }
 
 
-async def _read_managed_confornets_checkpoint(
-    session: AsyncSession,
-) -> ConformationalMappingSource | None:
-    """Expose one server-owned checkpoint identity without accepting a host path."""
-    checkpoint = get_weights_root() / "openfold3" / "of3-p2-155k.pt"
-    if not checkpoint.is_file() or checkpoint.is_symlink():
+# One observation only; browsing may reuse bytes, never an ORM identity row.
+_confornets_discovery_digest: tuple[tuple[str, int, int, int, int, int], str] | None = None
+
+
+def _confornets_checkpoint_observation(
+    checkpoint: Path,
+) -> tuple[str, int, int, int, int, int] | None:
+    try:
+        observed = checkpoint.lstat()
+        fields = (observed.st_dev, observed.st_ino, observed.st_size,
+                  observed.st_mtime_ns, observed.st_ctime_ns)
+        if not stat.S_ISREG(observed.st_mode) or any(type(value) is not int for value in fields):
+            return None
+        return (str(checkpoint), *fields)
+    except (OSError, AttributeError, TypeError, ValueError):
         return None
+
+
+def _confornets_discovery_checksum(checkpoint: Path) -> tuple[str, int]:
+    global _confornets_discovery_digest
+    before = _confornets_checkpoint_observation(checkpoint)
+    if before is not None and _confornets_discovery_digest is not None:
+        observed, digest = _confornets_discovery_digest
+        if before == observed:
+            return digest, before[3]
+    _confornets_discovery_digest = None
     digest = _sha256_path(checkpoint)
     size = checkpoint.stat().st_size
+    after = _confornets_checkpoint_observation(checkpoint)
+    # Uncertainty disables reuse, not discovery: keep the existing single read.
+    if before is not None and before == after:
+        _confornets_discovery_digest = (before, digest)
+    return digest, size
+
+
+async def _read_managed_confornets_checkpoint(
+    session: AsyncSession,
+    *,
+    reuse_discovery_checksum: bool = False,
+) -> ConformationalMappingSource | None:
+    """Expose one server-owned checkpoint identity without accepting a host path."""
+    global _confornets_discovery_digest
+    checkpoint = get_weights_root() / "openfold3" / "of3-p2-155k.pt"
+    if not checkpoint.is_file() or checkpoint.is_symlink():
+        if reuse_discovery_checksum:
+            _confornets_discovery_digest = None
+        return None
+    if reuse_discovery_checksum:
+        digest, size = _confornets_discovery_checksum(checkpoint)
+    else:
+        digest = _sha256_path(checkpoint)
+        size = checkpoint.stat().st_size
     source_id = f"cm_src_server_confornets_checkpoint_{digest[:32]}"
     existing = await session.get(ConformationalMappingSource, source_id)
     if existing is not None:
@@ -783,7 +826,7 @@ async def _read_managed_confornets_checkpoint(
 async def _ensure_managed_confornets_checkpoint(
     session: AsyncSession,
 ) -> ConformationalMappingSource | None:
-    managed = await _read_managed_confornets_checkpoint(session)
+    managed = await _read_managed_confornets_checkpoint(session, reuse_discovery_checksum=True)
     if managed is not None:
         session.add(managed)
     return managed
@@ -841,35 +884,77 @@ def _runtime_registry(backend: str) -> dict[str, Any]:
     }
 
 
-@router.get("/sources")
-async def list_sources(request: Request, session: AsyncSession = Depends(get_session)):
+def _source_detail(row, managed_checkpoint_source_id):
+    return {"source_id": row.source_id, "source_kind": row.source_kind,
+            "format": _registered_source_format(row.relative_path),
+            "sha256": row.content_sha256, "bytes": row.size_bytes,
+            "metadata": row.metadata_json,
+            "managed_checkpoint": row.source_id == managed_checkpoint_source_id,
+            "authority_receipt": _read_source_authority(row),
+            "submission_policy": _confornets_submission_policy() if row.source_kind == "protein_sequence" else None,
+            "created_at": row.created_at.isoformat() + "Z"}
+
+
+async def _picker_scope(request, session):
     principal_id = _principal(request)
     managed_checkpoint = await _ensure_managed_confornets_checkpoint(session)
-    managed_checkpoint_source_id = managed_checkpoint.source_id if managed_checkpoint is not None else None
+    managed_id = managed_checkpoint.source_id if managed_checkpoint is not None else None
     if managed_checkpoint is not None and managed_checkpoint in session.new:
         await session.commit()
-    rows = (
-        await session.execute(
-            select(ConformationalMappingSource).where(
-                ConformationalMappingSource.immutable.is_(True),
-                or_(
-                    ConformationalMappingSource.principal_id == principal_id,
-                    ConformationalMappingSource.source_id == managed_checkpoint_source_id,
-                ),
-            ).order_by(ConformationalMappingSource.created_at, ConformationalMappingSource.source_id)
-        )
-    ).scalars().all()
-    return {"sources": [
-        {"source_id": row.source_id, "source_kind": row.source_kind,
-         "format": _registered_source_format(row.relative_path),
-         "sha256": row.content_sha256, "bytes": row.size_bytes,
-         "metadata": row.metadata_json,
-         "managed_checkpoint": row.source_id == managed_checkpoint_source_id,
-         "authority_receipt": _read_source_authority(row),
-         "submission_policy": _confornets_submission_policy() if row.source_kind == "protein_sequence" else None,
-         "created_at": row.created_at.isoformat() + "Z"}
-        for row in rows
-    ]}
+    return (ConformationalMappingSource.immutable.is_(True), or_(
+        ConformationalMappingSource.principal_id == principal_id,
+        ConformationalMappingSource.source_id == managed_id,
+    )), managed_id
+
+
+@router.get("/sources")
+async def list_sources(
+    request: Request, session: AsyncSession = Depends(get_session),
+    summary: Annotated[bool, Query()] = False,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    after: Annotated[str | None, Query()] = None,
+    source_kind: Annotated[str | None, Query()] = None,
+    search: Annotated[str, Query(max_length=200)] = "",
+):
+    scope, managed_id = await _picker_scope(request, session)
+    source = ConformationalMappingSource
+    if not summary:
+        rows = (await session.execute(select(source).where(*scope).order_by(
+            source.created_at, source.source_id))).scalars().all()
+        return {"sources": [_source_detail(row, managed_id) for row in rows]}
+    # Project in SQL: no full metadata materialization or authority-file reads for page rows.
+    columns = (source.source_id, source.source_kind, source.relative_path,
+               source.content_sha256, source.size_bytes, source.created_at,
+               source.metadata_json["rcsb_entry"]["accession"].as_string().is_not(None).label("rcsb_source"))
+    statement = select(*columns).where(*scope)
+    if source_kind:
+        statement = statement.where(source.source_kind == source_kind)
+    if search:
+        statement = statement.where(source.source_id.contains(search, autoescape=True))
+    if after:
+        statement = statement.where(source.source_id > after)
+    rows = (await session.execute(statement.order_by(source.source_id).limit(limit + 1))).all()
+    def serialize(row):
+        return {"source_id": row.source_id, "source_kind": row.source_kind,
+                "format": _registered_source_format(row.relative_path),
+                "sha256": row.content_sha256, "bytes": row.size_bytes,
+                "metadata": {}, "summary": True, "rcsb_source": row.rcsb_source,
+                "managed_checkpoint": row.source_id == managed_id,
+                "created_at": row.created_at.isoformat() + "Z"}
+    managed = (await session.execute(select(*columns).where(*scope, source.source_id == managed_id))).first() if managed_id else None
+    return {"sources": [serialize(row) for row in rows[:limit]],
+            "next_cursor": rows[limit - 1].source_id if len(rows) > limit else None,
+            "managed_source": serialize(managed) if managed else None}
+
+
+@router.get("/sources/{source_id}")
+async def source_detail(source_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    scope, managed_id = await _picker_scope(request, session)
+    row = (await session.execute(select(ConformationalMappingSource).where(
+        *scope, ConformationalMappingSource.source_id == source_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Registered source not found")
+    return _source_detail(row, managed_id)
 
 
 _REUSABLE_CM_ARTIFACT_ROLES = frozenset({"authoritative_cif"})

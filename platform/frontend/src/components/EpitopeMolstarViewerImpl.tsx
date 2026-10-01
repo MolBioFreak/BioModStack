@@ -25,6 +25,9 @@ export interface EpitopeMolstarViewerProps {
     onResidueClick?: (residueKey: string) => void;
 }
 
+const EMPTY_RESIDUE_REFS: readonly ResidueRef[] = [];
+const EMPTY_SELECTED_RESIDUES: ReadonlySet<string> = new Set();
+
 const parseCompatibilityKey = (key: string): ResidueRef | null => {
     const normalized = key.trim();
     const explicit = /^([^:]+):(-?\d+)([A-Za-z]?)$/.exec(normalized);
@@ -60,8 +63,8 @@ export default function EpitopeMolstarViewer({
     sourceLabel = 'Structure',
     defaultFullView = false,
     expandRevision = 0,
-    selectedResidueRefs = [],
-    selectedResidues = new Set<string>(),
+    selectedResidueRefs = EMPTY_RESIDUE_REFS,
+    selectedResidues = EMPTY_SELECTED_RESIDUES,
     onResidueRefClick,
     onResidueClick,
 }: EpitopeMolstarViewerProps) {
@@ -108,6 +111,7 @@ export default function EpitopeMolstarViewer({
             workbenchCollapsed={!fullView}
             showSequenceTrack={fullView}
             residueSelections={canonicalSelections}
+            controlledResidueSelection={Boolean(onResidueRefClick || onResidueClick)}
             onResidueClick={(click) => {
                 const residue: ResidueRef = {
                     documentId: click.documentId,

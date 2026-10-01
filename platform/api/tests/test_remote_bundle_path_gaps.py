@@ -380,12 +380,16 @@ def test_cm_real_compiler_preserves_request_siblings_and_trusted_owner(roots, tm
     checkpoint.parent.mkdir()
     checkpoint.write_bytes(b'selected checkpoint fixture')
     request = request_root/'cm_request_v1.json'
-    request.write_text(json.dumps({'request_sha256': 'a'*64, 'confornets': {
+    request.write_text(json.dumps({'schema_name': 'cm_request', 'request_sha256': 'a'*64, 'confornets': {
         'checkpoint': {'path': 'registered/model.pt', 'sha256': bundle._sha256_file(checkpoint)},
         'references': []}}))
     plan = request_root/'cm_coordinate_plan_v1.json'; plan.write_text('{}')
     registry = request_root/'cm_runtime_registry_v1.json'; registry.write_text('{}')
     originals = {p: p.read_bytes() for p in (request, checkpoint, plan, registry)}
+    # Local canonical ownership is scoped to this fixture, never live results.
+    monkeypatch.setenv('BMS_RESULTS_ROOT', str(roots['results']))
+    assert prep._resolve_authenticated(request_root, 'registered/model.pt',
+        bundle._sha256_file(checkpoint), 'checkpoint') == checkpoint
     monkeypatch.setattr(nextflow, 'get_work_dir', lambda: roots['data']/'work')
     monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
     invocations = []
@@ -453,6 +457,7 @@ def test_metadata_only_runtime_projection_preserves_plan(roots, monkeypatch, mod
                      'runtime_data': roots['data']}
     # Image approval has separate tests; these leaves exercise the actual shared
     # metadata selection and provisioning projection without constructing argv.
+    monkeypatch.setattr(bundle, 'image_reference', lambda relative, root, params: (root/relative, None))
     monkeypatch.setattr(bundle, 'resolve_image', lambda relative, root, params: root/relative)
     params = {}
     for dependency in plan.dependencies:

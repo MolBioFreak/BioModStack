@@ -571,6 +571,16 @@ async def validate_bound_job_request(
         expected_params=expected_params,
     )
     params_match = _canonical_json(prepared_params) == _canonical_json(expected_params)
+    if not params_match and (model_id, mode) == ("protein_modification_experimental", "shape_blueprint"):
+        # Preserve historical literal equality. Shape's staged projection can
+        # omit defaults that the canonical Job normalizer pinned at setup.
+        from routers.jobs import normalize_job_request
+        from schemas import JobCreate
+        normalized = normalize_job_request(JobCreate(
+            name=job_name, model_id=model_id, mode=mode, params=dict(params), pinned_gpu=pinned_gpu,
+        )).params
+        prepared_params = normalize_bound_job_params(supplied_params=normalized, expected_params=expected_params)
+        params_match = _canonical_json(prepared_params) == _canonical_json(expected_params)
     if model_id == "nanopore":
         params_match = all(
             key in prepared_params and prepared_params[key] == value
@@ -944,7 +954,15 @@ async def validate_prepared_child_job_request(
     expected = loaded[1]["capability"].get("normalized_job_request")
     if expected is None:
         return False  # Historical/ordinary Plan handoffs retain their existing owner.
-    actual = JobCreate.model_validate(job_request).model_dump(mode="json")
+    actual_request = JobCreate.model_validate(job_request)
+    if (actual_request.model_id, actual_request.mode) == ("protein_modification_experimental", "shape_blueprint"):
+        from routers.jobs import normalize_job_request
+        actual_request = normalize_job_request(actual_request.model_copy(deep=True))
+        actual_request.params = normalize_bound_job_params(
+            supplied_params=actual_request.params,
+            expected_params={**expected["params"], "workflow_adapter": loaded[1]["capability"]["workflow_adapter_id"]},
+        )
+    actual = actual_request.model_dump(mode="json")
     expected = dict(expected)
     expected["params"] = {**expected["params"], "workflow_adapter": loaded[1]["capability"]["workflow_adapter_id"]}
     if actual["launch_context_id"] != context.launch_context_id:

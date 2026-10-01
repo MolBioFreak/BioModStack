@@ -9,7 +9,6 @@ const state = vi.hoisted(() => ({ actions: [] as BioXpOperatorActionSpec[] }));
 vi.mock('../../src/lib/bioxpClient', async importOriginal => ({
     ...await importOriginal<typeof import('../../src/lib/bioxpClient')>(),
     useBioXpOperatorControlCatalog: () => ({ data: { actions: state.actions, ownership_generation: 2, source_authority_verified: true }, error: null }),
-    useBioXpOperatorDashboard: () => ({ data: {}, error: null }),
     useBioXpOperatorActionHistory: () => ({ data: { items: [], limit: 100, next_cursor: null }, error: null }),
     useBioXpOperatorActionAdmission: () => ({ data: { enabled: true, dependencies: [] }, error: null }),
 }));

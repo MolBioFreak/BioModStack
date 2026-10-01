@@ -97,7 +97,7 @@ class PreloadRequest(StrictModel):
 
 class WorkflowPackSelection(StrictModel):
     kind: Literal["workflow_pack"]
-    workflow_id: Literal["structure_prediction"]
+    workflow_id: Literal["structure_prediction", "antibody_denovo"]
 
 
 class WorkflowPackRequest(WorkflowPackSelection):
@@ -222,7 +222,8 @@ class ProvisionPreview(StrictModel):
     artifacts: list[CachedArtifactReceipt]
     total_bytes: int = Field(ge=0)
     scientific_ready: Literal[False] = False
-    scope: Literal["managed_asset_activation"] = "managed_asset_activation"
+    # Historical previews remain readable; new previews promise file acquisition only.
+    scope: Literal["download_only", "managed_asset_activation"] = "download_only"
     destination: ProvisionDestination | None = None
     effective_params: dict[str, Any] | None = None
     plan_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
@@ -263,10 +264,45 @@ class ObservedArtifactInventory(StrictModel):
     scientific_ready: Literal[False] = False
 
 
-class ExecutionTargetResponse(StrictModel):
-    artifact_inventory: ObservedArtifactInventory | None = None
+class ArtifactSummary(StrictModel):
+    total_count: int = Field(ge=0)
+    verified_count: int = Field(ge=0)
+    total_bytes: int = Field(ge=0)
+    verified_bytes: int = Field(ge=0)
+
+
+class PreloadStatus(StrictModel):
+    operation_id: str
+    job_id: str | None = None
+    selection: ProvisionSelection | WorkflowProvisionSelection | WorkflowPackSelection | None = None
+    sequence: int = Field(default=0, ge=0)
+    endpoint_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    cancel_requested: bool = False
+    recovery_required: bool = False
+    source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    source_tree: str = Field(pattern=r"^[0-9a-f]{40}$")
+    request_sha256: str = Field(pattern=SHA256_PATTERN)
+    phase: Literal["checking", "transferring", "verifying", "source_download_ready", "failed", "cancelling", "recovery_blocked", "cancelled"]
+    artifact: str | None = Field(default=None, max_length=256)
+    message: str = Field(min_length=1, max_length=500)
+    started_at: datetime
+    updated_at: datetime
+    artifact_summary: ArtifactSummary
+    cached_artifact_count: int = Field(ge=0)
+
+
+class ArtifactInventoryStatus(StrictModel):
+    operation_id: str
+    selection: ProvisionSelection | WorkflowProvisionSelection | WorkflowPackSelection
+    observed_at: datetime
+    artifact_count: int = Field(ge=0)
+    scope: Literal["last_independent_provision"] = "last_independent_provision"
+    state: Literal["download_verified", "stale"] = "stale"
+    scientific_ready: Literal[False] = False
+
+
+class ExecutionTargetStatusFields(StrictModel):
     setup: ExecutionTargetSetup | None = None
-    preload: PreloadProgress | None = None
     progress: RemoteArtifactProgress | None = None
     id: str
     provider: Literal["vast"]
@@ -286,6 +322,33 @@ class ExecutionTargetResponse(StrictModel):
     activated_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class ExecutionTargetDetails(ExecutionTargetStatusFields):
+    artifact_inventory: ObservedArtifactInventory | None = None
+    preload: PreloadProgress | None = None
+
+
+class ExecutionTargetResponse(ExecutionTargetStatusFields):
+    """Routine transport; full retained observations require explicit readers."""
+    artifact_inventory: ArtifactInventoryStatus | None = None
+    preload: PreloadStatus | None = None
+
+
+class ArtifactPageFields(StrictModel):
+    total_count: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=250)
+    operation_id: str | None
+
+
+class CachedArtifactPage(ArtifactPageFields):
+    items: list[CachedArtifactReceipt]
+
+
+class PreloadArtifactPage(ArtifactPageFields):
+    items: list[ProvisionArtifactProgress] | list[CachedArtifactReceipt]
+    sequence: int = Field(ge=0)
 
 
 class ExecutionTargetInventoryResponse(StrictModel):
@@ -371,7 +434,7 @@ class RemoteAttemptStatus(StrictModel):
     attempt_id: str
     job_id: str
     state: Literal[
-        "prepared", "running", "awaiting_input", "cancelling", "cancelled", "succeeded", "failed", "lost"
+        "prepared", "running", "paused", "awaiting_input", "cancelling", "cancelled", "succeeded", "failed", "lost"
     ]
     supervisor_pid: int | None = None
     supervisor_start_ticks: int | None = None

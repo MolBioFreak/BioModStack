@@ -19,7 +19,7 @@ from routers.md_results import _stream_verified_artifact
 
 from scripts.bms_md.analysis import write_analysis_report
 from scripts.bms_md.contract import write_atom_order_manifest
-from services.md.results import MDJobRecord, MDResultError, analysis_report, artifact_inventory, build_analysis_work_items, completion_barrier, resolve_artifact, summary
+from services.md.results import MDJobRecord, MDResultError, analysis_report, artifact_inventory, completion_barrier, resolve_artifact, summary
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -229,7 +229,8 @@ def test_md_inventory_is_opaque_job_owned_and_checksum_enforced(tmp_path: Path, 
     assert md_summary["trajectory_playback"]["supported"] is False
     assert md_summary["result_state"] is None
     assert md_summary["aggregate_manifest_sha256"] == hashlib.sha256((tmp_path / "manifest.json").read_bytes()).hexdigest()
-    assert build_analysis_work_items(job)["items"][0]["state_authority"] == "source_contract_only_no_durable_md_analysis_table"
+    assert md_summary["replica_count"] == 1
+    assert {item["replica"] for item in inventory["artifacts"]} == {0}
 
     trajectory_id = next(item["id"] for item in inventory["artifacts"] if item["name"] == "trajectory")
     assert "trajectory" not in trajectory_id
@@ -334,7 +335,7 @@ def test_invalid_analysis_sidecar_does_not_block_dynamics(tmp_path: Path, monkey
     inventory = artifact_inventory(job)
     assert inventory["analysis_error"]["code"] == "MD_ANALYSIS_ARTIFACT_MANIFEST_INVALID"
     assert summary(job)["status"] == "completed"
-    assert build_analysis_work_items(job)["retryable"] is True
+    assert any(item["name"] == "trajectory" for item in inventory["artifacts"])
     with pytest.raises(MDResultError):
         analysis_report(job)
     trajectory_id = next(item["id"] for item in inventory["artifacts"] if item["name"] == "trajectory")
@@ -644,7 +645,8 @@ def test_job_owned_routes_stream_the_same_verified_descriptor_with_range_support
     assert '"/{job_id}/md/artifacts"' in router
     assert '"/{job_id}/md/analysis"' in router
     assert "job-bound/no-authenticated-principal" in router
-    assert "artifact, handle = open_verified_artifact" in router
+    assert "asyncio.to_thread(open_verified_artifact, record, artifact_id)" in router
+    assert "artifact, handle = await asyncio.shield(task)" in router
     assert "_stream_verified_artifact(handle" in router
     assert "_serve_file_response(artifact.path" not in router
 
@@ -654,7 +656,9 @@ def test_all_live_md_terminal_writers_route_through_the_md_completion_barrier() 
     orchestrator = (REPO_ROOT / "platform/api/services/gpu_orchestrator.py").read_text()
     completion = (REPO_ROOT / "platform/api/services/md/completion.py").read_text()
     assert "await validate_and_finalize_md_job(job, session)" in nextflow
-    assert "await validate_and_finalize_md_job(job, session)" in orchestrator
+    assert "await _finalize_local_md_job(job, session, result_output_dir)" in orchestrator
+    wrapper = nextflow.split("async def _finalize_local_md_job(", 1)[1].split("\nasync def ", 1)[0]
+    assert "await validate_and_finalize_md_job(job, session)" in wrapper
     assert "def validate_and_finalize_md_job" in completion
 
 

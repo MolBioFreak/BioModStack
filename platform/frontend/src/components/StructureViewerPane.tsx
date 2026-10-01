@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
 import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
+import { shapeDocuments, type ShapeDocument } from '../lib/shapeResultsView';
 import ChainDetailsPanel from './ChainDetailsPanel';
 import { parseScientificPae, parseScientificNativeMetric } from '../lib/scientificViewerIdentity';
 import ReferenceSelector, { type ReferenceStructure } from './ReferenceSelector';
@@ -293,6 +294,33 @@ const getFampnnScalar = (payload: Record<string, unknown> | null, ...keys: strin
     }
     return null;
 };
+
+/** Exact native documents share the standard host, not the primary Design metric binding. */
+export function ShapeDocumentInspector({ design, document }: { design: Design; document: ShapeDocument }) {
+    const [toolsOpen, setToolsOpen] = useState(false);
+    const [geometryOpen, setGeometryOpen] = useState(false);
+    const [sourceOpen, setSourceOpen] = useState(false);
+    const geometry = design.provenance?.geometry_id;
+    const source = shapeDocuments(design).find(doc => doc.key === 'source_backbone');
+    const overlays = useMemo(() => [
+        ...(geometryOpen && typeof geometry === 'string' ? [{ id: `shape-${geometry}`, structureUrl: `/api/shape-blueprint/geometries/${encodeURIComponent(geometry)}/points.cif`, format: 'cif' as const, label: 'Canonical Shape point pool' }] : []),
+        ...(sourceOpen && source && source.key !== document.key ? [{ id: `source-${design.id}`, structureUrl: source.url, format: source.format, label: 'Source backbone (published coordinates)' }] : []),
+    ], [geometryOpen, geometry, sourceOpen, source?.url, source?.format, document.key, design.id]);
+    return <section aria-label="Exact Shape document" className="min-w-0 space-y-3">
+        <header className="break-words text-sm"><h3 className="font-semibold">{design.name} · {document.label}</h3><p>{document.format.toUpperCase()} · Native document; confidence is not inferred from atom B factors.</p></header>
+        <div className="flex flex-wrap gap-4 text-sm">
+            <button type="button" aria-expanded={toolsOpen} onClick={() => setToolsOpen(value => !value)}>Measurements and exports</button>
+            {typeof geometry === 'string' && <label><input type="checkbox" checked={geometryOpen} onChange={event => setGeometryOpen(event.target.checked)} />Canonical point pool</label>}
+            {source && source.key !== document.key && <label><input type="checkbox" checked={sourceOpen} onChange={event => setSourceOpen(event.target.checked)} />Source backbone comparison</label>}
+            <a href={document.url} download>Download exact native document</a>
+        </div>
+        <StructureWorkbench mode="standard" structureUrl={document.url} format={document.format}
+            structureContentSha256={document.sha256} overlayStructures={overlays}
+            alphafoldView={false} height={520} hideControls={false} showSequenceTrack showMeasurements showM6Workbench
+            workbenchCollapsed={!toolsOpen} />
+        {(geometryOpen || sourceOpen) && <p className="text-xs">Published coordinate frames; this overlay does not compute an alignment or a scientific score.</p>}
+    </section>;
+}
 
 export default function StructureViewerPane({
     selectedDesignId,

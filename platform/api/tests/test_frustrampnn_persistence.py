@@ -1317,6 +1317,7 @@ async def test_same_local_invocation_id_is_isolated_by_parent_job(
     "mutator",
     [
         "request",
+        "invalid_native_identity",
         "source",
         "runtime",
         "gpu",
@@ -1340,9 +1341,14 @@ async def test_changed_immutable_closure_conflicts_without_modification(
         original_counts = await _counts(session)
 
     root = tmp_path / "changed"
-    if mutator == "request":
+    if mutator in {"request", "invalid_native_identity"}:
         request = _load_json(root, "workflow_component_request_v1.json")
-        request["source_artifact"]["producer_stage"] = "prediction:changed"
+        # A colon selects the native deterministic-identity contract, which this
+        # legacy fixture does not satisfy. Keep that rejection as a separate
+        # negative case; the valid request change must reach immutable replay.
+        request["source_artifact"]["producer_stage"] = (
+            "prediction_changed" if mutator == "request" else "prediction:changed"
+        )
         _write_json(root, "workflow_component_request_v1.json", request)
     elif mutator == "source":
         changed_sha = "2" * 64
@@ -1400,7 +1406,7 @@ async def test_changed_immutable_closure_conflicts_without_modification(
     async with db() as session:
         expected_error = (
             module.FrustraMPNNPersistenceError
-            if mutator == "source"
+            if mutator in {"source", "invalid_native_identity"}
             else module.FrustraMPNNConflictError
         )
         with pytest.raises(expected_error):

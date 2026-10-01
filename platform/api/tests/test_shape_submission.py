@@ -113,7 +113,7 @@ async def test_shape_request_materializes_closed_hash_bound_bundle(tmp_path: Pat
             assert profile["target_sampling"] == "seeded_subset_of_immutable_uniform_interior_pool_v1"
             assert profile["rfd3_transfer_coefficient"] == 0.13333333333333333
             assert profile["connectivity_weight"] == 0.0
-            assert persisted.request_spec["schema"] == "bms_shape_design_request_v2"
+            assert persisted.request_spec["schema"] == "bms_shape_design_request_v3"
             assert persisted.request_spec["sequence_policy"] == "auto"
             assert persisted.request_spec["sequence_engine"] is None
             assert persisted.request_spec["validator_suite"] == ["boltz2", "esmfold2", "protenix_v2"]
@@ -523,11 +523,9 @@ def test_shape_workflow_supplies_typed_esmfold2_input_tuple() -> None:
         "tuple([\n            producer_method: engine,\n            producer_artifact_id: name,\n            source_backbone_sha256: sourceSha,\n        ], sequence, name, source)"
         in workflow
     )
-    assert (
-        "ESMFold2Predict(shapeSequences.map { producerMeta, sequence, name, source -> "
-        "tuple(producerMeta, sequence, name) })"
-        in " ".join(workflow.split())
-    )
+    assert "ESMFold2Predict(shapeSequences.map { producerMeta, sequence, name, source ->" in workflow
+    assert "tuple(producerMeta, sequence, name)" in workflow
+    assert "shape_settings: shapeRequest.validator_settings.esmfold2" in workflow
     assert (
         "shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, source) }"
         in workflow
@@ -545,7 +543,8 @@ def test_shape_workflow_supplies_typed_esmfold2_input_tuple() -> None:
     assert "BuildRFD3Aggregate(PlanRFD3Batches.out.plan, admissionRecords)" in workflow
     assert "sequencePolicy != 'skip'" in workflow
     assert "sequenceEngine == 'proteinmpnn'" in workflow
-    assert "sequenceEngine in ['proteinmpnn', 'fampnn']" in workflow
+    assert "sequenceEngine in ['proteinmpnn', 'fampnn', 'caliby_experimental']" in workflow
+    assert "RunShapeCaliby(shapeBackbones, sequenceCount, seed, requestFile)" in workflow
     assert "RunShapeFAMPNN(shapeBackbones, sequenceCount, seed, requestFile)" in workflow
     assert "sequenceEnabled" in workflow
 

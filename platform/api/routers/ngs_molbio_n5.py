@@ -219,19 +219,16 @@ async def _dataset_domain_kind(
     experiment_id: str,
     domain_id: str,
 ) -> str:
-    try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
-        return "ngs_molbio"
-    except ValidationFailure as exc:
-        if str(exc) != "unsupported_dataset_kind":
-            raise
-    await require_protein_domain_hierarchy(
-        session,
-        project_id=project_id,
-        experiment_id=experiment_id,
-        domain_id=domain_id,
-    )
-    return "protein_in_silico"
+    domain = await session.get(ExperimentAggregateHead, domain_id)
+    revision = await session.get(ExperimentRevision, domain.current_revision_id if domain else "")
+    payload = json.loads(revision.canonical_payload) if revision else {}
+    if payload.get("domain_kind") == "protein_in_silico":
+        await require_protein_domain_hierarchy(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id,
+        )
+        return "protein_in_silico"
+    await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+    return "ngs_molbio"
 
 
 @router.get(D + "/dataset-kinds")
@@ -1201,7 +1198,7 @@ async def comparisons(project_id: str, experiment_id: str, domain_id: str, curso
 @router.get(D + "/run-groups")
 async def run_groups(project_id: str, experiment_id: str, domain_id: str, cursor: str | None = Query(default=None, max_length=1024), limit: int = Query(default=50, ge=1, le=100), session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id)
         scope = f"run-groups:{project_id}:{domain_id}"
         anchor = decode_cursor(cursor, scope=scope, limit=limit)
         statement = select(ExperimentRunGroup).join(ExperimentWorkflowRun, ExperimentWorkflowRun.run_group_id == ExperimentRunGroup.resource_id).join(ExperimentWorkflowPreparation, ExperimentWorkflowPreparation.resource_id == ExperimentWorkflowRun.preparation_id).join(ExperimentRevision, ExperimentRevision.resource_id == ExperimentWorkflowPreparation.workflow_revision_id).join(ExperimentAggregateHead, ExperimentAggregateHead.aggregate_id == ExperimentRevision.subject_id).where(ExperimentRunGroup.workspace_id == project_id, ExperimentWorkflowRun.workspace_id == project_id, ExperimentWorkflowPreparation.workspace_id == project_id, ExperimentAggregateHead.workspace_id == project_id, ExperimentAggregateHead.aggregate_kind == "workflow", ExperimentAggregateHead.parent_id == domain_id).order_by(ExperimentRunGroup.created_at.desc(), ExperimentRunGroup.resource_id.desc()).limit(limit + 1)
@@ -1264,7 +1261,7 @@ async def _attempt_in_domain(
 @router.get(D + "/attempts/{attempt_id}")
 async def attempt_detail(project_id: str, experiment_id: str, domain_id: str, attempt_id: str, session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id)
         attempt = await _attempt_in_domain(
             session,
             project_id=project_id,
@@ -1287,7 +1284,7 @@ async def attempt_logs(
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id)
         await _attempt_in_domain(
             session,
             project_id=project_id,
@@ -1369,7 +1366,7 @@ async def attempt_validations(
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id)
         await _attempt_in_domain(
             session,
             project_id=project_id,
@@ -1438,7 +1435,7 @@ async def attempt_validation_detail(
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id)
         await _attempt_in_domain(
             session,
             project_id=project_id,
@@ -1469,7 +1466,7 @@ async def attempt_validation_detail(
 @router.get(D + "/audit")
 async def audit(project_id: str, experiment_id: str, domain_id: str, cursor: str | None = Query(default=None, max_length=1024), limit: int = Query(default=50, ge=1, le=100), session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id)
         scope = f"audit:{project_id}:{domain_id}"
         anchor = decode_cursor(cursor, scope=scope, limit=limit)
         child_ids = select(ExperimentAggregateHead.aggregate_id).where(

@@ -31,7 +31,7 @@ A cache is an optimization, not a new source of scientific truth. Reuse requires
 Required invariants:
 
 - Template provisioning and BMS-controlled preload populate a cache consumed by normal launch, rather than parallel unused directories.
-- Cache hits are verified; missing or corrupt objects are never used as model weights or executable code.
+- Cold acquisition verifies exact bytes before atomic publication. Warm shared image/weight reuse checks the existing immutable publication and declared identity without routine body rehashing; explicit full audits remain available. Mutable source archives and consumed inputs retain their distinct byte checks.
 - Downloads/transfers publish only complete verified objects atomically. Interrupted writes must not poison a later hit.
 - Concurrent preparations do not overwrite an in-use immutable asset. Source and runtime materializations belong to one attempt; a new attempt must not inherit unmanifested files from an older source working directory or runtime generation. Runtime relocation must preserve exact source authority, including supported runtime-internal symlinks and interpreter paths.
 - Preloading admits only server-resolved model/runtime/workflow dependencies. It does not cache biological inputs, user results, credentials, or arbitrary browser-supplied filesystem paths.
@@ -51,7 +51,7 @@ Vast documents a `PROVISIONING_SCRIPT` URL for startup installation/model downlo
 
 Vast's [volume documentation](https://docs.vast.ai/guides/instances/storage/volumes) explicitly says provider volumes are currently Docker-only, not supported for VM instances. The worker cache is therefore instance-local reuse, not a promise of cache persistence across new rentals. Template configuration tests do not replace a real guest startup check.
 
-The supported BMS scientific runtime requires real VM capabilities for its Apptainer stack. Switching to an ordinary Vast Docker container or adding an ignored privileged flag is not an acceptable cache integration shortcut.
+The VM recipe is one supported alternative for an Apptainer backend, not a VM-only runtime requirement. Other supported container backends remain selectable through the existing backend qualification owner; an ignored privileged flag does not establish backend support.
 
 Keep credentials out of image layers, source, template environment settings and startup URLs. Fetch executable provisioning assets by immutable identity and verify them. Template updates are configuration changes; renting, recreating, stopping or destroying an instance is a separate provider lifecycle action. A saved template does not retroactively provision an already-running worker.
 
@@ -91,17 +91,51 @@ Send it to `/provision/preview`; send the same fields plus the returned `preview
 
 The pack references the existing Boltz-2, Fold-CP, Protenix V2, ESMFold2 and embedded FrustraMPNN asset bindings. It includes the supported ESMFold variants and Protenix ordinary, anchored and template-capable weight members. Shared assets are inventoried and transferred once; preparing an optional asset does not enable the corresponding scientific stage. FrustraMPNN remains an internal workflow component, not an independently enabled model. Boltz API and input-specific MSA calls are services, not predictor downloads, and are not invoked by preparation.
 
-The runtime-preparation owner reuses the job's source archive, content store, packed-weight acquisition, exact per-consumer shared weight layouts, and backend image derivation. It does not construct a disposable union-only weight tree or per-execution private container view. When the attached backend is unknown, assets and weight layouts still install, and the final status reports image preparation as deferred rather than ready. Backend-specific cold preparation remains separate from native inference and input-dependent compilation; software checks do not establish scientific readiness.
+Preload reuses the job's source archive, content store, packed-weight acquisition and exact per-consumer shared weight layouts. It downloads, unpacks and publishes selected layouts; it does not derive images or invoke native compatibility probes (images=not_requested). It does not construct a disposable union-only weight tree or per-execution private container view. Actual backend-specific image preparation belongs to its separate runtime consumer, whether or not backend metadata is already known. Software provisioning evidence does not establish scientific readiness.
 
 Pristine queued jobs may coexist with preparation. Existing active attempts and leases retain their protection. The existing scheduler waits while preparation is active and may claim an eligible queued job afterward; preparation does not create a Job, change approval or paused state, or implement another dispatch/resume path. Deactivation retains its broader nonterminal-job protection.
 
 This path prepares approved assets already installed on the controller. Missing host assets are reported through the existing managed-setup/acquisition mechanism. A native download URL is not an approved acquisition manifest, and a whole-workflow button does not cure missing upstream acquisition metadata or licensing requirements. Unknown runtime observations remain evidence, not new launch prerequisites.
+
+### Whole De Novo Binder workflow preparation
+
+On a selected worker, choose **De Novo Binder Design** under Preparation workflow and click **Prepare entire workflow**. The browser previews and starts the same existing managed operation with `{"kind":"workflow_pack","workflow_id":"antibody_denovo"}` and its fresh `preview_sha256`. This is a separate product from the De Novo Design family pack (`protein_modification_experimental`); it never substitutes whichever generator was last used. BindCraft2 also has an independent model/image preload option.
+
+The binder pack inventories BC2, BoltzGen, PPIFlow (protein, antibody and nanobody modes) and RFantibody, followed by ProteinMPNN, FA-MPNN and Caliby binder design. It includes the editable Boltz2/Protenix/ESMFold2 validators, optional FrustraMPNN and LigandMPNN interface-context images, PPIFlow/FA-MPNN refinement dependencies, and the existing GROMACS preparation/run/analysis images. BoltzGen protocol and checkpoint variants are unioned through its native selector; shared images and weights are transferred once and per-consumer weight views reuse the same cached objects. Protenix uses its ordinary binder validation assets: templates are disabled by default, and anchored target validation generates its CIF for the request. The optional generic template corpus is not a binder-pack dependency. An absent required host member is reported by the existing preview rather than quietly advertising a subset as the whole workflow.
+
+This action does not send biological inputs, job-specific checkpoints or configs, run inference, rent a worker, or alter the scientific compiler/launch gates. It cannot prove BC2 or another model's scientific execution; selected-request preparation and actual run evidence remain separate.
 
 ## Workflow coverage boundary
 
 Remote coverage belongs to the selected native execution plan and its actual process graph, not a blanket model-family label. De Novo RFD3 generation, native redesign, validated region redesign, CAD generation and Shape have selected-plan descriptors and existing remote bundle/result owners. Their installed runtime assets, optional stage combinations and live request-to-result behavior must be qualified separately. A connected descriptor or successful preload is not proof of native execution. Other workflow families retain their existing coverage and admission behavior; this De Novo repair neither certifies them nor adds new refusals.
 
 A pack describes reusable assets, not a new scientific execution route. Structure and complex prediction and Fold-CP retain their existing compiler, stage selection, result publication and remote placement behavior. Other workflow families retain their own configured preparation and execution contracts; the Structure pack does not claim their asset coverage or enable them. Verify actual native local/remote execution separately from metadata, fixture installs, or menu availability.
+
+## Worker status and artifact detail
+
+Routine `GET /api/execution-targets` reads return compact worker status, not
+per-file manifests. Target mutation responses and telemetry's embedded target use
+the same status contract. Availability, setup, scheduling, operation identity,
+phase, recovery/cancellation state and the frozen provision selection remain
+visible. Polling intervals and execution behavior are unchanged.
+
+`preload.artifact_summary` contains `total_count`, `verified_count`, `total_bytes`
+and `verified_bytes`; `cached_artifact_count` counts retained cache receipts.
+`artifact_inventory.artifact_count` accompanies the existing observation identity
+and state. These figures describe the recorded operation/phase, not whole-workflow
+scientific readiness or a new launch prerequisite. Full authoritative records
+remain stored at their existing owners.
+
+Artifact disclosures fetch one page only when opened. Read
+`/{id}/artifact-inventory/artifacts?offset=0&limit=100` for the observed receipts,
+or `/{id}/preload/{operation_id}/artifacts?collection=progress&offset=0&limit=100`
+for operation-local progress; `collection=cached` reads its cache receipts.
+These paths are relative to `/api/execution-targets`. Pages return `items`,
+`total_count`, `offset`, `limit` and `operation_id`; preload pages also report
+`sequence`. The default page size is 100 and the maximum is 250. Explicit
+`/{id}/details` and the existing `/{id}/artifact-inventory` read retain full detail
+for clients that deliberately request it. None of these reads starts preparation,
+refreshes an integrity audit, changes approval, or transfers scientific results.
 
 ## Visible lifecycle
 

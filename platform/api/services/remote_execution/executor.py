@@ -850,6 +850,213 @@ def _preparation_expired(job: Job) -> bool:
     return origin is None or (datetime.utcnow() - origin).total_seconds() >= grace
 
 
+async def pause_md_production(session: AsyncSession, job: Job, *, operation_id: str,
+                              timeout_seconds: float = 125.0) -> dict:
+    """Stop the existing root owner; return native checkpoint custody, not review."""
+    from scripts.lib.component_adapter import runtime_from_environment
+    provenance = dict(job.provenance or {})
+    local_path = provenance.get('component_context_path')
+    runtime = runtime_from_environment(local_path) if local_path and not job.execution_target_id else None
+    if runtime is not None:
+        if runtime.root_job_id != str(job.id) or runtime.target_id != 'local':
+            raise RemoteExecutionError('MD pause retained root conflicts')
+        runtime.request_md_pause(operation_id, boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+        await session.commit()
+        connection = attempt_dir = args = None
+    else:
+        receipt = provenance.get('remote_execution_receipt') or {}
+        context = receipt.get('component_context_identity') or {}
+        if (context.get('root_job_id') != str(job.id) or context.get('attempt_id') != str(job.remote_attempt_id)
+                or context.get('target_id') != job.execution_target_id
+                or receipt.get('source_revision') != job.execution_source_revision
+                or receipt.get('source_tree') != job.execution_source_tree
+                or receipt.get('execution_envelope_sha256') != job.execution_bundle_sha256
+                or not context.get('lease_id') or not receipt.get('boot_id')):
+            raise RemoteExecutionError('MD pause remote attempt/source/lease conflicts')
+        target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
+        connection, attempt_dir = _connection_for_attempt(target, job)
+        args = ['--attempt-id', str(job.remote_attempt_id), '--expected-boot-id', receipt['boot_id'],
+                '--lease-id', context['lease_id'], '--operation-id', operation_id]
+        await session.commit()
+        await _verify_remote_runner(connection, target)
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while True:
+        if runtime is not None:
+            observed = runtime.root_state()
+        else:
+            response = await run_remote(connection, _worker_argv(connection, 'md-pause', attempt_dir, *args), timeout=60)
+            observed = json.loads(response.stdout)
+        if observed.get('md_pause', {}).get('operation_id') != operation_id:
+            raise RemoteExecutionError('MD pause observation operation conflicts')
+        if observed.get('state') == 'paused' and observed.get('quiescent'):
+            break
+        if observed.get('state') in {'failed','cancelled','uncertain'} or asyncio.get_running_loop().time() >= deadline:
+            raise RemoteExecutionError('MD pause remains unresolved: ' + str(observed.get('state')))
+        await asyncio.sleep(0.1)
+    if runtime is not None:
+        from services.nextflow import _project_local_components
+        runtime.publish_projection()
+        await _project_local_components(job, session, local_path)
+    else:
+        status = await remote_status(session, job)
+        if status.state != 'paused' or not status.quiescent:
+            raise RemoteExecutionError('MD worker outer writer ownership remains unresolved')
+        remote_root = Path(attempt_dir) / 'results'
+        output = Path(job.output_dir)
+        if not output.is_absolute(): output = get_data_root() / output
+        from services.result_ingester import ingest_component_projection
+        edge = observed.get('continuation_edge') or {}
+        native_output = Path((edge.get('parent_snapshot') or {}).get('output_dir', str(remote_root)))
+        locator = (native_output.relative_to(remote_root) / '.bms-components.json').as_posix()
+        descriptor = observed['component_projection']
+        if descriptor['relative_path'] != locator:
+            raise RemoteExecutionError('MD pause projection generation locator conflicts')
+        await rsync_selected_from_remote(connection, str(remote_root), output, [locator],
+            max_file_bytes=descriptor['bytes'], timeout=300)
+        expected = dict(context, generation=observed.get('generation', 0),
+            current_plan_sha256=edge.get('plan_sha256', context.get('plan_sha256')),
+            projection_relative_path=locator, projection_sha256=descriptor['sha256'])
+        raw_projection = (output / locator).read_bytes()
+        if hashlib.sha256(raw_projection).hexdigest() != descriptor['sha256']:
+            raise RemoteExecutionError('MD pause returned projection digest conflicts')
+        from component_runtime import ResultReference
+        projection = json.loads(raw_projection)
+        references = [ResultReference(**reference)
+            for row in projection['components']
+            for reference in (row.get('result') or {}).get('references', [])]
+        if references:
+            await rsync_selected_from_remote(connection, str(remote_root), output,
+                sorted({reference.relative_path for reference in references}),
+                max_file_bytes=max(reference.size_bytes for reference in references), timeout=300)
+        for row in projection['components']:
+            # Executed failed/processless outputs can be empty. Bind only the
+            # authenticated native directory, never fabricate scientific files.
+            _safe_result_path(output, row['output_relative_path']).mkdir(parents=True, exist_ok=True)
+        for identity, checkpoint in observed['md_checkpoints'].items():
+            native = Path(checkpoint['md_resume_output_dir'])
+            relative = native.relative_to(remote_root).as_posix()
+            local = output
+            local.mkdir(parents=True, exist_ok=True)
+            selected = [relative + '/production/production.cpt', relative + '/md-checkpoint-receipt.json']
+            await rsync_selected_from_remote(connection, str(remote_root), local, selected,
+                max_file_bytes=max(checkpoint['receipt']['bytes'], checkpoint['receipt_bytes']), timeout=300)
+            checkpoint['local_output_dir'] = str(local / relative)
+        await ingest_component_projection(job, str(output), session, expected_context=expected)
+        if not await _publish_remote_transition(session, job,
+                {'remote_state':'paused', 'status':'paused', 'queue_status':'paused', 'paused':True}, release_lease=True):
+            raise RemoteExecutionError('MD pause current attempt changed during checkpoint return')
+    return observed
+
+
+async def resume_md_production(session: AsyncSession, job: Job, *, operation_id: str,
+                               checkpoints: dict) -> dict:
+    """Reacquire the original root reservation, never queue projected replicas."""
+    provenance = dict(job.provenance or {})
+    pause = provenance.get('md_production_pause') or {}
+    observation = pause.get('observation') or {}
+    if not operation_id or not pause.get('operation_id'):
+        raise RemoteExecutionError('MD continuation lacks its committed production pause')
+    # Native paths remain worker-owned. The API supplies only the newly committed
+    # segment identity; copied controller artifact paths must never replace them.
+    native = {identity: {key:value for key,value in checkpoint.items() if key != 'local_output_dir'}
+              for identity,checkpoint in observation.get('md_checkpoints', {}).items()}
+    if set(native) != set(checkpoints):
+        raise RemoteExecutionError('MD continuation segment coverage conflicts')
+    for identity, segment in checkpoints.items():
+        if set(segment) != {'md_resume_segment_id'} or not segment['md_resume_segment_id']:
+            raise RemoteExecutionError('MD continuation requires exact segment identity only')
+        native[identity].update(segment)
+    prior = provenance.get('component_md_resume')
+    if prior and prior['operation_id'] == operation_id:
+        if prior['checkpoints'] != native or prior['pause_operation_id'] != pause['operation_id']:
+            raise RemoteExecutionError('MD continuation operation conflicts')
+        intent = dict(prior)
+    else:
+        if job.status != 'paused' or not job.paused:
+            raise RemoteExecutionError('MD continuation requires its paused root')
+        intent = dict(kind='md_production', operation_id=operation_id,
+            pause_operation_id=pause['operation_id'], checkpoints=native,
+            continuation_lease_id=uuid.uuid4().hex, state='requested')
+    if not job.execution_target_id:
+        from scripts.lib.component_adapter import runtime_from_environment
+        path = Path(provenance['component_context_path'])
+        runtime = runtime_from_environment(path)
+        if runtime.root_job_id != str(job.id) or runtime.target_id != 'local':
+            raise RemoteExecutionError('MD continuation retained root conflicts')
+        intent['attempt_id'] = runtime.attempt_id
+        if prior and prior['operation_id'] == operation_id:
+            return dict(state=intent['state'], operation_id=operation_id)
+        gpu = runtime.context['resources'].get('gpu_id')
+        if not await _publish_remote_transition(session, job, {
+                'provenance':dict(provenance, component_md_resume=dict(intent,state='queued')),
+                'status':'queued', 'queue_status':'queued', 'paused':False, 'pinned_gpu':gpu,
+                'assigned_gpu':None, 'nextflow_run_id':None, 'started_at':None, 'completed_at':None,
+                'params':release_scheduler_gpu_assignment(job.params)}, require_lease=False):
+            raise RemoteExecutionError('MD continuation changed before scheduler admission')
+        return dict(state='queued', operation_id=operation_id)
+    from .targets import get_ready_target, admit_target_resources
+    target = await get_ready_target(session, str(job.execution_target_id))
+    connection, attempt_dir = _connection_for_attempt(target, job)
+    receipt = dict(provenance['remote_execution_receipt'])
+    context = receipt['component_context_identity']
+    if (context['root_job_id'] != str(job.id) or context['attempt_id'] != str(job.remote_attempt_id)
+            or context['target_id'] != job.execution_target_id
+            or receipt.get('source_revision') != job.execution_source_revision
+            or receipt.get('source_tree') != job.execution_source_tree
+            or receipt.get('execution_envelope_sha256') != job.execution_bundle_sha256):
+        raise RemoteExecutionError('MD continuation remote source/attempt conflicts')
+    if not prior or prior['operation_id'] != operation_id:
+        resources = provenance['remote_execution_assignment']['resources']
+        admission = await admit_target_resources(target, required_cpus=resources['required']['cpus'],
+            required_memory_bytes=resources['required']['memory_bytes'], required_scratch_bytes=0,
+            gpu_ids=resources['gpu_ids'], minimum_gpu_memory_mb=resources.get('minimum_gpu_memory_mb',0))
+        if admission['devices'] != resources.get('admission',{}).get('devices'):
+            raise RemoteExecutionError('MD continuation physical devices changed')
+        claimed = await session.execute(update(ExecutionTarget).where(
+            ExecutionTarget.id == target.id, ExecutionTarget.leased_job_id.is_(None),
+            ExecutionTarget.active.is_(True), ExecutionTarget.state == 'ready',
+            *(getattr(ExecutionTarget,key) == getattr(target,key) for key in
+              ('host','port','username','remote_root','host_key_sha256')),
+        ).values(leased_job_id=str(job.id),lease_acquired_at=datetime.utcnow()).execution_options(synchronize_session=False))
+        if claimed.rowcount != 1:
+            await session.rollback()
+            raise RemoteExecutionError('MD continuation target is already reserved')
+        await session.refresh(target)
+        receipt['lease_acquired_at'] = target.lease_acquired_at.isoformat()
+        intent.update(attempt_id=str(job.remote_attempt_id), resources=dict(resources,admission=admission))
+        provenance.update(component_md_resume=intent, remote_execution_receipt=receipt)
+        if not await _publish_remote_transition(session, job,
+                {'provenance':provenance,'status':'running','queue_status':'running','paused':False,
+                 'remote_state':'md_resume_requested','completed_at':None}, require_lease=False):
+            raise RemoteExecutionError('MD continuation root changed during reservation')
+    await session.commit()
+    args = ['--attempt-id',str(job.remote_attempt_id),'--expected-boot-id',receipt['boot_id'],
+        '--lease-id',context['lease_id'],'--operation-id',operation_id,
+        '--pause-operation-id',intent['pause_operation_id'],'--continuation-lease-id',intent['continuation_lease_id'],
+        '--resources-json',json.dumps(intent['resources'],sort_keys=True),
+        '--checkpoints-json',json.dumps(intent['checkpoints'],sort_keys=True)]
+    try:
+        await _verify_remote_runner(connection,target)
+        response = await run_remote(connection,_worker_argv(connection,'md-resume',attempt_dir,*args),timeout=180)
+        state = json.loads(response.stdout)
+        edge = state.get('continuation_edge') or {}
+        if (edge.get('operation_id') != operation_id or edge.get('continuation_lease_id') != intent['continuation_lease_id']
+                or edge.get('md_resume') != intent['checkpoints']):
+            raise RemoteExecutionError('MD worker continuation response conflicts')
+        observed = await remote_status(session,job)
+        if (observed.generation != state['generation'] or observed.continuation_lease_id != intent['continuation_lease_id']
+                or observed.plan_sha256 != edge['plan_sha256']):
+            raise RemoteExecutionError('MD worker continuation outer owner remains unresolved')
+        receipt.update(generation=state['generation'],plan_sha256=edge['plan_sha256'],
+            continuation_lease_id=intent['continuation_lease_id'],native_output_directory=edge['parent_snapshot']['output_dir'])
+        await _publish_remote_transition(session,job, {'remote_state':'running',
+            'provenance':dict(job.provenance or {},component_md_resume=dict(intent,state='accepted'),remote_execution_receipt=receipt)})
+        return dict(state='continuing',operation_id=operation_id)
+    except Exception:
+        await _publish_remote_transition(session,job,{'remote_state':'md_resume_uncertain'})
+        raise
+
+
 async def retry_component_execution(session: AsyncSession, job: Job, *, component_id: str,
                                     operation_id: str, actor: str, failure_code: str) -> dict:
     """Explicit native retry outbox; one original root, target and durable edge."""
@@ -912,6 +1119,7 @@ async def _queue_local_component_retry(session, job, intent, history, saved):
         sys.path.insert(0, code_root)
     from scripts.lib.component_adapter import runtime_from_environment
     from scripts.bms_md.spawn_replicas import prepare_replica_retry
+    from scripts.bms_md.spawn_analysis import prepare_analysis_retry
 
     provenance = dict(job.provenance or {})
     path = Path(str(provenance.get('component_context_path') or ''))
@@ -941,7 +1149,9 @@ async def _queue_local_component_retry(session, job, intent, history, saved):
     if (job.status != 'failed' or state.get('state') != 'failed' or not state.get('quiescent')
             or state.get('boot_id') != Path('/proc/sys/kernel/random/boot_id').read_text().strip()):
         raise RemoteExecutionError('Local retry requires same-boot failed quiescent root')
-    replacement, _ = prepare_replica_retry(runtime, component_id=intent['component_id'],
+    prepare_retry = (prepare_analysis_retry if runtime.request(intent['component_id']).stage == 'md_analysis'
+                     else prepare_replica_retry)
+    replacement, _ = prepare_retry(runtime, component_id=intent['component_id'],
         operation_id=intent['operation_id'], failure_code=intent['failure_code'])
     gpu = runtime.context['resources'].get('gpu_id')
     if type(gpu) is not int or gpu < 0:
@@ -1880,6 +2090,10 @@ async def _service_remote_external_inputs(session, job, status) -> None:
 
 async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
     """Reconcile one running remote Job. Return true when local state changed."""
+    if (job.queue_status not in {'cancelling', 'cancelled'} and job.status != 'cancelled'
+            and job.remote_state in {'md_resume_requested', 'md_resume_uncertain'}):
+        # Explicit same-operation recovery only; never replay uncertain science.
+        return False
     job_id = str(job.id)
     # A cancellation after the output rename but before its DB commit must
     # restore the prior visible result, not leave an uncommitted generation.

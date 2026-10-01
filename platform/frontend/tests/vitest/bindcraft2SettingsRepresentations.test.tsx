@@ -25,8 +25,23 @@ function mount(value: BC2Request) {
 }
 function unmount() { act(() => root.unmount()); host.remove(); }
 afterEach(unmount);
+/** Inspect native groups before expecting their deferred editors to exist. */
+function inspectDisclosures() {
+  let closed = Array.from(host.querySelectorAll<HTMLDetailsElement>('details')).filter(details => !details.open);
+  while (closed.length) {
+    act(() => {
+      for (const details of closed) {
+        details.querySelector('summary')!.click();
+        // jsdom queues native toggle delivery; deliver it at this interaction boundary.
+        details.dispatchEvent(new Event('toggle'));
+      }
+    });
+    closed = Array.from(host.querySelectorAll<HTMLDetailsElement>('details')).filter(details => !details.open);
+  }
+}
 function element(label: string) {
-  const el = host.querySelector<HTMLElement>(`[aria-label="${label}"]`)!;
+  let el = host.querySelector<HTMLElement>(`[aria-label="${label}"]`)!;
+  if (!el) { inspectDisclosures(); el = host.querySelector<HTMLElement>(`[aria-label="${label}"]`)!; }
   expect(el, label).not.toBeNull();
   const parents: HTMLDetailsElement[] = []; let node = el.parentElement;
   while (node) { if (node.tagName === 'DETAILS') parents.unshift(node as HTMLDetailsElement); node = node.parentElement; }

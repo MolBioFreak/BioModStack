@@ -1,27 +1,53 @@
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArtifactDetails } from './ArtifactDetails';
 import { isAxiosError } from 'axios';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchExecutionTargetRuntimeInventory, refreshExecutionTargetRuntimeInventory, provisionSelectionLabel, type ExecutionTarget } from '../../lib/api';
+import { fetchExecutionTargetRuntimeInventorySummary, fetchExecutionTargetRuntimeInventoryArtifacts, refreshExecutionTargetRuntimeInventorySummary, provisionSelectionLabel, type ExecutionTarget } from '../../lib/api';
+
+function InstalledArtifacts({ targetId, observationId, releaseSha256 }: { targetId: string; observationId: string; releaseSha256: string }) {
+  const [offset, setOffset] = useState(0);
+  const page = useQuery({ queryKey: ['managed-runtime-inventory-artifacts', targetId, observationId, releaseSha256, offset],
+    queryFn: ({ signal }) => fetchExecutionTargetRuntimeInventoryArtifacts(targetId, observationId, releaseSha256, offset, signal),
+    retry: false, staleTime: 0, refetchOnMount: 'always', gcTime: 0 });
+  const data = page.data?.observation_id === observationId && page.data.release_sha256 === releaseSha256
+    && page.data.offset === offset ? page.data : undefined;
+  return <div>
+    {page.isPending && <p role="status">Loading installed artifacts…</p>}
+    {page.error && <div role="alert"><p>{isAxiosError(page.error) ? page.error.response?.data?.detail ?? page.error.message : page.error.message}</p>
+      <button type="button" className={buttonClass} onClick={() => void page.refetch()} disabled={page.isFetching}>Reload installed artifacts</button></div>}
+    {data && <>
+      <p>{data.total === 0 ? 'No installed artifacts' : `${offset + 1}–${offset + data.artifacts.length} of ${data.total.toLocaleString()} artifacts`}</p>
+      <ul className="space-y-1">{data.artifacts.map(artifact => <li key={artifact.name}><p>{artifact.name} · Artifact state: {artifact.state}</p><p>{artifact.size_bytes.toLocaleString()} bytes · SHA256 {artifact.sha256}</p></li>)}</ul>
+    </>}
+    <button type="button" className={buttonClass} disabled={offset === 0 || page.isFetching} onClick={() => setOffset(Math.max(0, offset - 100))}>Previous</button>
+    <button type="button" className={buttonClass} disabled={!data || offset + 100 >= data.total || page.isFetching} onClick={() => setOffset(offset + 100)}>Next</button>
+  </div>;
+}
 
 const buttonClass = 'rounded-lg border border-[var(--border-primary)] px-3 py-1.5 text-sm disabled:opacity-50';
 const ACTIVE_PHASES = ['checking', 'transferring', 'verifying', 'cancelling', 'recovery_blocked'];
 export function ManagedRuntimeInventoryPanel({ target }: { target: ExecutionTarget }) {
   const binding = JSON.stringify([target.id, target.provider_instance_id, target.host, target.port, target.username, target.remote_root,
-    target.host_key_sha256, target.active, target.state, target.activated_at, target.preload?.operation_id,
-    target.preload?.updated_at, target.preload?.phase, target.preload?.recovery_required, target.preload?.source_revision, target.preload?.source_tree, target.progress?.operation_id]);
+    target.host_key_sha256, target.activated_at]);
   return <InventoryObservation key={binding} target={target} binding={binding} />;
 }
 function InventoryObservation({ target, binding }: { target: ExecutionTarget; binding: string }) {
   const client = useQueryClient();
-  const queryKey = ['managed-runtime-inventory', target.id, binding];
+  const queryKey = ['managed-runtime-inventory-summary', target.id, binding];
   const mutationKey = ['remote-preload', target.id];
   const active = useIsMutating({ mutationKey });
   const lock = useRef(false);
-  const saved = useQuery({ queryKey, queryFn: () => fetchExecutionTargetRuntimeInventory(target.id),
-    retry: false, staleTime: 0, refetchOnMount: 'always', refetchInterval: 30_000 });
+  const saved = useQuery({ queryKey, queryFn: ({ signal }) => fetchExecutionTargetRuntimeInventorySummary(target.id, signal),
+    retry: false, staleTime: 0, gcTime: 0, refetchOnMount: 'always', refetchInterval: 30_000 });
+  const terminal = ['source_download_ready', 'failed', 'cancelled'].includes(target.preload?.phase ?? '')
+    ? `${target.preload?.operation_id}:${target.preload?.phase}` : null;
+  const previousTerminal = useRef(terminal);
+  useEffect(() => {
+    if (terminal && terminal !== previousTerminal.current) void client.invalidateQueries({ queryKey });
+    previousTerminal.current = terminal;
+  }, [terminal, client, binding, target.id]);
   const refresh = useMutation({ mutationKey, retry: false,
-    mutationFn: () => refreshExecutionTargetRuntimeInventory(target.id),
+    mutationFn: () => refreshExecutionTargetRuntimeInventorySummary(target.id),
     onSuccess: data => { client.setQueryData(queryKey, data); },
     // Failure invalidates freshness on the server; reload that saved evidence, not another SSH request.
     onSettled: async () => { await client.invalidateQueries({ queryKey }); },
@@ -53,7 +79,8 @@ function InventoryObservation({ target, binding }: { target: ExecutionTarget; bi
     {data && <p>{fresh ? 'Fresh observation (current)' : 'Stale observation — refresh before relying on installed state'}</p>}
     <button type="button" className={buttonClass} disabled={!allowed} onClick={() => void observe()}>{refresh.isPending ? 'Observing installed assets…' : 'Refresh installed observation'}</button>
     {!allowed && !refresh.isPending && <p>Refresh requires an attached, ready, idle worker with no active preload.</p>}
-    {error && <div role="alert"><p>{message}</p><button type="button" className={buttonClass} disabled={saved.isFetching} onClick={() => void saved.refetch()}>Reload saved observation</button></div>}
+    {error && <div role="alert"><p>{message}</p></div>}
+    <button type="button" className={buttonClass} disabled={saved.isFetching} onClick={() => void saved.refetch()}>Reload saved observation</button>
     {!saved.isPending && !data && <p>No saved managed observation. Installed asset state is unknown, not ready.</p>}
     <p className="text-xs">Verified means installed bytes, modes and activation identity matched at observation, not scientific acceptance. Incompatible indicates a permission-mode or critical-runtime compatibility mismatch; unverified indicates absent or mismatched activation/manifest identity.</p>
     {data && <>
@@ -86,10 +113,9 @@ function InventoryObservation({ target, binding }: { target: ExecutionTarget; bi
               {key}: required {release.critical?.requirements[key] ?? 'not specified'} · observed {release.critical?.observed[key] ?? 'missing'}
             </li>)}</ul>}
           </div>}
-          <ArtifactDetails label={`${release.selection.kind} ${provisionSelectionLabel(release.selection)} installed artifacts`} count={release.artifacts.length}>
-            {() => <ul className="space-y-1">
-              {release.artifacts.map(artifact => <li key={artifact.name}><p>{artifact.name} · Artifact state: {artifact.state}</p><p>{artifact.size_bytes.toLocaleString()} bytes · SHA256 {artifact.sha256}</p></li>)}
-            </ul>}
+          <ArtifactDetails label={`${release.selection.kind} ${provisionSelectionLabel(release.selection)} installed artifacts`} count={release.artifact_count}>
+            {() => <InstalledArtifacts key={`${data.observation_id}:${release.release_sha256}`} targetId={target.id}
+              observationId={data.observation_id} releaseSha256={release.release_sha256} />}
           </ArtifactDetails>
         </li>)}
       </ul>

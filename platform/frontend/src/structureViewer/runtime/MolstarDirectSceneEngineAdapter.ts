@@ -8,6 +8,7 @@ import type { StructureComponentType, StructurePresentationQuery, StructureScene
 import type { StructureSceneState } from '../contracts/sceneState.js';
 import type { MDPlaybackState, MDSourceFrameRef } from '../contracts/mdTrajectory.js';
 import type { SpatialVolumeDescriptorV1, VolumePresentationStateV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../contracts/spatialVolumes.js';
+import type { AtomRef } from '../contracts/structureIdentity.js';
 import {
     viewerCancelled,
     viewerError,
@@ -49,6 +50,16 @@ export const toDirectPresentation = (state: StructureSceneState): MolstarDirectP
     const activeLayer = [...(state.presentation?.layers ?? [])].sort((left, right) => right.order - left.order)[0];
     const colorQueries = activeLayer && !activeLayer.visible ? [] : (state.presentation?.colorQueries ?? []);
     return {
+        selectionSelections: state.presentation?.selection?.flatMap(set => set.residues.map(residue => toDirectQuery({
+            documentId: residue.documentId, entityId: residue.entityId,
+            labelAsymId: residue.labelAsymId, authAsymId: residue.authAsymId,
+            startLabelSeqId: residue.labelSeqId, endLabelSeqId: residue.labelSeqId,
+            startAuthSeqId: residue.authSeqId, endAuthSeqId: residue.authSeqId,
+            insertionCode: residue.insertionCode,
+            labelAtomIds: (residue as AtomRef).labelAtomId ? [(residue as AtomRef).labelAtomId!] : undefined,
+            authAtomIds: (residue as AtomRef).authAtomId ? [(residue as AtomRef).authAtomId!] : undefined,
+            altLoc: residue.altLoc,
+        }))),
         colorSelections: colorQueries.map((query) => toDirectQuery({
             ...query,
             ...(activeLayer?.visible ? { opacity: activeLayer.opacity } : {}),

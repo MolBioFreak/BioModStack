@@ -15,6 +15,8 @@ from typing import Any, Mapping
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from component_runtime import SourceIdentity
+
 from experiment_models import (
     ExperimentAggregateHead,
     ExperimentAuditEvent,
@@ -81,7 +83,11 @@ from biomodstack_local_resources import applied_local_policy
 ACTIVE_ADMISSION_STATES = frozenset({"admitted", "queued"})
 
 
-def _runtime_source_authority(requests: list[dict[str, Any]]) -> tuple[str, str]:
+def _runtime_source_authority(requests: list[dict[str, Any]], *, source_identity: SourceIdentity | None = None) -> tuple[str, str]:
+    if source_identity is not None:
+        # Native Protein uses the committed execution source, not an unrelated
+        # frozen NGS implementation audit. Keep the existing receipt fields.
+        return source_identity.revision, source_identity.tree
     try:
         record = runtime_implementation_record()
         source_revision = str(record["successor_source_commit"])
@@ -630,7 +636,15 @@ async def reserve_run_group(
         )
     created: list[ExperimentResourceAdmission] = []
     timestamp = now()
-    source_revision, source_tree = _runtime_source_authority(requests)
+    domain = await session.get(ExperimentAggregateHead, domain_id)
+    domain_revision = await session.get(ExperimentRevision, domain.current_revision_id if domain else "")
+    domain_payload = json.loads(domain_revision.canonical_payload) if domain_revision else {}
+    source_identity = None
+    if (domain_payload.get("schema") == "bms.domain-experiment.v1"
+            and domain_payload.get("domain_kind") == "protein_in_silico"):
+        from paths import get_code_root
+        source_identity = SourceIdentity.from_checkout(get_code_root())
+    source_revision, source_tree = _runtime_source_authority(requests, source_identity=source_identity)
     for item in requests:
         attempt = item["attempt"]
         row = ExperimentResourceAdmission(

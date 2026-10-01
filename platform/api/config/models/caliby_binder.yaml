@@ -80,6 +80,10 @@ params:
   - soluble_caliby
   - soluble_caliby_v1
 - name: caliby_temperature
+  label: Sampling temperature
+  ui_control: slider
+  step: 0.001
+  group: sampling
   type: number
   description: Caliby sampling temperature
   default: 0.1

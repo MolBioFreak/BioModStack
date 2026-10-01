@@ -20,7 +20,7 @@ export const BC2_HELP: Record<string, string> = {
   "harden_steps": "Optimise a discrete sequence.",
   "mutate_steps": "Try substitutions that improve the result.",
   "number_of_final_designs": "How many accepted sequences you want.",
-  "max_trajectories": "Optional attempt limit. Leave unset to keep working toward the requested count.",
+  "max_trajectories": "Required finite positive integer attempt limit; caps attempts rather than accepted designs. No native default. Clear while authoring, then supply an explicit limit before preview.",
   "campaign_seed": "Choose a new set of random trajectories or reproduce the same draws.",
   "resume": "Continue the same experiment in its existing folder; false refuses a non-empty folder instead.",
   "trajectory_only": "Explore gradient designs without ProteinMPNN acceptance; specify an attempt limit.",
@@ -190,7 +190,7 @@ export const BC2_HELP: Record<string, string> = {
   "relax_min_sep": "How far two atoms may approach below contact, and the separation no pair is pushed under.",
   "length_bucket_size": "Pad lengths to reuse compiled calculations; 1 disables padding.",
   "compile_next_length": "Prepare the next length while the current trajectory runs.",
-  "subbatch_size": "Split large calculations to reduce memory; an integer fixes the chunk size, null disables chunking.",
+  "subbatch_size": "Off disables chunking (JSON null) and uses more VRAM. Native auto uses the model’s automatic chunk size; Custom size sets a positive integer. BMS recommends Off for new campaigns. No automatic fallback or OOM-driven setting changes.",
   "attention_backend": "Choose attention implementation; leave automatic unless diagnosing performance.",
   "use_cueq": "Enable optional cuEquivariance kernels when installed.",
   "auto_multi_gpu": "Use the visible GPU allocation automatically; false keeps a single process.",
@@ -254,7 +254,7 @@ export const BC2_PRIMARY = [
   { title: 'Binder design', help: 'Choose size, scaffold edits and biological properties.', keys: ['binder_name', 'binder_lengths', 'binder_scaffold', 'mutate_positions', 'copies', 'oligomer_tie', 'paratope_conformations', 'humanize', 'protease_stable', 'disulfide_staple', 'mixed_topology', 'termini_together', 'termini_accessible', 'cyclize_peptide'] },
   { title: 'Campaign budget', help: 'Accepted sequences and attempted trajectories are different budgets.', keys: ['campaign_name', 'number_of_final_designs', 'max_trajectories', 'campaign_seed', 'trajectory_only'] },
   { title: 'Design schedule', help: 'Native stage update counts; changes affect the optimisation schedule.', keys: ['screen_steps', 'refine_steps', 'anneal_steps', 'harden_steps', 'mutate_steps'] },
-  { title: 'Prediction & sequence design', help: 'Control model evaluation and how many redesigned sequences are tried and retained.', keys: ['validation_model', 'design_models', 'validation_models', 'design_recycles', 'validation_recycles', 'design_dropout', 'mpnn_model', 'mpnn_variant', 'sequence_candidates', 'enough_passing_sequences', 'kept_sequences', 'redesign_interface'] },
+  { title: 'Prediction & sequence design', help: 'Control model evaluation and how many redesigned sequences are tried and retained.', keys: ['subbatch_size', 'validation_model', 'design_models', 'validation_models', 'design_recycles', 'validation_recycles', 'design_dropout', 'mpnn_model', 'mpnn_variant', 'sequence_candidates', 'enough_passing_sequences', 'kept_sequences', 'redesign_interface'] },
 ];
 export const BC2_EXPERT_GROUPS = [
   'Target rotation & sequence windows', 'Conformational design', 'Scaffold & binder roles',

@@ -69,8 +69,10 @@ def collect_analysis(
     aggregate_manifest = aggregate_manifest.expanduser().resolve()
     parent_root = aggregate_manifest.parent
     output_dir = output_dir.expanduser().resolve()
-    if output_dir != parent_root:
-        raise ValueError("analysis collection output must be the MD parent root")
+    continuation = output_dir != parent_root
+    if continuation and (receipt is None or receipt.get('aggregate_manifest') != str(aggregate_manifest)
+            or not output_dir.is_relative_to(Path(receipt.get('artifact_root', '')).resolve() / 'generations')):
+        raise ValueError("analysis continuation requires its retained aggregate and contained generation")
     aggregate = json.loads(aggregate_manifest.read_text(encoding="utf-8"))
     if (
         aggregate.get("schema") != "bms.md.aggregate.v1"
@@ -91,6 +93,14 @@ def collect_analysis(
             or receipt.get("analysis_count") != len(replica_hashes)
         ):
             raise ValueError("MD analysis receipt does not match the immutable replica aggregate")
+
+    if continuation:
+        from .aggregate_children import publish_tree_immutable
+        # Keep dynamics byte-for-byte; never invoke preparation or a simulator.
+        # The fresh generation has no prior partial/terminal analysis manifest.
+        publish_tree_immutable(parent_root / 'replicas', output_dir / 'replicas')
+        publish_file_immutable(aggregate_manifest, output_dir / 'manifest.json',
+            expected_sha256=receipt['aggregate_manifest_sha256'])
 
     child_dirs = [Path(value).expanduser().resolve() for value in status.get("child_output_dirs") or []]
     completed_records: list[dict[str, Any]] = []

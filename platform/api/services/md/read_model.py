@@ -14,9 +14,10 @@ from services.md.pause_actuator import _checkpoint_roots
 from schemas import ExecutionPolicy
 
 
-def _actions(phase: str, has_checkpoint: bool, retryable: bool, *, pre_replica_terminal: bool = False, pause_ready: bool = False) -> list[str]:
+def _actions(phase: str, has_checkpoint: bool, retryable: bool, *, pre_replica_terminal: bool = False, pause_ready: bool = False, shared_running: bool = False) -> list[str]:
     actions: list[str] = []
-    if phase == "replicas_running" and pause_ready:
+    if pause_ready and (phase == "replicas_running" or
+            (shared_running and phase in {"validating", "preparing", "replicas_queued"})):
         actions.append("pause")
     if phase == "paused" and has_checkpoint:
         actions.append("resume_dynamics")
@@ -27,6 +28,12 @@ def _actions(phase: str, has_checkpoint: bool, retryable: bool, *, pre_replica_t
     if pre_replica_terminal:
         actions.extend(["view_logs", "reorchestrate", "delete_failed_launch"])
     return actions
+
+
+def _shared_root(job: Job) -> bool:
+    provenance = job.provenance or {}
+    return bool(provenance.get('component_context_path') or
+        (provenance.get('remote_execution_receipt') or {}).get('component_context_identity'))
 
 
 def _worker_pause_ready(child: Job | None) -> bool:
@@ -155,7 +162,13 @@ async def md_queue_snapshot(session: AsyncSession, *, limit: int) -> dict:
             and ready_counts.get(job_id, 0) == replica_summary[job_id].get("running", 0)
             and set(replica_summary[job_id]).issubset({"running", "completed"})
         }
-        for job_id in tuple(pause_ready_jobs):
+        # Shared children have no independent runner. Root control stops the
+        # retained attempt, including queued serialized siblings before projection.
+        shared_jobs = {job.id for _run, job in rows if _shared_root(job)}
+        pause_ready_jobs.update(job.id for _run, job in rows
+            if job.id in shared_jobs and job.status == "running"
+            and set(replica_summary[job.id]).issubset({"queued", "running", "completed"}))
+        for job_id in tuple(pause_ready_jobs - shared_jobs):
             running = list((await session.scalars(select(MdReplicaRun).where(
                 MdReplicaRun.md_job_id == job_id,
                 MdReplicaRun.active.is_(True),
@@ -179,7 +192,8 @@ async def md_queue_snapshot(session: AsyncSession, *, limit: int) -> dict:
             paused_ids = {item.id for item in run_replicas if item.active and item.state == "paused"}
             active_replicas = [item for item in run_replicas if item.active]
             barrier_complete = bool(paused_ids) and all(
-                item.state in {"paused", "completed"} for item in active_replicas
+                item.state in ({"queued", "paused", "completed"} if _shared_root(job)
+                               else {"paused", "completed"}) for item in active_replicas
             )
             try:
                 resolved = await resolve_resume_checkpoint_artifacts(
@@ -209,6 +223,7 @@ async def md_queue_snapshot(session: AsyncSession, *, limit: int) -> dict:
                 run.phase, has_checkpoint and not run.controls_blocked,
                 run.job_id in retryable_jobs and not run.controls_blocked,
                 pause_ready=run.job_id in pause_ready_jobs and not run.controls_blocked,
+                shared_running=_shared_root(job) and job.status == "running",
             ),
             "chemistry": {
                 "profile_id": run.chemistry_profile_id,
@@ -268,7 +283,8 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
             covered_ids.add(replica_id)
     active_replicas = [item for item in replicas if item.active]
     barrier_complete = bool(paused_ids) and all(
-        item.state in {"paused", "completed"} for item in active_replicas
+        item.state in ({"queued", "paused", "completed"} if _shared_root(job)
+                               else {"paused", "completed"}) for item in active_replicas
     )
     checkpoint_available = barrier_complete and covered_ids == paused_ids
     events = list((await session.scalars(select(MdEvent).where(
@@ -292,7 +308,10 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
     pause_ready = bool(running_replicas) and all(
         item.state in {"running", "completed"} for item in active_replicas
     )
-    if pause_ready:
+    if _shared_root(job):
+        pause_ready = job.status == "running" and all(
+            item.state in {"queued", "running", "completed"} for item in active_replicas)
+    elif pause_ready:
         for replica in running_replicas:
             child = await session.get(Job, replica.child_job_id) if replica.child_job_id else None
             if not _worker_pause_ready(child):
@@ -332,6 +351,7 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
             retryable and not run.controls_blocked,
             pre_replica_terminal=run.phase in {"failed", "cancelled"} and not replicas and not segments and not checkpoints and not artifact_count and not child_count,
             pause_ready=pause_ready and not run.controls_blocked,
+            shared_running=_shared_root(job) and job.status == "running",
         ),
         "action_explanations": {
             "resume_dynamics": "Unavailable: this failed launch has no accepted checkpoint.",

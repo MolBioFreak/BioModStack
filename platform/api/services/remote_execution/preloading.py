@@ -1,4 +1,4 @@
-"""Saved-Job cache prewarm and independent managed image/weight provisioning.
+"""Saved-Job cache prewarm and independent image/weight downloads.
 
 No queue insertion, Job updates, input transfers, inference or automatic resume.
 """
@@ -20,7 +20,7 @@ from .contracts import (PreloadProgress, ProvisionRequest, ProvisionSelection, C
     WorkflowProvisionRequest, WorkflowProvisionSelection, WorkflowPackRequest, WorkflowPackSelection)
 from .progress import PRELOAD_ACTIVE_PHASES, preload_idle_clause
 from .targets import (ExecutionTargetError, INVENTORY_MAX_AGE_SECONDS, get_target,
-    inventory_fresh, _target_response, _has_preparation_conflicts)
+    inventory_fresh, _target_response, target_status, artifact_summary, _has_preparation_conflicts)
 from .transport import RemoteConnection, RemoteHelperError
 
 
@@ -74,20 +74,9 @@ def endpoint(target):
     return (target.host, target.port, target.username, target.remote_root, target.host_key_sha256)
 
 
-def entry_source_identities(entries):
-    """Cheap mutation check for the start-approved, immutable artifact plan.
-
-    This does not certify bytes: hashes come from preview and the existing worker
-    ingest/probe owners still verify those exact hashes before activation.
-    """
-    return tuple((info.st_dev, info.st_ino, info.st_mode, info.st_size,
-                  info.st_mtime_ns, info.st_ctime_ns)
-                 for entry in entries for info in (entry.source.lstat(),))
-
-
 @dataclass(frozen=True)
 class TargetSnapshot:
-    """Only immutable authority needed by hashing, transport and admission."""
+    """Only immutable authority needed by planning, transport and admission."""
     id: str
     host: str
     port: int
@@ -188,14 +177,22 @@ class PreloadController:
 
     async def _preview(self, selection, target, *, compiled_plan=None):
         from .cache import independent_preview
-        # Cancellation must not release a slot while its hashing thread runs.
+        # Cancellation must not release a slot while its planning thread runs.
         async with self.preview_slots:
             kwargs = {'compiled_plan': compiled_plan} if compiled_plan is not None else {}
             task = asyncio.create_task(asyncio.to_thread(independent_preview, selection, target, **kwargs))
             try:
                 return await asyncio.shield(task)
             except asyncio.CancelledError:
-                await task
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not task.cancelled():
+                    task.exception()
                 raise
             except Exception as exc:
                 raise ExecutionTargetError("Runtime preview unavailable; verify reviewed model and managed assets") from exc
@@ -238,10 +235,9 @@ class PreloadController:
                 digest = preview.preview_sha256
                 if await asyncio.to_thread(current_source_identity) != (revision, tree):
                     raise ExecutionTargetError("Source identity changed during preload")
-                # Retain this exact admitted plan, not a third full hash scan in
-                # _run. Mutation checks and worker byte verification remain.
-                entries = tuple(entries)
-                admitted_plan = (digest, entries, await asyncio.to_thread(entry_source_identities, entries))
+                # Bind the exact published declarations. Actual acquisition
+                # checks received bytes; metadata touches do not rescan assets.
+                admitted_plan = (digest, tuple(entries))
             else:
                 job = await session.get(Job, request.job_id)
                 if job is None:
@@ -271,15 +267,16 @@ class PreloadController:
             now = datetime.utcnow()
             progress = PreloadProgress(operation_id=operation_id, job_id=None if independent else request.job_id, selection=selection,
                 source_revision=revision, source_tree=tree, request_sha256=digest,
-                phase="checking", message="Checking source and runtime cache", started_at=now, updated_at=now,
+                phase="checking", message="Planning selected downloads", started_at=now, updated_at=now,
                 endpoint_sha256=hashlib.sha256(json.dumps(endpoint(target)).encode()).hexdigest(),
                 artifact_progress=[dict(r.model_dump(), state="pending") for r in preview.artifacts] if independent else [])
             retry_fence = ([ExecutionTarget.provider_metadata["preload"]["operation_id"].as_string() == retry_operation_id]
                            if retry_operation_id is not None else [])
             admitted = await session.execute(update(ExecutionTarget).where(admission_clause(target), *retry_fence).values(
                 provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.preload",
-                    func.json(progress.model_dump_json()), '$.managed_inventory.refresh_failed',
-                    func.json('true'))).execution_options(synchronize_session=False))
+                    func.json(progress.model_dump_json()),
+                    "$.preload_artifact_summary", func.json(json.dumps(artifact_summary(progress))),
+                    "$.preload_cached_artifact_count", len(progress.artifacts))).execution_options(synchronize_session=False))
             if admitted.rowcount != 1:
                 await session.rollback()
                 raise ExecutionTargetError("Worker inventory, endpoint, or activity changed; refresh and retry")
@@ -290,24 +287,47 @@ class PreloadController:
                 command, connection, expected_endpoint,
                 native_invocation=native_invocation, compiled_plan=compiled_plan,
                 admitted_plan=admitted_plan), name=f"preload-{operation_id}")
-            response = _target_response(await get_target(session, target_id))
+            response = await target_status(session, target_id)
             await session.rollback()
             return response
 
-    async def _publish(self, session, target_id, progress, expected_endpoint=None, managed=None):
-        metadata = func.json_set(ExecutionTarget.provider_metadata, "$.preload", func.json(progress.model_dump_json()),
-            "$.preload.sequence", func.coalesce(ExecutionTarget.provider_metadata["preload"]["sequence"].as_integer(), 0) + 1)
-        if managed is not None:
-            metadata = func.json_set(metadata, "$.managed_inventory", func.json(json.dumps(managed)),
-                "$.managed_boot_id", managed['observation']['boot_id'])
+    async def _publish(self, session, target_id, progress, expected_endpoint=None, *, delta=None,
+                       summary=None, reset=False):
+        if delta is None:
+            metadata = func.json_set(ExecutionTarget.provider_metadata, "$.preload", func.json(progress.model_dump_json()))
+        else:
+            metadata = ExecutionTarget.provider_metadata
+            if reset:
+                metadata = func.json_set(metadata, '$.preload.artifact_progress',
+                    func.json(json.dumps([row.model_dump() for row in progress.artifact_progress])))
+            # Bounded JSON row writes; no full-array bind/read/validation on events.
+            for offset in range(0, len(delta), 40):
+                args = []
+                for index, row in delta[offset:offset + 40]:
+                    args.extend((f'$.preload.artifact_progress[{index}]', func.json(row.model_dump_json())))
+                metadata = func.json_set(metadata, *args)
+                changed = await session.execute(update(ExecutionTarget).where(
+                    ExecutionTarget.id == target_id,
+                    ExecutionTarget.provider_metadata['preload']['operation_id'].as_string() == progress.operation_id,
+                ).values(provider_metadata=metadata).execution_options(synchronize_session=False))
+                if changed.rowcount != 1:
+                    await session.rollback()
+                    raise ExecutionTargetError('Preload operation was superseded')
+                metadata = ExecutionTarget.provider_metadata
+            metadata = func.json_set(metadata, '$.preload.phase', progress.phase,
+                '$.preload.artifact', progress.artifact, '$.preload.message', progress.message,
+                '$.preload.updated_at', progress.updated_at.isoformat())
+        metadata = func.json_set(metadata,
+            "$.preload.sequence", func.coalesce(ExecutionTarget.provider_metadata["preload"]["sequence"].as_integer(), 0) + 1,
+            "$.preload_artifact_summary", func.json(json.dumps(summary if summary is not None else artifact_summary(progress))),
+            "$.preload_cached_artifact_count", len(progress.artifacts))
         if progress.selection is not None and progress.phase == "source_download_ready":
-            target = await get_target(session, target_id)
-            if expected_endpoint is None or endpoint(target) != expected_endpoint:
+            if expected_endpoint is None:
                 raise ExecutionTargetError("Worker identity or activity changed during preload")
             observed = dict(operation_id=progress.operation_id,
                 selection=progress.selection.model_dump(mode="json"), observed_at=progress.updated_at.isoformat(),
                 artifacts=[r.model_dump() for r in progress.artifacts],
-                endpoint_sha256=hashlib.sha256(json.dumps(endpoint(target)).encode()).hexdigest())
+                endpoint_sha256=hashlib.sha256(json.dumps(expected_endpoint).encode()).hexdigest())
             metadata = func.json_set(metadata, "$.artifact_inventory", func.json(json.dumps(observed)))
         fence = []
         if expected_endpoint is not None:
@@ -323,20 +343,39 @@ class PreloadController:
             ExecutionTarget.provider_metadata["preload"]["operation_id"].as_string() == progress.operation_id,
             ExecutionTarget.provider_metadata["preload"]["phase"].as_string().in_(PRELOAD_ACTIVE_PHASES),
         ).values(provider_metadata=metadata).execution_options(synchronize_session=False))
-        await session.commit()
         if changed.rowcount != 1:
+            await session.rollback()
             raise ExecutionTargetError("Preload operation was superseded")
+        await session.commit()
+        # Compact committed readback, including the SQL-owned operation sequence.
+        status = await target_status(session, target_id)
+        progress.sequence = status.preload.sequence
+        return status.preload
 
     async def _run(self, target_id, progress, snapshot, command, connection, expected_endpoint,
                    *, native_invocation=None, compiled_plan=None, admitted_plan=None):
         remote_started = False
         try:
             connection = replace(connection, provision_operation_id=progress.operation_id)
-            async def check_fence():
+            async def check_fence(*, source=True):
                 async with self.session_factory() as session:
-                    target = await get_target(session, target_id)
-                    inventory = (target.provider_metadata or {}).get("inventory", {})
-                    current = (target.provider_metadata or {}).get("preload", {})
+                    # Do not load inventories, capabilities or artifact rosters
+                    # at the repeated transport fence.
+                    columns = ('id', 'host', 'port', 'username', 'remote_root',
+                               'host_key_sha256', 'active', 'state', 'leased_job_id')
+                    row = (await session.execute(select(
+                        *(getattr(ExecutionTarget, key) for key in columns),
+                        func.json_extract(ExecutionTarget.provider_metadata, '$.inventory'),
+                        func.json_extract(ExecutionTarget.provider_metadata, '$.preload.operation_id'),
+                        func.json_extract(ExecutionTarget.provider_metadata, '$.preload.phase'),
+                        func.json_extract(ExecutionTarget.provider_metadata, '$.preload.cancel_requested'),
+                    ).where(ExecutionTarget.id == target_id))).one_or_none()
+                    if row is None:
+                        raise ExecutionTargetError("Worker identity or activity changed during preload")
+                    target = SimpleNamespace(**dict(zip(columns, row[:len(columns)])),
+                        provider_metadata={'inventory': json.loads(row[len(columns)] or '{}')})
+                    inventory = target.provider_metadata['inventory']
+                    current = dict(operation_id=row[-3], phase=row[-2], cancel_requested=row[-1])
                     if current.get("cancel_requested"):
                         raise asyncio.CancelledError()
                     if (not target.active or target.state != "ready" or not inventory_fresh(target)
@@ -349,77 +388,98 @@ class PreloadController:
                         job = await session.get(Job, snapshot.id, populate_existing=True)
                         if job is None or recipe_digest(job) != progress.request_sha256:
                             raise ExecutionTargetError("Saved recipe changed during preload")
-                if await asyncio.to_thread(current_source_identity) != (progress.source_revision, progress.source_tree):
+                if source and await asyncio.to_thread(current_source_identity) != (progress.source_revision, progress.source_tree):
                     raise ExecutionTargetError("Source identity changed during preload")
 
+            progress_lock = asyncio.Lock()
+            summary = artifact_summary(progress)
+
             async def publish(event):
-                await check_fence()
+                async with progress_lock:
+                    return await publish_locked(event)
+
+            async def publish_locked(event):
+                nonlocal summary
+                # Pure display progress retains the operation/recipe/worker
+                # fence. Source is checked at acquisition and final publication.
+                await check_fence(source=False)
                 # Validate the closed projection; raw stderr/path/command never enters UI.
-                updated = progress.model_copy(update={**event, "updated_at": datetime.utcnow()})
-                validated = PreloadProgress.model_validate(updated.model_dump())
+                from .contracts import ProvisionArtifactProgress, ArtifactSummary
+                event = dict(event)
+                roster = event.pop('artifact_progress', None)
+                supplied_summary = event.pop('artifact_summary', None)
+                changes = event.pop('artifact_delta', [])
+                # Validate scalars without visiting the retained roster.
+                scalars = {key: value for key, value in progress.__dict__.items()
+                           if key not in {'artifact_progress', 'artifacts'}}
+                validated = PreloadProgress.model_validate({**scalars, **event, 'updated_at': datetime.utcnow()})
                 if validated.phase not in {"checking", "transferring", "verifying"}:
                     raise ExecutionTargetError("Cache callback supplied a terminal phase")
+                if roster is not None:
+                    if changes:
+                        raise ValueError('Progress cannot reset and change a roster together')
+                    rows = [ProvisionArtifactProgress.model_validate(row) for row in roster]
+                    candidate_summary = artifact_summary({'artifact_progress': rows})
+                else:
+                    rows = progress.artifact_progress
+                    candidate_summary = dict(summary)
+                delta, seen = [], set()
+                for index, raw in changes:
+                    if type(index) is not int or not 0 <= index < len(rows) or index in seen:
+                        raise ValueError('Invalid artifact progress index')
+                    seen.add(index)
+                    row = ProvisionArtifactProgress.model_validate(raw)
+                    previous = rows[index]
+                    if (row.name, row.sha256, row.size_bytes) != (previous.name, previous.sha256, previous.size_bytes):
+                        raise ValueError('Artifact progress declaration changed')
+                    candidate_summary['verified_count'] += int(row.state == 'verified') - int(previous.state == 'verified')
+                    candidate_summary['verified_bytes'] += row.size_bytes * (int(row.state == 'verified') - int(previous.state == 'verified'))
+                    delta.append((index, row))
+                if supplied_summary is not None:
+                    checked = ArtifactSummary.model_validate(supplied_summary).model_dump()
+                    if checked != candidate_summary:
+                        raise ValueError('Artifact progress aggregate mismatch')
                 progress.phase, progress.artifact, progress.message = validated.phase, validated.artifact, validated.message
                 progress.updated_at = validated.updated_at
-                progress.artifact_progress = validated.artifact_progress
+                if roster is not None:
+                    progress.artifact_progress = rows
+                for index, row in delta:
+                    rows[index] = row
+                summary = candidate_summary
                 async with self.session_factory() as session:
-                    await self._publish(session, target_id, progress, expected_endpoint=expected_endpoint)
+                    return await self._publish(session, target_id, progress, expected_endpoint=expected_endpoint,
+                                               delta=delta, summary=summary, reset=roster is not None)
 
             await check_fence()
-            managed = None
             if progress.selection is not None:
                 from .cache import provision_cache
-                from .managed_inventory import (manifest_for, helper_call, activate_release,
-                    observe_releases, endpoint_digest, saved_manifests, run_native_readiness_check)
                 async with self.session_factory() as session:
-                    current_target = await get_target(session, target_id)
-                    target = TargetSnapshot.capture(current_target)
-                    manifests = saved_manifests(current_target)
+                    if admitted_plan is None:
+                        target = TargetSnapshot.capture(await get_target(session, target_id))
+                    else:
+                        binding = await session.scalar(select(func.json_extract(
+                            ExecutionTarget.capabilities, '$.critical_runtime_binding'
+                        )).where(ExecutionTarget.id == target_id))
+                        target = TargetSnapshot(target_id, *expected_endpoint,
+                            capabilities={'critical_runtime_binding': json.loads(binding or '{}')})
                 if admitted_plan is None:
                     preview, entries = await self._preview(progress.selection, target, compiled_plan=compiled_plan)
                     digest = preview.preview_sha256
                 else:
-                    digest, entries, source_identities = admitted_plan
-                    try:
-                        unchanged = await asyncio.to_thread(entry_source_identities, entries) == source_identities
-                    except OSError:
-                        unchanged = False
-                    if not unchanged:
-                        # Metadata is only an invalidation hint, never a new
-                        # refusal gate (a same-byte touch must remain valid).
-                        preview, entries = await self._preview(progress.selection, target, compiled_plan=compiled_plan)
-                        digest = preview.preview_sha256
+                    digest, entries = admitted_plan
                 if digest != progress.request_sha256:
                     raise ExecutionTargetError("Provision preview changed; preview again")
                 remote_started = True
-                boot = (await helper_call(connection, {'action': 'boot'}, check_fence))['boot_id']
-                manifest = manifest_for(progress.selection, entries, (progress.source_revision, progress.source_tree))
-                await helper_call(connection, dict(action='admit', manifest=manifest, boot_id=boot), check_fence)
-                pack_options = (dict(selection=progress.selection,
+                download_options = dict(selection=progress.selection,
                     source_identity=(progress.source_revision, progress.source_tree),
                     backend=(target.capabilities or {}).get('critical_runtime_binding', {})
                         .get('environment', {}).get('BMS_CONTAINER_BACKEND'))
-                    if progress.selection.kind == 'workflow_pack' else {})
                 prepared = await provision_cache(connection=connection, entries=entries,
                     operation_id=progress.operation_id, progress=publish, check_fence=check_fence,
-                    **pack_options)
-                await activate_release(connection, manifest, check_fence, publish, boot)
-                manifests = [m for m in manifests if m['selection'] != manifest['selection']] + [manifest]
-                observed = await observe_releases(connection, manifests, check_fence)
-                if observed.critical_runtime_ready and any(
-                        a.get('kind') == 'runtime_image' and a['name'] == 'containers/rfantibody.sif'
-                        for a in manifest['artifacts']):
-                    await publish(dict(phase='verifying', artifact=None,
-                        message='Native RFantibody CUDA/DGL preflight; no inference'))
-                    observed = await run_native_readiness_check(connection, manifest, check_fence,
-                        observed=observed, manifests=manifests)
-                if str(observed.boot_id) != boot:
-                    raise ExecutionTargetError('Worker identity or activity changed during preload')
-                managed = dict(manifests=manifests, observation=observed.model_dump(mode='json'),
-                               endpoint_sha256=endpoint_digest(target))
+                    **download_options)
                 receipt = dict(source_revision=progress.source_revision, source_tree=progress.source_tree,
-                    artifacts=prepared['artifacts'] if pack_options else prepared)
-                if pack_options:
+                    artifacts=prepared['artifacts'] if isinstance(prepared, dict) else prepared)
+                if isinstance(prepared, dict) and 'preparation' in prepared:
                     receipt['preparation'] = prepared['preparation']
             else:
                 prewarm = self.prewarm
@@ -439,17 +499,13 @@ class PreloadController:
             progress.artifact_progress = [ProvisionArtifactProgress(**r.model_dump(), state="verified") for r in progress.artifacts]
             progress.phase = "source_download_ready"
             progress.artifact = None
-            progress.message = "Source and cacheable runtime downloads verified; launch still prepares support Python and verifies scientific readiness"
-            if progress.selection is not None:
-                progress.message = "Selected managed assets activated and inventory refreshed; scientific readiness remains unverified"
+            progress.message = "Downloads complete"
             if preparation := receipt.get('preparation'):
-                images = ('runtime images prepared' if preparation['images'] == 'ready' else
-                    'shared image preparation deferred: attached backend is unknown')
-                progress.message = (f"Workflow assets activated; source cached and {preparation['weight_layouts']} "
-                    f"shared weight layouts prepared; {images}; scientific readiness remains unverified")
+                progress.message = (f"Downloads complete; source cached and {preparation['weight_layouts']} "
+                    "shared weight layouts prepared")
             progress.updated_at = datetime.utcnow()
             async with self.session_factory() as session:
-                await self._publish(session, target_id, progress, expected_endpoint=expected_endpoint, managed=managed)
+                await self._publish(session, target_id, progress, expected_endpoint=expected_endpoint)
         except BaseException as exc:
             quiet = not remote_started or await self._quiescent(connection, progress.operation_id)
             async with self.session_factory() as session:
@@ -532,11 +588,11 @@ class PreloadController:
                 progress.artifact = None
                 progress.updated_at = datetime.utcnow()
                 await self._publish(session, target_id, progress)
-            response = _target_response(await get_target(session, target_id))
+            response = await target_status(session, target_id)
             await session.rollback()
             return response
 
-    async def refresh_inventory(self, session, target_id):
+    async def refresh_inventory(self, session, target_id, *, summary=False):
         from .managed_inventory import observe_releases, endpoint_digest, project_inventory, saved_manifests
         async with self.lock:
             if self.closed:
@@ -582,7 +638,11 @@ class PreloadController:
                     await session.rollback()
                     raise ExecutionTargetError('Worker identity or activity changed during inventory observation')
                 await session.commit()
-                result = project_inventory(await get_target(session, target_id))
+                if summary:
+                    from .managed_inventory import read_inventory_summary
+                    result = await read_inventory_summary(session, target_id)
+                else:
+                    result = project_inventory(await get_target(session, target_id))
                 await session.rollback()
                 return result
             except BaseException as exc:

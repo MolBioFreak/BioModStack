@@ -2216,6 +2216,8 @@ export function NGSToolkit() {
     const [initialValues, setInitialValues] = useState<Record<string, unknown> | undefined>(undefined);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
+    const [page, setPage] = useState(0);
+    const pageSize = 100;
     const selectedJobId = requestedJobId?.trim()
         || (signalWorkbenchRequested ? requestedViewerSessionQuery.data?.alignment_job_id : null)
         || null;
@@ -2367,59 +2369,24 @@ export function NGSToolkit() {
         isError: jobsQueryIsError,
         error: jobsQueryError,
     } = useQuery({
-        queryKey: ['jobs', 'ngs'],
-        queryFn: async () => {
-            const jobsByModel = await Promise.all(
-                ['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation']
-                    .map(async (model_id) => {
-                        const jobs: Job[] = [];
-                        let offset = 0;
-                        let total = 0;
-                        do {
-                            const response = await fetchJobs({
-                                include_children: true,
-                                model_id,
-                                limit: 500,
-                                offset,
-                                summary: true,
-                            });
-                            jobs.push(...response.data.jobs);
-                            total = response.data.total;
-                            if (response.data.jobs.length === 0) break;
-                            offset += response.data.jobs.length;
-                        } while (offset < total && jobs.length < total);
-                        return jobs;
-                    }),
-            );
-            return {
-                data: {
-                    jobs: Array.from(
-                        new Map(
-                            jobsByModel.flat().map((job) => [job.id, job]),
-                        ).values(),
-                    ),
-                    total: jobsByModel.reduce((count, jobs) => count + jobs.length, 0),
-                },
-            };
-        },
-        refetchInterval: (query) => jobPollingInterval(5000, query),
+        queryKey: ['jobs', 'ngs', search.trim(), statusFilter, page],
+        queryFn: ({ queryKey, signal }) => fetchJobs({
+            model_ids: ['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'],
+            include_children: true,
+            summary: true,
+            q: search.trim(),
+            q_ignore_case_id: true,
+            status: statusFilter === 'all' ? undefined : statusFilter,
+            limit: pageSize,
+            offset: page * pageSize,
+        }, queryClient.getQueryData(queryKey), signal),
+        enabled: view === 'runs',
+        refetchInterval: (query) => view === 'runs' ? jobPollingInterval(5000, query) : false,
     });
 
-    const nanoporeJobs = useMemo(() => {
-        const jobs = jobsData?.data.jobs || [];
-        return jobs.filter(isNgsJob);
-    }, [jobsData]);
-
-    const filteredJobs = useMemo(() => {
-        return nanoporeJobs.filter((job) => {
-            const q = search.trim().toLowerCase();
-            const matchesSearch = !q ||
-                job.name.toLowerCase().includes(q) ||
-                job.id.toLowerCase().includes(q);
-            const matchesStatus = statusFilter === 'all' || job.status === statusFilter;
-            return matchesSearch && matchesStatus;
-        });
-    }, [nanoporeJobs, search, statusFilter]);
+    const nanoporeJobs = jobsData?.data.jobs || [];
+    const filteredJobs = nanoporeJobs;
+    const totalJobs = jobsData?.data.total ?? 0;
 
     const selectedJobSummary = useMemo(() => {
         if (!selectedJobId) return null;
@@ -2525,16 +2492,6 @@ export function NGSToolkit() {
             }
         }
     }, [alignmentAccessRecoveryPending, queryClient, refetchAlignmentSessions, selectedJobId]);
-
-    const stats = useMemo(() => {
-        return {
-            total: nanoporeJobs.length,
-            running: nanoporeJobs.filter((j) => j.status === 'running').length,
-            queued: nanoporeJobs.filter((j) => j.status === 'queued').length,
-            failed: nanoporeJobs.filter((j) => j.status === 'failed').length,
-            completed: nanoporeJobs.filter((j) => j.status === 'completed').length,
-        };
-    }, [nanoporeJobs]);
 
     const stagePayload = stagesData?.data && stagesData.data.job_id === selectedJobId
         ? stagesData.data
@@ -4559,27 +4516,10 @@ export function NGSToolkit() {
                 <OntInstrumentPanel onAnalyzeExistingData={() => selectView('launch')} />
             ) : (
                 <section className="space-y-4">
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                        <div className="bg-[var(--bg-secondary)] rounded-lg p-3 border border-[var(--border-primary)]">
-                            <p className="text-xs text-[var(--text-secondary)]">Total</p>
-                            <p className="text-xl font-semibold text-[var(--text-primary)]">{stats.total}</p>
-                        </div>
-                        <div className="bg-[var(--bg-secondary)] rounded-lg p-3 border border-[var(--border-primary)]">
-                            <p className="text-xs text-[var(--text-secondary)]">Running</p>
-                            <p className="text-xl font-semibold text-emerald-400">{stats.running}</p>
-                        </div>
-                        <div className="bg-[var(--bg-secondary)] rounded-lg p-3 border border-[var(--border-primary)]">
-                            <p className="text-xs text-[var(--text-secondary)]">Queued</p>
-                            <p className="text-xl font-semibold text-blue-400">{stats.queued}</p>
-                        </div>
-                        <div className="bg-[var(--bg-secondary)] rounded-lg p-3 border border-[var(--border-primary)]">
-                            <p className="text-xs text-[var(--text-secondary)]">Completed</p>
-                            <p className="text-xl font-semibold text-cyan-400">{stats.completed}</p>
-                        </div>
-                        <div className="bg-[var(--bg-secondary)] rounded-lg p-3 border border-[var(--border-primary)]">
-                            <p className="text-xs text-[var(--text-secondary)]">Failed</p>
-                            <p className="text-xl font-semibold text-rose-400">{stats.failed}</p>
-                        </div>
+                    <div className="flex items-center gap-3" aria-label="Jobs pagination">
+                        <span>{jobsQueryIsError ? 'Count unavailable' : `${totalJobs} matching jobs · Page ${page + 1} of ${Math.max(1, Math.ceil(totalJobs / pageSize))}`}</span>
+                        <button disabled={page === 0 || isLoading} onClick={() => setPage(page - 1)}>Previous page</button>
+                        <button disabled={(page + 1) * pageSize >= totalJobs || isLoading} onClick={() => setPage(page + 1)}>Next page</button>
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
@@ -4587,7 +4527,7 @@ export function NGSToolkit() {
                             <input
                                 type="text"
                                 value={search}
-                                onChange={(e) => setSearch(e.target.value)}
+                                onChange={(e) => { setSearch(e.target.value); setPage(0); }}
                                 placeholder="Search jobs..."
                                 className="w-full bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none"
                                 style={{ borderColor: 'var(--border-primary)' }}
@@ -4596,7 +4536,7 @@ export function NGSToolkit() {
                         <div>
                             <select
                                 value={statusFilter}
-                                onChange={(e) => setStatusFilter(e.target.value)}
+                                onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
                                 className="w-full bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none"
                             >
                                 {STATUS_OPTIONS.map((status) => (
@@ -4611,6 +4551,7 @@ export function NGSToolkit() {
                                 onClick={() => {
                                     setSearch('');
                                     setStatusFilter('all');
+                                    setPage(0);
                                 }}
                                 className="px-3 py-2 text-sm rounded border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] transition-colors"
                             >

@@ -20,9 +20,10 @@ const collectors = new WeakMap<QueryClient, {
     unsubscribe: () => void;
 }>();
 
-export function useSystemStatus(intervalMs = 5000) {
+export function useSystemStatus(intervalMs = 5000, { enabled = true }: { enabled?: boolean } = {}) {
     const client = useQueryClient();
     useEffect(() => {
+        if (!enabled) return;
         const token = Symbol();
         let collector = collectors.get(client);
         if (!collector) {
@@ -41,6 +42,6 @@ export function useSystemStatus(intervalMs = 5000) {
                 collector.observer.setOptions(options(Math.min(...collector.intervals.values())));
             }
         };
-    }, [client, intervalMs]);
+    }, [client, intervalMs, enabled]);
     return useQuery({ queryKey: systemKey, queryFn: fetchSystemStatus, enabled: false });
 }

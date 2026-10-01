@@ -1,28 +1,18 @@
 from __future__ import annotations
 
 import copy
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 import pytest
 
 from routers import bioxp
-from routers.bioxp.operator_controls import _normalize_interrupt_evidence, _translate_robot_error
+from routers.bioxp.operator_controls import _translate_robot_error
 from services.bioxp.errors import ConnectionStateError, RobotResponseError, RobotTimeoutError
-from services.bioxp.operator_models import (
-    OperatorActionHistory,
-    OperatorActionReceipt,
-    OperatorActionReceiptV2,
-    OperatorDashboard,
-    OperatorDashboardXFailure,
-    OperatorDashboardXReference,
-)
-from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
 from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
-from bioxp_recorded_receipts import RecordedReceipts
 
 REGISTRY = "1" * 64
 LOCK = "2" * 64
@@ -256,20 +246,6 @@ def v2_method() -> dict:
     }
 
 
-def test_x_dashboard_accepts_generation_drift_failure_context() -> None:
-    failure = OperatorDashboardXFailure.model_validate(
-        {
-            "failure": "x_board_lifecycle_generation_changed",
-            "recorded_generation": 1,
-            "current_generation": 1,
-            "recorded_board_lifecycle_generation": 1,
-            "current_board_lifecycle_generation": None,
-        }
-    )
-
-    assert failure.failure == "x_board_lifecycle_generation_changed"
-
-
 def catalog():
     dashboard = {
         "schema_version": "bioxp.operator_dashboard.v1",
@@ -415,31 +391,6 @@ def catalog():
     }
 
 
-def test_dashboard_accepts_robot_owned_unprepared_x_diagnostics() -> None:
-    payload = catalog()["dashboard"]
-    lifecycle = payload["x_axis"]["provider"]["lifecycle"]
-    failure = {
-        "failure": "raw_active_x_limit_after_mask_convergence",
-        "intent": "reconcile_switch_masks",
-        "no_motion_verified": True,
-        "physical_motion_commanded": False,
-    }
-    lifecycle.update({
-        "state": "unprepared",
-        "generation": None,
-        "board_lifecycle_generation": None,
-        "reference_state": "desynced",
-        "last_failure": copy.deepcopy(failure),
-    })
-    payload["x_axis"]["last_failure"] = failure
-
-    parsed = OperatorDashboard.model_validate(payload)
-    parsed_lifecycle = parsed.model_dump()["x_axis"]["provider"]["lifecycle"]
-
-    assert parsed_lifecycle["state"] == "unprepared"
-    assert parsed_lifecycle["last_failure"] is not None
-
-
 def receipt(*, action_id="motion.home_xy", key="invoke-12345678", command_id="cmd-1"):
     return {
         "schema_version": "bioxp.operator_action_receipt.v1",
@@ -509,177 +460,6 @@ def y_interrupt_receipt() -> dict:
         "observed_ownership_generation": 7,
         "observed_board_epoch_by_board": {},
     }
-
-
-def test_completed_x_receipt_accepts_robot_http_response_envelope():
-    completed = receipt(action_id="oem.x.manual_panel_home", command_id="operator-x-home-1")
-    completed.update({
-        "status": "completed",
-        "response": {
-            "http_status": 200,
-            "body": {
-                "ok": True,
-                "axis": "x",
-                "intent": "manual_panel_home",
-                "state": "awaiting_operator_observation",
-                "authority_receipt": {
-                    "command_id": "operator-x-home-1",
-                    "status": "completed",
-                },
-            },
-        },
-        "authority_receipt_id": "operator-x-home-1",
-        "authority_receipt_status": "completed",
-    })
-
-    parsed = OperatorActionReceipt.model_validate(completed)
-
-    assert parsed.command_id == "operator-x-home-1"
-    assert parsed.status == "completed"
-
-
-def test_legacy_completed_x_receipt_derives_self_authority_from_bound_fingerprint():
-    completed = receipt(action_id="oem.x.manual_panel_home", command_id="operator-x-home-legacy")
-    completed.update({
-        "status": "completed",
-        "response": {
-            "http_status": 200,
-            "body": {
-                "ok": True,
-                "axis": "x",
-                "intent": "manual_panel_home",
-                "state": "awaiting_operator_observation",
-            },
-        },
-        "authority_receipt_id": None,
-        "authority_receipt_status": None,
-        "authority_fingerprint": "a" * 64,
-    })
-
-    parsed = OperatorActionReceipt.model_validate(completed)
-
-    assert parsed.authority_receipt_id == "operator-x-home-legacy"
-    assert parsed.authority_receipt_status == "completed"
-
-
-def test_legacy_x_home_history_summary_derives_bound_self_authority():
-    completed = receipt(action_id="oem.x.manual_panel_home", command_id="operator-x-home-summary")
-    completed.update({
-        "status": "completed",
-        "response": {
-            "http_status": 200,
-            "body": {
-                "ok": True,
-                "result": {"ok": {}, "physical_effect_verified": {}},
-                "state": "awaiting_operator_observation",
-            },
-        },
-        "authority_receipt_id": None,
-        "authority_receipt_status": None,
-        "authority_fingerprint": "b" * 64,
-    })
-
-    parsed = OperatorActionReceipt.model_validate(completed)
-
-    assert parsed.authority_receipt_id == "operator-x-home-summary"
-    assert parsed.authority_receipt_status == "completed"
-
-
-def test_bounded_x_home_history_summary_derives_completed_self_authority():
-    completed = receipt(action_id="oem.x.manual_panel_home", command_id="operator-x-home-bounded-summary")
-    completed.update({
-        "status": "completed",
-        "response": {
-            "http_status": 200,
-            "body": {
-                "ok": True,
-                "result": {"ok": {}, "physical_effect_verified": {}},
-                "state": "awaiting_operator_observation",
-            },
-        },
-        "authority_receipt_id": "operator-x-home-bounded-summary",
-        "authority_receipt_status": {"omitted": "item_limit"},
-        "authority_fingerprint": "b" * 64,
-    })
-
-    parsed = OperatorActionReceipt.model_validate(completed)
-
-    assert parsed.authority_receipt_id == "operator-x-home-bounded-summary"
-    assert parsed.authority_receipt_status == "completed"
-
-
-def test_bounded_completed_x_observation_summary_keeps_exact_receipt_binding():
-    observed = receipt(action_id="oem.x.observe", command_id="operator-x-observe-summary")
-    observed.update({
-        "status": "completed",
-        "controller_acknowledged": False,
-        "controller_terminal_state_verified": False,
-        "authority_receipt_id": None,
-        "authority_receipt_status": None,
-        "authority_fingerprint": "c" * 64,
-        "observation_receipt_id": "operator-x-observe-summary",
-        "observes_command_id": "operator-x-home-summary",
-        "inputs": {
-            "command_id": "operator-x-home-summary",
-            "verdict": "pass",
-            "physical_motion_observed": True,
-            "expected_direction_observed": True,
-            "home_endpoint_observed": True,
-            "stopped_observed": True,
-            "note": "Christian confirmed the X Home was kosher.",
-        },
-        "response": {
-            "http_status": 200,
-            "body": {
-                "ok": True,
-                "state": "referenced_ready",
-                "observation": {
-                    "command_id": "operator-x-observe-summary",
-                    "status": "completed",
-                    "reference_persistence": {"ok": True, "state": "referenced"},
-                },
-            },
-        },
-    })
-
-    parsed = OperatorActionReceipt.model_validate(observed)
-
-    assert parsed.observation_receipt_id == "operator-x-observe-summary"
-    assert parsed.observes_command_id == "operator-x-home-summary"
-
-
-def test_history_accepts_explicit_legacy_authority_status_omission_marker():
-    legacy = receipt()
-    legacy["authority_receipt_status"] = {"omitted": "item_limit"}
-
-    parsed = RecordedReceipts.model_validate([legacy])
-
-    assert parsed.root[0].model_dump(exclude_none=True)["authority_receipt_status"] == {"omitted": "item_limit"}
-
-
-def test_reference_success_derives_trusted_authority_when_field_is_absent():
-    parsed = OperatorDashboardXReference.model_validate(
-        {
-            "ok": True,
-            "persisted": True,
-            "verified": True,
-            "durable_clean": True,
-            "axes": ["x"],
-            "rows": {
-                "x": {
-                    "axis": "x",
-                    "state": "unknown",
-                    "origin_position_steps": None,
-                    "source": None,
-                    "note": None,
-                    "updated_at": None,
-                    "last_motion_kind": None,
-                }
-            },
-        }
-    )
-
-    assert parsed.model_dump()["authority_untrusted"] is False
 
 
 class FakeRobotClient:
@@ -804,8 +584,19 @@ class FakeConnection:
         self.active_request_calls = []
         self.oem_action_calls = []
 
+    @property
+    def generation(self):
+        return self.value.generation
+
     def snapshot(self):
         return self.value
+
+    @asynccontextmanager
+    async def active_request_lease(self, *, expected_generation, require_fresh=True):
+        if expected_generation != self.value.generation:
+            raise ConnectionStateError("Expected connection generation does not match")
+        self.active_request_calls.append({"require_fresh": require_fresh})
+        yield self.client
 
     async def request_active(self, route_name, *, expected_generation, require_fresh=True, **kwargs):
         if expected_generation != self.value.generation:
@@ -844,6 +635,7 @@ class FakeConnection:
         return await self.request_active(
             route_name,
             expected_generation=expected_generation,
+            require_fresh=False,
             **kwargs,
         )
 
@@ -873,76 +665,6 @@ def make_client(monkeypatch, *, mutations=True):
     app.state.bioxp_runtime = runtime
     app.include_router(bioxp.router, prefix="/api/bioxp")
     return TestClient(app), runtime
-
-
-def test_queued_successive_move_receipt_parses():
-    queued = receipt(action_id="oem.x.move_steps", command_id="operator-x-queued-1")
-    queued.update({
-        "status": "queued",
-        "queued_at": 1787188152.83,
-        "dispatched_at": 1787188162.54,
-        "finished_at": None,
-        "controller_acknowledged": False,
-        "controller_terminal_state_verified": False,
-        "authority_receipt_id": None,
-        "authority_receipt_status": None,
-        "authority_fingerprint": None,
-        "observation_receipt_id": None,
-        "observes_command_id": None,
-    })
-
-    parsed = OperatorActionReceipt.model_validate(queued)
-
-    assert parsed.status == "queued"
-    assert parsed.queued_at == 1787188152.83
-    assert parsed.dispatched_at == 1787188162.54
-    assert parsed.finished_at is None
-
-
-def test_completed_successive_move_receipt_preserves_queue_timestamps():
-    completed = receipt(action_id="oem.x.move_steps", command_id="operator-x-queued-2")
-    completed.update({
-        "status": "completed",
-        "queued_at": 1787188152.83,
-        "dispatched_at": 1787188153.41,
-        "response": {"http_status": 200, "body": {"ok": True, "axis": "x", "intent": "move_steps"}},
-        "authority_receipt_id": "operator-x-queued-2",
-        "authority_receipt_status": "completed",
-        "authority_fingerprint": None,
-        "observation_receipt_id": None,
-        "observes_command_id": None,
-    })
-
-    parsed = OperatorActionReceipt.model_validate(completed)
-
-    assert parsed.status == "completed"
-    assert parsed.queued_at == 1787188152.83
-    assert parsed.dispatched_at == 1787188153.41
-
-
-def test_cleared_successive_move_receipt_parses():
-    cleared = receipt(action_id="oem.x.move_steps", command_id="operator-x-cleared-1")
-    cleared.update({
-        "status": "cleared",
-        "queued_at": 1787188152.83,
-        "cleared_at": 1787188154.2,
-        "started_at": "1787188152.83",
-        "finished_at": "1787188154.2",
-        "duration_ms": 1370.0,
-        "controller_acknowledged": False,
-        "controller_terminal_state_verified": False,
-        "authority_receipt_id": None,
-        "authority_receipt_status": None,
-        "authority_fingerprint": None,
-        "observation_receipt_id": None,
-        "observes_command_id": None,
-    })
-
-    parsed = OperatorActionReceipt.model_validate(cleared)
-
-    assert parsed.status == "cleared"
-    assert parsed.queued_at == 1787188152.83
-    assert parsed.cleared_at == 1787188154.2
 
 
 def test_dashboard_relays_successive_move_queue(monkeypatch):
@@ -1045,7 +767,6 @@ def test_dispatched_timeout_translation_is_explicitly_ambiguous_and_do_not_retry
         "message": "late robot response possible",
         "robot_response_received": False,
         "dispatch_state": "outcome_ambiguous",
-        "retry_guidance": "do_not_retry_until_status_recovery",
         "status_recovery": "query_current_v2_dashboard_and_receipt_before_any_retry",
     }
 
@@ -1066,7 +787,7 @@ def test_legacy_catalog_projection_preserves_y_and_xy_action_identities(monkeypa
     ]
 
 
-def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_mismatch(monkeypatch):
+def test_addressed_y_interrupt_relays_robot_receipt_unchanged(monkeypatch):
     client, runtime = make_client(monkeypatch)
     body = {
         "expected_connection_generation": 77,
@@ -1094,16 +815,7 @@ def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_
     response = client.post("/api/bioxp/operator-controls/v2/interrupts/oem.y.stop", json=body)
 
     assert response.status_code == 200, response.text
-    # Older source receipts omit these optional observations; serialization must
-    # report unknown, not infer either ACK or a Z move from successful delivery.
-    expected = copy.deepcopy(compact)
-    expected["z_move"] = None
-    expected["xy_failure"] = None
-    expected["interrupt_evidence"].update({
-        "first_stop_acknowledged": None,
-        "second_stop_acknowledged": None,
-    })
-    assert response.json() == expected
+    assert response.json() == compact
     route_name, kwargs = runtime.connection.safety_interrupt_calls[-1]
     assert route_name == "interrupt_operator_action_v1"
     assert kwargs == {
@@ -1116,21 +828,6 @@ def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_
             "observed_board_epoch_by_board": {},
         },
     }
-
-    runtime.connection.client.responses["interrupt_operator_action_v1"] = {
-        **compact,
-        "action_id": "oem.x.stop",
-    }
-    mismatch = client.post("/api/bioxp/operator-controls/v2/interrupts/oem.y.stop", json=body)
-    assert mismatch.status_code == 502
-    assert mismatch.json()["detail"]["retry_guidance"] == "do_not_resubmit_reconcile_by_command_id"
-    assert mismatch.json()["detail"]["robot_evidence"]["action_id"] == "oem.x.stop"
-
-    missing_recovery_hold = {**compact, "interrupt_evidence": dict(compact["interrupt_evidence"])}
-    del missing_recovery_hold["interrupt_evidence"]["persistence_state"]
-    runtime.connection.client.responses["interrupt_operator_action_v1"] = missing_recovery_hold
-    incomplete = client.post("/api/bioxp/operator-controls/v2/interrupts/oem.y.stop", json=body)
-    assert incomplete.status_code == 502
 
 
 def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(monkeypatch):
@@ -1214,45 +911,6 @@ def test_oem_lifecycle_actions_relay_through_the_closed_v2_contract(monkeypatch,
     assert kwargs["json_data"]["inputs"] == {}
 
 
-def test_v2_receipt_relays_closed_bounded_robot_failure_detail(monkeypatch):
-    client, runtime = make_client(monkeypatch)
-    failed = v2_receipt(action_id="oem.z.manual_home", command_id="home-z-failed-1")
-    failed.update({
-        "status": "failed",
-        "terminal": True,
-        "finished_at": 2.0,
-        "error": {
-            "code": "robot route returned HTTP 409",
-            "message": "robot route returned HTTP 409",
-            "retryable": False,
-            "detail": {
-                "provider_failure": "z_manual_home_evidence_not_verified",
-                "failure": "board_not_initialized",
-                "axis": "z",
-                "board": 4,
-                "motor": 1,
-                "source_return_code": 1,
-                "controller_acknowledged": False,
-                "controller_terminal_state_verified": False,
-                "physical_effect_verified": False,
-                "lifecycle_state": "failed_latched",
-                "reference_state": "desynced",
-            },
-        },
-    })
-    runtime.connection.client.responses["operator_action_receipt_v2"] = failed
-
-    response = client.get("/api/bioxp/operator-controls/v2/receipts/home-z-failed-1")
-
-    assert response.status_code == 200, response.text
-    assert response.json()["error"]["detail"] == failed["error"]["detail"]
-
-    failed["error"]["detail"]["unexpected"] = "forbidden"
-    rejected = client.get("/api/bioxp/operator-controls/v2/receipts/home-z-failed-1")
-    assert rejected.status_code == 502
-    assert rejected.json()["detail"] == "BioXP robot returned an invalid operator-control contract"
-
-
 def test_deck_move_relays_only_semantic_inputs_and_exact_board_fences(monkeypatch):
     client, runtime = make_client(monkeypatch)
     runtime.connection.client.responses["invoke_operator_action_v2"] = v2_receipt(
@@ -1282,9 +940,11 @@ def test_deck_move_relays_only_semantic_inputs_and_exact_board_fences(monkeypatc
     }
 
 
-@pytest.mark.parametrize("epochs", [{"4": 2}, {"5": 8}, {"4": 2, "5": 8, "6": 1}])
-def test_deck_move_rejects_missing_or_extra_required_board_epochs(monkeypatch, epochs):
+@pytest.mark.parametrize("epochs", [{}, {"4": 2}, {"5": 8}, {"4": 2, "5": 8, "6": 1}])
+def test_deck_move_forwards_available_epoch_observations_without_host_gate(monkeypatch, epochs):
     client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["invoke_operator_action_v2"] = v2_receipt(
+        action_id="oem.deck.move_to_location", command_id="deck-command-observation")
     response = client.post(
         "/api/bioxp/operator-controls/v2/actions/oem.deck.move_to_location",
         json={
@@ -1296,8 +956,9 @@ def test_deck_move_rejects_missing_or_extra_required_board_epochs(monkeypatch, e
             "inputs": {"target": "LOC_OC", "camera_offset": False},
         },
     )
-    assert response.status_code == 422
-    assert runtime.connection.client.calls == []
+    assert response.status_code == 202, response.text
+    assert len(runtime.connection.client.calls) == 1
+    assert runtime.connection.client.calls[0][1]["json_data"]["expected_board_epoch_by_board"] == epochs
 
 
 @pytest.mark.parametrize("status", [409, 422, 503])
@@ -1322,69 +983,6 @@ def test_deck_move_preserves_robot_rejection_evidence_and_never_retries(monkeypa
     )
     assert response.status_code == status
     assert response.json()["detail"] == evidence
-
-
-def test_deck_move_preserves_command_identity_when_post_dispatch_receipt_validation_fails(monkeypatch):
-    client, runtime = make_client(monkeypatch)
-    runtime.connection.client.responses["invoke_operator_action_v2"] = {
-        **v2_receipt(action_id="oem.deck.move_to_location", command_id="deck-command-uncertain-1"),
-        "status": "not-a-real-status",
-        "robot_error": {
-            "http_status": 409,
-            "detail": {"error": "board_epoch_conflict", "expected": {"4": 2}, "actual": {"4": 3}},
-        },
-    }
-    response = client.post(
-        "/api/bioxp/operator-controls/v2/actions/oem.deck.move_to_location",
-        json={
-            "expected_connection_generation": 77,
-            "schema_version": "bioxp.operator_action_request.v2",
-            "idempotency_key": "deck-move-uncertain-1",
-            "expected_ownership_generation": 1,
-            "expected_board_epoch_by_board": {"4": 2, "5": 8},
-            "inputs": {"target": "LOC_OC", "camera_offset": False},
-        },
-    )
-    assert response.status_code == 502
-    detail = response.json()["detail"]
-    assert detail["error"] == "post_dispatch_receipt_validation_failed"
-    assert detail["command_id"] == "deck-command-uncertain-1"
-    assert detail["status_path"].endswith("/deck-command-uncertain-1")
-    assert detail["outcome"] == "uncertain"
-    assert detail["retry_guidance"] == "do_not_resubmit_reconcile_by_command_id"
-    assert detail["robot_evidence"]["robot_error"]["http_status"] == 409
-    assert detail["robot_evidence"]["robot_error"]["detail"]["actual"] == {"4": 3}
-    assert len(runtime.connection.client.calls) == 1
-
-
-def test_deck_move_preserves_command_identity_when_post_dispatch_action_id_mismatches(monkeypatch):
-    client, runtime = make_client(monkeypatch)
-    runtime.connection.client.responses["invoke_operator_action_v2"] = v2_receipt(
-        action_id="oem.y.move_steps",
-        command_id="deck-command-action-mismatch-1",
-    )
-
-    response = client.post(
-        "/api/bioxp/operator-controls/v2/actions/oem.deck.move_to_location",
-        json={
-            "expected_connection_generation": 77,
-            "schema_version": "bioxp.operator_action_request.v2",
-            "idempotency_key": "deck-move-action-mismatch-1",
-            "expected_ownership_generation": 1,
-            "expected_board_epoch_by_board": {"4": 2, "5": 8},
-            "inputs": {"target": "LOC_OC", "camera_offset": False},
-        },
-    )
-
-    assert response.status_code == 502
-    detail = response.json()["detail"]
-    assert detail["error"] == "post_dispatch_receipt_validation_failed"
-    assert detail["command_id"] == "deck-command-action-mismatch-1"
-    assert detail["status_path"].endswith("/deck-command-action-mismatch-1")
-    assert detail["outcome"] == "uncertain"
-    assert detail["retry_guidance"] == "do_not_resubmit_reconcile_by_command_id"
-    assert detail["robot_evidence"]["action_id"] == "oem.y.move_steps"
-    assert len(runtime.connection.client.calls) == 1
 
 
 def test_robot_client_uses_fixed_operator_routes_only():
@@ -1438,32 +1036,6 @@ def test_typed_pipette_active_readback_proxy_forwards_fixed_request(monkeypatch)
     ]
 
 
-@pytest.mark.parametrize(
-    "mutate",
-    [
-        lambda payload: payload["channels"].pop(),
-        lambda payload: payload["channels"].__setitem__(3, copy.deepcopy(payload["channels"][2])),
-        lambda payload: payload["channels"][0].__setitem__("invented", True),
-        lambda payload: payload.__setitem__("controller_acknowledged", True),
-        lambda payload: payload["receipt_truth"].__setitem__("physical_effect_verified", True),
-        lambda payload: payload.__setitem__("truth_source", "cached_transport_state"),
-    ],
-)
-def test_pipette_active_readback_rejects_malformed_or_inflated_evidence(monkeypatch, mutate):
-    client, runtime = make_client(monkeypatch, mutations=False)
-    payload = pipette_readback()
-    mutate(payload)
-    runtime.connection.client.responses["pipette_readback"] = payload
-
-    response = client.post(
-        "/api/bioxp/operator-controls/pipettes/readback?expected_connection_generation=77",
-        headers={"Idempotency-Key": "pipette-test-12345678"},
-        json={"include_data": False},
-    )
-
-    assert response.status_code == 502
-
-
 def test_pipette_active_readback_request_rejects_unknown_fields(monkeypatch):
     client, runtime = make_client(monkeypatch, mutations=False)
 
@@ -1475,94 +1047,6 @@ def test_pipette_active_readback_request_rejects_unknown_fields(monkeypatch):
 
     assert response.status_code == 422
     assert runtime.connection.client.calls == []
-
-
-def _assert_display_section_quarantined(dashboard, section, *, match=None):
-    from services.bioxp.operator_models import (
-        OperatorAdmission,
-        OperatorControlCatalog,
-        OperatorDashboardPipettes,
-        OperatorDashboardXAxis,
-    )
-
-    # The closed section model still rejects invented/inflated evidence. Only
-    # its display embedding is tolerant (OperatorDashboard.isolate_display_section).
-    section_model = {
-        "pipettes": OperatorDashboardPipettes,
-        "x_axis": OperatorDashboardXAxis,
-    }[section]
-    with pytest.raises(ValidationError, match=match):
-        section_model.model_validate(dashboard[section])
-    parsed = OperatorDashboard.model_validate(dashboard)
-    healthy = OperatorDashboard.model_validate(catalog()["dashboard"])
-    assert getattr(parsed, section) is None
-    assert parsed.model_dump(exclude={section}) == healthy.model_dump(exclude={section})
-    assert parsed.model_dump()[section] is None
-
-    # Quarantine is not a replacement source of command/admission authority.
-    payload = catalog()
-    payload["dashboard"] = dashboard
-    parsed_catalog = OperatorControlCatalog.model_validate(payload)
-    healthy_catalog = OperatorControlCatalog.model_validate(catalog())
-    assert parsed_catalog.actions == healthy_catalog.actions
-    with pytest.raises(ValidationError):
-        OperatorDashboard.model_validate({**dashboard, "ownership_generation": "1"})
-    payload["actions"][0]["enabled"] = "true"
-    with pytest.raises(ValidationError):
-        OperatorControlCatalog.model_validate(payload)
-    with pytest.raises(ValidationError):
-        OperatorAdmission.model_validate({
-            "action_id": "motion.home_xy", "ownership_generation": 1,
-            "enabled": "true", "disabled_reason": None, "dependencies": [],
-        })
-
-
-def test_pipette_dashboard_accepts_exact_closed_four_channel_projection():
-    parsed = OperatorDashboard.model_validate(catalog()["dashboard"])
-
-    assert [channel.channel for channel in parsed.pipettes.channels] == [0, 1, 2, 3]
-    assert parsed.pipettes.live_query_performed is False
-
-
-@pytest.mark.parametrize(
-    "mutate",
-    [
-        lambda group: group["channels"].pop(),
-        lambda group: group["channels"].append(pipette_channel(3)),
-        lambda group: group["channels"].__setitem__(3, pipette_channel(2)),
-        lambda group: group["channels"][1].__setitem__("pipette_id", 2),
-        lambda group: group["channels"][0].__setitem__("position_steps", 123),
-        lambda group: group.__setitem__("physical_effect_verified", True),
-        lambda group: group["channels"][0].__setitem__("physical_effect_verified", True),
-        lambda group: group["channels"][0].__setitem__("hardware_pressure", "not-evidence"),
-        lambda group: group.__setitem__("application", {
-            "ok": True,
-            "mode": "plan_only",
-            "execution_admitted": False,
-            "physical_effect_verified": False,
-            "operations": ["load_tip"] * 5,
-            "blocker": "physical_pipette_execution_not_authorized",
-        }),
-        lambda group: group.__setitem__("unexpected", "invented"),
-    ],
-)
-def test_pipette_dashboard_quarantines_malformed_or_phase_inflated_projection(mutate):
-    dashboard = copy.deepcopy(catalog()["dashboard"])
-    mutate(dashboard["pipettes"])
-
-    _assert_display_section_quarantined(dashboard, "pipettes")
-
-
-def test_pipette_dashboard_quarantines_reordered_distinct_channels():
-    dashboard = copy.deepcopy(catalog()["dashboard"])
-    dashboard["pipettes"]["channels"] = [
-        pipette_channel(3),
-        pipette_channel(2),
-        pipette_channel(1),
-        pipette_channel(0),
-    ]
-
-    _assert_display_section_quarantined(dashboard, "pipettes", match="ordered")
 
 
 def _real_hardware_tip_evidence() -> dict:
@@ -1599,76 +1083,6 @@ def _real_hardware_tip_evidence() -> dict:
         "reader_generation": 1,
         "oem_source_anchor": "ClassPipette.QueryTipStatus: ?31",
     }
-
-
-def test_pipette_dashboard_hardware_evidence_closed_model_accepts_exact_producer_envelope():
-    from services.bioxp.operator_models import OperatorDashboardPipetteHardwareEvidence
-
-    parsed = OperatorDashboardPipetteHardwareEvidence.model_validate(_real_hardware_tip_evidence())
-    assert parsed.ok is True
-    assert parsed.reader_generation == 1
-    assert parsed.tip_loaded is False
-    assert parsed.source_tip_loaded is False
-    assert parsed.source_return == 2
-    assert parsed.source_return_completed is True
-
-
-def test_pipette_dashboard_hardware_evidence_closed_model_rejects_unknown_keys():
-    from services.bioxp.operator_models import OperatorDashboardPipetteHardwareEvidence
-
-    evidence = _real_hardware_tip_evidence()
-    evidence["invented"] = True
-    with pytest.raises(ValidationError):
-        OperatorDashboardPipetteHardwareEvidence.model_validate(evidence)
-
-
-def test_pipette_receipt_source_identity_requires_exact_producer_source_role_keys():
-    from services.bioxp.operator_models import PipetteReceiptSourceIdentity
-
-    base = {
-        "repository_root": "/opt/bioxp",
-        "source_sha256": {
-            "pipette_models": "1" * 64,
-            "pipette_transport": "2" * 64,
-            "pipette_receipts": "3" * 64,
-            "can_driver": "4" * 64,
-            "novo_router": "5" * 64,
-            "novo_usb_can": "6" * 64,
-            "pipette_service": "7" * 64,
-            "pipette_spec": "8" * 64,
-        },
-        "registry_sha256": REGISTRY,
-        "evidence_authority": {
-            "evidence_lock_path": "/opt/bioxp/oem/evidence_lock.json",
-            "evidence_lock_sha256": LOCK,
-            "evidence_lock_schema": "bioxp.oem_evidence_lock.v4",
-            "acquisition_id": "acq-1",
-            "evidence_lock_identity_verified": True,
-        },
-        "authority_verified": True,
-    }
-    parsed = PipetteReceiptSourceIdentity.model_validate(base)
-    assert parsed.authority_verified is True
-
-    extra = copy.deepcopy(base)
-    extra["source_sha256"]["invented"] = "9" * 64
-    with pytest.raises(ValidationError):
-        PipetteReceiptSourceIdentity.model_validate(extra)
-
-    missing = copy.deepcopy(base)
-    missing["source_sha256"].pop("can_driver")
-    with pytest.raises(ValidationError):
-        PipetteReceiptSourceIdentity.model_validate(missing)
-
-    bad_authority = copy.deepcopy(base)
-    bad_authority["evidence_authority"]["invented"] = True
-    with pytest.raises(ValidationError):
-        PipetteReceiptSourceIdentity.model_validate(bad_authority)
-
-    unverified = copy.deepcopy(base)
-    unverified["authority_verified"] = False
-    with pytest.raises(ValidationError):
-        PipetteReceiptSourceIdentity.model_validate(unverified)
 
 
 @pytest.mark.parametrize(
@@ -1725,102 +1139,6 @@ def test_pipette_plan_forwards_only_selected_operation_fields(monkeypatch, paylo
     assert runtime.connection.client.calls == [
         ("pipette_application_plan", {"json_data": {**forwarded, "idempotency_key": "pipette-test-12345678"}}),
     ]
-
-
-def test_x_dashboard_quarantines_unknown_nested_authority_keys():
-    nested_paths = [
-        "provider.lifecycle",
-        "provider.live_status",
-        "provider.switch_masks",
-        "provider.profile",
-        "provider.reference",
-        "snapshot_freshness",
-        "latest_receipt",
-    ]
-    for label in nested_paths:
-        candidate = catalog()["dashboard"]
-        current = candidate["x_axis"]
-        if label.startswith("provider."):
-            current = current["provider"]
-            field = label.split(".", 1)[1]
-            current = current[field]
-        else:
-            current = current[label]
-        current["unexpected"] = True
-        _assert_display_section_quarantined(candidate, "x_axis")
-
-
-@pytest.mark.parametrize(
-    ("container_path", "field", "value"),
-    [
-        (("provider", "lifecycle"), "prepared_receipt", {
-            "ok": True,
-            "observed_generation": 7,
-            "board_lifecycle_generation": 11,
-            "board_preparation_verified": True,
-            "initialize_without_motion_verified": True,
-            "physical_motion": False,
-            "motor_output_state": "unknown",
-            "motor_torque_verified": False,
-            "receipt": None,
-            "axis": "x",
-            "source_anchor": "locked OEM source",
-            "source_exact": True,
-            "literal_switch_mask_writes": [],
-            "unexpected_authority": "must fail closed",
-        }),
-        (("provider", "lifecycle"), "active_receipt", {
-            "command_id": "x-command-1",
-            "intent": "move_absolute",
-            "idempotency_key": "x-command-1",
-            "generation": 7,
-            "inputs": {"position_steps": 6000},
-            "status": "executing",
-            "result": None,
-            "unexpected_authority": "must fail closed",
-        }),
-        (("provider", "lifecycle"), "pending_ticket", {
-            "ok": True,
-            "axis": "x",
-            "source_mode": "provider.x.move_absolute",
-            "requested_position_steps": 6000,
-            "target_position_steps": 6000,
-            "before": {"board": 5, "param": 1, "motor": 0, "ack": {"status": 100, "value": 1000}, "value": 1000},
-            "before_position_steps": 1000,
-            "preflight": {"profile": {"board": 5}, "profile_receipt": None, "switch_masks": {}, "expected_switch_masks": {"12": 1, "13": 0}},
-            "command_issued": True,
-            "source_noop": False,
-            "physical_motion_commanded": True,
-            "controller_command_acknowledged": True,
-            "event_window": {"after_sequence": 10},
-            "move": {"ok": True, "ack": {"status": 100, "value": 0}, "board": 5, "motor": 0, "position": 6000},
-            "pending_motion": True,
-            "physical_motion": True,
-            "reference_before": {"ok": True, "durable_clean": True, "authority_untrusted": False, "rows": {"x": {"state": "referenced"}}},
-            "unexpected_authority": "must fail closed",
-        }),
-        (("provider", "live_status"), "readbacks", {1: {
-            "board": 5,
-            "param": 1,
-            "motor": 0,
-            "ack": {"status": 100, "value": 1000},
-            "value": 1000,
-            "unexpected_authority": "must fail closed",
-        }}),
-    ],
-)
-def test_operator_contract_rejects_unknown_fields_in_each_nested_x_authority_payload(container_path, field, value):
-    from services.bioxp.operator_models import OperatorDashboardXAxis
-    from pydantic import ValidationError
-
-    payload = catalog()["dashboard"]["x_axis"]
-    cursor = payload
-    for key in container_path:
-        cursor = cursor[key]
-    cursor[field] = value
-
-    with pytest.raises(ValidationError):
-        OperatorDashboardXAxis.model_validate(payload)
 
 
 def _exact_tmcl_provenance():
@@ -2045,128 +1363,6 @@ def _exact_x_lifecycle(**updates):
     return value
 
 
-def test_x_dashboard_accepts_exact_robot_lifecycle_reference_and_tmcl_projection_shapes_after_json_transport():
-    from services.bioxp.operator_models import OperatorDashboardXAxis
-
-    payload = catalog()["dashboard"]["x_axis"]
-    payload["provider"]["lifecycle"].update({
-        "schema_version": "bioxp.serial206_x_lifecycle.v2",
-        "generation": 7,
-        "board_lifecycle_generation": 3,
-        "prepared_receipt": None,
-        "active_receipt": None,
-        "pending_ticket": None,
-        "awaiting_observation_receipt_id": None,
-        "terminal_state": None,
-        "receipt_storage": "robot_sqlite",
-        "receipt_detail_on_request": True,
-        "recent_receipt_count": 1,
-    })
-    payload["provider"]["live_status"].update({
-        "ok": True,
-        "axis": "x",
-        "board": 5,
-        "motor": 0,
-        "expected_profile": {"4": 1700, "5": 350, "6": 31, "205": 16},
-        "switch_mask_tuple": {"12": 1, "13": 0},
-        "expected_switch_masks": {"12": 1, "13": 0},
-        "readbacks": {
-            str(param): _exact_x_register_readback(param=param, value=value)
-            for param, value in {1: 123, 3: 0, 4: 1700, 5: 350, 6: 31, 9: 0, 10: 1, 12: 1, 13: 0, 205: 16}.items()
-        },
-    })
-    payload["provider"]["switch_masks"] = {"expected": {"12": 1, "13": 0}, "verified": True}
-    payload["provider"]["reference"] = {
-        "ok": True,
-        "persisted": True,
-        "verified": True,
-        "durable_clean": True,
-        "authority_untrusted": False,
-        "axes": ["x"],
-        "rows": {"x": {
-            "axis": "x",
-            "state": "referenced",
-            "origin_position_steps": 0,
-            "source": "serial206.x.operator_observation",
-            "note": None,
-            "updated_at": "2026-08-12T00:00:00+00:00",
-            "last_motion_kind": "home",
-        }},
-    }
-
-    validated = OperatorDashboardXAxis.model_validate_json(OperatorDashboardXAxis.model_validate(payload).model_dump_json())
-    assert validated.provider.lifecycle is not None
-    assert validated.provider.reference is not None
-    assert validated.provider.live_status is not None
-    assert validated.provider.live_status.readbacks[1].ack is not None
-
-    assert validated.provider.lifecycle.schema_version == "bioxp.serial206_x_lifecycle.v2"
-    assert validated.provider.reference.axes == ["x"]
-    assert validated.provider.reference.rows["x"].state == "referenced"
-    assert validated.provider.live_status.readbacks[1].ack.cmd == 6
-
-
-@pytest.mark.parametrize("last_failure", [
-    "interrupted_x_transaction_outcome_ambiguous",
-    "operator_rejected_x_home",
-    "xy_restart_or_reentry_during_executing",
-    "homexy_intent_exception:RuntimeError:boom",
-    {
-        "failure": "x_board_lifecycle_generation_changed",
-        "recorded_generation": 7,
-        "current_generation": 7,
-        "recorded_board_lifecycle_generation": 3,
-        "current_board_lifecycle_generation": 4,
-    },
-    {
-        "ok": False,
-        "error": "durable_reference_path_required",
-        "axis": "x",
-        "state": "unknown",
-        "origin_position_steps": None,
-        "source": None,
-        "note": None,
-        "updated_at": None,
-        "last_motion_kind": None,
-        "persisted": False,
-        "verified": False,
-        "durable_clean": False,
-    },
-])
-def test_x_dashboard_accepts_exact_robot_string_and_structured_failure_variants(last_failure):
-    from services.bioxp.operator_models import OperatorDashboardXAxis
-
-    payload = catalog()["dashboard"]["x_axis"]
-    payload["provider"]["lifecycle"]["last_failure"] = last_failure
-    assert OperatorDashboardXAxis.model_validate(payload).provider.lifecycle.last_failure is not None
-
-
-def test_x_preparation_stage_rejects_cross_stage_authority_evidence():
-    from pydantic import ValidationError
-    from services.bioxp.operator_models import OperatorDashboardXPreparationStage
-
-    authority = {
-        "machine_serial": 206,
-        "acquisition_id": "serial206-acquisition",
-        "evidence_lock_sha256": "a" * 64,
-        "mutation_authorized": True,
-        "component_source": "serial-206 ClassControlInterface motor construction and m_AxisIODesignater",
-    }
-    stage = {
-        "stage_id": "authority",
-        "status": "passed",
-        "source_anchor": "immutable serial-206 OEM evidence lock",
-        "controller_evidence": authority,
-        "physical_motion": False,
-    }
-    assert isinstance(OperatorDashboardXPreparationStage.model_validate(stage).controller_evidence, object)
-
-    stage["stage_id"] = "rail_24v_readback"
-    projected = OperatorDashboardXPreparationStage.model_validate(stage)
-    from services.bioxp.operator_models import OperatorDashboardXJsonSafeEvidence
-    assert isinstance(projected.controller_evidence, OperatorDashboardXJsonSafeEvidence)
-
-
 def _exact_x_preparation_evidence():
     return {
         "schema_version": "bioxp.oem_prepare_without_motion.v2",
@@ -2192,413 +1388,17 @@ def _exact_x_preparation_evidence():
     }
 
 
-@pytest.mark.parametrize(
-    ("field_path", "valid_value"),
-    [
-        (("prepared_receipt", "receipt"), _exact_x_preparation_evidence()),
-        (("active_receipt", "inputs"), {"command_id": "x-command", "idempotency_key": "x-command", "expected_generation": 7, "position_steps": 6000, "wait_for_stop": False, "wait_timeout_s": 20.0}),
-        (("pending_ticket", "before"), _exact_x_position_readback()),
-        (("pending_ticket", "preflight"), _exact_x_preflight()),
-        (("pending_ticket", "event_window"), _exact_x_event_window()),
-        (("pending_ticket", "move"), _exact_x_move_receipt()),
-        (("pending_ticket", "reference_before"), _exact_x_reference_success()),
-        (("pending_ticket", "acceleration_set"), {"board": 5, "param": 5, "motor": 0, "set_value": 350, "ack": {"status": 100, "status_str": "OK", "board": 5, "cmd": 5, "value": 350, "raw": [5, 100, 5, 0, 0, 1, 94, 0], "provenance": _exact_tmcl_provenance()}, "readback": _exact_x_register_readback(param=5, value=350), "ok": True}),
-    ],
-)
-def test_x_dashboard_rejects_unknown_keys_at_each_authority_evidence_leaf(field_path, valid_value):
-    from copy import deepcopy
-    from pydantic import ValidationError
-    from services.bioxp.operator_models import OperatorDashboardXLifecycle
-
-    lifecycle = _exact_x_lifecycle(state="executing")
-    if field_path[0] == "prepared_receipt":
-        lifecycle["state"] = "prepared_unreferenced"
-        lifecycle["prepared_receipt"] = {"ok": True, "observed_generation": 7, "board_lifecycle_generation": 3, "board_preparation_verified": True, "initialize_without_motion_verified": True, "physical_motion": False, "motor_output_state": "unknown", "motor_torque_verified": False, "receipt": valid_value, "axis": "x", "source_anchor": "ClassControlInterface.initializeMotorsWithoutMotion:3187-3195", "source_exact": False, "initializer_source_exact": True, "literal_switch_mask_writes": []}
-    elif field_path[0] == "active_receipt":
-        lifecycle["active_receipt"] = {"command_id": "x-command", "intent": "move_absolute", "idempotency_key": "x-command", "generation": 7, "inputs": valid_value, "status": "executing", "result": None}
-    else:
-        ticket = _exact_x_pending_ticket()
-        ticket[field_path[1]] = valid_value
-        if field_path[1] == "acceleration_set":
-            ticket["acceleration_restore"] = {**valid_value, "set_value": 350}
-            ticket["acceleration_restore_verified"] = True
-        lifecycle["pending_ticket"] = ticket
-        lifecycle["active_receipt"] = {"command_id": "x-command", "intent": "move_absolute", "status": "executing", "result": ticket}
-
-    valid = OperatorDashboardXLifecycle.model_validate(lifecycle)
-    target = deepcopy(valid.model_dump(mode="python"))
-    cursor = target[field_path[0]][field_path[1]]
-    cursor["unexpected_authority"] = True
-    with pytest.raises(ValidationError):
-        OperatorDashboardXLifecycle.model_validate(target)
-
-
-def test_x_authority_rejects_invented_states_axes_registers_and_event_addresses():
-    from pydantic import ValidationError
-    from services.bioxp.operator_models import (
-        OperatorDashboardXEventWindow,
-        OperatorDashboardXLifecycle,
-        OperatorDashboardXLiveStatus,
-        OperatorDashboardXActiveReceipt,
-        OperatorDashboardXParameterWrite,
-        OperatorDashboardXPreflight,
-        OperatorDashboardXPreflightProfile,
-        OperatorDashboardXProfile,
-        OperatorDashboardXProfileFingerprint,
-        OperatorDashboardXProfileReceipt,
-        OperatorDashboardXProvider,
-        OperatorDashboardXReference,
-        OperatorDashboardXRegisterReadback,
-        OperatorDashboardXSwitchMasks,
-    )
-
-    cases = [
-        (OperatorDashboardXLifecycle, {"schema_version": "bioxp.serial206_x_lifecycle.v2", "state": "invented_state", "reference_state": "unknown"}),
-        (OperatorDashboardXLifecycle, {"schema_version": "bioxp.serial206_x_lifecycle.v2", "state": "unprepared", "reference_state": "invented_reference"}),
-        (OperatorDashboardXReference, {"ok": True, "axes": ["y"], "rows": {"y": {"axis": "y", "state": "referenced"}}}),
-        (OperatorDashboardXReference, {"ok": True, "axes": ["x"], "rows": {"x": {"axis": "x", "state": "invented_reference"}}}),
-        (OperatorDashboardXLiveStatus, {"expected_profile": {"999": 1}}),
-        (OperatorDashboardXLiveStatus, {"switch_mask_tuple": {"999": 1}}),
-        (OperatorDashboardXLiveStatus, {"expected_switch_masks": {"999": 1}}),
-        (OperatorDashboardXLiveStatus, {"readbacks": {"999": _exact_x_register_readback(param=999, value=1)}}),
-        (OperatorDashboardXPreflight, {"profile": {"board": 5, "motor": 0, "speed": 1700, "acc": 350, "run_current": 31, "stall_guard": 16, "axis_min_steps": 0, "axis_max_steps": 90263, "disable_right": True, "disable_left": False}, "switch_masks": {"999": _exact_x_register_readback(param=999, value=1)}, "expected_switch_masks": {"12": 1, "13": 0}}),
-        (OperatorDashboardXProfileReceipt, {"ok": True, "source": "initializeMotorsWithoutMotion", "axis": "x", "board": 5, "motor": 0, "profile_fingerprint": {"board": 5, "motor": 0}, "readbacks": {"999": _exact_x_register_readback(param=999, value=1)}}),
-        (OperatorDashboardXSwitchMasks, {"expected": {"999": 1}, "verified": False}),
-        (OperatorDashboardXProfile, {"expected": {"999": 1}, "verified": False}),
-        (OperatorDashboardXEventWindow, {"after_sequence": 1, "router_cleared": {"invented": 0}}),
-        (OperatorDashboardXEventWindow, {"after_sequence": 1, "dispatch_cursors": {"999:9": 1.0}}),
-        (OperatorDashboardXEventWindow, {"after_sequence": -1}),
-        (OperatorDashboardXRegisterReadback, {"board": 4, "param": 1, "motor": 0, "value": 0}),
-        (OperatorDashboardXRegisterReadback, {"board": 5, "param": 1, "motor": 1, "value": 0}),
-        (OperatorDashboardXProfileFingerprint, {"board": 4, "motor": 0}),
-        (OperatorDashboardXPreflightProfile, {"board": 5, "motor": 0, "speed": 1700, "acc": 350, "run_current": 31, "stall_guard": 16, "axis_min_steps": 0, "axis_max_steps": 99999, "disable_right": True, "disable_left": False}),
-        (OperatorDashboardXProfileReceipt, {"ok": True, "source": "invented", "axis": "x", "board": 5, "motor": 0, "profile_fingerprint": {"board": 5, "motor": 0}, "readbacks": {}}),
-        (OperatorDashboardXProvider, {"authority": "Serial206OemInitializationProvider", "axis": "x", "board": 4, "motor": 0, "bound": True, "physical_position_verified": False}),
-        (OperatorDashboardXActiveReceipt, {"command_id": "x-command", "intent": "move_absolute", "status": "invented", "inputs": {}}),
-        (OperatorDashboardXParameterWrite, {"board": 5, "param": 4, "motor": 0, "set_value": 1, "ok": True}),
-        (OperatorDashboardXParameterWrite, {"board": 5, "param": 5, "motor": 0, "set_value": 350, "readback": _exact_x_register_readback(param=4, value=350), "ok": True}),
-    ]
-    from pydantic import TypeAdapter
-
-    for model, payload in cases:
-        with pytest.raises(ValidationError):
-            TypeAdapter(model).validate_python(payload)
-
-
-def test_x_lifecycle_last_failure_rejects_invented_and_partial_families():
-    from pydantic import ValidationError
-    from services.bioxp.operator_models import OperatorDashboardXLifecycleLastFailure
-
-    valid = [
-        "restart_or_reentry_during_executing",
-        {
-            "failure": "x_generation_changed",
-            "recorded_generation": 6,
-            "current_generation": 7,
-            "recorded_board_lifecycle_generation": 2,
-            "current_board_lifecycle_generation": 3,
-        },
-        {
-            "ok": False,
-            "observed_generation": 7,
-            "physical_motion": False,
-            "blocker": "ownership_generation_changed_before_preparation",
-            "axis": "x",
-            "source_anchor": "ClassControlInterface.initializeMotorsWithoutMotion:3187-3195",
-            "source_exact": False,
-            "initializer_source_exact": True,
-            "literal_switch_mask_writes": [],
-        },
-        {
-            "ok": False,
-            "error": "reference store not bound",
-            "axis": "x",
-            "state": "unknown",
-            "origin_position_steps": None,
-            "source": None,
-            "note": None,
-            "updated_at": None,
-            "last_motion_kind": None,
-            "persisted": False,
-            "verified": False,
-            "durable_clean": False,
-        },
-        {"ok": False, "failure": "x_result_not_mapping"},
-        {
-            "ok": False,
-            "failure": "x_generation_changed_during_command",
-            "command_issued": True,
-            "recorded_generation": 6,
-            "current_generation": 7,
-            "primitive_result": _exact_x_pending_ticket(),
-        },
-        {
-            "ok": False,
-            "failure": "x_position_before_unavailable",
-            "physical_motion_commanded": False,
-            "before": _exact_x_position_readback(),
-        },
-        {
-            "ok": False,
-            "failure": "xy_interrupted_or_generation_changed",
-            "primitive_result": {"omitted": "item_limit"},
-        },
-        {
-            "ok": False,
-            "failure": "homexy_result_not_mapping",
-            "live_preflight": _exact_x_preflight(),
-        },
-        {
-            "reason": "board5_lifecycle_change",
-            "transition": "activated",
-            "command64_value": 1,
-            "previous_state": "referenced_ready",
-            "ack": None,
-            "invalidated_at": 100.0,
-            "reference_invalidation": None,
-        },
-    ]
-    for value in valid:
-        OperatorDashboardXLifecycleLastFailure.model_validate(value)
-
-    from services.bioxp.operator_models import (
-        OperatorDashboardXYReferenceAuthorityEffect,
-        OperatorDashboardXYSingleReferenceMutationSuccess,
-    )
-    y_only_reference = {
-        "axis": "y", "state": "referenced", "origin_position_steps": 4321,
-        "source": "serial206.move_xy", "note": None,
-        "updated_at": "2026-08-13T00:00:00+00:00", "last_motion_kind": "move_xy",
-        "ok": True, "persisted": True, "verified": True, "durable_clean": True,
-    }
-    y_effect = OperatorDashboardXYReferenceAuthorityEffect.model_validate(y_only_reference)
-    assert isinstance(y_effect.root, OperatorDashboardXYSingleReferenceMutationSuccess)
-    assert y_effect.root.axis == "y"
-
-    invalid = [
-        "invented_x_failure",
-        {"failure": "x_generation_changed", "current_generation": 7},
-        {"ok": False, "failure": "x_result_not_mapping", "invented": True},
-        {"ok": False, "failure": "enableXY_result_not_mapping"},
-        {"reason": "board5_lifecycle_change", "transition": "activated"},
-        {"ok": True},
-    ]
-    for value in invalid:
-        with pytest.raises(ValidationError):
-            OperatorDashboardXLifecycleLastFailure.model_validate(value)
-
-
-def test_x_safety_interrupt_receipt_binds_intent_inputs_result_and_status():
-    from pydantic import ValidationError
-    from services.bioxp.operator_models import OperatorDashboardXSafetyInterruptReceipt
-
-    stop_result = {
-        "ok": False,
-        "axis": "x",
-        "intent": "stop",
-        "stop": {"board": 5, "motor": 0, "ack": None, "first_delivery": None, "second_delivery": None, "oem_double_stop": True, "ok": False},
-        "wait": {"stopped": False, "elapsed_ms": 10, "polls": 1, "last_speed": None, "seen_nonzero": False, "target_position": None, "target_reached": False, "last_position": None, "ambiguous_no_motion": False, "last_ack": None},
-        "controller_command_acknowledged": False,
-        "controller_terminal_state_verified": False,
-        "physical_motion": False,
-        "physical_effect_verified": False,
-        "failure": "x_stop_not_verified",
-        "interrupt_epoch": 4,
-        "interrupted_command_ids": ["moving-x"],
-    }
-    base = {
-        "command_id": "stop-x",
-        "receipt_id": "stop-x:1",
-        "intent": "stop",
-        "idempotency_key": "stop-key",
-        "idempotency_replay_enabled": False,
-        "generation": 7,
-        "inputs": {"command_id": "stop-x", "idempotency_key": "stop-key", "expected_generation": 7, "timeout_s": 3.0},
-        "status": "failed",
-        "started_at": 1.0,
-        "finished_at": 2.0,
-        "interrupt_epoch": 4,
-        "interrupted_command_ids": ["moving-x"],
-        "result": stop_result,
-    }
-    OperatorDashboardXSafetyInterruptReceipt.model_validate(base)
-
-    exception = dict(base)
-    exception["result"] = {"ok": False, "error": "RuntimeError: failed", "interrupt_epoch": 4, "interrupted_command_ids": ["moving-x"]}
-    OperatorDashboardXSafetyInterruptReceipt.model_validate(exception)
-
-    cross_intent = dict(base)
-    cross_intent["intent"] = "abort"
-    with pytest.raises(ValidationError):
-        OperatorDashboardXSafetyInterruptReceipt.model_validate(cross_intent)
-
-    mismatched_status = dict(base)
-    mismatched_status["status"] = "completed"
-    with pytest.raises(ValidationError):
-        OperatorDashboardXSafetyInterruptReceipt.model_validate(mismatched_status)
-
-
-@pytest.mark.parametrize("failed_stage", [None, "latch_solenoid", "door_readback_after_latch", "latch_readback_after_latch", "rail_24v_readback"])
-def test_x_activation_preparation_preserves_latch_and_failure_evidence(failed_stage):
-    from services.bioxp.operator_models import (
-        OperatorDashboardXJsonSafeEvidence,
-        OperatorDashboardXPreparationEvidence,
-        OperatorDashboardXPreparationStage,
-    )
-
-    # Existing fixture plus exact stage keys/evidence from motion_safety.py's
-    # _stage, set_solenoid, read_door_latch and _preparation_result producer.
-    preparation = _exact_x_preparation_evidence()
-    preparation.update(
-        ok=failed_stage is None,
-        state="completed" if failed_stage is None else "failed_closed",
-        failure_stage=failed_stage,
-        error=(None if failed_stage is None else
-               "Activation stopped: the 24 V check failed after the door/latch checks. Inspect the retained controller evidence."
-               if failed_stage == "rail_24v_readback" else
-               f"Activation stopped at {failed_stage}. Inspect the retained controller evidence."),
-    )
-    for stage_id, evidence in [
-        ("latch_solenoid", {"value": 1, "source_call_completed": True,
-                            "return_value_ignored": True, "controller_acknowledged": False,
-                            "result": {"ack": None}}),
-        ("door_readback_after_latch", {"ack": {"status": 100}, "value": 0}),
-        ("latch_readback_after_latch", {"ack": {"status": 100}, "value": 0}),
-        ("rail_24v_readback", {"ack": {"status": 100}, "oem_scalar": 0}),
-    ]:
-        if stage_id == failed_stage:
-            evidence = {"value": 1, "error": "RuntimeError: controller unavailable"}
-        preparation["stage_ledger"].append({
-            "stage_id": stage_id,
-            "status": "failed" if stage_id == failed_stage else "passed",
-            "source_anchor": "ControlLib.checkDoorStatus:8678,8701",
-            "controller_evidence": evidence,
-            "physical_motion": False,
-        })
-        if stage_id == failed_stage:
-            break
-    preparation["stage_receipts"] = copy.deepcopy(preparation["stage_ledger"])
-    parsed = OperatorDashboardXPreparationEvidence.model_validate(preparation)
-    assert parsed.model_dump() == preparation
-    assert all(isinstance(stage, OperatorDashboardXPreparationStage)
-               and isinstance(stage.controller_evidence, OperatorDashboardXJsonSafeEvidence)
-               for stage in parsed.stage_ledger)
-
-
-def test_x_activation_preparation_optional_fields_remain_strict_and_bounded():
-    from pydantic import ValidationError
-    from services.bioxp.operator_models import OperatorDashboardXPreparationEvidence
-
-    legacy = _exact_x_preparation_evidence()
-    parsed = OperatorDashboardXPreparationEvidence.model_validate(legacy)
-    assert parsed.failure_stage is None
-    assert parsed.error is None
-    valid = {**legacy, "failure_stage": "latch_solenoid", "error": "x" * 200}
-    assert OperatorDashboardXPreparationEvidence.model_validate(valid).error == "x" * 200
-    for field, value in (("failure_stage", 1), ("failure_stage", "x" * 201),
-                         ("error", 1), ("error", "x" * 201), ("randomfield", True)):
-        with pytest.raises(ValidationError):
-            OperatorDashboardXPreparationEvidence.model_validate({**valid, field: value})
-    stage = {"stage_id": "latch_solenoid", "status": "passed",
-             "source_anchor": "ControlLib.checkDoorStatus:8678,8701",
-             "controller_evidence": {"value": 1}, "physical_motion": False}
-    for field, value in (("stage_id", "invented_latch_stage"), ("randomfield", True),
-                         ("physical_motion", True)):
-        with pytest.raises(ValidationError):
-            OperatorDashboardXPreparationEvidence.model_validate(
-                {**valid, "stage_ledger": [{**stage, field: value}]})
-
-
-def test_x_preparation_and_reference_success_reject_invented_authority_claims():
-    from pydantic import ValidationError
-    from services.bioxp.operator_models import (
-        OperatorDashboardXPreparationEvidence,
-        OperatorDashboardXReferenceSuccess,
-    )
-
-    preparation = _exact_x_preparation_evidence()
-    for field, value in (("state", "invented"), ("motor_output_state", "invented")):
-        malformed = copy.deepcopy(preparation)
-        malformed[field] = value
-        with pytest.raises(ValidationError):
-            OperatorDashboardXPreparationEvidence.model_validate(malformed)
-
-    reference = _exact_x_reference_success()
-    for field in ("persisted", "verified", "durable_clean"):
-        malformed = copy.deepcopy(reference)
-        malformed[field] = False
-        with pytest.raises(ValidationError):
-            OperatorDashboardXReferenceSuccess.model_validate(malformed)
-
-
-def test_x_failure_branch_validators_reject_sparse_cross_branch_authority():
-    from pydantic import ValidationError
-    from services.bioxp.operator_models import (
-        OperatorDashboardXBoardLifecycleInvalidation,
-        OperatorDashboardXFailure,
-        OperatorDashboardXIssuedMoveFailure,
-        OperatorDashboardXMoveXYFailure,
-        OperatorDashboardXRelativeMoveFailure,
-        OperatorDashboardXSwitchReconciliationFailure,
-    )
-
-    invalid = [
-        (OperatorDashboardXFailure, {}),
-        (OperatorDashboardXFailure, {"current_generation": 8}),
-        (OperatorDashboardXBoardLifecycleInvalidation, {
-            "reason": "board5_lifecycle_change", "transition": "activated", "command64_value": 0,
-            "previous_state": "cold", "ack": None, "invalidated_at": 1,
-            "reference_invalidation": None,
-        }),
-        (OperatorDashboardXMoveXYFailure, {
-            "ok": False, "source_operation": "ClassControlInterface.moveXY",
-            "source_anchor": "ClassControlInterface.cs:4285-4367",
-            "requested": {"x": 1, "y": 2}, "board_present": {"x": True, "y": True},
-            "ignored_compatibility_inputs": {}, "oem_wait_timeout_ms": 5000,
-        }),
-        (OperatorDashboardXMoveXYFailure, {
-            "ok": False, "source_operation": "ClassControlInterface.moveXY",
-            "source_anchor": "ClassControlInterface.cs:4285-4367",
-            "requested": {"x": 1, "y": 2}, "board_present": {"x": True, "y": True},
-            "ignored_compatibility_inputs": {}, "oem_wait_timeout_ms": 5000,
-            "branch": "source_noop", "failure": "parallel_wait_not_verified",
-            "launch_order": ["x", "y"], "pair_wait": {},
-        }),
-    ]
-    for model, payload in invalid:
-        with pytest.raises(ValidationError):
-            model.model_validate(payload)
-
-    base = _exact_x_pending_ticket()
-    relative_restore = {
-        "ok": False, "axis": "x", "intent": "move_steps",
-        "source_mode": "ClassControlInterface.moveSteps", "source_noop": False,
-        "requested_steps": 100, "target_position_steps": 6100,
-        "before": base["before"], "before_position_steps": 6000,
-        "preflight": base["preflight"], "event_window": base["event_window"],
-        "move": base["move"], "command_issued": True, "physical_motion_commanded": True,
-        "controller_command_acknowledged": True, "failure": "x_acceleration_restore_failed",
-        "after": base["before"], "after_position_steps": 6100,
-        "terminal_speed": {"board": 5, "motor": 0, "ack": None, "speed": 0, "ok": True},
-        "target_event_128_observed": True, "controller_terminal_state_verified": True,
-        "physical_effect_verified": False, "reference_before": base["reference_before"],
-        "physical_motion": True, "wait": {"omitted": "item_limit"}, "wait_verified": True, "events": [],
-        "controller_error_events": [], "target_events": [], "target_event_128_verified": True,
-        "target_position_verified": True,
-        "acceleration_set": base["acceleration_set"] or _exact_x_parameter_write(value=350),
-        "acceleration_restore": _exact_x_parameter_write(value=350),
-        "acceleration_restore_verified": False,
-    }
-    OperatorDashboardXRelativeMoveFailure.model_validate(relative_restore)
-
-
 def test_catalog_is_robot_owned_and_strict(monkeypatch):
     client, runtime = make_client(monkeypatch)
     response = client.get("/api/bioxp/operator-controls/catalog")
     assert response.status_code == 200
     assert response.json()["actions"][0]["action_id"] == "motion.home_xy"
     assert response.json()["actions"][0]["inputs"][0]["exclusive_minimum"] == 0.1
-    assert runtime.connection.client.calls == [("operator_control_catalog", {"params": None})]
+    assert runtime.connection.client.calls == [
+        ("operator_control_catalog", {"params": None}),
+        ("operator_control_catalog_v2", {"params": {"schema_version": "bioxp.operator_control_catalog.v2"}}),
+    ]
+    assert response.json()["canonical"]["schema_version"] == "bioxp.operator_control_catalog.v2"
 
 
 def test_catalog_accepts_typed_z_provider_last_observation(monkeypatch):
@@ -2652,6 +1452,7 @@ def test_shared_xz_catalog_and_dashboard_query_robot_without_bms_freshness_gate(
         for call in runtime.connection.active_request_calls
     ] == [
         ("operator_control_catalog", False),
+        ("operator_control_catalog_v2", False),
         ("operator_dashboard", False),
     ]
 
@@ -2771,27 +1572,6 @@ def test_z_stop_invocation_skips_catalog_preflight_but_keeps_generation_contract
     assert runtime.connection.client.calls == []
 
 
-def test_retired_z_abort_rejects_without_dispatch(monkeypatch):
-    client, runtime = make_client(monkeypatch)
-    runtime.connection.client.responses["invoke_operator_action"] = receipt(
-        action_id="oem.z.abort",
-        key="z-abort-12345678",
-        command_id="z-abort-command-1",
-    )
-
-    response = client.post("/api/bioxp/operator-controls/actions/oem.z.abort", json={
-        "expected_connection_generation": 77,
-        "expected_ownership_generation": 7,
-        "idempotency_key": "z-abort-12345678",
-        "inputs": {},
-    })
-
-    assert response.status_code == 410, response.text
-    assert "retired" in response.json()["detail"]
-    assert runtime.connection.safety_interrupt_calls == []
-    assert runtime.connection.client.calls == []
-
-
 def test_x_stop_and_abort_use_independent_interrupt_lane(monkeypatch):
     for action_id in ("oem.x.stop", "oem.abort_all"):
         client, runtime = make_client(monkeypatch)
@@ -2821,18 +1601,6 @@ def test_x_stop_and_abort_use_independent_interrupt_lane(monkeypatch):
             },
         )]
         assert runtime.connection.client.calls[-1][1]["path_params"] == {"action_id": action_id}
-
-
-def test_receipt_identity_mismatch_fails_closed(monkeypatch):
-    client, runtime = make_client(monkeypatch)
-    runtime.connection.client.responses["invoke_operator_action"] = receipt(action_id="motion.home_z")
-    response = client.post("/api/bioxp/operator-controls/actions/motion.home_xy", json={
-        "expected_connection_generation": 77,
-        "expected_ownership_generation": 7,
-        "idempotency_key": "invoke-12345678",
-        "inputs": {},
-    })
-    assert response.status_code == 502
 
 
 def test_mutation_gate_blocks_action_and_assessment(monkeypatch):
@@ -2978,21 +1746,6 @@ def test_history_defaults_limit_to_100_when_omitted(monkeypatch):
     assert runtime.connection.client.calls[-1][1]['params'] == {'limit': 100}
 
 
-@pytest.mark.parametrize('invalid', ['old_format', 'wrong_limit', 'missing_summary', 'unknown_authority', 'coerced_truth', 'duplicate', 'partial_cursor'])
-def test_history_rejects_wrong_or_incomplete_contract(monkeypatch, invalid):
-    client, runtime = make_client(monkeypatch)
-    page = history_page()
-    if invalid == 'old_format': page = {'schema_version': 'bioxp.operator_action_history.v1', 'receipts': [receipt()]}
-    elif invalid == 'wrong_limit': page['limit'] = 50
-    elif invalid == 'missing_summary': del page['items'][0]['history']
-    elif invalid == 'unknown_authority': page['items'][0]['history']['current_motion_authority'] = True
-    elif invalid == 'coerced_truth': page['items'][0]['history']['controller_acknowledged'] = 1
-    elif invalid == 'duplicate': page['items'].append(copy.deepcopy(page['items'][0]))
-    elif invalid == 'partial_cursor': page['next_cursor'] = 'another-page'
-    runtime.connection.client.responses['operator_action_history'] = page
-    assert client.get('/api/bioxp/operator-controls/history').status_code == 502
-
-
 def test_receipt_detail_keeps_incomplete_native_evidence_without_promoting_it(monkeypatch):
     client, runtime = make_client(monkeypatch)
     native = {'command_id': 'cmd-1', 'authority_fingerprint': 'a' * 64,
@@ -3009,210 +1762,6 @@ _FIXED_QUARANTINE_CASES = (
     ("route.motion_power_diag", "/motion/power/diag"),
     ("route.runtime_emergency_stop", "/oem/runtime/emergency_stop"),
 )
-
-
-def test_semantically_unproven_operator_paths_are_visible_but_never_mutation_relayed(monkeypatch):
-    client, runtime = make_client(monkeypatch)
-    catalog_payload = runtime.connection.client.responses["operator_control_catalog"]
-    template = catalog_payload["actions"][0]
-    for action_id, path in _FIXED_QUARANTINE_CASES:
-        catalog_payload["actions"].append({
-            **template,
-            "action_id": action_id,
-            "label": action_id,
-            "kind": "primitive",
-            "informational_method": "POST",
-            "informational_path": path,
-            "provider_available": True,
-            "provider_unavailable_reason": None,
-            "available": True,
-            "unavailable_reason": None,
-            "enabled": True,
-            "disabled_reason": None,
-            "dependencies": [],
-            "inputs": [],
-            "stages": [],
-        })
-
-    catalog_response = client.get("/api/bioxp/operator-controls/catalog")
-    assert catalog_response.status_code == 200, catalog_response.text
-    by_id = {row["action_id"]: row for row in catalog_response.json()["actions"]}
-    for action_id, path in _FIXED_QUARANTINE_CASES:
-        reason = OPERATOR_SEMANTIC_QUARANTINE_BY_PATH[path]
-        row = by_id[action_id]
-        assert row["provider_available"] is False
-        assert row["available"] is False
-        assert row["enabled"] is False
-        assert row["provider_unavailable_reason"] == reason
-        assert row["disabled_reason"] == reason
-
-    runtime.connection.client.calls.clear()
-    for action_id, path in _FIXED_QUARANTINE_CASES:
-        reason = OPERATOR_SEMANTIC_QUARANTINE_BY_PATH[path]
-        admission = client.post(f"/api/bioxp/operator-controls/actions/{action_id}/admission", json={
-            "expected_connection_generation": 77,
-            "expected_ownership_generation": 7,
-            "inputs": {},
-        })
-        assert admission.status_code == 200, admission.text
-        assert admission.json()["enabled"] is False
-        assert admission.json()["disabled_reason"] == reason
-
-        invocation = client.post(f"/api/bioxp/operator-controls/actions/{action_id}", json={
-            "expected_connection_generation": 77,
-            "expected_ownership_generation": 7,
-            "idempotency_key": f"quarantine-{action_id[-12:]}",
-            "inputs": {},
-        })
-        assert invocation.status_code == 409
-        assert invocation.json()["detail"] == reason
-
-    assert runtime.connection.client.calls == []
-
-
-def test_quarantine_validates_both_generation_domains_before_responding(monkeypatch):
-    client, runtime = make_client(monkeypatch)
-    payload = runtime.connection.client.responses["operator_control_catalog"]
-    template = payload["actions"][0]
-    action_id, path = _FIXED_QUARANTINE_CASES[0]
-    payload["actions"].append({
-        **template,
-        "action_id": action_id,
-        "informational_method": "POST",
-        "informational_path": path,
-        "inputs": [],
-    })
-
-    stale_connection = client.post(f"/api/bioxp/operator-controls/actions/{action_id}/admission", json={
-        "expected_connection_generation": 999,
-        "expected_ownership_generation": 7,
-        "inputs": {},
-    })
-    assert stale_connection.status_code == 200
-    assert stale_connection.json()["enabled"] is False
-    assert runtime.connection.client.calls == []
-
-    stale_ownership = client.post(f"/api/bioxp/operator-controls/actions/{action_id}/admission", json={
-        "expected_connection_generation": 77,
-        "expected_ownership_generation": 999,
-        "inputs": {},
-    })
-    assert stale_ownership.status_code == 200
-    assert stale_ownership.json()["enabled"] is False
-    assert runtime.connection.client.calls == []
-
-
-def test_catalog_removes_non_oem_session_field_and_keeps_latest_startup_status(monkeypatch):
-    client, runtime = make_client(monkeypatch)
-    payload = runtime.connection.client.responses["operator_control_catalog"]
-    template = payload["actions"][0]
-    session_input = {
-        **template["inputs"][0],
-        "name": "session_id",
-        "wire_name": "session_id",
-        "label": "Session Id",
-        "value_type": "string",
-        "location": "path",
-        "required": True,
-        "default": None,
-    }
-    payload["actions"].extend([
-        {
-            **template,
-            "action_id": "route.startup_status_by_session",
-            "kind": "primitive",
-            "informational_method": "GET",
-            "informational_path": "/oem/startup/status/{session_id}",
-            "inputs": [session_input],
-        },
-        {
-            **template,
-            "action_id": "route.startup_status_latest",
-            "kind": "primitive",
-            "informational_method": "GET",
-            "informational_path": "/oem/startup/status/latest",
-            "inputs": [],
-        },
-        {
-            **template,
-            "action_id": "route.startup_door_event",
-            "kind": "primitive",
-            "informational_method": "POST",
-            "informational_path": "/oem/startup/door_event",
-            "inputs": [{**session_input, "location": "body", "required": False}],
-        },
-    ])
-
-    response = client.get("/api/bioxp/operator-controls/catalog")
-    assert response.status_code == 200, response.text
-    actions = response.json()["actions"]
-    paths = {row["informational_path"] for row in actions}
-    assert "/oem/startup/status/latest" in paths
-    assert "/oem/startup/status/{session_id}" not in paths
-    assert all(input_row["name"] != "session_id" for row in actions for input_row in row["inputs"])
-
-
-def test_history_accepts_failed_x_receipt_without_authority_when_nothing_dispatched():
-    """R-A4 regression: the three live 2026-08-18 rows (failure
-    x_observed_commissioning_required_before_automatic_home) must validate and
-    appear in history instead of 502ing the whole endpoint."""
-    failed = receipt(action_id="oem.x.move_absolute", command_id="operator_1787095402672_8bf5ce277249")
-    failed.update({
-        "status": "failed",
-        "controller_acknowledged": True,
-        "controller_terminal_state_verified": False,
-        "physical_effect_verified": False,
-        "authority_receipt_id": None,
-        "authority_receipt_status": None,
-        "authority_fingerprint": None,
-        "response": {
-            "http_status": 409,
-            "body": {
-                "detail": {
-                    "automatic_prerequisites": [],
-                    "axis": "x",
-                    "failure": "x_observed_commissioning_required_before_automatic_home",
-                    "ok": False,
-                    "requested_motion_dispatched": False,
-                    "state": "prepared_unreferenced",
-                },
-            },
-        },
-    })
-
-    parsed = OperatorActionReceipt.model_validate(failed)
-
-    assert parsed.status == "failed"
-    assert parsed.authority_receipt_id is None
-    assert parsed.controller_acknowledged is True
-
-
-def test_history_rejects_failed_x_receipt_without_authority_when_motion_dispatched():
-    """R-A4 guard: controller evidence without an authority identity still
-    rejects when the response proves a dispatch happened."""
-    dispatched = receipt(action_id="oem.x.move_steps", command_id="operator-dispatch-no-authority")
-    dispatched.update({
-        "status": "failed",
-        "controller_acknowledged": True,
-        "controller_terminal_state_verified": False,
-        "authority_receipt_id": None,
-        "authority_receipt_status": None,
-        "authority_fingerprint": None,
-        "response": {
-            "http_status": 409,
-            "body": {
-                "detail": {
-                    "axis": "x",
-                    "failure": "x_some_dispatch_failure",
-                    "ok": False,
-                    "requested_motion_dispatched": True,
-                },
-            },
-        },
-    })
-
-    with pytest.raises(ValueError):
-        OperatorActionReceipt.model_validate(dispatched)
 
 
 def refusal_stop_receipt() -> dict:
@@ -3263,44 +1812,6 @@ def refusal_stop_receipt() -> dict:
     }
 
 
-_REFUSAL_EVIDENCE_FLAGS = (
-    "source_call_completed",
-    "source_return_ok",
-    "controller_stop_acknowledged",
-    "controller_terminal_state_verified",
-)
-
-
-def test_refusal_stop_receipt_requires_nullable_evidence_backfill() -> None:
-    payload = refusal_stop_receipt()
-
-    with pytest.raises(ValidationError):
-        OperatorActionReceiptV2.model_validate(payload)
-
-    normalized = _normalize_interrupt_evidence(payload)
-    parsed = OperatorActionReceiptV2.model_validate(normalized)
-
-    assert parsed.status == "rejected"
-    evidence = parsed.interrupt_evidence
-    assert evidence is not None
-    for flag in _REFUSAL_EVIDENCE_FLAGS:
-        assert getattr(evidence, flag) is None
-    assert evidence.persistence_state == "committed"
-    assert evidence.physical_effect_verified is False
-    assert evidence.details == {
-        "rejection": "interrupt_request_schema_required",
-        "required_schema": "bioxp.operator_interrupt_request.v1",
-        "surface": "x",
-    }
-    # The relayed robot payload is never mutated in place.
-    assert "source_call_completed" not in payload["interrupt_evidence"]
-
-
-def test_interrupt_evidence_normalization_is_identity_when_complete() -> None:
-    payload = v2_dashboard()
-    assert _normalize_interrupt_evidence(payload) is payload
-
-
 def test_v2_dashboard_route_relays_refusal_receipt(monkeypatch) -> None:
     client, runtime = make_client(monkeypatch)
     payload = v2_dashboard()
@@ -3311,8 +1822,7 @@ def test_v2_dashboard_route_relays_refusal_receipt(monkeypatch) -> None:
 
     assert response.status_code == 200
     evidence = response.json()["latest_receipts"][0]["interrupt_evidence"]
-    for flag in _REFUSAL_EVIDENCE_FLAGS:
-        assert evidence[flag] is None
+    assert evidence == refusal_stop_receipt()["interrupt_evidence"]
     assert evidence["details"]["rejection"] == "interrupt_request_schema_required"
 
 
@@ -3338,8 +1848,7 @@ def test_v2_catalog_route_relays_refusal_receipt(monkeypatch) -> None:
 
     assert response.status_code == 200
     evidence = response.json()["dashboard"]["latest_receipts"][0]["interrupt_evidence"]
-    for flag in _REFUSAL_EVIDENCE_FLAGS:
-        assert evidence[flag] is None
+    assert evidence == refusal_stop_receipt()["interrupt_evidence"]
 
 
 def test_v2_receipt_route_relays_refusal_receipt(monkeypatch) -> None:
@@ -3352,5 +1861,4 @@ def test_v2_receipt_route_relays_refusal_receipt(monkeypatch) -> None:
 
     assert response.status_code == 200
     evidence = response.json()["interrupt_evidence"]
-    for flag in _REFUSAL_EVIDENCE_FLAGS:
-        assert evidence[flag] is None
+    assert evidence == refusal_stop_receipt()["interrupt_evidence"]

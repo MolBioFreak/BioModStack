@@ -116,7 +116,9 @@ export async function preparePdbStructureSource(source: BC2Source, session = cre
 async function convertPdbSource(source: BC2Source, acquire: (source: BC2Source) => Promise<{ path: string; document: BC2Document }>): Promise<{ path: string; document: BC2Document }> {
     const acquired = await acquire(source);
     if (acquired.document.format === 'fasta') throw new Error('A sequence is not a PDB structure.');
-    if (acquired.document.format === 'pdb') return acquired;
+    // A PDB-only receiver must consume the explicitly chosen conformation too.
+    // Keep ordinary and already-single-model PDBs on the existing no-copy path.
+    if (acquired.document.format === 'pdb' && (source.modelNumber === undefined || acquired.document.models.length <= 1)) return acquired;
     const native = acquired.document.source || source;
     const materialization = await materializeExactStructure({ path: acquired.path, output_format: 'pdb',
         model_number: source.modelNumber, expected_sha256: native.materialization?.sha256 });

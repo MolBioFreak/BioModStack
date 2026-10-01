@@ -72,7 +72,7 @@ async def lane(tmp_path, monkeypatch):
         state.transfer_entered.set()
         await state.transfer_release.wait()
         await kw['check_fence']()
-        # Offline byte-check double; production worker ingest/probe is unchanged.
+        # Received bytes still match the admitted publication declaration.
         for entry in kw['entries']:
             assert hashlib.sha256(entry.source.read_bytes()).hexdigest() == entry.sha256
         return dict(artifacts=[dict(name=e.remote_destination, sha256=e.sha256, size_bytes=e.size_bytes)
@@ -147,7 +147,7 @@ async def test_queued_pack_prepares_without_job_mutation_or_third_preview(lane, 
     assert result['selection'] == SELECTION.model_dump()
     assert result['job_id'] is None
     assert lane.previews == 2  # UI approval plus start; no third full inventory hash.
-    assert lane.activations == 1
+    assert lane.activations == 0
     async with lane.factory() as s:
         assert p.recipe_snapshot(await s.get(Job, JOB)).__dict__ == before
         assert (await s.get(ExecutionTarget, TARGET)).leased_job_id is None
@@ -296,9 +296,9 @@ async def test_admitted_plan_preserves_source_and_endpoint_checks(lane, monkeypa
             await s.commit()
     release.set()
     assert (await settle(lane))['phase'] == ('source_download_ready' if mutation == 'touch' else 'failed')
-    assert lane.previews == (3 if mutation in {'bytes', 'touch'} else 2)
-    assert lane.transfers == (1 if mutation == 'touch' else 0)
-    assert lane.activations == (1 if mutation == 'touch' else 0)
+    assert lane.previews == 2  # Metadata touches never cause a third asset scan.
+    assert lane.transfers == (1 if mutation in {'touch', 'bytes'} else 0)
+    assert lane.activations == 0  # Actual delivery, not a second installed release.
 
 
 @pytest.mark.asyncio
@@ -313,9 +313,9 @@ async def test_pack_passes_existing_backend_without_inference(lane, backend):
     assert result['phase'] == 'source_download_ready'
     assert result['artifacts'][0]['name'] == 'weights/generic/model.bin'
     assert 'source cached and 1 shared weight layouts prepared' in result['message']
-    assert 'scientific readiness remains unverified' in result['message']
-    assert ('runtime images prepared' in result['message']) == (backend is not None)
-    assert ('preparation deferred: attached backend is unknown' in result['message']) == (backend is None)
+    assert result['message'].startswith('Downloads complete')
+    assert 'runtime images prepared' not in result['message']
+    assert 'activated' not in result['message']
     assert lane.forwarded_backend == backend
 
 
@@ -342,6 +342,27 @@ async def test_source_revision_changes_during_start_preview_refuse(lane, monkeyp
     with pytest.raises(targets.ExecutionTargetError, match='Source identity changed'):
         await start(lane, request)
     assert lane.transfers == 0
+
+
+@pytest.mark.asyncio
+async def test_download_never_installs_release_or_refreshes_prior_observation(lane, monkeypatch):
+    legacy = {'manifests': [], 'observation': {'legacy': 'retained'},
+              'refresh_failed': False, 'endpoint_sha256': 'f' * 64}
+    async with lane.factory() as s:
+        row = await s.get(ExecutionTarget, TARGET)
+        row.provider_metadata = dict(row.provider_metadata, managed_inventory=deepcopy(legacy))
+        await s.commit()
+    async def forbidden(*args, **kwargs):
+        pytest.fail('Download invoked managed install/audit or native qualification')
+    monkeypatch.setattr(managed, 'helper_call', forbidden)
+    monkeypatch.setattr(managed, 'activate_release', forbidden)
+    monkeypatch.setattr(managed, 'observe_releases', forbidden)
+    await start(lane)
+    assert (await settle(lane))['phase'] == 'source_download_ready'
+    async with lane.factory() as s:
+        row = await s.get(ExecutionTarget, TARGET)
+        assert row.provider_metadata['managed_inventory'] == legacy
+        assert row.provider_metadata['artifact_inventory']['artifacts'][0]['name'] == 'weights/generic/model.bin'
 
 
 @pytest.mark.asyncio

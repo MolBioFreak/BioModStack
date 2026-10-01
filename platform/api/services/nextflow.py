@@ -2425,13 +2425,31 @@ def needs_component_runtime(invocation):
             any(blocker.field == 'computational_closure' for blocker in metadata.blockers))
 
 
+def _receive_local_md_production_pause(job, context_path):
+    """The launcher must not translate a joined production pause into failure."""
+    if (job.model_id, job.mode) != ('molecular_dynamics', 'simulate') or not context_path:
+        return False
+    from scripts.lib.component_adapter import runtime_from_environment
+    runtime = runtime_from_environment(context_path)
+    state = runtime.root_state() if runtime is not None else None
+    if (not state or state['state'] != 'paused' or not state.get('md_pause')
+            or not state.get('quiescent') or runtime.root_job_id != str(job.id)):
+        return False
+    job.status = job.queue_status = 'paused'
+    job.paused = True
+    job.assigned_gpu = None
+    job.params = release_scheduler_gpu_assignment(job.params)
+    job.error_message = None
+    return True
+
+
 def _local_checkpoint_resume(job):
     """Load a retained local owner; never initialize a replacement ledger."""
     import sys
     from component_runtime import SourceIdentity
     from dataclasses import asdict
     provenance = dict(job.provenance or {})
-    pending = provenance.get('component_checkpoint_resume') or provenance.get('component_retry')
+    pending = provenance.get('component_md_resume') or provenance.get('component_checkpoint_resume') or provenance.get('component_retry')
     if not pending:
         return None
     if provenance.get('component_checkpoint_resume') and provenance.get('component_retry'):
@@ -2448,7 +2466,7 @@ def _local_checkpoint_resume(job):
     from scripts.lib.component_adapter import runtime_from_environment
     runtime = runtime_from_environment(str(path))
     runtime.check_active()
-    if provenance.get('component_retry'):
+    if provenance.get('component_retry') or provenance.get('component_md_resume'):
         return path, runtime.context, runtime, None, pending
     checkpoint = runtime.checkpoint_status(pending['checkpoint_id'])
     if checkpoint['checkpoint_sha256'] != pending['checkpoint_sha256']:
@@ -2459,8 +2477,24 @@ def _local_checkpoint_resume(job):
 
 def _compile_local_component_retry(job, retained):
     """Reuse the scheduler-acquired local owner and the shared retry adapter."""
-    from scripts.lib.component_adapter import retry_component_workflow
+    from types import SimpleNamespace
+    from scripts.lib.component_adapter import retry_component_workflow, resume_md_workflow
     path, context, runtime, _, pending = retained
+    if pending.get('kind') == 'md_production':
+        if (job.status != 'running' or job.assigned_gpu != context['resources'].get('gpu_id')
+                or not pending.get('continuation_lease_id')):
+            raise ValueError('MD continuation requires scheduler/GPU reacquisition')
+        prior = (runtime.root_state() or {}).get('continuation_edge', {})
+        resources = (dict(prior['resources']) if prior.get('operation_id') == pending['operation_id'] else
+            component_checkpoint_resources(SimpleNamespace(
+                execution_plan=context['execution_plan'], generated_inputs=()), context))
+        invocations = []
+        resume_md_workflow(path, operation_id=pending['operation_id'],
+            pause_operation_id=pending['pause_operation_id'],
+            boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+            continuation_lease_id=pending['continuation_lease_id'], resources=resources,
+            checkpoints=pending['checkpoints'], native_invocations=invocations)
+        return invocations[0]
     if (job.execution_target_id is not None or job.status != 'running'
             or not pending.get('continuation_lease_id')
             or context['resources'].get('gpu_id') != job.assigned_gpu):
@@ -2548,7 +2582,8 @@ def _component_launch_command(invocation, job, command, environment, *, attempt,
                 parent_snapshot=component_checkpoint_parent_snapshot(invocation, context),
                 resources=component_checkpoint_resources(invocation, context))
         else:
-            edge = runtime.retry_status(pending['operation_id'])
+            edge = ((runtime.root_state() or {}).get('continuation_edge')
+                    if pending.get('kind') == 'md_production' else runtime.retry_status(pending['operation_id']))
             if edge is None or edge['plan_sha256'] != invocation.execution_plan.plan_sha256:
                 raise ValueError('Component retry launch does not match its authorized continuation')
         environment['BMS_COMPONENT_CONTEXT'] = str(path)
@@ -2562,7 +2597,9 @@ def _component_launch_command(invocation, job, command, environment, *, attempt,
         invocation.execution_plan.plan_sha256, {})
     from services.remote_execution.targets import selected_plan_target_resources
     from types import SimpleNamespace
-    gpu_ids = (job.params or {}).get('pinned_gpus') or ([] if job.assigned_gpu is None else [job.assigned_gpu])
+    gpu_ids = ([] if job.assigned_gpu is None else [job.assigned_gpu]) if (
+        job.model_id == 'molecular_dynamics' and job.mode == 'simulate'
+    ) else ((job.params or {}).get('pinned_gpus') or ([] if job.assigned_gpu is None else [job.assigned_gpu]))
     resources = selected_plan_target_resources(SimpleNamespace(id='local'), invocation.execution_plan,
         gpu_ids=gpu_ids, scratch_bytes=0)
     resources['gpu_id'] = job.assigned_gpu
@@ -2610,19 +2647,22 @@ async def _project_local_components(job, session, context_path):
     if runtime is None or runtime.target_id != 'local' or runtime.root_job_id != str(job.id):
         raise ValueError('Local component projection requires the retained root owner')
     state = runtime.root_state()
-    if state is None or not state.get('quiescent'):
+    observing = (job.model_id == 'molecular_dynamics' and job.mode == 'simulate'
+                 and state is not None and state.get('state') == 'running')
+    if state is None or (not observing and not state.get('quiescent')):
         raise ValueError('Local component projection requires stopped execution writers')
     # Transport bindings stay relative to the original attempt root. Each native
     # collector publishes its own immutable sidecar inside its output generation.
-    native_output = Path(runtime.context['parent']['output_dir']).resolve()
+    native_output = Path(((state.get('continuation_edge') or {}).get('parent_snapshot')
+                          or runtime.context['parent'])['output_dir']).resolve()
     projection_relative = (native_output.relative_to(runtime.artifact_root) / '.bms-components.json').as_posix()
     expected = dict(root_job_id=runtime.root_job_id, attempt_id=runtime.attempt_id,
         target_id=runtime.target_id, lease_id=runtime.lease_id,
         source_identity=runtime.source_identity, plan_sha256=runtime.plan_sha256,
-        current_plan_sha256=runtime.context['plan_sha256'],
+        current_plan_sha256=(state.get('continuation_edge') or {}).get('plan_sha256', runtime.plan_sha256),
         generation=state.get('generation', 0), artifact_root=str(runtime.artifact_root),
         projection_relative_path=projection_relative,
-        projection_sha256=hashlib.sha256(canonical_bytes(runtime.export_projection())).hexdigest())
+        projection_sha256=hashlib.sha256(canonical_bytes(runtime.export_projection(control_observation=observing))).hexdigest())
     await ingest_component_projection(job, str(runtime.artifact_root), session,
                                       expected_context=expected)
 
@@ -2786,7 +2826,8 @@ async def launch_nextflow_job(
             from services.core_protein_scientific_contract import workflow_params
             launch_params = workflow_params(job, launch_params)
             component_retry = (job.provenance or {}).get('component_retry')
-            checkpoint_resume = (job.provenance or {}).get('component_checkpoint_resume') or component_retry
+            checkpoint_resume = ((job.provenance or {}).get('component_md_resume')
+                or (job.provenance or {}).get('component_checkpoint_resume') or component_retry)
             if checkpoint_resume or (
                     model_id == 'boltzgen' and job.mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}
                     and launch_params.get('boltzgen_yaml_config')):
@@ -3175,7 +3216,7 @@ async def launch_nextflow_job(
                     if retained is None:
                         raise ValueError('Retained component continuation context is missing')
                     _, context, runtime, checkpoint, pending = retained
-                    invocation = (_compile_local_component_retry(job, retained) if component_retry else
+                    invocation = (_compile_local_component_retry(job, retained) if component_retry or pending.get('kind') == 'md_production' else
                         compile_component_checkpoint_continuation(context, checkpoint, pending['decision']))
                 else:
                     invocation = await _compile_launch_nextflow_invocation(
@@ -3551,7 +3592,9 @@ async def launch_nextflow_job(
                 else:
                     checkpoints = await asyncio.to_thread(_local_component_checkpoints,
                         env.get('BMS_COMPONENT_CONTEXT'))
-                    if checkpoints:
+                    if _receive_local_md_production_pause(job, env.get('BMS_COMPONENT_CONTEXT')):
+                        pass  # API checkpoint owner commits native segments and pause event.
+                    elif checkpoints:
                         job.awaiting_payload = {**dict(job.awaiting_payload or {}),
                             'component_checkpoint': checkpoints[0], 'component_checkpoints': checkpoints}
                         job.awaiting_stage = checkpoints[0]['stage']
@@ -3769,10 +3812,8 @@ async def launch_nextflow_job(
                         # worker ORM snapshot has been expunged, so an operator's
                         # concurrent cancellation remains authoritative even when
                         # the terminal CAS loses its race.
-                        from services.md.lifecycle import reconcile_md_analysis_parent
-
                         session.expire_all()
-                        await reconcile_md_analysis_parent(md_analysis_parent_id, session)
+                        await reconcile_md_analysis_parent_if_current(md_analysis_parent_id, session)
                         await session.commit()
                 _running_units.pop(job_id, None)
                 
@@ -3844,10 +3885,28 @@ async def launch_nextflow_job(
                             stale_log_message="Skipped stale Nextflow exception publication for job %s",
                         )
                         if published and is_md_analysis:
-                            from services.md.lifecycle import reconcile_md_analysis_parent
-
-                            await reconcile_md_analysis_parent(str(job.parent_job_id), session)
+                            await reconcile_md_analysis_parent_if_current(str(job.parent_job_id), session)
                             await session.commit()
+
+
+async def reconcile_md_analysis_parent_if_current(parent_job_id, session):
+    """Hand off a fresh parent, never a cancelled/review-owned ORM snapshot.
+
+    The lifecycle finalizer still owns the publication fence and transaction.
+    This read also covers a late callback whose child terminal CAS lost.
+    """
+    from database import Job, MdRun
+    from services.md.lifecycle import reconcile_md_analysis_parent
+    with session.no_autoflush:
+        parent = await session.get(Job, str(parent_job_id), populate_existing=True)
+        run = await session.get(MdRun, str(parent_job_id), populate_existing=True)
+    if parent is not None and (
+        parent.status in {'cancelled', 'awaiting_input'}
+        or parent.queue_status == 'cancelled' or parent.awaiting_input
+        or (run is not None and run.phase in {'cancelling', 'cancelled'})
+    ):
+        return {'status': 'preserved'}
+    return await reconcile_md_analysis_parent(str(parent_job_id), session)
 
 
 def launch_nextflow_job_detached(
@@ -4110,7 +4169,7 @@ def _native_plan_metadata_settings(model_id, params):
 
 
 def build_selected_execution_plan(*, model_id, mode, entrypoint, requested, effective,
-                                  native_parameters, source_identity, metadata_settings=None):
+                                  native_parameters, source_identity, metadata_settings=None, profiles=()):
     """One shared logical-plan constructor for native commands and typed requests.
 
     A dependency-only preview does not need a fabricated Job, GPU assignment or
@@ -4151,6 +4210,10 @@ def build_selected_execution_plan(*, model_id, mode, entrypoint, requested, effe
         metadata = replace(metadata,
             static_components=tuple(bind_preparation(row) for row in metadata.static_components),
             dynamic_templates=tuple(bind_preparation(row) for row in metadata.dynamic_templates))
+    from native_profile_resources import bind_selected_profile_resources
+    from paths import get_code_root
+    metadata = bind_selected_profile_resources(metadata, profiles=tuple(profiles),
+        config_path=get_code_root() / 'nextflow.config')
     return SelectedExecutionPlan(source_identity, Path(entrypoint).stem, model_id, mode,
         entrypoint, snapshot(requested), effective_json, snapshot(native_parameters), metadata)
 
@@ -4687,6 +4750,14 @@ def compile_component_nextflow_invocation(request, context: dict):
             provenance['fampnn_analysis_declaration'] = declaration
         params = science.workflow_params(SimpleNamespace(model_id=model_id, provenance=provenance), params)
 
+    if (model_id, mode) == ('molecular_dynamics', 'replica'):
+        # Retain production bytes outside Nextflow task staging, including a
+        # nonzero checkpoint exit for which publishDir never runs.
+        params['md_resume_output_dir'] = str(output_dir / 'native')
+        continuation = context.get('md_resume', {}).get(request.component_id)
+        if continuation:
+            params.update({key: value for key, value in continuation.items() if key.startswith('md_resume_')})
+
     resources = context['resources']
     # MD analysis is natively CPU-only even when its root reserves a GPU.
     cpu_only = (model_id, mode) == ('molecular_dynamics', 'analyze')
@@ -4769,7 +4840,7 @@ def compile_component_retry_invocation(context, *, component_id, operation_id,
             any(path.is_symlink() for path in (output, *output.parents, work, *work.parents))):
         raise ValueError('Component retry requires fresh contained output and owned absolute work paths')
     receipt = deepcopy(spawn_receipt)
-    if (not isinstance(receipt, dict) or receipt.get('schema') != 'bms.md.replica-spawn.v1'
+    if (not isinstance(receipt, dict) or receipt.get('schema') not in {'bms.md.replica-spawn.v1', 'bms.md.analysis-spawn.v1'}
             or receipt.get('parent_job_id') != context['root_job_id']):
         raise ValueError('Component retry requires the native parent-bound replica spawn receipt')
     # Native adapter owns seed/roster validation; bind its complete bytes to this
@@ -4783,7 +4854,13 @@ def compile_component_retry_invocation(context, *, component_id, operation_id,
     for key in ('out_dir', 'job_id', 'resume_job_id', 'resume_source_dir',
                 'resume_requested_stage', 'resume_work_dir'):
         params.pop(key, None)
-    params['md_retry_spawn_receipt'] = str(root / receipt_relative)
+    params.pop('md_retry_spawn_receipt', None)
+    params.pop('md_analysis_retry_spawn_receipt', None)
+    receipt_key = ('md_analysis_retry_spawn_receipt' if receipt['schema'] == 'bms.md.analysis-spawn.v1'
+                   else 'md_retry_spawn_receipt')
+    params[receipt_key] = str(root / receipt_relative)
+    # Preserve bound metadata when the compiler relocates generated config inputs.
+    params['md_config'] = _native_plan_metadata_settings('molecular_dynamics', params)['md_config']
     params['work_dir'] = str(work / 'work')
     requested = deepcopy(parent.get('provenance', {}).get(
         'core_protein_requested_params', parent['params']))
@@ -5003,7 +5080,9 @@ def compile_nextflow_invocation(
         plan = build_selected_execution_plan(model_id=model_id, mode=mode,
             entrypoint=workflow_entrypoint, requested=invocation.requested_json,
             effective=invocation.effective_json, native_parameters=invocation.native_parameters_json,
-            source_identity=source, metadata_settings=metadata_settings)
+            source_identity=source, metadata_settings=metadata_settings,
+            profiles=tuple(command[command.index('-profile') + 1].split(','))
+                if '-profile' in command else ())
         return replace(invocation, source_identity=source, execution_plan=plan)
 
     from services.msa_policy import apply_msa_policy
@@ -5469,6 +5548,19 @@ def compile_nextflow_invocation(
             'md_input_root',
             str(Path(str(params['md_job_config'])).expanduser().resolve().parent),
         )
+        if mode == 'simulate' and params.get('gpu_id') is not None:
+            # Bind execution, not the saved requested science. The preparation
+            # task passes this physical identity into shared replica expansion;
+            # each engine's existing singleton namespace still runs logical 0.
+            bound = _native_plan_metadata_settings(model_id, params)['md_config']
+            bound['execution'] = {**bound.get('execution', {}),
+                                  'gpu_id': str(params['gpu_id'])}
+            execution_path = Path(output_dir) / 'inputs' / 'md_execution_config.json'
+            plan_input(execution_path, (json.dumps(bound, sort_keys=True) + '\n').encode('utf-8'))
+            params['md_job_config'] = str(execution_path)
+            # Metadata consumes the compiler-owned bytes before materialization,
+            # including fresh production continuation collector generations.
+            params['md_config'] = bound
     
     # Handle GPU priority forcing
     gpu_priority = params.get('gpu_priority', 'auto')

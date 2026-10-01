@@ -119,6 +119,93 @@
     "weights_iptm_loss": 0.05,
     "weights_plddt_loss": 0.1
   },
+  "display_resolver": {
+    "sha256": "8da47b9ad2df93a163eb2cad955e39fe7fd772a8a8e9ad842a6bfe5820a85e93",
+    "source": "def target_chain_name(target_chain_prefix: str, state_name: str) -> str:\n    return f'{target_chain_prefix}_{state_name}'\n\nclass ResidueFlags(IntFlag):\n    NONE = 0\n    DESIGN = 1 << 0\n    TEMPLATE = 1 << 1\n    SEQUENCE = 1 << 2\n    CONTACT = 1 << 3\n    HOTSPOT = 1 << 4\n    COLDSPOT = 1 << 5\n    CYCLIC = 1 << 6\n    PADDING = 1 << 7\n\n_EDIT_RE = re.compile('(?P<chain>[A-Za-z]+)(?P<start>\\\\d+)(?:-(?P<end>\\\\d+))?(?:\\\\((?P<lengths>[^)]+)\\\\))?(?P<flags>(?:[+-][A-Za-z]+|[*!])*)')\n\ndef parse_residue_length_choices(length_specification: str) -> list:\n    length_choices = []\n    for length_option in length_specification.split(','):\n        length_option = length_option.strip()\n        if '-' in length_option:\n            minimum_length, maximum_length = (int(length_value) for length_value in length_option.split('-', 1))\n            length_choices.extend(range(min(minimum_length, maximum_length), max(minimum_length, maximum_length) + 1))\n        else:\n            length_choices.append(int(length_option))\n    return length_choices\n\ndef named_residue_flag(name: str) -> ResidueFlags:\n    if name not in ResidueFlags.__members__:\n        raise ValueError(f\"residue span flag {name!r} is not a residue flag; the flags are {', '.join((flag.name for flag in ResidueFlags))}\")\n    return ResidueFlags[name]\n\ndef scaffold_edit_spans(edit_string: str, chain_letter: str, default_flags: ResidueFlags=ResidueFlags.DESIGN | ResidueFlags.CONTACT) -> list:\n    edit_spans, unmatched_text, parsed_position = ([], [], 0)\n    for residue_selection in _EDIT_RE.finditer(edit_string):\n        unmatched_text.append(edit_string[parsed_position:residue_selection.start()].strip(', '))\n        parsed_position = residue_selection.end()\n        if residue_selection.group('chain') != chain_letter:\n            continue\n        start = int(residue_selection.group('start'))\n        end = int(residue_selection.group('end')) if residue_selection.group('end') else start\n        start, end = (min(start, end), max(start, end))\n        replacement_length_choices = residue_selection.group('lengths')\n        flags = default_flags\n        for flag_delta in re.findall('[+-][A-Za-z]+|[*!]', residue_selection.group('flags')):\n            flag = ResidueFlags.CONTACT if flag_delta == '*' else ResidueFlags.DESIGN if flag_delta == '!' else named_residue_flag(flag_delta[1:])\n            flags = flags | flag if flag_delta.startswith('+') else flags & ~flag\n        edit_spans.append((start, end, parse_residue_length_choices(replacement_length_choices) if replacement_length_choices else None, flags))\n    unmatched_text.append(edit_string[parsed_position:].strip(', '))\n    if any(unmatched_text):\n        raise ValueError(f\"\"\"residue spans {edit_string!r} carry {' '.join(dict.fromkeys((text for text in unmatched_text if text)))!r} outside any span; a span is written \"A35\", \"A35-40\", \"A35-40(5-7)\", \"A35*\" for a framework position, \"A35!\" to hold the residue unredesigned, or \"A35+COLDSPOT\" to set a flag by name\"\"\")\n    return edit_spans\n\ndef scaffold_edit_flags(edit_string: str) -> list:\n    return [flags for chain_letter in dict.fromkeys((match.group('chain') for match in _EDIT_RE.finditer(edit_string))) for _, _, _, flags in scaffold_edit_spans(edit_string, chain_letter)]\n\nPROTOMER_SCOPED_LOSSES = ('binder_pae', 'compactness', 'binder_contacts')\n\nFASTA_SUFFIXES = ('.fasta', '.fa', '.faa')\n\nDEFAULT_IDR_CROP_LENGTHS = (10, 40)\n\nDEFAULT_INDUCED_FIT_INTERFACE_RMSD = 5.0\n\nDEFAULT_INDUCED_FIT_TM_TARGET = 0.6\n\nDEFAULT_DISORDERED_TARGET_PLDDT = 0.6\n\nDEFAULT_DETARGET_INTERFACE_RESIDUES = 3\n\ndef is_fasta(path) -> bool:\n    return Path(path or '').suffix.lower() in FASTA_SUFFIXES\n\ndef has_fasta_target(settings: dict) -> bool:\n    return any((is_fasta(target.get('target_path')) for target in settings.get('targets', [])))\n\nLOSS_PARAMETERS = {'interface_contact_distance': ('interface_contacts', 'cutoff'), 'non_contact_distance': ('non_contact', 'cutoff'), 'termini_distance_threshold': ('termini_distance', 'threshold_distance'), 'disulfide_distance': ('disulfide', 'distance'), 'disulfide_sigma': ('disulfide', 'sigma'), 'disulfide_sequence_separation': ('disulfide', 'sequence_separation'), 'disulfide_temperature': ('disulfide', 'temperature'), 'induced_fit_delta': ('induced_fit_interface', 'interface_rmsd_target'), 'induced_fit_interface_cutoff': ('induced_fit_interface', 'cutoff'), 'induced_fit_tm_target': ('induced_fit_global', 'tm_target'), 'humanization_species': ('humanization', 'species'), 'humanization_coupling_weight': ('humanization', 'coupling_weight'), 'humanization_hydro_weight': ('humanization', 'hydrophobicity_weight'), 'humanization_mhc2_weight': ('humanization', 'mhc_class_ii_weight'), 'exposed_loops_measure': ('exposed_loops', 'measure'), 'exposed_loops_distinguish_sheets': ('exposed_loops', 'distinguish_sheets')}\n\nDOMAIN_PARAMETERS = ('n_domains', 'min_domain_size', 'max_domain_size', 'max_domains', 'domain_rg_weight', 'domain_sep_weight', 'domain_contact_cutoff', 'domain_pae_margin', 'domain_linker_gap', 'domain_linker_sharpness', 'domain_linker_helix_weight')\n\nDESIGN_STAGE_NAMES = ('screen', 'refine', 'anneal', 'harden', 'mutate', 'final')\n\nCAMPAIGN_SETTING_NAMES = frozenset({'aa_bias', 'archive_trajectories', 'attention_backend', 'auto_multi_gpu', 'autotune', 'autotune_loss_weights', 'betasheet_reopt_extra_anneal_steps', 'betasheet_reopt_extra_refine_steps', 'betasheet_reopt_recycles', 'betasheet_reopt_trigger', 'binder_chain', 'binder_lengths', 'binder_name', 'binder_scaffold', 'binder_shapes', 'campaign_name', 'campaign_seed', 'compile_next_length', 'copies', 'crop_fasta_sequence', 'cyclic_offset_mode', 'cyclize_peptide', 'design_dropout', 'design_models', 'design_recycles', 'design_workers', 'desperation', 'desperation_trajectories', 'detarget_check_interval', 'domain_linker_fix_cut', 'enough_passing_sequences', 'filters', 'forced_targeting', 'forced_targeting_shell', 'gpu_ids', 'hash_design_names', 'idr_crop_count', 'induced_fit_monomer_adaptive', 'induced_fit_monomer_chunk', 'induced_fit_monomer_plddt', 'induced_fit_monomer_steps', 'induced_fit_mpnn_designed_share', 'induced_fit_mpnn_shell', 'induced_fit_mpnn_threshold', 'induced_fit_steps', 'initial_guess', 'kept_sequences', 'length_bucket_size', 'losses', 'max_binder_chain_breaks_final', 'max_binder_free_cysteines_final', 'max_coldspot_contact_final', 'max_cyclic_closure_distance_final', 'max_detarget_interface_residues_final', 'max_detarget_iptm', 'max_detarget_rounds', 'max_exposed_loop_fraction_final', 'max_helix_fraction_final', 'max_induced_fit_tm_final', 'max_interdomain_contact_final', 'max_mhc_anchor_score_final', 'max_off_epitope_contact_final', 'max_off_paratope_contact_final', 'max_oligomer_symmetry_rmsd_final', 'max_protease_site_score_final', 'max_scaffold_framework_rmsd_final', 'max_surface_hydrophobicity_final', 'max_termini_distance_final', 'max_terminus_exposure_final', 'max_trajectories', 'max_workers_per_gpu', 'min_binder_disulfides_final', 'min_domain_separation_ratio_final', 'min_epitope_residues_contacted_final', 'min_framework_packing_final', 'min_hotspot_contact_final', 'min_induced_fit_interface_rmsd_final', 'min_interface_buried_area_final', 'min_receptor_chains_contacted_final', 'min_scaffold_sequence_retained_final', 'min_target_crop_length_final', 'min_target_plddt_final', 'min_termini_away_cosine_final', 'mpnn_fix_linker', 'mpnn_model', 'mpnn_variant', 'multitarget_best_round', 'multitarget_cumulative_filter', 'multitarget_filter_models', 'multitarget_merged_gradient_budget', 'multitarget_merged_gradients', 'multitarget_rounds_per_target', 'multitarget_steps', 'multitarget_swap_patience', 'multitarget_swap_threshold', 'multitarget_tied_redesign', 'multitarget_warmup_patience', 'mutate_positions', 'number_of_final_designs', 'oligomer_tie', 'parameter_sweep', 'project_folder', 'redesign_interface', 'relax_accepted_designs', 'relax_learning_rate', 'relax_min_sep', 'relax_overlap_tol', 'relax_restraint_backbone', 'relax_restraint_sidechain', 'relax_steps', 'relax_weight_bond', 'relax_weight_clash', 'resume', 'save_binder_monomers', 'save_design_animations', 'save_design_frames', 'save_design_trajectory', 'save_design_sequences', 'save_failed_refolds', 'save_failed_trajectories', 'save_loss_plots', 'sequence_candidates', 'sparse_output', 'subbatch_size', 'target_chain', 'targets', 'trajectory_only', 'use_cueq', 'validation_crop_flank', 'validation_model', 'validation_models', 'validation_recycles', 'worker_launch_stagger', 'workers_per_gpu'})\n\nFINAL_CONFIDENCE_FILTERS = {'min_monomer_plddt_final': 'Unbound_Binder_pLDDT', 'min_ptm_final': 'pTM', 'min_iptm_final': 'i_pTM', 'max_ipae_final': 'i_pAE'}\n\nTARGET_SETTING_NAMES = frozenset({'name', 'target_path', 'chains', 'hotspots', 'coldspots', 'weight', 'objective'})\n\nMETRIC_ENTRY_NAMES = frozenset({'params', 'prediction_state'})\n\nFILTER_ENTRY_NAMES = METRIC_ENTRY_NAMES | {'threshold', 'higher', 'mandatory'}\n\n@dataclass(frozen=True)\nclass PreparedTargetState:\n    name: str\n    source_target: str\n    path: str | None\n    objective: str\n    weight: float\n    target_chain: str\n    chains: str = ''\n    hotspots: str = ''\n    coldspots: str = ''\n    crop_index: int = 0\n    crop_length_bounds: tuple[int, int] | None = None\n\ndef resolve_crop_length_bounds(settings: dict) -> tuple[int, int] | None:\n    crop_lengths = settings.get('crop_fasta_sequence', DEFAULT_IDR_CROP_LENGTHS)\n    if crop_lengths is None or crop_lengths is False:\n        return None\n    crop_length_bounds = (crop_lengths, crop_lengths) if isinstance(crop_lengths, int) and (not isinstance(crop_lengths, bool)) else crop_lengths\n    if not isinstance(crop_length_bounds, (tuple, list)) or len(crop_length_bounds) != 2 or min(crop_length_bounds) < 1:\n        raise ValueError('crop_fasta_sequence must be a positive length, two-value range, or false')\n    return (min(crop_length_bounds), max(crop_length_bounds))\n\ndef resolve_prepared_states(settings: dict) -> tuple[PreparedTargetState, ...]:\n    target_chain_prefix = settings.get('target_chain', 'target')\n    prepared_states = []\n    for target in settings.get('targets', []):\n        path = target.get('target_path')\n        crop_count = max(1, int(settings.get('idr_crop_count', 1))) if is_fasta(path) else 1\n        crop_length_bounds = resolve_crop_length_bounds(settings) if is_fasta(path) else None\n        weight = float(target.get('weight', 1.0))\n        objective = 'detarget' if target.get('objective') == 'detarget' or weight < 0 else 'target'\n        weight = -abs(weight) if objective == 'detarget' else weight\n        for crop_index in range(crop_count):\n            name = target['name'] if crop_count == 1 else f\"{target['name']}_epitope_{crop_index + 1}\"\n            prepared_states.append(PreparedTargetState(name, target['name'], path, objective, weight, target_chain_name(target_chain_prefix, name), target.get('chains', ''), target.get('hotspots', ''), target.get('coldspots', ''), 0 if crop_count == 1 else crop_index + 1, crop_length_bounds))\n    return tuple(prepared_states)\n\ndef record_modality_filter(settings: dict, name: str, unrejecting_threshold: float, higher: bool=False, threshold_setting: str='', **params) -> None:\n    if isinstance(settings.get('filters'), dict):\n        configured_threshold = settings.get(threshold_setting)\n        threshold = float(unrejecting_threshold if configured_threshold is None else configured_threshold)\n        settings['filters'].setdefault(name, {'threshold': threshold, 'higher': higher, 'mandatory': configured_threshold is not None, **({'params': params} if params else {})})\n\nclass ModalityCheck(NamedTuple):\n    metric: str\n    unrejecting_threshold: float\n    higher: bool = False\n    threshold_setting: str = ''\n    parameters: Callable[[dict], dict] | None = None\n\nclass ConfigurationRequest(NamedTuple):\n    overrides: dict\n    loss_settings: dict\n\nclass CampaignFeature(NamedTuple):\n    name: str\n    requested: Callable[[dict], bool]\n    shorthand: str | Callable[[dict], str] = ''\n    switch: str = ''\n    configure: Callable[[dict, ConfigurationRequest], None] | None = None\n    checks: tuple[ModalityCheck, ...] = ()\n    note: Callable[[dict], str] | None = None\n    conflicts: tuple[tuple[str, str], ...] = ()\n\ndef initial_guess_note(settings: dict) -> str:\n    if design_seeds_from_given_coordinates(settings):\n        return 'big bang: the gradient stages start from the coordinates on hand, which for a binder folded from nothing is the origin'\n    return 'initial guess: the re-prediction starts from the pose the trajectory folded, and the gradient stages start where they always do'\n\ndef design_seeds_from_given_coordinates(settings: dict) -> bool:\n    return bool(settings.get('bigbang_initialization'))\n\ndef binder_scaffold_name(settings: dict) -> str:\n    return os.path.splitext(os.path.basename(str(settings.get('binder_scaffold') or '')))[0]\n\ndef scaffold_check_parameters(settings: dict) -> dict:\n    return {'scaffold': settings['binder_scaffold'], 'scaffold_edits': settings.get('mutate_positions', '')}\n\ndef epitope_check_parameters(settings: dict) -> dict:\n    return {'epitope_cutoff': settings['forced_targeting_shell']} if 'forced_targeting_shell' in settings else {}\n\ndef domain_check_parameters(settings: dict) -> dict:\n    return {'n_domains': settings.get('n_domains', 2), 'min_domain_size': settings.get('min_domain_size', 50), 'domain_contact_cutoff': settings.get('domain_contact_cutoff', 8.0)}\n\ndef humanization_check_parameters(settings: dict) -> dict:\n    return settings.get('losses', {}).get('humanization', {}).get('params', {})\n\ndef terminus_exposure_check_parameters(settings: dict) -> dict:\n    return {key: value for key, value in settings.get('losses', {}).get('exposed_termini', {}).get('params', {}).items() if key == 'terminus_length'}\n\ndef configure_multidomain(settings: dict, request: ConfigurationRequest) -> None:\n    settings['weights_ptm_loss'] = 0.0\n\ndef configure_oligomer(settings: dict, request: ConfigurationRequest) -> None:\n    settings.setdefault('validation_model', 'multimer')\n    for name in PROTOMER_SCOPED_LOSSES:\n        settings['losses'].setdefault(name, {}).setdefault('params', {}).setdefault('per_protomer', True)\n\ndef configure_coldspots(settings: dict, request: ConfigurationRequest) -> None:\n    if 'weights_coldspot_repel' not in request.overrides and 'coldspot_repel' not in request.loss_settings:\n        settings['weights_coldspot_repel'] = 1.0\n    settings.setdefault('max_coldspot_contact_final', 0.05)\n\ndef configure_negative_selection(settings: dict, request: ConfigurationRequest) -> None:\n    settings.setdefault('weights_non_contact', 1.0)\n    settings.setdefault('max_detarget_interface_residues_final', DEFAULT_DETARGET_INTERFACE_RESIDUES)\n\ndef configure_fold_conditioning(settings: dict, request: ConfigurationRequest) -> None:\n    if isinstance(settings['filters'], dict):\n        settings['filters'].setdefault('Binder_RMSD', {'threshold': None, 'higher': False})\n    edit_flags = scaffold_edit_flags(str(settings.get('mutate_positions') or ''))\n    paratope_rows = [flags for flags in edit_flags if flags & ResidueFlags.CONTACT]\n    framework_rows = [flags for flags in edit_flags if not flags & ResidueFlags.CONTACT]\n    if paratope_rows:\n        if not framework_rows and 'binder_coldspot' not in request.loss_settings:\n            settings['losses'].setdefault('binder_coldspot', {}).setdefault('params', {})['designed_only'] = False\n        if 'weights_binder_coldspot' not in request.overrides:\n            settings['weights_binder_coldspot'] = 1.0\n        settings.setdefault('max_off_paratope_contact_final', 0.2)\n\ndef configure_focused_epitope(settings: dict, request: ConfigurationRequest) -> None:\n    settings.setdefault('weights_target_rmsd', 1.0)\n\ndef configure_disordered_target(settings: dict, request: ConfigurationRequest) -> None:\n    for name, weight in {'interface_pae': 0.3, 'target_plddt': 1.0, 'target_helicity': -0.3}.items():\n        if f'weights_{name}' not in request.overrides:\n            settings[f'weights_{name}'] = weight\n    if 'interface_contact_distance' not in request.overrides and 'interface_contacts' not in request.loss_settings:\n        settings['losses']['interface_contacts']['params']['cutoff'] = 10.0\n    if isinstance(settings['filters'], dict):\n        settings['filters'].setdefault('Target_pLDDT', {'threshold': settings.get('min_target_plddt_final', DEFAULT_DISORDERED_TARGET_PLDDT), 'higher': True})\n\ndef configure_induced_fit(settings: dict, request: ConfigurationRequest) -> None:\n    if isinstance(settings['filters'], dict):\n        settings['filters'].setdefault('Induced_Fit_Interface_RMSD', {'threshold': settings.get('min_induced_fit_interface_rmsd_final', DEFAULT_INDUCED_FIT_INTERFACE_RMSD), 'higher': True})\n\ndef configure_fold_switching(settings: dict, request: ConfigurationRequest) -> None:\n    if isinstance(settings['filters'], dict):\n        settings['filters'].setdefault('Induced_Fit_TM', {'threshold': settings.get('max_induced_fit_tm_final', settings.get('induced_fit_tm_target', DEFAULT_INDUCED_FIT_TM_TARGET)), 'higher': False})\n\ndef terminus_away_feature(terminus: str) -> 'CampaignFeature':\n    return CampaignFeature(f'{terminus} terminus away from the target', lambda settings, terminus=terminus: bool(settings.get(f'weights_{terminus}_terminus_away')), checks=(ModalityCheck(f'{terminus.upper()}_Terminus_Away_Cosine', -1.0, True, f'min_{terminus}_terminus_away_cosine_final'),))\n\ndef designs_peptide(settings: dict) -> bool:\n    lengths = campaign_binder_lengths(settings.get('binder_lengths'))\n    return bool(lengths) and max(lengths) < 36 and (not settings.get('cyclize_peptide'))\n\nCAMPAIGN_FEATURES = (CampaignFeature('multi-chain binder', lambda settings: int(settings.get('copies', 1) or 1) > 1, shorthand='oligomer', switch='copies', configure=configure_oligomer, checks=(ModalityCheck('Oligomer_Symmetry_RMSD', float('inf'), threshold_setting='max_oligomer_symmetry_rmsd_final'),), conflicts=(('multidomain binder', 'the domain split does not engage across oligomer copies'),)), CampaignFeature('initial guess', lambda settings: bool(settings.get('initial_guess')) or bool(settings.get('bigbang_initialization')), note=initial_guess_note), CampaignFeature('fold conditioning', lambda settings: bool(settings.get('binder_scaffold')), shorthand=lambda settings: binder_scaffold_name(settings).lower(), switch='binder_scaffold', configure=configure_fold_conditioning, checks=(ModalityCheck('Scaffold_Sequence_Retained_Fraction', 0.0, True, 'min_scaffold_sequence_retained_final', parameters=scaffold_check_parameters), ModalityCheck('Scaffold_Framework_RMSD', float('inf'), threshold_setting='max_scaffold_framework_rmsd_final', parameters=scaffold_check_parameters), ModalityCheck('Framework_Packing_Fraction', 0.0, True, 'min_framework_packing_final'), ModalityCheck('Off_Paratope_Contact_Fraction', 1.0, threshold_setting='max_off_paratope_contact_final')), conflicts=(('cyclic peptide', 'a framework fixes the fold, so it cannot also be closed into a macrocycle'), ('multi-chain binder', 'a scaffold defines one binder chain, so it cannot also be copied into an oligomer'), ('fold switching', 'a framework fixes the fold, so it cannot also be told to switch fold'), ('mixed topology', 'a framework fixes the fold, so it cannot also be told to change its secondary structure'))), CampaignFeature('forced targeting', lambda settings: bool(settings.get('forced_targeting')), shorthand='forced', switch='forced_targeting', configure=configure_focused_epitope, note=lambda settings: f\"forced targeting: everything outside {settings.get('forced_targeting_shell', 'the default')} Angstrom of the hotspots rebuilt as lysine\"), CampaignFeature('multidomain binder', lambda settings: bool(settings.get('weights_multidomain')), configure=configure_multidomain, note=lambda settings: f\"multidomain, {settings.get('n_domains', 2)} domains of at least {settings.get('min_domain_size', 50)} residues\", checks=(ModalityCheck('Interdomain_Contact_Fraction', 1.0, threshold_setting='max_interdomain_contact_final', parameters=domain_check_parameters), ModalityCheck('Domain_Separation_Ratio', 0.0, True, 'min_domain_separation_ratio_final', parameters=domain_check_parameters), ModalityCheck('Binder_Chain_Breaks', float('inf'), threshold_setting='max_binder_chain_breaks_final'))), CampaignFeature('cyclic peptide', lambda settings: bool(settings.get('cyclize_peptide')), shorthand='cyclic', switch='cyclize_peptide', checks=(ModalityCheck('Cyclic_Closure_Distance', float('inf'), threshold_setting='max_cyclic_closure_distance_final'),), note=lambda settings: 'cyclic peptide closure'), CampaignFeature('peptide', designs_peptide, shorthand='peptide'), CampaignFeature('disordered target crops', lambda settings: bool(settings.get('idr_crop_count')), shorthand='idr'), CampaignFeature('disulfide staple', lambda settings: bool(settings.get('weights_disulfide')) or 'disulfide' in settings.get('losses', {}), checks=(ModalityCheck('Binder_Disulfides', 0.0, True, 'min_binder_disulfides_final'),)), CampaignFeature('coldspot', lambda settings: any((state.coldspots for state in resolve_prepared_states(settings))), configure=configure_coldspots, checks=(ModalityCheck('Coldspot_Contact_Fraction', 100.0, threshold_setting='max_coldspot_contact_final'),)), CampaignFeature('hotspot targeting', lambda settings: any((state.hotspots for state in resolve_prepared_states(settings))), checks=(ModalityCheck('Hotspot_Contact_Fraction', 0.0, True, 'min_hotspot_contact_final'), ModalityCheck('Off_Epitope_Contact_Fraction', 1.0, threshold_setting='max_off_epitope_contact_final', parameters=epitope_check_parameters), ModalityCheck('Epitope_Residues_Contacted', 0.0, True, 'min_epitope_residues_contacted_final', parameters=epitope_check_parameters))), CampaignFeature('negative selection', lambda settings: any((state.objective == 'detarget' for state in resolve_prepared_states(settings))), configure=configure_negative_selection, checks=(ModalityCheck('Interface_Residues_detarget', float('inf'), threshold_setting='max_detarget_interface_residues_final'),)), CampaignFeature('termini distance', lambda settings: bool(settings.get('weights_termini_distance')), checks=(ModalityCheck('Termini_Distance', float('inf'), threshold_setting='max_termini_distance_final'),)), CampaignFeature('termini orientation', lambda settings: bool(settings.get('weights_termini_angle')), checks=(ModalityCheck('Termini_Away_Cosine', -1.0, True, 'min_termini_away_cosine_final'),)), terminus_away_feature('n'), terminus_away_feature('c'), CampaignFeature('disordered target', has_fasta_target, configure=configure_disordered_target, checks=(ModalityCheck('Target_Crop_Length', 0.0, True, 'min_target_crop_length_final'),), conflicts=(('forced targeting', 'forced targeting rebuilds around a resolved backbone, which a sequence target does not carry'), ('coldspot', 'coldspots are residue numbers a sequence target does not carry'))), CampaignFeature('humanization', lambda settings: bool(settings.get('weights_humanization')), checks=(ModalityCheck('MHC_Anchor_Score', float('inf'), threshold_setting='max_mhc_anchor_score_final', parameters=humanization_check_parameters),)), CampaignFeature('protease resistance', lambda settings: bool(settings.get('weights_protease_sites')), checks=(ModalityCheck('Protease_Site_Score', float('inf'), threshold_setting='max_protease_site_score_final'),)), CampaignFeature('buried loops', lambda settings: bool(settings.get('weights_exposed_loops')), checks=(ModalityCheck('Exposed_Loop_Fraction', float('inf'), threshold_setting='max_exposed_loop_fraction_final'),)), CampaignFeature('buried termini', lambda settings: bool(settings.get('weights_exposed_termini')), checks=(ModalityCheck('Terminus_Exposure', float('inf'), threshold_setting='max_terminus_exposure_final', parameters=terminus_exposure_check_parameters),)), CampaignFeature('mixed topology', lambda settings: bool(settings.get('weights_non_helical')) or settings.get('max_helix_fraction_final') is not None, checks=(ModalityCheck('Binder_Helix_Fraction', 1.0, threshold_setting='max_helix_fraction_final'),)), CampaignFeature('induced fit', lambda settings: bool(settings.get('weights_induced_fit_interface')), configure=configure_induced_fit, conflicts=(('negative selection', 'induced fit freezes one bound structure to compare a free state against, so it designs against a single target'),)), CampaignFeature('fold switching', lambda settings: bool(settings.get('weights_induced_fit_global')) or bool(settings.get('weights_fold_switching')), configure=configure_fold_switching), CampaignFeature('conformational switching', lambda settings: bool(settings.get('binder_shapes')), note=lambda settings: 'two conformations compared: ' + ' against '.join(('/'.join(group) for group in settings['binder_shapes']))))\n\nEVERY_CAMPAIGN_CHECKS = (ModalityCheck('Receptor_Chains_Contacted', 0.0, True, 'min_receptor_chains_contacted_final'), ModalityCheck('Target_pLDDT', 0.0, True, 'min_target_plddt_final'))\n\ndef requested_campaign_features(settings: dict) -> tuple[CampaignFeature, ...]:\n    return tuple((feature for feature in CAMPAIGN_FEATURES if feature.requested(settings)))\n\ndef install_modality_check(settings: dict, check: ModalityCheck) -> None:\n    record_modality_filter(settings, check.metric, check.unrejecting_threshold, check.higher, check.threshold_setting, **check.parameters(settings) if check.parameters else {})\n\ndef add_design_property_records(settings: dict) -> None:\n    install_modality_check(settings, ModalityCheck('Interface_BuriedArea', 0.0, True, 'min_interface_buried_area_final'))\n    install_modality_check(settings, ModalityCheck('Interface_BuriedArea_Fraction', 0.0, True, 'min_interface_buried_area_fraction_final'))\n    install_modality_check(settings, ModalityCheck('Surface_Hydrophobicity', float('inf'), threshold_setting='max_surface_hydrophobicity_final'))\n    install_modality_check(settings, ModalityCheck('Interface_Hydrophobicity', float('inf'), threshold_setting='max_interface_hydrophobicity_final'))\n    install_modality_check(settings, ModalityCheck('Target_RMSD', float('inf'), threshold_setting='max_target_rmsd_final'))\n    install_modality_check(settings, ModalityCheck('SS_pLDDT', 0.0, True, 'min_ss_plddt_final'))\n    install_modality_check(settings, ModalityCheck('All_Atom_Clashes', float('inf'), threshold_setting='max_all_atom_clashes_final'))\n    install_modality_check(settings, ModalityCheck('Binder_Free_Cysteines', float('inf'), threshold_setting='max_binder_free_cysteines_final'))\n    for name in ('Binder_Helix_Fraction', 'Binder_BetaSheet_Fraction', 'Binder_Loop_Fraction', 'Interface_Helix_Fraction', 'Interface_BetaSheet_Fraction', 'Interface_Loop_Fraction', 'Binder_Disulfides', 'Binder_Mass_kDa', 'Binder_pI', 'Binder_Net_Charge', 'Binder_Extinction', 'Binder_Cysteines'):\n        install_modality_check(settings, ModalityCheck(name, float('inf')))\n\ndef record_conformational_change(settings: dict) -> None:\n    if isinstance(settings['filters'], dict) and any((name in settings['filters'] for name in ('Induced_Fit_TM', 'Induced_Fit_Interface_RMSD'))):\n        settings['filters'].setdefault('Induced_Fit_RMSD', {'threshold': float('inf'), 'higher': False})\n\ndef configure_campaign_features(settings: dict, request: ConfigurationRequest) -> None:\n    for feature in requested_campaign_features(settings):\n        if feature.configure is not None:\n            feature.configure(settings, request)\n    record_conformational_change(settings)\n    for feature in requested_campaign_features(settings):\n        for check in feature.checks:\n            install_modality_check(settings, check)\n    for check in EVERY_CAMPAIGN_CHECKS:\n        install_modality_check(settings, check)\n    add_design_property_records(settings)\n\nPRESET_TIERS = ('modality', 'property', 'target')\n\nBINDER_FORMATS = ('binder', 'large_binder', 'peptide', 'cyclic_peptide', 'homo_oligomer', 'multidomain', 'VHH', 'scFv', 'Fab', 'ARP')\n\ndef design_property_names() -> tuple[str, ...]:\n    return shipped_preset_names('property')\n\ndef requested_preset_names(request: dict, tier: str, presets: Path=CAMPAIGN_PRESETS) -> tuple[str, ...]:\n    if tier == 'target':\n        named = request.get('target') or ()\n        return (named,) if isinstance(named, str) else tuple(named)\n    if tier == 'modality':\n        named = request.get('modality') or ()\n        named = (named,) if isinstance(named, str) else tuple(named)\n        return named if not named or any((name in BINDER_FORMATS for name in named)) else ('binder', *named)\n    return tuple((name for name in shipped_preset_names(tier, presets) if request.get(name)))\n\ndef preset_tier_layers(request: dict, tier: str, presets: Path=CAMPAIGN_PRESETS) -> list[dict]:\n    layers = [read_preset(tier, name, presets) for name in requested_preset_names(request, tier, presets)]\n    accumulated = [target for layer in layers for target in layer.pop('targets', [])]\n    return layers + [{'targets': accumulated}] if accumulated else layers\n\nCORE_RESERVED_NAMES = frozenset({'default', 'reference'})\n\ndef requested_core_profiles(request: dict) -> tuple[str, ...]:\n    named = request.get('core') or ()\n    named = (named,) if isinstance(named, str) else tuple(named)\n    return tuple((name for name in named if name not in CORE_RESERVED_NAMES))\n\ndef core_profile_layers(request: dict, presets: Path=CAMPAIGN_PRESETS) -> list[dict]:\n    return [read_preset('core', name, presets) for name in requested_core_profiles(request)]\n\ndef campaign_over_presets(request: dict, presets: Path=CAMPAIGN_PRESETS) -> dict:\n    layers = core_profile_layers(request, presets)\n    for tier in PRESET_TIERS:\n        layers += preset_tier_layers(request, tier, presets)\n    settings = {}\n    for layer in layers + [request]:\n        settings = overridden_settings(settings, layer)\n    return settings\n\ndef known_campaign_settings() -> frozenset[str]:\n    return frozenset({'core', 'modality', 'paratope_conformations', 'target'} | set(design_property_names()) | CAMPAIGN_SETTING_NAMES | set(DEFAULT_SETTINGS) | set(FINAL_CONFIDENCE_FILTERS) | set(LOSS_PARAMETERS) | set(DOMAIN_PARAMETERS) | {f'weights_{name}' for name in REGISTERED_LOSSES} | {f'{stage}_steps' for stage in DESIGN_STAGE_NAMES if stage != 'final'} | {f'{filter}_{stage}' for filter in ('min_plddt', 'min_iptm', 'max_detarget_iptm') for stage in DESIGN_STAGE_NAMES} | {f'min_{terminus}_terminus_away_cosine_final' for terminus in ('n', 'c')})\n\ndef metric_parameter_names(metric_function) -> frozenset[str]:\n    return frozenset(inspect.signature(metric_function).parameters) - {'protein_states', 'predictions'}\n\ndef unrecognized_setting(name: str, accepted, prefix: str='') -> str:\n    nearest = difflib.get_close_matches(name, sorted(accepted), n=1, cutoff=0.6)\n    return f'{prefix}{name}' + (f' (did you mean {nearest[0]}?)' if nearest else '')\n\nFRACTION_THRESHOLD_SETTINGS = frozenset({'betasheet_reopt_trigger', 'max_coldspot_contact_final', 'max_exposed_loop_fraction_final', 'max_helix_fraction_final', 'max_interdomain_contact_final', 'max_off_epitope_contact_final', 'max_off_paratope_contact_final', 'max_surface_hydrophobicity_final', 'min_framework_packing_final', 'min_hotspot_contact_final', 'min_scaffold_sequence_retained_final'})\n\ndef written_as_percentage(value) -> bool:\n    return isinstance(value, (int, float)) and (not isinstance(value, bool)) and math.isfinite(float(value)) and (float(value) > 1)\n\ndef reject_percentage_thresholds(overrides: dict) -> None:\n    written = [(name, overrides[name]) for name in sorted(FRACTION_THRESHOLD_SETTINGS) if written_as_percentage(overrides.get(name))]\n    configured = overrides.get('filters')\n    for name, entry in configured.items() if isinstance(configured, dict) else ():\n        if name.endswith('_Fraction') and isinstance(entry, dict) and written_as_percentage(entry.get('threshold')):\n            written.append((f'filters.{name}.threshold', entry['threshold']))\n    if written:\n        raise ValueError('these checks read a fraction of 0 to 1 rather than a percentage: ' + ', '.join((f'{name} {float(value):g} (write {float(value) / 100:g})' for name, value in written)))\n\ndef reject_unrecognized_settings(overrides: dict) -> None:\n    accepted = known_campaign_settings()\n    rejected = [unrecognized_setting(name, accepted) for name in overrides if name not in accepted]\n    for target in overrides.get('targets') or ():\n        rejected += [unrecognized_setting(name, TARGET_SETTING_NAMES, 'targets[].') for name in target if name not in TARGET_SETTING_NAMES]\n    for block, registry, entry_names in (('losses', REGISTERED_LOSSES, METRIC_ENTRY_NAMES), ('filters', REGISTERED_FILTER_METRICS, FILTER_ENTRY_NAMES)):\n        configured = overrides.get(block)\n        for name, entry in configured.items() if isinstance(configured, dict) else ():\n            registered_name = name\n            if registered_name not in registry:\n                rejected.append(unrecognized_setting(name, set(registry), f'{block}.'))\n            elif isinstance(entry, dict):\n                accepted_parameters = metric_parameter_names(registry[registered_name])\n                rejected += [unrecognized_setting(key, entry_names, f'{block}.{name}.') for key in entry if key not in entry_names]\n                rejected += [unrecognized_setting(key, accepted_parameters, f'{block}.{name}.params.') for key in entry.get('params') or () if key not in accepted_parameters]\n    if rejected:\n        raise ValueError('unrecognized campaign settings: ' + ', '.join(rejected))\n\ndef load_settings(overrides: dict | None=None) -> dict:\n    overrides = campaign_over_presets(copy.deepcopy(overrides or {}))\n    reject_unrecognized_settings(overrides)\n    reject_percentage_thresholds(overrides)\n    configured_losses = overrides.pop('losses', {})\n    loss_settings = {}\n    for name, value in configured_losses.items():\n        if isinstance(value, dict):\n            loss_settings[name] = value\n        else:\n            overrides[f'weights_{name}'] = value\n    settings = copy.deepcopy(DEFAULT_SETTINGS)\n    settings.update({key: value for key, value in overrides.items() if key != 'filters'})\n    settings['losses'] = copy.deepcopy(DEFAULT_LOSSES)\n    for name, entry in loss_settings.items():\n        settings['losses'][name] = {**settings['losses'].get(name, {}), **entry}\n    for parameter, (name, argument) in {**LOSS_PARAMETERS, **{name: ('multidomain', name) for name in DOMAIN_PARAMETERS}}.items():\n        if parameter in settings:\n            settings['losses'].setdefault(name, {}).setdefault('params', {}).setdefault(argument, settings[parameter])\n    if isinstance(overrides.get('filters'), dict):\n        for name, entry in overrides['filters'].items():\n            settings['filters'][name] = {**settings['filters'].get(name, {}), **entry}\n    elif 'filters' in overrides:\n        settings['filters'] = overrides['filters']\n    if settings.get('sparse_output'):\n        for name, value in {'save_failed_refolds': False, 'save_failed_trajectories': False, 'save_binder_monomers': False, 'save_design_animations': False, 'save_design_frames': False, 'save_design_sequences': False, 'save_design_trajectory': False, 'save_loss_plots': False}.items():\n            if name not in overrides:\n                settings[name] = value\n    configure_campaign_features(settings, ConfigurationRequest(overrides, loss_settings))\n    for setting_name, filter_name in FINAL_CONFIDENCE_FILTERS.items():\n        if setting_name in overrides and isinstance(settings['filters'], dict) and (filter_name not in overrides.get('filters', {})):\n            settings['filters'][filter_name]['threshold'] = float(overrides[setting_name])\n    return settings\n\ndef campaign_binder_lengths(binder_lengths) -> tuple[int, ...] | None:\n    if binder_lengths is None:\n        return None\n    binder_lengths = tuple((int(length) for length in binder_lengths))\n    return tuple(range(binder_lengths[0], binder_lengths[1] + 1)) if len(binder_lengths) == 2 else binder_lengths\n\ndef overridden_settings(request: dict, overrides: dict) -> dict:\n    merged = dict(request)\n    for name, value in overrides.items():\n        merged[name] = overridden_settings(merged[name], value) if isinstance(value, dict) and isinstance(merged.get(name), dict) else value\n    return merged",
+    "source_files": {
+      "loss.py": "625f9c4a1eb028aab59d06550994350c05a226d282eac2329d92038bceb3a323",
+      "protein.py": "9dc561946065d918057d3d469dc6aba66bd21f0709c373af07f1791f0746ac27",
+      "settings.py": "d88f87212929bfc7a8ae186189eab70a527d04aa2d89f5d6adee1f6af4993cfa"
+    },
+    "symbols": [
+      "BINDER_FORMATS",
+      "CAMPAIGN_FEATURES",
+      "CAMPAIGN_SETTING_NAMES",
+      "CORE_RESERVED_NAMES",
+      "CampaignFeature",
+      "ConfigurationRequest",
+      "DEFAULT_DETARGET_INTERFACE_RESIDUES",
+      "DEFAULT_DISORDERED_TARGET_PLDDT",
+      "DEFAULT_IDR_CROP_LENGTHS",
+      "DEFAULT_INDUCED_FIT_INTERFACE_RMSD",
+      "DEFAULT_INDUCED_FIT_TM_TARGET",
+      "DESIGN_STAGE_NAMES",
+      "DOMAIN_PARAMETERS",
+      "EVERY_CAMPAIGN_CHECKS",
+      "FASTA_SUFFIXES",
+      "FILTER_ENTRY_NAMES",
+      "FINAL_CONFIDENCE_FILTERS",
+      "FRACTION_THRESHOLD_SETTINGS",
+      "LOSS_PARAMETERS",
+      "METRIC_ENTRY_NAMES",
+      "ModalityCheck",
+      "PRESET_TIERS",
+      "PROTOMER_SCOPED_LOSSES",
+      "PreparedTargetState",
+      "ResidueFlags",
+      "TARGET_SETTING_NAMES",
+      "_EDIT_RE",
+      "add_design_property_records",
+      "binder_scaffold_name",
+      "campaign_binder_lengths",
+      "campaign_over_presets",
+      "configure_campaign_features",
+      "configure_coldspots",
+      "configure_disordered_target",
+      "configure_focused_epitope",
+      "configure_fold_conditioning",
+      "configure_fold_switching",
+      "configure_induced_fit",
+      "configure_multidomain",
+      "configure_negative_selection",
+      "configure_oligomer",
+      "core_profile_layers",
+      "design_property_names",
+      "design_seeds_from_given_coordinates",
+      "designs_peptide",
+      "domain_check_parameters",
+      "epitope_check_parameters",
+      "has_fasta_target",
+      "humanization_check_parameters",
+      "initial_guess_note",
+      "install_modality_check",
+      "is_fasta",
+      "known_campaign_settings",
+      "load_settings",
+      "metric_parameter_names",
+      "named_residue_flag",
+      "overridden_settings",
+      "parse_residue_length_choices",
+      "preset_tier_layers",
+      "record_conformational_change",
+      "record_modality_filter",
+      "reject_percentage_thresholds",
+      "reject_unrecognized_settings",
+      "requested_campaign_features",
+      "requested_core_profiles",
+      "requested_preset_names",
+      "resolve_crop_length_bounds",
+      "resolve_prepared_states",
+      "scaffold_check_parameters",
+      "scaffold_edit_flags",
+      "scaffold_edit_spans",
+      "target_chain_name",
+      "terminus_away_feature",
+      "terminus_exposure_check_parameters",
+      "unrecognized_setting",
+      "written_as_percentage"
+    ]
+  },
   "fields": {
     "aa_bias": {
       "has_native_default": false,
@@ -3513,7 +3600,12 @@
           "desperation"
         ],
         "nested": {},
-        "sha256": "8b5685b6e52812829aba55acf691ee3a719279204a88ee184268a921cd53d357"
+        "sha256": "8b5685b6e52812829aba55acf691ee3a719279204a88ee184268a921cd53d357",
+        "values": {
+          "autotune": false,
+          "campaign_seed": 0,
+          "desperation": false
+        }
       },
       "default": {
         "keys": [
@@ -3590,7 +3682,125 @@
             "plddt_loss"
           ]
         },
-        "sha256": "4b929f04e58f16d83d058155513bacbcdd8a818da16ac91ea53d9c015212ad22"
+        "sha256": "4b929f04e58f16d83d058155513bacbcdd8a818da16ac91ea53d9c015212ad22",
+        "values": {
+          "archive_trajectories": false,
+          "attention_backend": "auto",
+          "autotune": true,
+          "betasheet_reopt_extra_anneal_steps": 0,
+          "betasheet_reopt_extra_refine_steps": 0,
+          "betasheet_reopt_trigger": 0.15,
+          "bigbang_initialization": false,
+          "design_dropout": true,
+          "design_recycles": 1,
+          "desperation": true,
+          "enough_passing_sequences": 3,
+          "filters": {
+            "Backbone_Clashes": {
+              "higher": false,
+              "threshold": 0
+            },
+            "Interface_Residues": {
+              "higher": true,
+              "threshold": 7
+            },
+            "Unbound_Binder_pLDDT": {
+              "higher": true,
+              "threshold": 0.8
+            },
+            "i_pAE": {
+              "higher": false,
+              "threshold": 0.35
+            },
+            "i_pTM": {
+              "higher": true,
+              "threshold": 0.7
+            },
+            "pTM": {
+              "higher": true,
+              "threshold": 0.55
+            }
+          },
+          "forced_targeting": false,
+          "hash_design_names": true,
+          "initial_guess": false,
+          "kept_sequences": 1,
+          "losses": {
+            "binder_contacts": {
+              "params": {
+                "chain": "binder",
+                "prediction_state": "complex"
+              }
+            },
+            "binder_helicity": {
+              "params": {
+                "chain": "binder",
+                "prediction_state": "complex"
+              }
+            },
+            "binder_pae": {
+              "params": {
+                "chain": "binder",
+                "prediction_state": "complex"
+              }
+            },
+            "compactness": {
+              "params": {
+                "chain": "binder",
+                "prediction_state": "complex"
+              }
+            },
+            "interface_contacts": {
+              "params": {
+                "contacts_per_residue": 2,
+                "cutoff": 20.0
+              }
+            },
+            "plddt_loss": {
+              "params": {
+                "chain": "binder",
+                "prediction_state": "complex"
+              }
+            }
+          },
+          "min_iptm_anneal": 0.5,
+          "min_iptm_final": 0.7,
+          "min_iptm_harden": 0.5,
+          "min_iptm_mutate": 0.5,
+          "min_plddt_anneal": 0.65,
+          "min_plddt_final": 0.7,
+          "min_plddt_harden": 0.65,
+          "min_plddt_mutate": 0.6,
+          "min_plddt_refine": 0.6,
+          "min_plddt_screen": 0.6,
+          "mpnn_model": "v_48_020",
+          "mpnn_variant": "negative",
+          "redesign_interface": false,
+          "relax_accepted_designs": false,
+          "resume": true,
+          "save_binder_monomers": true,
+          "save_design_animations": false,
+          "save_design_frames": false,
+          "save_design_sequences": false,
+          "save_failed_refolds": true,
+          "save_failed_trajectories": true,
+          "save_loss_plots": false,
+          "sequence_candidates": 10,
+          "subbatch_size": "auto",
+          "target_flexibility": 0.0,
+          "trajectory_only": false,
+          "use_cueq": false,
+          "validation_crop_flank": 5,
+          "validation_recycles": 3,
+          "weights_binder_contacts": 1.0,
+          "weights_binder_helicity": -0.3,
+          "weights_binder_pae": 0.4,
+          "weights_compactness": 0.5,
+          "weights_interface_contacts": 1.0,
+          "weights_interface_pae": 0.1,
+          "weights_iptm_loss": 0.05,
+          "weights_plddt_loss": 0.1
+        }
       },
       "reference": {
         "keys": [
@@ -3835,7 +4045,312 @@
             "workers_per_gpu"
           ]
         },
-        "sha256": "9a664de69968f2dffe6c2beff167cd256d0c11d3b5f2e2c9a1358a557d372263"
+        "sha256": "9a664de69968f2dffe6c2beff167cd256d0c11d3b5f2e2c9a1358a557d372263",
+        "values": {
+          "settings": {
+            "aa_bias": null,
+            "anneal_steps": null,
+            "archive_trajectories": false,
+            "attention_backend": "auto",
+            "auto_multi_gpu": null,
+            "autotune": true,
+            "autotune_loss_weights": null,
+            "betasheet_reopt_extra_anneal_steps": 0,
+            "betasheet_reopt_extra_refine_steps": 0,
+            "betasheet_reopt_recycles": null,
+            "betasheet_reopt_trigger": 0.15,
+            "bigbang": null,
+            "bigbang_initialization": false,
+            "binder_chain": null,
+            "binder_lengths": null,
+            "binder_name": null,
+            "binder_scaffold": null,
+            "binder_shapes": null,
+            "campaign_name": null,
+            "campaign_seed": null,
+            "compile_next_length": null,
+            "copies": null,
+            "crop_fasta_sequence": null,
+            "cyclic_offset_mode": null,
+            "cyclize_peptide": null,
+            "design_dropout": true,
+            "design_models": null,
+            "design_recycles": 1,
+            "design_workers": null,
+            "desperation": true,
+            "desperation_trajectories": null,
+            "detarget_check_interval": null,
+            "disulfide_distance": null,
+            "disulfide_sequence_separation": null,
+            "disulfide_sigma": null,
+            "disulfide_staple": null,
+            "disulfide_temperature": null,
+            "domain_contact_cutoff": null,
+            "domain_linker_fix_cut": null,
+            "domain_linker_gap": null,
+            "domain_linker_helix_weight": null,
+            "domain_linker_sharpness": null,
+            "domain_pae_margin": null,
+            "domain_rg_weight": null,
+            "domain_sep_weight": null,
+            "enough_passing_sequences": 3,
+            "exposed_loops_distinguish_sheets": null,
+            "exposed_loops_measure": null,
+            "filters": {
+              "Backbone_Clashes": {
+                "higher": false,
+                "threshold": 0
+              },
+              "Interface_Residues": {
+                "higher": true,
+                "threshold": 7
+              },
+              "Off_Paratope_Contact_Fraction": {
+                "higher": false,
+                "threshold": null
+              },
+              "Unbound_Binder_pLDDT": {
+                "higher": true,
+                "threshold": 0.8
+              },
+              "i_pAE": {
+                "higher": false,
+                "threshold": 0.35
+              },
+              "i_pTM": {
+                "higher": true,
+                "threshold": 0.7
+              },
+              "pTM": {
+                "higher": true,
+                "threshold": 0.55
+              }
+            },
+            "forced_targeting": false,
+            "forced_targeting_shell": null,
+            "gpu_ids": null,
+            "harden_steps": null,
+            "hash_design_names": true,
+            "humanization_coupling_weight": null,
+            "humanization_hydro_weight": null,
+            "humanization_mhc2_weight": null,
+            "humanization_species": null,
+            "humanize": null,
+            "idr_crop_count": null,
+            "induced_fit_delta": null,
+            "induced_fit_interface_cutoff": null,
+            "induced_fit_monomer_adaptive": null,
+            "induced_fit_monomer_chunk": null,
+            "induced_fit_monomer_plddt": null,
+            "induced_fit_monomer_steps": null,
+            "induced_fit_mpnn_designed_share": null,
+            "induced_fit_mpnn_shell": null,
+            "induced_fit_mpnn_threshold": null,
+            "induced_fit_steps": null,
+            "induced_fit_tm_target": null,
+            "initial_guess": false,
+            "interface_contact_distance": null,
+            "kept_sequences": 1,
+            "length_bucket_size": null,
+            "losses": {
+              "binder_contacts": {
+                "params": {
+                  "chain": "binder",
+                  "prediction_state": "complex"
+                }
+              },
+              "binder_helicity": {
+                "params": {
+                  "chain": "binder",
+                  "prediction_state": "complex"
+                }
+              },
+              "binder_pae": {
+                "params": {
+                  "chain": "binder",
+                  "prediction_state": "complex"
+                }
+              },
+              "compactness": {
+                "params": {
+                  "chain": "binder",
+                  "prediction_state": "complex"
+                }
+              },
+              "interface_contacts": {
+                "params": {
+                  "contacts_per_residue": 2,
+                  "cutoff": 20.0
+                }
+              },
+              "plddt_loss": {
+                "params": {
+                  "chain": "binder",
+                  "prediction_state": "complex"
+                }
+              }
+            },
+            "max_binder_chain_breaks_final": null,
+            "max_binder_free_cysteines_final": null,
+            "max_coldspot_contact_final": null,
+            "max_cyclic_closure_distance_final": null,
+            "max_detarget_interface_residues_final": null,
+            "max_detarget_iptm": null,
+            "max_detarget_iptm_anneal": null,
+            "max_detarget_iptm_final": null,
+            "max_detarget_iptm_harden": null,
+            "max_detarget_iptm_mutate": null,
+            "max_detarget_iptm_refine": null,
+            "max_detarget_iptm_screen": null,
+            "max_detarget_rounds": null,
+            "max_domain_size": null,
+            "max_domains": null,
+            "max_exposed_loop_fraction_final": null,
+            "max_helix_fraction_final": null,
+            "max_induced_fit_tm_final": null,
+            "max_interdomain_contact_final": null,
+            "max_ipae_final": null,
+            "max_mhc_anchor_score_final": null,
+            "max_off_epitope_contact_final": null,
+            "max_off_paratope_contact_final": null,
+            "max_oligomer_symmetry_rmsd_final": null,
+            "max_protease_site_score_final": null,
+            "max_scaffold_framework_rmsd_final": null,
+            "max_surface_hydrophobicity_final": null,
+            "max_termini_distance_final": null,
+            "max_terminus_exposure_final": null,
+            "max_trajectories": null,
+            "max_workers_per_gpu": null,
+            "min_binder_disulfides_final": null,
+            "min_c_terminus_away_cosine_final": null,
+            "min_domain_separation_ratio_final": null,
+            "min_domain_size": null,
+            "min_epitope_residues_contacted_final": null,
+            "min_framework_packing_final": null,
+            "min_hotspot_contact_final": null,
+            "min_induced_fit_interface_rmsd_final": null,
+            "min_interface_buried_area_final": null,
+            "min_iptm_anneal": 0.5,
+            "min_iptm_final": 0.7,
+            "min_iptm_harden": 0.5,
+            "min_iptm_mutate": 0.5,
+            "min_iptm_refine": null,
+            "min_iptm_screen": null,
+            "min_monomer_plddt_final": null,
+            "min_n_terminus_away_cosine_final": null,
+            "min_plddt_anneal": 0.65,
+            "min_plddt_final": 0.7,
+            "min_plddt_harden": 0.65,
+            "min_plddt_mutate": 0.6,
+            "min_plddt_refine": 0.6,
+            "min_plddt_screen": 0.6,
+            "min_ptm_final": null,
+            "min_receptor_chains_contacted_final": null,
+            "min_scaffold_sequence_retained_final": null,
+            "min_target_crop_length_final": null,
+            "min_target_plddt_final": null,
+            "min_termini_away_cosine_final": null,
+            "mixed_topology": null,
+            "mpnn_fix_linker": null,
+            "mpnn_model": "v_48_020",
+            "mpnn_variant": "negative",
+            "multitarget_best_round": null,
+            "multitarget_cumulative_filter": null,
+            "multitarget_filter_models": null,
+            "multitarget_merged_gradient_budget": null,
+            "multitarget_merged_gradients": null,
+            "multitarget_rounds_per_target": null,
+            "multitarget_steps": null,
+            "multitarget_swap_patience": null,
+            "multitarget_swap_threshold": null,
+            "multitarget_tied_redesign": null,
+            "multitarget_warmup_patience": null,
+            "mutate_positions": null,
+            "mutate_steps": null,
+            "n_domains": null,
+            "non_contact_distance": null,
+            "number_of_final_designs": null,
+            "oligomer_tie": null,
+            "parameter_sweep": null,
+            "project_folder": null,
+            "protease_stable": null,
+            "redesign_interface": false,
+            "refine_steps": null,
+            "relax_accepted_designs": false,
+            "relax_learning_rate": null,
+            "relax_min_sep": null,
+            "relax_overlap_tol": null,
+            "relax_restraint_backbone": null,
+            "relax_restraint_sidechain": null,
+            "relax_steps": null,
+            "relax_weight_bond": null,
+            "relax_weight_clash": null,
+            "resume": true,
+            "save_binder_monomers": true,
+            "save_design_animations": false,
+            "save_design_frames": false,
+            "save_design_sequences": false,
+            "save_design_trajectory": false,
+            "save_failed_refolds": true,
+            "save_failed_trajectories": true,
+            "save_loss_plots": false,
+            "screen_steps": null,
+            "sequence_candidates": 10,
+            "sparse_output": null,
+            "subbatch_size": "auto",
+            "target_chain": null,
+            "target_flexibility": 0.0,
+            "targets": null,
+            "termini_accessible": null,
+            "termini_distance_threshold": null,
+            "termini_together": null,
+            "trajectory_only": false,
+            "use_cueq": false,
+            "validation_crop_flank": 5,
+            "validation_model": null,
+            "validation_models": null,
+            "validation_recycles": 3,
+            "weights_binder_coldspot": null,
+            "weights_binder_contacts": 1.0,
+            "weights_binder_helicity": -0.3,
+            "weights_binder_intra_coldspot": null,
+            "weights_binder_intra_hotspot": null,
+            "weights_binder_pae": 0.4,
+            "weights_c_terminus_away": null,
+            "weights_coldspot_repel": null,
+            "weights_collective_softness": null,
+            "weights_com_distance": null,
+            "weights_compactness": 0.5,
+            "weights_distogram_cce": null,
+            "weights_disulfide": null,
+            "weights_experimentally_resolved": null,
+            "weights_exposed_loops": null,
+            "weights_exposed_termini": null,
+            "weights_fold_switching": null,
+            "weights_humanization": null,
+            "weights_induced_fit_global": null,
+            "weights_induced_fit_interface": null,
+            "weights_interface_contacts": 1.0,
+            "weights_interface_pae": 0.1,
+            "weights_iptm_loss": 0.05,
+            "weights_multidomain": null,
+            "weights_n_terminus_away": null,
+            "weights_non_contact": null,
+            "weights_non_helical": null,
+            "weights_plddt_loss": 0.1,
+            "weights_protease_sites": null,
+            "weights_ptm_loss": null,
+            "weights_sequence_entropy": null,
+            "weights_target_helicity": null,
+            "weights_target_plddt": null,
+            "weights_target_rigidity": null,
+            "weights_target_rmsd": null,
+            "weights_termini_angle": null,
+            "weights_termini_distance": null,
+            "worker_launch_stagger": null,
+            "workers_per_gpu": null
+          }
+        }
       }
     },
     "modality": {
@@ -3858,7 +4373,22 @@
             "Y"
           ]
         },
-        "sha256": "dc63f2f16f70e8856d357d33e073d64cf60df5a1533268f422e61d9b64af5713"
+        "sha256": "dc63f2f16f70e8856d357d33e073d64cf60df5a1533268f422e61d9b64af5713",
+        "values": {
+          "aa_bias": {
+            "C": 0,
+            "F": 0.8,
+            "W": 0.3,
+            "Y": 0.9
+          },
+          "binder_scaffold": "scaffolds/ARP.cif",
+          "design_models": 3,
+          "max_scaffold_framework_rmsd_final": 3.0,
+          "min_monomer_plddt_final": 0.7,
+          "min_scaffold_sequence_retained_final": 1.0,
+          "mutate_positions": "A16,A20,A23,A44-48(5-10),A56,A57,A69,A76,A77-81(5-10),A89,A90,A102,A109,A110-114(5-10),A122,A123,A135,A142,A143-147(5-10),A156",
+          "validation_model": "multimer"
+        }
       },
       "Fab": {
         "keys": [
@@ -3878,7 +4408,21 @@
             "Y"
           ]
         },
-        "sha256": "4abb11b396e177ebbd3a54fe995a5393208208f2fba48ee6c90785c7aff1bf71"
+        "sha256": "4abb11b396e177ebbd3a54fe995a5393208208f2fba48ee6c90785c7aff1bf71",
+        "values": {
+          "aa_bias": {
+            "F": 0.8,
+            "W": 0.3,
+            "Y": 0.9
+          },
+          "binder_scaffold": "scaffolds/Fab.cif",
+          "design_models": 3,
+          "max_scaffold_framework_rmsd_final": 3.0,
+          "min_monomer_plddt_final": 0.7,
+          "min_scaffold_sequence_retained_final": 1.0,
+          "mutate_positions": "H28,H30-33,H52,H54-59,H100-103(3-8),L26-28,L30-32,L52,L53,L92-94",
+          "validation_model": "multimer"
+        }
       },
       "VHH": {
         "keys": [
@@ -3900,7 +4444,26 @@
             "Y"
           ]
         },
-        "sha256": "158740024164b9d245345dcbcf3cd920c695c3f30ba98c24f81db02a114cc332"
+        "sha256": "158740024164b9d245345dcbcf3cd920c695c3f30ba98c24f81db02a114cc332",
+        "values": {
+          "aa_bias": {
+            "F": 0.7,
+            "W": 0.3,
+            "Y": 0.9
+          },
+          "binder_scaffold": "scaffolds/VHH.cif",
+          "design_models": 3,
+          "min_monomer_plddt_final": 0.7,
+          "min_scaffold_sequence_retained_final": 1.0,
+          "mutate_positions": "A26-32,A33*,A35*,A37*,A45*,A46*,A47*,A49*,A50*,A52-57(5-7),A59,A97-99*,A100-114(5-12),A115,A116",
+          "paratope_conformations": [
+            "extended",
+            "folded_back"
+          ],
+          "validation_model": "multimer",
+          "weights_binder_coldspot": 1.0,
+          "weights_binder_intra_coldspot": 1.0
+        }
       },
       "binder": {
         "keys": [
@@ -3917,7 +4480,23 @@
             "Binder_RMSD"
           ]
         },
-        "sha256": "6bf615fb45e4b312fac84be39173c45b7ed65169d440e992485922bc9efcd50a"
+        "sha256": "6bf615fb45e4b312fac84be39173c45b7ed65169d440e992485922bc9efcd50a",
+        "values": {
+          "aa_bias": {
+            "C": 0
+          },
+          "binder_lengths": [
+            60,
+            180
+          ],
+          "filters": {
+            "Binder_RMSD": {
+              "higher": false,
+              "threshold": 3.5
+            }
+          },
+          "min_monomer_plddt_final": 0.7
+        }
       },
       "cyclic_peptide": {
         "keys": [
@@ -3940,7 +4519,30 @@
             "pTM"
           ]
         },
-        "sha256": "151d3b9b9ce5e47381ec163a386eb5ad8846242cb5c3470ece2f7c3c35f6e1b4"
+        "sha256": "151d3b9b9ce5e47381ec163a386eb5ad8846242cb5c3470ece2f7c3c35f6e1b4",
+        "values": {
+          "aa_bias": {
+            "C": 0
+          },
+          "binder_lengths": [
+            6,
+            16
+          ],
+          "cyclize_peptide": true,
+          "filters": {
+            "Unbound_Binder_pLDDT": {
+              "threshold": null
+            },
+            "pTM": {
+              "threshold": null
+            }
+          },
+          "max_ipae_final": 0.33,
+          "refine_steps": 75,
+          "validation_model": "multimer",
+          "weights_compactness": 0.0,
+          "weights_iptm_loss": 0.1
+        }
       },
       "fold_switch": {
         "keys": [
@@ -3954,7 +4556,17 @@
             "Binder_RMSD"
           ]
         },
-        "sha256": "7db5a06582df9d2a96145b64c5ca764465e81d63052b093765a05ea6e83e9fbf"
+        "sha256": "7db5a06582df9d2a96145b64c5ca764465e81d63052b093765a05ea6e83e9fbf",
+        "values": {
+          "filters": {
+            "Binder_RMSD": {
+              "threshold": null
+            }
+          },
+          "induced_fit_tm_target": 0.6,
+          "max_induced_fit_tm_final": 0.6,
+          "weights_induced_fit_global": 1.0
+        }
       },
       "homo_oligomer": {
         "keys": [
@@ -3968,7 +4580,21 @@
             "Binder_RMSD"
           ]
         },
-        "sha256": "71ccfe37a01fd108c6b69819811ad32b33ac30eaea2d5ea384aa0f66c43821a0"
+        "sha256": "71ccfe37a01fd108c6b69819811ad32b33ac30eaea2d5ea384aa0f66c43821a0",
+        "values": {
+          "binder_lengths": [
+            40,
+            120
+          ],
+          "copies": 2,
+          "filters": {
+            "Binder_RMSD": {
+              "higher": false,
+              "threshold": 3.5
+            }
+          },
+          "min_monomer_plddt_final": 0.7
+        }
       },
       "induced_fit": {
         "keys": [
@@ -3982,7 +4608,17 @@
             "Binder_RMSD"
           ]
         },
-        "sha256": "75872ebd027827118f82c939300cae691015df778401c2dab46fd3e5dc43905d"
+        "sha256": "75872ebd027827118f82c939300cae691015df778401c2dab46fd3e5dc43905d",
+        "values": {
+          "filters": {
+            "Binder_RMSD": {
+              "threshold": null
+            }
+          },
+          "induced_fit_delta": 5.0,
+          "min_induced_fit_interface_rmsd_final": 5.0,
+          "weights_induced_fit_interface": 0.224
+        }
       },
       "large_binder": {
         "keys": [
@@ -4013,7 +4649,38 @@
             "Binder_RMSD"
           ]
         },
-        "sha256": "70f4bd93c4bb13326f6715bc529d4c9232ba5d71bda59716efcd90ff7bbcadfb"
+        "sha256": "70f4bd93c4bb13326f6715bc529d4c9232ba5d71bda59716efcd90ff7bbcadfb",
+        "values": {
+          "anneal_steps": 90,
+          "binder_lengths": [
+            250,
+            600
+          ],
+          "design_models": 3,
+          "filters": {
+            "Binder_RMSD": {
+              "higher": false,
+              "threshold": 3.5
+            }
+          },
+          "harden_steps": 10,
+          "min_monomer_plddt_final": 0.6,
+          "min_plddt_mutate": 0.6,
+          "min_plddt_refine": 0.6,
+          "min_plddt_screen": 0.6,
+          "mutate_steps": 30,
+          "refine_steps": 50,
+          "screen_steps": 100,
+          "validation_model": "multimer",
+          "weights_binder_contacts": 1.8,
+          "weights_binder_helicity": -0.2,
+          "weights_binder_pae": 0.8,
+          "weights_compactness": 0.1,
+          "weights_interface_contacts": 0.8,
+          "weights_interface_pae": 0.5,
+          "weights_iptm_loss": 0.1,
+          "weights_plddt_loss": 1.0
+        }
       },
       "multidomain": {
         "keys": [
@@ -4050,7 +4717,41 @@
             "C"
           ]
         },
-        "sha256": "bc5e6d3960b94fb8ea52460bef8a245371981341355d2805699a284dcaba2b4a"
+        "sha256": "bc5e6d3960b94fb8ea52460bef8a245371981341355d2805699a284dcaba2b4a",
+        "values": {
+          "aa_bias": {
+            "C": 0
+          },
+          "anneal_steps": 90,
+          "binder_lengths": [
+            120,
+            300
+          ],
+          "design_recycles": 2,
+          "domain_contact_cutoff": 8.0,
+          "domain_linker_helix_weight": 0.5,
+          "domain_pae_margin": 0.2,
+          "domain_rg_weight": 0.5,
+          "domain_sep_weight": 1.0,
+          "harden_steps": 10,
+          "max_domain_size": 180,
+          "max_domains": 2,
+          "max_interdomain_contact_final": 0.05,
+          "max_ipae_final": 0.45,
+          "min_domain_separation_ratio_final": 1.0,
+          "min_domain_size": 50,
+          "min_monomer_plddt_final": 0.7,
+          "min_plddt_final": 0.75,
+          "min_ptm_final": 0.4,
+          "mutate_steps": 30,
+          "n_domains": 2,
+          "refine_steps": 50,
+          "screen_steps": 100,
+          "weights_binder_contacts": 0,
+          "weights_binder_pae": 0.1,
+          "weights_compactness": 0,
+          "weights_multidomain": 1.25
+        }
       },
       "peptide": {
         "keys": [
@@ -4072,7 +4773,29 @@
             "pTM"
           ]
         },
-        "sha256": "474a4e97a633e4933a37c190247676bbb5b0e6521c81492960e8a14177781341"
+        "sha256": "474a4e97a633e4933a37c190247676bbb5b0e6521c81492960e8a14177781341",
+        "values": {
+          "aa_bias": {
+            "C": 0
+          },
+          "binder_lengths": [
+            12,
+            25
+          ],
+          "filters": {
+            "Unbound_Binder_pLDDT": {
+              "threshold": null
+            },
+            "pTM": {
+              "threshold": null
+            }
+          },
+          "max_ipae_final": 0.33,
+          "refine_steps": 75,
+          "validation_model": "multimer",
+          "weights_compactness": 0.0,
+          "weights_iptm_loss": 0.1
+        }
       },
       "scFv": {
         "keys": [
@@ -4092,7 +4815,21 @@
             "Y"
           ]
         },
-        "sha256": "dd43c61f91e10f4516a52fbf1fd3dba4f80397c9f50e6b52b7c1de461bbc63a8"
+        "sha256": "dd43c61f91e10f4516a52fbf1fd3dba4f80397c9f50e6b52b7c1de461bbc63a8",
+        "values": {
+          "aa_bias": {
+            "F": 0.7,
+            "W": 0.3,
+            "Y": 0.9
+          },
+          "binder_scaffold": "scaffolds/scFv.cif",
+          "design_models": 3,
+          "max_scaffold_framework_rmsd_final": 3.0,
+          "min_monomer_plddt_final": 0.7,
+          "min_scaffold_sequence_retained_final": 1.0,
+          "mutate_positions": "H28,H30-33,H52,H54-59,H100-103(3-8),L26-28,L30-32,L52,L53,L92-94",
+          "validation_model": "multimer"
+        }
       }
     },
     "property": {
@@ -4101,7 +4838,10 @@
           "bigbang_initialization"
         ],
         "nested": {},
-        "sha256": "aedc7572bbb3b69420187c89a985d75035027be5b7ffccf129065a4825d1d0ee"
+        "sha256": "aedc7572bbb3b69420187c89a985d75035027be5b7ffccf129065a4825d1d0ee",
+        "values": {
+          "bigbang_initialization": true
+        }
       },
       "disulfide_staple": {
         "keys": [
@@ -4116,7 +4856,16 @@
             "C"
           ]
         },
-        "sha256": "80508e75ae48abe4ab8c5fc9f12d7e28f8782a3c86689926bd6701686baf137c"
+        "sha256": "80508e75ae48abe4ab8c5fc9f12d7e28f8782a3c86689926bd6701686baf137c",
+        "values": {
+          "aa_bias": {
+            "C": 1.0
+          },
+          "disulfide_distance": 3.8,
+          "disulfide_sequence_separation": 3,
+          "min_binder_disulfides_final": 1,
+          "weights_disulfide": 1.0
+        }
       },
       "forced_targeting": {
         "keys": [
@@ -4124,7 +4873,11 @@
           "min_hotspot_contact_final"
         ],
         "nested": {},
-        "sha256": "d2fbf6ccd469cf77ca035e47bae161f7ae408d58ab4e3e3282c50208bc7a96b2"
+        "sha256": "d2fbf6ccd469cf77ca035e47bae161f7ae408d58ab4e3e3282c50208bc7a96b2",
+        "values": {
+          "forced_targeting": true,
+          "min_hotspot_contact_final": 0.5
+        }
       },
       "humanize": {
         "keys": [
@@ -4135,14 +4888,24 @@
           "weights_humanization"
         ],
         "nested": {},
-        "sha256": "2a2b41628e1bd30705054ac9c2896df651c58b187884b81072d5c012c621c2da"
+        "sha256": "2a2b41628e1bd30705054ac9c2896df651c58b187884b81072d5c012c621c2da",
+        "values": {
+          "humanization_coupling_weight": 0.5,
+          "humanization_mhc2_weight": 1.0,
+          "humanization_species": "human",
+          "max_mhc_anchor_score_final": 1.95,
+          "weights_humanization": 1.0
+        }
       },
       "initial_guess": {
         "keys": [
           "initial_guess"
         ],
         "nested": {},
-        "sha256": "7ec55a4217c755be6da07fdd811090352abe983efb71512ca4ae54352b6700d1"
+        "sha256": "7ec55a4217c755be6da07fdd811090352abe983efb71512ca4ae54352b6700d1",
+        "values": {
+          "initial_guess": true
+        }
       },
       "mixed_topology": {
         "keys": [
@@ -4156,7 +4919,18 @@
             "Binder_BetaSheet_Fraction"
           ]
         },
-        "sha256": "91c772032dc2cdfb931d90aba5d7f6cf0e808ddcae874f4c58676ce9ae0b72f8"
+        "sha256": "91c772032dc2cdfb931d90aba5d7f6cf0e808ddcae874f4c58676ce9ae0b72f8",
+        "values": {
+          "filters": {
+            "Binder_BetaSheet_Fraction": {
+              "higher": true,
+              "threshold": 0.2
+            }
+          },
+          "max_helix_fraction_final": 0.5,
+          "weights_binder_helicity": 0,
+          "weights_non_helical": 1.0
+        }
       },
       "protease_stable": {
         "keys": [
@@ -4170,7 +4944,17 @@
           "weights_protease_sites"
         ],
         "nested": {},
-        "sha256": "0ad9af9cf28edc10aa3b9402f7b15d38bb0617107d6e09e84ca2907616dfc073"
+        "sha256": "0ad9af9cf28edc10aa3b9402f7b15d38bb0617107d6e09e84ca2907616dfc073",
+        "values": {
+          "exposed_loops_distinguish_sheets": true,
+          "exposed_loops_measure": "plddt",
+          "max_exposed_loop_fraction_final": 0.7,
+          "max_protease_site_score_final": 0.5,
+          "max_terminus_exposure_final": 0.6,
+          "weights_exposed_loops": 0.5,
+          "weights_exposed_termini": 0.5,
+          "weights_protease_sites": 1.0
+        }
       },
       "termini_accessible": {
         "keys": [
@@ -4182,7 +4966,15 @@
           "weights_termini_angle"
         ],
         "nested": {},
-        "sha256": "7b929f6bcaf563545450c24a667c8ff57f8f6e477f521411bc3c05e2643fa600"
+        "sha256": "7b929f6bcaf563545450c24a667c8ff57f8f6e477f521411bc3c05e2643fa600",
+        "values": {
+          "min_c_terminus_away_cosine_final": 0.0,
+          "min_n_terminus_away_cosine_final": 0.0,
+          "min_termini_away_cosine_final": 0.0,
+          "weights_c_terminus_away": 0.5,
+          "weights_n_terminus_away": 0.5,
+          "weights_termini_angle": 0.1
+        }
       },
       "termini_together": {
         "keys": [
@@ -4191,7 +4983,12 @@
           "weights_termini_distance"
         ],
         "nested": {},
-        "sha256": "c88bebb6377677b112f8da05c0aee3a732ab2537241cec5820a90c19c4eb39e5"
+        "sha256": "c88bebb6377677b112f8da05c0aee3a732ab2537241cec5820a90c19c4eb39e5",
+        "values": {
+          "max_termini_distance_final": 10.0,
+          "termini_distance_threshold": 7.0,
+          "weights_termini_distance": 1.0
+        }
       }
     },
     "target": {
@@ -4200,42 +4997,102 @@
           "targets"
         ],
         "nested": {},
-        "sha256": "27f9151808ccb25b90f4f7be9e02b51a01d92732d5652b037b7e174ed1ad198f"
+        "sha256": "27f9151808ccb25b90f4f7be9e02b51a01d92732d5652b037b7e174ed1ad198f",
+        "values": {
+          "targets": [
+            {
+              "name": "dynorphin_a",
+              "target_path": "structures/DynorphinA_IDR.fasta"
+            }
+          ]
+        }
       },
       "hIL2R": {
         "keys": [
           "targets"
         ],
         "nested": {},
-        "sha256": "31b2c7a14b89800834411346593e7b4f15fbfb6e56e95f520e5b004b3e202683"
+        "sha256": "31b2c7a14b89800834411346593e7b4f15fbfb6e56e95f520e5b004b3e202683",
+        "values": {
+          "targets": [
+            {
+              "chains": "A,B",
+              "hotspots": "A67,A68,A96,A99,A101,A159,A160,B125,B181,B229-231",
+              "name": "hIL2R",
+              "target_path": "structures/hIL2R_beta_gamma.pdb"
+            }
+          ]
+        }
       },
       "hIL7RA": {
         "keys": [
           "targets"
         ],
         "nested": {},
-        "sha256": "92e35ec6611be6e5e8c1fe283c160f1d4228a3ffd511d2ff242ab22d0f62e0e5"
+        "sha256": "92e35ec6611be6e5e8c1fe283c160f1d4228a3ffd511d2ff242ab22d0f62e0e5",
+        "values": {
+          "targets": [
+            {
+              "chains": "A",
+              "coldspots": "131-134,139,196-200,219-231",
+              "hotspots": "100,101,102,158,159,161,211,212,213,214",
+              "name": "hIL7RA",
+              "target_path": "structures/hIL7RA.pdb"
+            }
+          ]
+        }
       },
       "hPD1": {
         "keys": [
           "targets"
         ],
         "nested": {},
-        "sha256": "35dc6dc18757be4c445f1ea12a1a98cfb179affdbcf2fb9585af6c970d2d059a"
+        "sha256": "35dc6dc18757be4c445f1ea12a1a98cfb179affdbcf2fb9585af6c970d2d059a",
+        "values": {
+          "targets": [
+            {
+              "chains": "A",
+              "hotspots": "64,126,129,133",
+              "name": "hPD1",
+              "objective": "detarget",
+              "target_path": "structures/hPD1.pdb"
+            }
+          ]
+        }
       },
       "hPDL1": {
         "keys": [
           "targets"
         ],
         "nested": {},
-        "sha256": "39869560758b861b45ad7148bf0886c1af5d63a38cf59934d00d9b6d3c1be8d6"
+        "sha256": "39869560758b861b45ad7148bf0886c1af5d63a38cf59934d00d9b6d3c1be8d6",
+        "values": {
+          "targets": [
+            {
+              "chains": "A",
+              "hotspots": "54,56,66,115",
+              "name": "hPDL1",
+              "target_path": "structures/hPDL1.pdb"
+            }
+          ]
+        }
       },
       "mPDL1": {
         "keys": [
           "targets"
         ],
         "nested": {},
-        "sha256": "d5dc22107a825f57a1efcab989aca5fdea1fb3b26ac76629fdf23dad965fb81b"
+        "sha256": "d5dc22107a825f57a1efcab989aca5fdea1fb3b26ac76629fdf23dad965fb81b",
+        "values": {
+          "targets": [
+            {
+              "chains": "A",
+              "hotspots": "36,38,48,97",
+              "name": "mPDL1",
+              "target_path": "structures/mPDL1.pdb"
+            }
+          ]
+        }
       }
     }
   },

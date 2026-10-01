@@ -322,7 +322,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
     return (
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 shadow-xl animate-in fade-in slide-in-from-bottom-4">
-            <ExecutionTargetPicker key={JSON.stringify([baseSequence, mode, regionInput, strategy, numVariants, mutationsPerVariant, mutationCountMode, mutationCountExact, mutationCountSetInput, selectedPositionsList, excludeResiduesInput, allowedAAsInput, blockedAAsInput, allowInsertions, allowDeletions, indelSizes, indelProbability, manualMutations, physicsSettings])} workflowRequest={generatedVariants.length > 0 ? buildMutagenesisWorkflowRequest(jobNamePrefix, generatedVariants, buildPredictorConfig()) : null} />
+            <ExecutionTargetPicker workflowRequest={generatedVariants.length > 0 ? buildMutagenesisWorkflowRequest(jobNamePrefix, generatedVariants, buildPredictorConfig()) : null} />
             <header className="flex items-center justify-between mb-6 border-b border-slate-800 pb-4">
                 <div className="flex items-center gap-3">
                     <button

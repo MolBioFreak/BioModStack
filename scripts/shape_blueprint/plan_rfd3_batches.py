@@ -120,7 +120,7 @@ def _candidate_id(request_sha256: str, batch_index: int, local_index: int, effec
 
 
 def plan_batches(request: dict[str, Any], *, gpu_memory_gib: int) -> dict[str, Any]:
-    if request.get("schema") != "bms_shape_design_request_v2":
+    if request.get("schema") not in {"bms_shape_design_request_v2", "bms_shape_design_request_v3"}:
         raise ValueError("RFD3 batch planner requires request schema v2")
     _validate_request_hash(request)
     policy, policy_hash = _policy_for(request)

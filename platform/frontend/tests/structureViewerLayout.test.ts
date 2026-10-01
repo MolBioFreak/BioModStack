@@ -17,6 +17,107 @@ const STRUCTURE_VIEWER_PANE_PATH = resolve(process.cwd(), 'src/components/Struct
 const RESULTS_VIEWER_PATH = resolve(process.cwd(), 'src/components/ResultsViewer.tsx');
 const STRUCTURE_VIEWER_HOST_PATH = resolve(process.cwd(), 'src/structureViewer/StructureViewerHost.tsx');
 const METRIC_LEGEND_PATH = resolve(process.cwd(), 'src/structureViewer/extensions/metrics/MetricLegendPanel.tsx');
+const VIEWER_CSS = readFileSync(resolve(process.cwd(), 'src/structureViewer/structureViewer.css'), 'utf8');
+
+// Focused stylesheet contracts, not a browser-cascade emulator. The token parser
+// follows themeContrast.test.ts, including default-token inheritance for light themes.
+function themeTokenBlocks() {
+    const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8');
+    const blocks: { name: string; tokens: Record<string, string> }[] = [];
+    const re = /(?:^|\n)((?:\[data-theme="[^"]+"\]|:root)(?:,\s*\n\[data-theme="[^"]+"\])*)\s*\{([\s\S]*?)\n\}/g;
+    for (const match of css.matchAll(re)) {
+        const tokens = Object.fromEntries([...match[2].matchAll(/(--[a-z0-9-]+):\s*(#[0-9a-fA-F]{6})\s*;/g)].map(decl => [decl[1], decl[2]]));
+        for (const selector of match[1].split(',')) blocks.push({ name: selector.trim(), tokens });
+    }
+    const root = blocks.find(block => block.name === ':root')?.tokens;
+    assert.ok(root, 'default theme parsed');
+    return blocks.map(block => ({ name: block.name, tokens: { ...root, ...block.tokens } }));
+}
+
+function chromeRule(selector: string, property: string): string {
+    const rules = [...VIEWER_CSS.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+    const propertyPattern = new RegExp(`(?:^|[;\\n])\\s*${property}:\\s*([^;]+);`);
+    const match = rules.find(rule => rule[1].includes(selector) && propertyPattern.test(rule[2]));
+    assert.ok(match, `${selector} has explicit ${property} coverage`);
+    assert.match(match[1], /\[data-bms-molstar-adapter\] \.msp-plugin/, 'native overrides remain scoped');
+    const declaration = match[2].match(propertyPattern);
+    assert.ok(declaration);
+    return declaration[1].trim();
+}
+
+function themeContrast(foreground: string, background: string): number {
+    const luminance = (hex: string) => {
+        const channels = [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16) / 255)
+            .map(value => value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+        return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+    };
+    const a = luminance(foreground), b = luminance(background);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+function declarationToken(value: string): string {
+    const match = value.match(/^var\((--[a-z-]+)\)(?: !important)?$/);
+    assert.ok(match, `expected existing BMS token, got ${value}`);
+    return match[1];
+}
+
+test('native settings and help labels have themed effective surfaces in every theme', () => {
+    const pairs = [
+        ['.msp-control-row-label', '.msp-control-row,'],
+        ['.msp-simple-help,', '.msp-simple-help,'],
+        ['.msp-simple-help-section,', '.msp-simple-help-section,'],
+        ['.msp-control-button-label,', '.msp-control-row > div'],
+        ['.msp-sequence-number,', '.msp-sequence-wrapper,'],
+        ['.msp-sequence-missing', '.msp-sequence-wrapper,'],
+        ['.msp-btn-link-toggle-off', '.msp-btn-link-toggle-off'],
+        ['.msp-btn-link-toggle-on', '.msp-btn-link-toggle-on'],
+        [':is(:hover, :focus, :active)', ':is(:hover, :focus, :active)'],
+        [':is(:disabled, [readonly])', '.msp-btn-link-toggle-on'],
+        [':is(:disabled, [readonly])', ':is(:disabled, [readonly])'],
+        ['[data-seqid][style*="background-color:"]', '[data-seqid][style*="background-color:"]'],
+    ];
+    const blocks = themeTokenBlocks();
+    for (const name of ['black', 'light', 'clean_light']) assert.ok(blocks.some(block => block.name === `[data-theme="${name}"]`));
+    for (const [foregroundSelector, backgroundSelector] of pairs) {
+        const foregroundToken = declarationToken(chromeRule(foregroundSelector, 'color'));
+        const backgroundToken = declarationToken(chromeRule(backgroundSelector, 'background-color'));
+        for (const { name, tokens } of blocks) {
+            assert.ok(tokens[foregroundToken] && tokens[backgroundToken], `${name}: defined tokens`);
+            const ratio = themeContrast(tokens[foregroundToken], tokens[backgroundToken]);
+            assert.ok(ratio >= 4.5, `${name} ${foregroundSelector} on ${backgroundSelector}: ${ratio.toFixed(2)}:1`);
+        }
+    }
+    // Preserve the demonstrated baseline rather than treating the native beige as acceptable.
+    assert.ok(themeContrast('#9aa6b3', '#eeece7') < 2.2);
+});
+
+test('native states retain readable distinctions without hiding controls or recoloring the molecule', () => {
+    assert.equal(chromeRule('.msp-btn-link-toggle-off', 'color'), 'var(--text-secondary) !important');
+    assert.equal(chromeRule('.msp-btn-link-toggle-on', 'color'), 'var(--text-primary) !important');
+    assert.equal(chromeRule('.msp-control-group-header >', 'background-color'), 'var(--bg-secondary) !important');
+    assert.equal(chromeRule(':is(:disabled, [readonly])', 'opacity'), '1');
+    assert.equal(chromeRule(':is(:disabled, [readonly])', 'color'), 'var(--text-muted) !important');
+    assert.equal(chromeRule('[data-seqid][style*="background-color:"]', 'background-color'), 'var(--surface-control-strong) !important');
+    assert.equal(chromeRule('[data-seqid][style*="background-color:"]', 'box-shadow'), 'inset 0 -2px var(--accent-primary)');
+    assert.equal(chromeRule('[data-seqid][style*="rgb(255, 102, 153)"]', 'outline'), '1px dashed var(--accent-primary)');
+    assert.doesNotMatch(VIEWER_CSS.replace(/\/\*[\s\S]*?\*\//g, ''), /(?:canvas|\.msp-color-swatch)[^{}]*\{[^}]*\b(?:color|background|fill):/);
+    const chrome = VIEWER_CSS.slice(VIEWER_CSS.indexOf('/* Mol* ships'));
+    assert.doesNotMatch(chrome, /display:\s*none|visibility:\s*hidden|pointer-events:|filter:/);
+    assert.doesNotMatch(chrome, /(?:\.msp-plugin\s*\*|\.msp-plugin\s+span)\s*\{/);
+});
+
+test('shared workbench docks beside or below the scene instead of covering it', () => {
+    const host = readFileSync(STRUCTURE_VIEWER_HOST_PATH, 'utf8');
+    const css = readFileSync(resolve(process.cwd(), 'src/structureViewer/structureViewer.css'), 'utf8');
+    assert.match(host, /className="bms-structure-canvas"/);
+    assert.match(host, /<MolstarViewerImpl[^>]*height="100%"/);
+    assert.match(host, /<aside hidden=\{workbenchCollapsed\} className="bms-structure-workbench/);
+    assert.doesNotMatch(host, /<aside[^>]*className="absolute/);
+    assert.match(css, /grid-template-columns: minmax\(0, 1fr\) minmax\(18rem, 22rem\)/);
+    assert.match(css, /@container \(min-width: 56rem\)/);
+    assert.match(css, /background-color: var\(--surface-control\)/);
+    assert.match(css, /color: var\(--text-primary\)/);
+});
 
 test('structure viewer top toolbar contains navigation only, not legacy metric controls', () => {
     const source = readFileSync(STRUCTURE_VIEWER_PANE_PATH, 'utf8');

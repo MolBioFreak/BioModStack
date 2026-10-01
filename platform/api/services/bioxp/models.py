@@ -51,7 +51,6 @@ class BioXpSnapshot(BaseModel):
     hardware_observation_fresh: bool | None = None
     hardware_observation_stale: bool = False
     hardware_evidence_error: str | None = None
-    automatic_snapshot_refresh: dict[str, Any] | None = None
     capabilities: tuple[str, ...] = ()
     observed_at: datetime | None = None
     freshness_budget_seconds: float | None = Field(default=DEFAULT_BIOXP_FRESHNESS_BUDGET_SECONDS, gt=0)
@@ -61,7 +60,6 @@ class BioXpSnapshot(BaseModel):
     last_observed_runtime_ready: bool | None = None
     last_observed_hardware_ready: bool | None = None
     last_error: str | None = None
-    startup_lifecycle: dict[str, Any] | None = None
     maintenance_state: dict[str, Any] | None = None
     ownership: dict[str, Any] | None = None
 

@@ -42,6 +42,48 @@ async def cancel_running_md_run(
             MdReplicaRun.active.is_(True),
         )
     )).all())
+    # Attempt-local children are observations, not independent runner handles.
+    # The existing lineage owner withdraws queued work and stops the retained
+    # root with its attempt/source fences; it also retains unverified-stop evidence.
+    projected = list((await session.scalars(select(Job).where(
+        Job.parent_job_id == job_id,
+    ))).all())
+    shared = bool(
+        (parent.provenance or {}).get("component_context_path")
+        or parent.remote_attempt_id
+        or any((child.provenance or {}).get("component_projection") for child in projected)
+    )
+    if shared or (parent.status == "queued" and not parent.nextflow_run_id):
+        from services.job_control import cancel_job_lineage
+
+        async def persist_native_intent() -> None:
+            await request_cancel(session, job_id=job_id, expected_version=expected_version,
+                                 idempotency_key=idempotency_key)
+
+        parent, lineage = await cancel_job_lineage(
+            job_id, session, commit=False, before_intent_commit=persist_native_intent,
+        )
+        receipt = (parent.params or {}).get("cancellation_receipt") or {}
+        unverified = bool(parent.nextflow_run_id or parent.remote_attempt_id or parent.started_at) and not receipt.get("remote_stop_verified")
+        now = datetime.utcnow()
+        for replica in replicas:
+            replica.active = False
+            replica.state = "orphaned" if unverified else "cancelled"
+            replica.completed_at = now
+            if unverified:
+                replica.failure = {"code": "cancel_stop_unverified", "source": "root_cancellation"}
+            segments = list((await session.scalars(select(MdAttemptSegment).where(
+                MdAttemptSegment.replica_run_id == replica.id,
+            ))).all())
+            for segment in segments:
+                if segment.state not in {"completed", "failed", "cancelled", "orphaned"}:
+                    segment.state = replica.state
+                    segment.completed_at = now
+        from database import MdRun
+        run = await session.get(MdRun, job_id, populate_existing=True)
+        return await finalize_cancel(session, job_id=job_id, expected_version=run.state_version,
+                                     idempotency_key=f"{idempotency_key}:completed")
+
     children: list[Job] = []
     targets: list[str] = []
     processless_pre_replica = False
@@ -106,7 +148,7 @@ async def cancel_running_md_run(
     for replica, child in zip(replicas, children, strict=True):
         replica.active = False
         replica.state = "cancelled"
-        replica.ended_at = now
+        replica.completed_at = now
         child.status = "cancelled"
         child.queue_status = "completed"
         child.completed_at = now
@@ -116,7 +158,7 @@ async def cancel_running_md_run(
         for segment in segments:
             if segment.state not in terminal_segment_states:
                 segment.state = "cancelled"
-                segment.ended_at = now
+                segment.completed_at = now
 
     run = await finalize_cancel(
         session,

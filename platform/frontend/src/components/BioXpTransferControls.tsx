@@ -38,9 +38,8 @@ function ChildReceipt({ id, generation, connected }: { id: string; generation: n
     return <div>
         <p role={receipt?.status === 'failed' ? 'alert' : 'status'}>Robot step: {receipt?.status ?? 'receipt unavailable'}{outcomeText(receipt?.error) ? ` · ${outcomeText(receipt?.error)}` : ''}</p>
         {query.error != null && <p role="alert">{bioXpErrorText(query.error)}</p>}
-        <details><summary>Robot step {id} · {receipt?.status ?? 'receipt unavailable'}</summary>
-        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(receipt, null, 2)}</pre>
-    </details></div>;
+        <p className="text-xs">Robot step {id} · {receipt?.completion_class ?? 'completion not reported'}</p>
+    </div>;
 }
 
 export function BioXpTransferControls({ generation, connected }: {
@@ -125,9 +124,6 @@ export function BioXpTransferControls({ generation, connected }: {
         {currentLive && <p role="status">{command?.status} · {job?.execution?.runtime_state.workflow?.phase ?? 'phase unavailable'}</p>}
         {job?.execution?.runtime_state.workflow?.held_reason && <p role="alert">{job.execution.runtime_state.workflow.held_reason}</p>}
         {job?.execution?.runtime_state.action_results?.map((result, index) => <p key={index} role={result.ok === false ? 'alert' : 'status'}>Action {index + 1}: {result.ok === false ? 'failed' : result.ok === true ? 'completed' : 'reported'}{outcomeText(result) ? ` · ${outcomeText(result)}` : ''}</p>)}
-        {job && <details><summary>Robot custody, action results and failures</summary>
-            <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(job.execution?.runtime_state, null, 2)}</pre>
-        </details>}
         {job?.execution?.runtime_state.workflow?.child_command_ids.map(child => <ChildReceipt key={child} id={child} generation={retainedGeneration} connected={connected && sameConnection} />)}
         {error && <p role="alert">{error}</p>}
     </section>;

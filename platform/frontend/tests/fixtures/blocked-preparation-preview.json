@@ -18,11 +18,11 @@
     "kind": "model",
     "model_id": "boltz2"
   },
-  "preview_sha256": "c0a1dc798aed024586caa327ce40e92244f053ec0a600b0d523223e57d429993",
+  "preview_sha256": "6bc594819ce8038e1e630e6d16c1e7d4292e9c79252d0e1bd6e397bed6d8d1b2",
   "artifacts": [],
   "total_bytes": 0,
   "scientific_ready": false,
-  "scope": "managed_asset_activation",
+  "scope": "download_only",
   "destination": {
     "target_id": "vast:1",
     "remote_root": "/opt/biomodstack"

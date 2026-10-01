@@ -947,7 +947,27 @@ class ComponentRuntime(GroupingLedger):
             row = db.execute('SELECT snapshot FROM component_native_parents WHERE component=?',
                              (component_id,)).fetchone()
             if row is not None and row[0] != payload:
-                raise ValueError('immutable native parent snapshot conflicts')
+                # The same MD replica keeps its original compiler snapshot.
+                # Continuation-only system parameters belong to the authorized
+                # root edge, not a rewritten scientific request/native parent.
+                root = db.execute('SELECT detail FROM root_execution').fetchone()
+                continuation = (((json.loads(root[0]) if root else {}).get('continuation_edge')
+                                 or {}).get('md_resume') or {}).get(component_id)
+                retained = json.loads(row[0])
+                candidate = json.loads(payload)
+                if (continuation and retained.get('model_id') == 'molecular_dynamics'
+                        and retained.get('mode') == 'replica'):
+                    for key, value in continuation.items():
+                        if not key.startswith('md_resume_'):
+                            continue
+                        if candidate['params'].get(key) != value:
+                            raise ValueError('immutable native parent snapshot conflicts')
+                        if key in retained['params']:
+                            candidate['params'][key] = retained['params'][key]
+                        else:
+                            candidate['params'].pop(key, None)
+                if canonical_bytes(candidate) != row[0]:
+                    raise ValueError('immutable native parent snapshot conflicts')
             db.execute('INSERT OR IGNORE INTO component_native_parents VALUES (?,?)',
                        (component_id, payload))
 
@@ -973,6 +993,9 @@ class ComponentRuntime(GroupingLedger):
             if not row:
                 raise ValueError("foreign component")
             if row[0] != "queued":
+                return False
+            root = db.execute('SELECT detail FROM root_execution').fetchone()
+            if root and json.loads(root[0]).get('md_pause'):
                 return False
             db.execute("UPDATE components SET state='running',owner=?,boot=? WHERE component=?", (owner_id, boot_id, component_id))
             self._event(db, component_id, "claimed", dict(owner_id=owner_id, boot_id=boot_id))
@@ -1059,6 +1082,106 @@ class ComponentRuntime(GroupingLedger):
             db.execute("UPDATE components SET state=?,error=? WHERE component=?", (state, reason, component_id))
             self._event(db, component_id, state, dict(reason=reason,
                 **({"failure_receipt": dict(failure_receipt)} if failure_receipt else {})))
+
+    def request_md_pause(self, operation_id: str, *, boot_id: str) -> dict[str, Any]:
+        """Fence production pause on the existing root, not projected child PIDs."""
+        if not operation_id:
+            raise ValueError('MD pause requires its operation identity')
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._active(db)
+            row = db.execute('SELECT state,boot,detail FROM root_execution').fetchone()
+            if not row or row[1] != boot_id:
+                raise ValueError('MD pause root/boot conflicts')
+            detail = json.loads(row[2])
+            prior = detail.get('md_pause')
+            if prior:
+                if prior['operation_id'] != operation_id:
+                    raise ValueError('MD pause operation conflicts')
+                return prior
+            if row[0] != 'running':
+                raise ValueError('MD pause requires a running root')
+            running = list(db.execute("SELECT component,request FROM components WHERE state='running'"))
+            if not running or any(json.loads(request)['stage'] != 'md_replica' for _, request in running):
+                raise ValueError('MD pause requires active production replicas')
+            intent = dict(operation_id=operation_id, component_ids=[identity for identity, _ in running])
+            detail['md_pause'] = intent
+            db.execute('UPDATE root_execution SET detail=?', (canonical_bytes(detail),))
+            self._event(db, self.root_job_id, 'md_pause_requested', intent)
+        return intent
+
+    def md_execution_paused(self, component_id: str, *, owner_id: str, boot_id: str,
+                            checkpoint: Mapping[str, Any]) -> None:
+        """The process owner joined writers and verified native checkpoint bytes."""
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._active(db)
+            root = db.execute('SELECT detail FROM root_execution').fetchone()
+            intent = json.loads(root[0]).get('md_pause', {})
+            if component_id not in intent.get('component_ids', []):
+                raise ValueError('MD checkpoint lacks fenced pause intent')
+            row = self._owned(db, component_id, owner_id, boot_id)
+            payload = canonical_bytes(dict(result=dict(checkpoint), references=[]))
+            if row[0] == 'paused' and row[3] == payload:
+                return
+            if row[0] != 'running':
+                raise ValueError('MD pause component ownership changed')
+            db.execute("UPDATE components SET state='paused',result=?,error=NULL WHERE component=?",
+                       (payload, component_id))
+            self._event(db, component_id, 'md_production_paused', dict(checkpoint))
+
+    def resume_md_production(self, *, operation_id: str, pause_operation_id: str, boot_id: str,
+                             continuation_lease_id: str, invocation: NativeInvocation,
+                             parent_snapshot: Mapping[str, Any], resources: Mapping[str, Any],
+                             checkpoints: Mapping[str, Any], compiler_context: Mapping[str, Any]) -> dict[str, Any]:
+        """Continue the same replicas and exact collector; never manufacture retries."""
+        if not operation_id or not continuation_lease_id:
+            raise ValueError('MD continuation requires operation and renewed lease')
+        if invocation.source_identity is None or asdict(invocation.source_identity) != self.source_identity:
+            raise ValueError('MD continuation source changed')
+        edge = dict(operation_id=operation_id, pause_operation_id=pause_operation_id,
+            continuation_lease_id=continuation_lease_id, command=list(invocation.command),
+            native_parameters=invocation.native_parameters,
+            effective=json.loads(invocation.effective_json), model_id=invocation.model_id, mode=invocation.mode,
+            parent_snapshot=dict(parent_snapshot), resources=dict(resources),
+            execution_plan=invocation.execution_plan.to_dict(),
+            plan_sha256=invocation.execution_plan.plan_sha256, md_resume=dict(checkpoints),
+            md_compiler_context=dict(compiler_context))
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._active(db)
+            row = db.execute('SELECT state,boot,detail FROM root_execution').fetchone()
+            prior = json.loads(row[2]) if row else {}
+            previous_edge = prior.get('continuation_edge', {})
+            if previous_edge.get('operation_id') == operation_id:
+                if previous_edge != edge:
+                    raise ValueError('MD continuation replay conflicts')
+                return self.root_state()
+            if (not row or row[0] != 'paused' or row[1] != boot_id or not prior.get('quiescent')
+                    or prior.get('md_pause', {}).get('operation_id') != pause_operation_id):
+                raise ValueError('MD continuation requires its same-boot paused root')
+            paused = dict(db.execute("SELECT component,result FROM components WHERE state='paused'"))
+            if set(paused) != set(checkpoints):
+                raise ValueError('MD continuation checkpoint coverage conflicts')
+            for identity, raw in paused.items():
+                retained = json.loads(raw)['result']
+                supplied = checkpoints[identity]
+                if any(supplied.get(key) != retained.get(key) for key in
+                       ('md_resume_checkpoint', 'md_resume_checkpoint_sha256', 'md_resume_output_dir')):
+                    raise ValueError('MD continuation checkpoint custody conflicts')
+                path = Path(supplied['md_resume_checkpoint'])
+                if not path.resolve().is_relative_to(self.artifact_root) or file_identity(path)[0] != supplied['md_resume_checkpoint_sha256']:
+                    raise ValueError('MD continuation checkpoint bytes changed')
+            if db.execute("SELECT 1 FROM components WHERE state IN ('running','uncertain')").fetchone():
+                raise ValueError('MD continuation writers are not quiescent')
+            for item in invocation.generated_inputs:
+                item.materialize(self.artifact_root)
+            db.execute("UPDATE components SET state='queued',owner=NULL,boot=NULL,result=NULL WHERE state='paused'")
+            detail = dict(generation=int(prior.get('generation', 0)) + 1,
+                          continuation_edge=edge, quiescent=True)
+            db.execute("UPDATE root_execution SET state='resume_ready',detail=?", (canonical_bytes(detail),))
+            self._event(db, self.root_job_id, 'md_production_continuation_authorized', detail)
+        return self.root_state()
 
     def execution_finished(self, component_id: str, *, owner_id: str, boot_id: str,
                            output_dir: str, exit_code: int) -> None:
@@ -1208,8 +1331,8 @@ class ComponentRuntime(GroupingLedger):
                 raise ValueError("foreign component group")
             return self._effective_children(db, json.loads(row[0]))
 
-    def export_projection(self) -> dict[str, Any]:
-        """Snapshot authenticated ledger facts after the execution owner joins writers.
+    def export_projection(self, *, control_observation: bool = False) -> dict[str, Any]:
+        """Snapshot authenticated ledger facts, or explicit running control observations.
 
         This is host projection evidence, not a scientific success receipt. Original
         requests/groups and all failed/replaced children remain auditable.
@@ -1217,8 +1340,9 @@ class ComponentRuntime(GroupingLedger):
         with self._connect() as db:
             db.execute('BEGIN')
             root = db.execute('SELECT state,owner,boot,detail FROM root_execution').fetchone()
-            if (not root or root[0] not in {'completed', 'failed', 'cancelled', 'paused'}
-                    or not json.loads(root[3]).get('quiescent')):
+            running = bool(control_observation and root and root[0] == 'running')
+            if (not root or (not running and (root[0] not in {'completed', 'failed', 'cancelled', 'paused'}
+                    or not json.loads(root[3]).get('quiescent')))):
                 raise ValueError('component projection requires proven quiescent execution')
             detail = json.loads(root[3])
             components, unexecuted = [], []
@@ -1232,7 +1356,8 @@ class ComponentRuntime(GroupingLedger):
             for identity, request, state, result, error, owner in db.execute(
                     'SELECT component,request,state,result,error,owner FROM components ORDER BY rowid'):
                 if (owner is None or identity not in snapshots
-                        or state not in {'execution_finished', 'completed', 'failed', 'cancelled'}):
+                        or state not in ({'running', 'execution_finished', 'completed', 'failed', 'cancelled', 'paused'}
+                                         if running else {'execution_finished', 'completed', 'failed', 'cancelled', 'paused'})):
                     unexecuted.append(dict(component_id=identity, request=json.loads(request),
                         state=state, error=error, result=json.loads(result) if result else None))
                     continue
@@ -1264,20 +1389,27 @@ class ComponentRuntime(GroupingLedger):
             components=components, unprojected_components=unexecuted, groups=groups,
             replacements=replacements, events=events)
 
-    def publish_projection(self) -> Path:
-        payload = self.export_projection()
+    def publish_projection(self, *, control_observation: bool = False) -> Path:
+        payload = self.export_projection(control_observation=control_observation)
         encoded = canonical_bytes(payload)
         retained = self.artifact_root / 'component-projections' / f"generation-{payload['generation']}.json"
-        if retained.exists() and retained.read_bytes() != encoded:
-            raise ValueError('immutable terminal component projection conflicts')
-        durable_write(retained, encoded)
+        running = payload['root_state']['state'] == 'running'
+        if not running:
+            if retained.exists() and retained.read_bytes() != encoded:
+                raise ValueError('immutable terminal component projection conflicts')
+            durable_write(retained, encoded)
         edge = payload['root_state'].get('continuation_edge') or {}
         parent_output = Path((edge.get('parent_snapshot') or {}).get('output_dir', self.artifact_root)).resolve()
         if not parent_output.is_relative_to(self.artifact_root):
             raise ValueError('component projection output escapes its attempt')
         current = parent_output / '.bms-components.json'
         if current.exists() and current.read_bytes() != encoded:
-            raise ValueError('immutable native generation component projection conflicts')
+            previous = json.loads(current.read_bytes())
+            if (previous.get('root_state', {}).get('state') != 'running'
+                    or previous.get('generation') != payload['generation']
+                    or any(previous.get(key) != payload[key] for key in
+                        ('root_job_id', 'attempt_id', 'target_id', 'lease_id', 'source_identity', 'plan_sha256'))):
+                raise ValueError('immutable native generation component projection conflicts')
         durable_write(current, encoded)
         return current
 
@@ -1379,6 +1511,9 @@ class ComponentRuntime(GroupingLedger):
             row = db.execute("SELECT state,owner,boot,detail FROM root_execution").fetchone()
             if not row or row[1:3] != (owner_id, boot_id):
                 raise ValueError("root process/boot ownership conflicts")
+            pause = json.loads(row[3]).get('md_pause')
+            if pause:
+                detail['md_pause'] = pause
             if row[0] in {"completed", "failed", "cancelled", "paused"}:
                 if (state, canonical_bytes(detail)) != (row[0], row[3]):
                     raise ValueError("root terminal state conflicts")

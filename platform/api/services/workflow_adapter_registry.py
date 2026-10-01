@@ -59,6 +59,11 @@ PROJECT_NATIVE_OWNER_REGISTRY: dict[str, dict[str, Any]] = {
         "supports_initial_values": True,
         "supports_draft_reporting": True,
     },
+    "protein_modification_experimental": {
+        "setup_path": "/submit",
+        "supports_initial_values": True,
+        "supports_draft_reporting": True,
+    },
     "conformational_mapping": {
         "setup_path": "/submit",
         "supports_initial_values": True,

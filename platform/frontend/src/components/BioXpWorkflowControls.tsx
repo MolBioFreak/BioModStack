@@ -22,13 +22,12 @@ function selectedInput(text: string): BioXpWorkflowInput {
     return value;
 }
 
-export function BioXpWorkflowControls({ generation, connected, controlsEnabled }: {
-    generation: number; connected: boolean; controlsEnabled: boolean;
+export function BioXpWorkflowControls({ generation, connected, controlsEnabled, visible = true }: {
+    generation: number; connected: boolean; controlsEnabled: boolean; visible?: boolean;
 }) {
-    const jobs = useBioXpWorkflowJobs(generation, connected);
+    const jobs = useBioXpWorkflowJobs(generation, connected && visible);
     const [selection, setSelection] = useState<{ name: string; input: BioXpWorkflowInput } | null>(null);
     const [selectionError, setSelectionError] = useState<string | null>(null);
-    const [acknowledged, setAcknowledged] = useState(false);
     const [selectedJob, setSelectedJob] = useState<{ generation: number; id: string } | null>(null);
     const [attempt, setAttempt] = useState<{ generation: number; key: string; jobId: string } | null>(null);
     const [acceptedJob, setAcceptedJob] = useState<{ generation: number; job: BioXpWorkflowJob } | null>(null);
@@ -47,7 +46,7 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
     const listedActive = jobs.data?.find(job => job.command && (!job.command.terminal || job.command.status === 'ambiguous'));
     const jobId = (selectedJob?.generation === generation ? selectedJob.id : null)
         ?? currentAttempt?.jobId ?? listedActive?.job_id ?? null;
-    const query = useBioXpWorkflowJob(jobId, generation, connected);
+    const query = useBioXpWorkflowJob(jobId, generation, connected && visible);
     const job = query.data?.job_id === jobId ? query.data
         : acceptedJob?.generation === generation && acceptedJob.job.job_id === jobId ? acceptedJob.job : null;
     const command = job?.command;
@@ -55,7 +54,6 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
     const workflow = runtime?.workflow;
     const canonical = !!command && !!workflow && command.command_id === jobId && workflow.command_id === jobId && job?.execution?.dry_run === false;
     const busy = submit.isPending || control.isPending || review.isPending;
-    const settled = canonical && command.terminal && workflow.phase === 'terminal';
     const mutable = connected && controlsEnabled && !busy && !query.isError && canonical && !command.terminal
         && workflow.phase !== 'reconciling';
     const pendingControl = workflow?.requested_control != null && workflow.last_control_id !== workflow.reached_control_id;
@@ -64,8 +62,7 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
     const wakeReached = workflow?.gate === 'deferred_pause' && workflow.requested_control === null
         && workflow.reached_control_id != null && workflow.reached_control_id !== workflow.gate_id
         && workflow.reached_control_id === workflow.last_control_id;
-    const maySubmit = connected && controlsEnabled && !busy && acknowledged && selection !== null
-        && !jobs.isError && !jobs.isLoading && !listedActive && (!currentAttempt || settled && jobId === currentAttempt.jobId);
+    const maySubmit = connected && !busy && selection !== null;
 
     async function submitSelected() {
         if (!maySubmit || !selection || busyRef.current) return;
@@ -81,7 +78,6 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
             if (currentGeneration.current !== submittedGeneration) return;
             setAttempt({ generation, key, jobId: id });
             setSelectedJob({ generation, id });
-            setAcknowledged(false);
             setLocalError(null);
             const result = await submit.mutateAsync({ ...input, dry_run: false, idempotency_key: key, expected_connection_generation: generation });
             if (currentGeneration.current === submittedGeneration) {
@@ -129,10 +125,10 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
         <h2 className="text-lg font-semibold">Prepared workflow</h2>
         <p className="text-sm text-slate-400">Select an existing robot request with its prepared input, manifest and preflight. No recipe generation. Thermal and selected vision dependencies remain subject to robot support checks.</p>
         <label className="block text-sm">Prepared request file
-            <input type="file" accept=".json,application/json" disabled={busy || !!currentAttempt && !settled} onChange={async event => {
+            <input type="file" accept=".json,application/json" disabled={busy} onChange={async event => {
                 const file = event.currentTarget.files?.[0];
                 const version = ++selectionVersion.current;
-                setSelection(null); setSelectionError(null); setAcknowledged(false);
+                setSelection(null); setSelectionError(null);
                 if (!file) return;
                 try {
                     const input = selectedInput(await file.text());
@@ -142,7 +138,6 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
         </label>
         {selection && <p className="text-sm">Selected: {selection.name} · {selection.input.source_type}</p>}
         {selectionError && <p role="alert">{selectionError}</p>}
-        <label className="block text-sm"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} /> I intend to submit this prepared request for physical execution.</label>
         <button type="button" className={buttonClass} disabled={!maySubmit} onClick={() => void submitSelected()}>Submit prepared workflow</button>
         {currentAttempt && <p className="break-all text-xs">Original submission key: {currentAttempt.key}</p>}
         {jobs.data && jobs.data.length > 0 && <label className="block text-sm">Robot workflow

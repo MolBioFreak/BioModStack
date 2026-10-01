@@ -7,21 +7,60 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from database import Job, JobArtifact, MdAttemptSegment, MdReplicaRun, MdRun
 from services.md.results import (
-    MDJobRecord, MDResultError, _load_inventory, apply_completion_barrier, completion_barrier,
+    MDJobRecord, MDResultError, _load_inventory, _open_verified_descriptor,
+    apply_completion_barrier, completion_barrier, result_record,
 )
 
 
 _ARTIFACT_NAMESPACE = uuid.UUID("c87eb7cb-9684-470a-9b63-10b9500beef1")
 
 
-async def _ingest_durable_artifacts(job: MDJobRecord, session: Any) -> None:
+def _read_frame_endpoints(root, inventory):
+    endpoints: dict[int, tuple[int, float, int, float]] = {}
+    for item in inventory:
+        if item.semantic_role != "trajectory_frame_map":
+            continue
+        try:
+            _artifact, handle = _open_verified_descriptor(root, item)
+            with handle:
+                frame_map = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact cannot be decoded", 409) from exc
+        frames = frame_map.get("frames") if isinstance(frame_map, dict) else None
+        if not isinstance(frames, list) or not frames:
+            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact has no governed frames", 409)
+        first, last = frames[0], frames[-1]
+        if not isinstance(first, dict) or not isinstance(last, dict):
+            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact has invalid endpoint records", 409)
+        try:
+            endpoints[item.replica_index] = (
+                int(first["step"]), float(first["time_ps"]),
+                int(last["step"]), float(last["time_ps"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact has invalid endpoint values", 409) from exc
+
+    return endpoints
+
+
+def _prepare_completion(job):
+    digests = {}
+    inventory = _load_inventory(job, _digests=digests)
+    snapshot = completion_barrier(job, _inventory=inventory, _digests=digests)
+    return snapshot, inventory, _read_frame_endpoints(inventory[0], inventory[2])
+
+
+async def _ingest_durable_artifacts(job: MDJobRecord, session: Any, *, _inventory=None, _frame_endpoints=None) -> None:
     if job.params is None:
         raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD requested protocol is missing", 409)
-    root, _aggregate, inventory = _load_inventory(job)
+    from services.remote_execution.executor import _joined_thread
+    record = result_record(job)
+    root, _aggregate, inventory = (_inventory if _inventory is not None
+        else await _joined_thread(_load_inventory, record))
     replicas = list((await session.scalars(
         select(MdReplicaRun).where(MdReplicaRun.md_job_id == job.id)
         .order_by(MdReplicaRun.replica_index, MdReplicaRun.attempt.desc())
@@ -59,28 +98,8 @@ async def _ingest_durable_artifacts(job: MDJobRecord, session: Any) -> None:
         ]))
     )).all()) if replicas else []
     existing = {(row.owner_job_id, row.attempt, row.logical_path): row for row in existing_rows}
-    frame_endpoints: dict[int, tuple[int, float, int, float]] = {}
-    for item in inventory:
-        if item.semantic_role != "trajectory_frame_map":
-            continue
-        try:
-            frame_map = json.loads(item.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact cannot be decoded", 409) from exc
-        frames = frame_map.get("frames") if isinstance(frame_map, dict) else None
-        if not isinstance(frames, list) or not frames:
-            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact has no governed frames", 409)
-        first, last = frames[0], frames[-1]
-        if not isinstance(first, dict) or not isinstance(last, dict):
-            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact has invalid endpoint records", 409)
-        try:
-            frame_endpoints[item.replica_index] = (
-                int(first["step"]), float(first["time_ps"]),
-                int(last["step"]), float(last["time_ps"]),
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map artifact has invalid endpoint values", 409) from exc
-
+    frame_endpoints = (_frame_endpoints if _frame_endpoints is not None
+        else await _joined_thread(_read_frame_endpoints, root, inventory))
     for replica_index, endpoint in frame_endpoints.items():
         replica = replicas_by_index.get(replica_index)
         segment = latest_segment.get(replica.id) if replica is not None else None
@@ -180,17 +199,32 @@ async def _ingest_durable_artifacts(job: MDJobRecord, session: Any) -> None:
     await session.flush()
 
 
-def validate_md_completion(job: MDJobRecord) -> dict[str, Any]:
-    """Validate the complete immutable MD generation without mutating job state."""
-
-    return completion_barrier(job)
-
-
-async def validate_and_finalize_md_job(job: MDJobRecord, session: Any) -> dict[str, Any]:
+async def validate_and_finalize_md_job(job: Job, session: Any) -> dict[str, Any]:
     """Apply the MD-specific terminal barrier to the caller's current DB transaction."""
 
-    snapshot = apply_completion_barrier(job)
-    await _ingest_durable_artifacts(job, session)
+    from services.remote_execution.executor import _joined_thread
+    with session.no_autoflush:
+        await session.refresh(job, attribute_names=['status', 'queue_status', 'awaiting_input', 'paused'])
+    run = await session.get(MdRun, job.id, populate_existing=True)
+    if (job.status == "cancelled" or job.awaiting_input or job.paused
+            or (run is not None and run.phase in {"cancelled", "cancelling", "paused", "checkpointing"})):
+        raise MDResultError("MD_COMPLETION_CONFLICT", "MD cancellation or review owns the parent", 409)
+    status, queue_status = job.status, job.queue_status
+    snapshot, inventory, endpoints = await _joined_thread(_prepare_completion, result_record(job))
+    # Take writer ownership only after pure readback. The exact-state CAS protects
+    # against cancellation/review arriving while the filesystem leaf is running.
+    claimed = await session.execute(update(Job).where(
+        Job.id == job.id, Job.status == status, Job.queue_status == queue_status,
+        Job.status != "cancelled", Job.awaiting_input.is_(False), Job.paused.is_(False),
+    ).values(status=status).execution_options(synchronize_session=False))
+    if claimed.rowcount != 1:
+        raise MDResultError("MD_COMPLETION_CONFLICT", "MD terminal ownership changed during validation", 409)
+    with session.no_autoflush:
+        await session.refresh(job, attribute_names=['status', 'queue_status', 'awaiting_input', 'paused'])
+    run = await session.get(MdRun, job.id, populate_existing=True)
+    if run is None or run.phase in {"cancelled", "cancelling", "paused", "checkpointing"}:
+        raise MDResultError("MD_COMPLETION_CONFLICT", "Authoritative MD run does not own completion", 409)
+    await _ingest_durable_artifacts(job, session, _inventory=inventory, _frame_endpoints=endpoints)
     # Require the exact current native children after ALL replica/analysis
     # contracts passed. Shared finalize_component_projection owns host promotion
     # after the caller marks this parent completed in the same transaction.
@@ -232,6 +266,7 @@ async def validate_and_finalize_md_job(job: MDJobRecord, session: Any) -> dict[s
         raise MDResultError("MD_COMPLETION_CONFLICT", "Authoritative MD run state is missing", 409)
     if run.phase != "completed" or run.verification_status != "verified":
         run.state_version += 1
+    apply_completion_barrier(job, _snapshot=snapshot)
     run.phase = "completed"
     run.verification_status = "verified"
     run.controls_blocked = False

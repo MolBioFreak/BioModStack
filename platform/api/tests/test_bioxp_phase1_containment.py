@@ -36,7 +36,7 @@ def test_every_non_get_route_carries_the_global_guard() -> None:
 
 
 def test_safe_local_mutations_are_exact_and_do_not_reach_robot() -> None:
-    assert SAFE_LOCAL_MUTATIONS == frozenset({"/protocols/compile"})
+    assert SAFE_LOCAL_MUTATIONS == frozenset()
     assert CONNECTION_MUTATIONS == frozenset(
         {
             "/connection/connect",

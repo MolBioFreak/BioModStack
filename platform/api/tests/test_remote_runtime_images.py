@@ -359,7 +359,7 @@ async def test_worker_helper_packages_required_lifecycle_peer(tmp_path, local_tr
     assert result.stdout.strip() == str(installed.with_name('runtime_image_lifecycle.py'))
 
 
-def test_warm_image_ingest_hashes_only_lease_and_rejects_corruption(tmp_path, monkeypatch):
+def test_warm_image_ingest_reuses_lease_identity_and_rejects_changes(tmp_path, monkeypatch):
     store, source, item = publish(tmp_path)
     lifecycle = tool.runtime_lifecycle()
     real = lifecycle.verify_image
@@ -371,7 +371,7 @@ def test_warm_image_ingest_hashes_only_lease_and_rejects_corruption(tmp_path, mo
 
     monkeypatch.setattr(lifecycle, 'verify_image', counted)
     assert store.ingest_runtime(item, source)['cache_hit'] is True
-    assert len(hashes) == 1
+    assert hashes == []
     obj = store.image_path(item)
     obj.chmod(0o600)
     obj.write_bytes(b'x' * item['size_bytes'])
@@ -419,13 +419,17 @@ def test_image_publication_isolated_and_downstream_publish_reuses_inode(tmp_path
     assert not list(store.image_store.rglob('.publish-*'))
 
 
-@pytest.mark.parametrize('corruption', ['bytes', 'mode', 'hardlink', 'missing', 'symlink'])
+@pytest.mark.parametrize('corruption', ['bytes', 'size', 'mode', 'hardlink', 'missing', 'symlink'])
 def test_runtime_corruption_never_repaired(tmp_path, corruption):
     store, source, item = publish(tmp_path)
     obj = store.image_path(item)
     if corruption == 'bytes':
         obj.chmod(0o600)
         obj.write_bytes(b'x' * item['size_bytes'])
+        obj.chmod(0o400)
+    elif corruption == 'size':
+        obj.chmod(0o600)
+        obj.write_bytes(b'x' * (int(item['size_bytes']) + 1))
         obj.chmod(0o400)
     elif corruption == 'mode':
         obj.chmod(0o600)
@@ -437,6 +441,24 @@ def test_runtime_corruption_never_repaired(tmp_path, corruption):
         if corruption == 'symlink':
             obj.symlink_to(source)
         obj.parent.chmod(0o500)
+    if corruption == 'bytes':
+        inode = obj.stat().st_ino
+        assert store.probe(item)['state'] == 'cache_hit'
+        # Retained leases still compare exact inode receipts, independently of
+        # byte auditing. A mutation changes ctime, so that owner must refuse.
+        with pytest.raises(RuntimeError, match='leased image identity changed'):
+            store.ingest(item, source)
+        authority = tool.runtime_lifecycle()
+        for token, lease in authority.load_state(store.image_store)['leases'].items():
+            authority.release_lease(store.image_store, token, owner=lease['owner'])
+        # Without a stale retained lease, warm acquisition reuses the same bytes.
+        assert store.ingest(item, source)['cache_hit'] is True
+        assert obj.stat().st_ino == inode
+        assert obj.read_bytes() == b'x' * item['size_bytes']
+        # verify_runtime is the explicit full byte audit, not warm reuse.
+        with pytest.raises(RuntimeError, match='SHA-256'):
+            store.verify_runtime(item)
+        return
     for action in (lambda: store.probe(item), lambda: store.ingest(item, source),
                    lambda: store.verify_runtime(item)):
         with pytest.raises((RuntimeError, OSError, ValueError)):
@@ -588,7 +610,10 @@ async def test_actual_job_compiler_no_original_prewarm_provision_and_repeated_ex
     assert not (roots['containers'] / 'protenix.sif').exists()
     assert not list((Path(target.remote_root) / 'cache/artifacts/v1/objects').rglob(image.sha256))
     assert not list((Path(target.remote_root) / 'cache/artifacts/v1/incoming').rglob('*sif'))
-    assert all(not p.is_file() for p in (Path(target.remote_root) / 'cache/artifacts/v1/incoming').rglob('*'))
+    # Selected-weight prewarm also publishes its authenticated layout request.
+    # It is metadata, not a retained incoming asset body.
+    assert all(not p.is_file() or p.name == '.bms-runtime-images.json'
+               for p in (Path(target.remote_root) / 'cache/artifacts/v1/incoming').rglob('*'))
     assert explicit.stat().st_nlink == 1
     assert hashlib.sha256(images[0].read_bytes()).hexdigest() == image.sha256
     # Corruption between staging and execution prevents the real child from running.

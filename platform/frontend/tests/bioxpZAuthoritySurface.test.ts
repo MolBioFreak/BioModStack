@@ -42,8 +42,8 @@ test('main Z surface keeps pseudo-home authority on the robot', () => {
 test('main Z normal controls fail closed when current robot control state is unavailable', () => {
   // The shared normal-action guard now owns the same fail-closed contract.
   assert.match(source, /const v2NormalActionById = \(actionId: string\) => v2AuthorityCoherent/);
-  assert.match(source, /if \(!v2AuthorityCoherent\) return 'Current robot control state is unavailable\.'/);
-  assert.match(source, /const action = v2NormalActionById\(actionId\);\s*if \(!action\) return 'Robot action unavailable\.'/);
+  assert.match(source, /if \(!queryOnlyRefresh && !v2AuthorityCoherent\) return 'Current robot control state is unavailable\.'/);
+  assert.match(source, /v2NormalActionById\(actionId\);\s*if \(!action\) return 'Robot action unavailable\.'/);
   assert.match(source, /return action.enabled === true \? null : action.disabled_reason \?\? 'Robot action unavailable\.'/);
   assert.match(source, /const zAbsoluteDisabledReason = integerInputError\(absoluteTargets.z, zAbsoluteInput, 'Requested Z target'\)\s*\?\? v2ActionDisabledReason\('oem.z.move_absolute'\)/);
   assert.match(source, /const zAbsoluteEnabled = zAbsoluteDisabledReason === null/);
@@ -92,11 +92,11 @@ test('Z stop and abort use the independent typed interrupt lane', () => {
 });
 
 test('Z dashboard and robot receipt truth remain visible newest-first', () => {
-  assert.match(source, /z_axis\.provider\.state/);
+  assert.match(source, /z_axis\?\.provider\.state/);
   assert.match(source, /left_switch_disabled/);
   assert.match(source, /right_switch_disabled/);
-  assert.match(source, /controller_acknowledged/);
+  assert.match(readFileSync(resolve('src/components/BioXpHistoryReceiptCard.tsx'), 'utf8'), /controller_acknowledged/);
   assert.match(source, /physical_effect_verified/);
-  assert.match(source, /historyQuery\.data\?\.receipts \?\? \[\]/);
+  assert.match(source, /historyQuery\.data\?\.items \?\? \[\]/);
   assert.match(source, /\.slice\(0, historyLimit\)/);
 });

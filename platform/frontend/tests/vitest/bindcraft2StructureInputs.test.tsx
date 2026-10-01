@@ -81,6 +81,59 @@ beforeEach(() => {
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; client.clear(); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('shared full inspection and source lifecycle', () => {
+    it('keeps residue buttons, canonical fields and controlled viewer highlights synchronized without form submission', async () => {
+        await mount({ targets: [{ name: 'target', target_path: 'inputs/target.pdb', chains: 'A', coldspots: 'B20' }] });
+        await settle(() => !!host.querySelector('[title="A11 (GLY)"]'));
+        const residue = () => host.querySelector('[title="A11 (GLY)"]') as HTMLButtonElement;
+        expect(residue().type).toBe('button');
+        expect(residue().getAttribute('aria-pressed')).toBe('false');
+        await click(residue());
+        expect(residue().getAttribute('aria-pressed')).toBe('true');
+        expect((request.targets as any[])[0]).toMatchObject({ hotspots: 'A11', coldspots: 'B20' });
+        await settle(() => viewer.props.residueSelections?.some((row: any) => row.authSeqId === 11));
+        expect(viewer.props.controlledResidueSelection).toBe(true);
+        expect(viewer.props.residueSelections).toEqual([{ documentId: 'primary', authAsymId: 'A', authSeqId: 11, insertionCode: undefined }]);
+        await click(residue());
+        expect(residue().getAttribute('aria-pressed')).toBe('false');
+        expect(viewer.props.residueSelections).toEqual([]);
+        await click(button('Coldspots'));
+        await click(residue());
+        expect((request.targets as any[])[0]).toMatchObject({ hotspots: '', coldspots: 'B20,A11' });
+        expect(residue().getAttribute('aria-pressed')).toBe('true');
+        await click(button('Clear Selection'));
+        expect((request.targets as any[])[0]).toMatchObject({ hotspots: '', coldspots: 'B20' });
+        expect(viewer.props.residueSelections).toEqual([]);
+        expect(post).not.toHaveBeenCalled();
+    });
+    it('fullscreens the source inspection, retaining targeting controls, request and mounted viewer', async () => {
+        const previousFullscreen = Object.getOwnPropertyDescriptor(document, 'fullscreenElement');
+        const previousRequest = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'requestFullscreen');
+        const previousExit = Object.getOwnPropertyDescriptor(document, 'exitFullscreen');
+        let active: Element | null = null;
+        Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => active });
+        Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', { configurable: true, value: async function (this: HTMLElement) { active = this; document.dispatchEvent(new Event('fullscreenchange')); } });
+        Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: async () => { active = null; document.dispatchEvent(new Event('fullscreenchange')); } });
+        try {
+            const saved = { targets: [{ name: 'target', target_path: 'inputs/target.pdb', chains: 'A', hotspots: 'A10' }] };
+            await mount(saved);
+            await settle(() => !!host.querySelector('[data-testid="workbench"]'));
+            const viewerElement = host.querySelector('[data-testid="workbench"]');
+            await click(button('Fullscreen'));
+            expect(document.fullscreenElement).toBe(host.querySelector('[aria-label="Source inspection workspace"]'));
+            expect(document.fullscreenElement?.querySelector('[aria-label="Residue selection mode"]')).not.toBeNull();
+            expect(document.fullscreenElement?.querySelector('[title="A10 (ALA)"]')).not.toBeNull();
+            expect(host.querySelector('[data-testid="workbench"]')).toBe(viewerElement);
+            expect(request).toEqual(saved);
+            await click(button('Exit fullscreen'));
+            expect(document.fullscreenElement).toBeNull();
+            expect(host.querySelector('[data-testid="workbench"]')).toBe(viewerElement);
+            expect(request).toEqual(saved);
+        } finally {
+            for (const [object, key, descriptor] of [[document, 'fullscreenElement', previousFullscreen], [HTMLElement.prototype, 'requestFullscreen', previousRequest], [document, 'exitFullscreen', previousExit]] as const) {
+                if (descriptor) Object.defineProperty(object, key, descriptor); else delete (object as any)[key];
+            }
+        }
+    });
     it('evicts failed reads for retry and never renders coordinates for FASTA', async () => {
         const session = createBC2SourceSession();
         fetcher.mockRejectedValueOnce(new Error('offline'));

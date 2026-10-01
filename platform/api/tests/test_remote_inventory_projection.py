@@ -58,7 +58,17 @@ async def test_inventory_get_and_list_are_defensive_read_only(store, case):
         listing = await client.get('/execution-targets')
         assert listing.status_code == 200, listing.text
         observed = response.json()
-        assert listing.json()[0]['artifact_inventory'] == observed
+        compact = listing.json()[0]['artifact_inventory']
+        if observed is not None:
+            assert compact == {**{key: value for key, value in observed.items() if key != 'artifacts'},
+                               'artifact_count': len(observed['artifacts'])}
+        elif case == 'bad_artifact':
+            # The compact status describes retained observation metadata/counts,
+            # not full receipt validity. Explicit inventory still validates bytes' identities.
+            assert compact['artifact_count'] == 1
+            assert compact['scientific_ready'] is False
+        else:
+            assert compact is None
         if case in {'nonobject','missing','bad_artifact','bad_time'}:
             assert observed is None
         else:

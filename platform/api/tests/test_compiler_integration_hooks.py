@@ -75,6 +75,7 @@ def test_local_retry_native_compile_and_immutable_resource_replay(tmp_path, monk
     metadata = tmp_path/'metadata.json'; metadata.write_bytes(canonical_bytes(config))
     params = dict(md_job_config=str(config_path), md_job_spec=config)
     invocation = _compile('molecular_dynamics', 'simulate', params, tmp_path)
+    invocation.materialize_inputs(tmp_path)
     assert invocation.execution_plan.complete, invocation.execution_plan.to_dict()['blockers']
     resources = selected_plan_target_resources(SimpleNamespace(id='local'), invocation.execution_plan, gpu_ids=[0], scratch_bytes=0)
     resources.update(gpu_id=0, admission_required=False)

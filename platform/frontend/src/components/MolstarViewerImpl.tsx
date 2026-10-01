@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import 'molstar/build/viewer/molstar.css';
+import '../structureViewer/structureViewer.css';
+import { ThemeContext } from './themeContext';
 
 import {
     MolstarDirectAdapter,
@@ -91,9 +93,10 @@ const toMolstarLoadFormat = (format: 'cif' | 'pdb' | 'sdf' | undefined): 'mmcif'
     format === 'cif' || !format ? 'mmcif' : format
 );
 
-const normalizeBackgroundColor = (backgroundColor: string): string => (
-    /^#[0-9a-f]{6}$/i.test(backgroundColor) ? backgroundColor : '#0f172a'
-);
+const normalizeBackgroundColor = (backgroundColor?: string): string => {
+    const color = backgroundColor ?? getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim();
+    return /^#[0-9a-f]{6}$/i.test(color) ? color : '#0f172a';
+};
 
 const formatError = (error: unknown): string => {
     if (error instanceof Error && error.message) return error.message;
@@ -106,7 +109,7 @@ export default function MolstarViewer({
     alphafoldView = true,
     hideControls = false,
     height = 500,
-    backgroundColor = '#0f172a',
+    backgroundColor,
     label,
 
     overlayStructures,
@@ -123,6 +126,9 @@ export default function MolstarViewer({
     onLoadStateChange,
 }: MolstarViewerProps) {
     const mountRef = useRef<HTMLDivElement>(null);
+    const theme = useContext(ThemeContext)?.theme;
+    const latestBackgroundRef = useRef(backgroundColor);
+    latestBackgroundRef.current = backgroundColor;
     const adapterRef = useRef<MolstarDirectAdapter | null>(null);
     const controllerRef = useRef<StructureSceneController | null>(null);
     const sceneRequestGenerationRef = useRef(0);
@@ -146,10 +152,7 @@ export default function MolstarViewer({
 
 
     const absoluteUrl = useMemo(() => toAbsoluteStructureUrl(structureUrl), [structureUrl]);
-    const normalizedBackgroundColor = useMemo(
-        () => normalizeBackgroundColor(backgroundColor),
-        [backgroundColor],
-    );
+
     const effectiveAlphafoldView = alphafoldView && scenePresentation === undefined;
 
     const interactionTouchAction = useMemo(() => {
@@ -222,10 +225,9 @@ export default function MolstarViewer({
     const adapterSignature = useMemo(() => JSON.stringify({
         hideControls,
         effectiveAlphafoldView,
-        normalizedBackgroundColor,
         artifactJobId,
         hasGovernedMDPlayback: molecularDynamics?.playbackCapability.supported === true,
-    }), [artifactJobId, effectiveAlphafoldView, hideControls, molecularDynamics?.playbackCapability.supported, normalizedBackgroundColor]);
+    }), [artifactJobId, effectiveAlphafoldView, hideControls, molecularDynamics?.playbackCapability.supported]);
     const [adapterEpoch, setAdapterEpoch] = useState(0);
 
     useEffect(() => {
@@ -243,7 +245,6 @@ export default function MolstarViewer({
         const options = JSON.parse(adapterSignature) as {
             hideControls: boolean;
             effectiveAlphafoldView: boolean;
-            normalizedBackgroundColor: string;
             artifactJobId?: string;
             hasGovernedMDPlayback: boolean;
         };
@@ -251,7 +252,7 @@ export default function MolstarViewer({
         const adapter = new MolstarDirectAdapter({
             hideControls: options.hideControls,
             alphafoldView: options.effectiveAlphafoldView,
-            backgroundColor: options.normalizedBackgroundColor,
+            backgroundColor: normalizeBackgroundColor(latestBackgroundRef.current),
             resolveViewerArtifactUrl: options.artifactJobId
                 ? (artifactId) => `/api/jobs/${encodeURIComponent(options.artifactJobId!)}/${options.hasGovernedMDPlayback ? 'md' : 'viewer'}/artifacts/${encodeURIComponent(artifactId)}/content`
                 : undefined,
@@ -282,6 +283,20 @@ export default function MolstarViewer({
             void controller.dispose();
         };
     }, [adapterSignature, hasStructure]);
+
+    useEffect(() => {
+        const adapter = adapterRef.current;
+        if (!adapter || adapterEpoch === 0) return;
+        // ThemeProvider applies CSS tokens after render. Update only the canvas
+        // background on the next frame; never rebuild the scene for a theme change.
+        const frame = requestAnimationFrame(() => {
+            if (adapterRef.current === adapter) {
+                void adapter.setBackground(normalizeBackgroundColor(backgroundColor))
+                    .catch(error => console.warn('Unable to apply Mol* background:', error));
+            }
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [adapterEpoch, backgroundColor, theme]);
 
     useEffect(() => {
         const controller = adapterEpoch > 0 ? controllerRef.current : null;
@@ -415,22 +430,22 @@ export default function MolstarViewer({
 
     return (
         <div
-            className="w-full rounded-lg overflow-hidden relative bg-slate-900"
+            className="flex w-full flex-col rounded-lg overflow-hidden relative bg-slate-900"
             style={{ height: heightStyle }}
             data-bms-molstar-adapter="direct-4.5.0"
             data-bms-molstar-status={status}
         >
-            <div
-                ref={mountRef}
-                className="absolute inset-0"
-                style={{ touchAction: interactionTouchAction }}
-                data-bms-molstar-mount="true"
-            />
             {label && (
-                <div className="absolute top-2 left-2 z-20 px-2 py-1 bg-slate-800/80 text-slate-200 text-xs rounded font-medium pointer-events-none">
+                <div className="min-w-0 shrink-0 truncate border-b border-border-primary bg-bg-secondary px-2 py-1 text-xs font-medium text-text-secondary" title={label}>
                     {label}
                 </div>
             )}
+            <div
+                ref={mountRef}
+                className="relative min-h-0 flex-1"
+                style={{ touchAction: interactionTouchAction }}
+                data-bms-molstar-mount="true"
+            />
 
             {status === 'loading' && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/70 pointer-events-none">

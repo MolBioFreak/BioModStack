@@ -55,14 +55,22 @@ def _prediction(job, design, analyses):
     }
 
 
-async def binder_evidence(session: AsyncSession, job: Job, *, offset: int, limit: int):
-    """Paginate source Designs before querying their explicitly joined descendants."""
+async def binder_evidence(session: AsyncSession, job: Job, *, offset: int, limit: int,
+                          source_design_id: str | None = None):
+    """Read one source page or an exact root-owned source and its descendants."""
     with session.no_autoflush:
         total = await session.scalar(select(func.count()).select_from(Design).where(Design.job_id == job.id))
-        sources = list((await session.scalars(select(Design).where(Design.job_id == job.id)
-            .order_by(Design.id).offset(offset).limit(limit))).all())
+        source_query = select(Design).where(Design.job_id == job.id)
+        if source_design_id is not None:
+            sources = list((await session.scalars(source_query.where(Design.id == source_design_id))).all())
+            if not sources:
+                raise LookupError("Source Design not found in requested Job")
+        else:
+            sources = list((await session.scalars(source_query.order_by(Design.id).offset(offset).limit(limit))).all())
         envelope = {"schema_version": 1, "job_id": job.id, "offset": offset,
                     "limit": limit, "total": total, "records": []}
+        if source_design_id is not None:
+            envelope["source_design_id"] = source_design_id
         if not sources:
             return envelope
         ids = [source.id for source in sources]

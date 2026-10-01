@@ -23,7 +23,7 @@ def setup_source(tmp_path, monkeypatch):
     monkeypatch.setattr(launch, 'resolve_allowed_path', lambda name: tmp_path / name.removeprefix('bms_results/'))
     source = tmp_path / 'target.fasta'
     source.write_text('>target\n' + 'A' * 60 + '\n')
-    settings = {'max_trajectories': 1, 'modality': ['binder'],
+    settings = {'max_trajectories': 1, 'modality': ['binder'], 'subbatch_size': None,
                 'targets': [{'name': 'target', 'target_path': 'bms_results/target.fasta'}]}
     return source, settings
 
@@ -137,7 +137,8 @@ def test_shared_prequeue_request_preserves_typed_bc2_campaign_shape():
     params = {'bindcraft2_settings': {'max_trajectories': 2}, 'bc2_preview_digest': 'a' * 64}
     request = JobCreate(name='BC2 typed request', model_id='bindcraft2', mode='campaign', params=params)
     normalized = normalize_job_request(request, registry=Registry())
-    assert normalized.params == params
+    assert normalized.params == {**params, 'bindcraft2_settings': {
+        **params['bindcraft2_settings'], 'subbatch_size': None}}
     assert request.params == params
     invalid = request.model_copy(update={'params': {**params, 'bindcraft2_settings': {'max_trajectories': 0}}})
     with pytest.raises(HTTPException) as exc:

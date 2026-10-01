@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, StrictInt, StrictFloat
+from starlette.concurrency import run_in_threadpool
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -408,7 +409,7 @@ async def get_install_features(request: Request):
 async def get_stats_toolkit_status():
     # Publish only a same-origin path. The frontend maps this back to the local
     # loopback add-on when it is not running behind the Tailnet origin.
-    status = probe_stats_addon()
+    status = await run_in_threadpool(probe_stats_addon)
     return {**status, "entry_url": "/stats/embed/"}
 
 

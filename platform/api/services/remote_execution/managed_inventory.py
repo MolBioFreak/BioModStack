@@ -39,6 +39,7 @@ class ManagedImageReference(StrictModel):
 
 
 class NativeProbeEvidence(StrictModel):
+    # Retained manual/historical diagnostic contract, not a production task dependency.
     authority: Literal['scripts/check_rfantibody_runtime.py:run_preflight']
     outcome: Literal['passed', 'failed']
     gpu_id: int | None = Field(default=None, ge=0)
@@ -75,6 +76,40 @@ class ManagedRelease(StrictModel):
     artifacts: list[ManagedArtifact]
     bounded_readiness: Literal['verified_assets_and_critical_runtime', 'blocked', 'stale'] = 'blocked'
     readiness_scope: Literal['asset_integrity_and_critical_compatibility_only'] = 'asset_integrity_and_critical_compatibility_only'
+
+
+class ManagedReleaseSummary(StrictModel):
+    selection: ProvisionSelection | CriticalRuntimeSelection | WorkflowRuntimeSelection
+    critical: CriticalRuntimeCompatibility | None = None
+    native_readiness: NativeReadiness | None = None
+    release_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    source_revision: str = Field(pattern=r'^[0-9a-f]{40}$')
+    source_tree: str = Field(pattern=r'^[0-9a-f]{40}$')
+    state: Literal['verified', 'missing', 'partial', 'corrupt', 'incompatible', 'unverified']
+    artifact_count: int = Field(ge=0)
+    bounded_readiness: Literal['verified_assets_and_critical_runtime', 'blocked', 'stale'] = 'blocked'
+    readiness_scope: Literal['asset_integrity_and_critical_compatibility_only'] = 'asset_integrity_and_critical_compatibility_only'
+
+
+class ManagedInventorySummary(StrictModel):
+    observation_id: str
+    observed_at: datetime
+    boot_id: uuid.UUID
+    state: Literal['current', 'stale']
+    scope: Literal['managed_independent_asset_releases'] = 'managed_independent_asset_releases'
+    releases: list[ManagedReleaseSummary]
+    scientific_ready: Literal[False] = False
+    critical_runtime_ready: bool
+    blockers: list[str]
+
+
+class ManagedInventoryArtifactPage(StrictModel):
+    observation_id: str
+    release_sha256: str
+    offset: int
+    limit: int
+    total: int
+    artifacts: list[ManagedArtifact]
 
 
 class ManagedInventory(StrictModel):
@@ -278,97 +313,6 @@ async def observe_releases(connection, manifests, check_fence):
     return result
 
 
-async def run_native_readiness_check(connection, manifest, check_fence, *, gpu_id: int | None = None,
-                                     observed=None, manifests=None):
-    """Explicit operation-owned RFantibody preflight; never called by polling.
-
-    The fixed command is the native modules/rfantibody.nf preflight, not its
-    biological process. Stream the checked-out native script over existing SSH
-    stdin; stage no input/output files and execute no inference or downloads.
-    Caller owns the existing exclusive provisioning reservation/cancellation.
-    An omitted GPU is selected only from the worker's reported index/UUID; no
-    device-zero assumption or new job/worker scheduler is introduced.
-    Returned evidence must be persisted with the enclosing managed observation.
-    """
-    from pathlib import PurePosixPath
-    from services.nextflow import get_code_root
-    from .bundle import current_source_identity
-    from .transport import run_remote
-    if not connection.provision_operation_id or (gpu_id is not None and (type(gpu_id) is not int or gpu_id < 0)):
-        raise ValueError('Native check requires operation-owned GPU allocation')
-    images = [a for a in manifest['artifacts']
-              if a.get('kind') == 'runtime_image' and a['name'] == 'containers/rfantibody.sif']
-    if len(images) != 1:
-        raise ValueError('No bound RFantibody native check authority for this release')
-    source = get_code_root()
-    identity = (manifest['source_revision'], manifest['source_tree'])
-    if current_source_identity(source) != identity:
-        raise ValueError('Native check source identity changed')
-    script = (source / 'scripts/check_rfantibody_runtime.py').read_bytes()
-    manifests = manifests or [manifest]
-    before = observed or await observe_releases(connection, manifests, check_fence)
-    digest = release_digest(manifest)
-    release = next(r for r in before.releases if r.release_sha256 == digest)
-    if release.state != 'verified' or release.image_reference is None:
-        raise ValueError('Native check image release is not verified')
-    image = images[0]
-    path = PurePosixPath(release.image_reference.store_root) / 'objects/sha256' / image['sha256'] / 'runtime.sif'
-    await check_fence()
-    gpu_uuid = None
-    if gpu_id is None:
-        import csv, io, re
-        device_result = await run_remote(connection, ['nvidia-smi', '--query-gpu=index,uuid',
-            '--format=csv,noheader,nounits'], timeout=30)
-        await check_fence()
-        devices = []
-        for row in csv.reader(io.StringIO(device_result.stdout)):
-            if (len(row) == 2 and row[0].strip().isdigit() and re.fullmatch(
-                    r'GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', row[1].strip())):
-                devices.append((int(row[0].strip()), row[1].strip()))
-        if not devices:
-            readiness = project_native_readiness(release, current=True, critical_ready=before.critical_runtime_ready)
-            readiness.missing_authorities.append('native_probe_gpu_identity_not_reported')
-            release.native_readiness = readiness
-            return before
-        gpu_id, gpu_uuid = sorted(devices)[0]
-    from .critical_runtime import runtime_binding
-    critical_manifest = next((m for m in manifests if 'critical' in m), None)
-    critical_release = next((r for r in before.releases if r.critical and r.state == 'verified'), None)
-    if critical_manifest is None or critical_release is None:
-        raise ValueError('Native check requires verified critical runtime')
-    backend = critical_release.critical.observed.get('backend')
-    binding = runtime_binding(connection.remote_root, critical_manifest, backend)
-    environment = binding['environment']
-    result = await run_remote(connection, ['env', *[f'{k}={v}' for k, v in environment.items()],
-        environment.get('BMS_CONTAINER_EXECUTABLE', 'apptainer'), 'exec', '--nv',
-        '--env', 'CUDA_DEVICE_ORDER=PCI_BUS_ID', '--env', f'CUDA_VISIBLE_DEVICES={gpu_uuid or gpu_id}',
-        '--writable-tmpfs', str(path), 'python3', '-'], input_bytes=script, timeout=120)
-    await check_fence()
-    outcome = 'passed' if result.returncode == 0 and '[RFA-PREFLIGHT] OK' in result.stdout.splitlines() else 'failed'
-    after = await observe_releases(connection, manifests, check_fence)
-    checked = next(r for r in after.releases if r.release_sha256 == digest)
-    if (after.boot_id != before.boot_id or checked.state != 'verified'
-            or checked.image_reference != release.image_reference
-            or current_source_identity(source) != identity):
-        raise ValueError('Native check observation identity changed')
-    readiness = project_native_readiness(checked, current=True, critical_ready=after.critical_runtime_ready)
-    readiness.probe = NativeProbeEvidence(authority='scripts/check_rfantibody_runtime.py:run_preflight',
-        outcome=outcome, gpu_id=gpu_id, gpu_uuid=gpu_uuid, observed_at=after.observed_at,
-        release_sha256=release.release_sha256, image_sha256=image['sha256'],
-        script_sha256=hashlib.sha256(script).hexdigest(), source_revision=identity[0],
-        source_tree=identity[1], boot_id=after.boot_id)
-    # This probe checks CUDA/DGL, not all selected workflow components or weights.
-    readiness.missing_authorities = [m for m in readiness.missing_authorities
-                                    if m not in {'selected_image_native_preflight_binding',
-                                          'scripts/check_rfantibody_runtime.py:operation_owned_gpu_probe_not_recorded'}]
-    readiness.missing_authorities.append('complete_selected_model_native_probe_coverage')
-    if outcome == 'failed':
-        readiness.blockers.append('native_runtime_preflight_failed')
-        readiness.state = 'blocked'
-    checked.native_readiness = readiness
-    return after
-
-
 def project_native_readiness(release, *, current, critical_ready, boot=None):
     """Use shared dependency metadata; unknown probe coverage is not asset failure.
 
@@ -411,6 +355,148 @@ def project_native_readiness(release, *, current, critical_ready, boot=None):
                                           'scripts/check_rfantibody_runtime.py:operation_owned_gpu_probe_not_recorded'}]
         result.missing_authorities.append('complete_selected_model_native_probe_coverage')
     return result
+
+
+# Compact readers trust the existing immutable observation publication owner.
+# SQL removes manifests/artifact bodies before driver decoding; no ORM target or
+# full observation validation belongs on this routine saved-evidence path.
+async def _saved_header(session, target_id):
+    from sqlalchemy import select, func
+    from database import ExecutionTarget as T
+    from types import SimpleNamespace
+    from .targets import ExecutionTargetError
+    paths = ['inventory', 'managed_boot_id', 'managed_inventory.endpoint_sha256',
+             'managed_inventory.refresh_failed', 'managed_inventory.observation.observed_at',
+             'managed_inventory.observation.boot_id']
+    columns = [T.host, T.port, T.username, T.remote_root, T.host_key_sha256, T.active, T.state]
+    row = (await session.execute(select(*columns, *[
+        func.json_extract(T.provider_metadata, '$.' + path) for path in paths
+    ]).where(T.id == target_id))).first()
+    if row is None:
+        raise ExecutionTargetError('Execution target not found')
+    target = SimpleNamespace(**dict(zip(
+        ['host', 'port', 'username', 'remote_root', 'host_key_sha256', 'active', 'state'], row[:7])))
+    provider, boot, endpoint, failed, when, observed_boot = row[7:]
+    target.provider_metadata = {'inventory': json.loads(provider) if provider else {}}
+    return target, boot, endpoint, failed, when, observed_boot
+
+
+def _observation_parameters(target_id, header):
+    return dict(target_id=target_id, observed_at=header[4], boot_id=header[5], endpoint=header[2])
+
+
+_SAVED_RELEASES = """
+    FROM execution_targets t,
+         json_each(t.provider_metadata, '$.managed_inventory.observation.releases') r
+    WHERE t.id = :target_id
+      AND json_extract(t.provider_metadata, '$.managed_inventory.observation.observed_at') = :observed_at
+      AND json_extract(t.provider_metadata, '$.managed_inventory.observation.boot_id') = :boot_id
+      AND json_extract(t.provider_metadata, '$.managed_inventory.endpoint_sha256') = :endpoint
+"""
+
+
+async def read_inventory_summary(session, target_id, *, header=None):
+    from sqlalchemy import text
+    from .targets import inventory_fresh, INVENTORY_MAX_AGE_SECONDS
+    header = header or await _saved_header(session, target_id)
+    target, boot, endpoint, failed, when, observed_boot = header
+    if when is None:
+        return None
+    try:
+        observed_at = datetime.fromisoformat(when.replace('Z', '+00:00'))
+        observed_boot = uuid.UUID(observed_boot)
+        age = (datetime.now(timezone.utc) - (observed_at if observed_at.tzinfo else
+               observed_at.replace(tzinfo=timezone.utc))).total_seconds()
+        provider = target.provider_metadata['inventory']
+        current = (0 <= age <= INVENTORY_MAX_AGE_SECONDS and inventory_fresh(target)
+            and provider.get('present') is True and provider.get('running') is True
+            and target.active and target.state == 'ready' and endpoint == endpoint_digest(target)
+            and not failed and str(observed_boot) == boot)
+        params = _observation_parameters(target_id, header)
+        rows = (await session.execute(text("""
+            SELECT json_remove(r.value, '$.artifacts', '$.image_reference'),
+                   json_array_length(r.value, '$.artifacts'), r.key
+        """ + _SAVED_RELEASES + ' ORDER BY CAST(r.key AS INTEGER)'), params)).all()
+        releases = []
+        for payload, count, index in rows:
+            value = json.loads(payload)
+            native = value.pop('native_readiness', None)
+            release = ManagedReleaseSummary.model_validate(dict(value, artifact_count=count))
+            # Only a dependency witness per required prefix and the RFantibody
+            # image is needed for the existing native projection, never all names.
+            prefixes = []
+            if release.selection.kind == 'model':
+                from model_registry import model_runtime_dependencies
+                try:
+                    prefixes = [('containers/' if d.kind == 'image' else 'weights/') + d.relative_path
+                                for d in model_runtime_dependencies(release.selection.model_id)]
+                except ValueError:
+                    pass
+            witnesses = []
+            for prefix in dict.fromkeys(['containers/rfantibody.sif', *prefixes]):
+                witness = (await session.execute(text("""
+                    SELECT (SELECT a.value FROM json_each(r.value, '$.artifacts') a
+                        WHERE (json_extract(a.value, '$.name') = :prefix OR
+                            (:weight = 1 AND substr(json_extract(a.value, '$.name'), 1,
+                                length(:prefix) + 1) = :prefix || '/'))
+                          AND (:rf = 1 OR json_extract(a.value, '$.state') = 'verified')
+                        ORDER BY (json_extract(a.value, '$.state') = 'verified') DESC LIMIT 1)
+                """ + _SAVED_RELEASES + ' AND r.key = :release_index'),
+                    params | dict(release_index=index, prefix=prefix, weight=prefix.startswith('weights/'),
+                                  rf=prefix == 'containers/rfantibody.sif'))).scalar()
+                if witness:
+                    witnesses.append(ManagedArtifact.model_validate_json(witness))
+            stub = ManagedRelease.model_construct(**{key: getattr(release, key) for key in
+                ('selection', 'critical', 'release_sha256', 'source_revision', 'source_tree', 'state')},
+                artifacts=witnesses, native_readiness=None)
+            try:
+                stub.native_readiness = NativeReadiness.model_validate(native) if native else None
+            except ValueError:
+                pass
+            releases.append((release, stub))
+        critical_ready = current and any(r.selection.kind == 'critical_runtime' and r.state == 'verified'
+                                         for r, _ in releases)
+        for release, stub in releases:
+            release.native_readiness = project_native_readiness(stub, current=current,
+                critical_ready=critical_ready, boot=observed_boot)
+            release.bounded_readiness = ('stale' if not current else 'verified_assets_and_critical_runtime'
+                                        if critical_ready and release.state == 'verified' else 'blocked')
+        identity = hashlib.sha256(json.dumps([endpoint, when, str(observed_boot),
+            [r.release_sha256 for r, _ in releases]], separators=(',', ':')).encode()).hexdigest()
+        return ManagedInventorySummary(observation_id=identity, observed_at=observed_at,
+            boot_id=observed_boot, state='current' if current else 'stale',
+            releases=[r for r, _ in releases], critical_runtime_ready=critical_ready,
+            blockers=['scientific_readiness_not_checked'] if critical_ready else
+                     ['critical_release_not_verified', 'scientific_readiness_not_checked'])
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
+async def read_inventory_artifacts(session, target_id, observation_id, release_sha256, offset, limit):
+    from sqlalchemy import text
+    from .targets import ExecutionTargetError
+    header = await _saved_header(session, target_id)
+    summary = await read_inventory_summary(session, target_id, header=header)
+    release = next((r for r in summary.releases if r.release_sha256 == release_sha256), None) if summary else None
+    if not summary or summary.observation_id != observation_id or release is None:
+        raise ExecutionTargetError('Saved inventory observation or release changed; reload saved observation')
+    params = _observation_parameters(target_id, header) | dict(release_sha256=release_sha256, offset=offset, limit=limit)
+    rows = (await session.execute(text('''
+        SELECT a.value FROM execution_targets t,
+            json_each(t.provider_metadata, '$.managed_inventory.observation.releases') r,
+            json_each(r.value, '$.artifacts') a
+        WHERE t.id = :target_id
+          AND json_extract(t.provider_metadata, '$.managed_inventory.observation.observed_at') = :observed_at
+          AND json_extract(t.provider_metadata, '$.managed_inventory.observation.boot_id') = :boot_id
+          AND json_extract(t.provider_metadata, '$.managed_inventory.endpoint_sha256') = :endpoint
+          AND json_extract(r.value, '$.release_sha256') = :release_sha256
+        ORDER BY CAST(a.key AS INTEGER) LIMIT :limit OFFSET :offset
+    '''), params)).scalars().all()
+    if _observation_parameters(target_id, await _saved_header(session, target_id)) != _observation_parameters(target_id, header):
+        raise ExecutionTargetError('Saved inventory observation changed; reload saved observation')
+    return ManagedInventoryArtifactPage(observation_id=observation_id, release_sha256=release_sha256,
+        offset=offset, limit=limit, total=release.artifact_count,
+        artifacts=[ManagedArtifact.model_validate_json(row) for row in rows])
 
 
 def project_inventory(target):

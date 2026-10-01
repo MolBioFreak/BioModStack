@@ -605,6 +605,9 @@ def admit(root, manifest, expected_boot, cache):
 def install(root, manifest, expected_boot, cache):
     """Own admission, weight copies and activation of shared image references."""
     digest = validate_manifest(manifest, cache)
+    # Immutable for this validated operation; resolving per member rehashes the
+    # entire noncritical manifest and turns installation into quadratic work.
+    release = release_path(root, manifest)
     with admission_lock(root, cache) as (parent, fence):
         if boot_id() != expected_boot:
             raise ValueError('worker_boot_changed')
@@ -613,7 +616,7 @@ def install(root, manifest, expected_boot, cache):
             if not observed['critical']['compatible']:
                 raise ValueError('critical_runtime_incompatible')
             try:
-                prior_manifest = read_bytes(release_path(root, manifest) / 'manifest.json', cache)
+                prior_manifest = read_bytes(release / 'manifest.json', cache)
             except FileNotFoundError:
                 prior_manifest = None
             if prior_manifest is not None and prior_manifest != canonical(manifest):
@@ -651,7 +654,7 @@ def install(root, manifest, expected_boot, cache):
             fence()
             if boot_id() != expected_boot:
                 raise ValueError('worker_boot_changed')
-            destination = release_path(root, manifest) / row['name']
+            destination = release / row['name']
             with durable_directory(destination.parent, cache) as out:
                 # A nested mount must not evade the filesystem admission budget.
                 info = os.fstat(out)
@@ -662,7 +665,7 @@ def install(root, manifest, expected_boot, cache):
                     # Reuse authenticated link publication; targets are declared
                     # physical members and all regular leaves precede aliases.
                     storage.materialize_link(link_artifact(row), destination,
-                                             release_path(root, manifest), row['target'])
+                                             release, row['target'])
                     continue
                 # Recheck actual remaining free space before each large copy.
                 check_space(out, manifest, [row], metadata_allowance_bytes=budget["metadata_allowance_bytes"])
@@ -670,8 +673,7 @@ def install(root, manifest, expected_boot, cache):
                     source = os.open(row['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                      dir_fd=objects)
                     try:
-                        if not cache.verified(source, row):
-                            raise ValueError('corrupt_object')
+                        cache.regular(source)
                         # Copy through the already-open destination descriptor.
                         # The complete directory map is checked once before activation.
                         fence()

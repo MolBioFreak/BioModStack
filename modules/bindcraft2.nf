@@ -5,7 +5,9 @@ process RunBindCraft2 {
     // GPU placement is scheduler-owned. BC2 sees only the selected card(s), not the host fleet.
     // The workstation gpu label appends task.ext.containerOptions after its own
     // scheduler GPU prefix; the later visibility env owns BC2's selected set.
-    ext { containerOptions = "--env CUDA_VISIBLE_DEVICES=${params.get('bc2_gpu_ids') ?: params.gpu_id} --env BINDCRAFT_AF2_PARAMS=${params.weights_root}/alphafold/params --env JAX_COMPILATION_CACHE_DIR=/cache/bindcraft2/compile/${params.get('bc2_gpu_ids') ?: params.gpu_id} --bind ${params.cache_root}/bindcraft2/compile:/cache/bindcraft2/compile --bind ${params.weights_root}/alphafold/params:${params.weights_root}/alphafold/params:ro" }
+    ext containerOptions: "--env CUDA_VISIBLE_DEVICES=${params.get('bc2_gpu_ids') ?: params.gpu_id} --env BINDCRAFT_AF2_PARAMS=${params.weights_root}/alphafold/params --env JAX_COMPILATION_CACHE_DIR=/cache/bindcraft2/compile/${params.get('bc2_gpu_ids') ?: params.gpu_id} --bind ${params.cache_root}/bindcraft2/compile:/cache/bindcraft2/compile --bind ${params.weights_root}/alphafold/params:${params.weights_root}/alphafold/params:ro"
+    // The local executor runs this on the host before container bind resolution.
+    beforeScript "mkdir -p '${params.cache_root}/bindcraft2/compile'"
 
     input:
     path compilation
