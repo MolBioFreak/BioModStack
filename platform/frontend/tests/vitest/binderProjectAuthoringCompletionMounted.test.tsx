@@ -111,10 +111,10 @@ it('direct native URL mounts the receiving mode without a clone or populated dra
     expect(document.body.textContent).toContain('PPIFlow initial generation'); expect(document.querySelector('[aria-label="Target source"]')).not.toBeNull();
 });
 it('BC2 parent Project save/reopen retains typed native values and launch uses the current native preview', async () => {
-    const settings = { targets: [{ name: 'foreign source', target_path: 'inputs/fixture.pdb', chains: 'A', weight: 0 }], trajectory_only: false, max_trajectories: 3, losses: {} };
+    const settings = { subbatch_size: null, targets: [{ name: 'foreign source', target_path: 'inputs/fixture.pdb', chains: 'A', weight: 0 }], trajectory_only: false, max_trajectories: 3, losses: {} };
     state.project.draft = { model_id: 'bindcraft2', mode: 'campaign', denovo_generator: 'bindcraft2', job_name: 'BC2 project', bindcraft2_settings: settings };
     await mount(); expect(document.querySelector('[aria-label="BindCraft2 campaign"]')).not.toBeNull();
-    await click('Campaign'); await edit('max_trajectories', '0'); await click('Save draft');
+    await click('Generation'); await edit('max_trajectories', '0'); await click('Save draft');
     expect(state.project.draft.bindcraft2_settings).toEqual({ ...settings, max_trajectories: 0 });
     await unmount(); await mount(); await click('Preview native campaign'); state.trace = []; await click('Launch BindCraft2 campaign');
     expect(state.trace).toEqual(['save', 'prepare', 'reserve', 'context', 'submit', 'bind']);
@@ -167,7 +167,7 @@ it('real parent four-generator round trip preserves native drafts and independen
     await act(async () => { designer.value = 'caliby_binder'; designer.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
     await edit('caliby_num_seqs_per_pdb', '9');
     await click('Change generation engine');
-    await click('BindCraft2 campaign'); await click('Campaign'); await edit('max_trajectories', '0');
+    await click('BindCraft2 campaign'); await click('Generation'); await edit('max_trajectories', '0');
     await click('RFantibody Stack');
     await click('BoltzGen');
     await edit('Native binder job name', 'Boltz retained');

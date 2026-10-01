@@ -29,6 +29,10 @@ async function mount(node: React.ReactNode, refinement = false) {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
 }
 async function click(label: string) { const button = [...document.querySelectorAll('button')].find(el => el.textContent?.includes(label)); expect(button, label).toBeTruthy(); await act(async () => button!.click()); }
+async function inspectDisclosure(details: HTMLDetailsElement) {
+    // jsdom does not synchronously deliver the browser's native toggle event.
+    await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); });
+}
 
 it('shared quality panel keeps ThermoMPNN visible by default for other callers', async () => {
     const change = vi.fn();
@@ -138,7 +142,7 @@ it('grouped native controls keep advanced relaxation reachable and distinguish o
     await mount(<Form />);
     const relaxation = [...document.querySelectorAll('summary')].find(node => node.textContent?.startsWith('Native relaxation'));
     expect(relaxation).toBeTruthy();
-    await act(async () => relaxation!.click());
+    await inspectDisclosure(relaxation!.parentElement as HTMLDetailsElement);
     expect((document.querySelector('[aria-label="relax_steps"]') as HTMLInputElement).value).toBe('0');
     const reset = document.querySelector<HTMLButtonElement>('[aria-label="Reset relax_steps"]')!;
     await act(async () => reset.click());
@@ -155,6 +159,10 @@ it('every source-typed top-level scientific inventory field has a mounted contro
     }
     const internal = new Set(['project_folder', 'resume', 'gpu_ids', 'auto_multi_gpu', 'design_workers', 'workers_per_gpu', 'max_workers_per_gpu', 'worker_launch_stagger', 'compile_next_length']);
     await mount(<BindCraft2Settings inventory={native} value={{}} onChange={() => {}} />);
+    // Uninspected expert groups deliberately defer field construction.
+    for (const details of document.querySelectorAll<HTMLDetailsElement>('section[aria-label="Expert settings"] details')) {
+        await inspectDisclosure(details);
+    }
     const fields = Object.entries(native.fields).filter(([key, descriptor]: [string, any]) => !internal.has(key) && descriptor.status === 'typed');
     const cards = [...document.querySelectorAll('section[aria-label="BindCraft2 settings"] [data-bc2-field]')];
     expect(cards.map(node => node.getAttribute('data-bc2-field')).sort()).toEqual(fields.map(([key]) => key).sort());
@@ -173,7 +181,7 @@ it('registered list parameters and entry prediction state have typed controls', 
     await mount(<Form />);
     const configure = [...document.querySelectorAll('[data-bc2-field="losses"] summary')].find(node => node.textContent?.startsWith('Configure '));
     expect(configure).toBeTruthy();
-    await act(async () => (configure as HTMLElement).click());
+    await inspectDisclosure(configure!.parentElement as HTMLDetailsElement);
     const add = document.querySelector<HTMLButtonElement>('[role="group"][aria-label="losses.binder_pae.params.domain_ids"] button');
     expect(add).not.toBeNull();
     await act(async () => add!.click());
