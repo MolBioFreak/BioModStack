@@ -453,7 +453,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
         enabled: !services?.listSources && !registeredSources.some((source) => source.source_id === id),
         retry: false,
     })) });
-    const sourceRegistry = Array.from(new Map([
+    const sourceRegistry: CmSource[] = Array.from(new Map([
         ...(sources.data?.sources || []),
         ...(sources.data?.managed_source ? [sources.data.managed_source] : []),
         ...sourceDetails.flatMap((detail) => detail.data ? [detail.data] : []),
