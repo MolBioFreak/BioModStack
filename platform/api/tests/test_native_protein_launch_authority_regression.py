@@ -38,6 +38,8 @@ async def native_http(setup_store, tmp_path):
     from routers import projects
     app.include_router(projects.router)
     app.include_router(pm.router)
+    from routers import ngs_molbio_n5
+    app.include_router(ngs_molbio_n5.router)
 
     @app.middleware('http')
     async def operator(request, call_next):
@@ -133,22 +135,24 @@ async def test_native_setup_handoff_launch_and_bound_job(native_http, setup_stor
     response = await client.post(domain_path + '/run-groups', json={'preparation_launches': [
         {'preparation_id': preparation_id, 'launch_context_id': prepared['launch_context_id']}]},
         headers={'Idempotency-Key': 'run'})
-    # Real HTTP launch reaches existing resource admission; this disjoint
-    # candidate may lack its parent-owned source binding. Never mock it green.
-    if response.status_code == 409:
-        assert response.json()['detail']['code'] == 'resource_source_revision_unavailable', response.text
-        from experiment_services import create_run_group
-        async with setup_store() as session:
-            group_row = await create_run_group(session, project_id, [preparation_id],
-                idempotency_key='fixture-run', launch_context_ids={preparation_id: prepared['launch_context_id']},
-                source_domain_id=setup['domain_experiment_id'])
-            await session.commit()
-            group = await pm._run_group_document(session, group_row)
-    else:
-        assert response.status_code == 201, response.text
-        group = response.json()
+    # Exercise the actual native HTTP launch and resource owner, without a
+    # private-service fallback or an NGS source-audit escape/skip.
+    assert response.status_code == 201, response.text
+    group = response.json()
     readback = await client.get(domain_path + '/run-groups/' + group['run_group_id'])
     assert readback.status_code == 200 and readback.json() == group, readback.text
+    listed = await client.get(domain_path + '/run-groups')
+    assert listed.status_code == 200, listed.text
+    assert [row['run_group_id'] for row in listed.json()['items']] == [group['run_group_id']]
+    attempt_id = group['runs'][0]['attempts'][0]['attempt_id']
+    for suffix in ['', '/logs', '/validations']:
+        detail = await client.get(domain_path + '/attempts/' + attempt_id + suffix)
+        assert detail.status_code == 200, detail.text
+        assert detail.json()['attempt_id'] == attempt_id
+    absent = await client.get(domain_path + '/attempts/' + attempt_id + '/validations/absent')
+    assert absent.status_code == 404, absent.text
+    audit = await client.get(domain_path + '/audit')
+    assert audit.status_code == 200, audit.text
     async with setup_store() as session:
         preparation = await session.get(ExperimentWorkflowPreparation, preparation_id)
         await validate_preparation_authority(session, preparation)
@@ -168,17 +172,33 @@ async def test_native_setup_handoff_launch_and_bound_job(native_http, setup_stor
             assert [lineup[0]['params']['fampnn_temperature'], lineup[1]['params']['caliby_temperature']] == [0.3, 0.2]
             assert scheduler['params']['bindcraft2_settings']['number_of_final_designs'] == 25
             assert scheduler['params']['bindcraft2_settings']['max_trajectories'] == 100
-        from services.ngs_molbio_n5 import reserve_run_group, ResourceAdmissionDenied
-        try:
-            await reserve_run_group(session, group_id=group['run_group_id'],
-                domain_id=setup['domain_experiment_id'], actor='operator')
-        except ResourceAdmissionDenied as exc:
-            if exc.code == 'resource_source_revision_unavailable':
-                pytest.skip('Real create_run_group/readback/prepared request verified; final bound Job validation blocked by parent-owned runtime source binding')
-            raise
+        from services.ngs_molbio_n5 import resource_admission_handoff_for_attempt
+        from component_runtime import SourceIdentity
+        from paths import get_code_root
+        handoff = await resource_admission_handoff_for_attempt(session,
+            run_attempt_id=context.run_attempt_id,
+            canonical_job_id=group['runs'][0]['attempts'][0]['canonical_job_id'])
+        source = SourceIdentity.from_checkout(get_code_root())
+        assert (handoff['source_revision'], handoff['source_tree']) == (source.revision, source.tree)
         params = await validate_bound_job_request(session, context, job_name=scheduler['name'],
             model_id=scheduler['model_id'], mode=scheduler['mode'], params=scheduler['params'], pinned_gpu=None)
         assert all(params[key] == value for key, value in scheduler['params'].items())
+
+
+def test_connector_resource_source_keeps_existing_authority(monkeypatch):
+    from services import ngs_molbio_n5 as owner
+    def unavailable():
+        raise owner.NgsMolBioRuntimeAuthorityError('existing frozen connector source is unavailable')
+    monkeypatch.setattr(owner, 'runtime_implementation_record', unavailable)
+    with pytest.raises(owner.ResourceAdmissionDenied) as error:
+        owner._runtime_source_authority([])
+    assert error.value.code == 'resource_source_revision_unavailable'
+    # Committed native source metadata comes from the same existing owner used
+    # by execution-plan compilation, not from invented fixture identifiers.
+    from component_runtime import SourceIdentity
+    from paths import get_code_root
+    source = SourceIdentity.from_checkout(get_code_root())
+    assert owner._runtime_source_authority([], source_identity=source) == (source.revision, source.tree)
 
 
 @pytest.mark.asyncio
@@ -232,14 +252,9 @@ async def test_native_pending_run_cancel_uses_global_owner(native_http, setup_st
             idempotency_key='pending-run', source_domain_id=setup['domain_experiment_id'],
             launch_context_ids={prepared['preparation_id']: prepared['launch_context_id']})
         group_id, generation = group.resource_id, group.generation
-        from services.ngs_molbio_n5 import reserve_run_group, ResourceAdmissionDenied
-        try:
-            await reserve_run_group(session, group_id=group_id,
-                domain_id=setup['domain_experiment_id'], actor='operator')
-        except ResourceAdmissionDenied as exc:
-            if exc.code == 'resource_source_revision_unavailable':
-                pytest.skip('Cancellation fixture needs real admission; parent-owned runtime source binding unavailable')
-            raise
+        from services.ngs_molbio_n5 import reserve_run_group
+        await reserve_run_group(session, group_id=group_id,
+            domain_id=setup['domain_experiment_id'], actor='operator')
         await session.commit()
     response = await native_http.post(domain_path + '/run-groups/' + group_id + '/cancel',
         json={'expected_run_group_generation': generation, 'reason': 'Fixture cancellation'},
