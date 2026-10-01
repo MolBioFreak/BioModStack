@@ -71,9 +71,13 @@ def _has_inet_routes() -> bool:
     """Return whether the current namespace exposes a usable IPv4/IPv6 route."""
     try:
         ipv4_lines = Path("/proc/net/route").read_text(encoding="utf-8").splitlines()
-        ipv6_interfaces = Path("/proc/net/if_inet6").read_text(
-            encoding="utf-8"
-        ).splitlines()
+        try:
+            ipv6_interfaces = Path("/proc/net/if_inet6").read_text(
+                encoding="utf-8"
+            ).splitlines()
+        except FileNotFoundError:
+            # Kernels without IPv6 omit this file; they have no IPv6 interfaces.
+            ipv6_interfaces = []
     except OSError as exc:
         raise pytest.UsageError(
             f"cannot inspect BioXP network-namespace routes: {exc}"
