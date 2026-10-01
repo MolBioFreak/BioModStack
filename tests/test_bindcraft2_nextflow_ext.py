@@ -2,6 +2,7 @@
 from pathlib import Path
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -40,9 +41,20 @@ def test_bc2_ext_options_resolve_at_actual_task_submission(tmp_path):
     fake_engine.chmod(0o700)
     image = tmp_path / "inert-fixture.sif"
     image.write_text("inert container transport fixture; not a runtime image\n")
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "platform/api"))
+    from scripts.lib.component_adapter import native_resource_config
+    plan = {"metadata": {"static_components": [{
+        "authority": "modules/bindcraft2.nf:RunBindCraft2",
+        "selection_json": {"native_process": "RunBindCraft2"},
+        "resources_json": {"execution_role": "compute"},
+    }]}}
+    bound = native_resource_config(plan, {"required": {"cpus": 1, "memory_bytes": 268435456}},
+                                   str(tmp_path / "compute.lock"), ROOT)
+    assert preamble.strip() in bound.replace("      def nativeSetup = ", "beforeScript ")
     config = tmp_path / "smoke.config"
     config.write_text(
-        "process { withLabel: gpu { containerOptions = { task.ext.containerOptions ?: '' } } }\n"
+        bound + "process { withLabel: gpu { containerOptions = { task.ext.containerOptions ?: '' } } }\n"
         + f"process.container = '{image}'\n"
         + "docker.enabled = false\nsingularity.enabled = true\napptainer.enabled = false\n"
     )
@@ -64,4 +76,4 @@ def test_bc2_ext_options_resolve_at_actual_task_submission(tmp_path):
     assert "BINDCRAFT_AF2_PARAMS=/fixture/weights/alphafold/params" in resolved
     assert f"--bind {cache}/bindcraft2/compile:/cache/bindcraft2/compile" in resolved
     wrapper = outputs[0].with_name(".command.run").read_text()
-    assert wrapper.index("mkdir -p") < wrapper.index("singularity exec")
+    assert wrapper.index("flock -x 198") < wrapper.index("mkdir -p '") < wrapper.index("singularity exec")
