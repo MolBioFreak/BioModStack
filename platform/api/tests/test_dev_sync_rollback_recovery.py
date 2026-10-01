@@ -58,7 +58,7 @@ def recovery(tmp_path, monkeypatch):
     monkeypatch.setattr(sync, "_git_blob", lambda *args: b"candidate")
     monkeypatch.setattr(sync, "_active_development_work", lambda root: (False, 0))
     monkeypatch.setattr(sync, "_deployed_revision", lambda root: "a" * 40)
-    monkeypatch.setattr(sync, "validate_candidate_runtime_authority", lambda *args: fenced() or {})
+    monkeypatch.setattr(sync, "validate_candidate_runtime_authority", lambda *args: pytest.fail("NGS audit must not gate rollback"))
     return sync, root, state, installed, marker, calls, current
 
 
@@ -74,7 +74,7 @@ def test_recover_failed_rollback_verifies_then_clears_under_both_fences(recovery
     assert ("reset", "--hard", marker["rollback_revision"]) in calls
 
 
-@pytest.mark.parametrize("failure", ["pause", "missing", "phase", "malformed", "backup", "dirty", "head", "candidate", "active", "database", "authority"])
+@pytest.mark.parametrize("failure", ["pause", "missing", "phase", "malformed", "backup", "dirty", "head", "candidate", "active", "database"])
 def test_recovery_preconditions_preserve_evidence_without_restart(recovery, monkeypatch, failure):
     sync, root, state, installed, marker, calls, current = recovery
     path = state / sync.SYNC_REFRESH_FILENAME
@@ -101,7 +101,7 @@ def test_recovery_preconditions_preserve_evidence_without_restart(recovery, monk
     else:
         def fail(*args):
             raise RuntimeError(failure)
-        monkeypatch.setattr(sync, "_active_development_work" if failure == "database" else "validate_candidate_runtime_authority", fail)
+        monkeypatch.setattr(sync, "_active_development_work", fail)
     before = path.read_bytes() if path.exists() else None
     with pytest.raises(RuntimeError):
         sync.recover_failed_rollback(root, state)

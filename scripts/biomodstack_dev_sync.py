@@ -288,6 +288,7 @@ def _candidate_tree_without_record(root: Path, revision: str) -> str:
 
 
 def validate_candidate_runtime_authority(root: Path, revision: str) -> dict[str, object]:
+    """Explicit NGS source audit, not general Development deployment admission."""
     denominator = _json_blob(root, revision, RUNTIME_DENOMINATOR_PATH)
     runtime = _json_blob(root, revision, RUNTIME_IMPLEMENTATION_PATH)
     source_pin = _json_blob(root, revision, SOURCE_PIN_PATH)
@@ -691,8 +692,6 @@ def _resume_sync_rollback(root: Path, state_dir: Path, marker: dict[str, object]
         marker = _set_sync_refresh_phase(state_dir, marker, "rolling-back")
     manager = root / "scripts" / "manage_desktop_services.py"
     try:
-        if recovering_failure:
-            validate_candidate_runtime_authority(root, rollback_revision)
         _git(root, "reset", "--hard", rollback_revision)
         _run(root, sys.executable, str(manager), "restart", "--runtime", "dev")
         rollback_deployed = _deployed_revision(root)
@@ -812,7 +811,7 @@ def bootstrap_successor_sync(root: Path, state_dir: Path, revision: str) -> dict
             raise RuntimeAuthorityError(
                 f"successor bootstrap revision mismatch: expected {revision}, got {remote}"
             )
-        authority = validate_candidate_runtime_authority(root, revision)
+        source_identity: dict[str, object] = {"candidate_revision": revision}
         expected = _git_blob(root, revision, "scripts/biomodstack_dev_sync.py")
         executor = Path(__file__).resolve().read_bytes()
         if executor != expected:
@@ -832,10 +831,10 @@ def bootstrap_successor_sync(root: Path, state_dir: Path, revision: str) -> dict
                 "status": "installed",
                 "queue_state": "pending",
                 "queued_revision": revision,
-                "runtime_authority": authority,
+                "source_identity": source_identity,
             },
         )
-        return authority
+        return source_identity
 
 
 def _deployment_failure_state(error: BaseException) -> str:
@@ -856,7 +855,8 @@ def _deploy_candidate(
     remote_revision: str,
     deployed_revision: str | None,
 ) -> dict[str, object]:
-    authority = validate_candidate_runtime_authority(root, remote_revision)
+    # NGS source-audit records describe their frozen review tree. An unrelated
+    # commit must not turn that historical record into a deployment prerequisite.
     candidate_sync = _git_blob(root, remote_revision, "scripts/biomodstack_dev_sync.py")
     rollback_revision = (
         deployed_revision
@@ -927,7 +927,7 @@ def _deploy_candidate(
         ) from deployment_error
 
     return {
-        "runtime_authority": authority,
+        "candidate_revision": remote_revision,
         "deployed_revision_after": deployed_after,
     }
 
