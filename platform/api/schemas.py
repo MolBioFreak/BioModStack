@@ -226,11 +226,68 @@ class ExecutionStageResponse(BaseModel):
     source: Literal['plan', 'recorded', 'model']
 
 
-class JobResponse(BaseModel):
+class JobSummaryResponse(BaseModel):
+    """Bounded list projection. Scientific/detail DTO remains JobResponse."""
+
+    execution_stages: List[ExecutionStageResponse] = Field(default_factory=list)
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+    id: str
+    name: str
+    status: JobStatus
+    model_id: str
+    mode: str
+    created_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    output_dir: Optional[str] = None
+    error_message: Optional[str] = None
+    design_count: int = 0
+    batch_id: Optional[str] = None
+    batch_name: Optional[str] = None
+    parent_job_id: Optional[str] = None
+    child_stage: Optional[str] = None
+    lineage_root_job_id: Optional[str] = None
+    stage_family: Optional[str] = None
+    stage_mode: Optional[str] = None
+    source_stage_job_id: Optional[str] = None
+    source_stage_family: Optional[str] = None
+    source_stage_mode: Optional[str] = None
+    source_selection_count: Optional[int] = None
+    selected_input_artifact_class: Optional[str] = None
+    selected_input_schema_version: Optional[int] = None
+    selection_source_type: Optional[str] = None
+    selection_source_job_id: Optional[str] = None
+    selection_dataset_name: Optional[str] = None
+    pinned_gpu: Optional[int] = None
+    execution_target_id: Optional[str] = None
+    execution_source_revision: Optional[str] = None
+    execution_source_tree: Optional[str] = None
+    execution_bundle_sha256: Optional[str] = None
+    remote_attempt_id: Optional[str] = None
+    remote_state: Optional[str] = None
+    current_stage: Optional[str] = None
+    completed_stages: Optional[List[str]] = None
+    awaiting_input: Optional[bool] = None
+    awaiting_stage: Optional[str] = None
+    frustrampnn_result_count: int = 0
+    frustrampnn_reopen_destination: Optional[dict] = None
+    conformational_mapping_request_id: Optional[str] = None
+
+    from pydantic import field_serializer
+
+    @field_serializer('created_at', 'started_at', 'completed_at')
+    @classmethod
+    def serialize_datetime(cls, dt: Optional[datetime]) -> Optional[str]:
+        """Serialize datetime with Z suffix for UTC."""
+        if dt is None:
+            return None
+        return dt.isoformat() + 'Z'
+
+
+class JobResponse(JobSummaryResponse):
     """Response schema for a job."""
 
     source_structure: StructureSourceRequest | None = None
-    execution_stages: List[ExecutionStageResponse] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -248,7 +305,6 @@ class JobResponse(BaseModel):
 
     sequence_design: SequenceDesignRequest | None = None
     binder_round: BinderRoundRequest | None = None
-    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
 
     @model_validator(mode="after")
     def expose_orm_execution_policy(self):
@@ -266,69 +322,26 @@ class JobResponse(BaseModel):
         self.params = {key: value for key, value in self.params.items() if key != "remote_result_policy"}
         return self
 
-    id: str
-    name: str
-    status: JobStatus
-    model_id: str
-    mode: str
     params: dict
-    created_at: Optional[datetime] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    output_dir: Optional[str] = None
-    error_message: Optional[str] = None
-    design_count: int = 0
     requested_design_count: Optional[int] = None
-    # Batch grouping for job sets
-    batch_id: Optional[str] = None
-    batch_name: Optional[str] = None
-    # Parent-child tracking (SWA pattern)
-    parent_job_id: Optional[str] = None
-    child_stage: Optional[str] = None
-    lineage_root_job_id: Optional[str] = None
-    stage_family: Optional[str] = None
-    stage_mode: Optional[str] = None
-    source_stage_job_id: Optional[str] = None
-    source_stage_family: Optional[str] = None
-    source_stage_mode: Optional[str] = None
     source_selection_manifest_path: Optional[str] = None
-    source_selection_count: Optional[int] = None
-    selected_input_artifact_class: Optional[str] = None
-    selected_input_schema_version: Optional[int] = None
-    selection_source_type: Optional[str] = None
-    selection_source_job_id: Optional[str] = None
-    selection_dataset_name: Optional[str] = None
     selected_loop_scope: Optional[dict] = None
     provenance: Optional[dict] = None
     saved_selection_sets: Optional[List[dict]] = None
     # GPU assignment
-    pinned_gpu: Optional[int] = None
     assigned_gpu: Optional[int] = None
     vram_estimate_mb: Optional[int] = None
-    execution_target_id: Optional[str] = None
-    execution_source_revision: Optional[str] = None
-    execution_source_tree: Optional[str] = None
-    execution_bundle_sha256: Optional[str] = None
-    remote_attempt_id: Optional[str] = None
-    remote_state: Optional[str] = None
     # Stage tracking for multi-stage pipelines
-    current_stage: Optional[str] = None
-    completed_stages: Optional[List[str]] = None
     stage_outputs: Optional[dict] = None
-    awaiting_input: Optional[bool] = None
-    awaiting_stage: Optional[str] = None
     awaiting_payload: Optional[dict] = None
     decision_history: Optional[List[dict]] = None
     launch_context_id: Optional[str] = None
     launch_context_binding: Optional[dict] = None
     return_uri: Optional[str] = None
-    frustrampnn_result_count: int = 0
-    frustrampnn_reopen_destination: Optional[dict] = None
-    conformational_mapping_request_id: Optional[str] = None
     
     model_config = ConfigDict(from_attributes=True)
     
-    from pydantic import field_serializer, computed_field
+    from pydantic import computed_field
 
     @computed_field
     @property
@@ -353,19 +366,16 @@ class JobResponse(BaseModel):
             values['reason'] = {'code': 'result_integrity_failure', 'message': str(integrity['error'])}
         values['dispositions'] = receipt.get('dispositions')
         return CandidateResultSummary.model_validate(values)
-    
-    @field_serializer('created_at', 'started_at', 'completed_at')
-    @classmethod
-    def serialize_datetime(cls, dt: Optional[datetime]) -> Optional[str]:
-        """Serialize datetime with Z suffix for UTC."""
-        if dt is None:
-            return None
-        return dt.isoformat() + 'Z'
 
 
 class JobList(BaseModel):
     """Response schema for job list."""
     jobs: List[JobResponse]
+    total: int
+
+
+class JobSummaryList(BaseModel):
+    jobs: List[JobSummaryResponse]
     total: int
 
 

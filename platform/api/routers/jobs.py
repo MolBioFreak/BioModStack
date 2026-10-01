@@ -73,7 +73,7 @@ from runtime_policy import (
     workflow_launch_block_detail,
     workflow_launches_allowed,
 )
-from schemas import ExecutionPolicy, JobCreate, JobResponse, JobList, JobStatus
+from schemas import ExecutionPolicy, JobCreate, JobResponse, JobList, JobSummaryResponse, JobSummaryList, JobStatus
 from services.job_control import cancel_job_lineage, reject_generic_md_lifecycle_control
 from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
 from services.ont_barcode_units import load_barcode_units
@@ -5363,7 +5363,7 @@ def _is_protein_local_redesign_job(job: Job) -> bool:
     )
 
 
-@router.get("", response_model=JobList)
+@router.get("", response_model=JobList | JobSummaryList)
 async def list_jobs(
     status: Optional[JobStatus] = None,
     q: Optional[str] = None,
@@ -5434,24 +5434,6 @@ async def list_jobs(
         Job.provenance[("remote_execution_assignment", "resources", "components")].label("stage_assigned_components"),
         Job.provenance["stage_terminal_states"].label("stage_terminal_states"),
     )
-    selected_entities = summary_columns if summary else (Job,)
-    design_counts = (
-        select(
-            Design.job_id.label("job_id"),
-            func.count(Design.id).label("design_count"),
-        )
-        .group_by(Design.job_id)
-        .subquery()
-    )
-    query = (
-        select(
-            *selected_entities,
-            func.coalesce(design_counts.c.design_count, 0).label("design_count"),
-        )
-        .outerjoin(design_counts, design_counts.c.job_id == Job.id)
-        .order_by(Job.created_at.desc())
-    )
-    
     # Use identical predicates for the bounded page and its total. These are
     # presentation filters, not changes to execution/status authority.
     filters = []
@@ -5500,9 +5482,25 @@ async def list_jobs(
         filters.append(~or_(model_identity.in_(ngs_models), and_(
             model_identity == "", or_(workflow_identity.in_(ngs_workflows),
                                       mode_identity.in_((*ngs_workflows, "nanopore_methylation"))))))
-    query = query.where(*filters)
-
-    query = query.limit(limit).offset(offset)
+    if summary:
+        # Bound the Jobs scope before counting Designs. The existing job_id
+        # index serves one exact count per displayed row, not a global GROUP BY
+        # over retained scientific history on every recurring/conditional read.
+        page = select(*summary_columns).where(*filters).order_by(
+            Job.created_at.desc()).limit(limit).offset(offset).subquery()
+        page_design_count = select(func.count(Design.id)).where(
+            Design.job_id == page.c.id).correlate(page).scalar_subquery()
+        query = select(page, page_design_count.label("design_count")).order_by(page.c.created_at.desc())
+    else:
+        design_counts = (
+            select(Design.job_id.label("job_id"), func.count(Design.id).label("design_count"))
+            .group_by(Design.job_id).subquery()
+        )
+        query = (
+            select(Job, func.coalesce(design_counts.c.design_count, 0).label("design_count"))
+            .outerjoin(design_counts, design_counts.c.job_id == Job.id)
+            .where(*filters).order_by(Job.created_at.desc()).limit(limit).offset(offset)
+        )
     result = await session.execute(query)
     if summary:
         rows = [
@@ -5538,11 +5536,15 @@ async def list_jobs(
             for job_id, request_id in cm_request_rows.all()
         }
     child_design_count_by_parent: dict[str, int] = {}
-    if listed_job_ids:
+    child_count_ids = (listed_job_ids if not summary else [
+        job.id for job, design_count in rows
+        if not design_count and job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}
+    ])
+    if child_count_ids:
         child_count_result = await session.execute(
             select(Job.parent_job_id, func.count(Design.id))
             .join(Design, Design.job_id == Job.id)
-            .where(Job.parent_job_id.in_(listed_job_ids))
+            .where(Job.parent_job_id.in_(child_count_ids))
             .group_by(Job.parent_job_id)
         )
         child_design_count_by_parent = {
@@ -5560,23 +5562,21 @@ async def list_jobs(
     for job, design_count in rows:
         frustrampnn_result_count = frustrampnn_count_by_job.get(job.id, 0)
         completed_stages = _dedupe_preserve_order(list(job.completed_stages or []))
-        stage_outputs = {} if summary else dict(job.stage_outputs or {})
         if not summary and job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
             review_count = _review_candidate_count_cached(job)
             if (design_count or 0) == 0 and review_count is not None:
                 design_count = review_count
-            if (design_count or 0) == 0:
-                child_design_count = child_design_count_by_parent.get(job.id)
-                if child_design_count:
-                    design_count = child_design_count
+        if (design_count or 0) == 0 and job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
+            child_design_count = child_design_count_by_parent.get(job.id)
+            if child_design_count:
+                design_count = child_design_count
         
-        job_responses.append(JobResponse(
+        public_fields: dict[str, Any] = dict(
             id=job.id,
             name=job.name,
             status=job.status,
             model_id=job.model_id,
             mode=job.mode,
-            params={} if summary else _public_job_params(job),
             execution_policy=ExecutionPolicy.from_params(
                 {"remote_result_policy": job.remote_result_policy} if summary else job.params
             ),
@@ -5586,7 +5586,6 @@ async def list_jobs(
             output_dir=_public_job_output_dir(job),
             error_message=job.error_message,
             design_count=design_count,  # Now joined from DB
-            requested_design_count=None if summary else _resolve_requested_design_count(job),
             batch_id=job.batch_id,
             batch_name=job.batch_name,
             parent_job_id=job.parent_job_id,
@@ -5597,16 +5596,12 @@ async def list_jobs(
             source_stage_job_id=job.source_stage_job_id,
             source_stage_family=job.source_stage_family,
             source_stage_mode=job.source_stage_mode,
-            source_selection_manifest_path=None if summary else job.source_selection_manifest_path,
             source_selection_count=job.source_selection_count,
             selected_input_artifact_class=job.selected_input_artifact_class,
             selected_input_schema_version=job.selected_input_schema_version,
             selection_source_type=job.selection_source_type,
             selection_source_job_id=job.selection_source_job_id,
             selection_dataset_name=job.selection_dataset_name,
-            selected_loop_scope=None if summary else job.selected_loop_scope,
-            provenance=None if summary else job.provenance,
-            saved_selection_sets=None if summary else _serialized_saved_review_filter_sets(job),
             pinned_gpu=job.pinned_gpu,
             execution_target_id=job.execution_target_id,
             execution_source_revision=job.execution_source_revision,
@@ -5617,20 +5612,32 @@ async def list_jobs(
             execution_stages=project_execution_stages(job),
             current_stage=job.current_stage,
             completed_stages=completed_stages,
-            stage_outputs={} if summary else stage_outputs,
             awaiting_input=job.awaiting_input,
             awaiting_stage=job.awaiting_stage,
-            awaiting_payload={} if summary else job.awaiting_payload,
-            decision_history=[] if summary else job.decision_history,
             frustrampnn_result_count=frustrampnn_result_count,
             frustrampnn_reopen_destination=(
                 {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
                 if frustrampnn_result_count else None
             ),
             conformational_mapping_request_id=conformational_mapping_request_id_by_job.get(str(job.id)),
-        ))
+        )
+        if summary:
+            job_responses.append(JobSummaryResponse(**public_fields))
+        else:
+            job_responses.append(JobResponse(
+                **public_fields,
+                params=_public_job_params(job),
+                requested_design_count=_resolve_requested_design_count(job),
+                source_selection_manifest_path=job.source_selection_manifest_path,
+                selected_loop_scope=job.selected_loop_scope,
+                provenance=job.provenance,
+                saved_selection_sets=_serialized_saved_review_filter_sets(job),
+                stage_outputs=dict(job.stage_outputs or {}),
+                awaiting_payload=job.awaiting_payload,
+                decision_history=job.decision_history,
+            ))
     
-    result = JobList(jobs=job_responses, total=total)
+    result = (JobSummaryList if summary else JobList)(jobs=job_responses, total=total)
     if summary and request is not None:
         # Validate/project every request before comparing: counts, removals and
         # all visible fields participate, with no stale server-side cache.

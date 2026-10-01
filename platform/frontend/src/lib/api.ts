@@ -943,6 +943,25 @@ export const fetchJobs = async (params?: {
     // The validator and payload belong to the caller's exact query entry.
     // Keep ordinary auth/network failures rejected, never serve stale-on-error.
     if (response.status === 304 && previous) return { ...response, data: previous.data };
+    if (params?.summary ?? true) {
+        // Detail-only wire defaults are omitted by the bounded owner. Keep the
+        // established Job consumer shape, without another cache or detail read.
+        response.data = { ...response.data, jobs: response.data.jobs.map(job => Object.assign({
+            source_structure: null, sequence_design: null, binder_round: null,
+            params: {}, requested_design_count: null, source_selection_manifest_path: null,
+            selected_loop_scope: null, provenance: null, saved_selection_sets: null,
+            assigned_gpu: null, vram_estimate_mb: null, stage_outputs: {},
+            awaiting_payload: {}, decision_history: [], launch_context_id: null,
+            launch_context_binding: null, return_uri: null,
+            result_summary: {
+                stage_id: null, state: 'unavailable', partial: false,
+                requested_count: null, generated_count: null, rejected_count: null,
+                failed_count: null, unevaluable_count: null,
+                expected_publication_count: null, persisted_count: null,
+                reason: null, dispositions: null,
+            },
+        }, job)) };
+    }
     return response;
 };
 // Bound live telemetry requests so a half-open connection cannot permanently

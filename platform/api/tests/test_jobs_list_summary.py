@@ -88,19 +88,18 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     assert summary_job["stage_family"] == "fampnn"
     assert summary_job["stage_mode"] == "sequence_design"
     assert summary_job["pinned_gpu"] == 1
-    assert summary_job["params"] == {}
-    assert summary_job["provenance"] is None
-    assert summary_job["saved_selection_sets"] is None
-    assert summary_job["stage_outputs"] == {}
-    assert summary_job["awaiting_payload"] == {}
-    assert summary_job["decision_history"] == []
+    for detail_field in ("params", "provenance", "saved_selection_sets", "stage_outputs",
+                         "awaiting_payload", "decision_history", "result_summary"):
+        assert detail_field not in summary_job
+    # frontendDashboardSummary.test.ts exercises equivalent decoded defaults.
 
     summary_job_query = next(
         statement
         for statement in selected_statements
         if "from jobs" in statement and "design_count" in statement
     )
-    assert "group by designs.job_id" in summary_job_query
+    assert "group by designs.job_id" not in summary_job_query
+    assert "where designs.job_id = anon_1.id" in summary_job_query
     assert "group by jobs.id" not in summary_job_query
     # This one bounded scalar projection is required by remote result-policy
     # presentation; fetching the complete params JSON is still forbidden.
@@ -214,7 +213,7 @@ async def test_jobs_model_union_bounded_pages_discovery_and_validators(tmp_path:
             assert len(response.json()['jobs']) <= 100
             collected.extend(j['id'] for j in response.json()['jobs'])
         assert collected == [f'Case-{i:04d}' for i in reversed(range(625))] + ['Literal_%']
-        assert len(statements) == 35  # five actual SELECTs per page, never five model drains
+        assert len(statements) == 28  # four SELECTs; queued/running rows need no child fallback
         print(f'union fixture: 626 rows, seven bounded pages, {len(statements)} SELECTs; last page JSON {len(response.content)} bytes')
         first = client.get('/api/jobs', params=params)
         etag = first.headers['etag']
