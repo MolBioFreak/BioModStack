@@ -34,8 +34,8 @@ def test_bc2_ext_options_resolve_at_actual_task_submission(tmp_path):
     fake_engine = binary_dir / "singularity"
     fake_engine.write_text(
         "#!/usr/bin/env python3\nimport os,sys\nfrom pathlib import Path\n"
-        "assert (Path(os.environ['BMS_TEST_BC2_CACHE'])/'bindcraft2'/'compile').is_dir(), 'host cache missing before container entry'\n"
-        "index=sys.argv.index('/bin/bash')\nos.execv('/bin/bash',sys.argv[index:])\n"
+        + f"assert (Path({str(cache)!r})/'bindcraft2'/'compile').is_dir(), 'host cache missing before container entry'\n"
+        + "index=sys.argv.index('/bin/bash')\nos.execv('/bin/bash',sys.argv[index:])\n"
     )
     fake_engine.chmod(0o700)
     image = tmp_path / "inert-fixture.sif"
