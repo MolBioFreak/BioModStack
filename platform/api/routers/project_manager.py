@@ -2802,6 +2802,7 @@ async def project_manager_summary(
     decision_limit: int = Query(default=25, ge=1, le=100),
     dataset_limit: int = Query(default=25, ge=1, le=100),
     activity_limit: int = Query(default=25, ge=1, le=100),
+    collection_families: str | None = Query(default=None, max_length=128),
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict:
     try:
@@ -2826,6 +2827,8 @@ async def project_manager_summary(
             decision_limit=decision_limit,
             dataset_limit=dataset_limit,
             activity_limit=activity_limit,
+            collection_families=(collection_families.split(",") if collection_families else [])
+            if collection_families is not None else None,
         )
     except ExperimentServiceError as exc:
         raise _service_error(exc) from exc

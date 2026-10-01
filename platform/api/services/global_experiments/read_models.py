@@ -1006,6 +1006,7 @@ async def build_project_manager_read_model(
     decision_limit: int = DEFAULT_PAGE_ITEMS,
     dataset_limit: int = DEFAULT_PAGE_ITEMS,
     activity_limit: int = DEFAULT_PAGE_ITEMS,
+    collection_families: list[str] | None = None,
 ) -> dict[str, Any]:
     _validate_limit("map", map_limit, MAX_MAP_NODES)
     _validate_limit("run", run_limit)
@@ -1015,6 +1016,17 @@ async def build_project_manager_read_model(
     _validate_limit("decision", decision_limit)
     _validate_limit("dataset", dataset_limit)
     _validate_limit("activity", activity_limit)
+
+    # Map attachments, runs, hierarchy, task authority and complete source
+    # reconciliation are shared dependencies, independent of collection pages.
+    page_families = {"results", "lineage", "datasets", "notes", "decisions", "activity"}
+    demanded = page_families if collection_families is None else set(collection_families)
+    if demanded - page_families:
+        raise ValidationFailure("Unknown Project collection family")
+    if selected_node_key and selected_node_key.startswith("virtual_folder:"):
+        folder = selected_node_key.split(":", 2)[-1]
+        if folder in page_families:
+            demanded = demanded | {folder}
 
     project = await session.get(ExperimentAggregateHead, project_id)
     if project is None or project.aggregate_kind != "workspace":
@@ -1512,56 +1524,68 @@ async def build_project_manager_read_model(
     )
     if not map_rows:
         context_map_nodes = all_context_map_nodes[:map_limit]
-    lineage_rows, lineage_next_cursor = await _attachment_page(
-        session,
-        project_id=project_id,
-        focused_domain_ids=collection_domain_ids,
-        family="lineage",
-        cursor=lineage_cursor,
-        limit=lineage_limit,
-    )
-    result_rows, result_next_cursor = await _attachment_page(
-        session,
-        project_id=project_id,
-        focused_domain_ids=collection_domain_ids,
-        family="results",
-        cursor=result_cursor,
-        limit=result_limit,
-        edge_modes=RESULT_ATTACHMENT_MODES,
-    )
-    dataset_items, dataset_next_cursor = await _dataset_page(
-        session,
-        project_id=project_id,
-        domain_ids=collection_domain_ids,
-        cursor=dataset_cursor,
-        limit=dataset_limit,
-    )
-    note_items, note_next_cursor = await _record_page(
-        session,
-        project_id=project_id,
-        subject_resource_ids=collection_domain_ids,
-        record_kind="note",
-        family="notes",
-        cursor=note_cursor,
-        limit=note_limit,
-    )
-    decision_items, decision_next_cursor = await _record_page(
-        session,
-        project_id=project_id,
-        subject_resource_ids=collection_domain_ids,
-        record_kind="decision",
-        family="decisions",
-        cursor=decision_cursor,
-        limit=decision_limit,
-    )
-    activity_items, activity_next_cursor = await _activity_page(
-        session,
-        project_id=project_id,
-        resource_ids=collection_domain_ids,
-        cursor=activity_cursor,
-        limit=activity_limit,
-    )
-    result_items = await _result_items(session, project_id=project_id, rows=result_rows)
+    lineage_rows, lineage_next_cursor = [], None
+    if "lineage" in demanded:
+        lineage_rows, lineage_next_cursor = await _attachment_page(
+            session,
+            project_id=project_id,
+            focused_domain_ids=collection_domain_ids,
+            family="lineage",
+            cursor=lineage_cursor,
+            limit=lineage_limit,
+        )
+    result_rows, result_next_cursor = [], None
+    if "results" in demanded:
+        result_rows, result_next_cursor = await _attachment_page(
+            session,
+            project_id=project_id,
+            focused_domain_ids=collection_domain_ids,
+            family="results",
+            cursor=result_cursor,
+            limit=result_limit,
+            edge_modes=RESULT_ATTACHMENT_MODES,
+        )
+    dataset_items, dataset_next_cursor = [], None
+    if "datasets" in demanded:
+        dataset_items, dataset_next_cursor = await _dataset_page(
+            session,
+            project_id=project_id,
+            domain_ids=collection_domain_ids,
+            cursor=dataset_cursor,
+            limit=dataset_limit,
+        )
+    note_items, note_next_cursor = [], None
+    if "notes" in demanded:
+        note_items, note_next_cursor = await _record_page(
+            session,
+            project_id=project_id,
+            subject_resource_ids=collection_domain_ids,
+            record_kind="note",
+            family="notes",
+            cursor=note_cursor,
+            limit=note_limit,
+        )
+    decision_items, decision_next_cursor = [], None
+    if "decisions" in demanded:
+        decision_items, decision_next_cursor = await _record_page(
+            session,
+            project_id=project_id,
+            subject_resource_ids=collection_domain_ids,
+            record_kind="decision",
+            family="decisions",
+            cursor=decision_cursor,
+            limit=decision_limit,
+        )
+    activity_items, activity_next_cursor = [], None
+    if "activity" in demanded:
+        activity_items, activity_next_cursor = await _activity_page(
+            session,
+            project_id=project_id,
+            resource_ids=collection_domain_ids,
+            cursor=activity_cursor,
+            limit=activity_limit,
+        )
+    result_items = await _result_items(session, project_id=project_id, rows=result_rows) if "results" in demanded else []
 
     receipt_nodes = [_receipt_map_node(receipt) for _edge, receipt in map_rows]
     receipt_edges = [
@@ -1978,6 +2002,7 @@ async def build_project_manager_read_model(
             "global_experiments": _count_states(global_heads),
             "domain_experiments": _count_states(domain_heads),
         },
+        **({"loaded_collection_families": sorted(demanded)} if collection_families is not None else {}),
         "recent_activity": activity_items,
         "result_previews": [item for item in result_items if item.get("canonical_surface", True) is not None],
         "pagination": {

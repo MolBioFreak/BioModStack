@@ -558,6 +558,8 @@ export interface ProjectWorkflowTask {
 }
 
 export interface ProjectManagerReadModel {
+    /** Missing only on legacy full responses; absent pages are not empty catalogs. */
+    loaded_collection_families?: ProjectCollectionFamily[];
     schema: 'bms.project-manager.read-model.v1';
     subject_id: string;
     subject_generation: number;
@@ -716,7 +718,11 @@ export interface CreateLaunchContextRequest {
     return_uri: string;
 }
 
+export type ProjectCollectionFamily = 'results' | 'lineage' | 'datasets' | 'notes' | 'decisions' | 'activity';
+
 export interface ProjectSummaryOptions {
+    /** Omitted preserves the full API; [] requests only shared context. */
+    collectionFamilies?: ProjectCollectionFamily[];
     focusId?: string;
     selectedNodeKey?: string;
     mapCursor?: string;
@@ -1438,7 +1444,7 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
         'schema', 'subject_id', 'subject_generation', 'assembled_at', 'source_receipt_ids', 'source_digest_set_sha256',
         'adapter_versions', 'reconciliation', 'counts', 'status_summary', 'recent_activity', 'result_previews', 'pagination',
         'project', 'tree', 'map', 'selection', 'runs', 'warnings', 'allowed_actions',
-    ], ['tasks']);
+    ], ['tasks', 'loaded_collection_families']);
     const project = exactRecord(record.project, `${label}.project`, ['id', 'project_scope', 'name', 'objective', 'lifecycle_state', 'head_generation', 'current_revision_id', 'updated_at']);
     const tree = exactRecord(record.tree, `${label}.tree`, ['nodes']);
     const map = exactRecord(record.map, `${label}.map`, ['focus_node_key', 'nodes', 'edges', 'truncated', 'next_cursor']);
@@ -1465,6 +1471,10 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
         reconciliation: parseReconciliation(record.reconciliation, `${label}.reconciliation`),
         counts: requireCounts(record.counts, `${label}.counts`),
         status_summary: requireJsonObject(record.status_summary, `${label}.status_summary`),
+        loaded_collection_families: record.loaded_collection_families === undefined
+            ? ['results', 'lineage', 'datasets', 'notes', 'decisions', 'activity']
+            : requireArray(record.loaded_collection_families, `${label}.loaded_collection_families`, (item, itemLabel) =>
+                requireLiteral(item, itemLabel, ['results', 'lineage', 'datasets', 'notes', 'decisions', 'activity'])),
         recent_activity: requireArray(record.recent_activity, `${label}.recent_activity`, parseActivity),
         result_previews: requireArray(record.result_previews, `${label}.result_previews`, parseResultSurface),
         pagination: {
@@ -1781,6 +1791,7 @@ export async function fetchDomainFrustraMpnnResults(
 export async function getProjectSummary(projectId: string, options: ProjectSummaryOptions = {}): Promise<ProjectManagerReadModel> {
     const response = await api.get<unknown>(`/api/projects/${segment(projectId)}/summary`, {
         params: {
+            collection_families: options.collectionFamilies?.join(','),
             focus_id: options.focusId,
             selected_node_key: options.selectedNodeKey,
             map_cursor: options.mapCursor,

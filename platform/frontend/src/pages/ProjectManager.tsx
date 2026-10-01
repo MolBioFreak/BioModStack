@@ -390,9 +390,13 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         && canonicalRead.current?.selected === selectedNodeKey;
     const queryFocus = reuseCanonicalRead ? canonicalRead.current?.originalFocus : focusId;
     const querySelected = reuseCanonicalRead ? canonicalRead.current?.originalSelected : selectedNodeKey;
+    const requestedFolder = folderKindFromNodeKey(selectedNodeKey);
+    const collectionFamilies = requestedFolder && requestedFolder !== 'plans' && requestedFolder !== 'runs'
+        ? [requestedFolder] : [];
     const summaryQuery = useQuery({
-        queryKey: ['project-manager', 'summary', projectId, queryFocus ?? null, querySelected ?? null, mapCursor ?? null, runCursor ?? null, resultCursor ?? null, lineageCursor ?? null, noteCursor ?? null, decisionCursor ?? null, datasetCursor ?? null, activityCursor ?? null],
+        queryKey: ['project-manager', 'summary', projectId, queryFocus ?? null, querySelected ?? null, mapCursor ?? null, runCursor ?? null, resultCursor ?? null, lineageCursor ?? null, noteCursor ?? null, decisionCursor ?? null, datasetCursor ?? null, activityCursor ?? null, collectionFamilies.join(',')],
         queryFn: ({ signal }) => getProjectSummary(projectId, {
+            collectionFamilies,
             focusId,
             selectedNodeKey,
             mapCursor,
@@ -418,7 +422,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const invalidSelection = summaryQuery.isError && isValidatedSelectionFailure(summaryQuery.error) && Boolean(focusId || selectedNodeKey);
     const fallbackQuery = useQuery({
         queryKey: ['project-manager', 'summary', projectId, 'validated-fallback'],
-        queryFn: ({ signal }) => getProjectSummary(projectId, { mapLimit: MAP_LIMIT, runLimit: RUN_LIMIT, signal }),
+        queryFn: ({ signal }) => getProjectSummary(projectId, { collectionFamilies: [], mapLimit: MAP_LIMIT, runLimit: RUN_LIMIT, signal }),
         enabled: invalidSelection,
     });
     // React Query owns the previous snapshot. Keep the tree mounted while a
@@ -470,7 +474,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     }, [mapContextKey, rawSummary, selectionPending]);
 
     useEffect(() => {
-        if (!rawSummary || selectionPending) return;
+        if (!rawSummary || selectionPending || rawSummary.loaded_collection_families?.length === 0) return;
         const pages = rawSummary.pagination;
         const incoming = {
             results: pages.results.items,

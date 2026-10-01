@@ -107,7 +107,12 @@ export function ProteinProjectWorkspace({ projectId, globalExperimentId, domainE
     const project = useQuery({ queryKey: ['protein-project', ...scopeKey, 'project'], queryFn: ({ signal }) => getProject(projectId, signal), retry: false });
     const globalExperiment = useQuery({ queryKey: ['protein-project', ...scopeKey, 'global'], queryFn: ({ signal }) => getGlobalExperiment(projectId, globalExperimentId, signal), retry: false });
     const domain = useQuery({ queryKey: ['protein-project', ...scopeKey, 'domain'], queryFn: ({ signal }) => getDomainExperiment(projectId, globalExperimentId, domainExperimentId, signal), retry: false });
-    const summary = useQuery({ queryKey: ['protein-project', ...scopeKey, 'summary'], queryFn: ({ signal }) => getProjectSummary(projectId, { focusId: globalExperimentId, selectedNodeKey: `domain_experiment:${domainExperimentId}`, mapLimit: 50, runLimit: 100, resultLimit: 100, lineageLimit: 100, noteLimit: 100, decisionLimit: 100, datasetLimit: 100, activityLimit: 100, signal }), retry: false });
+    // Overview/tasks use the shared runs and authority; comparisons require
+    // canonical result metadata. Datasets has its own complete native reader.
+    const collectionFamilies: import('../../../lib/projectManager').ProjectCollectionFamily[] =
+        section === 'results' || section === 'comparisons' ? ['results']
+            : section === 'evidence' ? ['lineage'] : section === 'history' ? ['activity'] : [];
+    const summary = useQuery({ queryKey: ['protein-project', ...scopeKey, 'summary', collectionFamilies.join(',')], queryFn: ({ signal }) => getProjectSummary(projectId, { collectionFamilies, focusId: globalExperimentId, selectedNodeKey: `domain_experiment:${domainExperimentId}`, mapLimit: 50, runLimit: 100, resultLimit: 100, lineageLimit: 100, noteLimit: 100, decisionLimit: 100, datasetLimit: 100, activityLimit: 100, signal }), retry: false });
     const reverify = useMutation({
         mutationFn: async () => Promise.all(
             (summary.data?.source_receipt_ids ?? []).map((sourceReceiptId) => reverifySourceReceipt(
