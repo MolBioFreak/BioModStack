@@ -8,41 +8,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from routers.bioxp.operator_controls import router
-from services.bioxp.operator_models import OperatorDashboardV2
 from test_bioxp_camera_boundary import Boundary
 
 FIXTURES = Path(__file__).parent/'fixtures'
-
-
-@pytest.mark.parametrize('label,state', [('fresh','fresh'), ('stale','stale'), ('future','missing')])
-def test_producer_telemetry_http_route_preserves_observation_identity_and_skew(tmp_path, label, state):
-    async def scenario():
-        payload = json.loads((FIXTURES/f'bioxp_telemetry_producer_{label}.json').read_text())['payload']
-        b = Boundary(tmp_path)
-        b.app.include_router(router)
-        generation = await b.connect()
-        b.payload = copy.deepcopy(payload)
-        b.delay = 2.0
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=b.app), base_url='http://bms') as browser:
-            response = await browser.get('/operator-controls/v2/dashboard')
-            assert response.status_code == 200, response.text
-            parsed = OperatorDashboardV2.model_validate(response.json())
-            assert parsed.telemetry is not None
-            source = payload['telemetry']['snapshot']
-            assert parsed.telemetry.snapshot == source
-            assert parsed.telemetry.snapshot['freshness']['state'] == state
-            assert parsed.telemetry.snapshot['freshness']['fresh_for_s'] == 15
-            assert parsed.telemetry.snapshot['collection_triggered'] is False
-            if label == 'future':
-                assert parsed.telemetry.snapshot['clock_skew_detected'] is True
-            assert [a.position_steps for a in parsed.telemetry.axes] == [123, 456]
-            repeated = await browser.get('/operator-controls/v2/dashboard')
-            assert repeated.json()['telemetry']['snapshot'] == source
-            assert '/operator/v2/dashboard' in b.paths
-            assert b.connection._generation_leases[generation].lease_count == 0
-        await b.connection.disconnect()
-    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize('age,fresh', [(14.999, True), (15.0, True), (15.001, False)])

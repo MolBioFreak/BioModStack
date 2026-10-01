@@ -17,9 +17,11 @@ BioModStack owns only:
 - one persisted, policy-validated robot target profile;
 - one process-local connection generation;
 - connect, disconnect, and probe connection management;
-- typed forwarding of robot-owned V2 operator actions;
+- typed forwarding of robot-owned V2 operator actions (requests are validated
+  in `services/bioxp/operator_requests.py`);
 - private-ingress mutation authorization;
-- presentation and typed translation of robot-owned operator contracts;
+- relaying robot operator replies unchanged (BMS does not re-validate, filter,
+  or reshape them; robot transport errors become HTTP errors);
 - offline protocol validation and local job records.
 
 The robot owns:

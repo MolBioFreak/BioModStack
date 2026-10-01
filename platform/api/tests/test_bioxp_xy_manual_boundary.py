@@ -64,7 +64,7 @@ def test_native_xy_failure_survives_strict_receipt_boundary(tmp_path, source):
                 assert result['xy_failure'] == evidence
                 assert result['xy_failure']['controller_failure']['ack']['status'] == 100
                 assert result['xy_failure']['controller_failure']['timeout_position']['position'] == (5 if source == 'actual_y5' else 86000)
-                assert result['error'] == ({**receipts['compact']['error'], 'detail': None} if receipts['compact']['error'] is not None else None)
+                assert result['error'] == (receipts['compact']['error'] if receipts['compact']['error'] is not None else None)
                 if source == 'actual_y5':
                     assert result['error']['code'] == 'route_http_conflict'
                     assert result['xy_failure']['requested']['y'] == 0

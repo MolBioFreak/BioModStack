@@ -124,7 +124,7 @@ def test_composed_queries_concurrency_generation_and_cleanup(tmp_path, ending):
             assert not original.closed and not disconnect.done()
             release.set()
             result = await task
-            assert result.canonical is not None
+            assert result["canonical"] is not None
             await disconnect
             assert not clients[1].request_calls
         elif ending == 'cancel':
@@ -141,14 +141,6 @@ def test_composed_queries_concurrency_generation_and_cleanup(tmp_path, ending):
         await service.close()
         assert original.closed
     asyncio.run(scenario())
-
-
-@pytest.mark.parametrize('contract', ['operator_control_catalog', 'operator_control_catalog_v2'])
-def test_invalid_component_response_keeps_strict_validation(monkeypatch, contract):
-    client, runtime = make_client(monkeypatch)
-    runtime.connection.client.responses[contract]['unexpected_contract_field'] = True
-    response = client.get('/api/bioxp/operator-controls/catalog')
-    assert response.status_code == 502
 
 
 @pytest.mark.parametrize('target', [-2147483649, 2147483648, 'not-an-integer'])

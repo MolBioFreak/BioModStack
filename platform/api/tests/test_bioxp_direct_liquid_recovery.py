@@ -12,23 +12,6 @@ from services.bioxp.robot_client import BioXpRobotClient
 from services.bioxp.target_policy import ValidatedBioXpTarget
 from test_bioxp_direct_liquid_idempotency import LeasedConnection
 
-@pytest.mark.parametrize("value", [True, False])
-def test_original_semantic_truth_is_required_and_preserved(value):
-    from services.bioxp.operator_models import PipetteReceiptTruth
-    from pydantic import ValidationError
-    truth = dict(delivery_verified=False, controller_acknowledged=False,
-                 completion_verified=False, hardware_precondition_verified=False,
-                 hardware_postcondition_verified=False, physical_effect_verified=False,
-                 physical_effect_claim_suppressed=True,
-                 semantic_query_response_verified=value)
-    assert PipetteReceiptTruth.model_validate(truth).model_dump() == truth
-    for invalid in [None, 0, 1, "true", "false"]:
-        with pytest.raises(ValidationError):
-            PipetteReceiptTruth.model_validate({**truth, "semantic_query_response_verified": invalid})
-    del truth["semantic_query_response_verified"]
-    with pytest.raises(ValidationError):
-        PipetteReceiptTruth.model_validate(truth)
-
 
 KEY = "f33:retained-request"
 URL = "/api/bioxp/operator-controls/pipettes/requests"
@@ -79,15 +62,6 @@ def test_lookup_uses_pinned_get_without_body(kind):
     assert request.content == b""
 
 
-@pytest.mark.parametrize("change", [{"extra": True}, {"live_query_performed": True},
-                                    {"retry_forbidden": False}, {"idempotency_key": "wrong:key"}])
-def test_lookup_rejects_invalid_upstream(change):
-    client, _ = client_for({**envelope(), **change})
-    response = client.get(URL, params={"request_kind": "readback", "expected_connection_generation": 77},
-                          headers={"Idempotency-Key": KEY})
-    assert response.status_code == 502
-
-
 @pytest.mark.parametrize("query,headers", [
     ("request_kind=readback&expected_connection_generation=77&extra=x", [("Idempotency-Key", KEY)]),
     ("request_kind=readback&request_kind=readback&expected_connection_generation=77", [("Idempotency-Key", KEY)]),
@@ -116,97 +90,13 @@ def test_post_rejects_ambiguous_ingress(kind, query, duplicate):
     assert requests == []
 
 
-@pytest.mark.parametrize("kind", ["readback", "application_plan"])
-def test_post_projects_only_known_typed_metadata(kind):
-    result = record(kind)["result"]
-    metadata = {"callback_session_id": "pipette-callback:" + "c" * 32,
-                "command_id": "d" * 32, "pipette_operation_id": "e" * 32,
-                "replayed": True, "status": "completed"}
-    if kind == "readback":
-        metadata["semantic_query_response_verified"] = result["receipt_truth"]["semantic_query_response_verified"]
-    suffix = "readback" if kind == "readback" else "application/plan"
-    body = {"include_data": False} if kind == "readback" else {"operation": "detect_fluid", "fluid_class": "RC"}
-    url = "/api/bioxp/operator-controls/pipettes/" + suffix + "?expected_connection_generation=77"
-    client, _ = client_for({**result, **metadata})
-    response = client.post(url, json=body, headers={"Idempotency-Key": KEY})
-    assert response.status_code == 200, response.text
-    from services.bioxp.operator_models import PipetteReadbackResponse, PipetteApplicationPlanResponse
-    model = PipetteReadbackResponse if kind == "readback" else PipetteApplicationPlanResponse
-    assert response.json() == model.model_validate(result).model_dump()
-    for change in [{"invented": "private"}, {"replayed": "true"}, {"callback_session_id": 12}]:
-        client, _ = client_for({**result, **metadata, **change})
-        assert client.post(url, json=body, headers={"Idempotency-Key": KEY}).status_code == 502
-
-
-@pytest.mark.parametrize("semantic_value", [True, False])
-def test_post_source_metadata_is_closed_and_never_reflected(semantic_value):
-    from copy import deepcopy
-    source = {
-        "repository_root": "/private/robot",
-        "source_sha256": {name: "a" * 64 for name in ("pipette_models", "pipette_transport", "pipette_receipts", "can_driver", "novo_router", "novo_usb_can", "pipette_service", "pipette_spec")},
-        "registry_sha256": "a" * 64,
-        "evidence_authority": {"evidence_lock_path": "/private/lock", "evidence_lock_sha256": "a" * 64,
-            "evidence_lock_schema": "bioxp.oem_evidence_lock.v4", "acquisition_id": "acq", "evidence_lock_identity_verified": True},
-        "authority_verified": True,
-        "release_identity": {
-            "schema": "bioxp.runtime.release_identity.v1", "status": "unverified", "verified": False,
-            "reason": "canonical_release_packet_absent", "release_id": None,
-            "source": dict(commit=None, tree=None, mode=None, root=None, manifest_sha256=None, aggregate_sha256=None),
-            "image": dict(id=None, inspection_receipt_sha256=None),
-            "deployment": dict(receipt_id=None, installed_at=None, receipt_sha256=None),
-            "binding": dict(service_unit=None, unit_path=None, unit_sha256=None, launcher_path=None,
-                launcher_sha256=None, configuration_sha256=None, oem_lock_path=None, oem_lock_sha256=None,
-                declared_listener=None, observed_listener=None, database_root=None, systemd_invocation_id=None),
-            "runtime_release_receipt": None,
-            "observation": dict(pid=10, cgroup=None, cgroup_sha256=None, started_at=None, listener=None, database_root=None),
-        },
-    }
-    result = record("readback")["result"]
-    result["receipt_truth"]["semantic_query_response_verified"] = semantic_value
-    url = "/api/bioxp/operator-controls/pipettes/readback?expected_connection_generation=77"
-    semantic = {"semantic_query_response_verified": result["receipt_truth"]["semantic_query_response_verified"]}
-    client, _ = client_for({**result, **semantic, "source_identity": source})
-    response = client.post(url, json={"include_data": False}, headers={"Idempotency-Key": KEY})
-    assert response.status_code == 200, response.text
-    assert response.json() == {**result, "collection_source": None}
-    for invalid in [None, 0, 1, "true", "false", not semantic_value, "MISSING"]:
-        payload = {**result, **semantic, "source_identity": source}
-        if invalid == "MISSING":
-            del payload["semantic_query_response_verified"]
-        else:
-            payload["semantic_query_response_verified"] = invalid
-        client, _ = client_for(payload)
-        assert client.post(url, json={"include_data": False}, headers={"Idempotency-Key": KEY}).status_code == 502
-    for path in [(), ("release_identity",), ("release_identity", "observation")]:
-        malformed = deepcopy(source)
-        node = malformed
-        for part in path:
-            node = node[part]
-        node["invented"] = "private"
-        client, _ = client_for({**result, **semantic, "source_identity": malformed})
-        assert client.post(url, json={"include_data": False}, headers={"Idempotency-Key": KEY}).status_code == 502
-
-
 def test_readback_preserves_producer_hardware_truth_level():
     result = {**record("readback")["result"], "hardware_truth_level": "hardware_query"}
     client, _ = client_for({**result, "semantic_query_response_verified": result["receipt_truth"]["semantic_query_response_verified"]})
     response = client.post("/api/bioxp/operator-controls/pipettes/readback?expected_connection_generation=77",
         json={"include_data": False}, headers={"Idempotency-Key": KEY})
     assert response.status_code == 200, response.text
-    assert response.json() == {**result, "collection_source": None}
-
-
-@pytest.mark.parametrize("kind", ["readback", "application_plan"])
-def test_post_rejects_result_bound_to_different_request(kind):
-    result = record(kind)["result"]
-    if kind == "readback":
-        result = {**result, "semantic_query_response_verified": result["receipt_truth"]["semantic_query_response_verified"]}
-    suffix = "readback" if kind == "readback" else "application/plan"
-    body = {"include_data": True} if kind == "readback" else {"operation": "move_to_waste"}
-    client, _ = client_for(result)
-    response = client.post("/api/bioxp/operator-controls/pipettes/" + suffix + "?expected_connection_generation=77",
-        json=body, headers={"Idempotency-Key": KEY})
-    assert response.status_code == 502, response.text
+    assert response.json() == {**result, "semantic_query_response_verified": result["receipt_truth"]["semantic_query_response_verified"]}
 
 
 def record(kind):
@@ -233,21 +123,6 @@ def test_lookup_preserves_typed_original_record(kind):
     response = client.get(URL, params={"request_kind": kind, "expected_connection_generation": 77}, headers={"Idempotency-Key": KEY})
     assert response.status_code == 200, response.text
     assert response.json() == payload
-
-
-@pytest.mark.parametrize("change", [
-    {"command_status": "running", "pipette_status": "running", "result": None},
-    {"result": None},
-    {"pipette_status": "failed"},
-    {"pipette_operation_id": None, "pipette_status": None, "result": None},
-    {"requested_inputs": {}},
-])
-def test_resolved_requires_complete_terminal_bound_evidence(change):
-    payload = {**envelope(), "lookup_state": "resolved", "reason": None,
-               "record": {**record("readback"), **change}}
-    client, _ = client_for(payload)
-    response = client.get(URL, params={"request_kind": "readback", "expected_connection_generation": 77}, headers={"Idempotency-Key": KEY})
-    assert response.status_code == 502, response.text
 
 
 @pytest.mark.parametrize("state,reason,status,result", [

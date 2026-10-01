@@ -11,11 +11,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from fastapi.encoders import jsonable_encoder
-from starlette.responses import JSONResponse
 from routers.bioxp import operator_controls as routes
 from routers.bioxp.dependencies import get_bioxp_runtime
-from services.bioxp.operator_models import OperatorActionReceiptDetailV2
 
 @pytest.fixture
 def exports():
@@ -131,46 +128,3 @@ def test_actual_readback_route_conversion_measurement(exports, monkeypatch):
     assert metrics['after']['counts'].get('validate:PipetteReadbackResponse', 0) == 0
     metrics['scope'] = 'actual fresh FourPipetteTransport/service/SQLite readback output replayed through real BMS handler+FastAPI; host ASGI CPU microbenchmark, not hardware latency; before is reconstructed removed dump/validate step'
     (root / 'readback-serialization.json').write_text(json.dumps(metrics, indent=2))
-
-
-def test_populated_real_receipt_encode_microbenchmark(exports, monkeypatch):
-    root, data = exports
-    raw = data['receipts'][0]['detail']
-    model = OperatorActionReceiptDetailV2.model_validate(routes._normalize_interrupt_evidence(raw))
-    # Controlled old conversion shape versus typed return. Both pass FastAPI's
-    # actual response_model serializer; these are CPU microbenchmarks, not robot latency.
-    counts = {'dump': 0, 'validate': 0}
-    original_dump = OperatorActionReceiptDetailV2.model_dump
-    original_validate = OperatorActionReceiptDetailV2.model_validate.__func__
-    def dump(self, *a, **kw):
-        counts['dump'] += 1
-        return original_dump(self, *a, **kw)
-    def validate(cls, *a, **kw):
-        counts['validate'] += 1
-        return original_validate(cls, *a, **kw)
-    monkeypatch.setattr(OperatorActionReceiptDetailV2, 'model_dump', dump)
-    monkeypatch.setattr(OperatorActionReceiptDetailV2, 'model_validate', classmethod(validate))
-    app = FastAPI()
-    @app.get('/typed', response_model=OperatorActionReceiptDetailV2)
-    def typed():
-        return model
-    @app.get('/roundtrip', response_model=OperatorActionReceiptDetailV2)
-    def roundtrip():
-        return OperatorActionReceiptDetailV2.model_validate(model.model_dump(mode='json'))
-    results = {}
-    with TestClient(app) as client:
-        wire = {}
-        for variant in ('roundtrip', 'typed'):
-            counts.update(dump=0, validate=0)
-            start = time.perf_counter_ns()
-            for _ in range(50):
-                response = client.get('/' + variant)
-                assert response.status_code == 200
-            elapsed = time.perf_counter_ns() - start
-            wire[variant] = response.content
-            results[variant] = {**counts, 'iterations': 50, 'elapsed_ns': elapsed, 'bytes': len(response.content)}
-    assert wire['typed'] == wire['roundtrip']
-    assert results['roundtrip']['dump'] == results['roundtrip']['validate'] == 50
-    assert results['typed']['dump'] == results['typed']['validate'] == 0
-    results['scope'] = 'host CPU/ASGI microbenchmark on actual populated robot pipette-init receipt; NOT readback handler or hardware timing'
-    (root / 'serialization.json').write_text(json.dumps(results, indent=2))

@@ -241,25 +241,8 @@ def test_report_detail_export_metadata_and_download_use_robot_contract() -> None
     assert created.status_code == 200
     assert [call["route_name"] for call in connection.calls] == [
         "operator_report_command_detail",
-        "operator_report_commands",  # legacy detail requires indexed snapshot context
         "operator_report_export_detail",
         "operator_report_export_download",
         "operator_report_export_create",
     ]
     assert all(call["expected_generation"] == 9 for call in connection.calls)
-
-
-def test_export_metadata_rejects_missing_receipt_and_unknown_evidence_fields():
-    class InvalidConnection(FakeConnection):
-        async def request_active_query(self, *args, **kwargs):
-            payload = await super().request_active_query(*args, **kwargs)
-            if self.missing:
-                del payload["receipt"]
-            else:
-                payload["receipt"] = {**payload["receipt"], "invented_authority": True}
-            return payload
-    for missing in (True, False):
-        connection = InvalidConnection()
-        connection.missing = missing
-        response = TestClient(app_for(connection)).get("/operator-controls/reports/exports/export-1")
-        assert response.status_code == 502
