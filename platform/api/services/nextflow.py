@@ -4169,7 +4169,7 @@ def _native_plan_metadata_settings(model_id, params):
 
 
 def build_selected_execution_plan(*, model_id, mode, entrypoint, requested, effective,
-                                  native_parameters, source_identity, metadata_settings=None):
+                                  native_parameters, source_identity, metadata_settings=None, profiles=()):
     """One shared logical-plan constructor for native commands and typed requests.
 
     A dependency-only preview does not need a fabricated Job, GPU assignment or
@@ -4210,6 +4210,10 @@ def build_selected_execution_plan(*, model_id, mode, entrypoint, requested, effe
         metadata = replace(metadata,
             static_components=tuple(bind_preparation(row) for row in metadata.static_components),
             dynamic_templates=tuple(bind_preparation(row) for row in metadata.dynamic_templates))
+    from native_profile_resources import bind_selected_profile_resources
+    from paths import get_code_root
+    metadata = bind_selected_profile_resources(metadata, profiles=tuple(profiles),
+        config_path=get_code_root() / 'nextflow.config')
     return SelectedExecutionPlan(source_identity, Path(entrypoint).stem, model_id, mode,
         entrypoint, snapshot(requested), effective_json, snapshot(native_parameters), metadata)
 
@@ -5076,7 +5080,9 @@ def compile_nextflow_invocation(
         plan = build_selected_execution_plan(model_id=model_id, mode=mode,
             entrypoint=workflow_entrypoint, requested=invocation.requested_json,
             effective=invocation.effective_json, native_parameters=invocation.native_parameters_json,
-            source_identity=source, metadata_settings=metadata_settings)
+            source_identity=source, metadata_settings=metadata_settings,
+            profiles=tuple(command[command.index('-profile') + 1].split(','))
+                if '-profile' in command else ())
         return replace(invocation, source_identity=source, execution_plan=plan)
 
     from services.msa_policy import apply_msa_policy
