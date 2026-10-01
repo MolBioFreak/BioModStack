@@ -34,7 +34,25 @@ function mount(value: BC2Request = {}, slot = false) {
   act(() => root.render(<Form />));
 }
 afterEach(() => { if (root) act(() => root.unmount()); host?.remove(); });
-function input(label: string) { const element = host.querySelector<HTMLInputElement>(`[aria-label="${label}"]`); expect(element, label).not.toBeNull(); return element!; }
+/** Inspect lazily constructed groups through their real summary controls. */
+function inspectDisclosures() {
+  let closed = Array.from(host.querySelectorAll<HTMLDetailsElement>('details')).filter(details => !details.open);
+  while (closed.length) {
+    act(() => {
+      for (const details of closed) {
+        details.querySelector('summary')!.click();
+        // jsdom queues native toggle delivery; deliver it at this interaction boundary.
+        details.dispatchEvent(new Event('toggle'));
+      }
+    });
+    closed = Array.from(host.querySelectorAll<HTMLDetailsElement>('details')).filter(details => !details.open);
+  }
+}
+function input(label: string) {
+  let element = host.querySelector<HTMLInputElement>(`[aria-label="${label}"]`);
+  if (!element) { inspectDisclosures(); element = host.querySelector<HTMLInputElement>(`[aria-label="${label}"]`); }
+  expect(element, label).not.toBeNull(); return element!;
+}
 /** Open real disclosure summaries outermost first before interacting. */
 function reveal(element: Element) {
   const parents: HTMLDetailsElement[] = []; let node = element.parentElement;
@@ -57,7 +75,7 @@ const maskParams = () => (latest.losses as Record<string, { params: Record<strin
 
 describe('BC2 designed controls and saved campaign fidelity', () => {
   it('accounts for every prior scientific field exactly once, with standalone fallback controls', () => {
-    mount();
+    mount(); inspectDisclosures();
     const expected = Object.keys(raw.fields).filter(key => !BC2_SYSTEM_FIELDS.has(key)).sort();
     const mounted = Array.from(host.querySelectorAll<HTMLElement>('[data-bc2-field]'), node => node.dataset.bc2Field!).sort();
     expect(mounted).toEqual(expected);
@@ -75,7 +93,7 @@ describe('BC2 designed controls and saved campaign fidelity', () => {
 
   it('keeps every discovered loss/filter parameter reachable in its per-metric disclosure', () => {
     const saved = Object.fromEntries(Object.entries(inventory.registered_metrics).map(([kind, entries]) => [kind, Object.fromEntries(Object.keys(entries).map(name => [name, kind === 'filters' ? { threshold: 0, params: {} } : { params: {} }]))]));
-    mount(saved);
+    mount(saved); inspectDisclosures();
     let params = 0; let metrics = 0;
     for (const [kind, entries] of Object.entries(inventory.registered_metrics)) for (const [metric, info] of Object.entries(entries)) {
       metrics++;
@@ -92,7 +110,7 @@ describe('BC2 designed controls and saved campaign fidelity', () => {
   });
 
   it('delegates only target list and scaffold, keeping the singular native preset and all other controls', () => {
-    mount({ target: 'hPDL1', targets: [], binder_scaffold: 'saved.pdb', mutate_positions: 'A26-32' }, true);
+    mount({ target: 'hPDL1', targets: [], binder_scaffold: 'saved.pdb', mutate_positions: 'A26-32' }, true); inspectDisclosures();
     expect(host.querySelector('[data-testid="rich-structures"]')).not.toBeNull();
     const expected = Object.keys(raw.fields).filter(key => !BC2_SYSTEM_FIELDS.has(key) && !['targets', 'binder_scaffold'].includes(key)).sort();
     expect(Array.from(host.querySelectorAll<HTMLElement>('[data-bc2-field]'), node => node.dataset.bc2Field!).sort()).toEqual(expected);
