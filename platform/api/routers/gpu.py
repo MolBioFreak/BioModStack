@@ -437,6 +437,11 @@ def _save_power_state() -> None:
 
 
 def _read_live_power_limits() -> Dict[int, int]:
+    # Match the native telemetry owner: only complete absence skips driver I/O.
+    # Unknown/container inventories still probe; this is not mutation admission.
+    from services.nvidia_inventory import nvidia_gpu_present
+    if nvidia_gpu_present() is False:
+        return {}
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=index,power.limit", "--format=csv,noheader,nounits"],
@@ -1343,6 +1348,11 @@ def _save_fan_state() -> None:
 
 
 def _query_smi_gpu_map() -> Dict[int, Dict[str, Any]]:
+    # Match the native telemetry owner: only complete absence skips driver I/O.
+    # Unknown/container inventories still probe; this is not mutation admission.
+    from services.nvidia_inventory import nvidia_gpu_present
+    if nvidia_gpu_present() is False:
+        return {}
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=index,uuid,name,pci.bus_id", "--format=csv,noheader"],
