@@ -42,3 +42,27 @@ test('conditional list transport uses only each query entry and never conceals e
         assert.equal(calls.at(-1)!.etag, undefined, 'new query entry has no singleton validator');
     } finally { api.defaults.adapter = original; }
 });
+
+
+test('multi-model list query uses repeated FastAPI keys and literal search without changing old callers', async () => {
+    const original = api.defaults.adapter;
+    const urls: string[] = [];
+    api.defaults.adapter = async config => {
+        urls.push(api.getUri(config));
+        return { status: 200, statusText: '', config, headers: { etag: '"models"' }, data: { jobs: [], total: 0 } };
+    };
+    try {
+        await fetchJobs({ model_ids: ['nanopore', 'wf_clone_validation'], q: '%_\\Case', q_ignore_case_id: true, include_children: true, offset: 600 });
+        const query = new URL(urls[0], 'https://fixture.invalid').searchParams;
+        assert.deepEqual(query.getAll('model_ids'), ['nanopore', 'wf_clone_validation']);
+        assert.equal(query.has('model_ids[]'), false);
+        assert.equal(query.get('q'), '%_\\Case');
+        assert.equal(query.get('offset'), '600');
+        assert.equal(query.get('summary'), 'true');
+        await fetchJobs({ model_id: 'nanopore', summary: false, limit: 500 });
+        const legacy = new URL(urls[1], 'https://fixture.invalid').searchParams;
+        assert.equal(legacy.get('model_id'), 'nanopore');
+        assert.equal(legacy.get('summary'), 'false');
+        assert.equal(legacy.has('model_ids'), false);
+    } finally { api.defaults.adapter = original; }
+});

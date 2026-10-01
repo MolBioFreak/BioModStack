@@ -174,3 +174,81 @@ async def test_jobs_list_tolerates_rfc3339_z_timestamp_rows(tmp_path: Path) -> N
     assert payload["jobs"][0]["created_at"].startswith("2026-07-05T03:55:04.487348")
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_jobs_model_union_bounded_pages_discovery_and_validators(tmp_path: Path) -> None:
+    from datetime import timedelta
+    models = ['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation']
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'union.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        session.add_all([Job(id=f'Case-{i:04d}', name=f'run {i}', model_id=models[i % 5],
+            mode='ont_fastq_qc', status='running' if i % 2 else 'queued',
+            parent_job_id='Case-0000' if i % 3 == 1 else None,
+            params={'explicit_false': False, 'zero': 0, 'empty': '', 'null': None},
+            created_at=datetime(2026, 1, 1) + timedelta(seconds=i)) for i in range(625)])
+        session.add(Job(id='excluded', name='unrelated', model_id='ont_basecall_dna', mode='basecall_dna', status='queued', params={}))
+        session.add(Job(id='Literal_%', name='100%_\\literal Épreuve', model_id='nanopore', mode='ont_fastq_qc', status='failed', params={}, created_at=datetime(2025, 1, 1)))
+        await session.commit()
+    async def override():
+        async with factory() as session:
+            yield session
+    app = FastAPI()
+    app.dependency_overrides[jobs_router.get_session] = override
+    app.include_router(jobs_router.router, prefix='/api/jobs')
+    statements = []
+    @event.listens_for(engine.sync_engine, 'before_cursor_execute')
+    def record_select(_conn, _cursor, statement, _params, _context, _many):
+        if statement.lstrip().upper().startswith('SELECT'):
+            statements.append(statement)
+    with TestClient(app) as client:
+        params = [('model_ids', m) for m in models] + [('summary', 'true'), ('include_children', 'true'), ('limit', '100')]
+        collected = []
+        for offset in range(0, 626, 100):
+            response = client.get('/api/jobs', params=params + [('offset', str(offset))])
+            assert response.status_code == 200
+            assert response.json()['total'] == 626
+            assert len(response.json()['jobs']) <= 100
+            collected.extend(j['id'] for j in response.json()['jobs'])
+        assert collected == [f'Case-{i:04d}' for i in reversed(range(625))] + ['Literal_%']
+        assert len(statements) == 35  # five actual SELECTs per page, never five model drains
+        print(f'union fixture: 626 rows, seven bounded pages, {len(statements)} SELECTs; last page JSON {len(response.content)} bytes')
+        first = client.get('/api/jobs', params=params)
+        etag = first.headers['etag']
+        assert client.get('/api/jobs', params=params, headers={'If-None-Match': etag}).status_code == 304
+        assert client.get('/api/jobs', params=params + [('offset', '100')], headers={'If-None-Match': etag}).status_code == 200
+        # Existing single-model and case-sensitive ID search stay unchanged.
+        assert client.get('/api/jobs', params={'model_id': 'ont_fastq_qc', 'include_children': True}).json()['total'] == 125
+        assert client.get('/api/jobs', params=params + [('q', 'case-0001')]).json()['total'] == 0
+        assert client.get('/api/jobs', params=params + [('q', 'case-0001'), ('q_ignore_case_id', 'true')]).json()['total'] == 1
+        assert client.get('/api/jobs', params=params + [('q', 'éPREUVE'), ('q_ignore_case_id', 'true')]).json()['total'] == 1
+        for literal in ['%', '_', '\\']:
+            assert client.get('/api/jobs', params=params + [('q', literal)]).json()['total'] == 1
+        running = client.get('/api/jobs', params=params + [('status', 'running')]).json()
+        assert running['total'] == 312
+        assert all(j['status'] == 'running' for j in running['jobs'])
+        roots = client.get('/api/jobs', params=[(k, v) for k, v in params if k != 'include_children']).json()
+        assert roots['total'] == 418
+        detail = client.get('/api/jobs/Case-0001')
+        assert detail.status_code == 200
+        assert detail.json()['params'] == {'explicit_false': False, 'zero': 0, 'empty': '', 'null': None}
+        async with factory() as session:
+            child = Job(id='late-child', name='externally discovered child', model_id='wf_clone_validation', mode='ont_fastq_qc', status='queued', params={}, parent_job_id='Case-0000', created_at=datetime(2027, 1, 1))
+            session.add(child)
+            await session.commit()
+        late = client.get('/api/jobs', params=params, headers={'If-None-Match': etag})
+        assert late.status_code == 200
+        assert late.json()['total'] == 627
+        assert late.json()['jobs'][0]['id'] == 'late-child'
+        etag = late.headers['etag']
+        async with factory() as session:
+            child = await session.get(Job, 'late-child')
+            child.error_message = 'visible operational error'
+            await session.commit()
+        changed = client.get('/api/jobs', params=params, headers={'If-None-Match': etag})
+        assert changed.status_code == 200
+        assert changed.json()['jobs'][0]['error_message'] == 'visible operational error'
+    await engine.dispose()

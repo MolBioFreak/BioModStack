@@ -13,7 +13,7 @@ const consumers: Record<string, RegExp> = {
   'DesignBrowser.tsx': /fetchJobs\(\{ limit: 500, summary: true \}, undefined, signal\)/u,
   'QuickViewer.tsx': /fetchJobs\(\{ status: 'completed', limit: 100, summary: true \}, queryClient\.getQueryData/u,
   'ResultsViewer.tsx': /fetchJobs\(\{\s*include_children: true,\s*limit: 100,\s*summary: true,\s*q: debouncedJobSelectorSearch \|\| undefined,/u,
-  'NGSToolkit.tsx': /fetchJobs\(\{[\s\S]*?include_children: true,[\s\S]*?model_id,[\s\S]*?limit: 500,[\s\S]*?offset,[\s\S]*?summary: true,[\s\S]*?\}\)/u,
+  'NGSToolkit.tsx': /fetchJobs\(\{[\s\S]*?model_ids:[\s\S]*?include_children: true,[\s\S]*?summary: true,[\s\S]*?limit: pageSize,[\s\S]*?offset: page \* pageSize,[\s\S]*?\}, queryClient\.getQueryData\(queryKey\), signal\)/u,
 };
 
 test('every fetchJobs consumer requests a bounded SQL summary', () => {

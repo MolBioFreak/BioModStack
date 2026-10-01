@@ -5371,6 +5371,8 @@ async def list_jobs(
     mode: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    model_ids: Optional[list[str]] = Query(None),
+    q_ignore_case_id: bool = False,  # NGS historically searches IDs case-insensitively
     exclude_ngs: bool = False,  # Dashboard Show NGS Jobs filter, before paging/count
     include_children: bool = False,  # New param: show child jobs if True
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
@@ -5462,12 +5464,23 @@ async def list_jobs(
         filters.append(status_filter)
     if model_id:
         filters.append(Job.model_id == model_id)
+    if isinstance(model_ids, list) and model_ids:
+        filters.append(Job.model_id.in_(model_ids))
     if mode:
         filters.append(Job.mode == mode)
     if q:
         # Dashboard search was a literal substring, not a SQL wildcard pattern.
         escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        filters.append(or_(Job.name.ilike(f"%{escaped}%", escape="\\"), func.instr(Job.id, q) > 0))
+        if q_ignore_case_id:
+            # SQLite lower/NOCASE only handles ASCII. Preserve the NGS browser's
+            # Unicode lowercase literal search without materializing history.
+            connection = await session.connection()
+            await connection.run_sync(lambda conn: conn.connection.dbapi_connection.create_function(
+                "ngs_lower", 1, lambda value: str(value or "").lower(), deterministic=True))
+            filters.append(or_(func.instr(func.ngs_lower(Job.name), q.lower()) > 0,
+                               func.instr(func.ngs_lower(Job.id), q.lower()) > 0))
+        else:
+            filters.append(or_(Job.name.ilike(f"%{escaped}%", escape="\\"), func.instr(Job.id, q) > 0))
     if exclude_ngs:
         # Match ngsResultRouting.isNgsJob, including legacy missing-model rows.
         ngs_models = ("nanopore", "ont_basecall_dna", "ont_basecall_rna", "ont_plasmid_qc",
