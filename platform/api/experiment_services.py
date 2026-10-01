@@ -3326,6 +3326,12 @@ async def reconcile_run_group(
                 if status in {"cancelled", "canceled"}
                 else "failed"
             )
+            preparation = await session.get(ExperimentWorkflowPreparation, attempt.preparation_id)
+            normalized = json.loads(preparation.normalized_request_json) if preparation else {}
+            launch_authority = normalized.get("launch_authority", {})
+            native_protein = launch_authority.get("schema") == "bms.protein-setup-launch-authority.v1"
+            resource_usage = None
+            resource_evidence = None
             try:
                 from services.ngs_molbio_n5 import (
                     ResourceUsageEvidenceUnavailable,
@@ -3346,10 +3352,18 @@ async def reconcile_run_group(
                     "message": str(exc)[:512],
                 }
                 pending_json = canonical_json(pending_receipt)
-                if attempt.runtime_identity_json != pending_json:
-                    attempt.runtime_identity_json = pending_json
-                    await session.flush()
-                continue
+                if not native_protein:
+                    if attempt.runtime_identity_json != pending_json:
+                        attempt.runtime_identity_json = pending_json
+                        await session.flush()
+                    continue
+                # Native scheduler terminal state is authoritative. Missing
+                # accounting is reported as evidence, never as a running state
+                # or a retry/refusal gate inherited from the NGS workflow.
+                resource_evidence = pending_receipt
+                from services.ngs_molbio_n5 import release_attempt_admissions
+                await release_attempt_admissions(session, [attempt.resource_id],
+                    reason=f"native-core-terminal:{status}")
             receipt = {
                 "schema": "bms.experiment.terminal-receipt.v1",
                 "job_id": attempt.scheduler_job_id,
@@ -3358,9 +3372,11 @@ async def reconcile_run_group(
                 "completed_at": str(job.completed_at) if job.completed_at else None,
                 "error_message": job.error_message,
                 "provenance": _public_runtime_metadata(job.provenance or {}),
-                "resource_usage_receipt_id": resource_usage.receipt_id,
-                "resource_usage_receipt_sha256": resource_usage.receipt_sha256,
+                "resource_usage_receipt_id": resource_usage.receipt_id if resource_usage else None,
+                "resource_usage_receipt_sha256": resource_usage.receipt_sha256 if resource_usage else None,
             }
+            if resource_evidence is not None:
+                receipt["resource_usage_evidence"] = resource_evidence
             if projected_state == "completed":
                 try:
                     from services.global_experiments.receipts import verify_and_link_terminal_outputs

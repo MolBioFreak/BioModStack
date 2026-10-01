@@ -22,18 +22,27 @@ def policy_cache():
 
 
 @pytest_asyncio.fixture
-async def native_http(setup_store, tmp_path, monkeypatch):
+async def native_core_store(tmp_path):
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from database import Base
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    try:
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def native_http(setup_store, native_core_store, tmp_path, monkeypatch):
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
     from molbio_ngs_models import MolBioNGSBase
     ngs_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'ngs.db'}")
     async with ngs_engine.begin() as connection:
         await connection.run_sync(MolBioNGSBase.metadata.create_all)
     ngs_store = async_sessionmaker(ngs_engine, expire_on_commit=False)
-    from database import Base
-    core_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core.db'}")
-    async with core_engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    core_store = async_sessionmaker(core_engine, expire_on_commit=False)
+    core_store = native_core_store
     app = FastAPI()
     from routers import projects
     app.include_router(projects.router)
@@ -75,7 +84,6 @@ async def native_http(setup_store, tmp_path, monkeypatch):
             yield client
     finally:
         await ngs_engine.dispose()
-        await core_engine.dispose()
 
 
 async def prepared_setup(client, model):
@@ -322,3 +330,55 @@ async def test_connector_domains_keep_existing_ngs_authority(setup_store, kind, 
                 global_experiment_id='experiment', domain_id='domain', plan_authority=authority)
         assert calls == [{'project_id': 'project', 'global_experiment_id': 'experiment',
                           'domain_id': 'domain', 'expected_domain_revision_id': 'domain-revision'}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', ['failed', 'cancelled'])
+async def test_native_terminal_state_is_not_gated_on_missing_accounting(
+        native_http, native_core_store, setup_store, status):
+    # Inert canonical Job fixtures, real durable reservation/binding/projection.
+    from datetime import datetime, timezone
+    from database import Job
+    from sqlalchemy import select
+    from experiment_models import ExperimentRunAttempt, ExperimentResourceAdmission
+    from experiment_services import reconcile_run_group
+    from services.global_experiments.launch_contexts import claim_launch_context, consume_launch_context
+    project_id, setup, prepared, domain_path = await prepared_setup(native_http, 'bindcraft2')
+    response = await native_http.post(domain_path + '/run-groups', json={
+        'preparation_launches': [{'preparation_id': prepared['preparation_id'],
+                                 'launch_context_id': prepared['launch_context_id']}]},
+        headers={'Idempotency-Key': 'terminal-run'})
+    assert response.status_code == 201, response.text
+    group_doc = response.json()
+    attempt_doc = group_doc['runs'][0]['attempts'][0]
+    async with setup_store() as session, native_core_store() as core:
+        preparation = await session.get(ExperimentWorkflowPreparation, prepared['preparation_id'])
+        scheduler = json.loads(preparation.scheduler_payload_json)
+        job = Job(id=attempt_doc['canonical_job_id'], name=scheduler['name'],
+            model_id=scheduler['model_id'], mode=scheduler['mode'], params=scheduler['params'],
+            status=status, provenance={}, completed_at=datetime.now(timezone.utc),
+            error_message='Inert canonical terminal fixture')
+        core.add(job)
+        await core.flush()
+        context, token = await claim_launch_context(session, prepared['launch_context_id'])
+        context, binding = await consume_launch_context(session,
+            launch_context_id=context.launch_context_id, claim_token=token,
+            canonical_job_id=job.id, canonical_batch_id=None)
+        await pm._project_bound_job(session, core, context, job, binding)
+        group = await reconcile_run_group(session, core, project_id, group_doc['run_group_id'])
+        attempt = await session.get(ExperimentRunAttempt, attempt_doc['attempt_id'])
+        assert group.state == attempt.state == status
+        receipt = json.loads(attempt.terminal_receipt_json)
+        assert receipt['terminal_state'] == receipt['status'] == status
+        assert receipt['resource_usage_receipt_id'] is None
+        assert receipt['resource_usage_receipt_sha256'] is None
+        assert receipt['resource_usage_evidence']['core_status'] == status
+        assert receipt['resource_usage_evidence']['state'] == 'producer_resource_evidence_pending'
+        admission = await session.scalar(select(ExperimentResourceAdmission).where(
+            ExperimentResourceAdmission.run_attempt_id == attempt.resource_id))
+        assert admission.state == 'released'
+        await session.commit()
+        await core.commit()
+        generation = group.generation
+        again = await reconcile_run_group(session, core, project_id, group.resource_id)
+        assert again.state == status and again.generation == generation
