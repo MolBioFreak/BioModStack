@@ -88,6 +88,7 @@ async def get_design_analysis(
     session: AsyncSession = Depends(get_session),
     chain_id: Optional[str] = None,
     ignore_cbeta: Optional[bool] = None,
+    include_result: bool = True,
 ):
     result = await session.execute(select(Design).where(Design.id == design_id))
     design = result.scalar_one_or_none()
@@ -114,7 +115,7 @@ async def get_design_analysis(
             subject_id=design.id,
             params=normalized_params,
             cache_hit=run is not None and run.status == "completed",
-            include_result=True,
+            include_result=include_result,
         )
     )
 

@@ -320,6 +320,45 @@ const formatMetricRange = (
     return `${averageLabel} (${minLabel}-${maxLabel}${suffix})`;
 };
 
+// Overview cards consume persisted counts, not residue/document payloads. Historical
+// summaries lacking those fields retain the full reader rather than inventing values.
+const useOverviewAnalysis = <T,>(
+    designId: string | null,
+    analysisType: string,
+    enabled: boolean,
+    overview: boolean,
+    summaryFields: string[],
+    params?: Record<string, unknown>,
+    summaryKeys: string[] = [],
+) => {
+    const summary = useQuery({
+        queryKey: ['design-analysis', analysisType, designId, 'summary'],
+        queryFn: () => fetchDesignAnalysis<T>(designId!, analysisType, { ...params, include_result: false }).then(response => response.data),
+        enabled: enabled && overview,
+        staleTime: analysisType === 'structure_summary' ? 0 : 60000,
+        refetchInterval: (query) => {
+            const status = query.state.data?.status;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
+        },
+    });
+    const needsHistoricalDetail = summary.data?.status === 'completed'
+        && (summaryFields.some(field => typeof summary.data?.summary?.[field] !== 'number')
+            || summaryKeys.some(field => !Object.prototype.hasOwnProperty.call(summary.data?.summary, field)));
+    const full = useQuery({
+        queryKey: ['design-analysis', analysisType, designId],
+        queryFn: () => fetchDesignAnalysis<T>(designId!, analysisType, params).then(response => response.data),
+        enabled: enabled && (!overview || needsHistoricalDetail),
+        staleTime: analysisType === 'structure_summary' ? 0 : 60000,
+        refetchInterval: (query) => {
+            const status = query.state.data?.status;
+            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
+        },
+    });
+    return overview
+        ? needsHistoricalDetail ? { ...full, data: full.data ?? summary.data } : summary
+        : full;
+};
+
 const formatPersistedAnalysisStatus = (status: PersistedAnalysisRun['status'] | 'missing'): string => {
     if (status === 'completed') return 'Cached';
     if (status === 'running') return 'Running';
@@ -2880,19 +2919,11 @@ function ResultsViewerContent() {
         }
     }, [backboneFilterApplies, selectedBackboneId, reviewBackboneRows]);
 
-    const { data: structureAnalysisRun, error: structureAnalysisQueryError } = useQuery({
-        queryKey: ['design-analysis', 'structure_summary', selectedDesignId],
-        queryFn: () => (
-            selectedDesignId
-                ? fetchDesignAnalysis<StructureAnalysis>(selectedDesignId, 'structure_summary').then((response) => response.data)
-                : null
-        ),
-        enabled: !!selectedDesignId && selectedDesignCanRunStructureSummary && (activeTab === 'structure' || activeTab === 'overview'),
-        refetchInterval: (query) => {
-            const status = (query.state.data as PersistedAnalysisRun<StructureAnalysis> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
-        },
-    });
+    const { data: structureAnalysisRun, error: structureAnalysisQueryError } = useOverviewAnalysis<StructureAnalysis>(
+        selectedDesignId, 'structure_summary',
+        !!selectedDesignId && selectedDesignCanRunStructureSummary && (activeTab === 'structure' || activeTab === 'overview'),
+        activeTab === 'overview', ['residue_count', 'chain_count'],
+    );
     const structureAnalysis = structureAnalysisRun?.status === 'completed'
         ? (structureAnalysisRun.result as StructureAnalysis | null)
         : null;
@@ -2964,20 +2995,11 @@ function ResultsViewerContent() {
         runAntibodyAnalysis.mutate();
     }, [activeTab, selectedDesignId, selectedDesignCanRunAntibodyAnalysis, antibodyAnalysisBusy, antibodyAnalysisStatus, runAntibodyAnalysis]);
 
-    const { data: chainMetricsAnalysisRun, error: chainMetricsAnalysisQueryError } = useQuery({
-        queryKey: ['design-analysis', 'chain_metrics', selectedDesignId],
-        queryFn: () => (
-            selectedDesignId
-                ? fetchDesignAnalysis<Record<string, ChainMetric>>(selectedDesignId, 'chain_metrics').then((response) => response.data)
-                : null
-        ),
-        enabled: structureViewerAnalysisEnabled && selectedDesignCanRunChainMetrics,
-        staleTime: 60000,
-        refetchInterval: (query) => {
-            const status = (query.state.data as PersistedAnalysisRun<Record<string, ChainMetric>> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
-        },
-    });
+    const { data: chainMetricsAnalysisRun, error: chainMetricsAnalysisQueryError } = useOverviewAnalysis<Record<string, ChainMetric>>(
+        selectedDesignId, 'chain_metrics',
+        structureViewerAnalysisEnabled && selectedDesignCanRunChainMetrics,
+        activeTab === 'overview', ['chain_count'],
+    );
     const chainMetricsAnalysis = chainMetricsAnalysisRun?.status === 'completed'
         ? (chainMetricsAnalysisRun.result as Record<string, ChainMetric> | null)
         : null;
@@ -3032,20 +3054,11 @@ function ResultsViewerContent() {
         || fampnnPsceProfileAnalysisRun?.status === 'queued'
         || fampnnPsceProfileAnalysisRun?.status === 'running';
 
-    const { data: ipsaeAnalysisRun, error: ipsaeAnalysisQueryError } = useQuery({
-        queryKey: ['design-analysis', 'ipsae_interface', selectedDesignId],
-        queryFn: () => (
-            selectedDesignId
-                ? fetchDesignAnalysis<IpsaeInterfaceAnalysis>(selectedDesignId, 'ipsae_interface').then((response) => response.data)
-                : null
-        ),
-        enabled: structureViewerAnalysisEnabled && selectedDesignCanRunIpsae,
-        staleTime: 60000,
-        refetchInterval: (query) => {
-            const status = (query.state.data as PersistedAnalysisRun<IpsaeInterfaceAnalysis> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
-        },
-    });
+    const { data: ipsaeAnalysisRun, error: ipsaeAnalysisQueryError } = useOverviewAnalysis<IpsaeInterfaceAnalysis>(
+        selectedDesignId, 'ipsae_interface',
+        structureViewerAnalysisEnabled && selectedDesignCanRunIpsae,
+        activeTab === 'overview', ['ipsae'], undefined, ['ipsae_chain_pair'],
+    );
     const ipsaeAnalysis = ipsaeAnalysisRun?.status === 'completed'
         ? (ipsaeAnalysisRun.result as IpsaeInterfaceAnalysis | null)
         : null;
@@ -3109,20 +3122,11 @@ function ResultsViewerContent() {
         || paeMatrixAnalysisRun?.status === 'queued'
         || paeMatrixAnalysisRun?.status === 'running';
 
-    const { data: contactMapAnalysisRun, error: contactMapAnalysisQueryError } = useQuery({
-        queryKey: ['design-analysis', 'contact_map', selectedDesignId],
-        queryFn: () => (
-            selectedDesignId
-                ? fetchDesignAnalysis<ContactMapData>(selectedDesignId, 'contact_map', { max_size: 300 }).then((response) => response.data)
-                : null
-        ),
-        enabled: structureViewerAnalysisEnabled && selectedDesignCanRunContactMap,
-        staleTime: 60000,
-        refetchInterval: (query) => {
-            const status = (query.state.data as PersistedAnalysisRun<ContactMapData> | null | undefined)?.status;
-            return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
-        },
-    });
+    const { data: contactMapAnalysisRun, error: contactMapAnalysisQueryError } = useOverviewAnalysis<ContactMapData>(
+        selectedDesignId, 'contact_map',
+        structureViewerAnalysisEnabled && selectedDesignCanRunContactMap,
+        activeTab === 'overview', ['size'], { max_size: 300 },
+    );
     const contactMapAnalysis = contactMapAnalysisRun?.status === 'completed'
         ? (contactMapAnalysisRun.result as ContactMapData | null)
         : null;
@@ -4177,7 +4181,9 @@ function ResultsViewerContent() {
             unavailableReason: !selectedDesignCanRunStructureSummary
                 ? 'Required structure artifact is unavailable.'
                 : formatApiErrorMessage(structureAnalysisQueryError, ''),
-            summary: structureAnalysis
+            summary: structureAnalysisRun?.status === 'completed' && typeof structureAnalysisRun.summary?.residue_count === 'number' && typeof structureAnalysisRun.summary?.chain_count === 'number'
+                ? `${structureAnalysisRun.summary.residue_count} residues • ${structureAnalysisRun.summary.chain_count} chains`
+                : structureAnalysis
                 ? `${structureAnalysis.residue_count} residues • ${structureAnalysis.chain_ids?.length ?? 0} chains`
                 : null,
             run: () => runStructureAnalysis.mutateAsync(),
@@ -4209,7 +4215,9 @@ function ResultsViewerContent() {
             unavailableReason: !selectedDesignCanRunChainMetrics
                 ? 'Required structure artifact is unavailable.'
                 : formatApiErrorMessage(chainMetricsAnalysisQueryError, ''),
-            summary: chainMetricsAnalysis
+            summary: chainMetricsAnalysisRun?.status === 'completed' && typeof chainMetricsAnalysisRun.summary?.chain_count === 'number'
+                ? `${chainMetricsAnalysisRun.summary.chain_count} chains cached`
+                : chainMetricsAnalysis
                 ? `${Object.keys(chainMetricsAnalysis).length} chains cached`
                 : null,
             run: () => runChainMetricsAnalysis.mutateAsync(),
@@ -4225,7 +4233,9 @@ function ResultsViewerContent() {
             unavailableReason: !selectedDesignCanRunIpsae
                 ? 'Required structure and aligned-error artifacts are unavailable.'
                 : formatApiErrorMessage(ipsaeAnalysisQueryError, ''),
-            summary: ipsaeAnalysis
+            summary: ipsaeAnalysisRun?.status === 'completed' && typeof ipsaeAnalysisRun.summary?.ipsae === 'number' && Object.prototype.hasOwnProperty.call(ipsaeAnalysisRun.summary, 'ipsae_chain_pair')
+                ? `${formatMetric(ipsaeAnalysisRun.summary.ipsae, 2)} ${ipsaeAnalysisRun.summary.ipsae_chain_pair ? `• ${ipsaeAnalysisRun.summary.ipsae_chain_pair}` : ''}`
+                : ipsaeAnalysis
                 ? `${formatMetric(ipsaeAnalysis.ipsae, 2)} ${ipsaeAnalysis.ipsae_chain_pair ? `• ${ipsaeAnalysis.ipsae_chain_pair}` : ''}`
                 : null,
             run: () => runIpsaeAnalysis.mutateAsync(),
@@ -4255,12 +4265,14 @@ function ResultsViewerContent() {
             unavailableReason: !selectedDesignCanRunContactMap
                 ? 'Required structure artifact is unavailable.'
                 : formatApiErrorMessage(contactMapAnalysisQueryError, ''),
-            summary: contactMapAnalysis
+            summary: contactMapAnalysisRun?.status === 'completed' && typeof contactMapAnalysisRun.summary?.size === 'number'
+                ? `${contactMapAnalysisRun.summary.size} × ${contactMapAnalysisRun.summary.size} matrix`
+                : contactMapAnalysis
                 ? `${contactMapAnalysis.size} × ${contactMapAnalysis.size} matrix`
                 : null,
             run: () => runContactMapAnalysis.mutateAsync(),
         },
-    ].filter((item) => item.supported)), [structureAnalysisRun?.status, structureAnalysisRun?.error_message, structureAnalysisQueryError, structureAnalysisBusy, structureAnalysis, antibodyAnalysisRun?.status, antibodyAnalysisRun?.error_message, antibodyAnalysisQueryError, antibodyAnalysisBusy, antibodyData, chainMetricsAnalysisRun?.status, chainMetricsAnalysisRun?.error_message, chainMetricsAnalysisQueryError, chainMetricsAnalysisBusy, chainMetricsAnalysis, ipsaeAnalysisRun?.status, ipsaeAnalysisRun?.error_message, ipsaeAnalysisQueryError, ipsaeAnalysisBusy, ipsaeAnalysis, paeMatrixAnalysisRun?.status, paeMatrixAnalysisRun?.error_message, paeMatrixAnalysisQueryError, paeMatrixAnalysisBusy, paeMatrixAnalysis, paeMatrixSummary, contactMapAnalysisRun?.status, contactMapAnalysisRun?.error_message, contactMapAnalysisQueryError, contactMapAnalysisBusy, contactMapAnalysis, selectedDesignCanRunAntibodyAnalysis, selectedDesignCanRunChainMetrics, selectedDesignCanRunContactMap, selectedDesignCanRunIpsae, selectedDesignCanRunPaeMatrix, selectedDesignCanRunStructureSummary, selectedDesignSupportsAntibodyAnalyzer, selectedDesignSupportsChainMetrics, selectedDesignSupportsContactMap, selectedDesignSupportsIpsae, selectedDesignSupportsPaeMatrix, selectedDesignSupportsStructureSummary, runStructureAnalysis, runAntibodyAnalysis, runChainMetricsAnalysis, runIpsaeAnalysis, runPaeMatrixAnalysis, runContactMapAnalysis]);
+    ].filter((item) => item.supported)), [structureAnalysisRun?.summary, structureAnalysisRun?.status, structureAnalysisRun?.error_message, structureAnalysisQueryError, structureAnalysisBusy, structureAnalysis, antibodyAnalysisRun?.status, antibodyAnalysisRun?.error_message, antibodyAnalysisQueryError, antibodyAnalysisBusy, antibodyData, chainMetricsAnalysisRun?.summary, chainMetricsAnalysisRun?.status, chainMetricsAnalysisRun?.error_message, chainMetricsAnalysisQueryError, chainMetricsAnalysisBusy, chainMetricsAnalysis, ipsaeAnalysisRun?.summary, ipsaeAnalysisRun?.status, ipsaeAnalysisRun?.error_message, ipsaeAnalysisQueryError, ipsaeAnalysisBusy, ipsaeAnalysis, paeMatrixAnalysisRun?.status, paeMatrixAnalysisRun?.error_message, paeMatrixAnalysisQueryError, paeMatrixAnalysisBusy, paeMatrixAnalysis, paeMatrixSummary, contactMapAnalysisRun?.summary, contactMapAnalysisRun?.status, contactMapAnalysisRun?.error_message, contactMapAnalysisQueryError, contactMapAnalysisBusy, contactMapAnalysis, selectedDesignCanRunAntibodyAnalysis, selectedDesignCanRunChainMetrics, selectedDesignCanRunContactMap, selectedDesignCanRunIpsae, selectedDesignCanRunPaeMatrix, selectedDesignCanRunStructureSummary, selectedDesignSupportsAntibodyAnalyzer, selectedDesignSupportsChainMetrics, selectedDesignSupportsContactMap, selectedDesignSupportsIpsae, selectedDesignSupportsPaeMatrix, selectedDesignSupportsStructureSummary, runStructureAnalysis, runAntibodyAnalysis, runChainMetricsAnalysis, runIpsaeAnalysis, runPaeMatrixAnalysis, runContactMapAnalysis]);
     const overviewAnalysisCounts = useMemo(() => {
         if (!selectedDesignId) {
             return { cached: 0, running: 0, missing: 0, attention: 0 };
