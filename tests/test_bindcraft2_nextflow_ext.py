@@ -76,4 +76,4 @@ def test_bc2_ext_options_resolve_at_actual_task_submission(tmp_path):
     assert "BINDCRAFT_AF2_PARAMS=/fixture/weights/alphafold/params" in resolved
     assert f"--bind {cache}/bindcraft2/compile:/cache/bindcraft2/compile" in resolved
     wrapper = outputs[0].with_name(".command.run").read_text()
-    assert wrapper.index("flock -x 198") < wrapper.index("mkdir -p '") < wrapper.index("singularity exec")
+    assert wrapper.index("flock -x 198") < wrapper.index("mkdir -p '") < wrapper.index("(nxf_launch | tee")
