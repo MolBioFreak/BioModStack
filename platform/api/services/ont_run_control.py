@@ -20,7 +20,7 @@ import stat
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import OntInstrumentRun, OntInstrumentRunEvent, OntInstrumentRunPreflight, OntProtocolOptionReceipt, async_session
@@ -703,7 +703,7 @@ async def reset_ont_run_store() -> None:
 
 
 async def issue_position_protocol_catalog(position: str) -> dict[str, Any]:
-    """Persist and return one short-lived opaque option receipt for a live host option.
+    """Return a still-valid identical-context receipt, or persist a new live option.
 
     The host-agent response is intentionally treated as sensitive server-side
     protocol capability data. Only labels and opaque handles leave the API.
@@ -745,26 +745,50 @@ async def issue_position_protocol_catalog(position: str) -> dict[str, Any]:
             "basecalling_options": snapshot["basecalling_options"],
         }
     )
-    now = _utc_now()
-    receipt = OntProtocolOptionReceipt(
-        id=_new_preflight_id(),
-        option_id=_new_option_id(),
-        position_id=position,
-        flow_cell_identity_sha256=_flow_cell_identity(host_payload),
-        source_digest=source_digest,
-        capability_digest=capability_digest,
-        source_snapshot=snapshot,
-        expires_at=now + timedelta(minutes=10),
-        created_at=now,
-    )
+    flow_cell_identity = _flow_cell_identity(host_payload)
     async with async_session() as session:
-        session.add(receipt)
-        await session.commit()
+        # Serialize lookup/issuance with intent consumption across API processes.
+        # Live discovery above never runs under the SQLite writer reservation.
+        await session.execute(text("BEGIN IMMEDIATE"))
+        now = _utc_now()
+        receipt = (
+            await session.execute(
+                select(OntProtocolOptionReceipt).where(
+                    OntProtocolOptionReceipt.position_id == position,
+                    OntProtocolOptionReceipt.flow_cell_identity_sha256 == flow_cell_identity,
+                    OntProtocolOptionReceipt.source_digest == source_digest,
+                    OntProtocolOptionReceipt.capability_digest == capability_digest,
+                    OntProtocolOptionReceipt.consumed_at.is_(None),
+                    OntProtocolOptionReceipt.expires_at > now,
+                )
+                .order_by(OntProtocolOptionReceipt.created_at.desc(), OntProtocolOptionReceipt.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if receipt is None:
+            receipt = OntProtocolOptionReceipt(
+                id=_new_preflight_id(),
+                option_id=_new_option_id(),
+                position_id=position,
+                flow_cell_identity_sha256=flow_cell_identity,
+                source_digest=source_digest,
+                capability_digest=capability_digest,
+                source_snapshot=snapshot,
+                expires_at=now + timedelta(minutes=10),
+                created_at=now,
+            )
+            session.add(receipt)
+            await session.commit()
+        # Copy public fields before a read-only transaction closes/rolls back;
+        # reused ORM rows expire on rollback. Never renew or rewrite a receipt.
+        option_id = receipt.option_id
+        receipt_id = receipt.id
+        expires_at = receipt.expires_at
     safe_response["options"] = [
         {
-            "option_id": receipt.option_id,
-            "option_receipt_id": receipt.id,
-            "expires_at": _json_datetime(receipt.expires_at),
+            "option_id": option_id,
+            "option_receipt_id": receipt_id,
+            "expires_at": _json_datetime(expires_at),
             "protocol_label": _sanitize_label("MinKNOW sequencing protocol", "MinKNOW sequencing protocol"),
             "basecalling_enabled": snapshot["basecalling_enabled"],
             "output_policy_id": f"ont-output-policy-{source_digest[:16]}",
@@ -797,8 +821,11 @@ async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str,
         raise ValueError("opaque option_id and option_receipt_id are required")
     sample_id = _bounded_metadata(payload, "sample_id")
     experiment_group = _bounded_metadata(payload, "experiment_group")
-    now = _utc_now()
     async with async_session() as session:
+        # The shared opaque handle remains single-use even when several callers
+        # selected it from passive catalog reads. Check expiry after lock wait.
+        await session.execute(text("BEGIN IMMEDIATE"))
+        now = _utc_now()
         receipt = (
             await session.execute(
                 select(OntProtocolOptionReceipt).where(
