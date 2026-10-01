@@ -465,6 +465,16 @@ async def persist_workflow_plan_authority(
     domain = await _head(session, domain_experiment_id, "domain_experiment")
     revision = await session.get(ExperimentRevision, expected_domain_revision_id)
     existing = await session.get(ExperimentWorkflowPlanAuthority, workflow_id)
+    native_contract = None
+    if normalized_job_request is not None:
+        from services.protein_project_capabilities import normalized_job_plan_contract, _PARAMETER_SCHEMAS
+        setup_capability = capability_id if _PARAMETER_SCHEMAS.get(capability_id, {}).get("x-bms-native-editor-draft") else None
+        native_contract = normalized_job_plan_contract(
+            normalized_job_request, native_entrypoint=native_entrypoint,
+            setup_capability_id=setup_capability,
+        )
+        if native_contract["capability"]["capability_id"] != capability_id:
+            raise ValidationFailure("native Job Plan capability identity disagrees")
     if existing is not None:
         loaded = await load_workflow_plan_authority(session, workflow_id)
         if loaded is None:
@@ -478,19 +488,11 @@ async def persist_workflow_plan_authority(
             or existing.domain_experiment_id != domain_experiment_id
             or existing.expected_domain_revision_id != expected_domain_revision_id
             or stored_contract["capability"].get("capability_id") != capability_id
+            or (native_contract is not None and canonical_json(native_contract) != existing.capability_contract_json)
         ):
             raise IdempotencyConflict("Workflow Plan authority conflicts with the immutable stored authority")
         return existing, stored_contract
-    if normalized_job_request is None:
-        contract = workflow_plan_capability_contract(capability_id)
-    else:
-        from services.protein_project_capabilities import normalized_job_plan_contract
-        from services.protein_project_capabilities import _PARAMETER_SCHEMAS
-        setup_capability = capability_id if _PARAMETER_SCHEMAS.get(capability_id, {}).get("x-bms-native-editor-draft") else None
-        contract = normalized_job_plan_contract(normalized_job_request, native_entrypoint=native_entrypoint,
-                                                setup_capability_id=setup_capability)
-        if contract["capability"]["capability_id"] != capability_id:
-            raise ValidationFailure("native Job Plan capability identity disagrees")
+    contract = native_contract if native_contract is not None else workflow_plan_capability_contract(capability_id)
     contract_json = canonical_json(contract)
     contract_sha256 = sha256_text(contract_json)
     if (
@@ -1876,8 +1878,9 @@ async def save_workflow_revision(
     *,
     expected_head_generation: int,
     change_summary: str | None = None,
+    reuse_current_revision: bool = False,
 ) -> ExperimentRevision:
-    await _head(session, workflow_id, "workflow")
+    head = await _head(session, workflow_id, "workflow")
     result = await session.execute(
         select(ExperimentWorkflowDraft).where(ExperimentWorkflowDraft.workflow_id == workflow_id)
     )
@@ -1888,6 +1891,35 @@ async def save_workflow_revision(
     plan_authority = await load_workflow_plan_authority(session, workflow_id, required=False)
     if plan_authority is not None:
         validate_workflow_payload_for_plan(payload, plan_authority[1])
+    if reuse_current_revision and head.current_revision_id is not None:
+        current = await session.get(ExperimentRevision, head.current_revision_id)
+        payload_json = canonical_json(payload)
+        graph_json = canonical_json({
+            "nodes": payload.get("nodes", []), "edges": payload.get("edges", []), "references": [],
+        })
+        if (current is not None and current.subject_id == workflow_id
+                and current.canonical_payload == payload_json
+                and current.payload_sha256 == sha256_text(payload_json)
+                and current.dependency_graph_sha256 == sha256_text(graph_json)):
+            # Preparation can renew a context without inventing an identical
+            # immutable revision. Still acquire the existing head CAS: a cached
+            # ORM head alone cannot authorize reuse after a concurrent edit.
+            changed = await session.execute(
+                update(ExperimentAggregateHead).where(
+                    ExperimentAggregateHead.aggregate_id == workflow_id,
+                    ExperimentAggregateHead.aggregate_kind == "workflow",
+                    ExperimentAggregateHead.head_generation == expected_head_generation,
+                    ExperimentAggregateHead.current_revision_id == current.resource_id,
+                ).values(head_generation=expected_head_generation)
+                .execution_options(synchronize_session=False)
+            )
+            if changed.rowcount != 1:
+                await session.refresh(head)
+                raise RevisionConflict(
+                    f"workflow head generation conflict: expected {expected_head_generation}, current {head.head_generation}"
+                )
+            draft.base_revision_id = current.resource_id
+            return current
     revision = await _save_revision(
         session,
         aggregate_id=workflow_id,

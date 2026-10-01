@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError as JsonSchemaValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from experiment_models import (
@@ -478,6 +478,22 @@ async def prepare_workflow_setup_launch(
         raise RevisionConflict(
             f"workflow setup generation conflict: expected {expected_generation}, current {row.generation}"
         )
+    # Hold the existing setup generation through preparation. A cached ORM row
+    # must not authorize freezing an older draft after another editor saved it.
+    guarded = await session.execute(
+        update(ExperimentWorkflowSetupContext).where(
+            ExperimentWorkflowSetupContext.setup_context_id == setup_context_id,
+            ExperimentWorkflowSetupContext.project_id == project_id,
+            ExperimentWorkflowSetupContext.generation == expected_generation,
+            ExperimentWorkflowSetupContext.lifecycle_state == "open",
+            ExperimentWorkflowSetupContext.validation_state == "ready",
+        ).values(generation=expected_generation).execution_options(synchronize_session=False)
+    )
+    if guarded.rowcount != 1:
+        await session.refresh(row)
+        raise RevisionConflict(
+            f"workflow setup generation conflict: expected {expected_generation}, current {row.generation}"
+        )
     workflow = await session.get(ExperimentAggregateHead, row.workflow_id)
     if workflow is None or workflow.workspace_id != project_id or workflow.parent_id != row.domain_experiment_id:
         raise ValidationFailure("workflow setup ownership authority is invalid")
@@ -528,7 +544,7 @@ async def prepare_workflow_setup_launch(
     await save_workflow_draft(session, row.workflow_id, payload, expected_generation=draft.generation)
     revision = await save_workflow_revision(
         session, row.workflow_id, expected_head_generation=workflow.head_generation,
-        change_summary="Prepared native workflow setup",
+        change_summary="Prepared native workflow setup", reuse_current_revision=True,
     )
     preparation = await prepare_workflow(session, revision.resource_id, {
         "input_dataset_revision_ids": [],
