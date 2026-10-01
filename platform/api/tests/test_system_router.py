@@ -44,12 +44,12 @@ def test_stats_toolkit_status_always_publishes_same_origin_entry(monkeypatch) ->
         "id": "bms-stats-toolkit",
         "display_name": "BioModStack Stats Toolkit",
         "available": True,
-        "ready": True,
+        "ready": None,
         "version": "1.0.0",
-        "api_version": "v1",
-        "capability_count": 2,
+        "api_version": None,
+        "capability_count": None,
         "entry_url": "http://127.0.0.1:18180/stats/",
-        "detail": "standalone service ready",
+        "detail": "standalone service reachable; database readiness not assessed",
     }
     expected = {**probe, "entry_url": "/stats/embed/"}
     monkeypatch.setattr(system, "probe_stats_addon", lambda: probe)
