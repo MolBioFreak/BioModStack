@@ -7,6 +7,21 @@ import { act, create } from 'react-test-renderer'
 import { createRoot } from 'react-dom/client'
 import { BindCraft2Settings, type BC2Inventory } from '../../src/components/BindCraft2Settings'
 
+// Inspect disclosures before testing their surviving typed editors. The cold
+// construction/count contract is covered by launcherNativeDemandMounted.
+function inspectAll(host: HTMLElement) {
+  for (let depth = 0; depth < 4; depth++) domAct(() => {
+    for (const node of host.querySelectorAll('details')) {
+      node.open = true; node.dispatchEvent(new Event('toggle'));
+    }
+  });
+}
+async function inspectTree(tree: ReturnType<typeof create>) {
+  for (let depth = 0; depth < 4; depth++) await act(async () => {
+    for (const node of tree.root.findAllByType('details')) node.props.onToggle?.({ currentTarget: { open: true } });
+  });
+}
+
 const inventory: BC2Inventory = {
   upstream_commit: 'd5bae16e9fee95f4c97fc16bc05dcbde4ccb885f',
   fields: {
@@ -43,10 +58,9 @@ describe('BC2 model-owned operator adapter', () => {
     expect(html).toContain('[&amp;_button]:max-w-full')
     expect(html).toContain('aria-label="trajectory_only"')
     expect(html).toContain('Native default: false')
-    expect(html).toContain('Native runtime fallback when omitted: &quot;direction&quot;')
-    expect(html).toContain('aria-label="cyclic_offset_mode"')
-    expect(html).toContain('aria-label="filters.i_pTM.threshold"')
-    expect(html).toContain('Native type metadata is unavailable for this setting. Existing saved values are retained.')
+    expect(html).not.toContain('aria-label="cyclic_offset_mode"')
+    expect(html).not.toContain('aria-label="filters.i_pTM.threshold"')
+    expect(html).toContain('Configure Interface pTM')
     expect(html).not.toContain('aria-label="gpu_ids"')
     // Launch ownership stays in the parent; settings introduce no execution gates.
     expect(html).not.toContain('Unresolved settings prevent');
@@ -62,6 +76,7 @@ describe('BC2 model-owned operator adapter', () => {
       inventory, value: { max_trajectories: 7, parameter_sweep: { axes: [], max_arms: 5 } },
       onChange: next => changes.push(next),
     })) })
+    await inspectTree(tree!);
     await act(async () => { tree!.root.findByProps({ 'aria-label': 'parameter_sweep.axes' }).props.onChange({ currentTarget: { value: 'weights_interface_contacts' } }) })
     expect(changes[0].parameter_sweep).toEqual({ axes: ['weights_interface_contacts'], max_arms: 5 })
     await act(async () => { tree!.root.findByProps({ 'aria-label': 'parameter_sweep.max_arms' }).props.onChange({ currentTarget: { value: '3' } }) })
@@ -77,6 +92,7 @@ describe('BC2 model-owned operator adapter', () => {
         inventory, value: { max_trajectories: 3, filters: {} }, onChange: next => changes.push(next),
       }))
     })
+    await inspectTree(tree!);
     await act(async () => {
       tree!.root.findByProps({ 'aria-label': 'filters.i_pTM.enabled' }).props.onChange({ currentTarget: { checked: true } })
     })
@@ -97,9 +113,10 @@ describe('BC2 model-owned operator adapter', () => {
     const host = document.createElement('div')
     document.body.append(host)
     const root = createRoot(host)
-    domAct(() => root.render(<Form />))
+    domAct(() => root.render(<Form />)); inspectAll(host)
     const enable = host.querySelector<HTMLInputElement>('[aria-label="filters.Binder_RMSD.enabled"]')!
     domAct(() => enable.click())
+    inspectAll(host)
     expect((latest.filters as Record<string, unknown>).Binder_RMSD).toEqual({})
     expect((latest.filters as Record<string, unknown>).i_pTM).toBeUndefined()
     const threshold = host.querySelector<HTMLInputElement>('[aria-label="filters.Binder_RMSD.threshold"]')!
@@ -123,7 +140,7 @@ it('mounts every optional native relaxation numeric control without filling omit
   }
   const host = document.createElement('div'); document.body.append(host)
   const root = createRoot(host)
-  domAct(() => root.render(<Form />))
+  domAct(() => root.render(<Form />)); inspectAll(host)
   try {
     const keys = Object.keys(inventory.fields).filter(key => key.startsWith('relax_'))
     expect(keys).toHaveLength(8)
@@ -154,7 +171,7 @@ it('mounted scientific controls emit typed operator edits', () => {
   }
   const host = document.createElement('div'); document.body.append(host)
   const root = createRoot(host)
-  domAct(() => root.render(<Form />))
+  domAct(() => root.render(<Form />)); inspectAll(host)
   try {
     domAct(() => host.querySelector<HTMLInputElement>('[aria-label="humanize"]')!.click())
     expect(latest.humanize).toBe(true)
@@ -194,7 +211,7 @@ describe('BC2 sparse display transitions', () => {
       const [value, setValue] = useState(initial); latest = value;
       return <BindCraft2Settings inventory={displayInventory} value={value} inherited={inherited} effectiveSettings={effective} onChange={setValue} />;
     }
-    domAct(() => root.render(<Form />));
+    domAct(() => root.render(<Form />)); inspectAll(host);
     return { host, latest: () => latest, close: () => { domAct(() => root.unmount()); host.remove(); } };
   }
   const input = (host: HTMLElement, key: string) => host.querySelector<HTMLInputElement>(`[aria-label="${key}"]`)!;

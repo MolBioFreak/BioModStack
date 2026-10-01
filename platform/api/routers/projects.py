@@ -454,8 +454,10 @@ async def _head_json(
     exposed_kind: str,
     storage_kind: str,
     parent_id: str | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload = await _payload(session, head)
+    if payload is None:
+        payload = await _payload(session, head)
     lifecycle_state = head.lifecycle_state
     result = {
         "id": head.aggregate_id,
@@ -553,7 +555,8 @@ async def _list_json(
         )
     rows = (
         await session.execute(
-            select(ExperimentAggregateHead)
+            select(ExperimentAggregateHead, ExperimentRevision.canonical_payload)
+            .outerjoin(ExperimentRevision, ExperimentRevision.resource_id == ExperimentAggregateHead.current_revision_id)
             .where(*filters)
             .order_by(
                 ExperimentAggregateHead.created_at.desc(),
@@ -561,7 +564,7 @@ async def _list_json(
             )
             .limit(limit + 1)
         )
-    ).scalars().all()
+    ).all()
     page = rows[:limit]
     items = [
         await _head_json(
@@ -570,12 +573,13 @@ async def _list_json(
             exposed_kind=exposed_kind,
             storage_kind=storage_kind,
             parent_id=parent_id,
+            payload=json.loads(canonical_payload) if canonical_payload is not None else {},
         )
-        for head in page
+        for head, canonical_payload in page
     ]
     next_cursor = None
     if len(rows) > limit and page:
-        anchor = page[-1]
+        anchor = page[-1][0]
         next_cursor = _encode_cursor(
             exposed_kind,
             cursor_scope,
@@ -835,7 +839,7 @@ async def search_projects(
         separators=(",", ":"),
         ensure_ascii=True,
     )
-    statement = select(ExperimentAggregateHead).join(
+    statement = select(ExperimentAggregateHead, ExperimentRevision.canonical_payload).join(
         ExperimentRevision,
         ExperimentRevision.resource_id == ExperimentAggregateHead.current_revision_id,
     )
@@ -870,9 +874,9 @@ async def search_projects(
             .order_by(ExperimentAggregateHead.updated_at.desc(), ExperimentAggregateHead.aggregate_id.desc())
             .limit(limit + 1)
         )
-    ).scalars().all()
+    ).all()
     page = rows[:limit]
-    project_ids = [row.aggregate_id for row in page]
+    project_ids = [head.aggregate_id for head, _payload_text in page]
     active_counts: dict[str, int] = {}
     blocked_counts: dict[str, int] = {}
     failed_run_counts: dict[str, int] = {}
@@ -904,8 +908,18 @@ async def search_projects(
             .group_by(ExperimentWorkflowRun.workspace_id)
         )).all())
     items: list[dict[str, Any]] = []
-    for head in page:
-        item = await _head_json(session, head, exposed_kind="project", storage_kind="workspace")
+    linked_project_ids: set[str] = set()
+    if project_ids:
+        linked_project_ids = set((await session.execute(
+            select(ExperimentLineageEdge.target_resource_id).distinct().where(
+                ExperimentLineageEdge.target_resource_id.in_(project_ids),
+                ExperimentLineageEdge.edge_mode == "references",
+                ExperimentLineageEdge.edge_key.like("ngs-molbio-project-link:%"),
+            )
+        )).scalars().all())
+    for head, payload_text in page:
+        item = await _head_json(session, head, exposed_kind="project", storage_kind="workspace", payload=json.loads(payload_text))
+        item["has_ngs_molbio_links"] = head.aggregate_id in linked_project_ids
         item["active_experiment_count"] = int(active_counts.get(head.aggregate_id, 0))
         item["unresolved_failure_count"] = int(blocked_counts.get(head.aggregate_id, 0)) + int(failed_run_counts.get(head.aggregate_id, 0))
         items.append(item)
@@ -915,8 +929,8 @@ async def search_projects(
             _encode_cursor(
                 "project-search",
                 cursor_scope,
-                page[-1].updated_at,
-                page[-1].aggregate_id,
+                page[-1][0].updated_at,
+                page[-1][0].aggregate_id,
             )
             if len(rows) > limit and page
             else None

@@ -69,6 +69,7 @@ export function DashboardTelemetry({ jobs = [] }: { jobs?: Pick<Job, 'id' | 'mod
 
     const localTelemetry = (
         <InfraLiveTelemetry
+            executionTargetsQuery={targetsQuery}
             showXAxisLabels={false}
             defaultPollIntervalMs={1000}
             defaultWindowMinutes={3}

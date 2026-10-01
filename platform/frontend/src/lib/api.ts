@@ -919,6 +919,8 @@ export const fetchJobs = async (params?: {
     status?: string;
     q?: string;
     model_id?: string;
+    model_ids?: string[];
+    q_ignore_case_id?: boolean;
     mode?: string;
     limit?: number;
     offset?: number;
@@ -929,6 +931,7 @@ export const fetchJobs = async (params?: {
     const etag = previous?.headers.etag;
     const response = await api.get<{ jobs: Job[]; total: number }>('/api/jobs', {
         signal, timeout: 10_000,
+        paramsSerializer: { indexes: null },
         params: {
             ...params,
             limit: Math.min(500, Math.max(1, params?.limit ?? 100)),

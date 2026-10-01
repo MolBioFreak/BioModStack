@@ -115,6 +115,20 @@ it('multi-engine round edits independent native settings, saves and freshly load
     expect(submitted[1].binder_round).toEqual(round);
 });
 
+it('cold default round reads exactly FA-MPNN and Protenix; selecting an inactive engine hydrates only that catalog and retains explicit values', async () => {
+    let latest: any;
+    function Form() { const [values, setValues] = React.useState(hydrateBinderRound({ binder_round_drafts: { proteinmpnn: { mpnn_extra_config: null, mpnn_backbone_noise: 0, seqs_per_design: 0 } } })); latest = values; return <BinderRoundSettings values={values} onChange={setValues} />; }
+    await mount(<Form />);
+    const reads = () => vi.mocked(api.get).mock.calls.map(([url]) => url).filter(url => catalogs.some((model: any) => url === `/api/models/${model.id}`));
+    expect(reads().sort()).toEqual(['/api/models/fampnn', '/api/models/protenix']);
+    expect(latest.binder_round).toEqual(expectedRound());
+    await select('Round sequence designer', 'proteinmpnn');
+    expect(reads().sort()).toEqual(['/api/models/fampnn', '/api/models/proteinmpnn', '/api/models/protenix']);
+    expect(latest.binder_round_drafts.proteinmpnn).toMatchObject({ mpnn_extra_config: null, mpnn_backbone_noise: 0, seqs_per_design: 0 });
+    await select('Round sequence designer', 'fampnn');
+    expect(reads()).toHaveLength(3);
+});
+
 it('all six global inventories render every applicable typed field and preserve catalog defaults', async () => {
     let latest: any;
     function Form() { const [values, setValues] = React.useState(hydrateBinderRound()); latest = values; return <BinderRoundSettings values={values} onChange={setValues} />; }
@@ -194,6 +208,16 @@ it('historical refinement keeps its selected designer and does not acquire a rou
     expect(submitted[0]).toMatchObject({ source_job_id: 'source-fixture', design_ids: ['design-fixture'], action: 'ui_refinement', param_overrides: { seq_designer: 'proteinmpnn', run_structure_validation: false } });
     expect(submitted[0]).not.toHaveProperty('binder_round');
     expect(submitted[0].param_overrides).not.toHaveProperty('binder_round');
+});
+
+it('retained PPIFlow partial-flow destination keeps its seed identity and default round hydration while unopened', async () => {
+    let latest: any;
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialDraft={{ denovo_generator: 'ppiflow', ppiflow_seed_complex_path: 'inputs/retained-seed.pdb', ppiflow_seed_input_dir: 'inputs/retained', run_structure_validation: false }} onDraftChange={draft => { latest = draft; }} />);
+    expect(latest.denovo_generator).toBe('ppiflow');
+    expect(latest.ppiflow_seed_complex_path).toBe('inputs/retained-seed.pdb');
+    expect(latest.ppiflow_seed_input_dir).toBe('inputs/retained');
+    expect(latest.binder_round).toEqual(expectedRound());
+    expect(submitted).toHaveLength(0);
 });
 
 it('complete RFantibody parent requests a round without running historical sequence/validation stages', async () => {

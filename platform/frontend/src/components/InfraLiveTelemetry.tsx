@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { TimeSeriesPlot } from './telemetryMetricPlot';
 import { useTelemetryChartRefresh } from './useTelemetryChartRefresh';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import {
     activateExecutionTarget,
     deactivateExecutionTarget,
@@ -71,7 +71,11 @@ const WINDOW_PRESETS: ReadonlyArray<{ value: WindowPreset; label: string }> = [
 ];
 
 
+type ExecutionTargetsQuery = Pick<UseQueryResult<Awaited<ReturnType<typeof fetchExecutionTargets>>>,
+    'data' | 'error' | 'isError' | 'isSuccess'>;
+
 export interface InfraLiveTelemetryProps {
+    executionTargetsQuery?: ExecutionTargetsQuery;
     showXAxisLabels?: boolean;
     defaultPollIntervalMs?: PollPreset;
     defaultWindowMinutes?: WindowPreset;
@@ -1143,13 +1147,30 @@ function vastOperationErrorMessage(error: unknown): string {
     return error instanceof Error && error.message ? error.message : 'Unknown error';
 }
 
-export function InfraLiveTelemetry({
+export function InfraLiveTelemetry(props: InfraLiveTelemetryProps = {}) {
+    return props.executionTargetsQuery
+        ? <InfraLiveTelemetryPanel {...props} executionTargetsQuery={props.executionTargetsQuery} />
+        : <StandaloneInfraLiveTelemetry {...props} />;
+}
+
+function StandaloneInfraLiveTelemetry(props: InfraLiveTelemetryProps) {
+    const executionTargetsQuery = useQuery({
+        queryKey: ['execution-targets'],
+        queryFn: fetchExecutionTargets,
+        refetchInterval: 5_000,
+        retry: false,
+    });
+    return <InfraLiveTelemetryPanel {...props} executionTargetsQuery={executionTargetsQuery} />;
+}
+
+function InfraLiveTelemetryPanel({
+    executionTargetsQuery,
     showXAxisLabels = true,
     defaultPollIntervalMs = 1000,
     defaultWindowMinutes = 3,
     variant = 'infra',
     dashboardSize = 'standard',
-}: InfraLiveTelemetryProps = {}) {
+}: InfraLiveTelemetryProps & { executionTargetsQuery: ExecutionTargetsQuery }) {
     const compact = variant === 'dashboard';
     const dashboardSizing = DASHBOARD_SIZING[dashboardSize];
     const queryClient = useQueryClient();
@@ -1319,12 +1340,6 @@ export function InfraLiveTelemetry({
     const vastDiscoverMutation = useMutation({
         mutationFn: refreshVastExecutionTargets,
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
-    });
-    const executionTargetsQuery = useQuery({
-        queryKey: ['execution-targets'],
-        queryFn: fetchExecutionTargets,
-        refetchInterval: 5_000,
-        retry: false,
     });
     const attachVastMutation = useMutation({
         mutationFn: (providerInstanceId: string) => {

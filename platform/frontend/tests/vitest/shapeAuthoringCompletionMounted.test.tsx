@@ -155,6 +155,20 @@ const initial = { modification_mode: 'shape_blueprint', shape_geometry_id: geome
 const latest = () => posts.filter(p => p.url === '/api/shape-blueprint/requests').at(-1)!;
 async function until(text: string) { await vi.waitFor(async () => { await settle(); expect(document.body.textContent).toContain(text); }); }
 
+it('inactive Shape validator fields wait for inspection while authoritative defaults and saved drafts hydrate unchanged', async () => {
+    const draft = vi.fn();
+    await mount(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} initialValues={{ ...initial, shape_validator_suite: ['esmfold2'], shape_validator_settings_by_engine: { boltz2: { boltz2_diffusion_samples: 0 }, protenix_v2: { protenix_use_msa: false, protenix_num_samples: 0 } } }} />);
+    await until('Geometry preview'); await click('Prediction');
+    const panel = document.querySelector('[aria-label="boltz2 prediction"]')!;
+    expect(panel.querySelector('[data-shape-native-field]')).toBeNull();
+    expect(document.querySelector('[aria-label="esmfold2 prediction"] [data-shape-native-field]')).not.toBeNull();
+    const before = structuredClone(draft.mock.calls.at(-1)![0]);
+    await act(async () => (panel.querySelector('summary') as HTMLElement).click()); await settle();
+    expect(control('boltz2_diffusion_samples').value).toBe('0');
+    expect(draft.mock.calls.at(-1)![0]).toEqual(before);
+    expect(posts).toHaveLength(0);
+});
+
 it('keeps the real mesh canvas and camera controls mounted across all freely accessible sections', async () => {
     await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={initial} />);
     await until('3 vertices · 1 faces'); const canvas = document.querySelector('canvas'); const fetchCount = vi.mocked(fetch).mock.calls.length;

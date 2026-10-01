@@ -44,12 +44,12 @@ def test_stats_toolkit_status_always_publishes_same_origin_entry(monkeypatch) ->
         "id": "bms-stats-toolkit",
         "display_name": "BioModStack Stats Toolkit",
         "available": True,
-        "ready": True,
+        "ready": None,
         "version": "1.0.0",
-        "api_version": "v1",
-        "capability_count": 2,
+        "api_version": None,
+        "capability_count": None,
         "entry_url": "http://127.0.0.1:18180/stats/",
-        "detail": "standalone service ready",
+        "detail": "standalone service reachable; database readiness not assessed",
     }
     expected = {**probe, "entry_url": "/stats/embed/"}
     monkeypatch.setattr(system, "probe_stats_addon", lambda: probe)
@@ -59,6 +59,38 @@ def test_stats_toolkit_status_always_publishes_same_origin_entry(monkeypatch) ->
             response = client.get("/api/system/stats-toolkit")
         assert response.status_code == 200
         assert response.json() == expected
+
+
+def test_stats_liveness_read_does_not_block_the_event_loop(monkeypatch) -> None:
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    probe_threads: list[int] = []
+
+    def probe():
+        probe_threads.append(threading.get_ident())
+        entered.set()
+        assert release.wait(3), "test liveness probe was not released"
+        return {"available": True, "ready": None}
+
+    monkeypatch.setattr(system, "probe_stats_addon", probe)
+
+    async def exercise():
+        loop_thread = threading.get_ident()
+        pending = asyncio.create_task(system.get_stats_toolkit_status())
+        try:
+            assert await asyncio.to_thread(entered.wait, 3)
+            assert not pending.done()
+            assert probe_threads == [probe_threads[0]]
+            assert probe_threads[0] != loop_thread
+        finally:
+            release.set()
+        assert await pending == {
+            "available": True, "ready": None, "entry_url": "/stats/embed/",
+        }
+
+    asyncio.run(exercise())
 
 
 def test_runtime_start_endpoint_invokes_service_layer(monkeypatch) -> None:

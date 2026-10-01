@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
 import type { BC2Inventory } from './BindCraft2Settings';
 import { BindCraft2ListEditor } from './BindCraft2ListEditor';
 import { BC2InterfaceMask, BC2Number } from './BindCraft2NativeControls';
@@ -36,7 +37,7 @@ export function BindCraft2MetricEditor({ kind, inventory, value, inherited, effe
       {kind === 'filters' && requested && !Object.hasOwn(requested, 'threshold') && <p className="text-xs">Explicit cutoff required for a filter override. Inherited cutoff is reference only until supplied; remove the override to restore inheritance.</p>}
       <p className="text-xs">{requested ? 'Customized override · remove to restore inheritance' : base ? 'Inherited native metric' : 'Native activation unavailable'}{entry && kind === 'losses' ? weights?.[`weights_${metric}`] === 0 ? ' · Zero contribution' : typeof weights?.[`weights_${metric}`] === 'number' ? ' · Active objective' : ' · Native activation unavailable' : entry && entry.threshold === null ? ' · Disabled (explicit null)' : entry && entry.threshold !== undefined ? ' · Active filter' : ''}</p>
       {BC2_METRIC_HELP[metric] && <p className="mt-1 text-xs text-[var(--text-secondary)]">{BC2_METRIC_HELP[metric]}</p>}
-      <details className="mt-2"><summary className="cursor-pointer text-xs text-[var(--accent-primary)]">Configure {bc2Label(metric)}</summary>
+      <NativeSettingsDisclosure className="mt-2" summary={<span className="cursor-pointer text-xs text-[var(--accent-primary)]">Configure {bc2Label(metric)}</span>}>{() =>
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           {kind === 'losses' && weights && Object.hasOwn(weights, `weights_${metric}`) && <label>Objective weight<BC2Number label={`${kind}.${metric}.weight`} value={weights[`weights_${metric}`]} onChange={next => onWeightChange?.(`weights_${metric}`, next)} /><small>Weight is a separate native setting; parameters do not activate an objective. Zero turns off its contribution. Reset in Expert settings restores inheritance.</small></label>}
           {kind === 'filters' && <>
@@ -72,7 +73,7 @@ export function BindCraft2MetricEditor({ kind, inventory, value, inherited, effe
             </div>;
           })}
         </div>
-      </details>
+      }</NativeSettingsDisclosure>
     </div>;
   };
   const selected = names.filter(name => Object.hasOwn(entries, name) || Object.hasOwn(inheritedEntries, name) || Object.hasOwn(effectiveEntries, name));
@@ -81,7 +82,7 @@ export function BindCraft2MetricEditor({ kind, inventory, value, inherited, effe
     <p className="text-xs text-[var(--text-secondary)]">{kind === 'losses' ? 'Configure state-specific objectives here; relative weights are in Expert settings → Objective weights.' : 'Set metric-specific acceptance thresholds, direction and mandatory behavior.'} Omitted nested values follow native/profile resolution. Removing an entry removes its override, not a preset’s objective or filter. Set an objective’s weight to zero to turn off its contribution.</p>
     <input type="search" aria-label={`Find ${kind}`} placeholder={kind === 'losses' ? 'Find an objective…' : 'Find an acceptance metric…'} value={search} onChange={event => setSearch(event.currentTarget.value)} />
     <div className="grid gap-2 lg:grid-cols-2">{selected.map(row)}</div>
-    <details open={search ? true : undefined}><summary className="cursor-pointer text-sm text-[var(--accent-primary)]">Add {kind === 'losses' ? 'objectives' : 'acceptance metrics'} · {available.length} available</summary><div className="mt-3 grid gap-2 lg:grid-cols-2">{available.map(row)}</div></details>
+    <NativeSettingsDisclosure open={search ? true : undefined} summary={<span className="cursor-pointer text-sm text-[var(--accent-primary)]">Add {kind === 'losses' ? 'objectives' : 'acceptance metrics'} · {available.length} available</span>}>{() => <div className="mt-3 grid gap-2 lg:grid-cols-2">{available.map(row)}</div>}</NativeSettingsDisclosure>
     {!names.length && <p className="text-sm">No matching native metrics.</p>}
   </div>;
 }

@@ -93,7 +93,8 @@ function SwitchJobButton({ onJob456Layout }: { onJob456Layout?: () => void }) {
 
 async function flush() {
     await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(1);
+        else await new Promise((resolve) => setTimeout(resolve, 0));
         await Promise.resolve();
     });
 }
@@ -309,7 +310,7 @@ describe('preview-independent mounted locus loading', () => {
 });
 
 describe('completed NGS result routing', () => {
-    it('keeps a clean NGS landing URL on the workflow launcher after jobs load', async () => {
+    it('keeps a clean NGS landing URL on the workflow launcher without reading jobs', async () => {
         const completedJob = {
             id: 'job-123',
             name: 'AAZ605 FASTQ QC',
@@ -333,7 +334,7 @@ describe('completed NGS result routing', () => {
             );
             await Promise.resolve();
         });
-        await waitUntil(() => expect(ngsApiMocks.fetchJobs).toHaveBeenCalled());
+        expect(ngsApiMocks.fetchJobs).not.toHaveBeenCalled();
         for (let attempt = 0; attempt < 5; attempt += 1) {
             await flush();
         }
@@ -646,5 +647,62 @@ describe('completed NGS result routing', () => {
         await act(async () => restore?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
         await waitUntil(() => expect(container.textContent).toContain('post-rotation session failed'));
         expect(client.getQueryState(['sequence-qc-manifest', 'job-123'])?.isInvalidated).toBe(false);
+    });
+});
+
+
+describe('bounded NGS jobs receiving owner', () => {
+    const job = { id: 'selected-outside-page', name: 'Selected live detail', model_id: 'nanopore',
+        mode: 'ont_fastq_qc', status: 'running', params: { enabled: false, count: 0 }, created_at: '2026-01-01T00:00:00Z' };
+    async function mount(section: string) {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(job);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { job_id: job.id, stages: [] } });
+        await act(async () => root.render(<QueryClientProvider client={client}>
+            <MemoryRouter initialEntries={[section === 'launch' ? '/ngs' : `/ngs?section=${section}&job_id=${job.id}`]}><NGSToolkit /></MemoryRouter>
+        </QueryClientProvider>));
+        await flush();
+    }
+    it('requests one page at a time and keeps selected detail outside filtered pages', async () => {
+        vi.useFakeTimers();
+        ngsApiMocks.fetchJobs.mockImplementation(async ({ offset }) => ({ data: { jobs: [{ ...job,
+            id: `page-${offset}`, name: `Page row ${offset}`, status: 'queued' }], total: 625 }, headers: { etag: `"${offset}"` } }));
+        await mount('analyses');
+        await waitUntil(() => expect(container.textContent).toContain('625 matching jobs'));
+        expect(ngsApiMocks.fetchJobs).toHaveBeenCalledTimes(1);
+        expect(ngsApiMocks.fetchJobs.mock.calls[0][0]).toEqual({ model_ids: ['nanopore', 'ont_fastq_qc', 'ont_plasmid_qc', 'ont_construct_screening', 'wf_clone_validation'],
+            summary: true, include_children: true, q: '', q_ignore_case_id: true, status: undefined, limit: 100, offset: 0 });
+        expect(ngsApiMocks.fetchJobs.mock.calls[0][2]).toBeInstanceOf(AbortSignal);
+        expect(ngsApiMocks.fetchFullJob).toHaveBeenCalledWith(job.id);
+        expect(ngsApiMocks.fetchJobStages).toHaveBeenCalledWith(job.id);
+        const next = [...container.querySelectorAll('button')].find(b => b.textContent === 'Next page')!;
+        await act(async () => next.click());
+        await waitUntil(() => expect(container.textContent).toContain('Page row 100'));
+        expect(ngsApiMocks.fetchJobs).toHaveBeenCalledTimes(2);
+        expect(ngsApiMocks.fetchJobs.mock.calls[1][0].offset).toBe(100);
+        expect(ngsApiMocks.fetchJobs.mock.calls[1][1]).toBeUndefined();
+        expect(container.textContent).toContain('Selected live detail');
+        const select = container.querySelector('select')!;
+        await act(async () => { select.value = 'failed'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+        await waitUntil(() => expect(ngsApiMocks.fetchJobs).toHaveBeenCalledTimes(3));
+        expect(ngsApiMocks.fetchJobs.mock.calls[2][0]).toMatchObject({ status: 'failed', offset: 0 });
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [{ ...job, id: 'late-child', name: 'External late child' }], total: 626 }, headers: { etag: '"new"' } });
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+        await waitUntil(() => expect(container.textContent).toContain('External late child'));
+        expect(ngsApiMocks.fetchJobs).toHaveBeenCalledTimes(4);
+        expect(ngsApiMocks.fetchJobs.mock.calls[3][1].headers.etag).toBe('"0"');
+    });
+    it.each(['launch', 'instrument'])('%s has no history reads but retains selected live reads', async section => {
+        vi.useFakeTimers();
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [], total: 0 } });
+        await mount(section);
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        expect(ngsApiMocks.fetchJobs).not.toHaveBeenCalled();
+        if (section === 'instrument') {
+            expect(ngsApiMocks.fetchFullJob).toHaveBeenCalledWith(job.id);
+            await waitUntil(() => expect(ngsApiMocks.fetchJobStages).toHaveBeenCalledWith(job.id));
+        } else {
+            expect(ngsApiMocks.fetchFullJob).not.toHaveBeenCalled();
+        }
     });
 });

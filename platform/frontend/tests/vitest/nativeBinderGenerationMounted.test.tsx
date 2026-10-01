@@ -76,7 +76,7 @@ beforeEach(() => {
     mocks.inventory = {};
     mocks.models = [
         { id: 'ppiflow', name: 'PPIFlow', params: protein, modes: ['protein_binder', 'antibody_binder', 'nanobody_binder'].map(id => ({ id, name: id, params: (id === 'protein_binder' ? protein : id === 'antibody_binder' ? [...antibody, { name: 'light_chain' }] : antibody).map(p => p.name) })) },
-        { id: 'boltzgen', name: 'BoltzGen', params: boltz, modes: ['protein_binder', 'peptide_binder'].map(id => ({ id, name: id, params: boltz.map(p => p.name) })) },
+        { id: 'boltzgen', name: 'BoltzGen', params: boltz, modes: ['protein_binder', 'peptide_binder', 'nanobody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'].map(id => ({ id, name: id, params: boltz.map(p => p.name) })) },
     ];
     for (const model of mocks.models) for (const mode of model.modes) mocks.inventory[`${model.id}:${mode.id}`] = { schema_version: 'fixture', mode: mode.id, parameters: model.id === 'boltzgen' ? boltz : mode.id === 'protein_binder' ? protein : mode.id === 'antibody_binder' ? [...antibody, { name: 'light_chain', type: 'string', default: null }] : antibody, profile: { fixture: 'checkpoint owned' }, native_behavior: ['no native sampling in this test'] };
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -103,6 +103,40 @@ it.each(['protein_binder', 'antibody_binder', 'nanobody_binder'])('mounted PPIFl
     expect(request.params).not.toHaveProperty('seed_pdb');
     if (modeName !== 'protein_binder') expect(request.params).toMatchObject({ framework_pdb: 'inputs/framework.pdb', heavy_chain: 'H', antigen_chain: 'a' });
     if (modeName === 'nanobody_binder') expect(request.params).not.toHaveProperty('light_chain');
+});
+
+it.each(['protein_binder', 'peptide_binder', 'nanobody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'])('BoltzGen parent destination %s preserves the request and omits the unused ligand catalog', async modeName => {
+    const { fetchInputPresets } = await import('../../src/lib/api');
+    const values = { target_pdb: '', alpha: 0, binder_sequence: '', target_binding_positions: null, num_designs: 7 };
+    // Historical nanobody clones intentionally return to dedicated authoring.
+    // Exercise its explicit native destination without changing that behavior.
+    if (modeName === 'nanobody_binder') mocks.inventory[`boltzgen:${modeName}`].parameters = boltz.map(field => Object.hasOwn(values, field.name) ? { ...field, default: (values as any)[field.name] } : field);
+    else localStorage.setItem('clonedJobData', JSON.stringify({ model_id: 'boltzgen', mode: modeName, name: 'Destination fixture', params: values }));
+    const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[modeName === 'nanobody_binder' ? '/submit?model=boltzgen&mode=nanobody_binder' : '/submit']}><JobSubmission /></MemoryRouter></QueryClientProvider>)); await settle(); await settle();
+    if (modeName === 'nanobody_binder') await edit('Native binder job name', 'Destination fixture');
+    await vi.waitFor(() => expect(button('Launch Experiment').disabled).toBe(false));
+    expect(vi.mocked(fetchInputPresets).mock.calls.filter(([type]) => type === 'ligand')).toHaveLength(0);
+    await click('Launch Experiment');
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    expect(mocks.submit.mock.calls[0][0]).toMatchObject({ model_id: 'boltzgen', mode: modeName, params: values });
+});
+
+it.each(['protein_binder', 'antibody_binder', 'nanobody_binder'])('PPIFlow parent destination %s preserves native defaults without unused ligand reads', async modeName => {
+    const { fetchInputPresets } = await import('../../src/lib/api');
+    const values = { target_pdb: '', self_condition: false, min_t: 0, specified_hotspots: null };
+    const inventory = mocks.inventory[`ppiflow:${modeName}`];
+    inventory.parameters = inventory.parameters.map((field: any) => Object.hasOwn(values, field.name) ? { ...field, default: (values as any)[field.name] } : field);
+    const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/submit?model=ppiflow&mode=${modeName}`]}><JobSubmission /></MemoryRouter></QueryClientProvider>)); await settle(); await settle();
+    await edit('Native binder job name', 'PPIFlow destination');
+    await vi.waitFor(() => expect(button('Launch Experiment').disabled).toBe(false));
+    expect(vi.mocked(fetchInputPresets).mock.calls.filter(([type]) => type === 'ligand')).toHaveLength(0);
+    await click('Launch Experiment');
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    expect(mocks.submit.mock.calls[0][0]).toMatchObject({ model_id: 'ppiflow', mode: modeName, params: values });
 });
 
 it('actual target and framework preset acquisition remains independent and maps only verified PDB author hotspots', async () => {

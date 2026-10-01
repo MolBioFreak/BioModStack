@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const nativeApi = vi.hoisted(() => ({
@@ -233,7 +233,8 @@ async function waitUntil(assertion: () => void) {
 
 function LocationProbe() {
     const location = useLocation();
-    return <output data-testid="location">{location.pathname}{location.search}</output>;
+    const navigate = useNavigate();
+    return <><output data-testid="location">{location.pathname}{location.search}</output><button data-history="back" onClick={() => navigate(-1)}>Back</button><button data-history="forward" onClick={() => navigate(1)}>Forward</button></>;
 }
 
 async function renderAt(initialEntry: string) {
@@ -593,11 +594,97 @@ describe('ProjectManager', () => {
     });
 
     it('labels linked NGS/MolBio Projects from server-derived relationships', async () => {
-        managerApi.searchProjects.mockResolvedValue({ items: [{ ...project, payload: { ...project.payload, project_scope: 'ngs_molbio_local' } }], next_cursor: null });
+        managerApi.searchProjects.mockResolvedValue({ items: [{ ...project, has_ngs_molbio_links: true, payload: { ...project.payload, project_scope: 'ngs_molbio_local' } }], next_cursor: null });
         await renderAt('/projects?project_scope=ngs_molbio_local');
         await waitUntil(() => expect(container.textContent).toContain('Linked'));
-        expect(managerApi.listNgsMolBioProjectLinks).toHaveBeenCalledWith('project-1');
+        expect(managerApi.listNgsMolBioProjectLinks).not.toHaveBeenCalled();
     });
+    it('renders page-scoped link existence for every local card without detail requests', async () => {
+        managerApi.searchProjects.mockResolvedValue({ items: Array.from({ length: 50 }, (_, index) => ({
+            ...project, id: `local-${index}`, name: `Local ${index}`,
+            has_ngs_molbio_links: index % 2 === 0,
+            payload: { ...project.payload, project_scope: 'ngs_molbio_local' },
+        })), next_cursor: null });
+        await renderAt('/projects?scope=ngs-molbio');
+        await waitUntil(() => expect(container.querySelectorAll('[data-project-card]')).toHaveLength(50));
+        const cards = Array.from(container.querySelectorAll('[data-project-card]'));
+        cards.forEach((card, index) => expect(card.textContent).toContain(index % 2 === 0 ? 'Linked' : 'Standalone'));
+        expect(managerApi.searchProjects).toHaveBeenCalledTimes(1);
+        expect(managerApi.listNgsMolBioProjectLinks).not.toHaveBeenCalled();
+    });
+
+    it('keeps unavailable link evidence honest without issuing per-card fallback reads', async () => {
+        managerApi.searchProjects.mockResolvedValue({ items: [{ ...project, payload: { project_scope: 'ngs_molbio_local' } }], next_cursor: null });
+        await renderAt('/projects');
+        await waitUntil(() => expect(container.textContent).toContain('Link state unavailable'));
+        expect(managerApi.listNgsMolBioProjectLinks).not.toHaveBeenCalled();
+    });
+
+    it('reuses the bare-URL observer for canonical context without changing freshness or invalidation', async () => {
+        await renderAt('/projects/project-1?state_revision_id=retained');
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('selected=domain_experiment%3Adomain-1'));
+        await flush();
+        expect(managerApi.getProjectSummary).toHaveBeenCalledTimes(1);
+        const reads = client.getQueryCache().findAll({ queryKey: ['project-manager', 'summary', 'project-1'] }).filter((query) => query.queryKey[3] !== 'validated-fallback');
+        expect(reads).toHaveLength(1);
+        const updatedAt = reads[0].state.dataUpdatedAt;
+        await flush();
+        expect(reads[0].state.dataUpdatedAt).toBe(updatedAt);
+        expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('state_revision_id=retained');
+        await act(async () => { await client.invalidateQueries({ queryKey: ['project-manager', 'summary', 'project-1'] }); });
+        await waitUntil(() => expect(managerApi.getProjectSummary).toHaveBeenCalledTimes(2));
+        expect(managerApi.getProjectSummary.mock.calls[1][1]).toMatchObject({ focusId: 'global-1', selectedNodeKey: 'domain_experiment:domain-1' });
+    });
+
+    it('reads genuine selection navigation and back-forward against exact context after canonicalization', async () => {
+        await renderAt('/projects/project-1');
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('selected=domain_experiment'));
+        expect(managerApi.getProjectSummary).toHaveBeenCalledTimes(1);
+        const node = container.querySelector<HTMLButtonElement>('[aria-label="Select PLM-07 result"]');
+        expect(node).not.toBeNull();
+        await act(async () => node?.click());
+        await waitUntil(() => expect(managerApi.getProjectSummary.mock.calls.at(-1)?.[1].selectedNodeKey).toBe('external_entity_receipt:receipt-9'));
+        await waitUntil(() => expect(container.textContent).toContain('PLM-07 result'));
+        await act(async () => container.querySelector<HTMLButtonElement>('[data-history="back"]')?.click());
+        await waitUntil(() => expect(managerApi.getProjectSummary.mock.calls.at(-1)?.[1].selectedNodeKey).toBe('domain_experiment:domain-1'));
+        await act(async () => container.querySelector<HTMLButtonElement>('[data-history="forward"]')?.click());
+        await waitUntil(() => expect(managerApi.getProjectSummary.mock.calls.at(-1)?.[1].selectedNodeKey).toBe('external_entity_receipt:receipt-9'));
+        expect(managerApi.getProjectSummary).toHaveBeenCalledTimes(4);
+    });
+
+    it('reuses server-resolved missing selection on a hierarchy URL and keeps explicit route context', async () => {
+        await renderAt('/projects/project-1/experiments/global-1?state_revision_id=state-saved');
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('selected=global_experiment%3Aglobal-1'));
+        await flush();
+        expect(managerApi.getProjectSummary).toHaveBeenCalledTimes(1);
+        expect(managerApi.getProjectSummary.mock.calls[0][1]).toMatchObject({ focusId: 'global-1', selectedNodeKey: 'global_experiment:global-1' });
+        expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('state_revision_id=state-saved');
+    });
+
+    it('keeps canonical-context read errors and Retry operational after the initial reuse', async () => {
+        await renderAt('/projects/project-1');
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('selected=domain_experiment'));
+        managerApi.getProjectSummary.mockRejectedValueOnce(new Error('operational read failure'));
+        await act(async () => { await client.invalidateQueries({ queryKey: ['project-manager', 'summary', 'project-1'] }); });
+        await waitUntil(() => expect(container.textContent).toContain('operational read failure'));
+        const retry = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Retry');
+        await act(async () => retry?.click());
+        await waitUntil(() => expect(container.querySelector('[data-project-manager]')).not.toBeNull());
+        expect(managerApi.getProjectSummary).toHaveBeenCalledTimes(3);
+        expect(managerApi.getProjectSummary.mock.calls[2][1]).toMatchObject({ focusId: 'global-1', selectedNodeKey: 'domain_experiment:domain-1' });
+    });
+
+    it('does not alias explicit invalid context or suppress the validated fallback error', async () => {
+        managerApi.getProjectSummary.mockImplementation((_id: string, options: { selectedNodeKey?: string }) => {
+            if (options.selectedNodeKey) return Promise.reject({ isAxiosError: true, response: { status: 422 } });
+            return Promise.reject(new Error('fallback unavailable'));
+        });
+        await renderAt('/projects/project-1?focus=wrong&selected=domain_experiment%3Awrong');
+        await waitUntil(() => expect(container.textContent).toContain('fallback unavailable'));
+        expect(managerApi.getProjectSummary).toHaveBeenCalledTimes(2);
+        expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('focus=wrong');
+    });
+
     it('renders standalone NGS/MolBio Projects as DNA-sequence-centered current workspaces', async () => {
         managerApi.listNgsMolBioProjectLinks.mockResolvedValue([]);
         managerApi.getProjectSummary.mockImplementation(() => {

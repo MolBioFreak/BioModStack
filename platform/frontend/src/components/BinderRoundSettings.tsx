@@ -25,20 +25,22 @@ export function BinderRoundSettings({ values, onChange }: {
     values: Record<string, UntypedApiValue>;
     onChange: (draft: BinderRoundDraft) => void;
 }) {
+    const original = hydrateBinderRound(values);
+    const [editing, setEditing] = useState<Record<string, string>>({});
+    const selectedModels = [...roundStages(original.binder_round.sequence_design), ...roundStages(original.binder_round.prediction)].map(stage => stage.model_id);
     const queries = useQueries({ queries: models.map(id => ({ queryKey: ['binder-round-catalog', id],
+        enabled: selectedModels.includes(id) || Object.values(editing).includes(id),
         queryFn: async (): Promise<BinderRoundCatalog> => {
             const { data } = await fetchModelById(id);
             if (!Array.isArray(data.params)) throw new Error(`No typed settings returned for ${names[id]}.`);
             return { ...data, id };
         }, staleTime: 60_000, retry: false })) });
     const catalogs = queries.flatMap(query => query.data ? [query.data] : []);
-    const original = hydrateBinderRound(values);
     const draft = withRoundCatalogs(original, catalogs);
     const serialized = JSON.stringify(draft);
     const originalSerialized = JSON.stringify({ binder_round: values.binder_round, binder_round_drafts: values.binder_round_drafts });
     useEffect(() => { if (serialized !== originalSerialized) onChange(JSON.parse(serialized)); }, [serialized, originalSerialized, onChange]);
     const request = draft.binder_round;
-    const [editing, setEditing] = useState<Record<string, string>>({});
     const edit = (patch: Partial<Pick<typeof request, 'enabled' | 'binder_chains' | 'target_chains'>>) => onChange({ ...draft, binder_round: { ...request, ...patch } });
     return <section aria-label="Initial candidate round" className="space-y-4 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 text-[var(--text-primary)]">
         <h3 className="text-lg font-semibold">Initial candidate round</h3>

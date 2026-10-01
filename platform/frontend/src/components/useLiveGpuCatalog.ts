@@ -9,11 +9,13 @@ const GPU_CATALOG_MAX_AGE_MS = 15_000;
 const REMOTE_GPU_CATALOG_MAX_AGE_MS = 20_000;
 
 interface UseLiveGpuCatalogOptions {
+    enabled?: boolean;
     requireFresh?: boolean;
     followExecutionTarget?: boolean;
 }
 
 export function useLiveGpuCatalog(options: UseLiveGpuCatalogOptions = {}) {
+    const enabled = options.enabled !== false;
     const readTarget = () => options.followExecutionTarget && typeof window !== 'undefined'
         && window.location.pathname === '/submit'
         ? window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) : null;
@@ -26,20 +28,24 @@ export function useLiveGpuCatalog(options: UseLiveGpuCatalogOptions = {}) {
     const remoteQuery = useQuery({
         queryKey: ['active-remote-gpu-telemetry', executionTargetId],
         queryFn: () => fetchActiveRemoteGpuTelemetry(undefined, executionTargetId!),
-        enabled: Boolean(executionTargetId),
+        enabled: enabled && Boolean(executionTargetId),
         placeholderData: undefined,
         refetchInterval: 10_000,
         retry: false,
     });
     const requireFresh = options.requireFresh === true || Boolean(executionTargetId);
-    const systemQuery = useSystemStatus();
-    const [nowMs, setNowMs] = useState(() => Date.now());
+    const systemQuery = useSystemStatus(5000, { enabled });
+    const [clockMs, setClockMs] = useState(() => Date.now());
+    // Demand can resume after its aging timer has been absent for a long time.
+    // Apply the unchanged freshness windows on that first render, not one tick later.
+    const resumedAtMs = useMemo(() => Date.now(), [enabled, requireFresh]);
+    const nowMs = Math.max(clockMs, resumedAtMs);
 
     useEffect(() => {
-        if (!requireFresh) return undefined;
-        const timer = setInterval(() => setNowMs(Date.now()), 1000);
+        if (!enabled || !requireFresh) return undefined;
+        const timer = setInterval(() => setClockMs(Date.now()), 1000);
         return () => clearInterval(timer);
-    }, [requireFresh]);
+    }, [enabled, requireFresh]);
 
     const isStale = requireFresh && systemQuery.data !== undefined && (
         systemQuery.dataUpdatedAt <= 0

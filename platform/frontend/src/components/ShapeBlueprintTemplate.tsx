@@ -1,4 +1,5 @@
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
 import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -388,9 +389,9 @@ export default function ShapeBlueprintTemplate({ initialValues = {}, embedded = 
                         {settingsQuery.isError && <p role="status">Prediction settings could not refresh. Retained values are unchanged. <button type="button" onClick={() => void settingsQuery.refetch()}>Retry prediction settings</button></p>}
                         {(['esmfold2', 'boltz2', 'protenix_v2'] as const).map(id => <section key={id} aria-label={`${id} prediction`} className="min-w-0 space-y-3 rounded-lg border border-[var(--border-primary)] p-3">
                             <label className="flex gap-2 text-sm font-medium"><input type="checkbox" aria-label={`Include ${id}`} checked={validatorSuite.includes(id)} disabled={id === 'esmfold2'} onChange={event => setValidatorSuite(current => event.target.checked ? [...current, id] : current.filter(value => value !== id))} />{id === 'esmfold2' ? 'ESMFold2 · existing baseline' : id === 'boltz2' ? 'Boltz2' : 'Protenix V2'}</label>
-                            <details open={validatorSuite.includes(id)}><summary>{validatorSuite.includes(id) ? 'Native settings' : 'Retained native settings'}</summary><div className="mt-3">
+                            <NativeSettingsDisclosure open={validatorSuite.includes(id) || undefined} summary={validatorSuite.includes(id) ? 'Native settings' : 'Retained native settings'}>{() => <div className="mt-3">
                                 <ShapeNativeSettings definition={settingsQuery.data?.validators[id]} values={effectiveValidatorSettings[id]} onPatch={patch => setValidatorSettingsByEngine(current => ({ ...current, [id]: { ...current[id], ...patch } }))} />
-                            </div></details>
+                            </div>}</NativeSettingsDisclosure>
                         </section>)}
                     </div>
                     <div hidden={section !== 'Run'} className="space-y-4">
