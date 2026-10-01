@@ -911,25 +911,6 @@ export function MolBioToolkitV2() {
         };
     }, [selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType]);
 
-    // Release resources are independent of construct identity. Query invalidation
-    // remains the explicit refresh boundary; changing DNA never redownloads them.
-    useEffect(() => {
-        let cancelled = false;
-        void queryClient.fetchQuery({
-            queryKey: ['molbio-restriction-catalog'],
-            queryFn: ({ signal }) => fetchRestrictionCatalog({ signal }),
-            staleTime: 300_000,
-        }).then((page) => {
-            if (cancelled) return;
-            restrictionCatalogRecordsRef.current = page.items;
-            setRestrictionCatalog(page.catalog);
-            setRestrictionCatalogRecords(page.items);
-        }).catch((error) => {
-            if (!cancelled) setRestrictionAuthorityError(error instanceof Error ? error.message : 'Restriction catalog unavailable.');
-        });
-        return () => { cancelled = true; };
-    }, [queryClient]);
-
     useEffect(() => {
         restrictionDigestControllerRef.current.begin();
         restrictionAnalysisControllerRef.current.begin();
@@ -940,25 +921,6 @@ export function MolBioToolkitV2() {
         setRestrictionDigestError(null);
         setRestrictionAuthorityLoading(false);
     }, [restrictionSource]);
-
-    // Supplier products do not own recognition-site or cleavage geometry.
-    useEffect(() => {
-        let cancelled = false;
-        void queryClient.fetchQuery({
-            queryKey: ['molbio-restriction-product-release'],
-            queryFn: async ({ signal }) => {
-                // Only the release receipt is consumed here. The existing catalogue
-                // page carries it; product rows and their continuation are not needed.
-                const response = await fetch('/api/molbio/restriction/products?limit=1', { signal, credentials: 'same-origin' });
-                if (!response.ok) throw new Error('Restriction product release unavailable.');
-                return parseRestrictionProducts(await response.json()).product_release;
-            },
-            staleTime: 300_000,
-        }).then((receipt) => {
-            if (!cancelled) setRestrictionProductEvidence(receipt);
-        }).catch(() => { if (!cancelled) setRestrictionProductEvidence(null); });
-        return () => { cancelled = true; };
-    }, [queryClient]);
 
     const runRestrictionAnalysis = useCallback((enzymeIds?: string[]) => {
         if (!restrictionSource || !restrictionCatalog || enzymeIds?.length === 0) return;
@@ -2327,9 +2289,50 @@ export function MolBioToolkitV2() {
         viewportWidth,
         viewportHeight,
     });
-    const restrictionConsumerVisible = visibility.cutsites || (isMobileMolBio
+    const restrictionConsumerVisible = (Boolean(restrictionSource) && visibility.cutsites) || (isMobileMolBio
         ? mobileSurface === 'digest'
         : !isToolPanelCollapsed && activePanel === 'digest');
+    // Release resources are independent of construct identity. Query invalidation
+    // remains the explicit refresh boundary; changing DNA never redownloads them.
+    useEffect(() => {
+        if (!restrictionConsumerVisible) return;
+        let cancelled = false;
+        void queryClient.fetchQuery({
+            queryKey: ['molbio-restriction-catalog'],
+            queryFn: ({ signal }) => fetchRestrictionCatalog({ signal }),
+            staleTime: 300_000,
+        }).then((page) => {
+            if (cancelled) return;
+            restrictionCatalogRecordsRef.current = page.items;
+            setRestrictionCatalog(page.catalog);
+            setRestrictionCatalogRecords(page.items);
+        }).catch((error) => {
+            if (!cancelled) setRestrictionAuthorityError(error instanceof Error ? error.message : 'Restriction catalog unavailable.');
+        });
+        return () => { cancelled = true; };
+    }, [queryClient, restrictionConsumerVisible]);
+
+    // Supplier products do not own recognition-site or cleavage geometry.
+    useEffect(() => {
+        if (!restrictionConsumerVisible) return;
+        let cancelled = false;
+        void queryClient.fetchQuery({
+            queryKey: ['molbio-restriction-product-release'],
+            queryFn: async ({ signal }) => {
+                // Only the release receipt is consumed here. The existing catalogue
+                // page carries it; product rows and their continuation are not needed.
+                const response = await fetch('/api/molbio/restriction/products?limit=1', { signal, credentials: 'same-origin' });
+                if (!response.ok) throw new Error('Restriction product release unavailable.');
+                return parseRestrictionProducts(await response.json()).product_release;
+            },
+            staleTime: 300_000,
+        }).then((receipt) => {
+            if (!cancelled) setRestrictionProductEvidence(receipt);
+        }).catch(() => { if (!cancelled) setRestrictionProductEvidence(null); });
+        return () => { cancelled = true; };
+    }, [queryClient, restrictionConsumerVisible]);
+
+
     useEffect(() => {
         if (restrictionConsumerVisible) runRestrictionAnalysis(JSON.parse(selectedRestrictionIds));
     }, [selectedRestrictionIds, runRestrictionAnalysis, restrictionConsumerVisible]);

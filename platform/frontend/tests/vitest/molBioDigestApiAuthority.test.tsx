@@ -28,6 +28,37 @@ describe('DigestPanel backend authority', () => {
     let container: HTMLDivElement | undefined;
     afterEach(async () => { if (root) await act(async () => root?.unmount()); container?.remove(); });
 
+
+    it.each([false, true])('pages 123 ordered rows without narrowing scientific actions (mobile=%s)', async (mobile) => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const records = Array.from({length:123}, (_, i) => ({...record, enzyme_id:`Enzyme${i}`, canonical_name:`Enzyme${i}`, aliases:[i<100?'cohort':'other']}));
+        const fullAnalysis = {...analysis, analysis:{...analysis.analysis, enzyme_summaries:records.map(r=>({...analysis.analysis.enzyme_summaries[0],enzyme_id:r.enzyme_id})), occurrences:[]}};
+        const mapChange = vi.fn(), simulate = vi.fn(), digestChange = vi.fn(), analyzeAll = vi.fn(), highlight = vi.fn();
+        let mapped:string[]=[];
+        const render = async () => act(async()=>root?.render(<DigestPanel mobile={mobile} sequenceData={sequence} sequenceId={null} onHighlight={highlight} selectedEnzymes={mapped} onEnzymesChange={mapChange} catalog={{...catalog, counts:{...catalog.counts,total:123}}} catalogRecords={records} analysis={fullAnalysis} authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false} digestError={null} onDigestSelectionChange={digestChange} onSimulateDigest={simulate} onAnalyzeAll={analyzeAll}/>));
+        const button = (label:string) => [...container!.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent===label)!;
+        const rows = () => [...container!.querySelectorAll('[data-enzyme-name]')].map(r=>r.getAttribute('data-enzyme-name'));
+        await render();expect(rows()).toEqual(records.slice(0,50).map(r=>r.enzyme_id));
+        await act(async()=>button(mobile?'Add':'Digest').click());
+        await act(async()=>button('Next enzymes').click());expect(rows()).toEqual(records.slice(50,100).map(r=>r.enzyme_id));
+        await act(async()=>button(mobile?'Add':'Digest').click());
+        await act(async()=>button('Next enzymes').click());expect(rows()).toEqual(records.slice(100).map(r=>r.enzyme_id));
+        expect(button('Next enzymes').disabled).toBe(true);
+        await act(async()=>button('Run Digest (2 enzymes)').click());expect(simulate).toHaveBeenCalledWith(['Enzyme0','Enzyme50']);
+        await act(async()=>button('Map all 1x').click());expect(mapChange).toHaveBeenLastCalledWith(records.map(r=>r.enzyme_id));
+        mapped=mapChange.mock.calls.at(-1)![0];await render();
+        await act(async()=>button('Previous enzymes').click());
+        expect(container.querySelector('[data-enzyme-name="Enzyme50"]')?.textContent).toContain('Unmap');
+        const search=container.querySelector('input')!;
+        await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(search,'cohort');search.dispatchEvent(new Event('input',{bubbles:true}));});
+        expect(rows()).toEqual(records.slice(0,50).map(r=>r.enzyme_id));
+        mapped=[];await render();
+        await act(async()=>button('Map filtered (100)').click());expect(mapChange).toHaveBeenLastCalledWith(records.slice(0,100).map(r=>r.enzyme_id));
+        await act(async()=>button('Analyze full catalog').click());expect(analyzeAll).toHaveBeenCalledTimes(1);
+        await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(search,'missing');search.dispatchEvent(new Event('input',{bubbles:true}));});
+        expect(rows()).toEqual([]);expect(button('Next enzymes').disabled).toBe(true);expect(container.textContent).toContain('0 enzymes');
+    });
+
     it('keeps catalog/all-analysis authority and digest highlights stable across map-only selection changes', async () => {
         const toolkitSource = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/MolBioToolkitV2.tsx'), 'utf8');
         const authorityEffect = toolkitSource.slice(toolkitSource.indexOf('const restrictionSource ='), toolkitSource.indexOf('const runRestrictionDigest ='));
