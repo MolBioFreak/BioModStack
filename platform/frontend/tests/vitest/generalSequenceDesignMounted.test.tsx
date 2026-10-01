@@ -215,6 +215,8 @@ it.runIf(Boolean(realInventories))('actual API inventories expose every applicab
     await mount(<ProteinModificationTemplate onBack={() => {}} />); await openSettings();
     for (const id of ['proteinmpnn', 'fampnn', 'caliby_experimental'] as const) {
         await edit('Sequence designer', id); const inventory = await fetchGeneralSequenceInventory(id);
+        const retained = document.querySelector('[data-general-retained-settings] summary') as HTMLElement;
+        await act(async () => retained.click()); await settle();
         const source = realInventories[id];
         const mode = source.modes.find((m: any) => m.id === (id === 'caliby_experimental' ? 'ensemble_design' : 'design'));
         const expectedFields = id === 'caliby_experimental'

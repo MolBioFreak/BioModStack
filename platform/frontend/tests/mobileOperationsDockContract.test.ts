@@ -18,11 +18,13 @@ test('Cordova compact mode retains Settings without passive issue collection', (
 
 test('Cordova telemetry legends stay in flow inside their chart cards', () => {
     const telemetry = read('src/components/InfraLiveTelemetry.tsx');
+    const plot = read('src/components/telemetryMetricPlot.tsx');
     const css = read('src/index.css');
 
-    assert.match(telemetry, /data-bms-telemetry-plot="true"/u);
-    assert.match(telemetry, /data-bms-telemetry-legend="true"/u);
-    assert.match(telemetry, /data-bms-telemetry-canvas="true"/u);
+    assert.match(telemetry, /import \{ TimeSeriesPlot \} from '\.\/telemetryMetricPlot'/u);
+    assert.match(plot, /data-bms-telemetry-plot="true"/u);
+    assert.match(plot, /data-bms-telemetry-legend="true"/u);
+    assert.match(plot, /data-bms-telemetry-inspector="true"/u);
     assert.match(css, /html\.bms-cordova-compact \[data-bms-telemetry-legend='true'\][\s\S]*position:\s*static/u);
     assert.match(css, /html\.bms-cordova-compact \[data-bms-telemetry-canvas='true'\][\s\S]*position:\s*relative/u);
 });

@@ -61,6 +61,38 @@ def test_stats_toolkit_status_always_publishes_same_origin_entry(monkeypatch) ->
         assert response.json() == expected
 
 
+def test_stats_liveness_read_does_not_block_the_event_loop(monkeypatch) -> None:
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    probe_threads: list[int] = []
+
+    def probe():
+        probe_threads.append(threading.get_ident())
+        entered.set()
+        assert release.wait(3), "test liveness probe was not released"
+        return {"available": True, "ready": None}
+
+    monkeypatch.setattr(system, "probe_stats_addon", probe)
+
+    async def exercise():
+        loop_thread = threading.get_ident()
+        pending = asyncio.create_task(system.get_stats_toolkit_status())
+        try:
+            assert await asyncio.to_thread(entered.wait, 3)
+            assert not pending.done()
+            assert probe_threads == [probe_threads[0]]
+            assert probe_threads[0] != loop_thread
+        finally:
+            release.set()
+        assert await pending == {
+            "available": True, "ready": None, "entry_url": "/stats/embed/",
+        }
+
+    asyncio.run(exercise())
+
+
 def test_runtime_start_endpoint_invokes_service_layer(monkeypatch) -> None:
     started: list[str] = []
     monkeypatch.setattr(system, "start_all", lambda project_root=None, runtime_mode=None: started.append(runtime_mode or "dev"), raising=False)
