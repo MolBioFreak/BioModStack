@@ -1539,6 +1539,46 @@ async def _active_ngs_binding(domain_session: AsyncSession, *, project_id: str, 
     return binding
 
 
+async def _is_native_protein_domain(session: AsyncSession, revision_id: str) -> bool:
+    revision = await session.get(ExperimentRevision, revision_id)
+    if revision is None:
+        return False
+    payload = json.loads(revision.canonical_payload)
+    # Connector-backed v2/v4 Domains retain their existing local proof, including
+    # historical Protein Domains. Native setups use the global v1 hierarchy.
+    return payload.get("schema") == "bms.domain-experiment.v1" and payload.get("domain_kind") == "protein_in_silico"
+
+
+async def _domain_binding_revision(
+    session: AsyncSession, domain_session: AsyncSession, *, project_id: str,
+    experiment_id: str, domain: ExperimentAggregateHead,
+) -> str:
+    if await _is_native_protein_domain(session, domain.current_revision_id):
+        return domain.current_revision_id
+    binding = await _active_ngs_binding(
+        domain_session, project_id=project_id, experiment_id=experiment_id, domain=domain
+    )
+    return binding.global_domain_experiment_revision_id
+
+
+async def _plan_launch_authority(
+    session: AsyncSession, domain_session: AsyncSession, *, project_id: str,
+    global_experiment_id: str, domain_id: str,
+    plan_authority: ExperimentWorkflowPlanAuthority,
+    pinned: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if await _is_native_protein_domain(session, plan_authority.expected_domain_revision_id):
+        from experiment_services import protein_setup_launch_authority
+        return await protein_setup_launch_authority(session, plan_authority, pinned=pinned)
+    authority = await exact_local_launch_authority(
+        session, domain_session, project_id=project_id,
+        global_experiment_id=global_experiment_id, domain_id=domain_id,
+        expected_domain_revision_id=plan_authority.expected_domain_revision_id,
+    )
+    authority["capability_contract_sha256"] = plan_authority.capability_contract_sha256
+    return authority
+
+
 async def _current_preparation_launch_authority(
     global_session: AsyncSession,
     domain_session: AsyncSession,
@@ -1550,32 +1590,33 @@ async def _current_preparation_launch_authority(
     preparation: ExperimentWorkflowPreparation,
     proof_cache: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    current_authority = (
-        proof_cache.get(plan_authority.expected_domain_revision_id)
-        if proof_cache is not None
-        else None
-    )
-    if current_authority is None:
-        current_authority = await exact_local_launch_authority(
-            global_session,
-            domain_session,
-            project_id=project_id,
-            global_experiment_id=global_experiment_id,
-            domain_id=domain_id,
-            expected_domain_revision_id=plan_authority.expected_domain_revision_id,
-        )
-        if proof_cache is not None:
-            proof_cache[plan_authority.expected_domain_revision_id] = current_authority
-    current_authority = dict(current_authority)
-    current_authority["capability_contract_sha256"] = plan_authority.capability_contract_sha256
     try:
         normalized_preparation = json.loads(preparation.normalized_request_json)
     except (TypeError, json.JSONDecodeError) as exc:
         raise ValidationFailure("replacement_preparation_required") from exc
-    if (
-        not isinstance(normalized_preparation, dict)
-        or normalized_preparation.get("launch_authority") != current_authority
-    ):
+    if not isinstance(normalized_preparation, dict):
+        raise ValidationFailure("replacement_preparation_required")
+    pinned = normalized_preparation.get("launch_authority")
+    native = await _is_native_protein_domain(global_session, plan_authority.expected_domain_revision_id)
+    # Native proof includes the preparation's pinned Project/Experiment revisions
+    # and capability. A Domain-only cache must not substitute another Plan's proof.
+    current_authority = (
+        proof_cache.get(plan_authority.expected_domain_revision_id)
+        if proof_cache is not None and not native
+        else None
+    )
+    if current_authority is None:
+        current_authority = await _plan_launch_authority(
+            global_session, domain_session, project_id=project_id,
+            global_experiment_id=global_experiment_id, domain_id=domain_id,
+            plan_authority=plan_authority,
+            pinned=pinned if native and isinstance(pinned, dict) else None,
+        )
+        if proof_cache is not None and not native:
+            proof_cache[plan_authority.expected_domain_revision_id] = current_authority
+    current_authority = dict(current_authority)
+    current_authority["capability_contract_sha256"] = plan_authority.capability_contract_sha256
+    if pinned != current_authority:
         raise ValidationFailure("replacement_preparation_required")
     return current_authority
 
@@ -1938,7 +1979,7 @@ async def create_domain_plan(project_id: str, experiment_id: str, domain_id: str
                 capability_id=payload.capability_id,
             )
         else:
-            await _active_ngs_binding(domain_session, project_id=project_id, experiment_id=experiment_id, domain=domain)
+            await _domain_binding_revision(session, domain_session, project_id=project_id, experiment_id=experiment_id, domain=domain)
             if domain.current_revision_id != payload.expected_domain_revision_id:
                 raise RevisionConflict("Domain revision changed")
             domain_revision = await session.get(ExperimentRevision, payload.expected_domain_revision_id)
@@ -2017,10 +2058,10 @@ async def replace_domain_plan_draft(project_id: str, experiment_id: str, domain_
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         _project, _experiment, domain = await _domain_hierarchy(session, project_id, experiment_id, domain_id)
-        binding = await _active_ngs_binding(domain_session, project_id=project_id, experiment_id=experiment_id, domain=domain)
+        binding_revision_id = await _domain_binding_revision(session, domain_session, project_id=project_id, experiment_id=experiment_id, domain=domain)
         plan = await _plan_head(session, project_id=project_id, domain_id=domain_id, plan_id=plan_id)
         authority, _capability_contract = await _stored_plan_authority(session, plan)
-        if authority.expected_domain_revision_id != binding.global_domain_experiment_revision_id:
+        if authority.expected_domain_revision_id != binding_revision_id:
             raise RevisionConflict("Workflow Plan Domain revision changed")
         draft = await save_workflow_draft(session, plan_id, payload.payload, expected_generation=payload.expected_draft_generation)
         await session.commit()
@@ -2035,10 +2076,10 @@ async def publish_domain_plan_revision(project_id: str, experiment_id: str, doma
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         _project, _experiment, domain = await _domain_hierarchy(session, project_id, experiment_id, domain_id)
-        binding = await _active_ngs_binding(domain_session, project_id=project_id, experiment_id=experiment_id, domain=domain)
+        binding_revision_id = await _domain_binding_revision(session, domain_session, project_id=project_id, experiment_id=experiment_id, domain=domain)
         plan = await _plan_head(session, project_id=project_id, domain_id=domain_id, plan_id=plan_id)
         authority, _capability_contract = await _stored_plan_authority(session, plan)
-        if authority.expected_domain_revision_id != binding.global_domain_experiment_revision_id:
+        if authority.expected_domain_revision_id != binding_revision_id:
             raise RevisionConflict("Workflow Plan Domain revision changed")
         draft = await session.scalar(select(ExperimentWorkflowDraft).where(ExperimentWorkflowDraft.workflow_id == plan_id))
         if draft is None or draft.generation != payload.expected_draft_generation:
@@ -2090,15 +2131,11 @@ async def prepare_domain_plan(project_id: str, experiment_id: str, domain_id: st
         revision = await session.get(ExperimentRevision, revision_id)
         if revision is None or revision.subject_id != plan_id:
             raise NotFound("Workflow Plan revision not found")
-        launch_authority = await exact_local_launch_authority(
-            session,
-            domain_session,
-            project_id=project_id,
-            global_experiment_id=experiment_id,
-            domain_id=domain_id,
-            expected_domain_revision_id=plan_authority.expected_domain_revision_id,
+        launch_authority = await _plan_launch_authority(
+            session, domain_session, project_id=project_id,
+            global_experiment_id=experiment_id, domain_id=domain_id,
+            plan_authority=plan_authority,
         )
-        launch_authority["capability_contract_sha256"] = plan_authority.capability_contract_sha256
         key = _idempotency_key(request)
         normalized_request = {"project_id": project_id, "experiment_id": experiment_id, "domain_id": domain_id, "plan_id": plan_id, "revision_id": revision_id, "input_dataset_revision_ids": payload.input_dataset_revision_ids, "launch_authority": launch_authority}
         digest = hashlib.sha256(json.dumps(normalized_request, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -2135,6 +2172,7 @@ async def prepare_domain_plan(project_id: str, experiment_id: str, domain_id: st
                     revision_id,
                     {"input_dataset_revision_ids": payload.input_dataset_revision_ids, "launch_authority": launch_authority},
                     core_session=core_session,
+                    normalize_native_job=await _is_native_protein_domain(session, plan_authority.expected_domain_revision_id),
                 )
                 if prior is not None and prior.resource_id != preparation.resource_id:
                     session.add(ExperimentLineageEdge(id=f"preparation-supersedes:{uuid.uuid4()}", workspace_id=project_id, source_resource_id=preparation.resource_id, target_resource_id=prior.resource_id, edge_mode="retry_of", edge_key="prior-preparation", metadata_json=json.dumps({"reason": "current-authority-revalidation"}), created_at=datetime.now(timezone.utc).isoformat()))
@@ -2723,7 +2761,7 @@ async def cancel_domain_run_group(project_id: str, experiment_id: str, domain_id
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         _project, _experiment, domain = await _domain_hierarchy(session, project_id, experiment_id, domain_id)
-        await _active_ngs_binding(domain_session, project_id=project_id, experiment_id=experiment_id, domain=domain)
+        await _domain_binding_revision(session, domain_session, project_id=project_id, experiment_id=experiment_id, domain=domain)
         command = await request_run_group_cancellation(
             session,
             workspace_id=project_id,
