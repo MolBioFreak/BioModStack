@@ -18,7 +18,9 @@ interface ModelIntegrationControlProps {
 export const useModelIntegrationConfig = (
     modelId: string,
     loader?: ModelIntegrationLoader,
+    enabled = true,
 ) => useQuery({
+    enabled,
     queryKey: ['model-integration', modelId],
     queryFn: async ({ signal }) => {
         if (loader) return loader(signal);

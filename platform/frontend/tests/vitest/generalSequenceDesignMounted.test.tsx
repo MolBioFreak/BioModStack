@@ -99,7 +99,8 @@ it('keeps OFF compact and puts primary sampling ahead of collapsed native expert
     const retained = panel.querySelector<HTMLDetailsElement>('[data-general-retained-settings]')!;
     expect(retained.open).toBe(false);
     expect(control('Sequence designer').closest('details')).toBeNull(); expect(control('seqs_per_design').closest('details')).toBeNull();
-    expect(retained.contains(control('fampnn_temperature'))).toBe(true);
+    expect(retained.querySelector('[aria-label="fampnn_temperature"]')).toBeNull();
+    expect(retained.querySelector('[data-general-sequence-advanced]')).toBeNull();
     expect([...panel.querySelectorAll('details')].every(details => !details.open)).toBe(true);
     expect(panel.textContent).not.toContain('Range: unbounded – unbounded'); expect(panel.textContent).not.toContain('Native default: null');
     await toggle('Enable sequence design');
@@ -117,6 +118,8 @@ it('keeps OFF compact and puts primary sampling ahead of collapsed native expert
     await edit('fampnn_seed', '7'); await toggle('Enable sequence design');
     expect(panel.querySelector<HTMLDetailsElement>('[data-general-retained-settings]')!.open).toBe(false);
     await edit('Sequence designer', 'proteinmpnn'); await edit('Sequence designer', 'fampnn');
+    const reopened = panel.querySelector('[data-general-retained-settings] summary') as HTMLElement;
+    await act(async () => reopened.click()); await settle();
     expect(control('fampnn_seed').value).toBe('7');
     await click('Generate candidates'); expect(job()).not.toHaveProperty('sequence_design');
 });
@@ -129,7 +132,9 @@ it.each(['rfd3', 'disco', 'laproteina'])('%s uses section navigation, defaults o
     await openSettings(); expect(control('Sequence designer').closest('[hidden]')).toBeNull();
     await toggle('Enable sequence design'); await edit('fampnn_seed', '0'); await edit('fampnn_psce_threshold', ''); await toggle('fampnn_repack_last');
     await click('Generate candidates');
-    expect(job().sequence_design).toMatchObject(active);
+    // Clearing this NativeSetting emits an explicit empty string (also verified
+    // on the frozen baseline); cloning an explicit null is a separate case.
+    expect(job().sequence_design).toMatchObject({ ...active, params: { ...active.params, fampnn_psce_threshold: '' } });
     expect(job().params).not.toHaveProperty('sequence_design'); expect(job()).not.toHaveProperty('sequence_design_drafts');
     expect(job().sequence_design.params).not.toHaveProperty('input_pdb'); expect(job().sequence_design.params).not.toHaveProperty('design_chain'); expect(job().sequence_design.params).not.toHaveProperty('antibody_only_fixture');
     expect(job().params.generator).toBe(generator);

@@ -15,9 +15,11 @@ vi.mock('../../src/components/StructurePredictionTemplate', () => { loaded.predi
 vi.mock('../../src/components/MolecularDynamicsTemplate', () => { loaded.md(); return { MolecularDynamicsTemplate: () => null }; });
 vi.mock('../../src/components/ProteinModificationTemplate', () => { loaded.modification(); return { ProteinModificationTemplate: () => null }; });
 vi.mock('../../src/components/MutagenesisTemplate', () => { loaded.mutagenesis(); return { MutagenesisTemplate: () => null }; });
-vi.mock('../../src/components/ModelIntegrationControl', () => ({ ModelIntegrationControl: () => null, useModelIntegrationConfig: () => ({ data: { workflows: {} }, isFetching: false, isError: false }) }));
+// Keep the real metadata hook: assert actual parent transport demand.
+vi.mock('../../src/components/conformationalMapping/ConformationalMappingLauncher', () => ({ ConformationalMappingLauncher: () => <section data-cm-owned-picker>Dedicated CM placement owner</section> }));
 let root: Root; let client: QueryClient; let host: HTMLDivElement; let requests: InternalAxiosRequestConfig[];
 let failDetail: boolean; let hangDetail: boolean;
+let ligandConsumer: boolean;
 const oldAdapter = api.defaults.adapter;
 const definition = { id: 'fixture', name: 'Fixture definition', category: 'fixture', modes: [{ id: 'edit', name: 'Edit', params: ['label', 'count', 'enabled'] }], params: [{ name: 'label', type: 'string', default: 'default label' }, { name: 'count', type: 'integer', default: 7 }, { name: 'enabled', type: 'boolean', default: true }] };
 const compact = { ...definition, params: undefined, modes: definition.modes.map(({ params: _, ...mode }) => mode) };
@@ -27,7 +29,7 @@ async function until(check: () => void) { await vi.waitFor(async () => { await s
 async function mount(route: string) { await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[route]}><Location /><JobSubmission /></MemoryRouter></QueryClientProvider>)); await settle(); }
 const button = (label: string) => [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === label)!;
 beforeEach(() => {
-    failDetail = false; hangDetail = false; requests = [];
+    failDetail = false; hangDetail = false; ligandConsumer = false; requests = [];
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     api.defaults.adapter = async config => {
@@ -35,8 +37,9 @@ beforeEach(() => {
         if (config.url === '/api/models') { expect(config.params.compact).toBe(true); data = [compact]; }
         else if (config.url === '/api/models/fixture') {
             if (hangDetail) await new Promise((_resolve, reject) => config.signal!.addEventListener!('abort', () => reject(new CanceledError()), { once: true }));
-            if (failDetail) throw new Error('fixture offline'); data = definition;
-        } else if (config.url === '/api/gpu/status') data = { gpus: [] };
+            if (failDetail) throw new Error('fixture offline'); data = ligandConsumer ? { ...definition, modes: [{ id: 'edit', params: ['ligand'] }], params: [{ name: 'ligand', type: 'string', preset_type: 'ligand', default: '' }] } : definition;
+        } else if (config.url === '/api/inputs/presets' && config.params?.type === 'ligand') data = [{ id: 'one', name: 'Fixture ligand', smiles: 'C' }];
+        else if (config.url === '/api/gpu/status') data = { gpus: [] };
         else if (config.url === '/api/gpu/gpus') data = { gpus: [] };
         else if (config.url?.endsWith('/integration')) data = { workflows: {} };
         return { data, status: 200, statusText: 'OK', headers: {}, config };
@@ -78,6 +81,26 @@ it('a failed definition read does not add a launch gate to a retained manual dra
     failDetail = true; await mount('/submit');
     await until(() => expect(host.textContent).toContain('Selected model settings unavailable'));
     expect(button('Launch Experiment').disabled).toBe(false);
+});
+it.each(['', '?template=oligo_design', '?template=protein_modification_experimental', '?template=molecular_dynamics', '?template=antibody_denovo&engine=rfantibody'])('non-consuming parent %s reads no integration or ligand inventory', async suffix => {
+    await mount(`/submit${suffix}`); await settle();
+    expect(requests.filter(r => r.url?.endsWith('/integration'))).toHaveLength(0);
+    expect(requests.filter(r => r.url === '/api/inputs/presets' && r.params?.type === 'ligand')).toHaveLength(0);
+});
+it('actual ligand selector loads the complete preset contract exactly once without changing the cloned draft', async () => {
+    ligandConsumer = true;
+    localStorage.setItem('clonedJobData', JSON.stringify({ name: 'Ligand draft', model_id: 'fixture', mode: 'edit', params: { ligand: '' } }));
+    await mount('/submit');
+    await until(() => expect(host.textContent).toContain('Fixture ligand'));
+    expect(requests.filter(r => r.url === '/api/inputs/presets' && r.params?.type === 'ligand')).toHaveLength(1);
+    expect([...host.querySelectorAll('input')].some(input => input.value === '')).toBe(true);
+    expect(button('Launch Experiment').disabled).toBe(false);
+});
+it('CM parent has no placement picker competing with its dedicated owner', async () => {
+    await mount('/submit?template=conformational_mapping');
+    await until(() => expect(host.querySelectorAll('[data-cm-owned-picker]')).toHaveLength(1));
+    expect(requests.filter(r => r.url === '/api/execution-targets')).toHaveLength(0);
+    expect(requests.filter(r => r.url?.endsWith('/integration'))).toHaveLength(0);
 });
 it('leaving a pending selected-model read cancels its transport', async () => {
     hangDetail = true; await mount('/submit?model=fixture&mode=edit');

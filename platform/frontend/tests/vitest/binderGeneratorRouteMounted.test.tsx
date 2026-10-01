@@ -41,7 +41,7 @@ it('RF to BC2 selection persists engine identity on reopen without losing Projec
     expect(draft().denovo_generator).toBe('rfantibody');
     // Fresh entry intentionally opens the chooser. Exercise close/reopen at
     // its real native disclosure rather than treating the first click as open.
-    await settleDraft(() => expect(Object.keys(draft().binder_round_drafts)).toEqual(expect.arrayContaining(['fampnn', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2', 'caliby_binder'])));
+    await settleDraft(() => expect(Object.keys(draft().binder_round_drafts)).toEqual(expect.arrayContaining(['fampnn', 'protenix'])));
     expect(chooserDetails().open).toBe(true);
     await act(async () => chooserDetails().querySelector('summary')!.click());
     expect(chooserDetails().open).toBe(false);
@@ -90,7 +90,7 @@ it('explicit chooser reopening changes presentation only and remains dismissible
     expect(chooserDetails().open).toBe(true);
     // Round catalogs hydrate independently of chooser presentation. Observe the
     // completed emitted draft before comparing the close-only interaction.
-    await settleDraft(() => expect(Object.keys(draft().binder_round_drafts)).toEqual(expect.arrayContaining(['fampnn', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2', 'caliby_binder'])));
+    await settleDraft(() => expect(Object.keys(draft().binder_round_drafts)).toEqual(expect.arrayContaining(['fampnn', 'protenix'])));
     const before = draft();
     await act(async () => chooserDetails().querySelector('summary')!.click());
     expect(chooserDetails().open).toBe(false);

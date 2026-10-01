@@ -4,6 +4,7 @@ import { NativeSetting } from './NativeBinderGeneration';
 import { SequenceDesignerSettings } from './SequenceDesignerSettings';
 import { BioXpSchemaInput } from './BioXpSchemaInput';
 import { ProteinDesignPanel } from './ProteinDesignWorkflow';
+import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
 import { changeGeneralSequenceDesigner, fetchGeneralSequenceInventory, generalSequenceDesigners, generalSequenceNames,
     withGeneralSequenceInventory, type GeneralSequenceDesignDraft, type GeneralSequenceDesigner, type GeneralSequenceParameter } from '../lib/generalSequenceDesign';
 
@@ -58,9 +59,9 @@ export function GeneralSequenceDesignSettings({ value, onChange }: {
         return <NativeSetting parameter={presentation(parameter)} values={values} onPatch={update} chains={[]} />;
     };
     const parameters = query.data?.parameters ?? [];
-    const primary = <div className="grid gap-4 md:grid-cols-2" data-general-sequence-primary>{parameters.filter(parameter => isPrimary(parameter.name)).map(parameter =>
+    const primary = () => <div className="grid gap-4 md:grid-cols-2" data-general-sequence-primary>{parameters.filter(parameter => isPrimary(parameter.name)).map(parameter =>
         <div key={parameter.name} data-sequence-designer-field={parameter.name}>{render(parameter)}</div>)}</div>;
-    const advanced = <div className="space-y-3" data-general-sequence-advanced>
+    const advanced = () => <div className="space-y-3" data-general-sequence-advanced>
         <SequenceDesignerSettings key={model} fields={parameters.filter(parameter => !isCount(parameter.name) && !isPrimary(parameter.name))}
             groupForField={advancedGroup} initiallyOpenGroups={[]} renderField={parameter => render(parameter)} />
         {!!query.data?.inputParameters.length && <details className="rounded-lg border border-[var(--border-primary)] p-3"><summary>Generated-state constraints</summary>
@@ -84,11 +85,10 @@ export function GeneralSequenceDesignSettings({ value, onChange }: {
         {query.isPending && <p role="status">Loading model-owned settings…</p>}
         {query.error && <p role="status">{query.error.message} Saved settings remain intact.</p>}
         {query.data && (request.enabled ? <>
-            {primary}
-            <div className="space-y-3"><h4 className="text-sm font-medium">Advanced native settings</h4>{advanced}</div>
-        </> : <details className="rounded-lg border border-[var(--border-primary)] p-3" data-general-retained-settings>
-            <summary className="cursor-pointer text-sm font-medium">Retained native settings</summary>
-            <div className="mt-4 space-y-4">{primary}{advanced}</div>
-        </details>)}
+            {primary()}
+            <div className="space-y-3"><h4 className="text-sm font-medium">Advanced native settings</h4>{advanced()}</div>
+        </> : <NativeSettingsDisclosure className="rounded-lg border border-[var(--border-primary)] p-3" data-general-retained-settings summary={<span className="cursor-pointer text-sm font-medium">Retained native settings</span>}>
+            {() => <div className="mt-4 space-y-4">{primary()}{advanced()}</div>}
+        </NativeSettingsDisclosure>)}
     </section></ProteinDesignPanel>;
 }

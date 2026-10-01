@@ -1,5 +1,6 @@
 import { BindCraft2SourcePicker } from './BindCraft2SourcePicker';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
 import { bc2DisplaySelectors, bc2SelectorSignature, type BC2LeafDisplay } from '../lib/bc2LeafDisplay';
 import { BindCraft2ListEditor } from './BindCraft2ListEditor';
 import { BC2Number, BC2PresetPicker } from './BindCraft2NativeControls';
@@ -22,6 +23,8 @@ export function BindCraft2Settings({ inventory, value, onChange, structureInputs
   inventory: BC2Inventory; inherited?: BC2LeafDisplay; effectiveSettings?: Record<string, unknown>; value: BC2Request; onChange: (next: BC2Request) => void; launchAvailable?: boolean; structureInputs?: ReactNode; section?: BC2Section
 }) {
   const [search, setSearch] = useState('');
+  const [objectivesVisited, setObjectivesVisited] = useState(section === undefined || section === 'objectives');
+  useEffect(() => { if (section === undefined || section === 'objectives') setObjectivesVisited(true); }, [section]);
   // The shell supplies only preview values whose captured scientific revision is current.
   const effective = effectiveSettings;
   const candidate = inherited ?? inventory.display;
@@ -126,7 +129,7 @@ export function BindCraft2Settings({ inventory, value, onChange, structureInputs
       <div className="mb-4 border-l-2 border-[var(--accent-primary)] pl-3"><h3 className="font-semibold">{group.title}</h3><p className="mt-1 text-xs text-[var(--text-secondary)]">{group.help}</p></div>
       <div className={group.title === 'Design schedule' ? 'grid grid-cols-2 gap-4 lg:grid-cols-5' : grid}>{group.keys.map(fieldCard)}</div>
     </section>)}
-    {(['losses', 'filters'] as const).map(key => inventory.fields[key] && <section hidden={section !== undefined && section !== 'objectives'} aria-label={bc2Label(key)} key={key} className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4 sm:p-5">{fieldCard(key)}</section>)}
+    {objectivesVisited && (['losses', 'filters'] as const).map(key => inventory.fields[key] && <section hidden={section !== undefined && section !== 'objectives'} aria-label={bc2Label(key)} key={key} className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4 sm:p-5">{fieldCard(key)}</section>)}
     <section hidden={section !== undefined && section !== 'expert'} aria-label="Expert settings" className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4 sm:p-5">
       <h3 className="font-semibold">Expert settings</h3>
       <p className="mb-4 mt-1 text-xs text-[var(--text-secondary)]">All native scientific controls remain available. Groups describe context, not restrictions; inactive-mode overrides are kept when changing presets.</p>
@@ -136,9 +139,9 @@ export function BindCraft2Settings({ inventory, value, onChange, structureInputs
           const keys = expert.filter(key => bc2ExpertGroup(key) === group && `${key} ${bc2Label(key)} ${bc2Help(key) ?? ''}`.toLowerCase().includes(search.toLowerCase()));
           if (!keys.length) return null;
           const overridden = keys.filter(key => Object.hasOwn(value, key)).length;
-          return <details key={group} open={search ? true : undefined} className="py-3"><summary className="cursor-pointer text-sm font-medium">{group}<span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">{keys.length} controls{overridden ? ` · ${overridden} overrides` : ''}{group === 'Native relaxation' ? ` · ${value.relax_accepted_designs === true ? 'enabled' : 'optional accepted-design path'}` : ''}</span></summary>
+          return <NativeSettingsDisclosure key={group} open={search ? true : undefined} className="py-3" summary={<span className="cursor-pointer text-sm font-medium">{group}<span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">{keys.length} controls{overridden ? ` · ${overridden} overrides` : ''}{group === 'Native relaxation' ? ` · ${value.relax_accepted_designs === true ? 'enabled' : 'optional accepted-design path'}` : ''}</span></span>}>{() =>
             <div className="mt-4 space-y-4">{BC2_GROUP_CONTEXT[group] && <p className="text-xs text-[var(--text-secondary)]">{BC2_GROUP_CONTEXT[group]}</p>}<div className={grid}>{keys.map(fieldCard)}</div></div>
-          </details>;
+          }</NativeSettingsDisclosure>;
         })}
         {search && !expert.some(key => `${key} ${bc2Label(key)} ${bc2Help(key) ?? ''}`.toLowerCase().includes(search.toLowerCase())) && <p className="py-3 text-sm">No matching expert controls. Primary controls are above.</p>}
       </div>

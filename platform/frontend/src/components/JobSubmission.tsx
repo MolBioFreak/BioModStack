@@ -246,7 +246,7 @@ export function JobSubmission() {
     const setFampnnOverrides = (value: unknown) => setParams(previous => ({ ...previous, fampnn_analysis_overrides: value }));
     let fampnnError = '';
     try { hydrateFampnnOverrides(fampnnOverrides); } catch (error) { fampnnError = String(error); }
-    const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
+
     const [explicitRunFrustrampnn, setExplicitRunFrustrampnn] = useState<boolean | undefined>(undefined);
     const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(() => (
         hydrateFrustraMpnnSettings(undefined)
@@ -781,12 +781,7 @@ export function JobSubmission() {
     });
     const templateDetail = selectedTemplateData?.data?.data ?? selectedTemplateData?.data;
 
-    // Fetch ligand presets for dynamic dropdown
-    const { data: ligandPresetsData } = useQuery({
-        queryKey: ['presets', 'ligand'],
-        queryFn: () => fetchInputPresets('ligand'),
-    });
-    const ligandPresets = ligandPresetsData?.data ?? [];
+
 
     const submitBinderRequest = async (jobData: Partial<Job>, draft = projectDraftValues) => {
         if (!projectSetup.active) return submitNativeBinderRequest({ ...jobData, ...(launchContextId ? { launch_context_id: launchContextId } : {}) });
@@ -872,6 +867,9 @@ export function JobSubmission() {
         }
         return resolveFrustraMpnnWorkflowId(modelId, modeId);
     }, [wizardMode, selectedModelId, selectedModeId, selectedTemplateId, templateDetail, params, ligands]);
+    // Dedicated forms own their integration defaults. Only the generic stage
+    // below consumes this parent's copy.
+    const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn', undefined, !!resolvedFrustrampnnWorkflowId);
     const configuredFrustrampnnWorkflow = resolvedFrustrampnnWorkflowId
         ? frustrampnnIntegrationQuery.data?.workflows?.[resolvedFrustrampnnWorkflowId]
         : undefined;
@@ -1164,6 +1162,16 @@ export function JobSubmission() {
             return param.condition.values.includes(controllingValue);
         });
     }, [templateDetail, params]);
+
+    // Only ParamField's ligand preset selector consumes this inventory.
+    const ligandPresetFields = isTemplateMode && !isDedicatedLauncherTemplate(selectedTemplateId)
+        ? visibleTemplateParams : wizardMode === 'manual' && !isNativeBinderGeneration && !isLigandNative && !isCalibyNative ? visibleParams : [];
+    const { data: ligandPresetsData } = useQuery({
+        queryKey: ['presets', 'ligand'],
+        queryFn: () => fetchInputPresets('ligand'),
+        enabled: ligandPresetFields.some((field: UntypedApiValue) => field.preset_type === 'ligand'),
+    });
+    const ligandPresets = ligandPresetsData?.data ?? [];
 
     const groupedTemplateParams = useMemo(() => {
         const groups: Record<string, UntypedApiValue[]> = {};
@@ -1577,7 +1585,7 @@ export function JobSubmission() {
                     catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
                     finally { setProjectActionBusy(false); }
                 }}>Start run</button>}{projectActionError && <p role="alert">{projectActionError}</p>}<ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
-            {!isNativeBinderGeneration && !(isTemplateMode && ['structure_prediction', 'mutagenesis', 'antibody_denovo', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics'].includes(selectedTemplateId ?? '')) && <ExecutionTargetPicker workflowRequest={workflowRequest} />}
+            {!isNativeBinderGeneration && !(isTemplateMode && ['structure_prediction', 'mutagenesis', 'antibody_denovo', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'].includes(selectedTemplateId ?? '')) && <ExecutionTargetPicker workflowRequest={workflowRequest} />}
             {!isNativeBinderGeneration && selectedTemplateId !== DE_NOVO_TEMPLATE && selectedTemplateId !== 'antibody_denovo' && <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />}
             {launchContextId && (
                 <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
