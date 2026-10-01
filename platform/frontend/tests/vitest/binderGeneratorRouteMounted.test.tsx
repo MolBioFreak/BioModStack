@@ -52,14 +52,14 @@ it('RF to BC2 selection persists engine identity on reopen without losing Projec
     expect(params.get('engine')).toBe('bindcraft2');
     for (const [key, value] of Object.entries({ project_id: 'project-1', setup: 'setup-2', launch_context: 'ctx', extra: 'keep' })) expect(params.get(key)).toBe(value);
     expect(destination.endsWith('#sources')).toBe(true);
-    expect(draft().bindcraft2_settings).toEqual({});
+    expect(draft().bindcraft2_settings).toEqual({ subbatch_size: null });
     await remount(destination);
     expect(draft().denovo_generator).toBe('bindcraft2');
     expect(document.querySelector('[aria-label="BindCraft2 campaign"]')).not.toBeNull();
     expect(mocks.submit).not.toHaveBeenCalled();
 });
 it('BC2 to RF selection reopens RF and leaves requested BC2 settings untouched', async () => {
-    const settings = { targets: [], relax_steps: 0, trajectory_only: false, binder_name: null };
+    const settings = { subbatch_size: 'auto', targets: [], relax_steps: 0, trajectory_only: false, binder_name: null };
     await mount('/submit?template=antibody_denovo&engine=bindcraft2', { initialValues: { model_id: 'bindcraft2', mode: 'campaign', bindcraft2_settings: settings } });
     const select = [...document.querySelectorAll<HTMLSelectElement>('[aria-label="Binder format / objective"]')].find(el => !el.closest('[hidden]'))!;
     await act(async () => { select.value = 'antibody'; select.dispatchEvent(new Event('change', { bubbles: true })); });
@@ -73,7 +73,7 @@ it.each([
     { initialDraft: { model_id: 'bindcraft2', mode: 'campaign', bindcraft2_settings: { relax_steps: 0 } } },
 ])('saved/clone/Project native identity takes precedence over URL: %j', async props => {
     await mount('/submit?template=antibody_denovo&engine=rfantibody', props);
-    expect(draft().denovo_generator).toBe('bindcraft2'); expect(draft().bindcraft2_settings).toEqual({ relax_steps: 0 });
+    expect(draft().denovo_generator).toBe('bindcraft2'); expect(draft().bindcraft2_settings).toEqual({ subbatch_size: null, relax_steps: 0 });
 });
 it('unknown URL selector preserves the warning rather than substituting RF', async () => {
     await mount('/submit?template=antibody_denovo&engine=unknown-engine');

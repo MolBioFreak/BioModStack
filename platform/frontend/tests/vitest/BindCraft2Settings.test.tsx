@@ -24,7 +24,9 @@ async function inspectTree(tree: ReturnType<typeof create>) {
 
 const inventory: BC2Inventory = {
   upstream_commit: 'd5bae16e9fee95f4c97fc16bc05dcbde4ccb885f',
+  recommended_defaults: { subbatch_size: null },
   fields: {
+    subbatch_size: { native_key: 'subbatch_size', observed_types: ['string', 'integer', 'null'], has_native_default: true, native_default: 'auto', recommended_default: null, recommended_default_reason: 'No chunking by default for new BMS campaigns; uses more VRAM.', status: 'typed' },
     max_trajectories: { native_key: 'max_trajectories', observed_types: ['integer'], has_native_default: false, native_default: null, status: 'typed' },
     cyclic_offset_mode: { native_key: 'cyclic_offset_mode', observed_types: ['string'], has_native_default: false, native_default: null, choices: ['distance', 'direction', 'neighbours'], runtime_fallback: 'direction', status: 'typed' },
     trajectory_only: { native_key: 'trajectory_only', observed_types: ['boolean'], has_native_default: true, native_default: false, status: 'typed' },
@@ -183,6 +185,56 @@ it('mounted scientific controls emit typed operator edits', () => {
     expect(host.querySelector('[aria-label="validation_models.mode"]')).not.toBeNull()
   } finally { domAct(() => root.unmount()); host.remove() }
 })
+
+
+
+describe('BC2 chunking modes', () => {
+  function mount(initial: Record<string, unknown>) {
+    let latest = initial;
+    const host = document.createElement('div'); document.body.append(host);
+    const root = createRoot(host);
+    function Form() {
+      const [value, setValue] = useState(initial); latest = value;
+      return <BindCraft2Settings inventory={inventory} value={value} onChange={setValue} section="campaign"
+        inherited={{ selectors: {}, values: { subbatch_size: 'auto' } }} effectiveSettings={{ subbatch_size: 4 }} />;
+    }
+    domAct(() => root.render(<Form />));
+    return { host, latest: () => latest, close: () => { domAct(() => root.unmount()); host.remove(); } };
+  }
+  function mode(host: HTMLElement, value: string) {
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="subbatch_size.mode"]')!;
+    domAct(() => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  }
+  it('defaults Off in Generation without mutating sparse inheritance; modes emit native types and reset recommendation', () => {
+    const form = mount({ campaign_seed: 0 });
+    try {
+      const select = form.host.querySelector<HTMLSelectElement>('[aria-label="subbatch_size.mode"]')!;
+      expect(select.value).toBe('off'); expect(select.closest('[hidden]')).toBeNull();
+      expect(form.host.querySelector('[aria-label="subbatch_size"]')).toBeNull();
+      expect(form.latest()).toEqual({ campaign_seed: 0 });
+      expect(select.closest('[data-bc2-field]')!.textContent).toContain('BMS recommended default');
+      expect(select.closest('[data-bc2-field]')!.textContent).toContain('Native default: "auto"');
+      mode(form.host, 'auto'); expect(form.latest()).toEqual({ campaign_seed: 0, subbatch_size: 'auto' });
+      mode(form.host, 'custom'); expect(form.latest().subbatch_size).toBe(16);
+      const input = form.host.querySelector<HTMLInputElement>('[aria-label="subbatch_size"]')!;
+      expect(input.type).toBe('number'); expect(input.step).toBe('1'); expect(input.max).toBe('');
+      domAct(() => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '4096'); input.dispatchEvent(new Event('input', { bubbles: true })); });
+      expect(form.latest().subbatch_size).toBe(4096);
+      mode(form.host, 'off'); expect(form.latest().subbatch_size).toBeNull();
+      domAct(() => form.host.querySelector<HTMLButtonElement>('[aria-label="Reset subbatch_size"]')!.click());
+      expect(form.latest()).toEqual({ campaign_seed: 0 }); expect(select.value).toBe('off');
+    } finally { form.close(); }
+  });
+  it.each([null, 'auto', 1, 8192])('preserves explicit saved %j through mounted JSON reopen without inventing custom size', saved => {
+    const original = { subbatch_size: saved, max_trajectories: 7, losses: { custom: {} } };
+    const form = mount(JSON.parse(JSON.stringify(original)));
+    try {
+      expect(form.latest()).toEqual(original);
+      expect(form.host.querySelector<HTMLSelectElement>('[aria-label="subbatch_size.mode"]')!.value).toBe(saved === null ? 'off' : saved === 'auto' ? 'auto' : 'custom');
+      if (typeof saved === 'number') expect(form.host.querySelector<HTMLInputElement>('[aria-label="subbatch_size"]')!.value).toBe(String(saved));
+    } finally { form.close(); }
+  });
+});
 
 // Typed display fixtures exercise the leaf contract, not API/native runtime resolution.
 describe('BC2 sparse display transitions', () => {

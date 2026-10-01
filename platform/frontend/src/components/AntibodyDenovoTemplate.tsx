@@ -348,7 +348,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [templateIntent, setTemplateIntent] = useState<'browse' | 'save'>('browse');
     const [incompatibleTemplate, setIncompatibleTemplate] = useState<import('../lib/api').UserTemplate | null>(null);
     const keepLibraryOpen = useRef(false);
-    const bc2RequestIdentity = JSON.stringify(bc2Settings);
+    // Materialize only the new-campaign recommendation at the existing request /
+    // draft owner. Native profile inheritance stays sparse; saved explicit values win.
+    const requestedBc2Settings: BC2Request = { subbatch_size: null, ...bc2Settings };
+    const bc2RequestIdentity = JSON.stringify(requestedBc2Settings);
     const currentBc2Request = useRef({ identity: bc2RequestIdentity, revision: 0 });
     if (currentBc2Request.current.identity !== bc2RequestIdentity) {
         currentBc2Request.current = { identity: bc2RequestIdentity, revision: currentBc2Request.current.revision + 1 };
@@ -1101,7 +1104,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     });
     const bc2CampaignRequest = {
         name: jobName, model_id: 'bindcraft2', mode: 'campaign',
-        params: { bindcraft2_settings: bc2Settings },
+        params: { bindcraft2_settings: requestedBc2Settings },
         binder_round: roundDraft.binder_round,
     };
 
@@ -2406,7 +2409,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const authoringDraft: Record<string, UntypedApiValue> = {
                     ...retainedDraft,
                     ...(!isRefinementMode ? roundDraft : {}),
-                    bindcraft2_settings: bc2Settings,
+                    bindcraft2_settings: requestedBc2Settings,
                     model_id: deNovoGenerator === null ? retainedDraft.model_id : deNovoGenerator === 'bindcraft2' ? 'bindcraft2' : deNovoGenerator === 'boltzgen' ? 'boltzgen' : 'antibody_denovo',
                     mode: deNovoGenerator === null ? retainedDraft.mode : deNovoGenerator === 'bindcraft2' ? 'campaign' : deNovoGenerator === 'boltzgen' ? 'nanobody_binder' : deNovoGenerator === 'ppiflow' ? 'generator_backbone_refine' : ANTIBODY_DENOVO_PIPELINE_MODE,
                     openmm_enabled: physicsSettings.enabled,
@@ -3132,7 +3135,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         <BindCraft2Campaign
             name={jobName} onNameChange={setJobName} onBack={onBack}
             generatorChooser={<BinderGeneratorChooser generator={deNovoGenerator} onSelect={selectDeNovoGenerator} onOpenNativeRoute={openNativeRoute} />}
-            requestedSettings={bc2Settings} preview={activeBc2Preview}
+            requestedSettings={requestedBc2Settings} preview={activeBc2Preview}
             inheritedSettings={bc2Inventory?.display && bc2SelectorSignature(bc2Inventory.display.selectors) === bc2SelectorSignature(bc2DisplaySelectors(bc2Settings, bc2Inventory)) ? bc2Inventory.display.values : undefined}
             inheritedOrigins={bc2Inventory?.display && bc2SelectorSignature(bc2Inventory.display.selectors) === bc2SelectorSignature(bc2DisplaySelectors(bc2Settings, bc2Inventory)) ? bc2Inventory.display.origins : undefined}
             roundSettings={<div hidden={bc2Section !== 'campaign'}><ol aria-label="Initial generation flow">{initialRoundSteps(deNovoGenerator, roundDraft.binder_round).map(step => <li key={step.title}><strong>{step.title}</strong> — {step.detail}</li>)}</ol><BinderRoundSettings values={roundDraft} onChange={setRoundDraft} /></div>}
@@ -3146,7 +3149,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 const attempt = previewAttempts.current.begin();
                 const current = () => previewAttempts.current.isCurrent(attempt) && currentBc2Request.current.revision === revision && currentBc2Request.current.identity === identity;
                 try {
-                    const data = await previewBindCraft2Campaign(bc2Settings);
+                    const data = await previewBindCraft2Campaign(requestedBc2Settings);
                     if (current()) setBc2Preview({ identity, revision, data });
                 } catch (error) {
                     if (current()) { const failure = binderShellError(error); setBc2ErrorLocation(failure); setBc2SubmitError(failure.message); }
@@ -3180,7 +3183,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     setBc2Settings(params.bindcraft2_settings && typeof params.bindcraft2_settings === 'object' && !Array.isArray(params.bindcraft2_settings)
                         ? params.bindcraft2_settings : {});
                 }}
-                currentParams={templateIntent === 'save' ? { ...authoringDraft, job_name: jobName, denovo_generator: 'bindcraft2', bindcraft2_settings: bc2Settings } : undefined}
+                currentParams={templateIntent === 'save' ? { ...authoringDraft, job_name: jobName, denovo_generator: 'bindcraft2', bindcraft2_settings: requestedBc2Settings } : undefined}
                 currentModelId="bindcraft2" currentMode="campaign" baseTemplateId="antibody_denovo" initialIntent={templateIntent} />
                 {showTemplateManager && incompatibleTemplate && <div role="alert" className="fixed bottom-4 left-4 right-4 z-[60] rounded-xl border bg-[var(--bg-secondary)] p-4">
                     <p>{incompatibleTemplate.name} belongs to another workflow. The current campaign is unchanged.</p>

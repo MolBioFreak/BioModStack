@@ -11,6 +11,8 @@ export type BC2Field = {
   observed_types: string[];
   has_native_default: boolean;
   native_default: unknown;
+  recommended_default?: unknown;
+  recommended_default_reason?: string;
   choices?: string[];
   items?: { type?: string } & Record<string, unknown>;
   source_evidence?: string;
@@ -37,6 +39,7 @@ export type BC2Inventory = {
   presets: Record<string, Record<string, unknown>>;
   paratope_conformations: string[];
   registered_metrics: Record<string, Record<string, { params: Record<string, BC2MetricParameter> }>>;
+  recommended_defaults?: BC2Request;
   display?: BC2Display;
   display_selector_fields?: string[];
 };

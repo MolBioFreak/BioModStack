@@ -3,7 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
 import { bc2DisplaySelectors, bc2SelectorSignature, type BC2LeafDisplay } from '../lib/bc2LeafDisplay';
 import { BindCraft2ListEditor } from './BindCraft2ListEditor';
-import { BC2Number, BC2PresetPicker } from './BindCraft2NativeControls';
+import { BC2Chunking, BC2Number, BC2PresetPicker } from './BindCraft2NativeControls';
 import { BindCraft2MetricEditor } from './BindCraft2MetricEditor';
 import { BC2CropEditor, BC2ModelPool, BC2SweepEditor } from './BindCraft2CollectionControls';
 import { BC2_SYSTEM_FIELDS, BC2_PRIMARY, BC2_EXPERT_GROUPS, BC2_GROUP_CONTEXT, BC2_CHOICES, bc2ExpertGroup, bc2Label, bc2Help, bc2Range, bc2Unit } from '../lib/bindcraft2ControlMetadata';
@@ -31,16 +31,18 @@ export function BindCraft2Settings({ inventory, value, onChange, structureInputs
   const display = candidate && bc2SelectorSignature(candidate.selectors) === bc2SelectorSignature(bc2DisplaySelectors(value, inventory)) ? candidate : undefined;
   const inheritedValue = (key: string, field: BC2Field): unknown => {
     if (key === 'max_trajectories') return undefined;
+    if (key === 'subbatch_size') return Object.hasOwn(field, 'recommended_default') ? field.recommended_default : null;
     if (display && Object.hasOwn(display.values, key)) return display.values[key];
     const applies = !field.applicable_when || Object.entries(field.applicable_when).every(([name, expected]) => (Object.hasOwn(value, name) ? value[name] : effective && Object.hasOwn(effective, name) ? effective[name] : display && Object.hasOwn(display.values, name) ? display.values[name] : inventory.fields[name]?.native_default) === expected);
     if (applies && field.runtime_fallback !== undefined && (field.fallback_authority || field.source_evidence) && (key !== 'oligomer_tie' || field.applicable_when)) return field.runtime_fallback;
     return field.has_native_default ? field.native_default : undefined;
   };
-  const shown = (key: string, field: BC2Field) => Object.hasOwn(value, key) ? value[key] : key !== 'max_trajectories' && effective && Object.hasOwn(effective, key) ? effective[key] : inheritedValue(key, field);
+  const shown = (key: string, field: BC2Field) => Object.hasOwn(value, key) ? value[key] : key !== 'max_trajectories' && key !== 'subbatch_size' && effective && Object.hasOwn(effective, key) ? effective[key] : inheritedValue(key, field);
   const set = (key: string, next: unknown) => { const copy = { ...value }; if (next === undefined) delete copy[key]; else copy[key] = next; onChange(copy); };
   const control = (key: string, field: BC2Field) => {
     const type = field.observed_types[0]
     const current = shown(key, field)
+    if (key === 'subbatch_size') return <BC2Chunking value={current} onChange={next => set(key, next)} />;
     const choices = field.choices ?? BC2_CHOICES[key];
     if (choices) return <select aria-label={key} value={current as string ?? ''} onChange={event => set(key, event.currentTarget.value || undefined)}>
       <option value="">Native / profile choice</option>{Array.from(new Set([...choices, ...(typeof current === 'string' ? [current] : [])])).map(choice => <option value={choice} key={choice}>{bc2Label(choice)}</option>)}
@@ -96,18 +98,19 @@ export function BindCraft2Settings({ inventory, value, onChange, structureInputs
     return <div key={key} data-bc2-field={key} className={`min-w-0 space-y-2 ${['targets', 'losses', 'filters', 'parameter_sweep', 'aa_bias', 'binder_shapes'].includes(key) ? 'col-span-full' : ''}`}>
       <div className="flex items-start justify-between gap-2">
         <span className="text-sm font-medium text-[var(--text-primary)]">{bc2Label(key)}</span>
-        {explicit ? <button type="button" className="!border-0 !p-0 text-xs text-[var(--accent-primary)]" aria-label={`Reset ${key}`} onClick={() => set(key, undefined)}>{key === 'max_trajectories' ? 'Clear explicit attempt limit (required)' : inheritedValue(key, field) !== undefined ? 'Restore inherited value' : 'Clear value'}</button> : <span className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">Native / profile</span>}
+        {explicit ? <button type="button" className="!border-0 !p-0 text-xs text-[var(--accent-primary)]" aria-label={`Reset ${key}`} onClick={() => set(key, undefined)}>{key === 'subbatch_size' ? 'Restore BMS recommended default' : key === 'max_trajectories' ? 'Clear explicit attempt limit (required)' : inheritedValue(key, field) !== undefined ? 'Restore inherited value' : 'Clear value'}</button> : <span className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">{key === 'subbatch_size' ? 'BMS recommended default' : 'Native / profile'}</span>}
       </div>
       {help && <p className="text-xs leading-relaxed text-[var(--text-secondary)]">{help}</p>}
       {control(key, field)}
-      <small>{explicit ? 'Explicit override' : key === 'max_trajectories' ? 'Required · unconfigured · no native default' : effective && Object.hasOwn(effective, key) ? 'Compiler effective value (read-only authority)' : display && Object.hasOwn(display.values, key) ? `Inherited · ${display.origins?.[key] ?? 'selected native profile'}` : field.runtime_fallback !== undefined && inheritedValue(key, field) !== undefined ? `Native runtime fallback · ${field.fallback_authority ?? field.source_evidence}` : field.applicable_when ? 'Inactive retained setting' : field.has_native_default ? 'Native baseline · selected inheritance unavailable' : 'Inherited value unavailable'}</small>
+      <small>{explicit ? 'Explicit override' : key === 'subbatch_size' ? 'BMS recommended default · Off (no chunking)' : key === 'max_trajectories' ? 'Required · unconfigured · no native default' : effective && Object.hasOwn(effective, key) ? 'Compiler effective value (read-only authority)' : display && Object.hasOwn(display.values, key) ? `Inherited · ${display.origins?.[key] ?? 'selected native profile'}` : field.runtime_fallback !== undefined && inheritedValue(key, field) !== undefined ? `Native runtime fallback · ${field.fallback_authority ?? field.source_evidence}` : field.applicable_when ? 'Inactive retained setting' : field.has_native_default ? 'Native baseline · selected inheritance unavailable' : 'Inherited value unavailable'}</small>
       {explicit && value[key] === null && <small>Explicit null is retained.</small>}
-      {!explicit && shown(key, field) === null && <small>Native-derived / null; no numeric value is invented.</small>}
+      {!explicit && key !== 'subbatch_size' && shown(key, field) === null && <small>Native-derived / null; no numeric value is invented.</small>}
       {field.applicable_when && !Object.entries(field.applicable_when).every(([name, expected]) => inventory.fields[name] ? shown(name, inventory.fields[name]) === expected : value[name] === expected) && <small>Inactive retained settings; this stage is off.</small>}
       <details className="text-xs text-[var(--text-secondary)]"><summary className="cursor-pointer">{explicit ? 'Override' : 'Default'} · native reference</summary>
         <code className="block mt-1 break-all">{key}</code>
         {display && Object.hasOwn(display.values, key) && key !== 'max_trajectories' && <p>Selected inheritance: {defaultSummary(display.values[key])} · {display.origins?.[key] ?? 'model-owned native profile'}</p>}
         {effective && Object.hasOwn(effective, key) && <p>Compiler effective (read-only): {defaultSummary(effective[key])}. Editing the control creates a requested override; it does not edit this result.</p>}
+        {key === 'subbatch_size' && <p>BMS recommended default: Off (no chunking; JSON null). {field.recommended_default_reason ?? 'Uses more VRAM; choose Native auto or a custom size when needed.'}</p>}
         {field.has_native_default && <p>Native default: {defaultSummary(field.native_default)}. Selected presets may override this baseline.</p>}
         {!field.has_native_default && field.runtime_fallback !== undefined && <p>{field.fallback_authority ? 'Native relaxation fallback when omitted' : 'Native runtime fallback when omitted'}: {defaultSummary(field.runtime_fallback)}</p>}
         {field.applicable_when && <p>Applies when {Object.entries(field.applicable_when).map(([name, next]) => `${name} is ${next === true ? 'enabled' : String(next)}`).join(', ')}; omission retains native behavior.</p>}

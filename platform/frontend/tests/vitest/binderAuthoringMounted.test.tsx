@@ -82,7 +82,7 @@ async function edit(label: string, value: string) {
 }
 it('actual BC2 authoring previews server payload, submits digest, and reopens untouched requested values', async () => {
     discovery();
-    const settings = { max_trajectories: 4, trajectory_only: false, targets: [], aa_bias: { A: 0 }, relax_steps: 0, filters: {}, binder_name: null };
+    const settings = { subbatch_size: 'auto', max_trajectories: 4, trajectory_only: false, targets: [], aa_bias: { A: 0 }, relax_steps: 0, filters: {}, binder_name: null };
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { preview_digest: 'compiled-digest', requested_settings: settings, effective_settings: { resolved: true }, warnings: ['native notice'] } });
     await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ model_id: 'bindcraft2', mode: 'campaign', bindcraft2_settings: settings }} />);
     expect(document.querySelector('[aria-label="trajectory_only"]')?.getAttribute('type')).toBe('checkbox');

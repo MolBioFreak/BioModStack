@@ -19,6 +19,28 @@ export function BC2Number({ label, value, onChange, integer = false, range, unit
   </div>;
 }
 
+/** Native null | 'auto' | positive integer, with no hydration-time invention. */
+export function BC2Chunking({ value, onChange }: {
+  value: unknown; onChange: (next: null | 'auto' | number) => void;
+}) {
+  const mode = value === null || value === undefined ? 'off' : value === 'auto' ? 'auto' : 'custom';
+  const [draft, setDraft] = useState(typeof value === 'number' ? String(value) : '');
+  useEffect(() => setDraft(typeof value === 'number' ? String(value) : ''), [value]);
+  const valid = draft !== '' && Number.isInteger(Number(draft)) && Number(draft) > 0;
+  return <div className="space-y-2">
+    <select aria-label="subbatch_size.mode" value={mode} onChange={event => onChange(event.currentTarget.value === 'off' ? null : event.currentTarget.value === 'auto' ? 'auto' : typeof value === 'number' ? value : 16)}>
+      <option value="off">Off (no chunking)</option>
+      <option value="auto">Native auto</option>
+      <option value="custom">Custom size</option>
+    </select>
+    {mode === 'custom' && <>
+      <input aria-label="subbatch_size" type="number" min={1} step={1} value={draft} aria-invalid={!valid}
+        onChange={event => { const text = event.currentTarget.value; setDraft(text); const next = Number(text); if (text !== '' && Number.isInteger(next) && next > 0) onChange(next); }} />
+      <small>Positive integer chunk size; no upper limit. { !valid && 'Enter a positive integer to update the requested value; the previous value is retained.' }</small>
+    </>}
+  </div>;
+}
+
 /** Ordered selections: native modality/core composition is order-sensitive. */
 export function BC2PresetPicker({ label, value, choices, onChange, singular = false }: {
   label: string; value: unknown; choices: string[]; onChange: (next: unknown) => void; singular?: boolean;
