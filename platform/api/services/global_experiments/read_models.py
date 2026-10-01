@@ -835,7 +835,14 @@ async def _dataset_page(
     decoded = _decode_cursor(cursor, "datasets")
     if not domain_ids:
         return [], None
-    statement = select(ExperimentAggregateHead).where(
+    statement = select(
+        ExperimentAggregateHead,
+        ExperimentRevision.revision_number,
+        ExperimentRevision.payload_sha256,
+        ExperimentRevision.dependency_graph_sha256,
+    ).outerjoin(
+        ExperimentRevision, ExperimentRevision.resource_id == ExperimentAggregateHead.current_revision_id,
+    ).where(
         ExperimentAggregateHead.workspace_id == project_id,
         ExperimentAggregateHead.aggregate_kind == "dataset",
         ExperimentAggregateHead.parent_id.in_(domain_ids),
@@ -854,10 +861,9 @@ async def _dataset_page(
                 ExperimentAggregateHead.aggregate_id.desc(),
             ).limit(limit + 1)
         )
-    ).scalars().all()
+    ).all()
     items: list[dict[str, Any]] = []
-    for head in rows[:limit]:
-        revision = await session.get(ExperimentRevision, head.current_revision_id) if head.current_revision_id else None
+    for head, revision_number, payload_sha256, dependency_graph_sha256 in rows[:limit]:
         items.append({
             "id": _key("dataset", f"{head.aggregate_id}:{head.current_revision_id}"),
             "dataset_id": head.aggregate_id,
@@ -866,13 +872,13 @@ async def _dataset_page(
             "domain_experiment_id": head.parent_id,
             "lifecycle_state": head.lifecycle_state,
             "current_revision_id": head.current_revision_id,
-            "revision_number": revision.revision_number if revision is not None else None,
-            "payload_sha256": revision.payload_sha256 if revision is not None else None,
-            "dependency_graph_sha256": revision.dependency_graph_sha256 if revision is not None else None,
+            "revision_number": revision_number,
+            "payload_sha256": payload_sha256,
+            "dependency_graph_sha256": dependency_graph_sha256,
         })
     next_cursor = None
     if len(rows) > limit and items:
-        last = rows[limit - 1]
+        last = rows[limit - 1][0]
         next_cursor = _encode_cursor("datasets", last.created_at, last.aggregate_id)
     return items, next_cursor
 
@@ -1014,9 +1020,10 @@ async def build_project_manager_read_model(
     if project is None or project.aggregate_kind != "workspace":
         raise NotFound(f"project not found: {project_id}")
     project_payload = await _payload(session, project)
-    global_heads = (
+    global_rows = (
         await session.execute(
-            select(ExperimentAggregateHead)
+            select(ExperimentAggregateHead, ExperimentRevision.canonical_payload)
+            .outerjoin(ExperimentRevision, ExperimentRevision.resource_id == ExperimentAggregateHead.current_revision_id)
             .where(
                 ExperimentAggregateHead.workspace_id == project_id,
                 ExperimentAggregateHead.aggregate_kind == "experiment",
@@ -1024,15 +1031,17 @@ async def build_project_manager_read_model(
             .order_by(ExperimentAggregateHead.updated_at.desc(), ExperimentAggregateHead.aggregate_id)
             .limit(MAX_TREE_NODES + 1)
         )
-    ).scalars().all()
+    ).all()
+    global_heads = [head for head, _payload_text in global_rows]
     if len(global_heads) > MAX_TREE_NODES:
         raise ValidationFailure("Project hierarchy exceeds the supported complete-tree bound")
     global_ids = [head.aggregate_id for head in global_heads]
-    domain_heads: list[ExperimentAggregateHead] = []
+    domain_rows = []
     if global_ids:
-        domain_heads = (
+        domain_rows = (
             await session.execute(
-                select(ExperimentAggregateHead)
+                select(ExperimentAggregateHead, ExperimentRevision.canonical_payload)
+                .outerjoin(ExperimentRevision, ExperimentRevision.resource_id == ExperimentAggregateHead.current_revision_id)
                 .where(
                     ExperimentAggregateHead.workspace_id == project_id,
                     ExperimentAggregateHead.aggregate_kind == "domain_experiment",
@@ -1041,13 +1050,20 @@ async def build_project_manager_read_model(
                 .order_by(ExperimentAggregateHead.created_at, ExperimentAggregateHead.aggregate_id)
                 .limit(MAX_TREE_NODES + 1)
             )
-        ).scalars().all()
+        ).all()
+    domain_heads = [head for head, _payload_text in domain_rows]
     projected_tree_nodes = 1 + len(global_heads) + len(domain_heads) * (1 + len(VIRTUAL_FOLDERS))
     if projected_tree_nodes > MAX_TREE_NODES:
         raise ValidationFailure("Project hierarchy exceeds the supported complete-tree bound")
 
-    global_payloads = {head.aggregate_id: await _payload(session, head) for head in global_heads}
-    domain_payloads = {head.aggregate_id: await _payload(session, head) for head in domain_heads}
+    global_payloads = {
+        head.aggregate_id: json.loads(payload_text) if payload_text is not None else {}
+        for head, payload_text in global_rows
+    }
+    domain_payloads = {
+        head.aggregate_id: json.loads(payload_text) if payload_text is not None else {}
+        for head, payload_text in domain_rows
+    }
     globals_by_id = {head.aggregate_id: head for head in global_heads}
     domains_by_parent: dict[str, list[ExperimentAggregateHead]] = {}
     for head in domain_heads:
@@ -1164,18 +1180,20 @@ async def build_project_manager_read_model(
         raise ValidationFailure("NGS/MolBio Project links exceed the supported relationship-map bound")
     linked_local_ids = sorted({edge.target_resource_id for edge in ngs_project_links})
     stable_map_nodes[0]["counts"]["linked_ngs_molbio_projects"] = len(linked_local_ids)
-    linked_local_heads = list(
-        (
-            await session.scalars(
-                select(ExperimentAggregateHead).where(
-                    ExperimentAggregateHead.aggregate_id.in_(linked_local_ids),
-                    ExperimentAggregateHead.aggregate_kind == "workspace",
-                )
+    linked_local_rows = (
+        await session.execute(
+            select(ExperimentAggregateHead, ExperimentRevision.canonical_payload)
+            .outerjoin(ExperimentRevision, ExperimentRevision.resource_id == ExperimentAggregateHead.current_revision_id)
+            .where(
+                ExperimentAggregateHead.aggregate_id.in_(linked_local_ids),
+                ExperimentAggregateHead.aggregate_kind == "workspace",
             )
-        ).all()
-    ) if linked_local_ids else []
+        )
+    ).all() if linked_local_ids else []
+    linked_local_heads = [head for head, _payload_text in linked_local_rows]
     linked_local_payloads = {
-        head.aggregate_id: await _payload(session, head) for head in linked_local_heads
+        head.aggregate_id: json.loads(payload_text) if payload_text is not None else {}
+        for head, payload_text in linked_local_rows
     }
     linked_local_by_id = {head.aggregate_id: head for head in linked_local_heads}
     link_metadata = {edge.id: json.loads(edge.metadata_json) for edge in ngs_project_links}
@@ -1354,11 +1372,12 @@ async def build_project_manager_read_model(
         )
 
     workflow_parent_ids = collection_domain_ids + [head.aggregate_id for head in context_globals]
-    workflows: list[ExperimentAggregateHead] = []
+    workflow_rows = []
     if workflow_parent_ids:
-        workflows = (
+        workflow_rows = (
             await session.execute(
-                select(ExperimentAggregateHead)
+                select(ExperimentAggregateHead, ExperimentRevision.canonical_payload)
+                .outerjoin(ExperimentRevision, ExperimentRevision.resource_id == ExperimentAggregateHead.current_revision_id)
                 .where(
                     ExperimentAggregateHead.workspace_id == project_id,
                     ExperimentAggregateHead.aggregate_kind == "workflow",
@@ -1367,10 +1386,14 @@ async def build_project_manager_read_model(
                 .order_by(ExperimentAggregateHead.created_at, ExperimentAggregateHead.aggregate_id)
                 .limit(MAX_TREE_NODES + 1)
             )
-        ).scalars().all()
+        ).all()
+    workflows = [head for head, _payload_text in workflow_rows]
     if len(workflows) > MAX_TREE_NODES:
         raise ValidationFailure("Focused workflow hierarchy exceeds the supported bound")
-    workflow_payloads = {head.aggregate_id: await _payload(session, head) for head in workflows}
+    workflow_payloads = {
+        head.aggregate_id: json.loads(payload_text) if payload_text is not None else {}
+        for head, payload_text in workflow_rows
+    }
     workflow_ids = [head.aggregate_id for head in workflows]
     workflow_nodes: list[dict[str, Any]] = []
     workflow_edges: list[dict[str, Any]] = []

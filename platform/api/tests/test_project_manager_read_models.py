@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 import rfc8785
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from database import get_session as get_core_session
 from experiment_database import (
@@ -20,6 +20,7 @@ from experiment_database import (
 )
 from experiment_models import (
     ExperimentBase,
+    ExperimentAggregateHead,
     ExperimentAuditEvent,
     ExperimentDomainAdapterReceipt,
     ExperimentExternalEntityReceipt,
@@ -1648,3 +1649,147 @@ async def test_runs_use_stable_cursor_pages_and_workflow_run_map_nodes_are_selec
             item["run_id"] for item in first["runs"]["items"] + second["runs"]["items"]
         }
         assert paged_ids == persisted_ids
+
+async def _read_fixture_head(session, *, identity, kind, project_id, parent_id=None, payload=None):
+    """Only the scratch fixture store is written; readers run in a fresh session."""
+    revision_id = f"revision-{identity}" if payload is not None else None
+    session.add(ExperimentResource(id=identity, kind=kind, workspace_id=project_id))
+    await session.flush()
+    if revision_id:
+        session.add(ExperimentResource(id=revision_id, kind="revision", workspace_id=project_id))
+        await session.flush()
+        session.add(ExperimentRevision(
+            resource_id=revision_id, subject_id=identity, revision_number=1,
+            schema_name=f"bms.{kind}.v1", schema_version="1",
+            canonical_payload=canonical_json(payload), payload_sha256="a" * 64,
+            dependency_graph_sha256="b" * 64, provenance_json="{}",
+        ))
+    session.add(ExperimentAggregateHead(
+        aggregate_id=identity, aggregate_kind=kind, workspace_id=project_id,
+        parent_id=parent_id, current_revision_id=revision_id, display_name=identity,
+        lifecycle_state="active", created_at="2026-08-09T00:00:00Z", updated_at="2026-08-09T00:00:00Z",
+    ))
+    await session.flush()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [1, 50])
+async def test_project_search_reuses_joined_payload_and_page_link_existence(read_model_store, size):
+    from routers.projects import search_projects, list_ngs_molbio_project_links
+    async with read_model_store() as session:
+        global_head = await create_project(session, _project_payload())
+        global_id = global_head.id
+        for index in range(size + 1):
+            await _read_fixture_head(session, identity=f"local-{index:03}", kind="workspace",
+                project_id=f"local-{index:03}", payload={"name": f"Local {index}", "project_scope": "ngs_molbio_local", "false": False, "zero": 0, "null": None, "empty": []})
+            session.add(ExperimentLineageEdge(
+                id=f"link-{index}", workspace_id=global_id, source_resource_id=global_id,
+                target_resource_id=f"local-{index:03}", edge_mode="references" if index % 2 == 0 else "uses_input",
+                edge_key=f"ngs-molbio-project-link:{index}", metadata_json=canonical_json({"experiment_ids": ["exact-experiment"], "result_ids": ["exact-result"]}),
+            ))
+        await session.commit()
+    statements = []
+    engine = read_model_store.kw["bind"].sync_engine
+    def record(_connection, _cursor, statement, _params, _context, _many):
+        statements.append(statement)
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        async with read_model_store() as session:
+            page = await search_projects(q="", status_filter=None, archive="active", cursor=None,
+                limit=size, project_scope="ngs_molbio_local", session=session)
+            print(f"Project search SQL statements for {size} rows: {len(statements)}")
+            assert len(statements) == 5
+            assert len(page["items"]) == size
+            assert page["next_cursor"] is not None
+            for item in page["items"]:
+                index = int(item["id"].split("-")[1])
+                assert item["has_ngs_molbio_links"] is (index % 2 == 0)
+                assert item["payload"]["false"] is False and item["payload"]["zero"] == 0
+                assert item["payload"]["null"] is None and item["payload"]["empty"] == []
+            statements.clear()
+            second = await search_projects(q="", status_filter=None, archive="active", cursor=page["next_cursor"],
+                limit=size, project_scope="ngs_molbio_local", session=session)
+            assert len(statements) == 5
+            assert len(second["items"]) == 1 and second["next_cursor"] is None
+            assert not ({item["id"] for item in page["items"]} & {item["id"] for item in second["items"]})
+            detail = await list_ngs_molbio_project_links(project_id="local-000", limit=100, session=session)
+            assert detail["items"][0]["experiment_ids"] == ["exact-experiment"]
+            assert detail["items"][0]["result_ids"] == ["exact-result"]
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_revision_reads_are_bounded_with_complete_link_and_selected_context(read_model_store):
+    counts = []
+    for size in (1, 10):
+        async with read_model_store() as session:
+            project, global_experiment, domain = await _hierarchy(session)
+            project_id, global_id, domain_id = project.id, global_experiment.id, domain.id
+            for index in range(size):
+                await _read_fixture_head(session, identity=f"global-{size}-{index}", kind="experiment", project_id=project_id, parent_id=project_id, payload={"name": f"Global {index}"})
+                await _read_fixture_head(session, identity=f"domain-{size}-{index}", kind="domain_experiment", project_id=project_id, parent_id=global_id, payload={"name": f"Domain {index}", "domain_kind": "protein_in_silico", "zero": 0})
+                await _read_fixture_head(session, identity=f"workflow-{size}-{index}", kind="workflow", project_id=project_id, parent_id=domain_id, payload={"name": f"Plan {index}"})
+                local_id = f"linked-{size}-{index}"
+                await _read_fixture_head(session, identity=local_id, kind="workspace", project_id=local_id, payload={"name": f"Linked {index}", "project_scope": "ngs_molbio_local"})
+                session.add(ExperimentLineageEdge(id=f"edge-{size}-{index}", workspace_id=project_id,
+                    source_resource_id=project_id, target_resource_id=local_id, edge_mode="references",
+                    edge_key=f"ngs-molbio-project-link:{size}-{index}", metadata_json="{}"))
+            await session.commit()
+        statements = []
+        engine = read_model_store.kw["bind"].sync_engine
+        def record(_connection, _cursor, statement, _params, _context, _many):
+            statements.append(statement)
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            async with read_model_store() as session:
+                value = await build_project_manager_read_model(session, project_id=project_id, focus_id=global_id,
+                    selected_node_key=f"domain_experiment:domain-{size}-{size - 1}", map_limit=100)
+                counts.append(len(statements))
+                assert value["counts"]["global_experiments"] == size + 1
+                assert value["counts"]["domain_experiments"] == size + 1
+                assert value["selection"]["summary"]["zero"] == 0
+                assert any(edge["source_node_key"] == f"global_experiment:{global_id}" and edge["target_node_key"] == f"domain_experiment:domain-{size}-{size - 1}" for edge in value["map"]["edges"])
+                assert len([node for node in value["map"]["nodes"] if node["node_type"] == "local_ngs_molbio_project"]) == size
+                assert len([node for node in value["map"]["nodes"] if node["node_type"] == "workflow"]) == size
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+    print(f"Project hierarchy SQL statements for 1 and 10 siblings: {counts}")
+    assert counts[0] == counts[1], counts
+    assert counts[1] <= 25, counts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [1, 25])
+async def test_joined_hierarchy_and_dataset_pages_preserve_missing_revisions_and_cursors(read_model_store, size):
+    from routers.projects import _list_json
+    from services.global_experiments.read_models import _dataset_page
+    async with read_model_store() as session:
+        project, global_experiment, domain = await _hierarchy(session)
+        project_id, domain_id = project.id, domain.id
+        for index in range(size + 1):
+            await _read_fixture_head(session, identity=f"dataset-{index:03}", kind="dataset", project_id=project_id,
+                parent_id=domain_id, payload={"name": str(index)} if index else None)
+        await session.commit()
+    statements = []
+    engine = read_model_store.kw["bind"].sync_engine
+    def record(_connection, _cursor, statement, _params, _context, _many):
+        statements.append(statement)
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        async with read_model_store() as session:
+            kwargs = dict(project_id=project_id, aggregate_kind="dataset", exposed_kind="dataset", storage_kind="dataset", parent_id=domain_id, limit=size, cursor_scope=domain_id)
+            page = await _list_json(session, cursor=None, **kwargs)
+            assert len(statements) == 1
+            assert len(page["items"]) == size and page["next_cursor"] is not None
+            second = await _list_json(session, cursor=page["next_cursor"], **kwargs)
+            assert second["items"][0]["payload"] is None
+            statements.clear()
+            datasets, cursor = await _dataset_page(session, project_id=project_id, domain_ids=[domain_id], cursor=None, limit=size)
+            assert len(statements) == 1 and cursor is not None
+            remaining, cursor = await _dataset_page(session, project_id=project_id, domain_ids=[domain_id], cursor=cursor, limit=size)
+            assert cursor is None and remaining[0]["revision_number"] is None
+            assert remaining[0]["current_revision_id"] is None
+            assert all(item["payload_sha256"] == "a" * 64 for item in datasets)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)

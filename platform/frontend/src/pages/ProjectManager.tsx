@@ -174,14 +174,10 @@ function ProjectManagerErrorState({ error, onRetry, permission = false }: { erro
     );
 }
 
-function LocalProjectAssociationBadge({ projectId }: { projectId: string }) {
-    const links = useQuery({
-        queryKey: ['project-manager', 'local-project-links', projectId],
-        queryFn: () => listNgsMolBioProjectLinks(projectId),
-    });
-    if (links.isLoading) return <span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">Link state loading</span>;
-    if (links.isError) return <span className="rounded-full border border-red-700 px-2 py-1 text-xs text-red-300">Link state unavailable</span>;
-    return <span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">{links.data?.length ? 'Linked' : 'Standalone'}</span>;
+function LocalProjectAssociationBadge({ project }: { project: ProjectListItem }) {
+    const linked = 'has_ngs_molbio_links' in project ? project.has_ngs_molbio_links : undefined;
+    if (typeof linked !== 'boolean') return <span className="rounded-full border border-red-700 px-2 py-1 text-xs text-red-300">Link state unavailable</span>;
+    return <span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">{linked ? 'Linked' : 'Standalone'}</span>;
 }
 
 function ProjectsIndex() {
@@ -271,7 +267,7 @@ function ProjectsIndex() {
                             const failureCount = typeof project.unresolved_failure_count === 'number' ? project.unresolved_failure_count : typeof payload.unresolved_failure_count === 'number' ? payload.unresolved_failure_count : null;
                             return (
                                 <Link data-project-card key={project.id} to={`/projects/${encodeURIComponent(project.id)}`} className="group rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-sm outline-none transition hover:-translate-y-0.5 hover:border-accent hover:shadow-xl focus:ring-2 focus:ring-accent">
-                                    <div className="flex flex-wrap items-start justify-between gap-2"><div className="flex flex-wrap gap-2"><span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">{projectScope === 'ngs_molbio_local' ? 'NGS/MolBio' : 'Global'}</span>{projectScope === 'ngs_molbio_local' ? <LocalProjectAssociationBadge projectId={project.id} /> : null}</div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">{project.status}</span></div>
+                                    <div className="flex flex-wrap items-start justify-between gap-2"><div className="flex flex-wrap gap-2"><span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">{projectScope === 'ngs_molbio_local' ? 'NGS/MolBio' : 'Global'}</span>{projectScope === 'ngs_molbio_local' ? <LocalProjectAssociationBadge project={project} /> : null}</div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">{project.status}</span></div>
                                     <h2 className="mt-4 text-lg font-semibold text-content group-hover:text-accent">{project.name}</h2>
                                     <p className="mt-2 line-clamp-3 text-xs leading-5 text-content-secondary">{typeof payload.research_objective === 'string' ? payload.research_objective : project.description || 'No research objective recorded.'}</p>
                                     <div className="mt-3 space-y-1 text-[10px] text-content-muted"><p>{activeCount === null ? 'Active experiments unavailable' : `${activeCount} active experiments`}</p><p>{failureCount === null ? 'Unresolved failures unavailable' : `${failureCount} unresolved failures`}</p></div>
@@ -383,8 +379,19 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         activity: JsonObject[];
     } | null>(null);
 
+    // URL completion names the same server-resolved read, not a new selection.
+    // Keep that observer's original identity and freshness; real navigation,
+    // cursors, invalidation and retries still use normal React Query behavior.
+    const canonicalRead = useRef<{
+        focus: string; selected: string;
+        originalFocus: string | undefined; originalSelected: string | undefined;
+    } | null>(null);
+    const reuseCanonicalRead = canonicalRead.current !== null && canonicalRead.current.focus === focusId
+        && canonicalRead.current?.selected === selectedNodeKey;
+    const queryFocus = reuseCanonicalRead ? canonicalRead.current?.originalFocus : focusId;
+    const querySelected = reuseCanonicalRead ? canonicalRead.current?.originalSelected : selectedNodeKey;
     const summaryQuery = useQuery({
-        queryKey: ['project-manager', 'summary', projectId, focusId ?? null, selectedNodeKey ?? null, mapCursor ?? null, runCursor ?? null, resultCursor ?? null, lineageCursor ?? null, noteCursor ?? null, decisionCursor ?? null, datasetCursor ?? null, activityCursor ?? null],
+        queryKey: ['project-manager', 'summary', projectId, queryFocus ?? null, querySelected ?? null, mapCursor ?? null, runCursor ?? null, resultCursor ?? null, lineageCursor ?? null, noteCursor ?? null, decisionCursor ?? null, datasetCursor ?? null, activityCursor ?? null],
         queryFn: ({ signal }) => getProjectSummary(projectId, {
             focusId,
             selectedNodeKey,
@@ -521,15 +528,21 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     }, [focusId]);
 
     useEffect(() => {
-        if (!summary || invalidSelection) return;
+        if (!rawSummary || invalidSelection || selectionPending) return;
         const next = new URLSearchParams(searchParams);
         let changed = false;
-        if (!next.get('focus')) { next.set('focus', focusId ?? focusIdFromReadModel(summary)); changed = true; }
-        if (!next.get('selected')) { next.set('selected', selectedNodeKey ?? summary.selection.node_key); changed = true; }
+        if (!next.get('focus')) { next.set('focus', focusId ?? focusIdFromReadModel(rawSummary)); changed = true; }
+        if (!next.get('selected')) { next.set('selected', selectedNodeKey ?? rawSummary.selection.node_key); changed = true; }
+        if (changed) canonicalRead.current = {
+            focus: next.get('focus') as string,
+            selected: next.get('selected') as string,
+            originalFocus: queryFocus,
+            originalSelected: querySelected,
+        };
         next.delete('focus_id');
         next.delete('selected_node_key');
         if (changed || searchParams.has('focus_id') || searchParams.has('selected_node_key')) setSearchParams(next, { replace: true });
-    }, [focusId, invalidSelection, searchParams, selectedNodeKey, setSearchParams, summary]);
+    }, [focusId, invalidSelection, queryFocus, querySelected, rawSummary, searchParams, selectedNodeKey, selectionPending, setSearchParams]);
 
     const setSelection = useCallback((nodeKey: string, nodeType?: string, subjectId?: string | null) => {
         if (!summary) return;
