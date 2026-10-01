@@ -219,19 +219,16 @@ async def _dataset_domain_kind(
     experiment_id: str,
     domain_id: str,
 ) -> str:
-    try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
-        return "ngs_molbio"
-    except ValidationFailure as exc:
-        if str(exc) != "unsupported_dataset_kind":
-            raise
-    await require_protein_domain_hierarchy(
-        session,
-        project_id=project_id,
-        experiment_id=experiment_id,
-        domain_id=domain_id,
-    )
-    return "protein_in_silico"
+    domain = await session.get(ExperimentAggregateHead, domain_id)
+    revision = await session.get(ExperimentRevision, domain.current_revision_id if domain else "")
+    payload = json.loads(revision.canonical_payload) if revision else {}
+    if payload.get("domain_kind") == "protein_in_silico":
+        await require_protein_domain_hierarchy(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id,
+        )
+        return "protein_in_silico"
+    await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+    return "ngs_molbio"
 
 
 @router.get(D + "/dataset-kinds")

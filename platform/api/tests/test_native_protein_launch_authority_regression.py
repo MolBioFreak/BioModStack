@@ -22,7 +22,7 @@ def policy_cache():
 
 
 @pytest_asyncio.fixture
-async def native_http(setup_store, tmp_path):
+async def native_http(setup_store, tmp_path, monkeypatch):
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
     from molbio_ngs_models import MolBioNGSBase
     ngs_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'ngs.db'}")
@@ -40,6 +40,14 @@ async def native_http(setup_store, tmp_path):
     app.include_router(pm.router)
     from routers import ngs_molbio_n5
     app.include_router(ngs_molbio_n5.router)
+    from services import ngs_molbio_n5 as resource_owner
+    async def irrelevant_connector(*args, **kwargs):
+        raise AssertionError('Native Protein must never consult the NGS connector or hierarchy')
+    def irrelevant_source_audit(*args, **kwargs):
+        raise AssertionError('Native Protein must never consult a frozen NGS source audit')
+    monkeypatch.setattr(pm, 'exact_local_launch_authority', irrelevant_connector)
+    monkeypatch.setattr(ngs_molbio_n5, 'require_domain_hierarchy', irrelevant_connector)
+    monkeypatch.setattr(resource_owner, 'runtime_implementation_record', irrelevant_source_audit)
 
     @app.middleware('http')
     async def operator(request, call_next):
