@@ -10,6 +10,7 @@ import { StructurePredictionTemplate } from '../../src/components/StructurePredi
 import { MutagenesisTemplate } from '../../src/components/MutagenesisTemplate';
 import { ExecutionTargetPicker } from '../../src/components/ExecutionTargetPicker';
 import { useSystemStatus } from '../../src/lib/useSystemStatus';
+import { useLiveGpuCatalog } from '../../src/components/useLiveGpuCatalog';
 
 const mounts = vi.hoisted(() => ({ provision: vi.fn(), unmount: vi.fn() }));
 vi.mock('../../src/components/dashboard/IndependentProvisionPanel', () => ({
@@ -111,6 +112,41 @@ function StatusConsumer() {
     const query = useSystemStatus();
     return <span>{query.data?.data.timestamp}</span>;
 }
+function CatalogProbe({ enabled }: { enabled: boolean }) {
+    const catalog = useLiveGpuCatalog({ enabled, requireFresh: true, followExecutionTarget: true });
+    return <output data-catalog={catalog} />;
+}
+it.each([null, 'vast:one'])('native demand immediately rechecks expired cached telemetry while refresh is pending (%s)', async target => {
+    if (target) sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, target);
+    await render(<CatalogProbe enabled />);
+    const catalog = () => root!.root.findByType('output').props['data-catalog'];
+    expect(catalog().isStale).toBe(false);
+    expect(catalog().gpuOptions).toHaveLength(1);
+    await render(<CatalogProbe enabled={false} />);
+    const previousLocal = count('/api/gpu/status');
+    const previousRemote = count('/api/execution-targets/active/telemetry');
+    await tick(60_000);
+    expect(count('/api/gpu/status')).toBe(previousLocal);
+    expect(count('/api/execution-targets/active/telemetry')).toBe(previousRemote);
+
+    const freshAdapter = api.defaults.adapter as (config: any) => Promise<any>;
+    const pending: Array<() => Promise<void>> = [];
+    api.defaults.adapter = config => {
+        if (config.url !== '/api/gpu/status' && config.url !== '/api/execution-targets/active/telemetry') return freshAdapter(config);
+        return new Promise(resolve => pending.push(async () => resolve(await freshAdapter(config))));
+    };
+    await render(<CatalogProbe enabled />);
+    // No one-second aging tick has elapsed since demand resumed.
+    expect(catalog().isStale).toBe(true);
+    expect(catalog().telemetryRefusal).toContain('stale or unavailable');
+    expect(catalog().gpuOptions).toHaveLength(0);
+    expect(pending.length).toBeGreaterThan(0);
+    await act(async () => { await Promise.all(pending.map(resolve => resolve())); });
+    await tick();
+    expect(catalog().isStale).toBe(false);
+    expect(catalog().telemetryRefusal).toBeNull();
+    expect(catalog().gpuOptions).toHaveLength(1);
+});
 it.each([null, 'vast:one'])('provider-only prediction removes local/remote GPU polling and aging timer, then restores native freshness (%s)', async target => {
     if (target) sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, target);
     const draft = vi.fn();

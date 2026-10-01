@@ -35,11 +35,15 @@ export function useLiveGpuCatalog(options: UseLiveGpuCatalogOptions = {}) {
     });
     const requireFresh = options.requireFresh === true || Boolean(executionTargetId);
     const systemQuery = useSystemStatus(5000, { enabled });
-    const [nowMs, setNowMs] = useState(() => Date.now());
+    const [clockMs, setClockMs] = useState(() => Date.now());
+    // Demand can resume after its aging timer has been absent for a long time.
+    // Apply the unchanged freshness windows on that first render, not one tick later.
+    const resumedAtMs = useMemo(() => Date.now(), [enabled, requireFresh]);
+    const nowMs = Math.max(clockMs, resumedAtMs);
 
     useEffect(() => {
         if (!enabled || !requireFresh) return undefined;
-        const timer = setInterval(() => setNowMs(Date.now()), 1000);
+        const timer = setInterval(() => setClockMs(Date.now()), 1000);
         return () => clearInterval(timer);
     }, [enabled, requireFresh]);
 
