@@ -1,6 +1,13 @@
 {
   "metric_exception": {},
   "top_level_request_types": {
+    "subbatch_size": {
+      "request_types": ["string", "integer", "null"],
+      "source": "bindcraft/design_workers.py:campaign_subbatch_size; bindcraft/af2.py:resolve_subbatch_size; bindcraft/af/alphafold/model/mapping.py:sharded_apply",
+      "control": "subbatch-size",
+      "recommended_default": null,
+      "recommended_default_reason": "No chunking by default for new BMS campaigns; avoids the native small-chunk default. Uses more VRAM; choose auto or a custom size when needed."
+    },
     "design_models": {
       "observed_types": ["integer"],
       "request_types": ["integer", "array"],

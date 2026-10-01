@@ -6011,9 +6011,10 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
                 if field.default is not None:
                     job_data.params.setdefault(field.name, deepcopy(field.default))
     if (normalized_model_id, normalized_mode) == ('bindcraft2', 'campaign'):
-        from services.bindcraft2_typed import validate_request
+        from services.bindcraft2_typed import normalize_new_campaign_request
         try:
-            validate_request(job_data.params.get('bindcraft2_settings'))
+            job_data.params['bindcraft2_settings'] = normalize_new_campaign_request(
+                job_data.params.get('bindcraft2_settings'))
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     if normalized_model_id == 'bindcraft2' and normalized_mode != 'campaign':

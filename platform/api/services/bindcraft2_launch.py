@@ -14,7 +14,7 @@ from typing import Callable
 
 from paths import get_allowed_roots, get_results_dir, resolve_allowed_path
 from services.bindcraft2_native import PIN, _canonical
-from services.bindcraft2_typed import validate_request
+from services.bindcraft2_typed import normalize_new_campaign_request, validate_request
 
 IMAGE = Path('/mnt/BioModStack/apptainer/bindcraft2.sif')
 SCRIPT = Path(__file__).resolve().parents[3] / 'scripts/compile_bindcraft2_campaign.py'
@@ -150,7 +150,7 @@ def _compile(settings: dict, destination: Path, *, copy: bool,
 
 def preview_campaign(settings: dict, *, compiler: Callable[[dict, Path], dict] = _native_compile) -> dict:
     """Native CPU preview against a deterministic logical root; no directory created."""
-    validate_request(settings)
+    settings = normalize_new_campaign_request(settings)
     sources = _sources(settings)
     before = _identity(sources)
     token = hashlib.sha256(_canonical({'request': settings, 'sources': before})).hexdigest()
@@ -165,6 +165,7 @@ def preview_campaign(settings: dict, *, compiler: Callable[[dict, Path], dict] =
 def materialize_campaign(settings: dict, output_dir: Path, *, preview_digest: str,
                          compiler: Callable[[dict, Path], dict] = _native_compile) -> dict:
     """Copy governed sources, compile pinned native settings, persist receipt for Nextflow."""
+    settings = normalize_new_campaign_request(settings)
     if preview_campaign(settings, compiler=compiler)['preview_digest'] != preview_digest:
         raise ValueError('BC2 preview is stale or source bytes changed')
     destination = Path(output_dir).resolve() / 'bindcraft2'

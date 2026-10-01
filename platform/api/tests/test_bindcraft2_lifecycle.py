@@ -22,7 +22,8 @@ def setup(tmp_path, monkeypatch, compile_fn=compiler):
     monkeypatch.setattr(launch, 'get_allowed_roots', lambda: {'results': tmp_path})
     target = tmp_path / 'target.fasta'
     target.write_text('>fixture\nAAAAAAAAAAAAAAAAAAAA\n')
-    request = {'max_trajectories': 3, 'targets': [{'name': 'fixture', 'target_path': str(target)}]}
+    request = {'max_trajectories': 3, 'subbatch_size': None,
+               'targets': [{'name': 'fixture', 'target_path': str(target)}]}
     preview = launch.preview_campaign(request, compiler=compile_fn)
     launch.materialize_campaign(request, tmp_path / 'parent', preview_digest=preview['preview_digest'], compiler=compile_fn)
     campaign = tmp_path / 'parent/bindcraft2/campaign'
