@@ -1,5 +1,5 @@
 import { MSA_POLICY } from '../lib/msaPolicy';
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { MaturationEvidence } from './MaturationEvidence';
 import { parseScientificPae } from '../lib/scientificViewerIdentity';
 import { useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
@@ -55,26 +55,14 @@ import {
     supportsAnalyzer,
     supportsViewerCapability,
 } from '../lib/resultCapabilities';
-import MolstarViewer from './MolstarViewer';
-import { StabilityHeatmap } from './MetricCharts';
-import { BatchComparePane } from './BatchComparePane';
-import { DesignComparePane } from './DesignComparePane';
-import { DataViewerLanding } from './DataViewerLanding';
-import { AnalyticsDashboard } from './AnalyticsDashboard';
-import StructureViewerPane, { ShapeDocumentInspector } from './StructureViewerPane';
 import { isShapeResultJob, shapeCohort, shapeDocuments, filterShapeCohort, shapeCsv, type ShapeMetricFilter } from '../lib/shapeResultsView';
 import { metricKeys, formatMetric as formatShapeMetric, summarizeMetric } from '../lib/cohortAnalytics';
 import { continuationHref } from '../lib/deNovoContinuation';
-import MDResultsPane from './MDResultsPane';
-import { BindCraft2JobResults } from './BindCraft2JobResults';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { CandidateRoundProgress } from './CandidateRoundProgress';
 import { ProteinDesignPanel } from './ProteinDesignWorkflow';
-import { NativeBinderGenerationResults } from './NativeBinderGenerationResults';
 import NativeSequenceResults, { nativeSequenceResultKind } from './NativeSequenceResults';
 import { isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
-import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
-import RFD3GenerationResultsPane from './RFD3GenerationResultsPane';
 import { fetchRFD3Generation, fetchRFD3LocalRedesign } from '../lib/api';
 import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
 import {
@@ -82,11 +70,7 @@ import {
     isRFD3LocalRedesignResultJob,
 } from './rfd3LocalRedesignResultsView';
 import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from './ProteinLocalRedesignResultsPane';
-import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
-import BlindPoseSelectedControls from './BlindPoseSelectedControls';
-import BinderSelectedControls from './BinderSelectedControls';
 import { readBinderSelection, writeBinderSelection, readBinderCandidateDocuments, writeBinderCandidateDocuments } from '../lib/binderContinuation';
-import FrustraMpnnWorkbench from './frustrampnn/FrustraMpnnWorkbench';
 import {
     parseFrustraMpnnExperimentContext,
     parseWorkflowResultViewState,
@@ -98,7 +82,6 @@ import { hasFrustraMpnnResultSurface } from './frustraMpnnResultSurface';
 import { buildWorkflowModelResults, primaryWorkflowResultModel } from './frustrampnn/workflowModelResults';
 import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructureState.js';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
-import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
 import {
     CANONICAL_FRUSTRAMPNN_SETTINGS,
     hydrateFrustraMpnnSettings,
@@ -110,6 +93,25 @@ import {
     type AntibodyRefinementLaunchState,
 } from '../lib/refinementLaunchState';
 
+// Load useful visualization and operation owners only when their view is demanded.
+const MolstarViewer = lazy(() => import('./MolstarViewer'));
+const StabilityHeatmap = lazy(() => import('./MetricCharts').then(module => ({ default: module.StabilityHeatmap })));
+const BatchComparePane = lazy(() => import('./BatchComparePane').then(module => ({ default: module.BatchComparePane })));
+const DesignComparePane = lazy(() => import('./DesignComparePane').then(module => ({ default: module.DesignComparePane })));
+const DataViewerLanding = lazy(() => import('./DataViewerLanding').then(module => ({ default: module.DataViewerLanding })));
+const AnalyticsDashboard = lazy(() => import('./AnalyticsDashboard').then(module => ({ default: module.AnalyticsDashboard })));
+const StructureViewerPane = lazy(() => import('./StructureViewerPane'));
+const ShapeDocumentInspector = lazy(() => import('./StructureViewerPane').then(module => ({ default: module.ShapeDocumentInspector })));
+const MDResultsPane = lazy(() => import('./MDResultsPane'));
+const BindCraft2JobResults = lazy(() => import('./BindCraft2JobResults').then(module => ({ default: module.BindCraft2JobResults })));
+const NativeBinderGenerationResults = lazy(() => import('./NativeBinderGenerationResults').then(module => ({ default: module.NativeBinderGenerationResults })));
+const RFD3LocalRedesignResultsPane = lazy(() => import('./RFD3LocalRedesignResultsPane'));
+const RFD3GenerationResultsPane = lazy(() => import('./RFD3GenerationResultsPane'));
+const ConformationalMappingViewer = lazy(() => import('./conformationalMapping/ConformationalMappingViewer').then(module => ({ default: module.ConformationalMappingViewer })));
+const BlindPoseSelectedControls = lazy(() => import('./BlindPoseSelectedControls'));
+const BinderSelectedControls = lazy(() => import('./BinderSelectedControls'));
+const FrustraMpnnWorkbench = lazy(() => import('./frustrampnn/FrustraMpnnWorkbench'));
+const FrustraMpnnSettingsPanel = lazy(() => import('./frustrampnn/FrustraMpnnSettingsPanel.js').then(module => ({ default: module.FrustraMpnnSettingsPanel })));
 
 // Presentation metadata only; applicability comes from the authoritative review profile.
 const REVIEW_TAB_DEFINITIONS = [
@@ -1826,6 +1828,10 @@ export function ShapeResultsWorkspace({ job }: { job: Job }) {
 }
 
 export function ResultsViewer() {
+    return <Suspense fallback={<p role="status">Loading Results view…</p>}><ResultsViewerContent /></Suspense>;
+}
+
+function ResultsViewerContent() {
     const { jobId } = useParams();
     const navigate = useNavigate();
     const location = useLocation();
@@ -5620,10 +5626,9 @@ export function ResultsViewer() {
                                 onInspectDocument={(row, document) => {
                                     if (row.design_id) navigate(nativeCandidateRoute(selectedJobId, row.design_id, document, destinationLaunchContextId), { replace: true });
                                 }} />
-                            <details className="my-4 rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                                <summary className="cursor-pointer text-sm font-semibold text-slate-200">Selected candidate operations ({selectedDesignIds.length})</summary>
-                                <div className="mt-4">{selectedCandidateControls}</div>
-                            </details>
+                            <SelectedCandidateOperations key={`operations-${activeJob.id}`} count={selectedDesignIds.length}>
+                                {selectedCandidateControls}
+                            </SelectedCandidateOperations>
                         </>
                     ) : isRFD3GenerationResultJob(activeJob) ? (
                         <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />
@@ -9017,6 +9022,15 @@ export function ResultsViewer() {
             </div >
         </div >
     );
+}
+
+function SelectedCandidateOperations({ count, children }: { count: number; children: import('react').ReactNode }) {
+    const [opened, setOpened] = useState(false);
+    return <details className="my-4 rounded-xl border border-slate-700 bg-slate-900/50 p-4"
+        onToggle={event => { if (event.currentTarget.open) setOpened(true); }}>
+        <summary className="cursor-pointer text-sm font-semibold text-slate-200">Selected candidate operations ({count})</summary>
+        {opened && <div className="mt-4"><Suspense fallback={<p role="status">Loading candidate operations…</p>}>{children}</Suspense></div>}
+    </details>;
 }
 
 // Shared explicit failure state for job, routed-result, and design queries.

@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
-import { CohortAnalytics } from './CohortAnalytics';
 import { metricKeys, numericMetricKeys, metricLabel, formatMetric, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
-import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
 import { fetchNativeBinderGeneration, nativeCandidateRoute, nativeGenerationMetrics, nativeGenerationMetricDetail, nativeGenerationMetricUnit, type NativeGenerationRecord, type NativeGenerationDocument } from '../lib/nativeBinderResults';
+
+// Load useful visualization and operation owners only when their view is demanded.
+const CohortAnalytics = lazy(() => import('./CohortAnalytics').then(module => ({ default: module.CohortAnalytics })));
+const StructureWorkbench = lazy(() => import('../structureViewer/StructureWorkbench').then(module => ({ default: module.StructureWorkbench })));
 
 interface Props {
     jobId: string; status?: string; launchContextId?: string | null;
@@ -48,6 +50,12 @@ export function NativeBinderGenerationResults(props: Props) {
 }
 function NativeGenerationWorkbench({ jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, onInspectDocument, artifactId, targetState }: Props) {
     const [view, setView] = useState<View>(selectedDesignId || artifactId ? 'structure' : 'dashboard');
+    const [structureOpened, setStructureOpened] = useState(view === 'structure');
+    const [analyticsOpened, setAnalyticsOpened] = useState(view === 'dashboard' || view === 'analytics');
+    useEffect(() => {
+        if (view === 'structure') setStructureOpened(true);
+        if (view === 'dashboard' || view === 'analytics') setAnalyticsOpened(true);
+    }, [view]);
     const [search, setSearch] = useState('');
     const [filters, setFilters] = useState<Filter[]>([]);
     const [selectedOnly, setSelectedOnly] = useState(false);
@@ -198,10 +206,10 @@ function NativeGenerationWorkbench({ jobId, status, launchContextId, selectedDes
                     </div>)}
                     <p className="text-xs text-[var(--text-secondary)]">{matched.length} of {rows.length} loaded records in view · {numericKeys.length} numeric metrics · Filters do not change acceptance or selection.</p>
                 </div>
-                <div hidden={view !== 'dashboard' && view !== 'analytics'}><CohortAnalytics rows={matched} selectedIds={selectedCohortIds} activeId={activeId} mode={view === 'analytics' ? 'analytics' : 'dashboard'} onInspect={id => { const item = byId.get(id); if (item) inspect(item); }} onSelect={ids => changeSelection(ids.flatMap(id => byId.get(id)?.design_id ? [byId.get(id)!.design_id!] : []), true)} /></div>
+                <div hidden={view !== 'dashboard' && view !== 'analytics'}>{(analyticsOpened || view === 'dashboard' || view === 'analytics') && <Suspense fallback={<p role="status">Loading cohort charts…</p>}><CohortAnalytics rows={matched} selectedIds={selectedCohortIds} activeId={activeId} mode={view === 'analytics' ? 'analytics' : 'dashboard'} onInspect={id => { const item = byId.get(id); if (item) inspect(item); }} onSelect={ids => changeSelection(ids.flatMap(id => byId.get(id)?.design_id ? [byId.get(id)!.design_id!] : []), true)} /></Suspense>}</div>
                 {view !== 'structure' && table}
                 <div ref={inspector} hidden={view !== 'structure'} className={`${panel} p-4`} aria-label="Candidate structure inspector">
-                    {!row ? <p role="status">{!complete ? 'Loading the requested candidate from the publication. ' : 'Requested candidate is unavailable in this publication. '}Another candidate is not substituted.</p> : <>
+                    {(structureOpened || view === 'structure') && <Suspense fallback={<p role="status">Loading native structure…</p>}>{!row ? <p role="status">{!complete ? 'Loading the requested candidate from the publication. ' : 'Requested candidate is unavailable in this publication. '}Another candidate is not substituted.</p> : <>
                         <div className="flex flex-wrap items-center justify-between gap-3"><div><h4 className="text-lg font-semibold">{row.candidate_key ?? row.design_id ?? 'Native record'}</h4><p className="text-xs text-[var(--text-secondary)]">Exact published structure · native measurements are shown without an inferred confidence score</p></div><div className="flex gap-2"><button className={control} type="button" disabled={rows.indexOf(row) <= 0} onClick={() => inspect(rows[rows.indexOf(row) - 1])}>Previous candidate</button><button className={control} type="button" disabled={rows.indexOf(row) >= rows.length - 1} onClick={() => inspect(rows[rows.indexOf(row) + 1])}>Next candidate</button></div></div>
                         <div className="mt-4 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(220px,1fr)]"><div className="min-w-0">
                             <label className="mb-3 block text-xs">Published document <select className={`mt-1 block w-full min-w-0 ${control}`} aria-label="Published document" value={document ? String(documents.indexOf(document)) : ''} onChange={event => { const doc = documents[Number(event.target.value)]; if (doc) inspect(row, doc); }}>
@@ -210,7 +218,7 @@ function NativeGenerationWorkbench({ jobId, status, launchContextId, selectedDes
                             {document?.download_url ? <StructureWorkbench key={`${document.artifact_id}:${document.target_state}:${document.download_url}`} mode="standard" structureUrl={document.download_url} format={/\.(cif|mmcif)(?:$|\?)/i.test(document.logical_path ?? document.download_url) ? 'cif' : 'pdb'} structureDocumentId={document.artifact_id} structureContentSha256={document.sha256} alphafoldView={false} height={520} showSequenceTrack showMeasurements showM6Workbench hideControls={false} workbenchCollapsed={!viewerToolsOpen} /> : <p role="status">{explicit ? 'Requested native document is unavailable. The Design primary structure is not substituted.' : 'No downloadable native structure was published for this record.'}</p>}
                         </div><aside className="min-w-0"><h5 className="mb-2 text-sm font-semibold">Native measurements</h5><dl className="max-h-[600px] overflow-auto text-sm">{Object.entries(values(row)).map(([key, value]) => <div key={key} className="flex justify-between gap-3 border-b border-[var(--border-color)] py-2" title={[key, nativeGenerationMetricDetail(row, key)].filter(Boolean).join(' · ')}><dt className="break-words text-[var(--text-secondary)]">{label(key)}</dt><dd className="max-w-[55%] break-words text-right tabular-nums">{formatMetric(value)}</dd></div>)}</dl></aside></div>
                         <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">{document?.download_url && <><button className={control} type="button" aria-expanded={viewerToolsOpen} onClick={() => setViewerToolsOpen(value => !value)}>{viewerToolsOpen ? 'Hide viewer tools' : 'Measurements and exports'}</button><a className="underline" href={document.download_url} download>Download exact native document</a></>}{row.design_id && <a className="underline" href={nativeCandidateRoute(jobId, row.design_id, document, launchContextId)}>Open candidate workbench</a>}</div>
-                    </>}
+                    </>}</Suspense>}
                 </div>
                 <p className="text-xs text-[var(--text-secondary)]">Native model outputs, not experimentally validated binders. Statistics describe {complete ? 'this publication' : 'the loaded subset'}; numeric strings, booleans and missing values are not coerced into measurements.</p>
             </>}

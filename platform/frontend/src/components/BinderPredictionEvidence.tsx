@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import Plot from 'react-plotly.js';
 import { api, type Design, type PersistedAnalysisRun } from '../lib/api';
 import { CandidateRoundProgress } from './CandidateRoundProgress';
 import { fetchBinderEvidence, evidenceText, predictionKey, type BinderPrediction } from '../lib/binderEvidence';
 import { nativeCandidateRoute } from '../lib/nativeBinderResults';
 import { parseScientificNativeMetric, parseScientificPae } from '../lib/scientificViewerIdentity';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
+
+// Load useful visualization and operation owners only when their view is demanded.
+const Plot = lazy(() => import('react-plotly.js'));
 
 const control = 'rounded border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm';
 const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
@@ -117,7 +119,7 @@ function PredictionDetail({ prediction: p, launchContextId }: { prediction: Bind
         {p.error_message && <p role="status">{p.error_message}</p>}
         <div className="flex gap-3"><a className="underline" href={`/jobs/${encodeURIComponent(p.job_id)}`}>Open prediction Job</a>{p.design_id && <a className="underline" href={nativeCandidateRoute(p.job_id, p.design_id, undefined, launchContextId)}>Open prediction Mol* workbench</a>}</div>
         <h5 className="font-medium">PAE matrix</h5>
-        {boundPae.status === 'ok' ? <Plot data={[{ type: 'heatmap', z: boundPae.matrix, x: boundPae.columns.map(r => `${r.authAsymId ?? r.labelAsymId}:${r.authSeqId ?? r.labelSeqId}${r.insertionCode ?? ''}`), y: boundPae.rows.map(r => `${r.authAsymId ?? r.labelAsymId}:${r.authSeqId ?? r.labelSeqId}${r.insertionCode ?? ''}`), colorscale: 'Viridis', colorbar: { title: { text: 'PAE (Å)' } } }]} layout={{ autosize: true, height: 360, margin: { t: 20, l: 70, b: 70 }, xaxis: { title: { text: 'Scored residue' } }, yaxis: { title: { text: 'Aligned residue' } } }} style={{ width: '100%' }} useResizeHandler /> : <p>PAE: Unmeasured / unavailable. {pae.isError ? 'Native readback failed.' : boundPae.reason}</p>}
+        {boundPae.status === 'ok' ? <Suspense fallback={<p role="status">Loading PAE chart…</p>}><Plot data={[{ type: 'heatmap', z: boundPae.matrix, x: boundPae.columns.map(r => `${r.authAsymId ?? r.labelAsymId}:${r.authSeqId ?? r.labelSeqId}${r.insertionCode ?? ''}`), y: boundPae.rows.map(r => `${r.authAsymId ?? r.labelAsymId}:${r.authSeqId ?? r.labelSeqId}${r.insertionCode ?? ''}`), colorscale: 'Viridis', colorbar: { title: { text: 'PAE (Å)' } } }]} layout={{ autosize: true, height: 360, margin: { t: 20, l: 70, b: 70 }, xaxis: { title: { text: 'Scored residue' } }, yaxis: { title: { text: 'Aligned residue' } } }} style={{ width: '100%' }} useResizeHandler /></Suspense> : <p>PAE: Unmeasured / unavailable. {pae.isError ? 'Native readback failed.' : boundPae.reason}</p>}
         {p.pae_url && <a className="underline" href={p.pae_url}>Open native PAE readback</a>}
         <h5 className="font-medium">Native chain-pair iPTM (separate from ipSAE)</h5>
         {boundChains.status === 'ok' ? <table className="text-sm"><thead><tr><th>Native pair</th><th>iPTM</th></tr></thead><tbody>{boundChains.chains.flatMap(a => boundChains.chains.map(b => <tr key={`${a.providerIndex}:${b.providerIndex}`}><td className="p-2">{a.chainId} → {b.chainId}</td><td className="p-2">{evidenceText(boundChains.pairChainsIptm[a.providerIndex]?.[b.providerIndex])}</td></tr>))}</tbody></table> : <p>Native pair iPTM: Unmeasured / unavailable. {boundChains.reason}</p>}

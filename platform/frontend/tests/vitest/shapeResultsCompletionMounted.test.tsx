@@ -91,6 +91,7 @@ it('real Results shell charts the full thousand-row fixture while table pages, f
     await change('Search Shape candidates', 'fixture-1004');
     expect(analytics().rows.map((row: any) => row.id)).toEqual(['id-1004']);
     await click('fixture-1004');
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 400)); }); await flush();
     expect(mounted!.root.findByType(StructureWorkbench).props.structureUrl).toContain('primary-1004.pdb');
     await click('Back to Shape cohort');
     expect(field('Search Shape candidates').props.value).toBe('fixture-1004');
