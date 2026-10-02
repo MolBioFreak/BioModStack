@@ -2984,14 +2984,17 @@ export interface UserTemplateCreate {
     description?: string;
     icon?: string;
     color?: string;
-    base_template_id?: string;
-    model_id?: string;
+    base_template_id?: string | null;
+    model_id?: string | null;
     mode?: string;
     params: Record<string, UntypedApiValue>;
 }
 
-export const fetchUserTemplates = (search?: string, model_id?: string) =>
-    api.get<UserTemplate[]>('/api/user-templates', { params: { search, model_id } });
+export const fetchUserTemplates = (search?: string, model_id?: string, mode?: string, exclude_mode?: string) =>
+    api.get<UserTemplate[]>('/api/user-templates', { params: { search, model_id, mode, exclude_mode } });
+
+export const fetchUserTemplate = (id: string) =>
+    api.get<UserTemplate>(`/api/user-templates/${encodeURIComponent(id)}`);
 
 export const createUserTemplate = (data: UserTemplateCreate) =>
     api.post<UserTemplate>('/api/user-templates', data);
