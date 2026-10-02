@@ -230,6 +230,7 @@ def test_save_persists_structured_authority_from_the_simulated_product(
 
     assert result["message"] == "Saved Golden Gate product 'saved'"
     assert captured["extra_operation_params"] == {
+        "assembly_request": request.model_dump(mode="json"),
         "enzyme_id": "BsmBI",
         "catalog_id": "catalog-v1",
         "catalog_sha256": "a" * 64,
@@ -337,7 +338,7 @@ def test_simulate_response_and_saved_reload_share_exact_catalog_authority(
 
     assert simulated.product.golden_gate_authority.model_dump() == expected
     assert saved.product.golden_gate_authority.model_dump() == expected
-    assert captured["extra_operation_params"] == expected
+    assert captured["extra_operation_params"] == {**expected, "assembly_request": request.model_dump(mode="json")}
 
 
 def test_non_golden_gate_product_response_has_closed_null_authority() -> None:

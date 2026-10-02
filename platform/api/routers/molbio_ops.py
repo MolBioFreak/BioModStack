@@ -55,7 +55,7 @@ from services.molbio_sequence_import import (
     build_sequence_import_preview,
     commit_sequence_import,
 )
-from services.assembly.common import fragment_provenance_payload
+from services.assembly.common import fragment_provenance_payload, orient_fragment, reverse_complement_end
 from services.assembly.gibson import simulate_gibson
 from services.assembly.golden_gate import (
     GoldenGateAnalysisLimitError,
@@ -843,6 +843,10 @@ class AssemblyFragmentEndSchema(BaseModel):
     type: Literal["blunt", "sticky_5", "sticky_3"]
     overhang: str = ""
     label: Optional[str] = None
+    protruding_strand: Optional[Literal["top", "bottom"]] = Field(
+        default=None,
+        description="Physical overhang strand; overhang is that strand 5′→3′ and sequence is the top span. Omit for historical unspecified notation.",
+    )
 
 
 class AssemblyFragmentSchema(BaseModel):
@@ -1307,6 +1311,7 @@ def build_assembly_fragment(fragment: AssemblyFragmentSchema) -> AssemblyFragmen
             type=fragment.left_end.type,  # type: ignore[arg-type]
             overhang=fragment.left_end.overhang,
             label=fragment.left_end.label,
+            protruding_strand=fragment.left_end.protruding_strand,
         ),
         right_end=None
         if fragment.right_end is None
@@ -1314,6 +1319,7 @@ def build_assembly_fragment(fragment: AssemblyFragmentSchema) -> AssemblyFragmen
             type=fragment.right_end.type,  # type: ignore[arg-type]
             overhang=fragment.right_end.overhang,
             label=fragment.right_end.label,
+            protruding_strand=fragment.right_end.protruding_strand,
         ),
         metadata=fragment.metadata or {},
     )
@@ -1363,6 +1369,7 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
                     type=fragment.left_end.type,
                     overhang=fragment.left_end.overhang,
                     label=fragment.left_end.label,
+                    protruding_strand=fragment.left_end.protruding_strand,
                 ),
                 right_end=None
                 if fragment.right_end is None
@@ -1370,6 +1377,7 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
                     type=fragment.right_end.type,
                     overhang=fragment.right_end.overhang,
                     label=fragment.right_end.label,
+                    protruding_strand=fragment.right_end.protruding_strand,
                 ),
                 metadata=fragment.metadata or None,
             )
@@ -1576,11 +1584,17 @@ async def persist_assembly_product(
                     )
                 expected_sequence = source.sequence[start:end]
 
-            if fragment.orientation == "reverse":
-                expected_sequence = reverse_complement(
-                    expected_sequence,
-                    source.sequence_type or "dna",
-                )
+            if fragment.orientation == "reverse" and any(
+                end and end.protruding_strand for end in (fragment.left_end, fragment.right_end)
+            ):
+                expected_sequence = orient_fragment(AssemblyFragment(
+                    id=fragment.id, name=fragment.name, sequence=expected_sequence,
+                    orientation="reverse",
+                    left_end=reverse_complement_end(fragment.right_end),
+                    right_end=reverse_complement_end(fragment.left_end),
+                )).sequence
+            elif fragment.orientation == "reverse":
+                expected_sequence = reverse_complement(expected_sequence, source.sequence_type or "dna")
             if fragment.sequence != expected_sequence:
                 raise HTTPException(
                     status_code=409,
@@ -2322,6 +2336,7 @@ async def save_ligation_assembly(
         product=product,
         name=request.new_name,
         save_description=request.save_description,
+        extra_operation_params={"assembly_request": request.model_dump(mode="json")},
     )
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
@@ -2948,6 +2963,7 @@ async def save_golden_gate_assembly(
         name=request.new_name,
         save_description=request.save_description,
         extra_operation_params={
+            "assembly_request": request.model_dump(mode="json"),
             "enzyme_id": authority.enzyme_id,
             "catalog_id": authority.catalog_id,
             "catalog_sha256": authority.catalog_sha256,

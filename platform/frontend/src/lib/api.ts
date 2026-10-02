@@ -3344,6 +3344,8 @@ export interface NucleotideSequenceCreate {
 }
 
 export interface AssemblyFragmentEnd {
+    /** Physical protrusion written 5′→3′; absent means historical unspecified notation. */
+    protruding_strand?: 'top' | 'bottom' | null;
     type: 'blunt' | 'sticky_5' | 'sticky_3';
     overhang?: string;
     label?: string;

@@ -147,6 +147,24 @@ it('completed selection alignment cannot annotate after moving the selection', a
  await render(<AlignmentPanel {...props} selection={{ start: 16, end: 24 }} />);
  expect(host.textContent).not.toContain('Annotate Variants'); expect(props.onAddFeatures).toHaveBeenCalledTimes(1);
 });
+it('assembly physical notation survives saved hydration, editing and resubmission', async () => {
+ const fragments = [{ id: 'physical', name: 'physical', sequence: 'AATGCCCCC', orientation: 'reverse',
+  left_end: { type: 'sticky_5', overhang: 'AATG', protruding_strand: 'top' },
+  right_end: { type: 'sticky_5', overhang: 'CTCC', protruding_strand: 'bottom' } }];
+ const operationParams = { mode: 'ligation', assembly_request: { fragments, circular: false } };
+ vi.mocked(api.simulateLigationAssembly).mockResolvedValue({ data: { product: assembly } } as any);
+ vi.mocked(api.saveLigationAssembly).mockResolvedValue({ data: { product: assembly } } as any);
+ await render(<AssemblyPanel sequenceData={{ ...seq, operationParams }} selection={null} selectedSequenceId="saved" onLoadProduct={noop} onLoadSavedWorkup={noop} />);
+ const notation = [...host.querySelectorAll('select[aria-label$="notation"]')] as HTMLSelectElement[];
+ expect(notation.map(s => s.value)).toEqual(['top', 'bottom']);
+ await click('Simulate');
+ expect(vi.mocked(api.simulateLigationAssembly).mock.calls[0][0].fragments).toEqual(fragments);
+ await click('Validate + Save');
+ expect(vi.mocked(api.saveLigationAssembly).mock.calls[0][0].fragments).toEqual(fragments);
+ await act(async () => { notation[0].value = ''; notation[0].dispatchEvent(new Event('change', { bubbles: true })); });
+ await click('Simulate');
+ expect(vi.mocked(api.simulateLigationAssembly).mock.calls.at(-1)![0].fragments[0].left_end?.protruding_strand).toBeNull();
+});
 it('completed assembly cannot load after editing fragment orientation', async () => {
  vi.mocked(api.simulateLigationAssembly).mockResolvedValue({ data: { product: assembly } } as any);
  const load = vi.fn(); await render(<AssemblyPanel sequenceData={seq} selection={null} selectedSequenceId={null} onLoadProduct={load} onLoadSavedWorkup={noop} />);

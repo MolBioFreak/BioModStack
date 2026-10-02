@@ -131,7 +131,7 @@ function EndEditor({
         );
     }
 
-    const current = value || { type: 'blunt' as const, overhang: '' };
+    const current: AssemblyFragmentEnd = value || { type: 'blunt', overhang: '' };
     return (
         <div className="space-y-1">
             <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{label}</div>
@@ -149,9 +149,16 @@ function EndEditor({
                     value={current.overhang || ''}
                     disabled={current.type === 'blunt'}
                     onChange={(event) => onChange({ ...current, overhang: event.target.value.toUpperCase().replace(/[^A-Z]/g, '') })}
-                    placeholder={current.type === 'blunt' ? 'No overhang' : 'Overhang'}
+                    placeholder={current.type === 'blunt' ? 'No overhang' : 'Overhang 5′→3′'}
                     className="rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs disabled:opacity-50"
                 />
+                <select aria-label={`${label} notation`} value={current.protruding_strand || ''}
+                    disabled={current.type === 'blunt'}
+                    onChange={(event) => onChange({ ...current, protruding_strand: (event.target.value || null) as AssemblyFragmentEnd['protruding_strand'] })}>
+                    <option value="">Historical / unspecified</option>
+                    <option value="top">Physical top strand 5′→3′</option>
+                    <option value="bottom">Physical bottom strand 5′→3′</option>
+                </select>
             </div>
         </div>
     );
@@ -370,6 +377,16 @@ export function AssemblyPanel({
         setDnaWeaverPlan(null);
         setResult(null);
     }, [selectedSequenceId, sequenceData.sequence, sequenceData.circular]);
+
+    useEffect(() => {
+        const params = sequenceData.operationParams;
+        const saved = asWorkupRecord(params?.assembly_request);
+        if (saved && Array.isArray(saved.fragments) && (params?.mode === 'ligation' || params?.mode === 'golden_gate')) {
+            setMode(params.mode);
+            setFragments(saved.fragments as AssemblyFragmentInput[]);
+            if (typeof saved.enzyme_id === 'string') setGoldenGateEnzyme(saved.enzyme_id);
+        }
+    }, [selectedSequenceId, sequenceData.operationParams]);
 
     const refreshSavedWorkups = async () => {
         setSavedWorkupsLoading(true);
@@ -959,6 +976,7 @@ export function AssemblyPanel({
                             </label>
                         )}
 
+                        {mode !== 'gibson' && <p className="text-xs text-slate-400">Physical ends: enter each protruding strand 5′→3′; fragment sequence is the original top strand 5′→3′. Reverse rotates the duplex. Historical notation retains legacy behavior.</p>}
                         <div className="grid gap-3 sm:grid-cols-2">
                             <EndEditor
                                 label="Left end"

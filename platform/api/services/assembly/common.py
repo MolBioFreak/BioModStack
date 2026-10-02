@@ -39,7 +39,8 @@ def normalize_end(end: FragmentEnd | None) -> FragmentEnd | None:
         return FragmentEnd(type="blunt", overhang="", label=end.label)
     if not overhang:
         raise AssemblyError(f"{end.type} ends require an overhang sequence")
-    return FragmentEnd(type=end.type, overhang=overhang, label=end.label)
+    return FragmentEnd(type=end.type, overhang=overhang, label=end.label,
+                       protruding_strand=end.protruding_strand)
 
 
 def reverse_complement_end(end: FragmentEnd | None) -> FragmentEnd | None:
@@ -49,8 +50,10 @@ def reverse_complement_end(end: FragmentEnd | None) -> FragmentEnd | None:
         return FragmentEnd(type="blunt", overhang="", label=end.label)
     return FragmentEnd(
         type=end.type,
-        overhang=reverse_complement(end.overhang),
+        overhang=end.overhang if end.protruding_strand else reverse_complement(end.overhang),
         label=end.label,
+        protruding_strand=("bottom" if end.protruding_strand == "top" else "top")
+        if end.protruding_strand else None,
     )
 
 
@@ -64,6 +67,16 @@ def orient_fragment(fragment: AssemblyFragment) -> OrientedFragment:
         raise AssemblyError(f"Unsupported fragment orientation '{orientation}'")
 
     if orientation == "reverse":
+        # Rotate the duplex, not just its top span. Reconstruct the bottom's
+        # reference-axis span by removing top protrusions and adding bottom ones.
+        # Unspecified historical ends retain their previous RC(top) behavior.
+        start = len(left_end.overhang) if left_end and left_end.protruding_strand == "top" else 0
+        stop = len(sequence) - (len(right_end.overhang) if right_end and right_end.protruding_strand == "top" else 0)
+        sequence = sequence[start:stop]
+        if left_end and left_end.protruding_strand == "bottom":
+            sequence = reverse_complement(left_end.overhang) + sequence
+        if right_end and right_end.protruding_strand == "bottom":
+            sequence += reverse_complement(right_end.overhang)
         sequence = reverse_complement(sequence)
         left_end, right_end = reverse_complement_end(right_end), reverse_complement_end(left_end)
 
@@ -106,6 +119,11 @@ def overhangs_compatible(left: FragmentEnd | None, right: FragmentEnd | None) ->
             f"Sticky-end lengths differ: {len(left.overhang)} vs {len(right.overhang)} nt"
         ]
 
+    if left.protruding_strand and right.protruding_strand:
+        if left.protruding_strand != right.protruding_strand and reverse_complement_match(left.overhang, right.overhang):
+            return True, []
+        return False, [f"Physical protruding strands are not complementary: {left.overhang} vs {right.overhang}"]
+
     if left.overhang == right.overhang:
         return True, []
     if reverse_complement_match(left.overhang, right.overhang):
@@ -131,11 +149,13 @@ def fragment_provenance_payload(fragments: Iterable[OrientedFragment]) -> list[d
                 "type": fragment.left_end.type,
                 "overhang": fragment.left_end.overhang,
                 "label": fragment.left_end.label,
+                "protruding_strand": fragment.left_end.protruding_strand,
             },
             "right_end": None if fragment.right_end is None else {
                 "type": fragment.right_end.type,
                 "overhang": fragment.right_end.overhang,
                 "label": fragment.right_end.label,
+                "protruding_strand": fragment.right_end.protruding_strand,
             },
             "metadata": fragment.metadata or None,
         })
