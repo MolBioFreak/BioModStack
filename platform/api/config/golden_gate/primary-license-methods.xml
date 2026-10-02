@@ -1,0 +1,12 @@
+<primary_excerpts doi="10.1371/journal.pone.0238592">
+<permissions xmlns:ns0="http://www.w3.org/1999/xlink">
+<copyright-year>2020</copyright-year>
+<copyright-holder>Pryor et al</copyright-holder>
+<license ns0:href="http://creativecommons.org/licenses/by/4.0/" ns0:type="simple">
+<license-p>This is an open access article distributed under the terms of the <ext-link ext-link-type="uri" ns0:href="http://creativecommons.org/licenses/by/4.0/" ns0:type="simple">Creative Commons Attribution License</ext-link>, which permits unrestricted use, distribution, and reproduction in any medium, provided the original author and source are credited.</license-p>
+</license>
+</permissions>
+
+<p>Reactions (20 μL final volume) with T4 DNA ligase and BsaIHF-v2 or BsmBI-v2 were carried out using their respective NEB Golden Gate Enzyme Mixes (2 μL) in 1X T4 DNA ligase buffer. The reactions (20 μL final volume) with T4 DNA ligase (500 U) and SapI (15 U) or Esp3I (15 U) were carried out in 1X T4 DNA ligase buffer. Reactions (20 μL final volume) containing T4 DNA ligase (500 U) and BbsI-HF (15 U) were carried out in 1X CutSmart Buffer supplemented with 10 mM DTT and 1 mM ATP. The final concentration of DNA substrate in each assembly reaction was 100 nM. The reactions were cycled between 37°C and 16°C (SapI, Esp3I, BsaI-HFv2, BbsI-HF) or 42°C and 16°C (BsmBI-v2) for 5 minutes at each temperature for 30 cycles, and then subjected to a final heat-soak for 5 minutes at 60°C. Reactions were then quenched by the addition of 25 mM EDTA and purified using the Monarch PCR &amp; DNA Cleanup Kit. Each assembly reaction was performed a minimum of two times on different days. The assembly reactions were further purified to remove un-ligated substrates by treatment with Exonuclease III (50U) and Exonuclease VII (5 U) in 1X Standard Taq Polymerase buffer (final concentration) for 1 h at 37°C in a 50 μL reaction volume. The assembly products were then re-purified using the Monarch PCR &amp; DNA Cleanup Kit, including a second wash step, and quantified by Agilent Bioanalyzer (DNA 1000).</p>
+
+</primary_excerpts>
