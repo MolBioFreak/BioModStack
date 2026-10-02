@@ -753,14 +753,6 @@ async def authenticated_molbio_reviewer(request: Request) -> Optional[str]:
     return str(actor)
 
 
-class LigationRequest(BaseModel):
-    fragments: List[str]
-    circular: bool = True
-    parent_id: Optional[str] = None
-    save: bool = True
-    new_name: Optional[str] = None
-
-
 class MutationSchema(BaseModel):
     pos: int
     to: str
@@ -771,15 +763,6 @@ class MutationSchema(BaseModel):
 
 class MutagenesisRequest(SequenceInput):
     mutations: List[MutationSchema]
-    save: bool = True
-    new_name: Optional[str] = None
-
-
-class GibsonRequest(BaseModel):
-    fragments: List[str]
-    overlap_length: int = 20
-    circular: bool = True
-    parent_id: Optional[str] = None
     save: bool = True
     new_name: Optional[str] = None
 
@@ -2971,32 +2954,6 @@ async def save_golden_gate_assembly(
         product=assembly_product_to_response(product),
         saved_sequence=saved,
         message=f"Saved Golden Gate product '{saved.name}'",
-    )
-
-
-@router.post("/ligate", response_model=MolbioOperationResponse)
-async def ligate(
-    request: LigationRequest, session: AsyncSession = Depends(get_molbio_session)
-):
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            "The legacy /ligate route is deprecated because it does not carry fragment-end metadata. "
-            "Use /api/molbio/assembly/ligation/simulate or /save with explicit fragment ends."
-        ),
-    )
-
-
-@router.post("/gibson", response_model=MolbioOperationResponse)
-async def gibson(
-    request: GibsonRequest, session: AsyncSession = Depends(get_molbio_session)
-):
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            "The legacy /gibson route is deprecated because it does not carry validated overlap contracts. "
-            "Use /api/molbio/assembly/gibson/simulate or /save."
-        ),
     )
 
 
