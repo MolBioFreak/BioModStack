@@ -125,7 +125,6 @@ function getQscoreLabel(q: number): string {
 }
 
 const FASTQ_DEFAULT_MINIMAP_PRESET: MinimapPreset = 'map-ont';
-const FASTQ_DEFAULT_EXPECTED_PLASMID_SIZE_BP = 7000;
 const FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP = 100_000_000;
 const FASTQ_DEFAULT_MIN_READ_LENGTH_BP = 0;
 const FASTQ_MAX_MIN_READ_LENGTH_BP = 10_000_000;
@@ -910,12 +909,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         ?? (initialValues?.runMultimerQc as boolean | undefined)
         ?? true
     );
-    const [expectedPlasmidSize, setExpectedPlasmidSize] = useState<number>(() => coerceIntegerInput(
-        initialValues?.expectedPlasmidSize ?? initialValues?.expected_plasmid_size,
-        FASTQ_DEFAULT_EXPECTED_PLASMID_SIZE_BP,
-        1,
-        FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP,
-    ));
+    // Only initialization reads saved values. Reference/config refreshes never replace edits.
+    const savedExpectedSize = initialValues && Object.prototype.hasOwnProperty.call(initialValues, 'expectedPlasmidSize')
+        ? initialValues.expectedPlasmidSize : initialValues?.expected_plasmid_size;
+    const [autoExpectedPlasmidSize, setAutoExpectedPlasmidSize] = useState(savedExpectedSize == null);
+    const [expectedPlasmidSize, setExpectedPlasmidSize] = useState<string>(() => savedExpectedSize == null ? '' : String(savedExpectedSize));
     const [minFastqReadLength, setMinFastqReadLength] = useState<number>(() => coerceIntegerInput(
         initialValues?.minFastqReadLength ?? initialValues?.min_fastq_read_length,
         FASTQ_DEFAULT_MIN_READ_LENGTH_BP,
@@ -1096,13 +1094,15 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedManagedReferenceRevisionId,
     ]);
 
+    const usesExpectedPlasmidSize = ['clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'bamQc'].includes(selectedWorkflow);
+    const hasValidExpectedPlasmidSize = autoExpectedPlasmidSize || isIntegerInRange(Number(expectedPlasmidSize), 1, FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP);
     const hasValidFastqNumericControls = useMemo(() => (
-        isIntegerInRange(expectedPlasmidSize, 1, FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP)
+        hasValidExpectedPlasmidSize
         && isIntegerInRange(minFastqReadLength, 0, FASTQ_MAX_MIN_READ_LENGTH_BP)
         && isIntegerInRange(igvTrackWindowBp, 1, FASTQ_MAX_IGV_TRACK_WINDOW_BP)
         && isIntegerInRange(igvReportMaxSites, 1, FASTQ_MAX_IGV_REPORT_MAX_SITES)
         && isIntegerInRange(igvReportFlankingBp, 0, FASTQ_MAX_IGV_REPORT_FLANKING_BP)
-    ), [expectedPlasmidSize, igvReportFlankingBp, igvReportMaxSites, igvTrackWindowBp, minFastqReadLength]);
+    ), [hasValidExpectedPlasmidSize, igvReportFlankingBp, igvReportMaxSites, igvTrackWindowBp, minFastqReadLength]);
 
     const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
     const exactStateMolecularRevisionKeys = useMemo(() => new Set(
@@ -1132,6 +1132,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         : allMolbioRevisions;
     const selectedMolbioSequence = molbioSequences.find((sequence) => sequence.id === selectedMolbioSequenceId) || null;
     const selectedMolbioRevision = molbioRevisions.find((revision) => revision.id === selectedMolbioRevisionId) || null;
+    const expectedReferenceLength = usesMolBioReceiptLane
+        ? selectedMolbioRevision?.content_length
+        : selectedReferenceDetailQuery.data?.payload.contigs?.[0]?.length;
     const managedReferenceBlocker = useMemo(() => {
         if (!exactDomainExperimentId) return 'Select an exact NGS/MolBio Domain Experiment.';
         if (!exactStateRevisionId) return 'Select an exact local state revision.';
@@ -1192,6 +1195,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (inputSource === 'fastq' && !['clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'pooledAssignment'].includes(selectedWorkflow)) blockers.push('The selected workflow does not accept FASTQ input.');
         if (molbioRevisionPairError) blockers.push(molbioRevisionPairError);
         if (managedReferenceBlocker) blockers.push(managedReferenceBlocker);
+        if (usesExpectedPlasmidSize && runFastqQc && !hasValidExpectedPlasmidSize) blockers.push('Expected plasmid size must be Auto or an integer within the displayed bounds.');
         if (inputSource === 'fastq' && !hasValidFastqNumericControls) blockers.push('FASTQ QC numeric controls must be finite integers within the displayed bounds.');
         return [...new Set(blockers)];
     };
@@ -1360,9 +1364,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         bam_force_realign: bamForceRealign,
                         bam_min_mapq: bamMinMapq,
                     }),
+                    ...(usesExpectedPlasmidSize && { expected_plasmid_size: autoExpectedPlasmidSize ? null : Number(expectedPlasmidSize) }),
                     ...(inputSource === 'fastq' && {
                         fastq_path: fastqPath,
-                        expected_plasmid_size: expectedPlasmidSize,
                         min_fastq_read_length: minFastqReadLength,
                         fastq_minimap2_preset: fastqMinimap2Preset,
                         fastq_minimap2_allow_secondary: fastqMinimap2AllowSecondary,
@@ -2153,27 +2157,33 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     </label>
                 )}
 
+                {usesExpectedPlasmidSize && runFastqQc && (
+                    <div className="text-xs text-[var(--text-secondary)]">
+                        <label>
+                            Expected plasmid size mode
+                            <select aria-label="Expected plasmid size mode" value={autoExpectedPlasmidSize ? 'auto' : 'override'}
+                                onChange={(event) => setAutoExpectedPlasmidSize(event.target.value === 'auto')}
+                                className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5">
+                                <option value="auto">Auto — selected reference</option>
+                                <option value="override">Explicit size</option>
+                            </select>
+                        </label>
+                        {autoExpectedPlasmidSize ? <p role="status">{expectedReferenceLength
+                            ? `Auto: ${expectedReferenceLength.toLocaleString()} bp from selected reference`
+                            : 'Auto: resolved from selected reference at launch'}</p> : <label>
+                            Expected plasmid size (bp)
+                            <input aria-label="Expected plasmid size (bp)" type="number" min={1} max={FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP}
+                                value={expectedPlasmidSize} onChange={(event) => setExpectedPlasmidSize(event.target.value)}
+                                className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
+                        </label>}
+                        <p>Read-length / plasmid-length estimate; not biological copy number. Explicit range: 1–100,000,000 bp.</p>
+                    </div>
+                )}
+
                 {inputSource === 'fastq' && runFastqQc && (
                     <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                         <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">FASTQ QC core controls</div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                            <label className="text-xs text-[var(--text-secondary)]">
-                                Expected plasmid size (bp)
-                                <input
-                                    type="number"
-                                    min={1}
-                                    max={FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP}
-                                    value={expectedPlasmidSize}
-                                    onChange={(e) => setExpectedPlasmidSize(coerceIntegerInput(
-                                        e.target.value,
-                                        FASTQ_DEFAULT_EXPECTED_PLASMID_SIZE_BP,
-                                        1,
-                                        FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP,
-                                    ))}
-                                    className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
-                                />
-                            </label>
-
                             <label className="text-xs text-[var(--text-secondary)]">
                                 Min read length (bp)
                                 <input

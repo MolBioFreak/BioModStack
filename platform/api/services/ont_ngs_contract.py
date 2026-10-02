@@ -28,8 +28,8 @@ MANIFEST_SCHEMA = "sequence_qc.manifest.v1"
 DORADO_LOCK_PATH = Path(__file__).resolve().parents[3] / "config" / "ngs" / "dorado_v1.3.1.lock.json"
 
 
-def normalized_fasta_sequence_sha256(path: Path) -> str:
-    """Hash one normalized FASTA record without trusting headers or line wrapping."""
+def normalized_fasta_sequence_identity(path: Path) -> tuple[str, int]:
+    """Return digest and length from the existing single-record reference parse."""
     records = 0
     chunks: list[str] = []
     with path.open("r", encoding="utf-8") as handle:
@@ -51,7 +51,32 @@ def normalized_fasta_sequence_sha256(path: Path) -> str:
     invalid = sorted(set(sequence) - set("ACGTN"))
     if invalid:
         raise ValueError(f"reference_fasta contains unsupported symbols: {''.join(invalid)}")
-    return hashlib.sha256(sequence.encode("ascii")).hexdigest()
+    return hashlib.sha256(sequence.encode("ascii")).hexdigest(), len(sequence)
+
+
+def normalized_fasta_sequence_sha256(path: Path) -> str:
+    """Compatibility wrapper for callers needing only the reference digest."""
+    return normalized_fasta_sequence_identity(path)[0]
+
+
+def effective_expected_plasmid_size(requested: Any, reference_length: int | None = None) -> int | None:
+    """Null requests Auto; positive integers are overrides, including historical 7000.
+
+    With no parsed reference yet, leave Auto unresolved. The native tasks resolve
+    the same rule from their existing reference index for direct Nextflow calls.
+    """
+    if requested is None:
+        return reference_length
+    if isinstance(requested, bool) or not isinstance(requested, int) or not 1 <= requested <= 100_000_000:
+        raise ValueError("expected_plasmid_size must be null (Auto) or an integer from 1 through 100000000")
+    return requested
+
+
+def resolve_expected_plasmid_size(params: dict[str, Any], reference_length: int) -> None:
+    """Keep requested intent beside the effective execution value in saved params."""
+    requested = params.get("expected_plasmid_size")
+    params["requested_expected_plasmid_size"] = requested
+    params["expected_plasmid_size"] = effective_expected_plasmid_size(requested, reference_length)
 
 
 ONT_QUALITY_MODE_CONTRACT: dict[str, Any] = {
@@ -491,6 +516,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     spec = get_ont_workflow_spec(canonical_id)
     normalized: dict[str, Any] = dict(WORKFLOW_DEFAULTS.get(canonical_id, {}))
     normalized.update(dict(params or {}))
+    if canonical_id in {"ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}:
+        normalized["expected_plasmid_size"] = effective_expected_plasmid_size(normalized.get("expected_plasmid_size"))
 
     if canonical_id == "ont_fastq_qc":
         def fastq_bool(name: str, default: bool) -> bool:

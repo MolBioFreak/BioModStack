@@ -8,87 +8,6 @@ def shellQuote(value) {
     return "'${text.replace("'", "'\"'\"'")}'"
 }
 
-process FastqMultimerQC {
-    label 'local_cpu'
-    publishDir "${params.out_dir}/multimer_qc", mode: 'copy'
-    tag "multimer_qc"
-
-    input:
-    path fastq
-
-    output:
-    path "read_lengths.tsv", emit: lengths
-    path "multimer_summary.tsv", emit: summary
-    path "multimer_candidates.tsv", emit: candidates
-    path "multimer_qc.log", emit: log
-
-    script:
-    def expectedSize = (params.expected_plasmid_size ?: 7000) as Integer
-    def minReadLength = (params.min_fastq_read_length ?: 0) as Integer
-    """
-    set -euo pipefail
-
-    touch multimer_candidates.tsv
-
-    if [[ "${fastq}" == *.gz ]]; then
-        zcat "${fastq}" | awk 'NR % 4 == 2 { print length(\$0) }' > read_lengths.tsv
-    else
-        cat "${fastq}" | awk 'NR % 4 == 2 { print length(\$0) }' > read_lengths.tsv
-    fi
-
-    awk -v expected=${expectedSize} -v minlen=${minReadLength} '
-        BEGIN {
-            total = 0; mono = 0; dimer = 0; trimer = 0; tetramer_plus = 0; sum = 0;
-            # Midpoints between integer multiples of plasmid size
-            dimer_cutoff   = expected * 1.5;   # boundary between 1x and 2x
-            trimer_cutoff  = expected * 2.5;   # boundary between 2x and 3x
-            tetramer_cutoff = expected * 3.5;  # boundary between 3x and 4x+
-        }
-        {
-            len = \$1;
-            if (len < minlen) next;
-            total++;
-            sum += len;
-            if (len >= tetramer_cutoff) {
-                tetramer_plus++;
-                print NR "\\t" len "\\ttetramer_plus" >> "multimer_candidates.tsv";
-            } else if (len >= trimer_cutoff) {
-                trimer++;
-                print NR "\\t" len "\\ttrimer_candidate" >> "multimer_candidates.tsv";
-            } else if (len >= dimer_cutoff) {
-                dimer++;
-                print NR "\\t" len "\\tdimer_candidate" >> "multimer_candidates.tsv";
-            } else {
-                mono++;
-            }
-        }
-        END {
-            mean = (total > 0) ? (sum / total) : 0;
-            print "metric\\tvalue" > "multimer_summary.tsv";
-            print "total_reads\\t" total >> "multimer_summary.tsv";
-            print "monomer_reads\\t" mono >> "multimer_summary.tsv";
-            print "dimer_reads\\t" dimer >> "multimer_summary.tsv";
-            print "trimer_reads\\t" trimer >> "multimer_summary.tsv";
-            print "tetramer_plus_reads\\t" tetramer_plus >> "multimer_summary.tsv";
-            print "expected_plasmid_size\\t" expected >> "multimer_summary.tsv";
-            print "dimer_cutoff\\t" dimer_cutoff >> "multimer_summary.tsv";
-            print "trimer_cutoff\\t" trimer_cutoff >> "multimer_summary.tsv";
-            print "tetramer_cutoff\\t" tetramer_cutoff >> "multimer_summary.tsv";
-            print "min_read_length\\t" minlen >> "multimer_summary.tsv";
-            print "mean_read_length\\t" mean >> "multimer_summary.tsv";
-        }
-    ' read_lengths.tsv
-
-    {
-        echo "FASTQ multimer QC complete"
-        echo "Expected plasmid size: ${expectedSize}"
-        echo "Dimer cutoff (1.5x): \$(echo "${expectedSize} * 1.5" | bc)"
-        echo "Trimer cutoff (2.5x): \$(echo "${expectedSize} * 2.5" | bc)"
-        echo "Tetramer cutoff (3.5x): \$(echo "${expectedSize} * 3.5" | bc)"
-        echo "Minimum read length: ${minReadLength}"
-    } > multimer_qc.log
-    """
-}
 process FastqDimerAnalysis {
     label 'dorado_cpu'
     publishDir "${params.out_dir}/multimer_qc", mode: 'copy', saveAs: { filename ->
@@ -166,7 +85,7 @@ process FastqDimerAnalysis {
     path "dimer_alignment.log", emit: align_log, optional: true
 
     script:
-    def expectedSize = (params.expected_plasmid_size ?: 7000) as Integer
+    def expectedSize = params.expected_plasmid_size == null ? '' : (params.expected_plasmid_size as Integer).toString()
     def minReadLength = (params.min_fastq_read_length ?: 0) as Integer
     def enableRotation = params.enable_rotating_reference_frames == false ? 'false' : 'true'
     def rotationScanStep = (params.rotation_scan_step_bp ?: 1) as Integer
@@ -210,15 +129,17 @@ process FastqDimerAnalysis {
     fi
     bash "${codeRoot}/scripts/init_fastq_dimer_outputs.sh"
 
-    dimer_cutoff=\$(awk -v expected=${expectedSize} 'BEGIN { printf "%d\\n", int(expected * 1.5 + 0.5) }')
-    trimer_cutoff=\$(awk -v expected=${expectedSize} 'BEGIN { printf "%d\\n", int(expected * 2.5 + 0.5) }')
-
     # Stage reference to deterministic local filename to avoid escaping issues
     # when upstream path includes spaces.
     cp ${reference} reference_input.fasta
     samtools faidx reference_input.fasta
     ref_name=\$(head -n1 reference_input.fasta.fai | cut -f1)
     ref_len=\$(head -n1 reference_input.fasta.fai | cut -f2)
+
+    expected_size="${expectedSize}"
+    expected_size="\${expected_size:-\${ref_len}}"
+    dimer_cutoff=\$(awk -v expected="\${expected_size}" 'BEGIN { printf "%d\\n", int(expected * 1.5 + 0.5) }')
+    trimer_cutoff=\$(awk -v expected="\${expected_size}" 'BEGIN { printf "%d\\n", int(expected * 2.5 + 0.5) }')
     samtools faidx reference_input.fasta "\${ref_name}" > ref_single.fasta
     ref_seq=\$(tail -n +2 ref_single.fasta | tr -d '\\n' | tr '[:lower:]' '[:upper:]')
     source_reference_sha256="\$(printf '%s' "\${ref_seq}" | sha256sum | awk '{print \$1}')"
@@ -1328,7 +1249,7 @@ process FastqDimerAnalysis {
 
     {
         echo -e "metric\\tvalue"
-        echo -e "expected_plasmid_size\\t${expectedSize}"
+        echo -e "expected_plasmid_size\\t\${expected_size}"
         echo -e "min_read_length\\t${minReadLength}"
         echo -e "dimer_cutoff\\t\${dimer_cutoff}"
         echo -e "trimer_cutoff\\t\${trimer_cutoff}"

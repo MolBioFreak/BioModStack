@@ -61,7 +61,10 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         // Legacy reopen compatibility. Fresh payloads serialize run_fastq_qc only.
         runFastqQc: (typeof p.run_fastq_qc === 'boolean') ? p.run_fastq_qc : p.run_multimer_qc === true,
         runMultimerQc: (typeof p.run_fastq_qc === 'boolean') ? p.run_fastq_qc : p.run_multimer_qc === true,
-        expectedPlasmidSize: p.expected_plasmid_size ?? 7000,
+        // Retained numeric execution values stay explicit. Null is a saved Auto
+        // request; only pre-Auto jobs missing the field use the historical default.
+        expectedPlasmidSize: Object.prototype.hasOwnProperty.call(p, 'expected_plasmid_size')
+            ? p.expected_plasmid_size : 7000,
         enableRotatingReferenceFrames: p.enable_rotating_reference_frames !== false,
         rotationScanStepBp: p.rotation_scan_step_bp ?? 1,
         minFastqReadLength: p.min_fastq_read_length ?? 0,

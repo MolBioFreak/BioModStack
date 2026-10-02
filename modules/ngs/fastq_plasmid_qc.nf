@@ -48,7 +48,7 @@ process FastqPlasmidQC {
     path "fastq_qc.log", emit: log
 
     script:
-    def expectedSize = (params.expected_plasmid_size ?: 7000) as Integer
+    def expectedSize = params.expected_plasmid_size == null ? '' : (params.expected_plasmid_size as Integer).toString()
     def minReadLength = (params.min_fastq_read_length ?: 0) as Integer
     def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
     def minimapAllowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
@@ -149,15 +149,6 @@ process FastqPlasmidQC {
         n50_read_length=0
     fi
 
-    dimer_cutoff=\$(awk -v expected=${expectedSize} 'BEGIN { printf "%.0f", expected * 1.5 }')
-    trimer_cutoff=\$(awk -v expected=${expectedSize} 'BEGIN { printf "%.0f", expected * 2.5 }')
-    dimer_like_reads=\$(awk -v d="\${dimer_cutoff}" -v t="\${trimer_cutoff}" 'NR > 1 && (\$2 + 0) >= d && (\$2 + 0) < t {c++} END {print c + 0}' read_lengths.tsv)
-    trimer_plus_reads=\$(awk -v t="\${trimer_cutoff}" 'NR > 1 && (\$2 + 0) >= t {c++} END {print c + 0}' read_lengths.tsv)
-    estimated_copy_number_mean=\$(awk -v mean="\${mean_read_length}" -v expected=${expectedSize} 'BEGIN {
-        if (expected > 0) printf "%.4f", mean / expected
-        else printf "0"
-    }')
-
     cp --reflink=auto -- "${reference}" reference.snapshot.fasta
     chmod 0444 reference.snapshot.fasta
     reference_raw_sha256_before="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
@@ -190,6 +181,17 @@ process FastqPlasmidQC {
     fi
     reference_name=\$(head -n1 reference_qc.fasta.fai | cut -f1)
     reference_length=\$(head -n1 reference_qc.fasta.fai | cut -f2)
+
+    expected_size="${expectedSize}"
+    expected_size="\${expected_size:-\${reference_length}}"
+    dimer_cutoff=\$(awk -v expected="\${expected_size}" 'BEGIN { printf "%d", int(expected * 1.5 + 0.5) }')
+    trimer_cutoff=\$(awk -v expected="\${expected_size}" 'BEGIN { printf "%d", int(expected * 2.5 + 0.5) }')
+    dimer_like_reads=\$(awk -v d="\${dimer_cutoff}" -v t="\${trimer_cutoff}" 'NR > 1 && (\$2 + 0) >= d && (\$2 + 0) < t {c++} END {print c + 0}' read_lengths.tsv)
+    trimer_plus_reads=\$(awk -v t="\${trimer_cutoff}" 'NR > 1 && (\$2 + 0) >= t {c++} END {print c + 0}' read_lengths.tsv)
+    estimated_copy_number_mean=\$(awk -v mean="\${mean_read_length}" -v expected="\${expected_size}" 'BEGIN {
+        if (expected > 0) printf "%.4f", mean / expected
+        else printf "0"
+    }')
 
     mapped_alignment_records=\$("\${SAMTOOLS_CMD[@]}" view -c -F 4 "${bam}")
     unmapped_alignment_records=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 "${bam}")
@@ -394,7 +396,7 @@ process FastqPlasmidQC {
         echo -e "metric\\tvalue"
         echo -e "reference_name\\t\${reference_name}"
         echo -e "reference_length\\t\${reference_length}"
-        echo -e "expected_plasmid_size\\t${expectedSize}"
+        echo -e "expected_plasmid_size\\t\${expected_size}"
         echo -e "min_fastq_read_length\\t${minReadLength}"
         echo -e "fastq_minimap2_preset\\t${minimapPreset}"
         echo -e "fastq_minimap2_allow_secondary\\t${minimapAllowSecondary}"

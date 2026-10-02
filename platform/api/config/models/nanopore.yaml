@@ -182,6 +182,7 @@ modes:
     params:
       - fastq_path
       - reference_fasta
+      - expected_plasmid_size
       - run_fastq_qc
       - min_fastq_read_length
       - fastq_minimap2_preset
@@ -231,6 +232,7 @@ modes:
       - bam_path
       - fastq_path
       - reference_fasta
+      - expected_plasmid_size
       - dorado_model
       - dorado_device
       - min_qscore
@@ -431,10 +433,11 @@ params:
 
   - name: expected_plasmid_size
     type: integer
-    description: Expected plasmid size (bp) used for coarse copy-number/read-length context
+    description: "Expected plasmid length (bp): null selects Auto from the reference; a positive integer overrides it. Read-length ratios are length heuristics, not biological copy number."
     required: false
-    default: 7000
+    default: null
     minimum: 1
+    maximum: 100000000
 
   - name: min_fastq_read_length
     type: integer
