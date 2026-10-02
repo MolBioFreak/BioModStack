@@ -127,6 +127,40 @@ def test_actual_image_cpu_compilation_and_native_handoff(tmp_path, monkeypatch):
     assert launch.read_campaign_receipt(tmp_path / 'job')['effective_sha256'] == handoff['bc2_effective_sha256']
 
 
+@pytest.mark.parametrize('explicit', [False, True])
+def test_native_preview_uses_selected_image_without_replacing_explicit_override(tmp_path, monkeypatch, explicit):
+    from lib.shared_runtime_images import publish_image
+    from lib.runtime_image_lifecycle import commit_release, transaction
+    from services.remote_execution.images import image_reference
+    containers = tmp_path / 'containers'
+    containers.mkdir()
+    legacy = containers / 'bindcraft2.sif'
+    legacy.write_bytes(b'inert legacy image fixture')
+    source = tmp_path / 'repaired.sif'
+    source.write_bytes(b'inert repaired image fixture')
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    store = containers / '.image-store'
+    selected = publish_image(source, store, digest)
+    with transaction(store):
+        commit_release(store, 'development', {'BMS_RUNTIME_IMAGE_BINDCRAFT2_SIF': {
+            'path': str(selected), 'sha256': digest}})
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(store))
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_LANE', 'development')
+    monkeypatch.delenv('BMS_RUNTIME_IMAGE_BINDCRAFT2_SIF', raising=False)
+    monkeypatch.setattr(launch, 'get_container_dir', lambda: containers)
+    monkeypatch.setattr(launch, 'get_results_dir', lambda: tmp_path)
+    calls = []
+    def compile_stub(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps({'upstream_commit': launch.PIN}))
+    monkeypatch.setattr(launch.subprocess, 'run', compile_stub)
+    launch._native_compile({}, tmp_path / 'campaign', **({'image': legacy} if explicit else {}))
+    expected = legacy if explicit else selected
+    assert calls[0][calls[0].index('python3') - 1] == str(expected)
+    assert image_reference('bindcraft2.sif', containers) == (selected, digest)
+    assert legacy.read_bytes() == b'inert legacy image fixture'
+
+
 def test_shared_prequeue_request_preserves_typed_bc2_campaign_shape():
     class Registry:
         def validate_job_params(self, model_id, mode, params, **kwargs):

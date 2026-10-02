@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from paths import get_allowed_roots, get_results_dir, resolve_allowed_path
+from paths import get_allowed_roots, get_container_dir, get_results_dir, resolve_allowed_path
 from services.bindcraft2_native import PIN, _canonical
 from services.bindcraft2_typed import normalize_new_campaign_request, validate_request
 
@@ -53,8 +53,11 @@ def _identity(sources: list[tuple[str, int | None, Path]]) -> list[dict]:
             for role, index, path in sources]
 
 
-def _native_compile(request: dict, destination: Path, *, resume: bool = False, image: Path = IMAGE,
+def _native_compile(request: dict, destination: Path, *, resume: bool = False, image: Path | None = None,
                     script: Path = SCRIPT) -> dict:
+    if image is None:
+        from services.remote_execution.images import resolve_image
+        image = resolve_image('bindcraft2.sif', get_container_dir())
     if not image.is_file():
         raise ValueError('Pinned BC2 image is unavailable')
     if not destination.is_absolute():

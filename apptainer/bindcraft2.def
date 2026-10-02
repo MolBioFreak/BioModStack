@@ -1,15 +1,17 @@
 Bootstrap: docker
 From: ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 
-# Build from the BMS repository root; this tracked hook adds producer identity
-# without altering the pinned native sampling/filtering algorithms.
+# Build from the BMS repository root. Producer identity is separate from the
+# upstream PR17 amino-acid-bias calculation backport; native presets stay pinned.
 %files
     apptainer/bindcraft2-producer.patch /opt/bindcraft2-producer.patch
+    apptainer/bindcraft2-aa-bias.patch /opt/bindcraft2-aa-bias.patch
 
 %labels
     Author BioModStack
     Version d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f
     Description BindCraft2 cuda13 native campaign image (not retired BindCraft v1)
+    AminoAcidBiasFix 90f5496550d5981aa0d6fe1831f76c87322350d9-code-only
 
 %post
     set -eu
@@ -23,7 +25,9 @@ From: ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cff
     test "$(git rev-parse HEAD)" = d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f
     git apply --check /opt/bindcraft2-producer.patch
     git apply /opt/bindcraft2-producer.patch
-    python3 -m py_compile bindcraft/campaign.py
+    git apply --check /opt/bindcraft2-aa-bias.patch
+    git apply /opt/bindcraft2-aa-bias.patch
+    python3 -m py_compile bindcraft/af2.py bindcraft/campaign.py bindcraft/protein_preparation.py bindcraft/proteinmpnn.py bindcraft/sequence_optimization.py
     # Dependency versions observed in the installed pinned image. Keep the source
     # editable for native settings/scaffolds; do not resolve new accelerator wheels.
     python3 -m pip install \
@@ -106,10 +110,12 @@ From: ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cff
 
 %test
     test "$(git -C /opt/bindcraft rev-parse HEAD)" = d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f
+    git -C /opt/bindcraft apply --reverse --check /opt/bindcraft2-aa-bias.patch
     git -C /opt/bindcraft apply --reverse --check /opt/bindcraft2-producer.patch
     python3 -m bindcraft.selfcheck cuda13 --shipped-only
 
 %help
-    Pinned BC2 v1.0.1. Bind the shared AlphaFold params and durable JAX cache
+    Pinned BC2 v1.0.1 plus the upstream PR17 bias calculation correction.
+    Presets and operator settings are unchanged. Bind AlphaFold params and JAX cache
     at runtime; the image includes shipped MPNN weights, not AF2 downloads.
     Build/qualify on an authorized CUDA 13 compatible host before enabling.

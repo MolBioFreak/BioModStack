@@ -1,7 +1,8 @@
 """PR17 calculation-only backport; optional pinned-source/native CPU differential.
 
 Set BMS_TEST_BC2_UPSTREAM to pristine d5bae16 and BMS_TEST_BC2_PYTHON
-(or BMS_TEST_BC2_IMAGE) for native JAX checks. No weights or GPU inference.
+(or BMS_TEST_BC2_IMAGE) to the repaired runtime for native JAX checks.
+No weights or GPU inference.
 """
 import ast
 import hashlib
@@ -79,8 +80,8 @@ def test_native_campaign_design_not_validation_and_both_af2_paths(patched_source
     assert all(ast.unparse(call.args[-1]) == 'self.amino_acid_bias' for call in calls)
 
 
-# Execute actual native function bodies with their installed globals, not a
-# reimplementation of the calculation. Models/weights are never constructed.
+# Execute imported repaired-image functions, checking their installed source
+# against the exact backport. Models/weights are never constructed.
 NATIVE = r'''
 import ast, sys
 from pathlib import Path
@@ -101,12 +102,14 @@ def load(module, root, names, extra=None):
     assert len(selected) == len(names)
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(root), 'exec'), namespace)
     return namespace
-new = load(so, stage, ['sequence_features_from_logits'])['sequence_features_from_logits']
+for name in ('af2.py', 'campaign.py', 'protein_preparation.py', 'proteinmpnn.py', 'sequence_optimization.py'):
+    assert Path(so.__file__).with_name(name).read_bytes() == (stage / 'bindcraft' / name).read_bytes(), name
+new = so.sequence_features_from_logits
 old = load(so, source, ['sequence_features_from_logits'])['sequence_features_from_logits']
-prepare = load(af2, stage, ['prepare_design_sequence_features'], {'sequence_features_from_logits': new})['prepare_design_sequence_features']
-mpnew = load(mp, stage, ['proteinmpnn_input_features'])['proteinmpnn_input_features']
+prepare = af2.prepare_design_sequence_features
+mpnew = mp.proteinmpnn_input_features
 mpold = load(mp, source, ['proteinmpnn_input_features'])['proteinmpnn_input_features']
-init = load(prep, stage, ['prepare_binder_chains'])['prepare_binder_chains']
+init = prep.prepare_binder_chains
 settings = {'aa_bias': {'W': .3, 'Y': 2., 'C': 0, 'A': -1, 'F': 1.}}
 biases = resolve_amino_acid_bias(settings)
 assert resolve_omitted_amino_acids(settings) == ''.join(a for a in AMINO_ACIDS if a in 'CA')
