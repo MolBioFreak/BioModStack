@@ -1,0 +1,20 @@
+.bioxp-plan-leaf { display: flex; flex-direction: column; gap: .85rem; min-width: 0; color: var(--text-primary); }
+.bioxp-plan-leaf h3 { margin: 0; font-size: 1rem; }
+.bioxp-plan-leaf p, .bioxp-plan-leaf small { color: var(--text-secondary); font-size: .8rem; line-height: 1.5; }
+.bioxp-plan-leaf small { display: block; overflow-wrap: anywhere; }
+.bioxp-plan-leaf fieldset { display: flex; flex-direction: column; gap: .65rem; min-width: 0; margin: 0; padding: .8rem; border: 1px solid var(--border-primary); border-radius: .6rem; }
+.bioxp-plan-leaf legend { padding: 0 .3rem; font-size: .85rem; font-weight: 600; }
+.bioxp-plan-leaf label { display: block; font-size: .8rem; min-width: 0; }
+.bioxp-plan-leaf input:not([type=checkbox]), .bioxp-plan-leaf select { display: block; width: 100%; min-width: 0; box-sizing: border-box; margin-top: .3rem; border: 1px solid var(--border-primary); border-radius: .4rem; padding: .5rem; background: var(--surface-control, var(--bg-primary)); color: var(--text-primary); }
+.bioxp-plan-leaf button { border: 1px solid var(--border-primary); border-radius: .4rem; padding: .45rem .6rem; background: var(--bg-primary); color: var(--text-primary); font-size: .8rem; cursor: pointer; }
+.bioxp-plan-leaf button:hover:not(:disabled) { border-color: var(--accent-primary); }
+.bioxp-plan-leaf :disabled { opacity: .5; cursor: default; }
+.bioxp-plan-leaf :is(button, input, select):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.bioxp-plan-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.bioxp-plan-row { display: flex; flex-direction: column; gap: .5rem; border-top: 1px solid var(--border-primary); padding-top: .7rem; }
+.bioxp-plan-row strong { font-size: .85rem; overflow-wrap: anywhere; }
+.bioxp-plan-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: .7rem; }
+.bioxp-plan-leaf ol { padding-left: 1.5rem; margin: .2rem 0; font-size: .85rem; }
+.bioxp-reference-list li { margin-bottom: .6rem; }
+.bioxp-plan-leaf .bioxp-channel-choice { display: inline-flex; align-items: center; gap: .3rem; padding: .3rem; }
+.bioxp-channel-choice input { accent-color: var(--accent-primary); }

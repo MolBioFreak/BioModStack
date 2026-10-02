@@ -87,6 +87,50 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('canonical prepared workflow controls', () => {
+    it.each(['control', 'review'])('serializes prepared hashing with %s, including same-turn clicks', async kind => {
+        if (kind === 'review') job = jobFixture({ phase: 'waiting', gate: 'review', gate_id: 'review-action' });
+        rows = [job]; await render(); await pick(prepared);
+        if (kind === 'review') await act(async () => inputText('Reviewer', 'Alice'));
+        let finish!: (value: ArrayBuffer) => void;
+        vi.stubGlobal('crypto', { randomUUID: () => 'review-key', subtle: { digest: () => new Promise(resolve => { finish = resolve; }) } });
+        const controlLabel = kind === 'review' ? 'Acknowledge protocol review' : 'Pause workflow';
+        await act(async () => { button('Submit prepared workflow').click(); button(controlLabel).click(); });
+        await tick();
+        expect(finish).toBeTypeOf('function');
+        await click(controlLabel);
+        expect(api.post).not.toHaveBeenCalled();
+        expect(button('Submit prepared workflow').disabled).toBe(true);
+        await act(async () => finish(new Uint8Array(32).buffer)); await tick();
+        expect(api.post).toHaveBeenCalledTimes(1);
+        expect(api.post).toHaveBeenCalledWith('/api/bioxp/protocols/submit', expect.objectContaining({ ...prepared, dry_run: false, expected_connection_generation: 9 }));
+        expect(button('Submit prepared workflow').disabled).toBe(false);
+    });
+    it.each(['control', 'review'])('retains pending %s ownership across job selection until settlement', async kind => {
+        if (kind === 'review') job = jobFixture({ phase: 'waiting', gate: 'review', gate_id: 'review-action' });
+        const second = structuredClone(job); second.job_id = 'job-two'; second.command!.command_id = 'job-two';
+        second.execution.runtime_state.workflow!.command_id = 'job-two'; rows = [job, second];
+        await render(); await pick(prepared);
+        if (kind === 'review') await act(async () => inputText('Reviewer', 'Alice'));
+        let finish!: (value: any) => void;
+        vi.mocked(api.post).mockImplementation(() => new Promise(resolve => { finish = resolve; }) as never);
+        await act(async () => {
+            button(kind === 'review' ? 'Acknowledge protocol review' : 'Pause workflow').click();
+            button('Submit prepared workflow').click();
+        }); await tick();
+        expect(api.post).toHaveBeenCalledTimes(1);
+        expect(button('Submit prepared workflow').disabled).toBe(true);
+        job = second;
+        await act(async () => { const picker = host.querySelector('select')!; picker.value = 'job-two'; picker.dispatchEvent(new Event('change', { bubbles: true })); }); await tick();
+        expect(button('Submit prepared workflow').disabled).toBe(true);
+        expect(button('Request safe-state stop').disabled).toBe(true);
+        await click('Submit prepared workflow'); await click('Request safe-state stop');
+        expect(api.post).toHaveBeenCalledTimes(1);
+        await act(async () => finish({ data: { accepted: true, command_id: 'job-one', control_command_id: 'old-control' } })); await tick();
+        expect(button('Submit prepared workflow').disabled).toBe(false);
+        expect(button('Request safe-state stop').disabled).toBe(false);
+        expect(host.textContent).not.toContain('Control old-control');
+    });
+
     it.skipIf(!process.env.BIOXP_WORKFLOW_EXPORT_SOURCE).each(['accepted', 'running', 'completed', 'fresh_process'])(
         'renders the real connected robot producer %s without mutation', async phase => {
             const producer = JSON.parse(readFileSync(process.env.BIOXP_WORKFLOW_EXPORT_SOURCE!, 'utf8'));

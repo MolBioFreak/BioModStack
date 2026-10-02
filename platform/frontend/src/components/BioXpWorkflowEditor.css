@@ -51,6 +51,12 @@
 .bioxp-deck-adoption p { margin-top: .5rem; font-size: .8rem; }
 .bioxp-review-step { text-align: left; padding: .4rem 0; color: var(--text-primary); }
 .bioxp-notice { margin-top: .5rem; color: var(--text-secondary); }
+.bioxp-materials-disclosure { margin-top: 1rem; border-top: 1px solid var(--border-primary); padding-top: .75rem; }
+.bioxp-materials-disclosure > summary { cursor: pointer; font-weight: 600; }
+.bioxp-logical-preview { margin: 1rem 0; display: grid; gap: .75rem; }
+.bioxp-logical-preview input[type=range] { display: block; width: 100%; }
+.bioxp-preview-navigation { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .75rem; }
+.bioxp-native-json { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: .75rem; background: var(--bg-primary); font-size: .8rem; }
 @media (max-width: 1250px) {
   .bioxp-build-grid { grid-template-columns: minmax(13rem, .65fr) minmax(0, 1.7fr); }
   .bioxp-step-list { grid-column: 1; grid-row: 1 / span 2; }

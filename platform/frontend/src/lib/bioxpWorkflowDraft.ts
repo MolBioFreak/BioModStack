@@ -1,3 +1,4 @@
+import type { WorkflowPlan } from './bioxpWorkflowPlan';
 import type { BioXpManualStep } from './bioxpManualPipetting';
 
 export type DraftObject = { [key: string]: DraftValue };
@@ -73,14 +74,16 @@ export function mergeDraftEdits(original: DraftObject, before: DraftObject, afte
     return result;
 }
 
-export function readWorkflowDraft(value: unknown): WorkflowDraft {
-    if (!isDraftObject(value) || value.schema !== 'bms.bioxp-workflow-draft.v1' || !Array.isArray(value.steps) || !isDraftObject(value.editor_state)
-        || Object.keys(value).some(k => !['schema', 'steps', 'editor_state'].includes(k))) throw new Error('Unsupported workflow draft envelope.');
+export function readWorkflowDraft(value: unknown): WorkflowDraft | WorkflowPlan {
+    if (!isDraftObject(value) || (value.schema !== 'bms.bioxp-workflow-draft.v1' && value.schema !== 'bms.bioxp-workflow-draft.v2') || !Array.isArray(value.steps) || !isDraftObject(value.editor_state)
+        || Object.keys(value).some(k => !['schema', 'steps', 'editor_state', ...(value.schema === 'bms.bioxp-workflow-draft.v2' ? ['deck_plan'] : [])].includes(k))) throw new Error('Unsupported workflow draft envelope.');
+    if (value.schema === 'bms.bioxp-workflow-draft.v2' && (!isDraftObject(value.deck_plan)
+        || !['labware', 'materials', 'assignments'].every(key => Array.isArray((value.deck_plan as DraftObject)[key])))) throw new Error('Invalid workflow deck plan.');
     const ids = new Set<string>();
     for (const row of value.steps) {
         if (!isDraftObject(row) || typeof row.step_id !== 'string' || !row.step_id.trim() || ids.has(row.step_id) || !isDraftObject(row.intent)
             || Object.keys(row).some(k => !['step_id', 'intent'].includes(k))) throw new Error('Invalid workflow draft row.');
         ids.add(row.step_id);
     }
-    return value as unknown as WorkflowDraft;
+    return value as unknown as WorkflowDraft | WorkflowPlan;
 }

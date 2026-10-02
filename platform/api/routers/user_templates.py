@@ -72,10 +72,14 @@ def _validate_bioxp_workflow_draft(
         return
     if model_id is not None or base_template_id is not None:
         raise HTTPException(422, "BioXP workflow drafts have no model or base template")
+    schema = params.get("schema") if isinstance(params, dict) else None
+    keys = {"schema", "steps", "editor_state"}
+    if schema == "bms.bioxp-workflow-draft.v2":
+        keys.add("deck_plan")
     if (
         not isinstance(params, dict)
-        or set(params) != {"schema", "steps", "editor_state"}
-        or params["schema"] != "bms.bioxp-workflow-draft.v1"
+        or set(params) != keys
+        or schema not in ("bms.bioxp-workflow-draft.v1", "bms.bioxp-workflow-draft.v2")
         or not isinstance(params["steps"], list)
         or not isinstance(params["editor_state"], dict)
     ):
@@ -93,6 +97,13 @@ def _validate_bioxp_workflow_draft(
         if step["step_id"] in seen:
             raise HTTPException(422, "BioXP workflow draft step_id values must be distinct")
         seen.add(step["step_id"])
+    if schema == "bms.bioxp-workflow-draft.v2":
+        from bioxp_workflow_authoring import WorkflowDeckPlan
+        from pydantic import ValidationError
+        try:
+            WorkflowDeckPlan.model_validate(params["deck_plan"])
+        except ValidationError as exc:
+            raise HTTPException(422, f"Invalid BioXP workflow deck plan: {exc}") from None
     try:
         json.dumps(params, allow_nan=False)
     except (ValueError, TypeError):

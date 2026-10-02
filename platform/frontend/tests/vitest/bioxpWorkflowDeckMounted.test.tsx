@@ -104,3 +104,20 @@ it('remains controlled across external reopen and does not silently replace unkn
     onChange.mockClear(); await act(async () => root.render(<BioXpWorkflowDeck selection={{ station: 'future-station', wells: ['Z99'] }} onChange={onChange} />));
     expect(onChange).not.toHaveBeenCalled(); expect(host.textContent).toContain('Z99');
 });
+
+it('shows compiled action highlights without inert selection controls, retaining view navigation', async () => {
+    await act(async () => root.render(<BioXpWorkflowDeck readOnly selection={{ station: 'LOC_MS', wells: ['A1'] }} onChange={changed} />));
+    expect(host.textContent).toContain('Native action location');
+    expect(host.querySelector('[aria-label="Deck station"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Well selection mode"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Select well A1"]')).toBeNull();
+    const well = el('Magnetic station A1');
+    expect(well.getAttribute('role')).toBe('img');
+    await click('Magnetic station A1'); await click('Select Output chiller');
+    expect(changed).not.toHaveBeenCalled();
+    const svg = el('BioXP deck map'), original = svg.getAttribute('viewBox');
+    await click('Zoom in'); expect(svg.getAttribute('viewBox')).not.toBe(original);
+    await act(async () => root.render(<BioXpWorkflowDeck readOnly selection={{ station: 'LOC_OC', wells: ['B1'] }} onChange={changed} />));
+    expect(el('Output chiller B1').getAttribute('aria-pressed')).toBe('true');
+    expect(el('Magnetic station A1')).toBe(well);
+});

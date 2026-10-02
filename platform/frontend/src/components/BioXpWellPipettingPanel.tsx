@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { BioXpPipetteResults } from './BioXpPipetteResults';
+import { BioXpWorkflowMaterials } from './BioXpWorkflowMaterials';
+import { BioXpWorkflowTransferEditor } from './BioXpWorkflowTransferEditor';
+import { BioXpSavedWorkflowRun } from './BioXpSavedWorkflowRun';
+import { emptyDeckPlan, emptyTransferIntent, previewBioXpWorkflow, type WorkflowDeckPlan, type WorkflowTransferIntent, type SavedWorkflowSnapshot, type WorkflowPreview } from '../lib/bioxpWorkflowPlan';
 import { BioXpWorkflowDeck } from './BioXpWorkflowDeck';
 import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import './BioXpWorkflowEditor.css';
@@ -12,14 +16,27 @@ import { type BioXpSourceStep, describeManualStep, manualPipettingDocument, type
 import { createUserTemplate, updateUserTemplate, fetchUserTemplates, fetchUserTemplate, type UserTemplate } from '../lib/api';
 import { isDraftObject, mergeDraftEdits, sameDraftValue, nativeIntent, readWorkflowDraft, type DraftObject, type NativeDraft, type WorkflowDraftRow } from '../lib/bioxpWorkflowDraft';
 
-type Operation = BioXpManualStep['operation'];
+type Operation = BioXpManualStep['operation'] | 'transfer';
 const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix', 'load_tip', 'measure_fluid_height', 'source_fluid_offset', 'diagnostic_detect_fluid', 'source_calwith_fluid'];
 const allOperations: Operation[] = [...operations, ...Object.keys(sourceDefaults) as BioXpSourceStep['operation'][]];
 const label = (operation: Operation) => operation in sourceLabels ? sourceLabels[operation as BioXpSourceStep['operation']] : operation === 'load_tip' ? 'Load tip' : operation === 'measure_fluid_height' ? 'Measure fluid height' : operation === 'source_fluid_offset' ? 'OEM fluid offset scan' : operation === 'diagnostic_detect_fluid' ? 'OEM Detect Fluid' : operation === 'source_calwith_fluid' ? 'OEM calibrate with fluid' : operation[0].toUpperCase() + operation.slice(1);
+// A visual projection only: mergeDraftEdits retains missing/null/unknown raw fields.
+const projectTransfer = (value: DraftObject): WorkflowTransferIntent => {
+    const blank = emptyTransferIntent();
+    const endpoint = (raw: unknown) => {
+        const obj = isDraftObject(raw) ? raw : {};
+        return { station: typeof obj.station === 'string' ? obj.station : '',
+            location_id: typeof obj.location_id === 'string' || typeof obj.location_id === 'number' ? obj.location_id : '',
+            wells: Array.isArray(obj.wells) ? obj.wells.filter((w): w is string => typeof w === 'string') : [] };
+    };
+    return { ...blank, ...Object.fromEntries(Object.keys(blank).filter(key => typeof value[key] === 'string' || typeof value[key] === 'number' || key.endsWith('lift_height_steps') && value[key] === null).map(key => [key, value[key]])),
+        operation: 'transfer', source: endpoint(value.source), destination: endpoint(value.destination),
+        channels: Array.isArray(value.channels) ? value.channels.filter((c): c is number => typeof c === 'number') : [] } as WorkflowTransferIntent;
+};
 const wells = [...'ABCDEFGH'].flatMap(row => Array.from({ length: 12 }, (_, col) => `${row}${col + 1}`));
 
-export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision, workflowAuthoring = false }: {
-    workflowAuthoring?: boolean; generation: number; connected: boolean; destinations?: BioXpDeckDestinationV1[]; positionTableRevision?: string | null;
+export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision, workflowAuthoring = false, controlsEnabled = false }: {
+    controlsEnabled?: boolean; workflowAuthoring?: boolean; generation: number; connected: boolean; destinations?: BioXpDeckDestinationV1[]; positionTableRevision?: string | null;
 }) {
     const [sourceDrafts, setSourceDrafts] = useState<Record<BioXpSourceStep['operation'], NativeDraft<BioXpSourceStep>>>(sourceDefaults);
     const updateSource = (step: NativeDraft<BioXpSourceStep>) => setSourceDrafts(current => ({ ...current, [step.operation]: step }));
@@ -42,6 +59,14 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     const [dispenseSpeed, setDispenseSpeed] = useState('');
     const [cycles, setCycles] = useState('');
     const [operation, setOperation] = useState<Operation>('move');
+    const [schema, setSchema] = useState<'bms.bioxp-workflow-draft.v1' | 'bms.bioxp-workflow-draft.v2'>('bms.bioxp-workflow-draft.v1');
+    const [deckPlan, setDeckPlan] = useState<WorkflowDeckPlan>(emptyDeckPlan);
+    const [transfer, setTransfer] = useState<WorkflowTransferIntent>(emptyTransferIntent);
+    const [savedWorkflow, setSavedWorkflow] = useState<SavedWorkflowSnapshot | null>(null);
+    const [preview, setPreview] = useState<{ result: WorkflowPreview; snapshot: string } | null>(null);
+    const [previewBusy, setPreviewBusy] = useState(false);
+    const previewLock = useRef(false);
+    const [previewIndex, setPreviewIndex] = useState(0);
     const [deck, setDeck] = useState<BioXpDeckSelection>({ station: '', wells: [] });
     const [workflowView, setWorkflowView] = useState<'build' | 'review'>('build');
     const [steps, setSteps] = useState<WorkflowDraftRow[]>([]);
@@ -101,6 +126,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         return { operation: op, ...common, speed: number(op === 'aspirate' ? aspirateSpeed : dispenseSpeed, `${op} speed`) };
     };
     const rawDraft = (op: Operation): DraftObject => {
+        if (op === 'transfer') return transfer as unknown as DraftObject;
         if (op in sourceDefaults) return sourceDrafts[op as BioXpSourceStep['operation']] as unknown as DraftObject;
         if (op === 'load_tip') return { operation: op, tray, well: tipWell, overpress, lift_z: liftZ };
         if (op === 'measure_fluid_height') return { operation: op, speed: detectionSpeed };
@@ -115,11 +141,13 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     };
     useEffect(() => { if (editingId && !editBaseline.current) editBaseline.current = rawDraft(operation); });
     const append = () => {
+        if (operation === 'transfer') setSchema('bms.bioxp-workflow-draft.v2');
         setSteps(current => [...current, { step_id: crypto.randomUUID(), intent: rawDraft(operation) }]);
         setError(null); setSavedNotice('');
     };
     const cancelEdit = () => { editingChanged.current = true; setEditingId(null); editBaseline.current = null; };
     const updateStep = () => {
+        if (operation === 'transfer') setSchema('bms.bioxp-workflow-draft.v2');
         const after = rawDraft(operation), before = editBaseline.current;
         setSteps(current => current.map(row => row.step_id !== editingId ? row : { ...row,
             intent: row.intent.operation === operation && before
@@ -128,8 +156,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     };
     const form = (): DraftObject => ({ sourceDrafts: sourceDrafts as unknown as DraftObject, tray, tipWell, overpress, liftZ,
         detectionSpeed, scanPlate, scanPrefill, scanSpacing, location, well, flag, liftMode, height, channels,
-        volume, aspirateSpeed, dispenseSpeed, cycles, operation, ...(workflowAuthoring ? { deck: deck as unknown as DraftObject } : {}) });
-    currentEditor.current = JSON.stringify({ workflowName, steps, form: form(), editingId });
+        volume, aspirateSpeed, dispenseSpeed, cycles, operation, ...(workflowAuthoring ? { deck: deck as unknown as DraftObject, ...(operation === 'transfer' || schema === 'bms.bioxp-workflow-draft.v2' ? { transfer: transfer as unknown as DraftObject } : {}) } : {}) });
+    currentEditor.current = JSON.stringify({ workflowName, steps, schema, deckPlan, form: form(), editingId });
     useEffect(() => { if (captureHydratedForm.current) { loadedForm.current = form(); captureHydratedForm.current = false; } });
     const hydrateForm = (value: DraftObject) => {
         const textSetters = { tray: setTray, tipWell: setTipWell, detectionSpeed: setDetectionSpeed, scanSpacing: setScanSpacing,
@@ -139,7 +167,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         setOverpress(value.overpress === true); setLiftZ(value.liftZ === true); setScanPrefill(value.scanPrefill === true);
         setScanPlate((typeof value.scanPlate === 'string' ? value.scanPlate : '') as typeof scanPlate);
         setChannels(Array.isArray(value.channels) ? value.channels.filter((v): v is number => typeof v === 'number') : []);
-        setOperation(allOperations.includes(value.operation as Operation) ? value.operation as Operation : 'move');
+        setOperation(value.operation === 'transfer' || allOperations.includes(value.operation as Operation) ? value.operation as Operation : 'move');
+        setTransfer(isDraftObject(value.transfer) ? projectTransfer(value.transfer) : emptyTransferIntent());
         const savedDeck = isDraftObject(value.deck) ? value.deck : {};
         setDeck({ station: typeof savedDeck.station === 'string' ? savedDeck.station : '',
             wells: Array.isArray(savedDeck.wells) ? savedDeck.wells.filter((w): w is string => typeof w === 'string') : [] });
@@ -160,15 +189,29 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         try { await action(); } catch (cause) { if (mounted.current) setError(bioXpErrorText(cause)); }
         finally { storageLock.current = false; if (mounted.current) setStorageBusy(false); }
     }
+    const workflowDraft = () => {
+        const editor_state = mergeDraftEdits(storedEditor.current, { form: loadedForm.current }, { form: form() });
+        if (editingId) { editor_state.editing_step_id = editingId; editor_state.edit_baseline = editBaseline.current; }
+        else if (editingChanged.current) { delete editor_state.editing_step_id; delete editor_state.edit_baseline; }
+        return schema === 'bms.bioxp-workflow-draft.v2'
+            ? { schema, steps, editor_state, deck_plan: deckPlan }
+            : { schema, steps, editor_state };
+    };
+    const requestPreview = async () => {
+        if (previewLock.current) return;
+        previewLock.current = true; setPreviewBusy(true); setError(null); setPreview(null);
+        const snapshot = currentEditor.current;
+        try {
+            const result = await previewBioXpWorkflow(structuredClone(workflowDraft()), 'bms-workflow-preview');
+            if (mounted.current) { setPreview({ result, snapshot }); setPreviewIndex(0); }
+        } catch (cause) { if (mounted.current) setError(bioXpErrorText(cause)); }
+        finally { previewLock.current = false; if (mounted.current) setPreviewBusy(false); }
+    };
     const save = () => void storage(async () => {
         if (!workflowName.trim()) throw new Error('Enter a workflow name.');
         const savedSnapshot = currentEditor.current;
-        const currentForm = form();
-        const editor_state = mergeDraftEdits(storedEditor.current, { form: loadedForm.current }, { form: currentForm });
-        if (editingId) { editor_state.editing_step_id = editingId; editor_state.edit_baseline = editBaseline.current; }
-        else if (editingChanged.current) { delete editor_state.editing_step_id; delete editor_state.edit_baseline; }
         const body = { name: workflowName, mode: 'bioxp_workflow', model_id: null, base_template_id: null,
-            params: { schema: 'bms.bioxp-workflow-draft.v1', steps, editor_state } };
+            params: workflowDraft() };
         const result = workflowId ? await updateUserTemplate(workflowId, body) : await createUserTemplate(body);
         // Retain an accepted create's ID even if the verification GET fails, so
         // retrying Save updates that record rather than creating a duplicate.
@@ -179,6 +222,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             || readback.data.model_id !== null || readback.data.base_template_id !== null
             || !sameDraftValue(readback.data.params, body.params)) throw new Error('Workflow save readback differs; unsaved editor retained.');
         if (!mounted.current) return;
+        setSavedWorkflow({ id: readback.data.id, name: readback.data.name, draft: structuredClone(readWorkflowDraft(readback.data.params)) });
         setSavedNotice(currentEditor.current === savedSnapshot
             ? 'Saved draft.'
             : 'Saved the earlier draft snapshot. Newer editor changes are not saved.');
@@ -194,6 +238,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         if (result.data.id !== id || result.data.mode !== 'bioxp_workflow' || result.data.model_id !== null || result.data.base_template_id !== null) throw new Error('Not a BioXP workflow draft.');
         const saved = readWorkflowDraft(result.data.params);
         if (!mounted.current) return;
+        setSchema(saved.schema); setDeckPlan(saved.schema === 'bms.bioxp-workflow-draft.v2' ? saved.deck_plan : emptyDeckPlan());
+        setSavedWorkflow({ id, name: result.data.name, draft: structuredClone(saved) }); setPreview(null);
         editingChanged.current = false;
         storedEditor.current = saved.editor_state;
         loadedForm.current = isDraftObject(saved.editor_state.form) ? saved.editor_state.form : {};
@@ -228,6 +274,9 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     });
     const edit = (index: number, inPlace = false) => {
         const row = steps[index], step = row.intent;
+        if (step.operation === 'transfer' && workflowAuthoring) {
+            setOperation('transfer'); setTransfer(projectTransfer(step)); setEditingId(inPlace ? row.step_id : null); editBaseline.current = null; return;
+        }
         if (!allOperations.includes(step.operation as Operation)) { setError('Unknown draft retained. Its native editor is not available.'); return; }
         setOperation(step.operation as Operation); setEditingId(inPlace ? row.step_id : null); editBaseline.current = null;
         if (workflowAuthoring) {
@@ -263,12 +312,14 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     const sourceOperation = Object.hasOwn(sourceDefaults, operation);
     const show = (...ops: Operation[]) => !workflowAuthoring || ops.includes(operation);
     const workflowLabel = (intent: DraftObject) => {
+        if (intent.operation === 'transfer') return 'Transfer';
         if (intent.operation === 'diagnostic_pipette' && isDraftObject(intent.diagnostic))
             return intent.diagnostic.action === 'eject' ? 'Eject selected tips (diagnostic)' : 'Pipette diagnostic';
         return typeof intent.operation === 'string' && allOperations.includes(intent.operation as Operation)
             ? label(intent.operation as Operation) : 'Unrecognized step';
     };
     const workflowSummary = (intent: DraftObject) => {
+        if (intent.operation === 'transfer') return `${isDraftObject(intent.source) ? intent.source.station : 'Source'} → ${isDraftObject(intent.destination) ? intent.destination.station : 'Destination'} · ${intent.volume_ul === '' || intent.volume_ul == null ? 'Volume not set' : `${intent.volume_ul} µL`}`;
         const station = deckStations.find(item => String(item.locationId) === String(intent.location_id));
         if (['move', 'lower', 'lift'].includes(String(intent.operation))) return [station?.label ?? (intent.location_id ? `Location ${intent.location_id}` : 'Choose a station'), intent.well].filter(Boolean).join(' · ');
         if (intent.operation === 'load_tip') return `Tip tray ${intent.tray || '—'} · ${intent.well || 'Choose a well'}`;
@@ -287,6 +338,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         setSavedNotice('');
     };
     const description = (intent: DraftObject) => {
+        if (intent.operation === 'transfer') return 'Ordered head-reference pairs; Preview shows the explicit native expansion.';
         try { return describeManualStep(nativeIntent(intent)); }
         catch { return `${typeof intent.operation === 'string' ? intent.operation : 'Unknown operation'} · incomplete or unknown fields retained`; }
     };
@@ -354,7 +406,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             <div className="flex flex-wrap gap-2">
                 <button type="button" className="bioxp-primary" disabled={storageBusy} onClick={save}>Save workflow</button>
                 <button type="button" disabled={storageBusy} onClick={listWorkflows}>Open workflow</button>
-                <button type="button" disabled={storageBusy} onClick={() => { setWorkflowId(null); setWorkflowName(''); setSteps([]); cancelEdit(); storedEditor.current = {}; loadedForm.current = {}; setDeck({ station: '', wells: [] }); setWorkflowView('build'); setSavedNotice('New empty workflow.'); }}>New workflow</button>
+                <button type="button" disabled={storageBusy} onClick={() => { setWorkflowId(null); setSavedWorkflow(null); setPreview(null); setWorkflowName(`${workflowName || 'Untitled workflow'} copy`); setSavedNotice('Cloned as an unsaved workflow. Save creates a new template; the original is unchanged.'); }}>Clone workflow</button>
+                <button type="button" disabled={storageBusy} onClick={() => { setWorkflowId(null); setSavedWorkflow(null); setPreview(null); setSchema('bms.bioxp-workflow-draft.v1'); setDeckPlan(emptyDeckPlan()); setTransfer(emptyTransferIntent()); setWorkflowName(''); setSteps([]); cancelEdit(); storedEditor.current = {}; loadedForm.current = {}; setDeck({ station: '', wells: [] }); setWorkflowView('build'); setSavedNotice('New empty workflow.'); }}>New workflow</button>
             </div>
             <div className="bioxp-view-tabs" role="tablist" aria-label="Workflow views">
                 {(['build', 'review'] as const).map(view => <button type="button" key={view} role="tab" aria-selected={workflowView === view} onClick={() => setWorkflowView(view)}>{view === 'build' ? 'Build' : 'Review'}</button>)}
@@ -367,20 +420,41 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
                 <button type="button" onClick={() => setOpenList(null)}>Close workflow list</button>
             </div>}
         </div>}
-        {workflowAuthoring && workflowView === 'review' && <section className="bioxp-workflow-card" aria-label="Workflow review">
+        {workflowAuthoring && <section hidden={workflowView !== 'review'} className="bioxp-workflow-card" aria-label="Workflow review">
             <h3>{workflowName || 'Untitled workflow'}</h3>
-            <p className="bioxp-muted">Draft review only. No robot job has been submitted.</p>
+            <p className="bioxp-muted">Draft review only. Preview does not move hardware, measure liquid, or submit a robot job. Saved execution is a separate explicit action below.</p>
             {editingId && <p className="bioxp-notice">The selected step has a separate editing form. Use Update step to apply it to this list before saving.</p>}
             <ol className="mt-4 space-y-3">{steps.map((row, index) => <li key={row.step_id}>
                 <button type="button" onClick={() => { edit(index, true); setWorkflowView('build'); }} className="bioxp-review-step">{index + 1}. {workflowLabel(row.intent)} — {workflowSummary(row.intent)}</button>
-                <details><summary>Step settings</summary><p className="bioxp-muted">{description(row.intent)}</p></details>
+                <details><summary>Step settings</summary><p className="bioxp-muted">{description(row.intent)}</p><pre className="bioxp-native-json">{JSON.stringify(row.intent, null, 2)}</pre></details>
             </li>)}</ol>
             {!steps.length && <p className="bioxp-empty">No steps yet. Return to Build to add your first action.</p>}
+            <button type="button" className="mt-4" disabled={previewBusy} onClick={() => void requestPreview()}>{previewBusy ? 'Previewing…' : 'Preview workflow'}</button>
+            {preview && <section aria-label="Logical native preview" className="bioxp-logical-preview">
+                {preview.snapshot !== currentEditor.current && <p role="status">Preview is an earlier draft snapshot. Preview again to include current edits.</p>}
+                {preview.result.issues.map((issue, index) => <p role="alert" key={index}>{issue.step_id ? `Step ${issue.step_id}: ` : ''}{issue.message}</p>)}
+                {!preview.result.document && <p>No native document produced. Correct the reported fields and preview again.</p>}
+                {preview.result.document && <>
+                    <p>{preview.result.actions.length} native actions. Logical order only, not a physical simulation.</p>
+                    {preview.result.actions.length > 0 && <>
+                        <label>Native action<input aria-label="Native action scrubber" type="range" min={0} max={preview.result.actions.length - 1} value={previewIndex} onChange={event => setPreviewIndex(Number(event.target.value))} /></label>
+                        <div className="bioxp-preview-navigation"><button type="button" disabled={previewIndex === 0} onClick={() => setPreviewIndex(index => index - 1)}>Previous native action</button><button type="button" disabled={previewIndex >= preview.result.actions.length - 1} onClick={() => setPreviewIndex(index => index + 1)}>Next native action</button></div>
+                        <p aria-live="polite">{previewIndex + 1}. {preview.result.actions[previewIndex].label} · Step {preview.result.actions[previewIndex].step_id}{preview.result.actions[previewIndex].pair_index !== null ? ` · pair ${preview.result.actions[previewIndex].pair_index! + 1}` : ''}</p>
+                        <BioXpWorkflowDeck readOnly selection={{ station: preview.result.actions[previewIndex].station ?? '', wells: preview.result.actions[previewIndex].well ? [preview.result.actions[previewIndex].well!] : [] }} onChange={() => {}} />
+                        <h4>Effective native fields</h4><pre aria-label="Effective native fields" className="bioxp-native-json">{JSON.stringify({ kind: preview.result.actions[previewIndex].kind, params: preview.result.actions[previewIndex].params }, null, 2)}</pre>
+                    </>}
+                    <details><summary>Native document</summary><pre className="bioxp-native-json">{JSON.stringify(preview.result.document, null, 2)}</pre></details>
+                </>}
+            </section>}
+            <BioXpSavedWorkflowRun saved={savedWorkflow} generation={generation} connected={connected} controlsEnabled={controlsEnabled} />
             <button type="button" className="mt-4" onClick={() => setWorkflowView('build')}>Back to Build</button>
         </section>}
         <div className={workflowAuthoring ? 'bioxp-build-grid' : undefined} hidden={workflowAuthoring && workflowView !== 'build'}>
         {workflowAuthoring && <>{orderedSteps}<div className="bioxp-workflow-card bioxp-deck-column">
             <BioXpWorkflowDeck selection={deck} onChange={setDeck} />
+            <details className="bioxp-materials-disclosure"><summary>Planned labware & materials</summary>
+                <BioXpWorkflowMaterials plan={deckPlan} onChange={plan => { setDeckPlan(plan); setSchema('bms.bioxp-workflow-draft.v2'); setSavedNotice(''); }} selection={deck} />
+            </details>
             <div className="bioxp-deck-adoption">
                 {positionOperation || operation === 'load_tip' ? <>
                     <button type="button" className="bioxp-secondary" onClick={applyDeckSelection}
@@ -393,11 +467,13 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         </div></>}
         <section className={workflowAuthoring ? 'bioxp-workflow-card bioxp-step-inspector' : 'space-y-3'} aria-label="Step settings">
         <h3 className="font-semibold">{workflowAuthoring ? editingId ? `Step ${steps.findIndex(row => row.step_id === editingId) + 1}` : 'New step' : 'Native step editor'}</h3>
-        {workflowAuthoring && <label className="bioxp-step-type">Action<select aria-label="Step to append" value={operation} onChange={e => setOperation(e.target.value as Operation)}>
+        {workflowAuthoring && <label className="bioxp-step-type">Action<select aria-label="Step to append" value={operation} onChange={e => { setOperation(e.target.value as Operation); if (e.target.value === 'transfer') setSchema('bms.bioxp-workflow-draft.v2'); }}>
+            <option value="transfer">Transfer</option>
             <optgroup label="Position & liquid">{allOperations.filter(op => ['move','lower','lift','aspirate','dispense','mix'].includes(op)).map(op => <option key={op} value={op}>{label(op)}</option>)}</optgroup>
             <optgroup label="Tips & source procedures">{allOperations.filter(op => ['load_tip','source_load_tips','source_mix','source_aspirate_air','source_dispense_air','source_purge'].includes(op)).map(op => <option key={op} value={op}>{label(op)}</option>)}</optgroup>
             <optgroup label="Diagnostics & calibration">{allOperations.filter(op => ['measure_fluid_height','source_fluid_offset','diagnostic_detect_fluid','source_calwith_fluid','diagnostic_pipette'].includes(op)).map(op => <option key={op} value={op}>{label(op)}</option>)}</optgroup>
         </select></label>}
+        {workflowAuthoring && operation === 'transfer' && <BioXpWorkflowTransferEditor value={transfer} onChange={setTransfer} selection={deck} onSelect={setDeck} />}
         {(!workflowAuthoring || positionOperation) && <p className="text-sm">Move positions the head at a station and reference well. Lower and Lift act vertically in place.</p>}
         {!workflowAuthoring && <p className="text-sm text-amber-200">Choose which pipettes aspirate, dispense or mix. This does not load tips or change tip alignment. Use Load selected tips for physical loading. With four tips, the selected well positions the head; the tips keep their fixed spacing.</p>}
         {workflowAuthoring && liquidOperation && <p className="text-sm">Choose which pipettes perform liquid strokes. Their spacing is fixed; this does not position the head or load tips.</p>}

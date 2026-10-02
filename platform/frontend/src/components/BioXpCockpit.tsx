@@ -1118,7 +1118,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 </div>
             </div>
             <div role="tabpanel" id="control-panel-workflows" aria-labelledby="control-tab-workflows" hidden={controlTab !== 'workflows'}>
-                {workflowsOpened && <BioXpWorkflowEditor />}
+                {workflowsOpened && <BioXpWorkflowEditor generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />}
             </div>
             <div hidden={controlTab === 'workflows'} className="space-y-4">
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
