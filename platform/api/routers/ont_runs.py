@@ -1206,11 +1206,14 @@ async def ont_get_pooled_assignment_manifest(
 async def ont_get_pooled_assignment_targets(
     assignment_job_id: str,
     session: AsyncSession = Depends(get_session),
+    read_limit: int = Query(0, ge=0, le=1000, description="Explicit per-read inspection; zero keeps target polling unchanged."),
+    read_offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
-    """Read persisted pooled target identities and immutable revision bindings."""
+    """Read target identities, optionally with one page of numerical observations."""
     try:
         return await get_pooled_assignment_targets(
-            session, assignment_job_id=assignment_job_id
+            session, assignment_job_id=assignment_job_id,
+            read_limit=read_limit, read_offset=read_offset,
         )
     except PooledAssignmentError as exc:
         raise HTTPException(

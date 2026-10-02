@@ -22,7 +22,7 @@ async def test_numerical_http_reader_and_explicit_release(policy_context, observ
     assert response.status_code == 201, response.text
     submitted = response.json()
     job_id = submitted["assignment_job_id"]
-    path = f"/api/jobs/{job_id}/pooled-assignment/targets"
+    path = f"/api/jobs/{job_id}/pooled-assignment/targets?read_limit=100"
     pending = await context.client.get(path)
     assert pending.status_code == 200
     assert pending.json()["read_assignments"] is None
@@ -86,6 +86,19 @@ async def test_numerical_http_reader_and_explicit_release(policy_context, observ
             assert tuple(int(tsv[key]) for key in NUMERICAL) == (100, 70, 30, 60)
     loaded = await pooled._load_release_context(context.session, job_id)
     assert loaded["summary"]["read_assignments"] == summary["read_assignments"]
+    async def no_evidence_scan(*_args, **_kwargs):
+        raise AssertionError("ordinary target polling must not load release/read evidence")
+    with monkeypatch.context() as guard:
+        guard.setattr(pooled, "_load_release_context", no_evidence_scan)
+        ordinary = await context.client.get(path.split("?")[0])
+        assert ordinary.status_code == 200
+        assert "read_assignments" not in ordinary.json()
+    for offset in (0, 1, 2):
+        page = await context.client.get(path.split("?")[0], params={"read_limit": 1, "read_offset": offset})
+        assert page.status_code == 200
+        assert page.json()["read_assignments"] == summary["read_assignments"][offset:offset + 1]
+        assert page.json()["read_assignments_total"] == len(summary["read_assignments"])
+        assert page.json()["read_assignments_offset"] == offset
     read = await context.client.get(path)
     assert read.status_code == 200, read.text
     assert read.json()["read_assignments"] == summary["read_assignments"]
@@ -126,7 +139,7 @@ async def test_unknown_assignment_fields_still_rejected_and_targets_remain_reada
     summary_path.write_text(json.dumps(summary))
     with pytest.raises(pooled.PooledAssignmentError, match="keys are not exact"):
         await pooled._load_release_context(context.session, job_id)
-    response = await context.client.get(f"/api/jobs/{job_id}/pooled-assignment/targets")
+    response = await context.client.get(f"/api/jobs/{job_id}/pooled-assignment/targets?read_limit=100")
     assert response.status_code == 200
     assert len(response.json()["targets"]) == 3
     assert response.json()["read_assignments"] is None
