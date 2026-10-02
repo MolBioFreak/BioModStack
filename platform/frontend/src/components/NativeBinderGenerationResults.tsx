@@ -5,6 +5,8 @@ import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 import { metricKeys, numericMetricKeys, metricLabel, formatMetric, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
 import { fetchNativeBinderGeneration, nativeCandidateRoute, nativeGenerationMetrics, nativeGenerationMetricDetail, nativeGenerationMetricUnit, type NativeGenerationPage, type NativeGenerationRecord, type NativeGenerationDocument } from '../lib/nativeBinderResults';
 
+import type { CohortInitialMetrics } from './CohortAnalytics';
+
 // Load useful visualization and operation owners only when their view is demanded.
 const CohortAnalytics = lazy(() => import('./CohortAnalytics').then(module => ({ default: module.CohortAnalytics })));
 const StructureWorkbench = lazy(() => import('../structureViewer/StructureWorkbench').then(module => ({ default: module.StructureWorkbench })));
@@ -14,6 +16,8 @@ export interface NativeWorkbenchAdapter {
     fetchPage: (offset: number, signal?: AbortSignal) => Promise<NativeGenerationPage>;
     label: (row: NativeGenerationRecord) => string;
     preferredColumns?: string[];
+    initialMetrics?: (numericKeys: string[]) => CohortInitialMetrics;
+    compact?: boolean;
     inspect?: (row: NativeGenerationRecord) => ReactNode;
     summary?: (rows: NativeGenerationRecord[]) => ReactNode;
 }
@@ -163,7 +167,8 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const exportRows = useMemo(() => exportScope === 'all' ? rows : exportScope === 'selected' ? rows.filter(item => selectionId(item) && selectedSet.has(selectionId(item)!)) : matched.map(entry => byId.get(entry.id)!), [rows, exportScope, selectedSet, matched, byId]);
     const csv = useMemo(() => [['candidate_key', 'design_id', ...keys].map(csvCell).join(','), ...exportRows.map(item => [item.candidate_key, item.design_id, ...keys.map(key => values(item)[key])].map(csvCell).join(','))].join('\r\n'), [exportRows, keys]);
     const exportJson = useMemo(() => JSON.stringify(exportRows.map(item => item.native_record ?? item), null, 2), [exportRows]);
-    const headlineKeys = (adapter ? ['duration_seconds', ...numericKeys] : ['seq_length', 'dsasa', ...numericKeys]).filter((key, i, all) => numericKeys.includes(key) && all.indexOf(key) === i).slice(0, 2);
+    const initialMetrics = adapter?.initialMetrics?.(numericKeys);
+    const headlineKeys = (initialMetrics?.headline?.length ? initialMetrics.headline : adapter ? ['duration_seconds', ...numericKeys] : ['seq_length', 'dsasa', ...numericKeys]).filter((key, i, all) => numericKeys.includes(key) && all.indexOf(key) === i).slice(0, 2);
     const headlineMetrics = headlineKeys.map(key => ({ key, ...summarizeMetric(matched, key) }));
     const table = <section className={`${panel} overflow-hidden`} aria-label="Candidate data table">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-color)] p-4">
@@ -192,8 +197,8 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
             <div className="flex gap-2"><button className={control} type="button" disabled={displayedPage === 0} onClick={() => setPageIndex(displayedPage - 1)}>Previous native records</button><button className={control} type="button" disabled={(displayedPage + 1) * pageSize >= matched.length} onClick={() => setPageIndex(displayedPage + 1)}>Next native records</button></div>
         </nav>
     </section>;
-    return <section aria-label="Native initial-generation results" className="min-w-0 space-y-4 text-[var(--text-primary)]">
-        <header className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-xl font-semibold">{adapter?.title ?? "Generation dashboard"}</h3><span className="rounded-full border border-[var(--border-color)] px-3 py-1 text-xs">{scopeText}</span></header>
+    return <section aria-label="Native initial-generation results" className={`min-w-0 ${adapter?.compact ? "space-y-2" : "space-y-4"} text-[var(--text-primary)]`}>
+        <header className="flex flex-wrap items-center justify-between gap-3"><h3 className={`${adapter?.compact ? "text-base" : "text-xl"} font-semibold`}>{adapter?.title ?? "Generation dashboard"}</h3><span className="rounded-full border border-[var(--border-color)] px-3 py-1 text-xs">{scopeText}</span></header>
         {!adapter && <BinderPredictionEvidence jobId={jobId} sourceDesignId={row?.design_id} launchContextId={launchContextId} />}
         {query.isLoading && <p role="status">Reading published generation records…</p>}
         {query.isError && <p role="status" className={`${panel} p-4`}>Native publication {rows.length ? 'is partially loaded' : 'is not available'}: {String(query.error)} <button className={control} type="button" onClick={() => void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch())}>Retry native readback</button></p>}
@@ -201,15 +206,15 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         {page && <>
             {adapter?.summary?.(matched.map(entry => byId.get(entry.id)!))}
             {page.total === 0 ? <p className={`${panel} p-5`}>No native candidate records were emitted. This published zero-yield result remains available for review.</p> : <>
-                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Cohort summary">
+                <div className={`grid grid-cols-2 ${adapter?.compact ? "gap-2" : "gap-3"} lg:grid-cols-4`} aria-label="Cohort summary">
                     {[
                         [adapter ? 'Native records' : 'Published candidates', page.total, `${matched.length} in view · ${rows.length} loaded`],
                         ...headlineMetrics.map(metric => [`Median ${label(metric.key)}`, metric.median == null ? '—' : formatMetric(metric.median), `${metric.observed} observations in this view`]),
                         ['Selected', selection.length, adapter ? 'Native record selection for export' : 'Shared with candidate operations'],
-                    ].map(([label, count, detail]) => <div key={String(label)} className={`${panel} px-4 py-2`}><div className="text-xs text-[var(--text-secondary)]">{label}</div><div className="my-1 text-2xl font-semibold tabular-nums">{count}</div><div className="text-xs text-[var(--text-secondary)]">{detail}</div></div>)}
+                    ].map(([label, count, detail]) => <div key={String(label)} className={`${panel} px-4 py-2 ${adapter?.compact ? "flex min-w-0 items-center justify-between gap-2" : ""}`}><div title={String(label)} className={`text-xs text-[var(--text-secondary)] ${adapter?.compact ? "truncate" : ""}`}>{label}</div><div title={String(detail)} className={`${adapter?.compact ? "text-lg" : "my-1 text-2xl"} font-semibold tabular-nums`}>{count}</div>{!adapter?.compact && <div className="text-xs text-[var(--text-secondary)]">{detail}</div>}</div>)}
                 </div>
                 <div role="tablist" aria-label="Native result review" className="flex flex-wrap gap-1 border-b border-[var(--border-color)]">{([['dashboard', 'Dashboard'], ['analytics', 'Analytics'], ['table', 'Data table'], ['structure', 'Structure']] as const).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={view === key} className={`border-b-2 px-4 py-2 text-sm font-medium ${view === key ? 'border-blue-500 bg-blue-500/10' : 'border-transparent hover:bg-blue-500/5'}`} onClick={() => setView(key)}>{adapter && key === 'structure' ? 'Inspect record' : label}</button>)}</div>
-                <div className={`${panel} space-y-3 p-3`} aria-label="Cohort controls">
+                <div className={`${panel} ${adapter?.compact ? "space-y-1 p-2" : "space-y-3 p-3"}`} aria-label="Cohort controls">
                     <div className="flex flex-wrap items-center gap-3"><input aria-label="Search candidates" className={`${control} min-w-0 flex-1`} type="search" placeholder="Search candidates, source IDs or metric values…" value={search} onChange={event => { setSearch(event.target.value); setPageIndex(0); }} />
                         <button className={control} type="button" onClick={() => filterChanged([...filters, { key: numericKeys[0] ?? keys[0] ?? '', kind: 'range', min: '', max: '' }])}>Add metric filter</button>
                         <label className="flex items-center gap-2 text-sm"><input type="checkbox" aria-label="Selected candidates only" checked={selectedOnly} onChange={event => { setSelectedOnly(event.target.checked); setPageIndex(0); }} />Selected only</label>
@@ -222,9 +227,9 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                         {filter.kind === 'range' && <><input aria-label={`Filter ${index + 1} minimum`} className={`${control} w-28`} type="number" step="any" placeholder="Minimum" value={filter.min} onChange={event => filterChanged(filters.map((item, i) => i === index ? { ...item, min: event.target.value } : item))} /><span>to</span><input aria-label={`Filter ${index + 1} maximum`} className={`${control} w-28`} type="number" step="any" placeholder="Maximum" value={filter.max} onChange={event => filterChanged(filters.map((item, i) => i === index ? { ...item, max: event.target.value } : item))} /></>}
                         <button aria-label={`Remove filter ${index + 1}`} className={control} type="button" onClick={() => filterChanged(filters.filter((_, i) => i !== index))}>Remove</button>
                     </div>)}
-                    <p className="text-xs text-[var(--text-secondary)]">{matched.length} of {rows.length} loaded records in view · {numericKeys.length} numeric metrics · Filters do not change acceptance or selection.</p>
+                    <p className="text-xs text-[var(--text-secondary)]">{matched.length} of {rows.length} loaded records in view · {numericKeys.length} numeric metrics{!adapter?.compact && " · Filters do not change acceptance or selection."}</p>
                 </div>
-                <div hidden={view !== 'dashboard' && view !== 'analytics'}>{(analyticsOpened || view === 'dashboard' || view === 'analytics') && <Suspense fallback={<p role="status">Loading cohort charts…</p>}><CohortAnalytics rows={matched} selectedIds={selectedCohortIds} activeId={activeId} mode={view === 'analytics' ? 'analytics' : 'dashboard'} onInspect={id => { const item = byId.get(id); if (item) inspect(item); }} onSelect={ids => changeSelection(designIds(matched.filter(entry => ids.includes(entry.id))), true)} /></Suspense>}</div>
+                <div hidden={view !== 'dashboard' && view !== 'analytics'}>{(analyticsOpened || view === 'dashboard' || view === 'analytics') && <Suspense fallback={<p role="status">Loading cohort charts…</p>}><CohortAnalytics initialMetrics={initialMetrics} rows={matched} selectedIds={selectedCohortIds} activeId={activeId} mode={view === 'analytics' ? 'analytics' : 'dashboard'} onInspect={id => { const item = byId.get(id); if (item) inspect(item); }} onSelect={ids => changeSelection(designIds(matched.filter(entry => ids.includes(entry.id))), true)} /></Suspense>}</div>
                 {view !== 'structure' && table}
                 <div ref={inspector} hidden={view !== 'structure'} className={`${panel} p-4`} aria-label="Candidate structure inspector">
                     {(structureOpened || view === 'structure') && <Suspense fallback={<p role="status">Loading native structure…</p>}>{!row ? <p role="status">{!complete ? 'Loading the requested candidate from the publication. ' : 'Requested candidate is unavailable in this publication. '}Another candidate is not substituted.</p> : <>

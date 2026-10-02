@@ -69,6 +69,31 @@ it('lands a 100-trajectory zero-yield result on shared plots, not settings or em
     expect(summary.parent?.props.open).not.toBe(true);
     expect(control('Sort by screen · human_EGFR.iptm · last recorded')).toBeTruthy();
 });
+it('prefers exact recorded iPTM over coldspot and iptm_loss, retaining operator choices', async () => {
+    const rows: any[] = fixture(2);
+    for (const row of rows) {
+        row.analytics.phase_metrics.screen['human_EGFR.iptm_loss'] = { last: 9 };
+        row.analytics.phase_metrics.screen['coldspot'] = { last: 99, max: 100 };
+        row.analytics.phase_metrics.refine = { 'human_EGFR.iptm': { last: 0.72 }, 'human_EGFR.iptm_loss': { last: 8 } };
+    }
+    await mount(rows);
+    const screen = 'screen · human_EGFR.iptm · last recorded';
+    const refine = 'refine · human_EGFR.iptm · last recorded';
+    expect(control('X metric').props.value).toBe(screen);
+    expect(control('Y metric').props.value).toBe(refine);
+    expect(control('Distribution metric').props.value).toBe(refine);
+    expect(text(control('Cohort summary'))).toContain('Median Refine · human EGFR.iptm · last recorded');
+    expect(text(control('Cohort summary'))).toContain('0.72');
+    expect(text(control('Cohort summary'))).not.toContain('coldspot');
+    await change('X metric', 'seq_length');
+    await change('Distribution metric', screen);
+    await change('Search candidates', 'nothing matches');
+    await change('Search candidates', '');
+    await click('Trajectory 1'); await flush(); await click('Dashboard');
+    expect(control('X metric').props.value).toBe('seq_length');
+    expect(control('Y metric').props.value).toBe(refine);
+    expect(control('Distribution metric').props.value).toBe(screen);
+});
 it('fills three pages; table, plots, outcomes, cross-page selection and native JSON use one filtered cohort', async () => {
     const rows = fixture(205); await mount(rows);
     expect(reads.map(url => url.searchParams.get('offset'))).toEqual(['0', '100', '200']);

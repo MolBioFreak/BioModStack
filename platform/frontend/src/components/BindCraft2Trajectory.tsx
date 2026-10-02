@@ -51,5 +51,5 @@ export function BindCraft2Trajectory({ jobId, row, arm }: { jobId: string; row: 
 
 export function BindCraft2OutcomeSummary({ rows }: { rows: NativeGenerationRecord[] }) {
     const counts = rows.reduce<Record<string, number>>((result, row) => { const native = object(row.native_record); const key = String(native.terminated ?? native.outcome ?? 'Not reported'); result[key] = (result[key] ?? 0) + 1; return result; }, {});
-    return <p aria-label="Native outcomes in view" className="text-sm">Native outcomes in this view: {Object.entries(counts).map(([key, count]) => `${key}: ${count}`).join(' · ') || 'No matching records'}. Computational outcomes, not experimental binding.</p>;
+    return <p aria-label="Native outcomes in view" className="text-sm">Native outcomes in this view: {Object.entries(counts).map(([key, count]) => `${key}: ${count}`).join(' · ') || 'No matching records'}. Recorded updates ≠ native verdicts.</p>;
 }

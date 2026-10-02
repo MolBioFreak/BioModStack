@@ -3,7 +3,10 @@ import Plot from 'react-plotly.js';
 import type { Config, Data, Layout, PlotMouseEvent, PlotSelectionEvent } from 'plotly.js';
 import { correlateMetrics, formatMetric, isFiniteMetric, metricKeys, metricLabel, numericMetricKeys, secondaryStructureComposition, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
 
+export interface CohortInitialMetrics { x?: string; y?: string; distribution?: string; headline?: string[] }
+
 interface Props {
+    initialMetrics?: CohortInitialMetrics;
     rows: CohortRow[];
     selectedIds: string[];
     activeId?: string;
@@ -62,12 +65,12 @@ export function CohortPlot({ label, data, layout, onClick, onSelected, height = 
     </div>;
 }
 
-export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSelect, mode }: Props): JSX.Element {
+export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSelect, mode, initialMetrics }: Props): JSX.Element {
     const numeric = useMemo(() => numericMetricKeys(rows), [rows]);
     const allKeys = useMemo(() => metricKeys(rows), [rows]);
-    const [xChoice, setXChoice] = useState('seq_length');
-    const [yChoice, setYChoice] = useState('dsasa');
-    const [distributionChoice, setDistributionChoice] = useState('dsasa');
+    const [xChoice, setXChoice] = useState(initialMetrics?.x ?? 'seq_length');
+    const [yChoice, setYChoice] = useState(initialMetrics?.y ?? 'dsasa');
+    const [distributionChoice, setDistributionChoice] = useState(initialMetrics?.distribution ?? 'dsasa');
     const [colorChoice, setColorChoice] = useState('');
     const [dragMode, setDragMode] = useState<'zoom' | 'select' | 'lasso'>('zoom');
     const [heatChoice, setHeatChoice] = useState<string[] | null>(null);

@@ -124,7 +124,7 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
     queryFn: ({ signal }) => fetchBC2Page(jobId, query.arm, query.stage, 0, signal),
     retry: false, refetchOnWindowFocus: false,
   });
-  return <div className="space-y-4 min-w-0">
+  return <div className="space-y-2 min-w-0">
     {data && <div className="flex flex-wrap items-center gap-4 text-sm">
       <label>Campaign arm <select className="rounded border bg-[var(--bg-primary)] p-2" aria-label="Campaign arm" value={data.arm ?? ''} onChange={event => setQuery({ ...query, arm: event.target.value || null })}>
         {data.arms.map(arm => <option key={arm.name ?? ''} value={arm.name ?? ''}>{arm.name ?? 'Main campaign'}</option>)}
@@ -137,12 +137,20 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
     {!resultsAvailable ? <p>Native results will appear after publication.</p> : isLoading ? <p>Loading BindCraft2 native records...</p>
       : isError || !data ? <p role="status">BindCraft2 native records are not available for this job. <button type="button" onClick={() => void refetch()}>Retry native readback</button></p>
       : <NativeBinderGenerationResults {...workbench} jobId={jobId} launchContextId={launchContextId} adapter={{
-          key: JSON.stringify(['bindcraft2', query.arm, query.stage]), title: 'BindCraft2 campaign dashboard',
+          key: JSON.stringify(['bindcraft2', query.arm, query.stage]), title: 'BindCraft2 campaign dashboard', compact: true,
+          initialMetrics: keys => {
+            // Exact per-target confidence only: iptm_loss is not iPTM.
+            const screen = keys.find(key => /^screen · .+\.iptm · last recorded$/.test(key));
+            const refine = (screen && keys.includes(screen.replace(/^screen/, 'refine')) ? screen.replace(/^screen/, 'refine') : undefined)
+              ?? keys.find(key => /^refine · .+\.iptm · last recorded$/.test(key));
+            return { x: screen, y: refine ?? screen, distribution: refine ?? screen, headline: [refine ?? screen, 'duration_seconds'].filter((key): key is string => !!key) };
+          },
           fetchPage: async (offset, signal) => bc2Page(offset === 0 ? data : await fetchBC2Page(jobId, query.arm, query.stage, offset, signal)),
-          label: bc2Label, preferredColumns: ['seq_length', 'duration_seconds', 'terminated', ...Object.keys(bc2Page(data).records[0]?.metrics ?? {}).filter(key => /iptm.*last recorded/i.test(key)).slice(0, 1), ...(query.stage === 'trajectory' ? [] : ['outcome', 'rank'])],
+          label: bc2Label, preferredColumns: ['seq_length', 'duration_seconds', 'terminated', ...Object.keys(bc2Page(data).records[0]?.metrics ?? {}).filter(key => /\.iptm · last recorded$/.test(key)).slice(0, 1), ...(query.stage === 'trajectory' ? [] : ['outcome', 'rank'])],
           inspect: row => <BindCraft2Trajectory key={row.candidate_key} jobId={jobId} row={row} arm={data.arm} />,
-          summary: rows => <><BindCraft2OutcomeSummary rows={rows} />{data.analytics?.complete === false && <p role="status">Trajectory analytics are incomplete. Plots cover available recorded observations only.</p>}{data.analytics?.warnings?.map((warning, i) => <p key={i} role="status">{warning}</p>)}</>,
+          summary: rows => <><BindCraft2OutcomeSummary rows={rows} />{data.analytics?.complete === false && <p role="status">Trajectory analytics are incomplete. Plots cover available recorded observations only.</p>}</>,
         }} />}
+    {!!data?.analytics?.warnings?.length && <details><summary className="cursor-pointer text-sm">Recorded measurement notes</summary>{data.analytics.warnings.map((warning, i) => <p key={i}>{warning}</p>)}</details>}
     <details onToggle={event => setSettingsOpen(event.currentTarget.open)}><summary className="cursor-pointer font-semibold">Native campaign settings</summary>
     <section aria-label="BindCraft2 campaign settings">
       <h3 className="font-semibold">Native campaign settings</h3>
