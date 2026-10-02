@@ -900,9 +900,7 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
         "[Service]\n"
         f"Environment={systemd_value('BMS_HOME=' + str(root))}\n"
         f"Environment=BMS_DEV_API_PROXY_TARGET={dev_api_target}\n"
-        f"Environment=VITE_BMS_BUILD_SHA={revision}\n"
-        f"Environment=VITE_BMS_BUILD_ID={build_id}\n"
-        f"Environment=VITE_BMS_BUILD_TIME={build_time}\n"
+        # Build identity stays with the generated base unit across later syncs.
         f"WorkingDirectory={systemd_value(root / 'platform/frontend')}\n"
         "ExecStartPre=\n"
         f"ExecStartPre=/usr/bin/sh -c 'test \"$BMS_DEV_API_PROXY_TARGET\" = \"{dev_api_target}\"'\n"
