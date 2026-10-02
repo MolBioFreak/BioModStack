@@ -1,4 +1,5 @@
 import { ScientificAnalytics } from './ScientificAnalytics';
+import { PlotlyLab } from './PlotlyLab';
 import { CohortAnalytics } from './CohortAnalytics';
 import type { ComponentProps } from 'react';
 import { parseScientificPoint } from '../lib/scientificAnalytics';
@@ -463,6 +464,7 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
     const [pointSize, setPointSize] = useState(DEFAULT_POINT_SIZE);
     const [analysisLensOverride, setAnalysisLensOverride] = useState<AnalysisLens | 'auto'>('auto');
     const [showAdvancedCharts, setShowAdvancedCharts] = useState(false);
+    const [showPlotlyLab, setShowPlotlyLab] = useState(false);
     const sourceDesignCount = loadedDesignCount ?? designs.length;
     const isDesignSampled = designs.length < sourceDesignCount;
     const baseSortedDesigns = useMemo(
@@ -1246,9 +1248,9 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
             marker: {
                 size: pointSize,
                 opacity: 0.84,
-                color: colorValues,
+                color: colorKey ? colorValues : '#60a5fa',
                 colorscale: resolvedColorScale,
-                showscale: true,
+                showscale: !!colorKey,
                 colorbar: {
                     title: { text: getMetricLabel(colorKey), font: { color: FONT_COLOR } },
                     tickfont: { color: AXIS_COLOR },
@@ -1362,6 +1364,7 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
                         </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
+                        <button type="button" className="rounded-lg border px-3 py-2 text-sm" aria-expanded={showPlotlyLab} onClick={() => setShowPlotlyLab(value => !value)}>{showPlotlyLab ? 'Close Plotly Lab' : 'Open Plotly Lab'}</button>
                         <button
                             type="button"
                             onClick={() => setShowAdvancedCharts((current) => !current)}
@@ -2322,70 +2325,16 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
                 </section>
             )}
 
+            {showPlotlyLab && <PlotlyLab keys={availableMetricKeys} getMetricLabel={getMetricLabel}
+                palette={colorScale} onPalette={value => setColorScale(value as ColorScaleName)} reverse={reverseColorScale} onReverse={setReverseColorScale}
+                palettes={COLOR_SCALE_OPTIONS.map(option => option.value)}
+                axes2d={{ x: custom2dX, y: custom2dY, color: custom2dColor, onX: setCustom2dX, onY: setCustom2dY, onColor: setCustom2dColor }}
+                axes3d={{ x: custom3dX, y: custom3dY, z: custom3dZ, color: custom3dColor, onX: setCustom3dX, onY: setCustom3dY, onZ: setCustom3dZ, onColor: setCustom3dColor }}
+                plot2d={<Plot data={buildScatter(custom2dX, custom2dY, custom2dColor)} layout={make2DLayout(custom2dX, custom2dY)} config={DEFAULT_PLOT_CONFIG} style={{ width: '100%', height: '360px' }} />}
+                plot3d={<Plot data={build3DScatter(custom3dX, custom3dY, custom3dZ, custom3dColor)} layout={make3DLayout(custom3dX, custom3dY, custom3dZ)} config={DEFAULT_PLOT_CONFIG} style={{ width: '100%', height: '420px' }} />}
+            />}
             {showAdvancedCharts && (
                 <section className="space-y-4">
-                    <SectionHeader
-                        title="Custom Plotly Lab"
-                        description="Use the flattened metric surface to explore unknown new RFA, validator, or downstream-model fields without touching the dashboard code again."
-                        count={availableMetricKeys.length}
-                        accentClass="border-slate-700 bg-slate-800/70 text-slate-200"
-                    />
-                    <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
-                        <PlotCard
-                            title="Custom 2D Scatter"
-                            description="Pick unknown two metric axes plus a color channel."
-                            hasData={buildScatter(custom2dX, custom2dY, custom2dColor).length > 0}
-                        >
-                            <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-4">
-                                <select value={custom2dX} onChange={(event) => setCustom2dX(event.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
-                                    {availableMetricKeys.map((key) => <option key={key} value={key}>{getMetricLabel(key)}</option>)}
-                                </select>
-                                <select value={custom2dY} onChange={(event) => setCustom2dY(event.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
-                                    {availableMetricKeys.map((key) => <option key={key} value={key}>{getMetricLabel(key)}</option>)}
-                                </select>
-                                <select value={custom2dColor} onChange={(event) => setCustom2dColor(event.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
-                                    {availableMetricKeys.map((key) => <option key={key} value={key}>{getMetricLabel(key)}</option>)}
-                                </select>
-                                <div className="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-xs text-slate-400">
-                                    {buildScatter(custom2dX, custom2dY, custom2dColor).length ? 'Interactive Plotly scatter' : 'No overlapping values'}
-                                </div>
-                            </div>
-                            <Plot
-                                data={buildScatter(custom2dX, custom2dY, custom2dColor)}
-                                layout={make2DLayout(custom2dX, custom2dY)}
-                                config={DEFAULT_PLOT_CONFIG}
-                                style={{ width: '100%', height: '360px' }}
-                            />
-                        </PlotCard>
-
-                        <PlotCard
-                            title="Custom 3D Scatter"
-                            description="Same dynamic metric surface, but with a Z axis for cross-family exploration."
-                            hasData={build3DScatter(custom3dX, custom3dY, custom3dZ, custom3dColor).length > 0}
-                        >
-                            <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-4">
-                                <select value={custom3dX} onChange={(event) => setCustom3dX(event.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
-                                    {availableMetricKeys.map((key) => <option key={key} value={key}>{getMetricLabel(key)}</option>)}
-                                </select>
-                                <select value={custom3dY} onChange={(event) => setCustom3dY(event.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
-                                    {availableMetricKeys.map((key) => <option key={key} value={key}>{getMetricLabel(key)}</option>)}
-                                </select>
-                                <select value={custom3dZ} onChange={(event) => setCustom3dZ(event.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
-                                    {availableMetricKeys.map((key) => <option key={key} value={key}>{getMetricLabel(key)}</option>)}
-                                </select>
-                                <select value={custom3dColor} onChange={(event) => setCustom3dColor(event.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
-                                    {availableMetricKeys.map((key) => <option key={key} value={key}>{getMetricLabel(key)}</option>)}
-                                </select>
-                            </div>
-                            <Plot
-                                data={build3DScatter(custom3dX, custom3dY, custom3dZ, custom3dColor)}
-                                layout={make3DLayout(custom3dX, custom3dY, custom3dZ)}
-                                config={DEFAULT_PLOT_CONFIG}
-                                style={{ width: '100%', height: '420px' }}
-                            />
-                        </PlotCard>
-                    </div>
-
                     <PlotCard
                         title="CDR + Geometry Correlation Matrix"
                         description="Correlates CDR lengths, binder size, RoG, and RF placement metrics inside the current review set."

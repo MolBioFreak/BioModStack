@@ -154,10 +154,12 @@ test('mounted chart contract: full cohort, exact inspection, explicit selection,
     new Function('require', 'module', 'exports', compiled)((name: string) => {
         if (name === 'react-plotly.js') return (props: Record<string, unknown>) => React.createElement('plot-probe', props);
         if (name === '../lib/cohortAnalytics') return analytics;
+        if (name === './PlotlyLab') return nativeRequire('../src/components/PlotlyLab.tsx');
         return nativeRequire(name);
     }, module, module.exports);
     const { CohortAnalytics } = module.exports;
     const globals: Record<string, unknown> = {
+        React,
         IS_REACT_ACT_ENVIRONMENT: true,
         document: { documentElement: {}, body: {} },
         window: { matchMedia: () => ({ addEventListener() {}, removeEventListener() {} }) },
@@ -183,11 +185,12 @@ test('mounted chart contract: full cohort, exact inspection, explicit selection,
         assert.equal(scatter.data[0].marker.symbol[5], 'diamond');
         assert.equal(scatter.config.toImageButtonOptions.format, 'svg');
         assert.equal(scatter.layout.width, 620);
-        assert.equal(plots()[1].props.data[1].q1[0], summarizeMetric(rows, 'dsasa').q1, 'box quartiles agree with the descriptive table');
+        assert.equal(plots()[1].props.data.length, 1, 'default histogram has no unexplained box strip');
+        assert.equal(plots()[1].props.layout.yaxis2, undefined);
         assert.equal(plots()[2].props.data[0].type, 'bar');
         assert.equal(plots()[2].props.data[0].customdata.length, 20);
         assert.equal(plots()[2].props.data[0].customdata[0], 'row:999');
-        assert.equal(select('X metric').props.title, 'Sequence length (seq_length)');
+        assert.equal(plots()[0].props.layout.xaxis.title.text, 'Sequence length');
         assert.deepEqual(selections, [], 'mount must not select candidates');
         await act(async () => {
             scatter.onClick({ points: [{ customdata: 'row:999' }] });
@@ -200,21 +203,23 @@ test('mounted chart contract: full cohort, exact inspection, explicit selection,
         assert.deepEqual(selections, [['row:888']], 'only explicitly selected valid IDs are returned, not the existing selection');
         assert.equal(plots()[0].props.layout.dragmode, 'lasso');
         await act(async () => { renderer!.update(React.createElement(CohortAnalytics, { ...props, mode: 'analytics' })); });
-        assert.equal(plots().length, 5);
+        assert.equal(plots().length, 4);
+        await act(async () => { select('Plotly Lab view').props.onChange({ target: { value: '3D' } }); });
         assert.ok(renderer!.root.findByProps({ 'aria-label': 'Metric summary pages' }));
-        assert.equal(plots()[3].props.data[0].type, 'scatter3d');
-        assert.equal(plots()[3].props.data[0].customdata.length, 1000);
-        assert.equal(plots()[4].props.data[0].z[2][0], null, 'constant correlations are undefined');
-        assert.match(plots()[4].props.data[0].customdata[2][0], /constant metric/);
-        await act(async () => { plots()[3].props.onClick({ points: [{ customdata: 'row:998' }] }); plots()[2].props.onClick({ points: [{ customdata: 'row:997' }] }); });
+        assert.equal(plots()[0].props.data[0].type, 'scatter3d');
+        assert.equal(plots()[0].props.data[0].customdata.length, 1000);
+        assert.equal(plots()[3].props.data[0].z[2][0], null, 'constant correlations are undefined');
+        assert.match(plots()[3].props.data[0].customdata[2][0], /constant metric/);
+        await act(async () => { plots()[0].props.onClick({ points: [{ customdata: 'row:998' }] }); plots()[2].props.onClick({ points: [{ customdata: 'row:997' }] }); });
         assert.deepEqual(inspected, ['row:999', 'row:998', 'row:997']);
         await act(async () => { select('3D Z metric').props.onChange({ target: { value: 'color' } }); });
-        assert.equal(plots()[3].props.data[0].z.length, 500, 'the third axis omits missing rather than filling zero');
-        await act(async () => { select('Color metric').props.onChange({ target: { value: 'color' } }); });
+        assert.equal(plots()[0].props.data[0].z.length, 500, 'the third axis omits missing rather than filling zero');
+        await act(async () => { select('Plotly Lab view').props.onChange({ target: { value: '2D' } }); });
+        await act(async () => { select('2D color metric').props.onChange({ target: { value: 'color' } }); });
         assert.equal(plots()[0].props.data[0].x.length, 500);
         assert.equal(plots()[0].props.data[1].x.length, 500, 'missing color never removes complete coordinate pairs');
         await act(async () => { select('Correlation metrics').props.onChange({ target: { selectedOptions: [{ value: 'seq_length' }, { value: 'dsasa' }] } }); });
-        assert.equal(plots()[4].props.data[0].z.length, 2);
+        assert.equal(plots()[3].props.data[0].z.length, 2);
         const compositionRows = rowsOf([{ seq_length: 50, dsasa: 715, radius_of_gyration: 10.45,
             coil_percent: 0.4, helix_percent: 0.24, strand_percent: 0.36 }]);
         await act(async () => { renderer!.update(React.createElement(CohortAnalytics, { ...props, rows: compositionRows, activeId: 'row:0', mode: 'dashboard' })); });
