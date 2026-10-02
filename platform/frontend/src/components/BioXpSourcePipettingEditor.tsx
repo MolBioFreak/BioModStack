@@ -27,14 +27,20 @@ export function sourceEditorDraft(op: BioXpSourceStep['operation'], value: Draft
         : d.action === 'eject' ? { action: '', channels: [] } : d.action === 'plunger_up' || d.action === 'plunger_down' ? { action: '', steps: '' } : { action: '' };
     return { operation: op, diagnostic: blank(sample as DraftObject, d) } as unknown as NativeDraft<BioXpSourceStep>;
 }
-export function BioXpSourcePipettingEditor({ drafts, onChange, enabled, run }: { drafts: Record<BioXpSourceStep['operation'], NativeDraft<BioXpSourceStep>>; onChange: (step: NativeDraft<BioXpSourceStep>) => void; enabled: boolean; run?: (operation: BioXpSourceStep['operation']) => void }) {
+const fieldLabels: Record<string, string> = {
+    'Source mix volume_ul': 'Liquid volume (µL)', 'Source mix air_ul': 'Air volume (µL)',
+    'Source mix aspirate_speed': 'Aspiration speed', 'Source mix dispense_speed': 'Dispense speed',
+    'Source mix aspirate_delay_ms': 'Aspiration delay (ms)', 'Source mix dispense_delay_ms': 'Dispense delay (ms)',
+    'Source mix cycles': 'Mix cycles', 'Source purge speed': 'Purge speed',
+};
+export function BioXpSourcePipettingEditor({ drafts, onChange, enabled, run, selectedOperation }: { drafts: Record<BioXpSourceStep['operation'], NativeDraft<BioXpSourceStep>>; onChange: (step: NativeDraft<BioXpSourceStep>) => void; enabled: boolean; run?: (operation: BioXpSourceStep['operation']) => void; selectedOperation?: BioXpSourceStep['operation'] }) {
     return <div className="space-y-3 [&_select]:mt-1 [&_select]:block [&_select]:w-full [&_select]:rounded [&_select]:bg-slate-950 [&_select]:p-2">
-        {Object.values(drafts).map(raw => {
+        {Object.values(drafts).filter(raw => !selectedOperation || raw.operation === selectedOperation).map(raw => {
             const step = sourceEditorDraft(raw.operation, raw as unknown as DraftObject);
             const update = (fields: object) => onChange(mergeDraftEdits(raw as unknown as DraftObject, step as unknown as DraftObject, { ...step, ...fields } as unknown as DraftObject) as unknown as NativeDraft<BioXpSourceStep>);
-            const num = (name: string, value: number | string | null | undefined, set: (value: number | string | null) => void, nullable = false) => <label key={name} className="block">{name.replace('Source mix ', '').replace('Source purge ', 'Purge ').replaceAll('_', ' ')}<input className="mt-1 block w-full rounded bg-slate-950 p-2" aria-label={name} type="number" step="any" placeholder={nullable ? 'Default' : undefined} value={value ?? ''} onChange={e => set(e.target.value)} /></label>;
+            const num = (name: string, value: number | string | null | undefined, set: (value: number | string | null) => void, nullable = false) => <label key={name} className="block">{fieldLabels[name] ?? name.replaceAll('_', ' ')}<input className="mt-1 block w-full rounded bg-slate-950 p-2" aria-label={name} type="number" step="any" placeholder={nullable ? 'Default' : undefined} value={value ?? ''} onChange={e => set(e.target.value)} /></label>;
             const bool = (name: string, value: boolean, set: (value: boolean) => void) => <label key={name}><input aria-label={name} type="checkbox" checked={value ?? false} onChange={e => set(e.target.checked)} />{name}</label>;
-            return <details key={step.operation} className="min-w-0 rounded border border-slate-700 p-3"><summary className="cursor-pointer font-semibold">{sourceLabels[step.operation]}</summary><div className="mt-3 grid gap-3 sm:grid-cols-2">
+            return <details key={step.operation} open={selectedOperation !== undefined || undefined} className="min-w-0 rounded border border-slate-700 p-3"><summary className="cursor-pointer font-semibold">{sourceLabels[step.operation]}</summary><div className="mt-3 grid gap-3 sm:grid-cols-2">
                 {step.operation === 'source_load_tips' && <>
                     <p className="text-sm sm:col-span-2">Physical loading sets tip alignment. If matching tips are already loaded and Force new tip is off, the existing alignment is kept. Selecting a different pipette here alone does not realign the tips.</p>
                     <label>Tip size<select aria-label="Tip size" value={step.tip_type} onChange={e => update({ tip_type: e.target.value === '' ? '' : Number(e.target.value) })}><option value="">Select tip size</option><option value="50">T50</option><option value="200">T200</option></select></label>

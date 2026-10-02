@@ -8,6 +8,9 @@ import { BioXpCockpit } from '../../src/components/BioXpCockpit';
 import { MemoryRouter } from 'react-router-dom';
 import { BioXpWorkflowEditor } from '../../src/components/BioXpWorkflowEditor';
 import { api } from '../../src/lib/api';
+import { deckStations } from '../../src/lib/bioxpWorkflowDeck';
+import { nativeIntent } from '../../src/lib/bioxpWorkflowDraft';
+import { manualPipettingDocument } from '../../src/lib/bioxpManualPipetting';
 
 let host: HTMLDivElement, root: Root, client: QueryClient;
 let requests: any[], db: Record<string, any>, fail: string | null;
@@ -30,7 +33,7 @@ async function change(label: string, value: string) {
         el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
     });
 }
-async function append(op: string) { await change('Step to append', op); await click('Append step'); }
+async function append(op: string) { await change('Step to append', op); await click(host.querySelector('[aria-label="Workflow editor"]') ? 'Add step' : 'Append step'); }
 const rows = () => [...host.querySelectorAll('[data-step-id]')].map(el => el.getAttribute('data-step-id'));
 const writes = () => requests.filter(r => ['post', 'put'].includes(r.method));
 function seed(steps: any[], editor_state: any = {}) {
@@ -160,7 +163,8 @@ it('saves cleared numeric text, source raw precision, null, false, zero and omit
     seed([{ step_id: 'stable-source', intent }], { foreign: { zero: 0, nil: null, no: false }, form: { future: 'preserve' } });
     await mount(); await open(); await control('Edit step 1'); await change('Source mix air_ul', '0.00');
     await change('Source mix cycles', ''); await click('Update step');
-    await change('Source purge speed', ''); await change('Aspirate air volume (µL)', '6.250');
+    await change('Step to append', 'source_purge'); await change('Source purge speed', '');
+    await change('Step to append', 'source_aspirate_air'); await change('Aspirate air volume (µL)', '6.250');
     await append('source_aspirate_air'); await click('Save workflow');
     const saved = writes()[0].body.params;
     expect(saved.steps[0]).toEqual({ step_id: 'stable-source', intent: { ...intent, air_ul: '0.00', cycles: '' } });
@@ -187,7 +191,7 @@ it('fresh mount and fresh cache Open use a mode-only list then exact ID, not lis
 it('unknown and incomplete steps stay visible drafts, save unchanged, and never silently execute', async () => {
     const steps = [{ step_id: 'unknown', intent: { operation: 'future_operation', n: null } }, { step_id: 'incomplete', intent: { operation: 'source_mix' } }];
     seed(steps); await mount(); await open(); await click('Save workflow');
-    expect(writes()[0].body.params.steps).toEqual(steps); expect(host.textContent).toContain('Draft · future_operation');
+    expect(writes()[0].body.params.steps).toEqual(steps); expect(host.textContent).toContain('future_operation · retained draft');
     expect([...host.querySelectorAll('button')].some(el => el.textContent?.endsWith(' now') || el.textContent === 'Run ordered steps')).toBe(false);
     expect(requests.filter(r => r.url.includes('/bioxp/'))).toHaveLength(0);
 });
@@ -210,7 +214,7 @@ it('retains the accepted create ID if readback fails, so retry updates instead o
 
 it('keeps unselected source tip controls blank instead of selecting pipette zero', async () => {
     await mount(); await change('Workflow name', 'Unselected tips');
-    await change('Tip size', ''); await change('Pipettes to load', ''); await append('source_load_tips');
+    await change('Step to append', 'source_load_tips'); await change('Tip size', ''); await change('Pipettes to load', ''); await append('source_load_tips');
     await click('Save workflow');
     expect(writes()[0].body.params.steps[0].intent).toEqual({ operation: 'source_load_tips', tip_type: '', pipette: '', force_new_tip: false });
     expect([...host.querySelectorAll('button')].some(el => el.textContent === 'Load selected tips now')).toBe(false);
@@ -275,6 +279,75 @@ it('retains newer edits while a selected workflow GET is delayed', async () => {
     await act(async () => release());
     expect((host.querySelector('[aria-label="Workflow name"]') as HTMLInputElement).value).toBe('Newer local');
     expect(rows()).toHaveLength(1); expect(host.textContent).toContain('Editor changed while opening');
+});
+
+it('shows only the selected action settings rather than the manual-control wall', async () => {
+    await mount();
+    expect(host.querySelector('[aria-label="Block"]')?.closest('[hidden]')).toBeNull();
+    expect(host.querySelector('[aria-label="Volume (µL)"]')?.closest('[hidden]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Tip size"]')).toBeNull();
+    await change('Step to append', 'aspirate');
+    expect(host.querySelector('[aria-label="Block"]')?.closest('[hidden]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Volume (µL)"]')?.closest('[hidden]')).toBeNull();
+    expect(host.querySelector('[aria-label="Dispense speed"]')?.closest('[hidden]')).not.toBeNull();
+    await change('Step to append', 'source_mix');
+    expect(host.querySelector('[aria-label="Source mix volume_ul"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Tip size"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Diagnostic action"]')).toBeNull();
+    expect(requests).toEqual([]);
+});
+
+it('adopts the approved deck reference into native steps and reopens the same selection', async () => {
+    seed([], { form: { operation: 'move', flag: '1', deck: { station: 'LOC_RC', wells: ['B3'], future: null } } });
+    await mount(); await open(); await change('Workflow name', 'Deck-linked steps');
+    const station = deckStations.find(item => item.id === 'LOC_RC')!;
+    expect(station.locationId).not.toBeNull();
+    await click('Use as reference well');
+    expect((host.querySelector('[aria-label="Reference well"]') as HTMLInputElement).value).toBe('B3');
+    expect((host.querySelector('[aria-label="Location number"]') as HTMLInputElement).value).toBe(String(station.locationId));
+    await click('Add step');
+    await change('Step to append', 'aspirate'); await control('Plunger 1');
+    await change('Volume (µL)', '7.250'); await change('Aspirate speed', '30'); await click('Add step');
+    await click('Save workflow');
+    const saved = writes()[0].body.params;
+    expect(saved.steps.map((row: any) => row.intent)).toEqual([
+        { operation: 'move', location_id: String(station.locationId), well: 'B3', position_flag: '1' },
+        { operation: 'aspirate', channels: [0], volume_ul: '7.250', speed: '30' },
+    ]);
+    expect(saved.editor_state.form.deck).toEqual({ station: 'LOC_RC', wells: ['B3'], future: null });
+    const doc = manualPipettingDocument({ protocol_id: 'deck-workflow-test', steps: saved.steps.map((row: any) => nativeIntent(row.intent)) });
+    expect(doc.stages[0].actions.map(action => ({ kind: action.kind, params: action.params }))).toEqual([
+        { kind: 'pipette_position', params: { operation: 'move', location_id: station.locationId, well: 'B3', position_flag: 1 } },
+        { kind: 'pipette_aspirate', params: { channels: [0], volume_ul: 7.25, speed: 30 } },
+    ]);
+    await fresh(); await click('Open workflow'); await click('Deck-linked steps'); await click('Save workflow');
+    expect(writes()[1].body.params).toEqual(saved);
+    expect(requests.every(request => request.url.startsWith('/api/user-templates'))).toBe(true);
+});
+
+it('retains multiple planned wells without silently picking one reference or changing the head', async () => {
+    seed([], { form: { operation: 'move', location: '4', well: 'C1', deck: { station: 'LOC_RC', wells: ['A1', 'B1'] } } });
+    await mount(); await open();
+    expect(button('Use as reference well').disabled).toBe(true);
+    await click('Use as reference well');
+    expect((host.querySelector('[aria-label="Reference well"]') as HTMLInputElement).value).toBe('C1');
+    await click('Save workflow');
+    expect(writes()[0].body.params.editor_state.form.deck.wells).toEqual(['A1', 'B1']);
+    expect(writes()[0].body.params.steps).toEqual([]);
+});
+
+it('Review preserves an unapplied edit and navigates back to the same saved step', async () => {
+    await mount(); await change('Workflow name', 'Review without execution'); await change('Location number', '4'); await append('lower');
+    const ids = rows(); await control('Edit step 1'); await change('Location number', '7');
+    await click('Review');
+    expect(host.querySelector('[aria-label="Workflow review"]')?.textContent).toContain('Draft review only.');
+    expect(host.querySelector('.bioxp-build-grid')?.hasAttribute('hidden')).toBe(true);
+    await click('Back to Build');
+    expect(rows()).toEqual(ids);
+    expect((host.querySelector('[aria-label="Location number"]') as HTMLInputElement).value).toBe('7');
+    await click('Update step'); await click('Save workflow');
+    expect(writes()[0].body.params.steps[0].intent.location_id).toBe('7');
+    expect(requests.every(request => request.url.startsWith('/api/user-templates'))).toBe(true);
 });
 
 it('labels a saved earlier snapshot when native fields change while Save is pending', async () => {

@@ -35,9 +35,9 @@ it.each(['/bioxp', '/bioxp/workflows'])('opens saved authoring inside the robot 
     const panel = host.querySelector('#control-panel-workflows') as HTMLElement;
     expect(panel.hidden).toBe(false);
     expect(panel.querySelector('[aria-label="Saved workflow"]')).not.toBeNull();
-    expect(panel.querySelector('[aria-label="Step to append"]')?.closest('details')?.open).toBe(true);
+    expect(panel.querySelector('[aria-label="Step to append"]')?.closest('[aria-label="Step settings"]')).not.toBeNull();
     expect([...panel.querySelectorAll('button')].some(button => button.textContent?.endsWith(' now'))).toBe(false);
-    expect(panel.textContent).toContain('Save workflow stores the draft; it does not run the robot.');
+    expect(panel.textContent).toContain('Editing does not send robot commands.');
     expect(host.querySelector('#control-panel-pipettes [aria-label="Saved workflow"]')).toBeNull();
     expect(requests.every(request => request.method === 'get' && request.url === '/api/bioxp/status')).toBe(true);
 });

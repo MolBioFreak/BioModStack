@@ -1,0 +1,68 @@
+.bioxp-workflow-editor {
+  min-width: 0;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.bioxp-workflow-editor [hidden] { display: none !important; }
+.bioxp-workflow-editor h3 { font-size: 1rem; font-weight: 650; }
+.bioxp-workflow-editor .bioxp-muted,
+.bioxp-workflow-editor small { color: var(--text-secondary); }
+.bioxp-workflow-editor button { cursor: pointer; }
+.bioxp-workflow-editor button:disabled { cursor: default; opacity: .5; }
+.bioxp-workflow-editor :is(button, select, input):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 3px; }
+.bioxp-workflow-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; padding: 1rem; border: 1px solid var(--border-primary); border-radius: .8rem; background: var(--bg-secondary); }
+.bioxp-workflow-toolbar .bioxp-workflow-name { flex: 1 1 18rem; }
+.bioxp-workflow-name input { display: block; margin-top: .35rem; width: 100%; }
+.bioxp-workflow-toolbar > [role=status],
+.bioxp-workflow-toolbar > [aria-label="Workflow list"] { flex-basis: 100%; }
+.bioxp-workflow-editor :is(.bioxp-workflow-toolbar, .bioxp-step-inspector) :is(input:not([type=checkbox]), select) { min-width: 0; max-width: 100%; border: 1px solid var(--border-primary); padding: .55rem .65rem; border-radius: .45rem; background: var(--surface-control, var(--bg-primary)); color: var(--text-primary); }
+.bioxp-workflow-toolbar button,
+.bioxp-workflow-editor .bioxp-secondary,
+.bioxp-workflow-editor .bioxp-primary,
+.bioxp-workflow-editor .bioxp-inspector-actions button { padding: .5rem .75rem; border: 1px solid var(--border-primary); border-radius: .45rem; background: var(--bg-primary); color: var(--text-primary); }
+.bioxp-workflow-editor button.bioxp-primary { background: var(--accent-primary); color: var(--text-on-accent, #fff); border-color: var(--accent-primary); font-weight: 600; }
+.bioxp-view-tabs { display: flex; gap: .3rem; }
+.bioxp-view-tabs [aria-selected=true] { color: var(--accent-primary); border-color: var(--accent-primary); background: var(--bg-tertiary); }
+.bioxp-build-grid { display: grid; grid-template-columns: minmax(12rem, .7fr) minmax(0, 1.65fr) minmax(17rem, 1fr); gap: 1rem; align-items: start; }
+.bioxp-workflow-card { min-width: 0; padding: 1rem; border: 1px solid var(--border-primary); border-radius: .8rem; background: var(--bg-secondary); }
+.bioxp-step-list ol { max-height: 70vh; overflow-y: auto; padding: .15rem; }
+.bioxp-step-row { overflow: hidden; border: 1px solid var(--border-primary); border-radius: .55rem; }
+.bioxp-step-row.is-selected { border-color: var(--accent-primary); box-shadow: inset 3px 0 var(--accent-primary); }
+.bioxp-step-select { display: flex; gap: .6rem; width: 100%; padding: .75rem; text-align: left; align-items: start; background: transparent; }
+.bioxp-step-select strong { font-size: .875rem; font-weight: 600; }
+.bioxp-step-select small { display: block; margin-top: .2rem; font-size: .75rem; overflow-wrap: anywhere; }
+.bioxp-step-number { color: var(--accent-primary); font-size: .8rem; font-weight: 700; }
+.bioxp-step-tools { display: flex; justify-content: end; gap: .25rem; border-top: 1px solid var(--border-primary); padding: .25rem; }
+.bioxp-step-tools button { border-radius: .3rem; padding: .25rem .4rem; font-size: .75rem; color: var(--text-secondary); }
+.bioxp-step-tools button:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.bioxp-empty { padding: 1rem 0; font-size: .875rem; color: var(--text-secondary); }
+.bioxp-step-inspector { display: flex; flex-direction: column; gap: .8rem; }
+.bioxp-step-inspector label { min-width: 0; display: block; font-size: .8rem; }
+.bioxp-step-inspector label :is(select, input:not([type=checkbox])) { display: block; width: 100%; margin-top: .35rem; }
+.bioxp-step-inspector :is(p, legend, summary) { color: var(--text-secondary); font-size: .8rem; }
+.bioxp-step-inspector .grid { grid-template-columns: minmax(0, 1fr); }
+.bioxp-step-inspector fieldset { min-width: 0; }
+.bioxp-step-inspector details { border-color: var(--border-primary); background: var(--bg-secondary); }
+.bioxp-step-inspector input[type=checkbox] { accent-color: var(--accent-primary); margin-right: .4rem; }
+.bioxp-inspector-actions { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: .5rem; padding-top: .8rem; border-top: 1px solid var(--border-primary); background: var(--bg-secondary); }
+.bioxp-deck-adoption { margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--border-primary); }
+.bioxp-deck-adoption p { margin-top: .5rem; font-size: .8rem; }
+.bioxp-review-step { text-align: left; padding: .4rem 0; color: var(--text-primary); }
+.bioxp-notice { margin-top: .5rem; color: var(--text-secondary); }
+@media (max-width: 1250px) {
+  .bioxp-build-grid { grid-template-columns: minmax(13rem, .65fr) minmax(0, 1.7fr); }
+  .bioxp-step-list { grid-column: 1; grid-row: 1 / span 2; }
+  .bioxp-deck-column, .bioxp-step-inspector { grid-column: 2; }
+}
+@media (max-width: 700px) {
+  .bioxp-build-grid { grid-template-columns: minmax(0, 1fr); }
+  .bioxp-step-list, .bioxp-deck-column, .bioxp-step-inspector { grid-column: 1; grid-row: auto; }
+  .bioxp-step-inspector { order: 1; }
+  .bioxp-deck-column { order: 2; }
+  .bioxp-step-list { order: 3; }
+  .bioxp-workflow-toolbar { padding: .75rem; }
+  .bioxp-workflow-card { padding: .75rem; }
+  .bioxp-step-list ol { max-height: none; }
+}
