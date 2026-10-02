@@ -682,7 +682,7 @@ export function AssemblyPanel({
             <div>
                 <h4 className="font-semibold text-slate-200">Assembly</h4>
                 <p className="mt-1 text-xs leading-5 text-slate-500">
-                    Fragment-driven cloning workspace with explicit end or overlap contracts. Nothing is inferred from missing chemistry.
+                    Fragment-driven cloning workspace with explicit end or overlap contracts. End compatibility follows the supplied metadata; it does not establish experimental success.
                 </p>
             </div>
 
@@ -844,6 +844,7 @@ export function AssemblyPanel({
 
             {mode === 'golden_gate' && (
                 <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                    <p className="mb-2 text-xs leading-5 text-slate-400">Post-digestion fragment assembly: supply prepared fragment sequences and end metadata. This does not digest raw Type IIS-flanked parts or migrate saved end-strand conventions. Warnings describe possible alternative ligations, not a fidelity estimate.</p>
                     <label className="space-y-1">
                         <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Type IIS enzyme</span>
                         <select
