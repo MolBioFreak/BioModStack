@@ -15,6 +15,7 @@ interface GibsonDesignWorkspaceProps {
     saveDescription: string;
     sequenceName: string;
     initialCircular: boolean;
+    onSaved?: () => void;
     onLoadProduct: (sequenceData: SequenceData, savedSequenceId?: string | null) => void;
 }
 
@@ -42,6 +43,7 @@ export function GibsonDesignWorkspace({
     sequenceName,
     initialCircular,
     onLoadProduct,
+    onSaved,
 }: GibsonDesignWorkspaceProps) {
     const [circular, setCircular] = useState(initialCircular);
     const [overlap, setOverlap] = useState(30);
@@ -74,21 +76,30 @@ export function GibsonDesignWorkspace({
         setError(null);
     }, [requestScope]);
 
+    const previewController = useRef<AbortController | null>(null);
+    useEffect(() => {
+        setLoading(null);
+        return () => previewController.current?.abort();
+    }, [requestScope]);
+
     const runDesign = async () => {
         if (fragments.length < 2) {
             setError('Add at least two ordered fragments before designing.');
             return;
         }
+        previewController.current?.abort();
+        const controller = new AbortController();
+        previewController.current = controller;
         setLoading('design');
         setError(null);
         const scope = requestScope;
         try {
-            const response = await designGibsonAssembly(payload);
-            if (requestScopeRef.current === scope) setResult(response.data);
+            const response = await designGibsonAssembly(payload, controller.signal);
+            if (!controller.signal.aborted && requestScopeRef.current === scope) setResult(response.data);
         } catch (runError: unknown) {
-            if (requestScopeRef.current === scope) setError(errorMessage(runError));
+            if (!controller.signal.aborted && requestScopeRef.current === scope) setError(errorMessage(runError));
         } finally {
-            setLoading(null);
+            if (!controller.signal.aborted && requestScopeRef.current === scope) setLoading(null);
         }
     };
 
@@ -105,6 +116,7 @@ export function GibsonDesignWorkspace({
                 new_name: saveName.trim() || `${sequenceName} Gibson product`,
                 save_description: saveDescription.trim() || undefined,
             });
+            onSaved?.();
             if (requestScopeRef.current === scope) setResult(response.data);
         } catch (saveError: unknown) {
             if (requestScopeRef.current === scope) setError(errorMessage(saveError));

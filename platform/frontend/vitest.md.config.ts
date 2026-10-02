@@ -22,6 +22,7 @@ export default defineConfig({
             './tests/vitest/projectCollectionDemandMounted.test.tsx',
             './tests/vitest/cmPickerBoundedMounted.test.tsx',
             './tests/vitest/molBioDigestApiAuthority.test.tsx',
+            './tests/vitest/molBioTraffic*.test.tsx',
             './tests/vitest/BindCraft2Settings.test.tsx',
             './tests/vitest/bindcraft2CampaignWorkspace.test.tsx',
             './tests/vitest/bindcraft2StructureInputs*.test.tsx',

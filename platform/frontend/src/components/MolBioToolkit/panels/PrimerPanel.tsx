@@ -259,6 +259,7 @@ export function PrimerPanel({
     const calculateTmForSequence = useCallback(async (
         sequence: string,
         explicitSequenceType?: 'dna' | 'rna',
+        signal?: AbortSignal,
     ): Promise<PrimerTmResult | null> => {
         const cleaned = cleanNucleotideSequence(sequence);
         if (!cleaned) {
@@ -271,10 +272,10 @@ export function PrimerPanel({
                     sequence_type: explicitSequenceType || inferSequenceTypeFromSequence(cleaned),
                 }],
                 settings: tmSettings,
-            });
+            }, signal);
             return response.data[0] ?? null;
         } catch (tmError) {
-            console.error('Failed to calculate primer Tm:', tmError);
+            if (!signal?.aborted) console.error('Failed to calculate primer Tm:', tmError);
             return null;
         }
     }, [tmSettings]);
@@ -284,15 +285,16 @@ export function PrimerPanel({
         setDraftTmLoading(false);
         if (activeTab !== 'sequence' || !cleanedDraftPrimer || !isValidNucleotideSequence(cleanedDraftPrimer)) return;
         let cancelled = false;
+        const controller = new AbortController();
         setDraftTmLoading(true);
         const timer = window.setTimeout(async () => {
-            const value = await calculateTmForSequence(draftTmSequence, inferSequenceTypeFromSequence(draftTmSequence));
+            const value = await calculateTmForSequence(draftTmSequence, inferSequenceTypeFromSequence(draftTmSequence), controller.signal);
             if (!cancelled && tmOwner.isCurrent()) {
                 setDraftTmResult(value);
                 setDraftTmLoading(false);
             }
         }, 250);
-        return () => { cancelled = true; window.clearTimeout(timer); };
+        return () => { cancelled = true; controller.abort(); window.clearTimeout(timer); };
     }, [activeTab, calculateTmForSequence, cleanedDraftPrimer, draftTmSequence]);
 
     // QC has no chemistry input: changing Tm settings must not repeat template QC.
@@ -300,6 +302,7 @@ export function PrimerPanel({
         setDraftQc(null);
         if (activeTab !== 'sequence' || !cleanedDraftPrimer || !isValidNucleotideSequence(cleanedDraftPrimer)) return;
         let cancelled = false;
+        const controller = new AbortController();
         const timer = window.setTimeout(async () => {
             const response = await calculatePrimerQc({
                 primers: [{ sequence: cleanedDraftPrimer, sequence_type: inferSequenceTypeFromSequence(cleanedDraftPrimer) }],
@@ -307,10 +310,10 @@ export function PrimerPanel({
                 template_sequence_type: sequenceType,
                 template_is_circular: sequenceData.circular,
                 include_pairwise: false,
-            }).catch(() => null);
+            }, controller.signal).catch(() => null);
             if (!cancelled) setDraftQc(response?.data.primers[0]?.qc || null);
         }, 250);
-        return () => { cancelled = true; window.clearTimeout(timer); };
+        return () => { cancelled = true; controller.abort(); window.clearTimeout(timer); };
     }, [activeTab, cleanedDraftPrimer, sequenceData.circular, sequenceData.sequence, sequenceType]);
 
     useEffect(() => {
@@ -324,6 +327,7 @@ export function PrimerPanel({
         }
 
         let cancelled = false;
+        const controller = new AbortController();
         setQcLoading(true);
         void calculatePrimerQc({
             primers: primers.map((primer) => ({
@@ -336,12 +340,12 @@ export function PrimerPanel({
             template_sequence_type: sequenceType,
             template_is_circular: sequenceData.circular,
             include_pairwise: true,
-        }).then((response) => {
+        }, controller.signal).then((response) => {
             if (!cancelled) {
                 setSequenceQc(response.data);
             }
         }).catch((qcError) => {
-            console.error('Failed to calculate primer QC:', qcError);
+            if (!cancelled) console.error('Failed to calculate primer QC:', qcError);
         }).finally(() => {
             if (!cancelled) {
                 setQcLoading(false);
@@ -350,6 +354,7 @@ export function PrimerPanel({
 
         return () => {
             cancelled = true;
+            controller.abort();
         };
     }, [activeTab, sequenceData.circular, sequenceData.primers, sequenceData.sequence, sequenceType]);
 
@@ -542,8 +547,14 @@ export function PrimerPanel({
         setDesignResult(null);
     };
 
+    const designController = useRef<AbortController | null>(null);
+    useEffect(() => () => designController.current?.abort(), [designOwner.token]);
+
     const runPrimerDesign = async () => {
         if (!sequenceData.sequence) return;
+        designController.current?.abort();
+        const controller = new AbortController();
+        designController.current = controller;
         setDesignLoading(true);
         setError(null);
         try {
@@ -569,12 +580,12 @@ export function PrimerPanel({
                 overhang_forward: designOverhangForward,
                 overhang_reverse: designOverhangReverse,
                 tm_settings: tmSettings,
-            });
-            if (designOwner.isCurrent()) setDesignResult(response.data);
+            }, controller.signal);
+            if (!controller.signal.aborted && designOwner.isCurrent()) setDesignResult(response.data);
         } catch (designError) {
-            if (designOwner.isCurrent()) setError(designError instanceof Error ? designError.message : 'Primer design failed');
+            if (!controller.signal.aborted && designOwner.isCurrent()) setError(designError instanceof Error ? designError.message : 'Primer design failed');
         } finally {
-            if (designOwner.isCurrent()) setDesignLoading(false);
+            if (!controller.signal.aborted && designOwner.isCurrent()) setDesignLoading(false);
         }
     };
 
