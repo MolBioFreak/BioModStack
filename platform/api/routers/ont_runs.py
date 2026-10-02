@@ -624,7 +624,7 @@ def _job_create_for_ont_submit(
         params=params,
         pinned_gpu=request.pinned_gpu,
         execution_target_id=request.execution_target_id,
-        execution_policy=request.execution_policy,
+        execution_policy=request.execution_policy if request.execution_policy is not None else ExecutionPolicy(),
     )
 
 

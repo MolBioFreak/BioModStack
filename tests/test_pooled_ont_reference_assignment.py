@@ -4,6 +4,10 @@ import hashlib
 import json
 from pathlib import Path
 import stat
+import csv
+import os
+import random
+import subprocess
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -120,6 +124,133 @@ def test_tie_and_shared_backbone_score_margin_is_ambiguous(tmp_path: Path) -> No
     assert assignment.score_delta == 5
 
 
+def test_near_tie_uses_mapq_zero_secondary_competitor(tmp_path: Path) -> None:
+    # minimap2 always reports secondary alignments with MAPQ 0; the runner-up
+    # target must still compete before the MAPQ gate is applied.
+    reference_set = validate_reference_set(
+        _write_manifest(tmp_path, [("target-a", "ACGTACGT"), ("target-b", "ACGTAAAA")])
+    )
+    evidence = {
+        "read-1": [
+            AlignmentEvidence("read-1", "target-a", 3, 100, False),
+            AlignmentEvidence("read-1", "target-b", 0, 98, True),
+        ],
+        "read-2": [
+            AlignmentEvidence("read-2", "target-a", 40, 100, False),
+            AlignmentEvidence("read-2", "target-b", 0, 70, True),
+        ],
+    }
+    near_tie, distinct = classify_assignments(
+        [_record("read-1"), _record("read-2", ordinal=2)],
+        evidence,
+        reference_set,
+        min_mapq=20,
+        min_alignment_score_margin=5,
+    )
+    assert near_tie.disposition == "ambiguous"
+    assert near_tie.reason == "near_tie_within_score_margin"
+    assert (near_tie.second_score, near_tie.score_delta) == (98, 2)
+    assert distinct.disposition == "target:target-a"
+    assert (distinct.second_score, distinct.score_delta, distinct.best_mapq) == (70, 30, 40)
+
+
+@pytest.mark.parametrize(
+    "hits,min_mapq,margin,disposition,scores",
+    [
+        ([("target-a", 37, 4000, False), ("target-b", 0, 3976, True)], 20, 24, "ambiguous", (4000, 3976, 24, 37)),
+        ([("target-a", 37, 4000, False), ("target-b", 0, 3976, True)], 20, 23, "target:target-a", (4000, 3976, 24, 37)),
+        ([("target-a", 3, 100, False), ("target-b", 60, 70, False)], 20, 5, "unclassified", (100, 70, 30, 3)),
+        ([("target-a", 0, 100, True), ("target-b", 60, 70, False)], 20, 5, "unclassified", (100, 70, 30, 0)),
+        ([("target-a", 0, 100, True), ("target-a", 60, 90, False), ("target-b", 60, 70, False)], 20, 5, "unclassified", (100, 70, 30, 0)),
+        ([("target-a", 37, 100, False), ("target-a", 0, 99, True), ("target-b", 0, 70, True)], 20, 5, "target:target-a", (100, 70, 30, 37)),
+        ([("target-a", 0, 100, False)], 0, 5, "target:target-a", (100, None, None, 0)),
+        ([("target-a", 0, 100, False)], 20, 5, "unclassified", (100, None, None, 0)),
+        ([], 20, 5, "unclassified", (None, None, None, None)),
+    ],
+    ids=["inclusive-margin", "outside-margin", "multiple-primary", "secondary-winner", "same-target-lower-primary", "deduplicate-target", "zero-threshold", "zero-confidence", "no-hit"],
+)
+def test_selected_alignment_owns_confidence(tmp_path, hits, min_mapq, margin, disposition, scores):
+    reference_set = validate_reference_set(
+        _write_manifest(tmp_path, [("target-a", "ACGTACGT"), ("target-b", "TTTTCCCC")])
+    )
+    assignment = classify_assignments(
+        [_record("read-1")],
+        {"read-1": [AlignmentEvidence("read-1", *hit) for hit in hits]},
+        reference_set, min_mapq=min_mapq, min_alignment_score_margin=margin,
+    )[0]
+    assert assignment.disposition == disposition
+    assert (assignment.best_score, assignment.second_score, assignment.score_delta, assignment.best_mapq) == scores
+
+
+@pytest.fixture
+def native_tools(tmp_path):
+    image = os.environ.get("BMS_TEST_ONT_NATIVE_IMAGE")
+    if not image:
+        pytest.skip("set BMS_TEST_ONT_NATIVE_IMAGE to the installed minimap2/samtools image")
+    assert Path(image).is_file(), "explicit native image override must exist"
+    return ["apptainer", "exec", "--cleanenv", "--containall", "--no-home", "--bind", f"{tmp_path}:{tmp_path}", image]
+
+
+@pytest.mark.parametrize("margin,disposition", [(24, "ambiguous"), (23, "target:target-a")])
+def test_native_mapq_zero_competitor_and_real_output(tmp_path, native_tools, margin, disposition):
+    from scripts.pooled_ont_reference_assignment import parse_sam_evidence
+    rng = random.Random(48)
+    sequence = "".join(rng.choice("ACGT") for _ in range(2000))
+    mutated = list(sequence)
+    for i in range(4):
+        position = 20 + i * 29
+        mutated[position] = next(base for base in "ACGT" if base != mutated[position])
+    snapshot = tmp_path / "snapshot"
+    manifest = _write_manifest(snapshot, [("target-a", sequence), ("target-b", "".join(mutated))])
+    source = tmp_path / "reads.fastq"
+    source.write_text(f"@native-read\n{sequence}\n+\n{'I' * len(sequence)}\n")
+    output = tmp_path / "output"
+    run_preflight(manifest, snapshot, source, output)
+    reference = output / "combined_intended_reference.fasta"
+    sam = output / "native.sam"
+    with sam.open("w") as stream, (output / "pooled_reference_assignment.minimap2.log").open("w") as log:
+        subprocess.run([*native_tools, "minimap2", "-a", "-x", "map-ont", "--secondary=yes", "-t", "1", str(reference), str(output / "valid_reads.fastq")], stdout=stream, stderr=log, check=True)
+    bam = output / "pooled_assignment.bam"
+    for args in (["sort", "-o", str(bam), str(sam)], ["index", str(bam)], ["faidx", str(reference)]):
+        subprocess.run([*native_tools, "samtools", *args], check=True, capture_output=True)
+    accepted = subprocess.run([*native_tools, "samtools", "view", "-h", str(bam)], check=True, capture_output=True, text=True).stdout
+    refs = validate_reference_set(manifest)
+    evidence = parse_sam_evidence(accepted.splitlines(), refs, frozenset({"occurrence_1"}))
+    assert [(hit.target_id, hit.mapq, hit.alignment_score, hit.secondary) for hit in evidence["occurrence_1"]] == [
+        ("target-a", 37, 4000, False), ("target-b", 0, 3976, True),
+    ]
+    run_classify(manifest, snapshot, source, output / "valid_reads.fastq", output / "fastq_preflight.json", bam,
+                 [*native_tools, "samtools"], reference, output, 20, margin)
+    with (output / "per_read_assignment.tsv").open() as stream:
+        row, = list(csv.DictReader(stream, delimiter="\t"))
+    assert row["disposition"] == disposition
+    assert tuple(int(row[key]) for key in ("best_alignment_score", "second_alignment_score", "alignment_score_delta", "best_mapq")) == (4000, 3976, 24, 37)
+    summary = json.loads((output / "assignment_summary.json").read_text())
+    assert summary["read_assignments"][0]["disposition"] == disposition
+    assert summary["scientific_status"] == "REVIEW"
+    assert summary["release_state"] == "awaiting_operator_release"
+    assert summary["policy"]["min_mapq"] == 20
+
+
+@pytest.mark.parametrize("secondary", [False, True])
+def test_native_samtools_accepted_cross_target_confidence_edge(tmp_path, native_tools, secondary):
+    from scripts.pooled_ont_reference_assignment import parse_sam_evidence
+    refs = validate_reference_set(_write_manifest(tmp_path, [("target-a", "ACGTACGT"), ("target-b", "TTTTCCCC")]))
+    sam = tmp_path / "edge.sam"
+    sam.write_text("@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:target-a\tLN:8\n@SQ\tSN:target-b\tLN:8\n" +
+        f"read-1\t{256 if secondary else 0}\ttarget-a\t1\t{0 if secondary else 3}\t4M\t*\t0\t0\tACGT\tIIII\tAS:i:100\n" +
+        "read-1\t0\ttarget-b\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\tAS:i:70\n" +
+        "read-1\t2048\ttarget-a\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\tAS:i:1000\n")
+    bam = tmp_path / "edge.bam"
+    subprocess.run([*native_tools, "samtools", "view", "-b", "-o", str(bam), str(sam)], check=True, capture_output=True)
+    accepted = subprocess.run([*native_tools, "samtools", "view", "-h", str(bam)], check=True, capture_output=True, text=True).stdout
+    evidence = parse_sam_evidence(accepted.splitlines(), refs, frozenset({"read-1"}))
+    assert len(evidence["read-1"]) == 2  # Supplementary is still excluded.
+    assignment, = classify_assignments([_record("read-1")], evidence, refs, min_mapq=20, min_alignment_score_margin=5)
+    assert assignment.disposition == "unclassified"
+    assert (assignment.best_score, assignment.second_score, assignment.score_delta, assignment.best_mapq) == (100, 70, 30, 0 if secondary else 3)
+
+
 def test_unclassified_when_no_alignment_meets_min_mapq(tmp_path: Path) -> None:
     reference_set = validate_reference_set(
         _write_manifest(tmp_path, [("target-a", "ACGTACGT"), ("target-b", "TTTTCCCC")])
@@ -135,7 +266,8 @@ def test_unclassified_when_no_alignment_meets_min_mapq(tmp_path: Path) -> None:
     assert assignment.reason == "no_alignment_at_min_mapq"
 
 
-def test_identical_entries_require_common_group_and_remain_ambiguous(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mapq", [0, 60])
+def test_identical_entries_require_common_group_and_remain_ambiguous(tmp_path: Path, mapq: int) -> None:
     manifest = _write_manifest(tmp_path, [("target-a", "ACGTACGT"), ("target-b", "ACGTACGT")])
     with pytest.raises(PooledAssignmentError, match="identical FASTA entries require"):
         validate_reference_set(manifest)
@@ -148,7 +280,7 @@ def test_identical_entries_require_common_group_and_remain_ambiguous(tmp_path: P
     reference_set = validate_reference_set(grouped_manifest)
     assignment = classify_assignments(
         [_record("read-1")],
-        {"read-1": [AlignmentEvidence("read-1", "target-a", 60, 100, False)]},
+        {"read-1": [AlignmentEvidence("read-1", "target-a", mapq, 100, False)]},
         reference_set,
         min_mapq=20,
         min_alignment_score_margin=0,
@@ -237,7 +369,14 @@ def test_workflow_and_profile_are_review_only_and_use_competitive_alignment() ->
     assert "occurrence_map.json" in workflow
     assert "scientific_status" in (root / "scripts/pooled_ont_reference_assignment.py").read_text(encoding="utf-8")
     assert "ont_pooled_reference_assignment" in config
-    assert 'container = "${params.container_dir}/dorado.sif"' in config
+    import runpy
+    native = runpy.run_path(str(root / "platform/api/native_components.py"))
+    labels = native["PROCESS_CONTRACTS"][
+        "workflows/ngs/ont_pooled_reference_assignment.nf:ONTPooledReferenceAssignment"
+    ][0]
+    assert [native["LABEL_ASSETS"][label][:2] for label in labels if label in native["LABEL_ASSETS"]] == [
+        ("dorado.sif", "dorado_runtime_sif")
+    ]
     assert "ont_pooled_reference_assignment" in dispatcher
     assert "ont_pooled_reference_assignment" in model_config
     for forbidden in ("FastqDimerAnalysis", "FastqPlasmidQC", "ConstructVerify", "consensus", "dimer"):

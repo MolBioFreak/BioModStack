@@ -444,7 +444,10 @@ def test_public_jobs_route_rejects_all_direct_nanopore_creation() -> None:
             },
         )
         assert response.status_code == 422, (key, response.text)
-        assert "typed /api/ont/ngs" in response.text
+        if key == "resume_source_dir":
+            assert response.json()["detail"]["code"] == "RESUME_SOURCE_OUTSIDE_MANAGED_STORAGE"
+        else:
+            assert "typed /api/ont/ngs" in response.text
 
     unknown = client.post(
         "/api/jobs",

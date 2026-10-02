@@ -682,10 +682,11 @@ def classify_assignments(
     assignments: list[ReadAssignment] = []
     for record in records:
         all_evidence = list(evidence_by_occurrence_id.get(record.occurrence_id, ()))
+        # Competitors are ranked before any MAPQ gate: minimap2 reports secondary
+        # alignments with MAPQ 0, so filtering first would discard every runner-up
+        # target and make the score-margin test unreachable.
         candidate_by_target: dict[str, AlignmentEvidence] = {}
         for evidence in all_evidence:
-            if evidence.mapq < min_mapq:
-                continue
             previous = candidate_by_target.get(evidence.target_id)
             if previous is None or (evidence.alignment_score, evidence.mapq) > (
                 previous.alignment_score,
@@ -697,41 +698,30 @@ def classify_assignments(
             key=lambda value: (-value.alignment_score, -value.mapq, value.target_id),
         )
         if not ranked:
-            reason = "no_alignment_evidence" if not all_evidence else "no_alignment_at_min_mapq"
             assignments.append(
-                ReadAssignment(record, "unclassified", None, None, None, None, None, reason)
+                ReadAssignment(record, "unclassified", None, None, None, None, None, "no_alignment_evidence")
             )
             continue
 
         best = ranked[0]
         second = ranked[1] if len(ranked) > 1 else None
+        second_score = second.alignment_score if second else None
         score_delta = best.alignment_score - second.alignment_score if second else None
+        # Confidence belongs to the selected alignment, not a different target's
+        # primary (nor a lower-scoring hit on this target).
+        read_mapq = best.mapq
+
+        def unresolved(disposition: str, reason: str) -> ReadAssignment:
+            return ReadAssignment(
+                record, disposition, None, best.alignment_score, second_score, score_delta, read_mapq, reason
+            )
+
         if best.target_id in identical_targets:
-            assignments.append(
-                ReadAssignment(
-                    record,
-                    "ambiguous",
-                    None,
-                    best.alignment_score,
-                    second.alignment_score if second else None,
-                    score_delta,
-                    best.mapq,
-                    "identical_targets_require_indistinguishable_group",
-                )
-            )
+            assignments.append(unresolved("ambiguous", "identical_targets_require_indistinguishable_group"))
         elif second is not None and score_delta is not None and score_delta <= min_alignment_score_margin:
-            assignments.append(
-                ReadAssignment(
-                    record,
-                    "ambiguous",
-                    None,
-                    best.alignment_score,
-                    second.alignment_score,
-                    score_delta,
-                    best.mapq,
-                    "near_tie_within_score_margin",
-                )
-            )
+            assignments.append(unresolved("ambiguous", "near_tie_within_score_margin"))
+        elif read_mapq < min_mapq:
+            assignments.append(unresolved("unclassified", "no_alignment_at_min_mapq"))
         else:
             assignments.append(
                 ReadAssignment(
@@ -739,9 +729,9 @@ def classify_assignments(
                     f"target:{best.target_id}",
                     best.target_id,
                     best.alignment_score,
-                    second.alignment_score if second else None,
+                    second_score,
                     score_delta,
-                    best.mapq,
+                    read_mapq,
                     "unique_competitive_alignment",
                 )
             )
