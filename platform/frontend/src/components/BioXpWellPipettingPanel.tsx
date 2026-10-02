@@ -204,11 +204,11 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         editBaseline.current = isDraftObject(saved.editor_state.edit_baseline) ? saved.editor_state.edit_baseline : null;
         setSavedNotice('Opened draft from database.');
     });
-    async function run(op?: Operation) {
+    async function run(op?: Operation, explicitStep?: BioXpManualStep) {
         if (!enabled || busy.current) return;
         busy.current = true; setPending(true); setError(null);
         try {
-            const document = manualPipettingDocument({ protocol_id: 'bms-manual-pipetting', steps: op ? [draft(op)] : steps.map(row => nativeIntent(row.intent)) });
+            const document = manualPipettingDocument({ protocol_id: 'bms-manual-pipetting', steps: explicitStep ? [explicitStep] : op ? [draft(op)] : steps.map(row => nativeIntent(row.intent)) });
             const key = crypto.randomUUID();
             const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
             const id = `protocol-live-${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`;
@@ -330,7 +330,25 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         </details>
     );
     return <section onChangeCapture={() => setSavedNotice('')} aria-label={workflowAuthoring ? "Workflow editor" : "Well pipetting"} className={workflowAuthoring ? 'bioxp-workflow-editor' : 'mt-4 min-w-0 space-y-3 rounded border border-slate-700 p-4 [&_select]:max-w-full [&_select]:rounded [&_select]:bg-slate-950 [&_select]:p-2 [&_input[type=number]]:min-w-0 [&_input[type=number]]:rounded [&_input[type=number]]:bg-slate-950 [&_input[type=number]]:p-2'}>
-        {!workflowAuthoring && <h3 className="font-semibold">Well pipetting</h3>}
+        {!workflowAuthoring && <>
+            <section aria-label="Tip ejection" className="space-y-2 rounded border border-slate-700 p-3">
+                <h3 className="font-semibold">Tip ejection</h3>
+                <p className="text-sm">Releases tips at the current head position. Move over waste first; these buttons do not move the head.</p>
+                <fieldset><legend className="text-sm">Pipettes to eject</legend><div className="flex flex-wrap gap-4">
+                    {[0, 1, 2, 3].map(channel => <label key={channel}><input type="checkbox" aria-label={`Eject pipette ${channel + 1}`} checked={channels.includes(channel)}
+                        onChange={e => setChannels(current => e.target.checked ? [...current, channel].sort() : current.filter(c => c !== channel))} /> Pipette {channel + 1}</label>)}
+                </div></fieldset>
+                <p className="text-xs">Shared with the liquid-stroke selection below. Only tips detected on the requested pipettes receive an eject command.</p>
+                <div className="flex flex-wrap gap-2">
+                    <button type="button" disabled={!enabled} onClick={() => void run(undefined, { operation: 'diagnostic_pipette', diagnostic: { action: 'eject', channels: [0, 1, 2, 3] } })}
+                        className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">Eject all tips</button>
+                    <button type="button" disabled={!enabled || channels.length === 0} onClick={() => void run(undefined, { operation: 'diagnostic_pipette', diagnostic: { action: 'eject', channels: [...channels] } })}
+                        title={channels.length === 0 ? 'Choose pipettes above, or use Eject all tips.' : undefined}
+                        className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">Eject selected tips</button>
+                </div>
+            </section>
+            <h3 className="font-semibold">Well pipetting</h3>
+        </>}
         {workflowAuthoring && <div className="bioxp-workflow-toolbar" aria-label="Saved workflow">
             <label className="bioxp-workflow-name">Workflow name<input aria-label="Workflow name" placeholder="Untitled workflow" value={workflowName} onChange={e => { setWorkflowName(e.target.value); setSavedNotice(''); }} /></label>
             <div className="flex flex-wrap gap-2">
