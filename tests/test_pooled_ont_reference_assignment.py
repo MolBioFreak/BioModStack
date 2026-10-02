@@ -120,6 +120,36 @@ def test_tie_and_shared_backbone_score_margin_is_ambiguous(tmp_path: Path) -> No
     assert assignment.score_delta == 5
 
 
+def test_near_tie_uses_mapq_zero_secondary_competitor(tmp_path: Path) -> None:
+    # minimap2 always reports secondary alignments with MAPQ 0; the runner-up
+    # target must still compete before the MAPQ gate is applied.
+    reference_set = validate_reference_set(
+        _write_manifest(tmp_path, [("target-a", "ACGTACGT"), ("target-b", "ACGTAAAA")])
+    )
+    evidence = {
+        "read-1": [
+            AlignmentEvidence("read-1", "target-a", 3, 100, False),
+            AlignmentEvidence("read-1", "target-b", 0, 98, True),
+        ],
+        "read-2": [
+            AlignmentEvidence("read-2", "target-a", 40, 100, False),
+            AlignmentEvidence("read-2", "target-b", 0, 70, True),
+        ],
+    }
+    near_tie, distinct = classify_assignments(
+        [_record("read-1"), _record("read-2", ordinal=2)],
+        evidence,
+        reference_set,
+        min_mapq=20,
+        min_alignment_score_margin=5,
+    )
+    assert near_tie.disposition == "ambiguous"
+    assert near_tie.reason == "near_tie_within_score_margin"
+    assert (near_tie.second_score, near_tie.score_delta) == (98, 2)
+    assert distinct.disposition == "target:target-a"
+    assert (distinct.second_score, distinct.score_delta, distinct.best_mapq) == (70, 30, 40)
+
+
 def test_unclassified_when_no_alignment_meets_min_mapq(tmp_path: Path) -> None:
     reference_set = validate_reference_set(
         _write_manifest(tmp_path, [("target-a", "ACGTACGT"), ("target-b", "TTTTCCCC")])

@@ -221,7 +221,7 @@ class OntNgsSubmitRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     pinned_gpu: int | None = Field(default=None)
     execution_target_id: str | None = Field(default=None)
-    execution_policy: ExecutionPolicy | None = None
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     source_instrument_run_id: str | None = Field(default=None)
     managed_reference: OntManagedReferenceRequest | None = None
 

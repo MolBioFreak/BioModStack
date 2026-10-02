@@ -149,15 +149,6 @@ process FastqPlasmidQC {
         n50_read_length=0
     fi
 
-    dimer_cutoff=\$(awk -v expected=${expectedSize} 'BEGIN { printf "%.0f", expected * 1.5 }')
-    trimer_cutoff=\$(awk -v expected=${expectedSize} 'BEGIN { printf "%.0f", expected * 2.5 }')
-    dimer_like_reads=\$(awk -v d="\${dimer_cutoff}" -v t="\${trimer_cutoff}" 'NR > 1 && (\$2 + 0) >= d && (\$2 + 0) < t {c++} END {print c + 0}' read_lengths.tsv)
-    trimer_plus_reads=\$(awk -v t="\${trimer_cutoff}" 'NR > 1 && (\$2 + 0) >= t {c++} END {print c + 0}' read_lengths.tsv)
-    estimated_copy_number_mean=\$(awk -v mean="\${mean_read_length}" -v expected=${expectedSize} 'BEGIN {
-        if (expected > 0) printf "%.4f", mean / expected
-        else printf "0"
-    }')
-
     cp --reflink=auto -- "${reference}" reference.snapshot.fasta
     chmod 0444 reference.snapshot.fasta
     reference_raw_sha256_before="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
@@ -190,6 +181,17 @@ process FastqPlasmidQC {
     fi
     reference_name=\$(head -n1 reference_qc.fasta.fai | cut -f1)
     reference_length=\$(head -n1 reference_qc.fasta.fai | cut -f2)
+
+    # Multimer bins use the authenticated reference length; expected_plasmid_size is
+    # retained only as the declared value in the alignment metrics.
+    dimer_cutoff=\$(awk -v expected="\${reference_length}" 'BEGIN { printf "%.0f", expected * 1.5 }')
+    trimer_cutoff=\$(awk -v expected="\${reference_length}" 'BEGIN { printf "%.0f", expected * 2.5 }')
+    dimer_like_reads=\$(awk -v d="\${dimer_cutoff}" -v t="\${trimer_cutoff}" 'NR > 1 && (\$2 + 0) >= d && (\$2 + 0) < t {c++} END {print c + 0}' read_lengths.tsv)
+    trimer_plus_reads=\$(awk -v t="\${trimer_cutoff}" 'NR > 1 && (\$2 + 0) >= t {c++} END {print c + 0}' read_lengths.tsv)
+    estimated_copy_number_mean=\$(awk -v mean="\${mean_read_length}" -v expected="\${reference_length}" 'BEGIN {
+        if (expected > 0) printf "%.4f", mean / expected
+        else printf "0"
+    }')
 
     mapped_alignment_records=\$("\${SAMTOOLS_CMD[@]}" view -c -F 4 "${bam}")
     unmapped_alignment_records=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 "${bam}")
@@ -459,6 +461,7 @@ process FastqPlasmidQC {
         echo "Reference: \${reference_name} (\${reference_length} bp)"
         echo "Reads considered: \${total_reads}; mapped: \${mapped_reads} (rate \${mapping_rate_pct}%)"
         echo "Read length mean/N50: \${mean_read_length}/\${n50_read_length} bp"
+        echo "Multimer size basis: reference length \${reference_length} bp (declared expected_plasmid_size ${expectedSize} bp)"
         echo "Coverage mean/median: \${mean_coverage}/\${median_coverage}"
         echo "Consensus: \${consensus_status} (\${consensus_length} bp)"
     } > fastq_qc.log
