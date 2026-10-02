@@ -27,10 +27,17 @@ async def retry_round(job_id: str, session: AsyncSession = Depends(get_session),
     return await reconcile_round(session, experiment_session, job_id, retry=True)
 
 
+class NativeSource(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    job_id: str
+    artifact_id: str
+
+
 class SelectedOperationRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     source_job_id: str
-    design_ids: list[str] = Field(min_length=1)
+    design_ids: list[str] = Field(default_factory=list)
+    native_sources: list[NativeSource] = Field(default_factory=list)
     operation: Literal['refine', 'caliby', 'frustrampnn', 'fampnn', 'proteinmpnn', 'predict_boltz2', 'predict_protenix']
     params: dict[str, Any] = Field(default_factory=dict)
     frustrampnn_settings: FrustraMPNNRequestedSettings | None = None
@@ -44,9 +51,13 @@ async def _launch_selected(request: SelectedOperationRequest, background_tasks: 
                           session: AsyncSession = Depends(get_session),
                           experiment_session: AsyncSession = Depends(get_experiment_session)):
     from routers.jobs import create_job, get_job
+    if not request.design_ids and not request.native_sources:
+        raise HTTPException(422, 'Select at least one Design or native source')
     source, root, designs = await resolve_selection(session, request.source_job_id, request.design_ids)
     try:
+        from services.binder_native_selection import resolve_native_sources
         documents = await resolve_candidate_documents(session, designs, request.candidate_documents)
+        native = await resolve_native_sources(session, root, request.native_sources)
     except (ValueError, OSError) as exc:
         raise HTTPException(422, str(exc)) from exc
     if request.operation == 'frustrampnn':
@@ -73,6 +84,10 @@ async def _launch_selected(request: SelectedOperationRequest, background_tasks: 
                     'source_review_artifact_manifest': designs[ordinal].review_artifact_manifest,
                     'source_review_role_map': designs[ordinal].review_role_map,
                 })
+            from services.binder_native_selection import frustra_native_selections
+            selections.extend(frustra_native_selections(native))
+            for ordinal, selection in enumerate(selections):
+                selection.producer_coordinates['selection_ordinal'] = ordinal
             if request.execution_target_id is not None or request.launch_context_id:
                 from services.frustrampnn.jobs import submit_selected_analysis
                 launched = await submit_selected_analysis(session, experiment_session, background_tasks,
@@ -82,7 +97,7 @@ async def _launch_selected(request: SelectedOperationRequest, background_tasks: 
                     destination_launch_context_id=request.launch_context_id,
                     idempotency_key=request.idempotency_key,
                     response_context={'source_job_id': source.id, 'root_job_id': root.id,
-                                      'operation': request.operation, 'selected_design_count': len(designs)})
+                                      'operation': request.operation, 'selected_design_count': len(designs), 'selected_native_count': len(native)})
             else:
                 fanout = await _fanout_design_selections(session, parent=source, selections=selections,
                     requested_settings=request.frustrampnn_settings or default_settings(),
@@ -95,7 +110,7 @@ async def _launch_selected(request: SelectedOperationRequest, background_tasks: 
         if request.frustrampnn_settings is not None:
             raise HTTPException(422, 'FrustraMPNN settings belong to the FrustraMPNN operation')
         try:
-            directory = snapshot_selection(source, root, designs, candidate_documents=documents)
+            directory = snapshot_selection(source, root, designs, candidate_documents=documents, native_sources=native)
         except (ValueError, OSError) as exc:
             raise HTTPException(422, str(exc)) from exc
         job = model_request(operation=request.operation, params=request.params,
@@ -103,14 +118,14 @@ async def _launch_selected(request: SelectedOperationRequest, background_tasks: 
                             execution_target_id=request.execution_target_id)
         requests = individual_model_requests(job, request.operation, directory)
         response_context = {'source_job_id': source.id, 'root_job_id': root.id,
-                            'operation': request.operation, 'selected_design_count': len(designs)}
+                            'operation': request.operation, 'selected_design_count': len(designs), 'selected_native_count': len(native)}
         from routers.jobs import submit_selected_child_jobs
         launched = await submit_selected_child_jobs(
             requests, background_tasks, session, experiment_session,
             destination_launch_context_id=request.launch_context_id,
             idempotency_key=request.idempotency_key or str(directory), response_context=response_context)
     return {'source_job_id': source.id, 'root_job_id': root.id,
-            'operation': request.operation, 'selected_design_count': len(designs),
+            'operation': request.operation, 'selected_design_count': len(designs), 'selected_native_count': len(native),
             'launched_jobs': launched}
 
 

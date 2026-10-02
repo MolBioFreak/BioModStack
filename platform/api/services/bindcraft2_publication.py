@@ -133,6 +133,14 @@ def _inventory(root: Path, publication: NativePublication, *, legacy: bool = Fal
     return inventory
 
 
+def _native_document_identity(arm, document) -> dict:
+    from dataclasses import asdict
+    # Filename-associated observations are not producer-qualified Design joins.
+    return {**asdict(document), "arm": arm.name, "row_association": "native_filename",
+            "native_rows": [asdict(row) for row in (*arm.trajectories, *arm.draws, *arm.retained)
+                            if row.design == Path(document.path).stem]}
+
+
 def _summary(publication: NativePublication) -> list[dict]:
     return [{"arm": arm.name, **arm.accounting,
              "verified_attempts": sum(row.attempt_sha256 is not None for row in arm.trajectories),
@@ -283,6 +291,8 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
         designs = (await session.scalars(select(Design).where(Design.job_id == job.id))).all()
     if previous is None and designs:
         raise PublicationError("BC2 Designs exist without native publication receipt")
+    document_identity = {doc.path: _native_document_identity(arm, doc)
+                         for arm in publication.arms for doc in arm.documents}
     attempt = receipt["attempt"]
     owned = {a.logical_path: a for a in existing if a.attempt == attempt}
     if any(a.logical_path.startswith("bindcraft2/native/") and a.attempt != attempt for a in existing):
@@ -303,7 +313,8 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
                                     logical_path=key, storage_path=str(root / name),
                                     sha256=entry["sha256"], bytes=entry["bytes"],
                                     media_type=entry["media_type"],
-                                    provenance={"schema": _SCHEMA, "remote_attempt_id": job.remote_attempt_id})
+                                    provenance={"schema": _SCHEMA, "remote_attempt_id": job.remote_attempt_id,
+                                                **({"native_document": document_identity[name]} if name in document_identity else {})})
             session.add(artifact)
             owned[key] = artifact
     if previous is not None and {name for name in owned if name.startswith("bindcraft2/native/")} != {
@@ -365,7 +376,12 @@ async def read_published_native_results(job: Job, session) -> tuple[NativePublic
             "bindcraft2/native/" + name: row for name, row in registered.items()}, job.id, source=receipt.get("source")):
         raise PublicationError("BC2 candidate artifact bindings changed")
     await _verify_designs(job, session, receipt["candidates"], root)
-    return publication, receipt
+    # Readback handles are derived from the verified registry, not persisted
+    # candidate bindings: saved rejected structures remain native artifacts.
+    native_documents = [{**_native_document_identity(arm, document),
+                         "artifact_id": registered[document.path].id, "job_id": job.id}
+                        for arm in publication.arms for document in arm.documents]
+    return publication, {**receipt, "native_documents": native_documents}
 
 
 async def verify_selected_native_designs(job: Job, session, designs) -> None:
@@ -436,12 +452,25 @@ def native_workbench_page(page: dict, receipt: dict) -> dict:
             row["structures"] = [{**structure,
                 "download_url": downloads.get(structure.get("path", structure["logical_path"].removeprefix("bindcraft2/native/")))}
                 for structure in binding["structures"]]
+        if not binding and page["stage"] in {"trajectory", "draw"}:
+            row["structures"] = [{**doc, "download_url": downloads.get(doc["path"]),
+                                  "native_source": {"job_id": doc["job_id"], "artifact_id": doc["artifact_id"]}}
+                for doc in receipt.get("native_documents", []) if doc["arm"] == page["arm"]
+                and any(native["stage"] == page["stage"] and native["design"] == row.get("design")
+                        for native in doc["native_rows"])]
         if page["stage"] == "document":
+            document = next((doc for doc in receipt.get("native_documents", [])
+                             if doc["path"] == row["path"]), None)
+            if document:
+                row["structures"] = [{**document, "download_url": downloads.get(row["path"]),
+                    "native_source": {"job_id": document["job_id"], "artifact_id": document["artifact_id"]}}]
             row["download_url"] = downloads.get(row["path"])
         rows.append(row)
     prefix = f'{page["arm"]}/' if page["arm"] else ""
     return {**page, "rows": rows, "artifacts": [
-        {"path": name, **entry, "download_url": downloads.get(name)}
+        {"path": name, **entry, "download_url": downloads.get(name),
+         **next(({"artifact_id": doc["artifact_id"], "job_id": doc["job_id"]}
+                 for doc in receipt.get("native_documents", []) if doc["path"] == name), {})}
         for name, entry in receipt["files"].items()
         if not prefix or name.startswith(prefix) or "/" not in name
     ]}
