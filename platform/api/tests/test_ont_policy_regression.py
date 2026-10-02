@@ -28,6 +28,7 @@ async def policy_context(pooled_context, monkeypatch):
     monkeypatch.setattr(jobs, "get_inputs_dir", lambda: context.inputs_root)
     monkeypatch.setattr(jobs, "get_data_root", lambda: context.inputs_root.parent)
     monkeypatch.setattr(jobs, "get_allowed_roots", lambda: {"inputs": context.inputs_root, "results": context.results_root})
+    monkeypatch.setattr(ont_runs.ont_submission_trust, "get_inputs_dir", lambda: context.inputs_root)
     app = FastAPI()
     app.include_router(ont_runs.router, prefix="/api/ont")
     app.include_router(jobs.router, prefix="/api/jobs")
@@ -111,6 +112,8 @@ async def test_pooled_release_real_job_persistence_and_replay(policy_context, mo
         assert len((await reader.execute(select(NgsPooledAssignmentReleaseTarget))).scalars().all()) == 2
         for child in children:
             assert child.params["remote_result_policy"] == ExecutionPolicy().remote_result_policy
+            assert child.params["expected_plasmid_size"] == 8
+            assert child.params["requested_expected_plasmid_size"] is None
             assert child.status == "queued"
 
 
@@ -188,6 +191,8 @@ async def test_instrument_handoff_real_owners(policy_context, monkeypatch, tmp_p
                 row = await reader.get(Job, response.json()["id"])
                 assert row.params["remote_result_policy"] == ExecutionPolicy().remote_result_policy
                 assert row.params["source_instrument_run_id"] == run_id
+                assert row.params["expected_plasmid_size"] == 8
+                assert row.params["requested_expected_plasmid_size"] is None
                 assert row.params["ont_instrument_run_binding"]["observed_generation"] == 2
                 receipt = await reader.get(MolBioNgsReceipt, context.receipt_ids[0])
                 assert receipt.consumed_job_id == row.id

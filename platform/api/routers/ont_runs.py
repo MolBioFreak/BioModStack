@@ -70,7 +70,8 @@ from services.ont_pooled_reference_assignment import (
 from services.ont_ngs_contract import (
     get_ont_workflow_spec,
     normalize_ont_launch_params,
-    normalized_fasta_sequence_sha256,
+    normalized_fasta_sequence_identity,
+    resolve_expected_plasmid_size,
     resolve_ont_workflow_alias,
 )
 
@@ -603,7 +604,10 @@ def _job_create_for_ont_submit(
     if reference_raw:
         reference_path = Path(reference_raw).expanduser()
         if reference_path.is_file():
-            params["reference_sequence_sha256"] = normalized_fasta_sequence_sha256(reference_path)
+            digest, reference_length = normalized_fasta_sequence_identity(reference_path)
+            params["reference_sequence_sha256"] = digest
+            if "expected_plasmid_size" in params:
+                resolve_expected_plasmid_size(params, reference_length)
     model_mode = _mode_for_ont_workflow(canonical_id)
     params["ont_request_workflow_id"] = workflow_id
     params["ont_workflow_id"] = canonical_id
