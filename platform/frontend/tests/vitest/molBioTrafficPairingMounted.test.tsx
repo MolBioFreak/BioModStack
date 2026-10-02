@@ -8,7 +8,7 @@ import { DigestPanel, getQuickMapEnzymeNames } from '../../src/components/MolBio
 import { GibsonDesignWorkspace } from '../../src/components/MolBioToolkit/panels/GibsonDesignWorkspace';
 import { AssemblyPanel } from '../../src/components/MolBioToolkit/panels/AssemblyPanel';
 import { api, saveGibsonAssembly, saveGoldenGateAssembly, saveDesignedGibsonAssembly } from '../../src/lib/api';
-import { fetchRestrictionCatalogBrowse, fetchRestrictionCatalogDetails, parseRestrictionCatalogBrowsePage, parseRestrictionCatalogPage, parseRestrictionDigestSimulation, parseRestrictionDigestSaveAcknowledgement, type RestrictionCatalogSummary, type RestrictionRecord, type RestrictionAnalysisBatch } from '../../src/lib/restrictionAnalysis';
+import { simulateRestrictionDigest, fetchRestrictionCatalogBrowse, fetchRestrictionCatalogDetails, parseRestrictionCatalogBrowsePage, parseRestrictionCatalogPage, parseRestrictionDigestSimulation, parseRestrictionDigestSaveAcknowledgement, type RestrictionCatalogSummary, type RestrictionRecord, type RestrictionAnalysisBatch } from '../../src/lib/restrictionAnalysis';
 import fixture from '../fixtures/molBioTrafficPairing.json';
 
 const shell = vi.hoisted(() => ({ input: {} as any, visibility: {} as any }));
@@ -60,6 +60,8 @@ async function transport(input: RequestInfo | URL, init?: RequestInit): Promise<
         const cursor = url.searchParams.get('cursor');
         const offset = ids.length ? Number(cursor ?? 0) : cursor ? (fixture.catalog.cursors.indexOf(cursor) + 1) * 200 : 0;
         body = JSON.stringify(page(view, offset, ids.length ? ids : undefined));
+    } else if (url.pathname === '/api/molbio/restriction/digests/simulate') {
+        body = fixture.digest.simulation;
     } else if (url.pathname === '/api/molbio/restriction/digests') {
         expect(url.searchParams.get('response_view')).toBe('compact');
         body = fixture.digest.compact;
@@ -178,13 +180,14 @@ it('mounted full/compact inventory has identical filters, every bulk-map group a
     expect(detailBytes).toBe(bytes(JSON.stringify(page('full', 0, selected))) + bytes(JSON.stringify(page('full', 200, selected))));
     console.info('PAIRING_DETAIL_METRICS', JSON.stringify({ count: selected.length, requests: requests.length, decodedBytes: detailBytes }));
 });
-it('reports the inherited real linear-terminal normalized-boundary mismatch without weakening the full parser', () => {
-    expect(() => parseRestrictionDigestSimulation(JSON.parse(fixture.digest.simulation))).toThrow('linear boundary outside source geometry');
+it('strictly accepts the corrected real linear terminal coordinates', () => {
+    const simulation = parseRestrictionDigestSimulation(JSON.parse(fixture.digest.simulation));
+    expect(simulation.fragments.at(-1)?.top_end_boundary_normalized).toBe(simulation.source.content_length);
 });
 it('mounted digest compact save is identity-only, preserves held fragments and performs no eager GET', async () => {
-    // Actual API capture: known inherited linear-terminal normalization mismatch is
-    // asserted below, not weakened in the strict full parser. This test starts at held-preview Save.
-    const simulation = JSON.parse(fixture.digest.simulation);
+    const simulation = await simulateRestrictionDigest({source:fixture.digest.request.source, catalog:fixture.digest.request.catalog, enzymeIds:fixture.digest.request.enzyme_ids});
+    expect(requests).toHaveLength(1);
+    requests = []; vi.mocked(fetch).mockClear();
     await render(<DigestPanel sequenceData={seq} sequenceId="source-document" onHighlight={noop} catalog={receipt} catalogRecords={compact} analysis={null} authorityLoading={false} authorityError={null} digestSimulation={simulation} digestLoading={false} digestError={null} onDigestSelectionChange={noop} onSimulateDigest={noop} />);
     await click('Save digest & fragments');
     expect(requests).toHaveLength(1);

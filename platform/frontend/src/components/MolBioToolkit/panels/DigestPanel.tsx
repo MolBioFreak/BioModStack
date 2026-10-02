@@ -1,3 +1,5 @@
+import { digestFragmentsForAssembly } from '../../../lib/digestAssemblyTransfer';
+import type { AssemblyFragmentInput } from '../../../lib/api';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { saveRestrictionDigest, restrictionRecognitionSite } from '../../../lib/restrictionAnalysis';
 import type { HighlightedRegion, SelectionInfo, SequenceData } from '../types';
@@ -16,6 +18,7 @@ type GroupFilter = 'all' | 'digest' | 'nicking' | 'recognition_only';
 export type QuickMapGroup = 'unique' | 'double' | 'three_plus' | 'nicking' | 'type_iis';
 
 interface DigestPanelProps {
+    onUseInAssembly?: (fragments: AssemblyFragmentInput[]) => void;
     mobile?: boolean;
     compactLandscape?: boolean;
     sequenceData: SequenceData;
@@ -89,7 +92,9 @@ const CUT_FILTERS: Array<[CutFilter, string]> = [['all','All'],['unique','1x'],[
 const GROUP_FILTERS: Array<[GroupFilter, string]> = [['all','All Types'],['digest','Digest-ready'],['nicking','Nicking'],['recognition_only','Recognition only']];
 const QUICK: Array<[QuickMapGroup, string]> = [['unique','Map all 1x'],['double','Map all 2x'],['three_plus','Map all 3x+'],['nicking','Map nicking'],['type_iis','Map Golden Gate']];
 
-export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, onReadEnzymeDetails, productEvidence }: DigestPanelProps) {
+export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, onReadEnzymeDetails, productEvidence, sequenceId, onUseInAssembly }: DigestPanelProps) {
+    const [assemblySelection, setAssemblySelection] = useState<{simulation: RestrictionDigestSimulation; indices: number[]} | null>(null);
+    const assemblyIndices = assemblySelection?.simulation === digestSimulation ? assemblySelection.indices : [];
     const [digestEnzymes, setDigestEnzymes] = useState<string[]>([]);
     const detailKey = JSON.stringify([catalog?.catalog_id, catalog?.catalog_sha256, [...new Set([...selectedEnzymes, ...digestEnzymes])].sort()]);
     const [detailState, setDetailState] = useState<{ key: string; records?: RestrictionRecord[]; error?: string } | null>(null);
@@ -258,6 +263,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             <button onClick={() => onSimulateDigest(digestEnzymes)} disabled={digestLoading || digestEnzymes.length === 0} data-digest-mobile-run={mobile ? 'true' : undefined} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded bg-cyan-600 py-2 disabled:bg-slate-600 ${mobile ? 'min-h-12 min-w-12' : ''}`}>{digestLoading ? 'Digesting…' : `Run Digest (${digestEnzymes.length} enzyme${digestEnzymes.length === 1 ? '' : 's'})`}</button>
             {digestSimulation?.source?.kind === 'molecular_revision' && <div>
                 <button type="button" onClick={saveDigest} disabled={currentSave?.pending || !!currentSave?.operationId} className="rounded border px-3 py-2 disabled:opacity-40">{currentSave?.pending ? 'Saving…' : 'Save digest & fragments'}</button>
+                {onUseInAssembly && digestSimulation && <div><p>Select physical fragments for Assembly (order can be edited there):</p>{digestSimulation.fragments.map(f => <label key={f.fragment_index}><input type="checkbox" aria-label={`Use digest fragment ${f.fragment_index}`} checked={assemblyIndices.includes(f.fragment_index)} onChange={e => setAssemblySelection({simulation:digestSimulation,indices:e.target.checked ? [...assemblyIndices,f.fragment_index] : assemblyIndices.filter(i => i !== f.fragment_index)})}/>{f.fragment_index}: {f.top_strand_sequence.length} bp</label>)}<button disabled={!assemblyIndices.length} onClick={() => onUseInAssembly(digestFragmentsForAssembly(digestSimulation,assemblyIndices,sequenceId,sequenceData.name))}>Use selected fragments in assembly</button></div>}
                 {currentSave?.operationId && <a className="ml-2 underline" href={`/api/molbio/restriction/digests/${encodeURIComponent(currentSave.operationId)}`} target="_blank" rel="noreferrer">Open saved digest</a>}
                 {currentSave?.error && <p role="alert">{currentSave.error}</p>}
             </div>}

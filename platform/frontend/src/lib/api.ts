@@ -3568,6 +3568,7 @@ export interface GoldenGateAssemblyRequest {
 }
 
 export interface GoldenGateAssemblyOptionsResponse {
+    raw_design?: { schema_version: string; raw_enzyme_adapters: string[]; datasets: Array<{ id: string; restriction_enzyme_variant: string; thermal_profile: string; buffer: string }>; limitations: string[] };
     catalog: {
         catalog_id: string;
         catalog_sha256: string;
