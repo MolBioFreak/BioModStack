@@ -5363,6 +5363,39 @@ def _is_protein_local_redesign_job(job: Job) -> bool:
     )
 
 
+def _scientific_family_ids(job_id: str):
+    """Read persisted scientific edges, never rewrite scheduler parentage.
+
+    The existing Jobs listing remains the paged readback owner. Traverse on the
+    server so reopening an old round does not download unrelated job history.
+    """
+    from sqlalchemy import union_all
+
+    def text_value(value):
+        return func.nullif(value, "")
+
+    root = func.coalesce(text_value(Job.lineage_root_job_id),
+                         text_value(Job.params["lineage_root_job_id"].as_string()),
+                         text_value(Job.params["iteration_source_root_job_id"].as_string()))
+    source = func.coalesce(text_value(Job.selection_source_job_id),
+                           text_value(Job.source_stage_job_id),
+                           text_value(Job.params["selection_source_job_id"].as_string()),
+                           text_value(Job.params["source_stage_job_id"].as_string()),
+                           text_value(Job.params["iteration_source_job_id"].as_string()))
+    # Only legacy records without scientific references use scheduler edges.
+    legacy = select(Job.id.label("child"), Job.parent_job_id.label("source")).where(
+        root.is_(None), source.is_(None), Job.parent_job_id.is_not(None))
+    edges = union_all(select(Job.id.label("child"), root.label("source")).where(root.is_not(None)),
+                      select(Job.id.label("child"), source.label("source")).where(source.is_not(None)),
+                      legacy).cte("scientific_edges")
+    family = select(Job.id).where(Job.id == job_id).cte("scientific_family", recursive=True)
+    family = family.union(
+        select(edges.c.source).join(family, edges.c.child == family.c.id),
+        select(edges.c.child).join(family, edges.c.source == family.c.id),
+    )
+    return select(family.c.id)
+
+
 @router.get("", response_model=JobList | JobSummaryList)
 async def list_jobs(
     status: Optional[JobStatus] = None,
@@ -5375,6 +5408,7 @@ async def list_jobs(
     q_ignore_case_id: bool = False,  # NGS historically searches IDs case-insensitively
     exclude_ngs: bool = False,  # Dashboard Show NGS Jobs filter, before paging/count
     include_children: bool = False,  # New param: show child jobs if True
+    scientific_family_job_id: Optional[str] = None,
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
     session: AsyncSession = Depends(get_session),
     *,
@@ -5437,6 +5471,8 @@ async def list_jobs(
     # Use identical predicates for the bounded page and its total. These are
     # presentation filters, not changes to execution/status authority.
     filters = []
+    if scientific_family_job_id:
+        filters.append(Job.id.in_(_scientific_family_ids(scientific_family_job_id)))
     if not include_children:
         filters.append(Job.parent_job_id.is_(None))
     if status:
