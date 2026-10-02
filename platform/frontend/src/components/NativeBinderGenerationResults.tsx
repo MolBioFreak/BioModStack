@@ -197,7 +197,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
             <div className="flex gap-2"><button className={control} type="button" disabled={displayedPage === 0} onClick={() => setPageIndex(displayedPage - 1)}>Previous native records</button><button className={control} type="button" disabled={(displayedPage + 1) * pageSize >= matched.length} onClick={() => setPageIndex(displayedPage + 1)}>Next native records</button></div>
         </nav>
     </section>;
-    return <section aria-label="Native initial-generation results" className={`min-w-0 ${adapter?.compact ? "space-y-2" : "space-y-4"} text-[var(--text-primary)]`}>
+    return <section aria-label="Native initial-generation results" className={`min-w-0 ${adapter?.compact ? "space-y-1" : "space-y-4"} text-[var(--text-primary)]`}>
         <header className="flex flex-wrap items-center justify-between gap-3"><h3 className={`${adapter?.compact ? "text-base" : "text-xl"} font-semibold`}>{adapter?.title ?? "Generation dashboard"}</h3><span className="rounded-full border border-[var(--border-color)] px-3 py-1 text-xs">{scopeText}</span></header>
         {!adapter && <BinderPredictionEvidence jobId={jobId} sourceDesignId={row?.design_id} launchContextId={launchContextId} />}
         {query.isLoading && <p role="status">Reading published generation records…</p>}
