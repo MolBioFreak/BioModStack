@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 
 import {
     bioXpErrorText,
@@ -22,6 +23,7 @@ import {
 } from './bioxpCameraState';
 
 interface BioXpCameraPanelProps {
+    visible?: boolean;
     connected: boolean;
     connectionGeneration: number | null;
     mutationEnabled: boolean;
@@ -39,9 +41,12 @@ export function BioXpCameraPanel({
     connected,
     connectionGeneration,
     mutationEnabled,
+    visible = true,
 }: BioXpCameraPanelProps) {
-    const statusQuery = useBioXpCameraStatus(connectionGeneration, connected);
-    const streamQuery = useBioXpCameraStreamState(connectionGeneration, connected);
+    const documentVisible = useBioXpDocumentVisible();
+    const observing = visible && documentVisible;
+    const streamQuery = useBioXpCameraStreamState(connectionGeneration, connected && observing);
+    const statusQuery = useBioXpCameraStatus(connectionGeneration, connected && observing, streamQuery.data?.active === true ? 2_000 : false);
     const refetchStatus = statusQuery.refetch;
     const refetchStream = streamQuery.refetch;
     const ownerRef = useRef<CameraObjectUrlOwner | null>(null);
@@ -259,8 +264,8 @@ export function BioXpCameraPanel({
     const illuminationOwner = effectiveStream?.connection_generation === connectionGeneration
         ? `${effectiveStreamActive}:${effectiveStream?.camera_ownership_epoch}:${effectiveStream?.stream_id}` : null;
     useEffect(() => {
-        void refreshIllumination();
-    }, [connected, connectionGeneration, illuminationOwner, refreshIllumination]);
+        if (observing) void refreshIllumination();
+    }, [observing, connected, connectionGeneration, illuminationOwner, refreshIllumination]);
 
     const toggleStream = useCallback(async () => {
         if (connectionGeneration === null || !connected || !mutationEnabled || requestPendingRef.current) return;
@@ -342,7 +347,7 @@ export function BioXpCameraPanel({
                     ? streamQuery.data?.state === 'live' && streamQuery.data?.connection_generation === connectionGeneration && sequenceAdvancingRef.current
                         ? 'Video live' : 'Waiting for advancing frames'
                     : 'Ready';
-    const mediaUrl = !connected ? null : effectiveStreamActive && connectionGeneration !== null
+    const mediaUrl = !connected || !observing ? null : effectiveStreamActive && connectionGeneration !== null
         ? buildBioXpCameraMjpegUrl(connectionGeneration, effectiveStream?.stream_id)
         : imageSessionRef.current === sessionRef.current ? imageUrl : null;
 

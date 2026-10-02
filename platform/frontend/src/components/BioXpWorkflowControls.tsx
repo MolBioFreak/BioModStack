@@ -1,3 +1,4 @@
+import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useRef, useState } from 'react';
 import {
     bioXpErrorText, useBioXpWorkflowJobs,
@@ -27,7 +28,8 @@ function selectedInput(text: string): BioXpWorkflowInput {
 export function BioXpWorkflowControls({ generation, connected, controlsEnabled, visible = true }: {
     generation: number; connected: boolean; controlsEnabled: boolean; visible?: boolean;
 }) {
-    const jobs = useBioXpWorkflowJobs(generation, connected && visible);
+    const documentVisible = useBioXpDocumentVisible();
+    const jobs = useBioXpWorkflowJobs(generation, connected && visible && documentVisible);
     const [selection, setSelection] = useState<{ name: string; input: BioXpWorkflowInput } | null>(null);
     const [selectionError, setSelectionError] = useState<string | null>(null);
     const [selectedJob, setSelectedJob] = useState<{ generation: number; id: string } | null>(null);

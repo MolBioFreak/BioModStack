@@ -1,3 +1,4 @@
+import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { bioXpErrorText, useBioXpWorkflowJob, useControlBioXpWorkflow, useReviewBioXpWorkflow,
     type BioXpWorkflowAction, type BioXpWorkflowJob } from '../lib/bioxpClient';
@@ -22,7 +23,14 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     }, [jobId, generation]);
     const control = useControlBioXpWorkflow();
     const review = useReviewBioXpWorkflow();
-    const query = useBioXpWorkflowJob(jobId, generation, connected && visible);
+    const documentVisible = useBioXpDocumentVisible();
+    const [settledJob, setSettledJob] = useState<string | null>(null);
+    const observationId = jobId;
+    const observeJob = documentVisible && (visible || (observationId !== null && settledJob !== observationId));
+    const query = useBioXpWorkflowJob(observationId, generation, connected && observeJob);
+    useEffect(() => {
+        if (query.data?.command?.terminal && query.data.job_id === observationId) setSettledJob(observationId);
+    }, [query.data, observationId]);
     const job = query.data?.job_id === jobId ? query.data : acceptedJob?.job_id === jobId ? acceptedJob : null;
     const command = job?.command;
     const runtime = job?.execution?.runtime_state;

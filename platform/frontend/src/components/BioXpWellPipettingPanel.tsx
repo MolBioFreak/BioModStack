@@ -1,3 +1,4 @@
+import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useRef, useState } from 'react';
 import { BioXpPipetteResults } from './BioXpPipetteResults';
 import { BioXpWorkflowMaterials } from './BioXpWorkflowMaterials';
@@ -35,7 +36,7 @@ const projectTransfer = (value: DraftObject): WorkflowTransferIntent => {
 };
 const wells = [...'ABCDEFGH'].flatMap(row => Array.from({ length: 12 }, (_, col) => `${row}${col + 1}`));
 
-export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision, workflowAuthoring = false, controlsEnabled = false }: {
+export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision, workflowAuthoring = false, controlsEnabled = false, visible = true }: { visible?: boolean;
     controlsEnabled?: boolean; workflowAuthoring?: boolean; generation: number; connected: boolean; destinations?: BioXpDeckDestinationV1[]; positionTableRevision?: string | null;
 }) {
     const [sourceDrafts, setSourceDrafts] = useState<Record<BioXpSourceStep['operation'], NativeDraft<BioXpSourceStep>>>(sourceDefaults);
@@ -94,7 +95,14 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     const [accepted, setAccepted] = useState<BioXpWorkflowJob | null>(null);
     const submit = useSubmitBioXpProtocol();
     const sameConnection = !attempt || attempt.generation === generation;
-    const query = useBioXpWorkflowJob(attempt?.id ?? null, attempt?.generation ?? generation, connected && sameConnection);
+    const documentVisible = useBioXpDocumentVisible();
+    const [settledJob, setSettledJob] = useState<string | null>(null);
+    const observationId = attempt?.id ?? null;
+    const observeJob = documentVisible && (visible || (observationId !== null && settledJob !== observationId));
+    const query = useBioXpWorkflowJob(observationId, attempt?.generation ?? generation, connected && sameConnection && observeJob);
+    useEffect(() => {
+        if (query.data?.command?.terminal && query.data.job_id === observationId) setSettledJob(observationId);
+    }, [query.data, observationId]);
     const mismatch = !!query.data && !!attempt && (query.data.job_id !== attempt.id || query.data.command?.idempotency_key !== attempt.key);
     const job = mismatch ? null : query.data ?? accepted;
     // Historical jobs, receipts, unavailable observations and unrelated pending
@@ -462,7 +470,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
                     <details><summary>Native document</summary><pre className="bioxp-native-json">{JSON.stringify(preview.result.document, null, 2)}</pre></details>
                 </>}
             </section>}
-            <BioXpSavedWorkflowRun saved={savedWorkflow} generation={generation} connected={connected} controlsEnabled={controlsEnabled} onClone={adoptJobClone} authoringBusy={storageBusy} />
+            <BioXpSavedWorkflowRun visible={visible && workflowView === 'review'} saved={savedWorkflow} generation={generation} connected={connected} controlsEnabled={controlsEnabled} onClone={adoptJobClone} authoringBusy={storageBusy} />
             <button type="button" className="mt-4" onClick={() => setWorkflowView('build')}>Back to Build</button>
         </section>}
         <div className={workflowAuthoring ? 'bioxp-build-grid' : undefined} hidden={workflowAuthoring && workflowView !== 'build'}>

@@ -7,7 +7,7 @@ import { BioXpWorkflowJobMonitor } from './BioXpWorkflowJobMonitor';
 import { BioXpWorkflowJobClone } from './BioXpWorkflowJobClone';
 import type { WorkflowJobClone } from '../lib/bioxpWorkflowPlan';
 
-export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEnabled, onClone, authoringBusy = false }: {
+export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEnabled, onClone, authoringBusy = false, visible = true }: { visible?: boolean;
     saved: SavedWorkflowSnapshot | null; generation: number; connected: boolean; controlsEnabled: boolean;
     onClone?: (clone: WorkflowJobClone) => void; authoringBusy?: boolean;
 }) {
@@ -71,7 +71,7 @@ export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEn
             <p className="break-all">Original submission key: {active.key}</p>
             <p>Original connection generation: {active.generation}; current connection generation: {generation}. Readback targets the original job only.</p>
             <details><summary>Exact run snapshot</summary><pre>{JSON.stringify(active.saved, null, 2)}</pre></details>
-            <BioXpWorkflowJobMonitor jobId={active.jobId} generation={generation}
+            <BioXpWorkflowJobMonitor visible={visible} jobId={active.jobId} generation={generation}
                 connected={connected} controlsEnabled={controlsEnabled} submitting={busy} busyRef={busyRef} onBusyChange={setBusy} pending
                 acceptedJob={accepted?.generation === generation ? accepted.job : null} />
         </>}

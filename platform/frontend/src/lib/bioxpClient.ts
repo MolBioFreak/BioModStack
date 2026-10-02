@@ -2453,6 +2453,7 @@ export async function getBioXpCameraStatus(connectionGeneration: number) {
 export const useBioXpCameraStatus = (
     connectionGeneration: number | null,
     enabled = true,
+    interval: number | false = 2_000,
 ) => useQuery({
     queryKey: ['bioxp', 'camera', 'status', connectionGeneration],
     queryFn: async () => {
@@ -2461,7 +2462,7 @@ export const useBioXpCameraStatus = (
     },
     enabled: enabled && connectionGeneration !== null,
     retry: false,
-    refetchInterval: enabled ? 2_000 : false,
+    refetchInterval: enabled ? interval : false,
 });
 
 export const useBioXpCameraStreamState = (
@@ -2477,7 +2478,8 @@ export const useBioXpCameraStreamState = (
     },
     enabled: enabled && connectionGeneration !== null,
     retry: false,
-    refetchInterval: enabled ? 2_000 : false,
+    // Visible idle panes discover another client's stream without 2s idle polling.
+    refetchInterval: query => enabled ? (query.state.data?.active ? 2_000 : 15_000) : false,
 });
 
 export async function startBioXpCameraStream(connectionGeneration: number): Promise<BioXpCameraStream> {

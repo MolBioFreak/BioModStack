@@ -4,7 +4,7 @@ import { calibrationFields, readCalibrationSettings, saveCalibrationSettings,
     type CalibrationField, type CalibrationPatch, type CalibrationSettings } from '../lib/bioxpCalibration';
 
 type Drafts = Record<string, Partial<Record<CalibrationField, string>>>;
-export function BioXpCalibrationSettings({ generation, connected }: { generation: number; connected: boolean }) {
+export function BioXpCalibrationSettings({ generation, connected, visible = true }: { generation: number; connected: boolean; visible?: boolean }) {
     const [data, setData] = useState<CalibrationSettings | null>(null);
     const [station, setStation] = useState('');
     const [drafts, setDrafts] = useState<Drafts>({});
@@ -14,15 +14,21 @@ export function BioXpCalibrationSettings({ generation, connected }: { generation
     const busy = useRef(false);
     const epoch = useRef(0);
     const current = useRef({ generation, connected }); current.current = { generation, connected };
+    const observedEpoch = useRef<number | null>(null);
     useEffect(() => {
-        const token = ++epoch.current;
+        ++epoch.current;
         setData(null); setDrafts({}); setMessage(''); setError(null);
-        if (connected) void readCalibrationSettings(generation).then(result => {
+        return () => { ++epoch.current; };
+    }, [generation, connected]);
+    useEffect(() => {
+        const token = epoch.current;
+        if (!connected || !visible || observedEpoch.current === token) return;
+        observedEpoch.current = token;
+        void readCalibrationSettings(generation).then(result => {
             if (epoch.current !== token) return;
             setData(result); setStation(result.saved_positions[0]?.name ?? '');
         }).catch(cause => { if (epoch.current === token) setError(bioXpErrorText(cause)); });
-        return () => { ++epoch.current; };
-    }, [generation, connected]);
+    }, [generation, connected, visible]);
     async function read() {
         const token = epoch.current; setError(null);
         try { const result = await readCalibrationSettings(generation); if (epoch.current === token) setData(result); }

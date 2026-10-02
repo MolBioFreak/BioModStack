@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 
 import {
     bioXpDeckRecoveryResolution,
@@ -51,9 +52,10 @@ function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
     item: BioXpDeckSubmission; generation: number; active: boolean; onSelect: (id: string) => void;
     onTerminal: (key: string, receipt: BioXpOperatorReceiptV2) => void;
 }) {
+    const documentVisible = useBioXpDocumentVisible();
     const current = active && item.request.expected_connection_generation === generation;
     const commandId = item.receipt?.command_id ?? item.commandId;
-    const query = useBioXpOperatorReceiptV2(commandId ?? null, item.request.expected_connection_generation, current);
+    const query = useBioXpOperatorReceiptV2(commandId ?? null, item.request.expected_connection_generation, current && documentVisible);
     const receipt = query.data?.action_id === item.request.action_id ? query.data : item.receipt;
     useEffect(() => {
         if (current && !query.error && query.data?.terminal && query.data.action_id === item.request.action_id)
@@ -238,9 +240,10 @@ function InterruptOutcome({ label, receipt, error, pending, generation, connecte
     generation: number;
     connected: boolean;
 }) {
+    const documentVisible = useBioXpDocumentVisible();
     const identity = bioXpPostDispatchCommandIdentity(error);
     const commandId = receipt?.command_id ?? identity?.commandId ?? null;
-    const query = useBioXpOperatorReceiptV2(commandId, generation, connected && (identity !== null || receipt?.terminal === false));
+    const query = useBioXpOperatorReceiptV2(commandId, generation, connected && documentVisible && (identity !== null || receipt?.terminal === false));
     const current = query.data?.command_id === commandId ? query.data : receipt;
     if (!pending && !current && !error) return null;
     const evidence = current?.interrupt_evidence;
@@ -263,7 +266,8 @@ const CONTROL_TABS = ['robot', 'pipettes', 'workflows'] as const;
 type ControlTab = typeof CONTROL_TABS[number];
 
 export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab }) {
-    const statusQuery = useBioXpStatus(true);
+    const documentVisible = useBioXpDocumentVisible();
+    const statusQuery = useBioXpStatus(documentVisible);
     const status = statusQuery.data;
     const connection = status?.connection;
     const active = connection?.active === true;
@@ -290,13 +294,17 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     useEffect(() => {
         currentGenerationRef.current = generation;
     }, [generation]);
+    const [historyOpen, setHistoryOpen] = useState(false);
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(8);
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const [reportsOpen, setReportsOpen] = useState(false);
     const [workflowOpen, setWorkflowOpen] = useState(false);
     const [workflowVisible, setWorkflowVisible] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [cameraOpen, setCameraOpen] = useState(initialTab !== 'workflows');
     const [controlTab, setControlTab] = useState<ControlTab>(initialTab);
+    const operationalVisible = documentVisible && controlTab !== 'workflows';
+    const robotVisible = documentVisible && controlTab === 'robot';
     const [pipettesOpened, setPipettesOpened] = useState(initialTab === 'pipettes');
     const [workflowsOpened, setWorkflowsOpened] = useState(initialTab === 'workflows');
     const selectControlTab = (tab: ControlTab) => {
@@ -308,7 +316,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'z' | 'g', number>>({ x: 60, z: 65000, g: 0 });
     const operatorCatalog = useBioXpOperatorControlCatalog(
         generation,
-        linkConnected,
+        linkConnected && operationalVisible,
         null,
         Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined,
     );
@@ -357,9 +365,15 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         ?? yAxisV2?.active_command?.command_id
         ?? yAxisV2?.latest_compact_receipt?.command_id
         ?? null;
-    const yReceiptQuery = useBioXpOperatorReceiptDetailV2(yReceiptCommandId, generation, active);
-    const zHomeReceiptQuery = useBioXpOperatorReceiptV2(currentZHomeCommandId, generation, active);
-    const lifecycleReceiptQuery = useBioXpOperatorReceiptV2(currentLifecycleCommandId, generation, linkConnected);
+    const [settledY, setSettledY] = useState<string | null>(null);
+    const yReceiptQuery = useBioXpOperatorReceiptDetailV2(yReceiptCommandId, generation, active && documentVisible && (robotVisible || (settledY !== yReceiptCommandId && (yCommandId !== null || yAxisV2?.active_command != null))));
+    useEffect(() => { if (yReceiptQuery.data?.terminal) setSettledY(yReceiptCommandId); }, [yReceiptQuery.data, yReceiptCommandId]);
+    const [settledZHome, setSettledZHome] = useState<string | null>(null);
+    const zHomeReceiptQuery = useBioXpOperatorReceiptV2(currentZHomeCommandId, generation, active && documentVisible && (operationalVisible || settledZHome !== (currentZHomeCommandId)));
+    useEffect(() => { if (zHomeReceiptQuery.data?.terminal) setSettledZHome(zHomeReceiptQuery.data.command_id); }, [zHomeReceiptQuery.data]);
+    const [settledLifecycle, setSettledLifecycle] = useState<string | null>(null);
+    const lifecycleReceiptQuery = useBioXpOperatorReceiptV2(currentLifecycleCommandId, generation, linkConnected && documentVisible && (operationalVisible || settledLifecycle !== (currentLifecycleCommandId)));
+    useEffect(() => { if (lifecycleReceiptQuery.data?.terminal) setSettledLifecycle(lifecycleReceiptQuery.data.command_id); }, [lifecycleReceiptQuery.data]);
     const [reconciledDeckPredecessor, setReconciledDeckPredecessor] = useState<{ commandId: string; generation: number } | null>(null);
     const dashboardDeckReceipt = [
         ...(currentDashboardV2?.active_commands ?? []),
@@ -376,12 +390,16 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const effectiveDeckCommandId = active
         ? (deckMutationGeneration === generation ? deckCommandId : null) ?? dashboardDeckReceipt?.command_id ?? null
         : null;
-    const deckReceiptQuery = useBioXpOperatorReceiptDetailV2(effectiveDeckCommandId, generation, active);
+    const [settledDeck, setSettledDeck] = useState<string | null>(null);
+    const deckReceiptQuery = useBioXpOperatorReceiptDetailV2(effectiveDeckCommandId, generation, active && documentVisible && (robotVisible || (settledDeck !== effectiveDeckCommandId && (deckCommandId !== null || dashboardDeckReceipt?.terminal === false))));
+    useEffect(() => { if (deckReceiptQuery.data?.terminal) setSettledDeck(effectiveDeckCommandId); }, [deckReceiptQuery.data, effectiveDeckCommandId]);
     const invokeLifecycleActionMutation = useInvokeBioXpOperatorActionV2();
     const invokeYAction = useInvokeBioXpOperatorActionV2();
     const [axisSubmission, setAxisSubmission] = useState<{ generation: number; commandId: string; actionId: string; receipt: BioXpOperatorReceiptV2 | null } | null>(null);
     const currentAxisSubmission = active && axisSubmission?.generation === generation ? axisSubmission : null;
-    const axisReceiptQuery = useBioXpOperatorReceiptV2(currentAxisSubmission?.commandId ?? null, generation, active);
+    const [settledAxis, setSettledAxis] = useState<string | null>(null);
+    const axisReceiptQuery = useBioXpOperatorReceiptV2(currentAxisSubmission?.commandId ?? null, generation, active && documentVisible && (operationalVisible || settledAxis !== (currentAxisSubmission?.commandId ?? null)));
+    useEffect(() => { if (axisReceiptQuery.data?.terminal) setSettledAxis(axisReceiptQuery.data.command_id); }, [axisReceiptQuery.data]);
     const axisReceipt = currentAxisSubmission == null ? null
         : axisReceiptQuery.data?.command_id === currentAxisSubmission.commandId
             && axisReceiptQuery.data.action_id === currentAxisSubmission.actionId ? axisReceiptQuery.data : currentAxisSubmission.receipt;
@@ -395,7 +413,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const invokeXYAction = useInvokeBioXpOperatorActionV2();
     const [xySubmission, setXYSubmission] = useState<{ generation: number; commandId: string; receipt: BioXpOperatorReceiptV2 | null } | null>(null);
     const currentXYSubmission = active && xySubmission?.generation === generation ? xySubmission : null;
-    const xyReceiptQuery = useBioXpOperatorReceiptV2(currentXYSubmission?.commandId ?? null, generation, active);
+    const [settledXy, setSettledXy] = useState<string | null>(null);
+    const xyReceiptQuery = useBioXpOperatorReceiptV2(currentXYSubmission?.commandId ?? null, generation, active && documentVisible && (operationalVisible || settledXy !== (currentXYSubmission?.commandId ?? null)));
+    useEffect(() => { if (xyReceiptQuery.data?.terminal) setSettledXy(xyReceiptQuery.data.command_id); }, [xyReceiptQuery.data]);
     const xyReceipt = currentXYSubmission == null ? null
         : xyReceiptQuery.data?.command_id === currentXYSubmission.commandId ? xyReceiptQuery.data : currentXYSubmission.receipt;
     const xyOutcomeUnresolved = currentXYSubmission != null && (xyReceipt == null || !xyReceipt.terminal || xyReceipt.status === 'ambiguous');
@@ -412,7 +432,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         if (identity) setXYSubmission({ generation, commandId: identity.commandId, receipt: null });
     };
     const historyPagination = useBioXpHistoryPagination(linkConnected ? generation : 0, historyLimit);
-    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected, historyLimit, historyPagination.cursor);
+    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected && operationalVisible && historyOpen, historyLimit, historyPagination.cursor);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
 
@@ -510,7 +530,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const interruptAnyPending = interruptXStop.isPending || interruptYStop.isPending || interruptZStop.isPending || interruptAggregateAbort.isPending || componentStop.isPending;
     const busy = invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || xyPending || interruptAnyPending || componentStop.isPending;
     const latestOperatorReceipt = interruptAggregateAbort.data ?? interruptZStop.data ?? interruptYStop.data ?? interruptXStop.data ?? invokeDeckAction.data ?? invokeLifecycleActionMutation.data ?? invokeYAction.data ?? xyReceipt ?? invokeOperatorAction.data;
-    const latestReceiptQuery = useBioXpOperatorReceiptV2(latestOperatorReceipt?.command_id ?? null, generation, linkConnected);
+    const [settledLatest, setSettledLatest] = useState<string | null>(null);
+    const latestReceiptQuery = useBioXpOperatorReceiptV2(latestOperatorReceipt?.command_id ?? null, generation, linkConnected && documentVisible && (operationalVisible || settledLatest !== (latestOperatorReceipt?.command_id ?? null)));
+    useEffect(() => { if (latestReceiptQuery.data?.terminal) setSettledLatest(latestReceiptQuery.data.command_id); }, [latestReceiptQuery.data]);
     const displayedLatestReceipt = latestReceiptQuery.data?.command_id === latestOperatorReceipt?.command_id
         ? latestReceiptQuery.data : latestOperatorReceipt;
     const latestReceiptFailure = bioXpReceiptFailureText(displayedLatestReceipt);
@@ -1118,7 +1140,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 </div>
             </div>
             <div role="tabpanel" id="control-panel-workflows" aria-labelledby="control-tab-workflows" hidden={controlTab !== 'workflows'}>
-                {workflowsOpened && <BioXpWorkflowEditor generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />}
+                {workflowsOpened && <BioXpWorkflowEditor visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />}
             </div>
             <div hidden={controlTab === 'workflows'} className="space-y-4">
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
@@ -1166,7 +1188,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             <details onToggle={event => { setWorkflowVisible(event.currentTarget.open); if (event.currentTarget.open) setWorkflowOpen(true); }}>
                 <summary className="cursor-pointer text-lg font-semibold">Prepared workflows</summary>
                 {workflowOpen && <BioXpWorkflowControls key={generation} generation={generation} connected={active}
-                    controlsEnabled={robotControlReady} visible={workflowVisible} />}
+                    controlsEnabled={robotControlReady} visible={operationalVisible && workflowVisible} />}
             </details>
 
             <BioXpQuickDashboard
@@ -1181,7 +1203,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={reportsOpen} onToggle={(event) => setReportsOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Operator reports</summary>
-                {reportsOpen && <div className="mt-4"><BioXpOperatorReports generation={generation} connected={linkConnected} /></div>}
+                {reportsOpen && operationalVisible && <div className="mt-4"><BioXpOperatorReports generation={generation} connected={linkConnected} /></div>}
             </details>
 
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
@@ -1328,7 +1350,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 <YOperatorError label="Deck enqueue" error={currentDeckInvokeError} />
                 {deckResolution && <p className="text-sm text-slate-300">Earlier move reconciled. Historical outcome remains {deckReceipt?.status}; this does not retry the command. {deckRecoveryResolved ? 'The robot checks each new request.' : 'Current recovery revision is not yet observed.'}</p>}
                 <YOperatorError label="Deck receipt" error={deckReceiptQuery.error} />
-                <BioXpTransferControls key={`${generation}:${active}`} generation={generation} connected={linkConnected} />
+                <BioXpTransferControls visible={robotVisible} key={`${generation}:${active}`} generation={generation} connected={linkConnected} />
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
@@ -1670,7 +1692,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             </div>
             <div role="tabpanel" id="control-panel-pipettes" aria-labelledby="control-tab-pipettes" hidden={controlTab !== 'pipettes'}>
                 {pipettesOpened && <>
-                <BioXpPipetteControlPanel
+                <BioXpPipetteControlPanel visible={documentVisible && controlTab === 'pipettes'}
                     generation={generation}
                     connected={robotControlReady && operatorCatalog.data !== undefined}
                     pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined}
@@ -1680,13 +1702,13 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                     invokePending={invokeOperatorAction.isPending}
                     invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
                 />
-                <BioXpWellPipettingPanel generation={generation} connected={linkConnected}
+                <BioXpWellPipettingPanel visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected}
                     destinations={selectionAction?.destination_options ?? []}
                     positionTableRevision={selectionAction?.position_table_revision} />
-                <details className="mt-4 rounded border border-slate-700 p-3">
+                <details onToggle={event => setSettingsOpen(event.currentTarget.open)} className="mt-4 rounded border border-slate-700 p-3">
                     <summary className="cursor-pointer font-semibold">Settings & calibration</summary>
-                    <BioXpPipetteSettings key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
-                    <BioXpCalibrationSettings key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
+                    <BioXpPipetteSettings visible={settingsOpen && documentVisible && controlTab === 'pipettes'} key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
+                    <BioXpCalibrationSettings visible={settingsOpen && documentVisible && controlTab === 'pipettes'} key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
                 </details>
                 </>}
             </div>
@@ -1708,13 +1730,13 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             </div>
                 <details className="w-full max-w-xs self-start rounded-lg border border-slate-800 bg-slate-950/70 p-2 xl:sticky xl:top-4 xl:order-last" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
                     <summary className="cursor-pointer text-sm font-semibold">Camera</summary>
-                    {cameraOpen && <div className="mt-2"><BioXpCameraPanel connected={active} connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>}
+                    {cameraOpen && <div className="mt-2"><BioXpCameraPanel visible={operationalVisible} connected={active} connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>}
                 </details>
             </div>
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
-                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">Additional service, recovery and diagnostic controls.</p><div className="mt-4"><BioXpOperatorControlTabs generation={generation} connected={robotControlReady} catalogObservation={operatorCatalog} zTargetSteps={Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined} /></div></>}
+                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">Additional service, recovery and diagnostic controls.</p><div className="mt-4"><BioXpOperatorControlTabs visible={operationalVisible} generation={generation} connected={robotControlReady} catalogObservation={operatorCatalog} zTargetSteps={Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined} /></div></>}
             </details>
 
             <section className="rounded-xl border border-red-800/70 bg-red-950/30 p-4">
@@ -1739,7 +1761,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 <InterruptOutcome label="Z STOP" receipt={interruptZStop.data} error={interruptZStop.error} pending={interruptZStop.isPending} generation={generation} connected={linkConnected} />
             </section>
 
-            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+            <details onToggle={event => setHistoryOpen(event.currentTarget.open)} className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
                 <summary className="cursor-pointer font-semibold">Recent Robot Actions</summary>
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                     <label className="flex items-center gap-2 text-xs text-slate-400">
@@ -1770,7 +1792,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 ) : (
                     <div className="mt-3 space-y-2">
                         {recentCommands.map((record) => (
-                            <BioXpHistoryReceiptCard key={`${generation}:${record.command_id}`} receipt={record} generation={generation} connected={linkConnected} />
+                            <BioXpHistoryReceiptCard key={`${generation}:${record.command_id}`} receipt={record} generation={generation} connected={linkConnected && operationalVisible && historyOpen} />
                         ))}
                     </div>
                 )}

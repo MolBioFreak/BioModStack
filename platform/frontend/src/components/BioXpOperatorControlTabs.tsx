@@ -1,3 +1,4 @@
+import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useMemo, useState } from 'react';
 import { BioXpOperatorInput, initialOperatorInputs as initialInputs, normalizeOperatorInputs as normalizeInput } from './BioXpOperatorInput';
 
@@ -133,18 +134,20 @@ function isCurrentActionReceipt(receipt: BioXpOperatorHistoryReceipt): boolean {
     return receipt.history.source === 'direct' && receipt.history.source_schema === 'bioxp.operator_action_receipt.v1';
 }
 
-export function BioXpOperatorControlTabs({ generation, connected, zTargetSteps, catalogObservation }: {
+export function BioXpOperatorControlTabs({ generation, connected, zTargetSteps, catalogObservation, visible = true }: { visible?: boolean;
     generation: number; connected: boolean; zTargetSteps?: number;
     catalogObservation?: ReturnType<typeof useBioXpOperatorControlCatalog>;
 }) {
     const [pane, setPane] = useState<Pane>('primitive');
+    const documentVisible = useBioXpDocumentVisible();
+    visible = visible && documentVisible;
     const historyPagination = useBioXpHistoryPagination(connected ? generation : 0, 100);
     // The mounted cockpit owns the observation cadence. Standalone Advanced
     // retains its own owner; two visible surfaces must not create two timers.
-    const ownCatalogQuery = useBioXpOperatorControlCatalog(generation, connected && !catalogObservation, null, zTargetSteps);
+    const ownCatalogQuery = useBioXpOperatorControlCatalog(generation, connected && visible && !catalogObservation, null, zTargetSteps);
     const catalogQuery = catalogObservation ?? ownCatalogQuery;
     const dashboard = catalogQuery.data?.dashboard;
-    const historyQuery = useBioXpOperatorActionHistory(generation, connected, 100, pane === 'logs' ? historyPagination.cursor : null);
+    const historyQuery = useBioXpOperatorActionHistory(generation, connected && visible && pane === 'logs', 100, pane === 'logs' ? historyPagination.cursor : null);
     const invoke = useInvokeBioXpOperatorAction();
     // Published stop/emergency actions retain their own request and receipt owner.
     // Same catalog route/admission; no new transport or queue policy.
@@ -209,7 +212,7 @@ export function BioXpOperatorControlTabs({ generation, connected, zTargetSteps, 
         generation,
         authoritativeCatalog?.ownership_generation ?? 0,
         normalizedForAdmission,
-        connected,
+        connected && visible,
         dashboard?.x_axis?.provider?.lifecycle?.state ?? dashboard?.x_axis?.provider?.state ?? null,
     );
     // A failed preview is not a robot denial. The query key binds successful
@@ -375,7 +378,7 @@ export function BioXpOperatorControlTabs({ generation, connected, zTargetSteps, 
 
             {pane === 'logs' ? (
                 <div className="mt-4 space-y-2">
-                    {(authoritativeHistory?.items ?? []).map((receipt) => <BioXpHistoryReceiptCard key={`${generation}:${receipt.command_id}`} receipt={receipt} generation={generation} connected={connected} />)}
+                    {(authoritativeHistory?.items ?? []).map((receipt) => <BioXpHistoryReceiptCard key={`${generation}:${receipt.command_id}`} receipt={receipt} generation={generation} connected={connected && visible && pane === 'logs'} />)}
                     {authoritativeHistory?.items.length === 0 && <p className="text-sm text-slate-400">No robot-owned action receipts on this page.</p>}
                     <BioXpHistoryPager pagination={historyPagination} nextCursor={authoritativeHistory?.next_cursor ?? null} disabled={!connected || historyQuery.isFetching || historyQuery.isError} />
                 </div>

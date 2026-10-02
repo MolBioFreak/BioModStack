@@ -1,3 +1,4 @@
+import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useRef, useState } from 'react';
 import {
     bioXpErrorText, useBioXpWorkflowJobs, useBioXpWorkflowJob, useSubmitBioXpProtocol,
@@ -42,8 +43,8 @@ function ChildReceipt({ id, generation, connected }: { id: string; generation: n
     </div>;
 }
 
-export function BioXpTransferControls({ generation, connected }: {
-    generation: number; connected: boolean;
+export function BioXpTransferControls({ generation, connected, visible = true }: {
+    visible?: boolean; generation: number; connected: boolean;
 }) {
     const [object, setObject] = useState<string>('CV_OUTPUT');
     const [destination, setDestination] = useState<string>('LOC_OCS');
@@ -55,12 +56,19 @@ export function BioXpTransferControls({ generation, connected }: {
     const connection = useRef({ generation, connected });
     connection.current = { generation, connected };
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-    const jobs = useBioXpWorkflowJobs(generation, connected);
+    const jobs = useBioXpWorkflowJobs(generation, connected && visible);
     const activeJob = jobs.data?.find(job => job.command?.terminal === false);
     const id = attempt?.id ?? activeJob?.job_id ?? null;
     const retainedGeneration = attempt?.generation ?? generation;
     const sameConnection = retainedGeneration === generation;
-    const query = useBioXpWorkflowJob(id, retainedGeneration, connected && sameConnection);
+    const documentVisible = useBioXpDocumentVisible();
+    const [settledJob, setSettledJob] = useState<string | null>(null);
+    const observationId = id;
+    const observeJob = documentVisible && (visible || (observationId !== null && settledJob !== observationId));
+    const query = useBioXpWorkflowJob(observationId, retainedGeneration, connected && sameConnection && observeJob);
+    useEffect(() => {
+        if (query.data?.command?.terminal && query.data.job_id === observationId) setSettledJob(observationId);
+    }, [query.data, observationId]);
     const identityMismatch = !!query.data && !!attempt && (query.data.job_id !== attempt.id || query.data.command?.idempotency_key !== attempt.key);
     const job = !identityMismatch && query.data?.job_id === id ? query.data : accepted?.job_id === id ? accepted : null;
     const command = job?.command;
@@ -124,7 +132,7 @@ export function BioXpTransferControls({ generation, connected }: {
         {currentLive && <p role="status">{command?.status} · {job?.execution?.runtime_state.workflow?.phase ?? 'phase unavailable'}</p>}
         {job?.execution?.runtime_state.workflow?.held_reason && <p role="alert">{job.execution.runtime_state.workflow.held_reason}</p>}
         {job?.execution?.runtime_state.action_results?.map((result, index) => <p key={index} role={result.ok === false ? 'alert' : 'status'}>Action {index + 1}: {result.ok === false ? 'failed' : result.ok === true ? 'completed' : 'reported'}{outcomeText(result) ? ` · ${outcomeText(result)}` : ''}</p>)}
-        {job?.execution?.runtime_state.workflow?.child_command_ids.map(child => <ChildReceipt key={child} id={child} generation={retainedGeneration} connected={connected && sameConnection} />)}
+        {job?.execution?.runtime_state.workflow?.child_command_ids.map(child => <ChildReceipt key={child} id={child} generation={retainedGeneration} connected={connected && sameConnection && observeJob} />)}
         {error && <p role="alert">{error}</p>}
     </section>;
 }

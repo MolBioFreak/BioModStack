@@ -749,10 +749,15 @@ describe('critical evidence presentation', () => {
 });
 
 describe('primary cockpit query ownership', () => {
-    it('fetches the primary catalog and history without opening Advanced', async () => {
+    it('fetches the primary catalog while history waits for its own open panel, independent of Advanced', async () => {
         await act(async () => { root.render(<BioXpCockpit />); });
         expect(state.v1CatalogEnabled).toBe(true);
+        expect(state.historyEnabled).toBe(false);
+        const history = [...container.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent === 'Recent Robot Actions')!;
+        await act(async () => { history.open = true; history.dispatchEvent(new Event('toggle')); });
         expect(state.historyEnabled).toBe(true);
+        await act(async () => { history.open = false; history.dispatchEvent(new Event('toggle')); });
+        expect(state.historyEnabled).toBe(false);
         const x = [...container.querySelectorAll('article')].find(node => node.textContent?.includes('X Axis'))!;
         expect([...x.querySelectorAll('button')].find(node => node.textContent === 'Move +')?.disabled).toBe(false);
     });
