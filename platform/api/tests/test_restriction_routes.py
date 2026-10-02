@@ -388,6 +388,8 @@ def test_catalog_openapi_query_parameters_publish_exact_runtime_constraints() ->
         "palindromic",
         "limit",
         "cursor",
+        "response_view",
+        "enzyme_ids",
     }
     assert _non_null_parameter_schema(parameters["query"]) == {
         "type": "string",
