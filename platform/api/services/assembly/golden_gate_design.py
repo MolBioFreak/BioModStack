@@ -252,7 +252,7 @@ def design_golden_gate(
             right_tail = prep.right.clamp + enzyme.site + prep.right.spacer + reverse_complement(prep.right.fusion)
             sequence = left_tail + payload + reverse_complement(right_tail)
             coords = [None] * len(left_tail) + positions + [None] * len(right_tail)
-            prepared = DesignMaterial(id=f"{part.id}:prepared", sequence=sequence, topology="linear",
+            prepared = DesignMaterial(id=f"preparation:{part.id}", sequence=sequence, topology="linear",
                 stage="prepared", parent_id=source.id, transformation=prep.kind,
                 mappings=_mappings(coords, source.id, strand),
                 features=_map_features(source.features, source, coords, strand))
@@ -314,7 +314,7 @@ def design_golden_gate(
         if retained_index is not None and (retained_index not in valid_indices or retained_index in removed):
             raise AssemblyError("Retained digest fragment selection is invalid or also removed")
         digests.append(DigestOutcome(part_id=part.id, input_material_id=prepared.id,
-            fragment_material_ids=[f"{part.id}:digest:{f.fragment_index}" for f in simulation.fragments],
+            fragment_material_ids=[f"digest:{part.id}:{f.fragment_index}" for f in simulation.fragments],
             fragments=list(simulation.fragments), occurrences=list(simulation.occurrences),
             cleavages=list(simulation.cleavages), retained_fragment_index=retained_index,
             removed_fragment_indices=removed,
@@ -323,7 +323,7 @@ def design_golden_gate(
         retained_id = None
         if retained_index is not None:
             physical = simulation.fragments[retained_index]
-            retained_id = f"{part.id}:digest:{retained_index}"
+            retained_id = f"digest:{part.id}:{retained_index}"
             # Tail-bearing molecules already use the requested orientation.
             assembly_part = part if prep.kind == "donor" else part.model_copy(update={"orientation": "forward"})
             fragment = digest_fragment_to_assembly(physical, part=assembly_part)
