@@ -1,0 +1,1274 @@
+{
+  "schema_version": "bms.golden-gate-design-result.v1",
+  "enzyme": {
+    "enzyme_id": "SapI",
+    "catalog_id": "biopython-rebase-404-bms-v1",
+    "catalog_sha256": "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f"
+  },
+  "geometry": {
+    "site": "GCTCTTC",
+    "top_offset": 8,
+    "bottom_offset": 11,
+    "spacer_length": 1,
+    "overhang_length": 3,
+    "polarity": "five_prime"
+  },
+  "primer_settings": {
+    "algorithm": "nn_santalucia_hicks_2004",
+    "salt_correction": "owczarzy_2008",
+    "primer_concentration_nM": 250.0,
+    "template_concentration_nM": 0.0,
+    "na_mM": 50.0,
+    "k_mM": 0.0,
+    "tris_mM": 0.0,
+    "mg_mM": 1.5,
+    "dntps_mM": 0.6,
+    "dmso_percent": 0.0,
+    "formamide_percent": 0.0,
+    "self_complementary": false
+  },
+  "materials": [
+    {
+      "sequence": "TTGCTCTTCAATGACGTACCGTATGACCTGATCGTAGCTACGATCGTACCTAGGTCAGTACGATCGTACAGTCGAGTGAAGAGCAA",
+      "topology": "circular",
+      "features": [],
+      "id": "source:donor",
+      "stage": "source",
+      "parent_id": null,
+      "transformation": "source",
+      "mappings": [],
+      "left_end": null,
+      "right_end": null
+    },
+    {
+      "sequence": "TGACCGATGCTAGCATCGATGGTACCTAGCTGACTACGATGCGTATCGAGCTAGTTCGAC",
+      "topology": "linear",
+      "features": [
+        {
+          "id": "cds",
+          "type": "CDS",
+          "name": "insert CDS",
+          "segments": [
+            {
+              "start": 0,
+              "end": 60,
+              "wraps_origin": false
+            }
+          ],
+          "strand": 1,
+          "qualifiers": {
+            "transl_table": [
+              "11"
+            ]
+          },
+          "codon_start": 2,
+          "status": "intact",
+          "frame_preserved": null
+        }
+      ],
+      "id": "source:insert",
+      "stage": "source",
+      "parent_id": null,
+      "transformation": "source",
+      "mappings": [],
+      "left_end": null,
+      "right_end": null
+    },
+    {
+      "sequence": "TTGCTCTTCAGAGTGACCGATGCTAGCATCGATGGTACCTAGCTGACTACGATGCGTATCGAGCTAGTTCGACATGTGAAGAGCTT",
+      "topology": "linear",
+      "features": [
+        {
+          "id": "cds",
+          "type": "CDS",
+          "name": "insert CDS",
+          "segments": [
+            {
+              "start": 13,
+              "end": 73,
+              "wraps_origin": false
+            }
+          ],
+          "strand": 1,
+          "qualifiers": {
+            "transl_table": [
+              "11"
+            ]
+          },
+          "codon_start": 2,
+          "status": "intact",
+          "frame_preserved": true
+        },
+        {
+          "id": "insert:forward:binding",
+          "type": "primer_bind",
+          "name": "insert forward",
+          "segments": [
+            {
+              "start": 13,
+              "end": 33,
+              "wraps_origin": false
+            }
+          ],
+          "strand": 1,
+          "qualifiers": {},
+          "codon_start": null,
+          "status": "intact",
+          "frame_preserved": null
+        },
+        {
+          "id": "insert:reverse:binding",
+          "type": "primer_bind",
+          "name": "insert reverse",
+          "segments": [
+            {
+              "start": 52,
+              "end": 73,
+              "wraps_origin": false
+            }
+          ],
+          "strand": -1,
+          "qualifiers": {},
+          "codon_start": null,
+          "status": "intact",
+          "frame_preserved": null
+        }
+      ],
+      "id": "preparation:insert",
+      "stage": "prepared",
+      "parent_id": "source:insert",
+      "transformation": "pcr",
+      "mappings": [
+        {
+          "output_start": 13,
+          "output_end": 73,
+          "parent_id": "source:insert",
+          "parent_start": 0,
+          "parent_end": 60,
+          "strand": 1
+        }
+      ],
+      "left_end": null,
+      "right_end": null
+    }
+  ],
+  "source_screens": [
+    {
+      "source_material_id": "source:donor",
+      "occurrences": [
+        {
+          "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+          "occurrence_ordinal": 0,
+          "enzyme_id": "SapI",
+          "canonical_name": "SapI",
+          "orientation": "forward",
+          "certainty": "definite",
+          "recognition_pattern": "GCTCTTC",
+          "site_start": 2,
+          "site_end_unwrapped": 9,
+          "site_segments": [
+            [
+              2,
+              9
+            ]
+          ],
+          "wraps_origin": false,
+          "matched_reference_sequence": "GCTCTTC",
+          "double_strand_events": [
+            {
+              "enzyme_id": "SapI",
+              "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+              "event_ordinal": 0,
+              "orientation": "forward",
+              "status": "complete",
+              "top_boundary": 10,
+              "bottom_boundary": 13,
+              "top_boundary_unwrapped": 10,
+              "bottom_boundary_unwrapped": 13,
+              "top_winding": 0,
+              "bottom_winding": 0,
+              "overhang_kind": "five_prime",
+              "overhang_length_nt": 3,
+              "overhang_sequence_5to3": "ATG",
+              "overhang_source_strand": "top",
+              "protruding_strand": "top",
+              "contributor_group_id": "sha256:b4711df1faf6abb8cf7735a3590425cfbc7e9a1ea927324efb17e392482744b2",
+              "activity_assessment": "not_evaluated",
+              "methylation_context": "unknown"
+            }
+          ],
+          "nicks": [],
+          "limitations": [],
+          "activity_assessment": "not_evaluated",
+          "methylation_context": "unknown"
+        },
+        {
+          "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+          "occurrence_ordinal": 1,
+          "enzyme_id": "SapI",
+          "canonical_name": "SapI",
+          "orientation": "reverse",
+          "certainty": "definite",
+          "recognition_pattern": "GAAGAGC",
+          "site_start": 77,
+          "site_end_unwrapped": 84,
+          "site_segments": [
+            [
+              77,
+              84
+            ]
+          ],
+          "wraps_origin": false,
+          "matched_reference_sequence": "GAAGAGC",
+          "double_strand_events": [
+            {
+              "enzyme_id": "SapI",
+              "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+              "event_ordinal": 0,
+              "orientation": "reverse",
+              "status": "complete",
+              "top_boundary": 73,
+              "bottom_boundary": 76,
+              "top_boundary_unwrapped": 73,
+              "bottom_boundary_unwrapped": 76,
+              "top_winding": 0,
+              "bottom_winding": 0,
+              "overhang_kind": "five_prime",
+              "overhang_length_nt": 3,
+              "overhang_sequence_5to3": "GAG",
+              "overhang_source_strand": "top",
+              "protruding_strand": "top",
+              "contributor_group_id": "sha256:b62ec6c623d9d64608f7513d1bbae2104e472017b34f9ab41ddf1a11077f261f",
+              "activity_assessment": "not_evaluated",
+              "methylation_context": "unknown"
+            }
+          ],
+          "nicks": [],
+          "limitations": [],
+          "activity_assessment": "not_evaluated",
+          "methylation_context": "unknown"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "source_material_id": "source:insert",
+      "occurrences": [],
+      "warnings": []
+    }
+  ],
+  "preparations": [
+    {
+      "part_id": "backbone",
+      "source_material_id": "source:donor",
+      "prepared_material_id": "source:donor",
+      "retained_material_id": "digest:backbone:0",
+      "primer_ids": [],
+      "pcr_verification": "not_applicable",
+      "pcr_diagnostics": [],
+      "pair_qc": null
+    },
+    {
+      "part_id": "insert",
+      "source_material_id": "source:insert",
+      "prepared_material_id": "preparation:insert",
+      "retained_material_id": "digest:insert:1",
+      "primer_ids": [
+        "insert:forward",
+        "insert:reverse"
+      ],
+      "pcr_verification": "verified",
+      "pcr_diagnostics": [],
+      "pair_qc": {
+        "heterodimer_complement": 5,
+        "three_prime_heterodimer": 1,
+        "warnings": []
+      }
+    }
+  ],
+  "primers": [
+    {
+      "id": "insert:forward",
+      "part_id": "insert",
+      "direction": "forward",
+      "full_sequence": "TTGCTCTTCAGAGTGACCGATGCTAGCATCGAT",
+      "clamp": "TT",
+      "recognition_site": "GCTCTTC",
+      "recognition_orientation": "forward",
+      "spacer": "A",
+      "fusion": "GAG",
+      "annealing_sequence": "TGACCGATGCTAGCATCGAT",
+      "tm": {
+        "id": null,
+        "name": null,
+        "sequence": "TGACCGATGCTAGCATCGAT",
+        "sequence_type": "dna",
+        "length": 20,
+        "gc_percent": 50.0,
+        "tm": 62.63,
+        "algorithm": "nn_santalucia_hicks_2004",
+        "algorithm_label": "Nearest-neighbor: SantaLucia & Hicks 2004",
+        "salt_correction": "owczarzy_2008",
+        "salt_correction_label": "Owczarzy 2008",
+        "polymer_pairing": "dna_dna",
+        "warnings": []
+      },
+      "qc": {
+        "sequence": "TTGCTCTTCAGAGTGACCGATGCTAGCATCGAT",
+        "sequence_type": "dna",
+        "length": 33,
+        "gc_percent": 48.48,
+        "max_self_complement": 14,
+        "three_prime_self_complement": 6,
+        "max_hairpin_stem": 5,
+        "hairpin_loop_size": 4,
+        "binding_site_count": 1,
+        "off_target_site_count": 0,
+        "binding_positions": [
+          {
+            "start": 0,
+            "end": 20,
+            "strand": 1,
+            "anneal_length": 20,
+            "overhang_length": 13,
+            "reverse_primer_binding": false
+          }
+        ],
+        "warnings": [
+          "Strong self-complementarity detected (14 contiguous bases)",
+          "3' self-complementarity is elevated (6 contiguous bases)",
+          "Hairpin stem detected (5 bp stem, loop 4)"
+        ]
+      },
+      "qc_template_orientation": "forward",
+      "footprint_mappings": [
+        {
+          "output_start": 0,
+          "output_end": 20,
+          "parent_id": "source:insert",
+          "parent_start": 0,
+          "parent_end": 20,
+          "strand": 1
+        }
+      ]
+    },
+    {
+      "id": "insert:reverse",
+      "part_id": "insert",
+      "direction": "reverse",
+      "full_sequence": "AAGCTCTTCACATGTCGAACTAGCTCGATACGCA",
+      "clamp": "AA",
+      "recognition_site": "GCTCTTC",
+      "recognition_orientation": "forward",
+      "spacer": "A",
+      "fusion": "CAT",
+      "annealing_sequence": "GTCGAACTAGCTCGATACGCA",
+      "tm": {
+        "id": null,
+        "name": null,
+        "sequence": "GTCGAACTAGCTCGATACGCA",
+        "sequence_type": "dna",
+        "length": 21,
+        "gc_percent": 52.4,
+        "tm": 63.25,
+        "algorithm": "nn_santalucia_hicks_2004",
+        "algorithm_label": "Nearest-neighbor: SantaLucia & Hicks 2004",
+        "salt_correction": "owczarzy_2008",
+        "salt_correction_label": "Owczarzy 2008",
+        "polymer_pairing": "dna_dna",
+        "warnings": []
+      },
+      "qc": {
+        "sequence": "AAGCTCTTCACATGTCGAACTAGCTCGATACGCA",
+        "sequence_type": "dna",
+        "length": 34,
+        "gc_percent": 47.06,
+        "max_self_complement": 6,
+        "three_prime_self_complement": 0,
+        "max_hairpin_stem": 4,
+        "hairpin_loop_size": 6,
+        "binding_site_count": 1,
+        "off_target_site_count": 0,
+        "binding_positions": [
+          {
+            "start": 39,
+            "end": 60,
+            "strand": -1,
+            "anneal_length": 21,
+            "overhang_length": 13,
+            "reverse_primer_binding": true
+          }
+        ],
+        "warnings": [
+          "Moderate self-complementarity detected (6 contiguous bases)"
+        ]
+      },
+      "qc_template_orientation": "forward",
+      "footprint_mappings": [
+        {
+          "output_start": 0,
+          "output_end": 21,
+          "parent_id": "source:insert",
+          "parent_start": 39,
+          "parent_end": 60,
+          "strand": -1
+        }
+      ]
+    }
+  ],
+  "digests": [
+    {
+      "part_id": "backbone",
+      "input_material_id": "source:donor",
+      "fragment_material_ids": [
+        "digest:backbone:0",
+        "digest:backbone:1"
+      ],
+      "fragments": [
+        {
+          "fragment_index": 0,
+          "topology": "linear",
+          "top_strand_sequence": "ATGACGTACCGTATGACCTGATCGTAGCTACGATCGTACCTAGGTCAGTACGATCGTACAGTC",
+          "reference_span_bp": 63,
+          "source_segments": [
+            [
+              10,
+              73
+            ]
+          ],
+          "top_start_boundary": 10,
+          "top_end_boundary": 73,
+          "bottom_start_boundary": 13,
+          "bottom_end_boundary": 76,
+          "top_start_boundary_normalized": 10,
+          "top_end_boundary_normalized": 73,
+          "bottom_start_boundary_normalized": 13,
+          "bottom_end_boundary_normalized": 76,
+          "top_start_winding": 0,
+          "top_end_winding": 0,
+          "bottom_start_winding": 0,
+          "bottom_end_winding": 0,
+          "wraps_origin": true,
+          "left_end": {
+            "kind": "five_prime_overhang",
+            "enzyme_created": true,
+            "side": "left",
+            "protruding_strand": "top",
+            "overhang_sequence_5to3": "ATG",
+            "length_nt": 3,
+            "top_boundary": 10,
+            "bottom_boundary": 13,
+            "top_boundary_unwrapped": 10,
+            "bottom_boundary_unwrapped": 13,
+            "top_winding": 0,
+            "bottom_winding": 0,
+            "contributing_enzyme_ids": [
+              "SapI"
+            ],
+            "contributors": [
+              {
+                "enzyme_id": "SapI",
+                "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+                "event_ordinal": 0,
+                "orientation": "forward"
+              }
+            ],
+            "contributor_group_id": "sha256:b4711df1faf6abb8cf7735a3590425cfbc7e9a1ea927324efb17e392482744b2"
+          },
+          "right_end": {
+            "kind": "five_prime_overhang",
+            "enzyme_created": true,
+            "side": "right",
+            "protruding_strand": "bottom",
+            "overhang_sequence_5to3": "CTC",
+            "length_nt": 3,
+            "top_boundary": 73,
+            "bottom_boundary": 76,
+            "top_boundary_unwrapped": 73,
+            "bottom_boundary_unwrapped": 76,
+            "top_winding": 0,
+            "bottom_winding": 0,
+            "contributing_enzyme_ids": [
+              "SapI"
+            ],
+            "contributors": [
+              {
+                "enzyme_id": "SapI",
+                "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+                "event_ordinal": 0,
+                "orientation": "reverse"
+              }
+            ],
+            "contributor_group_id": "sha256:b62ec6c623d9d64608f7513d1bbae2104e472017b34f9ab41ddf1a11077f261f"
+          },
+          "lineage_cleavage_group_ids": [
+            "sha256:b4711df1faf6abb8cf7735a3590425cfbc7e9a1ea927324efb17e392482744b2",
+            "sha256:b62ec6c623d9d64608f7513d1bbae2104e472017b34f9ab41ddf1a11077f261f"
+          ],
+          "contributing_enzyme_ids": [
+            "SapI"
+          ]
+        },
+        {
+          "fragment_index": 1,
+          "topology": "linear",
+          "top_strand_sequence": "GAGTGAAGAGCAATTGCTCTTCA",
+          "reference_span_bp": 23,
+          "source_segments": [
+            [
+              73,
+              86
+            ],
+            [
+              0,
+              10
+            ]
+          ],
+          "top_start_boundary": 73,
+          "top_end_boundary": 96,
+          "bottom_start_boundary": 76,
+          "bottom_end_boundary": 99,
+          "top_start_boundary_normalized": 73,
+          "top_end_boundary_normalized": 10,
+          "bottom_start_boundary_normalized": 76,
+          "bottom_end_boundary_normalized": 13,
+          "top_start_winding": 0,
+          "top_end_winding": 1,
+          "bottom_start_winding": 0,
+          "bottom_end_winding": 1,
+          "wraps_origin": true,
+          "left_end": {
+            "kind": "five_prime_overhang",
+            "enzyme_created": true,
+            "side": "left",
+            "protruding_strand": "top",
+            "overhang_sequence_5to3": "GAG",
+            "length_nt": 3,
+            "top_boundary": 73,
+            "bottom_boundary": 76,
+            "top_boundary_unwrapped": 73,
+            "bottom_boundary_unwrapped": 76,
+            "top_winding": 0,
+            "bottom_winding": 0,
+            "contributing_enzyme_ids": [
+              "SapI"
+            ],
+            "contributors": [
+              {
+                "enzyme_id": "SapI",
+                "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+                "event_ordinal": 0,
+                "orientation": "reverse"
+              }
+            ],
+            "contributor_group_id": "sha256:b62ec6c623d9d64608f7513d1bbae2104e472017b34f9ab41ddf1a11077f261f"
+          },
+          "right_end": {
+            "kind": "five_prime_overhang",
+            "enzyme_created": true,
+            "side": "right",
+            "protruding_strand": "bottom",
+            "overhang_sequence_5to3": "CAT",
+            "length_nt": 3,
+            "top_boundary": 10,
+            "bottom_boundary": 13,
+            "top_boundary_unwrapped": 10,
+            "bottom_boundary_unwrapped": 13,
+            "top_winding": 0,
+            "bottom_winding": 0,
+            "contributing_enzyme_ids": [
+              "SapI"
+            ],
+            "contributors": [
+              {
+                "enzyme_id": "SapI",
+                "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+                "event_ordinal": 0,
+                "orientation": "forward"
+              }
+            ],
+            "contributor_group_id": "sha256:b4711df1faf6abb8cf7735a3590425cfbc7e9a1ea927324efb17e392482744b2"
+          },
+          "lineage_cleavage_group_ids": [
+            "sha256:b62ec6c623d9d64608f7513d1bbae2104e472017b34f9ab41ddf1a11077f261f",
+            "sha256:b4711df1faf6abb8cf7735a3590425cfbc7e9a1ea927324efb17e392482744b2"
+          ],
+          "contributing_enzyme_ids": [
+            "SapI"
+          ]
+        }
+      ],
+      "occurrences": [
+        {
+          "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+          "occurrence_ordinal": 0,
+          "enzyme_id": "SapI",
+          "canonical_name": "SapI",
+          "orientation": "forward",
+          "certainty": "definite",
+          "recognition_pattern": "GCTCTTC",
+          "site_start": 2,
+          "site_end_unwrapped": 9,
+          "site_segments": [
+            [
+              2,
+              9
+            ]
+          ],
+          "wraps_origin": false,
+          "matched_reference_sequence": "GCTCTTC",
+          "double_strand_events": [
+            {
+              "enzyme_id": "SapI",
+              "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+              "event_ordinal": 0,
+              "orientation": "forward",
+              "status": "complete",
+              "top_boundary": 10,
+              "bottom_boundary": 13,
+              "top_boundary_unwrapped": 10,
+              "bottom_boundary_unwrapped": 13,
+              "top_winding": 0,
+              "bottom_winding": 0,
+              "overhang_kind": "five_prime",
+              "overhang_length_nt": 3,
+              "overhang_sequence_5to3": "ATG",
+              "overhang_source_strand": "top",
+              "protruding_strand": "top",
+              "contributor_group_id": "sha256:b4711df1faf6abb8cf7735a3590425cfbc7e9a1ea927324efb17e392482744b2",
+              "activity_assessment": "not_evaluated",
+              "methylation_context": "unknown"
+            }
+          ],
+          "nicks": [],
+          "limitations": [],
+          "activity_assessment": "not_evaluated",
+          "methylation_context": "unknown"
+        },
+        {
+          "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+          "occurrence_ordinal": 1,
+          "enzyme_id": "SapI",
+          "canonical_name": "SapI",
+          "orientation": "reverse",
+          "certainty": "definite",
+          "recognition_pattern": "GAAGAGC",
+          "site_start": 77,
+          "site_end_unwrapped": 84,
+          "site_segments": [
+            [
+              77,
+              84
+            ]
+          ],
+          "wraps_origin": false,
+          "matched_reference_sequence": "GAAGAGC",
+          "double_strand_events": [
+            {
+              "enzyme_id": "SapI",
+              "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+              "event_ordinal": 0,
+              "orientation": "reverse",
+              "status": "complete",
+              "top_boundary": 73,
+              "bottom_boundary": 76,
+              "top_boundary_unwrapped": 73,
+              "bottom_boundary_unwrapped": 76,
+              "top_winding": 0,
+              "bottom_winding": 0,
+              "overhang_kind": "five_prime",
+              "overhang_length_nt": 3,
+              "overhang_sequence_5to3": "GAG",
+              "overhang_source_strand": "top",
+              "protruding_strand": "top",
+              "contributor_group_id": "sha256:b62ec6c623d9d64608f7513d1bbae2104e472017b34f9ab41ddf1a11077f261f",
+              "activity_assessment": "not_evaluated",
+              "methylation_context": "unknown"
+            }
+          ],
+          "nicks": [],
+          "limitations": [],
+          "activity_assessment": "not_evaluated",
+          "methylation_context": "unknown"
+        }
+      ],
+      "cleavages": [
+        {
+          "cleavage_index": 0,
+          "contributor_group_id": "sha256:b4711df1faf6abb8cf7735a3590425cfbc7e9a1ea927324efb17e392482744b2",
+          "top_boundary": 10,
+          "bottom_boundary": 13,
+          "top_boundary_unwrapped": 10,
+          "bottom_boundary_unwrapped": 13,
+          "top_winding": 0,
+          "bottom_winding": 0,
+          "overhang_kind": "five_prime",
+          "overhang_length_nt": 3,
+          "contributing_enzyme_ids": [
+            "SapI"
+          ],
+          "contributors": [
+            {
+              "enzyme_id": "SapI",
+              "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+              "event_ordinal": 0,
+              "orientation": "forward"
+            }
+          ]
+        },
+        {
+          "cleavage_index": 1,
+          "contributor_group_id": "sha256:b62ec6c623d9d64608f7513d1bbae2104e472017b34f9ab41ddf1a11077f261f",
+          "top_boundary": 73,
+          "bottom_boundary": 76,
+          "top_boundary_unwrapped": 73,
+          "bottom_boundary_unwrapped": 76,
+          "top_winding": 0,
+          "bottom_winding": 0,
+          "overhang_kind": "five_prime",
+          "overhang_length_nt": 3,
+          "contributing_enzyme_ids": [
+            "SapI"
+          ],
+          "contributors": [
+            {
+              "enzyme_id": "SapI",
+              "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+              "event_ordinal": 0,
+              "orientation": "reverse"
+            }
+          ]
+        }
+      ],
+      "retained_fragment_index": 0,
+      "removed_fragment_indices": [],
+      "background_fragment_indices": [
+        1
+      ],
+      "warnings": []
+    },
+    {
+      "part_id": "insert",
+      "input_material_id": "preparation:insert",
+      "fragment_material_ids": [
+        "digest:insert:0",
+        "digest:insert:1",
+        "digest:insert:2"
+      ],
+      "fragments": [
+        {
+          "fragment_index": 0,
+          "topology": "linear",
+          "top_strand_sequence": "TTGCTCTTCA",
+          "reference_span_bp": 10,
+          "source_segments": [
+            [
+              0,
+              10
+            ]
+          ],
+          "top_start_boundary": 0,
+          "top_end_boundary": 10,
+          "bottom_start_boundary": 0,
+          "bottom_end_boundary": 13,
+          "top_start_boundary_normalized": 0,
+          "top_end_boundary_normalized": 10,
+          "bottom_start_boundary_normalized": 0,
+          "bottom_end_boundary_normalized": 13,
+          "top_start_winding": 0,
+          "top_end_winding": 0,
+          "bottom_start_winding": 0,
+          "bottom_end_winding": 0,
+          "wraps_origin": false,
+          "left_end": {
+            "kind": "natural",
+            "enzyme_created": false,
+            "side": "left",
+            "protruding_strand": null,
+            "overhang_sequence_5to3": null,
+            "length_nt": 0,
+            "top_boundary": 0,
+            "bottom_boundary": 0,
+            "top_boundary_unwrapped": 0,
+            "bottom_boundary_unwrapped": 0,
+            "top_winding": 0,
+            "bottom_winding": 0,
+            "contributing_enzyme_ids": [],
+            "contributors": [],
+            "contributor_group_id": null
+          },
+          "right_end": {
+            "kind": "five_prime_overhang",
+            "enzyme_created": true,
+            "side": "right",
+            "protruding_strand": "bottom",
+            "overhang_sequence_5to3": "CTC",
+            "length_nt": 3,
+            "top_boundary": 10,
+            "bottom_boundary": 13,
+            "top_boundary_unwrapped": 10,
+            "bottom_boundary_unwrapped": 13,
+            "top_winding": 0,
+            "bottom_winding": 0,
+            "contributing_enzyme_ids": [
+              "SapI"
+            ],
+            "contributors": [
+              {
+                "enzyme_id": "SapI",
+                "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+                "event_ordinal": 0,
+                "orientation": "forward"
+              }
+            ],
+            "contributor_group_id": "sha256:4e190e719c20cc0d817d5fdde795f92e03e482f7a266d3cf251e09ff5a179b82"
+          },
+          "lineage_cleavage_group_ids": [
+            "sha256:4e190e719c20cc0d817d5fdde795f92e03e482f7a266d3cf251e09ff5a179b82"
+          ],
+          "contributing_enzyme_ids": [
+            "SapI"
+          ]
+        },
+        {
+          "fragment_index": 1,
+          "topology": "linear",
+          "top_strand_sequence": "GAGTGACCGATGCTAGCATCGATGGTACCTAGCTGACTACGATGCGTATCGAGCTAGTTCGAC",
+          "reference_span_bp": 63,
+          "source_segments": [
+            [
+              10,
+              73
+            ]
+          ],
+          "top_start_boundary": 10,
+          "top_end_boundary": 73,
+          "bottom_start_boundary": 13,
+          "bottom_end_boundary": 76,
+          "top_start_boundary_normalized": 10,
+          "top_end_boundary_normalized": 73,
+          "bottom_start_boundary_normalized": 13,
+          "bottom_end_boundary_normalized": 76,
+          "top_start_winding": 0,
+          "top_end_winding": 0,
+          "bottom_start_winding": 0,
+          "bottom_end_winding": 0,
+          "wraps_origin": false,
+          "left_end": {
+            "kind": "five_prime_overhang",
+            "enzyme_created": true,
+            "side": "left",
+            "protruding_strand": "top",
+            "overhang_sequence_5to3": "GAG",
+            "length_nt": 3,
+            "top_boundary": 10,
+            "bottom_boundary": 13,
+            "top_boundary_unwrapped": 10,
+            "bottom_boundary_unwrapped": 13,
+            "top_winding": 0,
+            "bottom_winding": 0,
+            "contributing_enzyme_ids": [
+              "SapI"
+            ],
+            "contributors": [
+              {
+                "enzyme_id": "SapI",
+                "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+                "event_ordinal": 0,
+                "orientation": "forward"
+              }
+            ],
+            "contributor_group_id": "sha256:4e190e719c20cc0d817d5fdde795f92e03e482f7a266d3cf251e09ff5a179b82"
+          },
+          "right_end": {
+            "kind": "five_prime_overhang",
+            "enzyme_created": true,
+            "side": "right",
+            "protruding_strand": "bottom",
+            "overhang_sequence_5to3": "CAT",
+            "length_nt": 3,
+            "top_boundary": 73,
+            "bottom_boundary": 76,
+            "top_boundary_unwrapped": 73,
+            "bottom_boundary_unwrapped": 76,
+            "top_winding": 0,
+            "bottom_winding": 0,
+            "contributing_enzyme_ids": [
+              "SapI"
+            ],
+            "contributors": [
+              {
+                "enzyme_id": "SapI",
+                "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+                "event_ordinal": 0,
+                "orientation": "reverse"
+              }
+            ],
+            "contributor_group_id": "sha256:619e83e6c8e2ba67698efb00e67dd2eadaae48f6196137695d43dbe8869cd50e"
+          },
+          "lineage_cleavage_group_ids": [
+            "sha256:4e190e719c20cc0d817d5fdde795f92e03e482f7a266d3cf251e09ff5a179b82",
+            "sha256:619e83e6c8e2ba67698efb00e67dd2eadaae48f6196137695d43dbe8869cd50e"
+          ],
+          "contributing_enzyme_ids": [
+            "SapI"
+          ]
+        },
+        {
+          "fragment_index": 2,
+          "topology": "linear",
+          "top_strand_sequence": "ATGTGAAGAGCTT",
+          "reference_span_bp": 13,
+          "source_segments": [
+            [
+              73,
+              86
+            ]
+          ],
+          "top_start_boundary": 73,
+          "top_end_boundary": 86,
+          "bottom_start_boundary": 76,
+          "bottom_end_boundary": 86,
+          "top_start_boundary_normalized": 73,
+          "top_end_boundary_normalized": 0,
+          "bottom_start_boundary_normalized": 76,
+          "bottom_end_boundary_normalized": 0,
+          "top_start_winding": 0,
+          "top_end_winding": 0,
+          "bottom_start_winding": 0,
+          "bottom_end_winding": 0,
+          "wraps_origin": false,
+          "left_end": {
+            "kind": "five_prime_overhang",
+            "enzyme_created": true,
+            "side": "left",
+            "protruding_strand": "top",
+            "overhang_sequence_5to3": "ATG",
+            "length_nt": 3,
+            "top_boundary": 73,
+            "bottom_boundary": 76,
+            "top_boundary_unwrapped": 73,
+            "bottom_boundary_unwrapped": 76,
+            "top_winding": 0,
+            "bottom_winding": 0,
+            "contributing_enzyme_ids": [
+              "SapI"
+            ],
+            "contributors": [
+              {
+                "enzyme_id": "SapI",
+                "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+                "event_ordinal": 0,
+                "orientation": "reverse"
+              }
+            ],
+            "contributor_group_id": "sha256:619e83e6c8e2ba67698efb00e67dd2eadaae48f6196137695d43dbe8869cd50e"
+          },
+          "right_end": {
+            "kind": "natural",
+            "enzyme_created": false,
+            "side": "right",
+            "protruding_strand": null,
+            "overhang_sequence_5to3": null,
+            "length_nt": 0,
+            "top_boundary": 86,
+            "bottom_boundary": 86,
+            "top_boundary_unwrapped": 86,
+            "bottom_boundary_unwrapped": 86,
+            "top_winding": 0,
+            "bottom_winding": 0,
+            "contributing_enzyme_ids": [],
+            "contributors": [],
+            "contributor_group_id": null
+          },
+          "lineage_cleavage_group_ids": [
+            "sha256:619e83e6c8e2ba67698efb00e67dd2eadaae48f6196137695d43dbe8869cd50e"
+          ],
+          "contributing_enzyme_ids": [
+            "SapI"
+          ]
+        }
+      ],
+      "occurrences": [
+        {
+          "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+          "occurrence_ordinal": 0,
+          "enzyme_id": "SapI",
+          "canonical_name": "SapI",
+          "orientation": "forward",
+          "certainty": "definite",
+          "recognition_pattern": "GCTCTTC",
+          "site_start": 2,
+          "site_end_unwrapped": 9,
+          "site_segments": [
+            [
+              2,
+              9
+            ]
+          ],
+          "wraps_origin": false,
+          "matched_reference_sequence": "GCTCTTC",
+          "double_strand_events": [
+            {
+              "enzyme_id": "SapI",
+              "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+              "event_ordinal": 0,
+              "orientation": "forward",
+              "status": "complete",
+              "top_boundary": 10,
+              "bottom_boundary": 13,
+              "top_boundary_unwrapped": 10,
+              "bottom_boundary_unwrapped": 13,
+              "top_winding": 0,
+              "bottom_winding": 0,
+              "overhang_kind": "five_prime",
+              "overhang_length_nt": 3,
+              "overhang_sequence_5to3": "GAG",
+              "overhang_source_strand": "top",
+              "protruding_strand": "top",
+              "contributor_group_id": "sha256:4e190e719c20cc0d817d5fdde795f92e03e482f7a266d3cf251e09ff5a179b82",
+              "activity_assessment": "not_evaluated",
+              "methylation_context": "unknown"
+            }
+          ],
+          "nicks": [],
+          "limitations": [],
+          "activity_assessment": "not_evaluated",
+          "methylation_context": "unknown"
+        },
+        {
+          "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+          "occurrence_ordinal": 1,
+          "enzyme_id": "SapI",
+          "canonical_name": "SapI",
+          "orientation": "reverse",
+          "certainty": "definite",
+          "recognition_pattern": "GAAGAGC",
+          "site_start": 77,
+          "site_end_unwrapped": 84,
+          "site_segments": [
+            [
+              77,
+              84
+            ]
+          ],
+          "wraps_origin": false,
+          "matched_reference_sequence": "GAAGAGC",
+          "double_strand_events": [
+            {
+              "enzyme_id": "SapI",
+              "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+              "event_ordinal": 0,
+              "orientation": "reverse",
+              "status": "complete",
+              "top_boundary": 73,
+              "bottom_boundary": 76,
+              "top_boundary_unwrapped": 73,
+              "bottom_boundary_unwrapped": 76,
+              "top_winding": 0,
+              "bottom_winding": 0,
+              "overhang_kind": "five_prime",
+              "overhang_length_nt": 3,
+              "overhang_sequence_5to3": "ATG",
+              "overhang_source_strand": "top",
+              "protruding_strand": "top",
+              "contributor_group_id": "sha256:619e83e6c8e2ba67698efb00e67dd2eadaae48f6196137695d43dbe8869cd50e",
+              "activity_assessment": "not_evaluated",
+              "methylation_context": "unknown"
+            }
+          ],
+          "nicks": [],
+          "limitations": [],
+          "activity_assessment": "not_evaluated",
+          "methylation_context": "unknown"
+        }
+      ],
+      "cleavages": [
+        {
+          "cleavage_index": 0,
+          "contributor_group_id": "sha256:4e190e719c20cc0d817d5fdde795f92e03e482f7a266d3cf251e09ff5a179b82",
+          "top_boundary": 10,
+          "bottom_boundary": 13,
+          "top_boundary_unwrapped": 10,
+          "bottom_boundary_unwrapped": 13,
+          "top_winding": 0,
+          "bottom_winding": 0,
+          "overhang_kind": "five_prime",
+          "overhang_length_nt": 3,
+          "contributing_enzyme_ids": [
+            "SapI"
+          ],
+          "contributors": [
+            {
+              "enzyme_id": "SapI",
+              "occurrence_id": "sha256:91287c0d4de0cdc1cb9d42d9890be4eb1c4d58d52e713863da0c59084fa4a55e",
+              "event_ordinal": 0,
+              "orientation": "forward"
+            }
+          ]
+        },
+        {
+          "cleavage_index": 1,
+          "contributor_group_id": "sha256:619e83e6c8e2ba67698efb00e67dd2eadaae48f6196137695d43dbe8869cd50e",
+          "top_boundary": 73,
+          "bottom_boundary": 76,
+          "top_boundary_unwrapped": 73,
+          "bottom_boundary_unwrapped": 76,
+          "top_winding": 0,
+          "bottom_winding": 0,
+          "overhang_kind": "five_prime",
+          "overhang_length_nt": 3,
+          "contributing_enzyme_ids": [
+            "SapI"
+          ],
+          "contributors": [
+            {
+              "enzyme_id": "SapI",
+              "occurrence_id": "sha256:599d2c99c9d3f173291ed618c27ee9f5a78241b067c63cdccc889d6407a1ef12",
+              "event_ordinal": 0,
+              "orientation": "reverse"
+            }
+          ]
+        }
+      ],
+      "retained_fragment_index": 1,
+      "removed_fragment_indices": [],
+      "background_fragment_indices": [
+        0,
+        2
+      ],
+      "warnings": []
+    }
+  ],
+  "solutions": [
+    {
+      "id": "fixed",
+      "sequence": "ATGACGTACCGTATGACCTGATCGTAGCTACGATCGTACCTAGGTCAGTACGATCGTACAGTCGAGTGACCGATGCTAGCATCGATGGTACCTAGCTGACTACGATGCGTATCGAGCTAGTTCGAC",
+      "topology": "circular",
+      "display_origin": 0,
+      "part_material_ids": [
+        "digest:backbone:0",
+        "digest:insert:1"
+      ],
+      "mappings": [
+        {
+          "output_start": 0,
+          "output_end": 63,
+          "parent_id": "source:donor",
+          "parent_start": 10,
+          "parent_end": 73,
+          "strand": 1
+        },
+        {
+          "output_start": 63,
+          "output_end": 126,
+          "parent_id": "preparation:insert",
+          "parent_start": 10,
+          "parent_end": 73,
+          "strand": 1
+        }
+      ],
+      "features": [
+        {
+          "id": "insert:cds",
+          "type": "CDS",
+          "name": "insert CDS",
+          "segments": [
+            {
+              "start": 66,
+              "end": 126,
+              "wraps_origin": false
+            }
+          ],
+          "strand": 1,
+          "qualifiers": {
+            "transl_table": [
+              "11"
+            ]
+          },
+          "codon_start": 2,
+          "status": "intact",
+          "frame_preserved": true
+        },
+        {
+          "id": "insert:insert:forward:binding",
+          "type": "primer_bind",
+          "name": "insert forward",
+          "segments": [
+            {
+              "start": 66,
+              "end": 86,
+              "wraps_origin": false
+            }
+          ],
+          "strand": 1,
+          "qualifiers": {},
+          "codon_start": null,
+          "status": "intact",
+          "frame_preserved": null
+        },
+        {
+          "id": "insert:insert:reverse:binding",
+          "type": "primer_bind",
+          "name": "insert reverse",
+          "segments": [
+            {
+              "start": 105,
+              "end": 126,
+              "wraps_origin": false
+            }
+          ],
+          "strand": -1,
+          "qualifiers": {},
+          "codon_start": null,
+          "status": "intact",
+          "frame_preserved": null
+        }
+      ],
+      "junctions": [
+        {
+          "left_fragment_id": "backbone",
+          "right_fragment_id": "insert",
+          "left_fragment_name": "vector",
+          "right_fragment_name": "insert",
+          "mode": "golden_gate",
+          "left_end_type": "sticky_5",
+          "right_end_type": "sticky_5",
+          "overhang_sequence": "CTC",
+          "overlap_sequence": null,
+          "overlap_length": 0,
+          "junction_sequence": "GATCGTACAGTCGAGTGACCGATG",
+          "validation": "validated",
+          "notes": []
+        },
+        {
+          "left_fragment_id": "insert",
+          "right_fragment_id": "backbone",
+          "left_fragment_name": "insert",
+          "right_fragment_name": "vector",
+          "mode": "golden_gate",
+          "left_end_type": "sticky_5",
+          "right_end_type": "sticky_5",
+          "overhang_sequence": "CAT",
+          "overlap_sequence": null,
+          "overlap_length": 0,
+          "junction_sequence": "AGCTAGTTCGACATGACGTACCGT",
+          "validation": "validated",
+          "notes": []
+        }
+      ],
+      "occurrences": [],
+      "exact_target_match": true,
+      "warnings": []
+    }
+  ],
+  "selected_solution_id": "fixed",
+  "search_scope": "fixed_order_and_explicit_preparations_only",
+  "diagnostics": [],
+  "limitations": [
+    "Only intended fixed-order full-digest product modeled; alternative orders, subsets and partial digestion not enumerated",
+    "Reactive background is listed, not silently purified; no kinetic, nick-closure, activity or yield model",
+    "No empirical scoring or sequence editing in this preparation service",
+    "PCR footprints are explicitly selected; full-template ambiguity/QC is evidence, not a uniqueness claim"
+  ]
+}
