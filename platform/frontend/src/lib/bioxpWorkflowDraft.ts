@@ -48,13 +48,25 @@ export function nativeIntent(intent: DraftObject): BioXpManualStep {
     return result as unknown as BioXpManualStep;
 }
 
+// Database/API JSON may reorder object keys. Equality must still preserve
+// value types, omitted keys, array order and null without normalizing the draft.
+export function sameDraftValue(left: unknown, right: unknown): boolean {
+    if (left === right) return true;
+    if (Array.isArray(left) || Array.isArray(right)) return Array.isArray(left) && Array.isArray(right)
+        && left.length === right.length && left.every((value, index) => sameDraftValue(value, right[index]));
+    if (!isDraftObject(left) || !isDraftObject(right)) return false;
+    const keys = Object.keys(left);
+    return keys.length === Object.keys(right).length
+        && keys.every(key => Object.hasOwn(right, key) && sameDraftValue(left[key], right[key]));
+}
+
 // Apply only fields actually changed in the form. An untouched omitted/null/
 // unknown field in a hydrated intent must not be replaced by a visual blank.
 export function mergeDraftEdits(original: DraftObject, before: DraftObject, after: DraftObject): DraftObject {
     if ('action' in after && after.action !== before.action) return after;
     const result = { ...original };
     for (const [key, value] of Object.entries(after)) {
-        if (JSON.stringify(value) === JSON.stringify(before[key])) continue;
+        if (sameDraftValue(value, before[key])) continue;
         result[key] = isDraftObject(value) && isDraftObject(before[key]) && isDraftObject(original[key])
             ? mergeDraftEdits(original[key], before[key], value) : value;
     }

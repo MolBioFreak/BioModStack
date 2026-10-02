@@ -169,6 +169,18 @@ it('keeps unselected source tip controls blank instead of selecting pipette zero
     expect(requests.filter(r => r.url.includes('/bioxp/'))).toHaveLength(0);
 });
 
+it('verifies readback when the API returns canonically ordered object keys', async () => {
+    const normal = api.defaults.adapter as (config: any) => Promise<any>;
+    const reordered = (value: any): any => Array.isArray(value) ? value.map(reordered) : value && typeof value === 'object'
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, reordered(value[key])])) : value;
+    api.defaults.adapter = async config => { const result = await normal(config); return { ...result, data: reordered(result.data) }; };
+    await mount(); await change('Workflow name', 'Canonical JSON'); await change('Location number', '4'); await append('lower');
+    await click('Save workflow'); expect(host.textContent).toContain('Saved draft.');
+    await fresh(); await click('Open workflow'); await click('Canonical JSON');
+    expect(rows()).toHaveLength(1); await click('Save workflow'); expect(host.textContent).toContain('Saved draft.');
+    expect(writes()[1].body.params.steps).toEqual(writes()[0].body.params.steps);
+});
+
 it('network Save/Open errors retain unsaved name, rows, selection and native form', async () => {
     await mount(); await change('Workflow name', 'Keep me'); await append('lower'); await control('Edit step 1'); await change('Location number', '11');
     const ids = rows(); fail = 'post'; await click('Save workflow'); expect(host.textContent).toContain('Storage network unavailable');

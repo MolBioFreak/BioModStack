@@ -7,7 +7,7 @@ import { bioXpErrorText, useBioXpWorkflowJob, useSubmitBioXpProtocol,
 import { BioXpSourcePipettingEditor, sourceDefaults, sourceLabels } from './BioXpSourcePipettingEditor';
 import { type BioXpSourceStep, describeManualStep, manualPipettingDocument, type BioXpManualStep } from '../lib/bioxpManualPipetting';
 import { createUserTemplate, updateUserTemplate, fetchUserTemplates, fetchUserTemplate, type UserTemplate } from '../lib/api';
-import { isDraftObject, mergeDraftEdits, nativeIntent, readWorkflowDraft, type DraftObject, type NativeDraft, type WorkflowDraftRow } from '../lib/bioxpWorkflowDraft';
+import { isDraftObject, mergeDraftEdits, sameDraftValue, nativeIntent, readWorkflowDraft, type DraftObject, type NativeDraft, type WorkflowDraftRow } from '../lib/bioxpWorkflowDraft';
 
 type Operation = BioXpManualStep['operation'];
 const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix', 'load_tip', 'measure_fluid_height', 'source_fluid_offset', 'diagnostic_detect_fluid', 'source_calwith_fluid'];
@@ -169,7 +169,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         const readback = await fetchUserTemplate(result.data.id);
         if (readback.data.id !== result.data.id || readback.data.mode !== 'bioxp_workflow' || readback.data.name !== workflowName
             || readback.data.model_id !== null || readback.data.base_template_id !== null
-            || JSON.stringify(readback.data.params) !== JSON.stringify(body.params)) throw new Error('Workflow save readback differs; unsaved editor retained.');
+            || !sameDraftValue(readback.data.params, body.params)) throw new Error('Workflow save readback differs; unsaved editor retained.');
         if (!mounted.current) return;
         setSavedNotice(currentEditor.current === savedSnapshot
             ? 'Saved draft.'
