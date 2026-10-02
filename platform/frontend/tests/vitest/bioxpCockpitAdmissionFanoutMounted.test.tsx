@@ -15,6 +15,7 @@ import actualY5History from '../fixtures/bioxp_xy_y5_history.json';
 import actualY5Detail from '../fixtures/bioxp_xy_y5_detail.json';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { api } from '../../src/lib/api';
+import { catalogWireFixture } from '../fixtures/bioxpCatalogWire';
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 const nativeMetadataMode = vi.hoisted(() => ({ enabled: false, receipts: false, mutations: false, protocols: false }));
 import retainedHistory from '../fixtures/bioxp_retained_history.json';
@@ -950,10 +951,10 @@ describe('primary cockpit query ownership', () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         vi.mocked(api.get).mockReset();
         vi.mocked(api.post).mockReset();
-        vi.mocked(api.get).mockImplementation(async (url) => {
+        vi.mocked(api.get).mockImplementation(async (url, config) => {
             if (url === '/api/bioxp/calibration-settings') throw new Error('offline calibration fixture unavailable');
             expect(url).toBe('/api/bioxp/operator-controls/catalog');
-            return { data: { ...state.catalog.data, canonical: structuredClone(bmsMetadata.catalog) } };
+            return { data: catalogWireFixture({ ...state.catalog.data, canonical: structuredClone(bmsMetadata.catalog) }, config?.params?.view) };
         });
         const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
         const advance = async (ms: number) => {
@@ -979,7 +980,8 @@ describe('primary cockpit query ownership', () => {
                 expect(button().disabled).toBe(false);
                 expect(state.xyReceipt.data).toEqual(bmsMetadata.compact);
             }
-            expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/operator-controls/catalog')).toHaveLength(3);
+            expect(vi.mocked(api.get).mock.calls.filter(([url, config]) => url === '/api/bioxp/operator-controls/catalog' && config?.params?.view === 'assessment')).toHaveLength(3);
+            expect(vi.mocked(api.get).mock.calls.filter(([, config]) => config?.params?.view === 'metadata')).toHaveLength(1);
             // Pipette settings are lazy until the Pipettes tab is first opened.
             expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/calibration-settings')).toHaveLength(0);
             await advance(6000);

@@ -6,6 +6,7 @@ import { writeFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
+import { catalogWireFixture } from '../fixtures/bioxpCatalogWire';
 import metadata from '../fixtures/bioxp_xy_bms_metadata.json';
 import destinations from '../fixtures/bioxp_deck_admission_catalog.json';
 import manual from '../fixtures/bioxpManualCatalogProducer.json';
@@ -87,9 +88,9 @@ beforeEach(() => {
         requests.push({ method, url, body, params: config.params });
         if (method === 'get') {
             if (url === '/api/bioxp/status') return response(config, { connection: { generation, active, configured: true, reachable: true, runtime_ready: true, hardware_fresh: true }, mutation_access: { enabled: true } });
-            if (url.endsWith('/catalog')) return response(config, { schema_version: 'bioxp.operator_control_catalog.v1',
+            if (url.endsWith('/catalog')) return response(config, catalogWireFixture({ schema_version: 'bioxp.operator_control_catalog.v1',
                 dashboard: catalog.dashboard.telemetry ?? metadata.catalog.dashboard.telemetry,
-                actions: manual.referenced, canonical: structuredClone(catalog) });
+                actions: manual.referenced, canonical: structuredClone(catalog) }, config.params?.view));
             if (url.endsWith('/history')) return response(config, { items: [], next_cursor: null, limit: 8 });
             if (url === '/api/bioxp/calibration-settings') throw new Error('Controlled display-only geometry outage');
             if (url.includes('/receipts/')) return response(config, receipts.get(decodeURIComponent(url.split('/').at(-1)!)));

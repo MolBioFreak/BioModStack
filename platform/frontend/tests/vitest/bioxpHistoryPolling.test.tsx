@@ -7,6 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
+import { catalogWireFixture } from '../fixtures/bioxpCatalogWire';
 import { useBioXpOperatorReceiptV2, useInterruptBioXpOperatorActionV1, useBioXpOperatorActionHistory, useBioXpOperatorControlCatalog, useInvokeBioXpOperatorAction, useAssessBioXpOperatorAction, useInvokeBioXpOperatorActionV2 } from '../../src/lib/bioxpClient';
 
 import { BioXpQuickDashboard } from '../../src/components/BioXpQuickDashboard';
@@ -120,7 +121,7 @@ it('bounds and cancels catalog reads without changing the authority freshness bu
     vi.mocked(api.get).mockImplementation(() => new Promise(() => {}));
     await act(async () => root.render(<QueryClientProvider client={client}><CatalogHarness /></QueryClientProvider>));
     expect(api.get).toHaveBeenCalledWith('/api/bioxp/operator-controls/catalog', {
-        timeout: 12_000, signal: expect.any(AbortSignal), params: undefined,
+        timeout: 12_000, signal: expect.any(AbortSignal), params: { view: 'assessment' },
     });
     const options = vi.mocked(api.get).mock.calls[0][1]!;
     const query = client.getQueryCache().getAll()[0];
@@ -141,7 +142,7 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
     }
     vi.mocked(api.get).mockImplementation((_url, options) => {
         calls++;
-        if (calls > 1) return Promise.resolve({ data: { actions: [], dashboard: {} } }) as never;
+        if (calls > 1) return Promise.resolve({ data: catalogWireFixture({ actions: [], dashboard: {} }, options?.params?.view) }) as never;
         // Model the transport timeout rejection, not a never-settling GET.
         // Missing timeout leaves this pending and causes the regression to fail.
         return new Promise((_resolve, reject) => {
@@ -162,7 +163,7 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
         // The consolidated catalog retains its existing five-second cadence.
         await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
         await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-        expect(api.get).toHaveBeenCalledTimes(2);
+        expect(api.get).toHaveBeenCalledTimes(3); // two assessments plus one cold definition read
         expect(container.querySelector('output')?.textContent).toBe('success');
         expect(container.textContent).toContain('Catalog recovered');
         expect(container.textContent).not.toContain('Dashboard unavailable');

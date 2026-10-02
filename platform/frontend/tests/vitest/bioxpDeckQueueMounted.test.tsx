@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
+import { catalogWireFixture } from '../fixtures/bioxpCatalogWire';
 import metadata from '../fixtures/bioxp_xy_bms_metadata.json';
 import canonicalProducer from '../fixtures/bioxp_deck_canonical_queue.json';
 import deckCatalog from '../fixtures/bioxp_deck_admission_catalog.json';
@@ -42,9 +43,9 @@ beforeEach(() => {
     catalog.dashboard.command_queue = { schema_version: 'bioxp.oem_command_queue.v1', generated_at: Date.now() / 1000, items: [] };
     catalog.actions = catalog.actions.filter((a: any) => a.action_id !== 'oem.deck.move_to_location').concat(structuredClone(deckCatalog.action));
     admissions = []; lookup = null; completed = new Set();
-    vi.mocked(api.get).mockImplementation(async (url) => {
+    vi.mocked(api.get).mockImplementation(async (url, config) => {
         if (url === "/api/bioxp/calibration-settings") return { data: { active_motion_positions: [] } };
-        if (url.endsWith('/catalog')) { catalog.dashboard.generated_at = Date.now() / 1000; return { data: { actions: [], dashboard: {}, canonical: structuredClone(catalog) } }; }
+        if (url.endsWith('/catalog')) { catalog.dashboard.generated_at = Date.now() / 1000; return { data: catalogWireFixture({ actions: [], dashboard: {}, canonical: structuredClone(catalog) }, config?.params?.view) }; }
         if (url.includes('/requests/')) { if (lookup == null) throw { response: { status: 404 } }; return { data: lookup }; }
         if (url.includes('/receipts/')) { const id = Number(url.split('queue-')[1]); return { data: completed.has(id) ? { ...receipt(id), terminal: true, status: 'completed', completion_class: 'completed' } : receipt(id) }; }
         throw new Error(`Unexpected GET ${url}`);

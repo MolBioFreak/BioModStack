@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
 import { api } from '../../src/lib/api';
+import { catalogWireFixture } from '../fixtures/bioxpCatalogWire';
 import parkReceipt from '../fixtures/bioxp_park_completed_receipt.json';
 
 // Actual cockpit, child components, query owners and Axios serialization. Only
@@ -33,7 +34,7 @@ beforeEach(() => {
         const url = config.url ?? '';
         let data: unknown = { dependency_blockers: [], operations: [], channels: [] };
         if (url === '/api/bioxp/status') data = { connection: { active: true, configured: true, generation: 1, reachable: true }, mutation_access: { enabled: true } };
-        else if (url.includes('/operator-controls/catalog')) data = { ...catalog, canonical: { ...catalog.canonical, dashboard: { ...catalog.canonical.dashboard, latest_receipts: recoveryVisible ? [recoveryReceipt] : [] } } };
+        else if (url.includes('/operator-controls/catalog')) data = catalogWireFixture({ ...catalog, canonical: { ...catalog.canonical, dashboard: { ...catalog.canonical.dashboard, latest_receipts: recoveryVisible ? [recoveryReceipt] : [] } } }, config.params?.view);
         else if (url.includes('/receipts/')) data = recoveryReceipt;
         else if (url.includes('/protocols/jobs/')) data = liveJob;
         else if (url.endsWith('/protocols/jobs')) data = { rows };
