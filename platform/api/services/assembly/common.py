@@ -85,11 +85,14 @@ def orient_fragment(fragment: AssemblyFragment) -> OrientedFragment:
     )
 
 
-def reverse_complement_match(left: str, right: str) -> bool:
-    return reverse_complement(left) == right
-
-
 def overhangs_compatible(left: FragmentEnd | None, right: FragmentEnd | None) -> tuple[bool, list[str]]:
+    """Check two facing ends written in top-strand junction notation.
+
+    Both ends of a junction name the same top-strand bases (for example ``AATG``
+    on both Golden Gate partners), so compatible sticky ends are identical.
+    ``orient_fragment`` reverse-complements overhangs when it flips a fragment,
+    which keeps this notation valid for reverse-oriented parts.
+    """
     if left is None or right is None:
         return False, ["Both fragment ends must be specified for explicit-end ligation"]
 
@@ -108,9 +111,34 @@ def overhangs_compatible(left: FragmentEnd | None, right: FragmentEnd | None) ->
 
     if left.overhang == right.overhang:
         return True, []
-    if reverse_complement_match(left.overhang, right.overhang):
-        return True, ["Matched by reverse-complement overhang normalization"]
-    return False, [f"Sticky ends are not compatible: {left.overhang} vs {right.overhang}"]
+    return False, [
+        f"Sticky ends are not compatible: {left.overhang} vs {right.overhang} "
+        "(both ends of a junction must name the same top-strand bases)"
+    ]
+
+
+def junction_sequence_error(left: OrientedFragment, right: OrientedFragment) -> str | None:
+    """Return why the fragment sequences do not carry the junction overhang exactly once.
+
+    Top-strand sequences follow the digest convention: a 5' overhang belongs to
+    the top strand of the right-hand fragment, and a 3' overhang to the top
+    strand of the left-hand fragment. Concatenating the two top strands then
+    reproduces the junction without duplicating or dropping overhang bases.
+    """
+    end = left.right_end
+    if end is None or end.type == "blunt":
+        return None
+    if end.type == "sticky_5" and not right.sequence.startswith(end.overhang):
+        return (
+            f"'{right.name}' must begin with its 5' overhang {end.overhang}; "
+            "the top strand of a 5'-overhang end includes the protruding bases"
+        )
+    if end.type == "sticky_3" and not left.sequence.endswith(end.overhang):
+        return (
+            f"'{left.name}' must end with its 3' overhang {end.overhang}; "
+            "the top strand of a 3'-overhang end includes the protruding bases"
+        )
+    return None
 
 
 def fragment_provenance_payload(fragments: Iterable[OrientedFragment]) -> list[dict[str, object]]:

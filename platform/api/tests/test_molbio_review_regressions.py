@@ -68,11 +68,13 @@ from routers.nucleotide_sequences import (  # noqa: E402
     update_sequence,
 )
 from services.assembly.golden_gate import resolve_golden_gate_enzyme, simulate_golden_gate  # noqa: E402
+from services.assembly.ligation import simulate_ligation  # noqa: E402
+from services.assembly.types import AssemblyError  # noqa: E402
 from services.assembly.types import AssemblyFragment, FragmentEnd  # noqa: E402
 from services.restriction_catalog import catalog_authority  # noqa: E402
 from services.molbio_ops import pcr_product  # noqa: E402
 from services.molbio_persistence import record_sequence_revision  # noqa: E402
-from services.primer_qc import evaluate_primer_pair_qc  # noqa: E402
+from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc  # noqa: E402
 from services.sqlite_backup import backup_sqlite_database  # noqa: E402
 
 
@@ -940,13 +942,104 @@ async def test_approval_requires_authenticated_reviewer_and_persists_server_acto
         await engine.dispose()
 
 
-def test_three_prime_heterodimer_anchors_both_physical_three_prime_ends() -> None:
+def test_three_prime_heterodimer_counts_full_length_complement() -> None:
     metrics = evaluate_primer_pair_qc(
         "AAAAAAAAAAAACCCC",
         "GGGGTTTTTTTTTTTT",
     )
     assert metrics.heterodimer_complement == 16
-    assert metrics.three_prime_heterodimer == 0
+    # Perfect reverse complements pair along their full length, 3' ends included.
+    assert metrics.three_prime_heterodimer == 16
+
+
+def test_three_prime_dimer_uses_antiparallel_pairing() -> None:
+    # Self-complementary 3' ends form the extendable primer dimer.
+    assert evaluate_primer_qc("ATGCATGCAAGAATTC").three_prime_self_complement == 6
+    assert evaluate_primer_pair_qc("TTTTTTTTGGATCC", "AAAAAAAAGGATCC").three_prime_heterodimer == 6
+    # Parallel identity between complements is not base pairing.
+    assert evaluate_primer_pair_qc("CGCGCGAAAAGG", "GCGCGCTTTTCC").three_prime_heterodimer == 2
+
+
+def test_primer_qc_reports_partial_three_prime_off_target_sites() -> None:
+    template = (
+        "GATTACAGGCTTACCGATAGCTTGCAAGTCCGTAGGCATCGTTAGCCAAGTTCGA"
+        "TCCGGAATGCTAACGTTGACCTAGGTCAAGCTTCAGGATCCATGACCGGTAAC"
+    )
+    primer = template[10:32]
+    off_target = primer[-15:]
+    shuffled = template[:60] + off_target + template[60 + len(off_target):]
+    metrics = evaluate_primer_qc(primer, template_sequence=shuffled)
+    assert metrics.off_target_site_count == 1
+    sites = {(site["start"], site["anneal_length"]) for site in metrics.binding_positions}
+    assert sites == {(10, 22), (60, 15)}
+
+    reverse = str(Seq(template[40:62]).reverse_complement())
+    reverse_off_target = str(Seq(reverse[-14:]).reverse_complement())
+    reverse_template = template[:80] + reverse_off_target + template[80 + len(reverse_off_target):]
+    reverse_metrics = evaluate_primer_qc(reverse, template_sequence=reverse_template)
+    assert {(site["start"], site["strand"]) for site in reverse_metrics.binding_positions} == {
+        (40, -1),
+        (80, -1),
+    }
+
+
+def test_ligation_requires_identical_top_strand_overhangs_present_in_sequence() -> None:
+    left = AssemblyFragment(
+        id="left", name="left", sequence="GGAGCCCCCC",
+        left_end=FragmentEnd(type="sticky_5", overhang="GGAG"),
+        right_end=FragmentEnd(type="sticky_5", overhang="AATG"),
+    )
+    right = AssemblyFragment(
+        id="right", name="right", sequence="AATGGGGGGG",
+        left_end=FragmentEnd(type="sticky_5", overhang="AATG"),
+        right_end=FragmentEnd(type="sticky_5", overhang="GCTT"),
+    )
+    assert simulate_ligation([left, right], circular=False).sequence == "GGAGCCCCCCAATGGGGGGG"
+
+    reverse_complement_end = AssemblyFragment(
+        id="rc", name="rc", sequence="CATTGGGGGG",
+        left_end=FragmentEnd(type="sticky_5", overhang="CATT"),
+        right_end=FragmentEnd(type="sticky_5", overhang="GCTT"),
+    )
+    with pytest.raises(AssemblyError, match="not compatible"):
+        simulate_ligation([left, reverse_complement_end], circular=False)
+
+    missing_overhang = AssemblyFragment(
+        id="missing", name="missing", sequence="GGGGGGGGGG",
+        left_end=FragmentEnd(type="sticky_5", overhang="AATG"),
+        right_end=FragmentEnd(type="sticky_5", overhang="GCTT"),
+    )
+    with pytest.raises(AssemblyError, match="must begin with its 5' overhang"):
+        simulate_ligation([left, missing_overhang], circular=False)
+
+
+def test_golden_gate_warns_on_reused_and_palindromic_overhangs() -> None:
+    catalog = catalog_authority.require()
+    enzyme = resolve_golden_gate_enzyme(
+        enzyme_id="BsaI",
+        catalog_id=catalog.catalog_id,
+        expected_catalog_sha256=catalog.content_sha256,
+    )
+    parts = [
+        AssemblyFragment(
+            id="a", name="a", sequence="GATCCCCCCC",
+            left_end=FragmentEnd(type="sticky_5", overhang="GATC"),
+            right_end=FragmentEnd(type="sticky_5", overhang="AATG"),
+        ),
+        AssemblyFragment(
+            id="b", name="b", sequence="AATGGGGGGG",
+            left_end=FragmentEnd(type="sticky_5", overhang="AATG"),
+            right_end=FragmentEnd(type="sticky_5", overhang="AATG"),
+        ),
+        AssemblyFragment(
+            id="c", name="c", sequence="AATGTTTTTT",
+            left_end=FragmentEnd(type="sticky_5", overhang="AATG"),
+            right_end=FragmentEnd(type="sticky_5", overhang="GATC"),
+        ),
+    ]
+    warnings = simulate_golden_gate(parts, enzyme=enzyme, circular=True).warnings
+    assert any("AATG is used at 2 junctions" in warning for warning in warnings)
+    assert any("GATC is palindromic" in warning for warning in warnings)
 
 
 def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends() -> None:
@@ -1002,8 +1095,8 @@ def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends()
         AssemblyFragment(
             id="junction-two",
             name="junction-two",
-            sequence="CCTTTT",
-            left_end=FragmentEnd(type="sticky_5", overhang="GGGG"),
+            sequence="CCCCTTTT",
+            left_end=FragmentEnd(type="sticky_5", overhang="CCCC"),
             right_end=FragmentEnd(type="sticky_5", overhang="TTTT"),
         ),
     ]

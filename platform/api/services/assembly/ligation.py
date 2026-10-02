@@ -1,7 +1,7 @@
 """Validated ligation and sticky-end assembly helpers."""
 from __future__ import annotations
 
-from .common import orient_fragment, overhangs_compatible
+from .common import junction_sequence_error, orient_fragment, overhangs_compatible
 from .types import AssemblyError, AssemblyFragment, AssemblyJunction, AssemblyProduct
 
 
@@ -33,6 +33,9 @@ def simulate_ligation(
             raise AssemblyError(
                 f"Ligation failed between '{left.name}' and '{right.name}': " + "; ".join(notes)
             )
+        sequence_error = junction_sequence_error(left, right)
+        if sequence_error:
+            raise AssemblyError(f"Ligation failed between '{left.name}' and '{right.name}': {sequence_error}")
         if notes:
             warnings.extend(notes)
         sequence += right.sequence
@@ -59,6 +62,9 @@ def simulate_ligation(
             raise AssemblyError(
                 f"Circularization failed between '{last.name}' and '{first.name}': " + "; ".join(notes)
             )
+        sequence_error = junction_sequence_error(last, first)
+        if sequence_error:
+            raise AssemblyError(f"Circularization failed between '{last.name}' and '{first.name}': {sequence_error}")
         if notes:
             warnings.extend(notes)
         junctions.append(

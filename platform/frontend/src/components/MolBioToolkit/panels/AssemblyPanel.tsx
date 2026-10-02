@@ -149,7 +149,8 @@ function EndEditor({
                     value={current.overhang || ''}
                     disabled={current.type === 'blunt'}
                     onChange={(event) => onChange({ ...current, overhang: event.target.value.toUpperCase().replace(/[^A-Z]/g, '') })}
-                    placeholder={current.type === 'blunt' ? 'No overhang' : 'Overhang'}
+                    placeholder={current.type === 'blunt' ? 'No overhang' : 'Top-strand bases, e.g. AATG'}
+                    title="Top-strand 5'→3' junction bases. Both partners at a junction use the same sequence; a 5' overhang must begin the right-hand fragment, a 3' overhang must end the left-hand fragment."
                     className="rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs disabled:opacity-50"
                 />
             </div>

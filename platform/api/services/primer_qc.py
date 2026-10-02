@@ -4,7 +4,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from services.molbio_ops import clean_sequence, _resolve_primer_binding_sites_canonical, reverse_complement
+from services.molbio_ops import (
+    PrimerBinding,
+    _bases_overlap,
+    _find_pattern_positions_canonical,
+    clean_sequence,
+    reverse_complement,
+)
 
 
 @dataclass(slots=True)
@@ -37,51 +43,43 @@ def _calculate_gc_percent(sequence: str) -> float:
     return round((gc / len(sequence)) * 100.0, 2)
 
 
-def _longest_contiguous_complement(left: str, right: str, *, anchor_left_3: bool = False, anchor_right_3: bool = False) -> int:
-    left_sequence = clean_sequence(left)
-    cleaned_right = clean_sequence(right)
-    if anchor_left_3 and anchor_right_3:
-        for length in range(min(len(left_sequence), len(cleaned_right)), 0, -1):
-            right_three_prime_complement = reverse_complement(
-                cleaned_right[-length:]
-            )[::-1]
-            if left_sequence[-length:] == right_three_prime_complement:
-                return length
-        return 0
+def _dna_alphabet(sequence: str) -> str:
+    return clean_sequence(sequence).replace("U", "T")
 
-    right_sequence = reverse_complement(cleaned_right)
+
+def _longest_contiguous_complement(left: str, right: str) -> int:
+    """Longest perfectly paired run anywhere in an antiparallel left/right duplex."""
+    left_sequence = _dna_alphabet(left)
+    right_sequence = reverse_complement(_dna_alphabet(right))
     best = 0
-
     for offset in range(-len(right_sequence) + 1, len(left_sequence)):
         run = 0
-        run_start_left = -1
-        run_end_left = -1
-        run_start_right = -1
-        run_end_right = -1
-        for left_index in range(len(left_sequence)):
-            right_index = left_index - offset
-            if 0 <= right_index < len(right_sequence) and left_sequence[left_index] == right_sequence[right_index]:
-                if run == 0:
-                    run_start_left = left_index
-                    run_start_right = right_index
+        for left_index in range(max(0, offset), min(len(left_sequence), offset + len(right_sequence))):
+            if left_sequence[left_index] == right_sequence[left_index - offset]:
                 run += 1
-                run_end_left = left_index
-                run_end_right = right_index
-                left_anchored = not anchor_left_3 or run_end_left == len(left_sequence) - 1
-                right_anchored = not anchor_right_3 or run_end_right == len(right_sequence) - 1
-                if left_anchored and right_anchored:
-                    best = max(best, run)
+                best = max(best, run)
             else:
                 run = 0
-
     return best
 
 
-def _find_hairpin(sequence: str, *, min_stem: int = 3, min_loop: int = 3, max_loop: int = 12) -> tuple[int, int | None]:
-    cleaned = clean_sequence(sequence)
-    best_stem = 0
-    best_loop: int | None = None
+def _three_prime_dimer_length(left: str, right: str) -> int:
+    """Longest antiparallel duplex in which both 3' terminal bases are paired.
 
+    left[-n:] pairs with right[-n:] exactly when left[-n:] is the reverse
+    complement of right[-n:]. Each primer's unpaired 5' remainder then templates
+    extension of the other primer, which is the extendable primer-dimer geometry.
+    """
+    left_sequence = _dna_alphabet(left)
+    right_sequence = _dna_alphabet(right)
+    for length in range(min(len(left_sequence), len(right_sequence)), 0, -1):
+        if left_sequence[-length:] == reverse_complement(right_sequence[-length:]):
+            return length
+    return 0
+
+
+def _find_hairpin(sequence: str, *, min_stem: int = 3, min_loop: int = 3, max_loop: int = 12) -> tuple[int, int | None]:
+    cleaned = _dna_alphabet(sequence)
     for stem_length in range(len(cleaned) // 2, min_stem - 1, -1):
         for left_start in range(0, len(cleaned) - stem_length):
             left_end = left_start + stem_length
@@ -90,14 +88,60 @@ def _find_hairpin(sequence: str, *, min_stem: int = 3, min_loop: int = 3, max_lo
                 right_end = right_start + stem_length
                 if right_end > len(cleaned):
                     continue
-                left_stem = cleaned[left_start:left_end]
-                right_stem = cleaned[right_start:right_end]
-                if left_stem == reverse_complement(right_stem):
+                if cleaned[left_start:left_end] == reverse_complement(cleaned[right_start:right_end]):
                     return stem_length, loop_size
-        if best_stem:
-            break
+    return 0, None
 
-    return best_stem, best_loop
+
+def _primer_binding_sites(
+    template: str,
+    primer: str,
+    *,
+    reverse: bool,
+    circular: bool,
+    sequence_type: str,
+    min_anneal_length: int,
+) -> list[PrimerBinding]:
+    """Every distinct 3'-anchored site with at least ``min_anneal_length`` paired 3' bases.
+
+    One template scan finds each exact 3' core; each hit is then extended toward
+    the primer's 5' end. Partial 3' matches are reported alongside the intended
+    full-length site because they are the mispriming risk this check exists for.
+    """
+    length = len(template)
+    core_length = max(1, min(len(primer), min_anneal_length))
+    core = primer[-core_length:]
+    query = reverse_complement(core, sequence_type) if reverse else core
+    sites: list[PrimerBinding] = []
+    for position in _find_pattern_positions_canonical(template, query, circular=circular):
+        anneal_length = core_length
+        while anneal_length < len(primer):
+            primer_base = primer[-(anneal_length + 1)]
+            if reverse:
+                template_index = position + anneal_length
+                expected = reverse_complement(primer_base, sequence_type)
+            else:
+                template_index = position - (anneal_length - core_length) - 1
+                expected = primer_base
+            if circular:
+                if anneal_length + 1 > length:
+                    break
+                template_index %= length
+            elif not 0 <= template_index < length:
+                break
+            if not _bases_overlap(template[template_index], expected):
+                break
+            anneal_length += 1
+        start = position if reverse else position - (anneal_length - core_length)
+        if circular:
+            start %= length
+        sites.append(PrimerBinding(
+            start=start,
+            end=start + anneal_length,
+            anneal_length=anneal_length,
+            overhang_length=len(primer) - anneal_length,
+        ))
+    return sites
 
 
 def evaluate_primer_qc(
@@ -124,7 +168,7 @@ def _evaluate_primer_qc_canonical(
         raise ValueError("Primer sequence contains no valid nucleotide characters")
 
     max_self = _longest_contiguous_complement(cleaned, cleaned)
-    three_prime_self = _longest_contiguous_complement(cleaned, cleaned, anchor_left_3=True, anchor_right_3=True)
+    three_prime_self = _three_prime_dimer_length(cleaned, cleaned)
     hairpin_stem, hairpin_loop = _find_hairpin(cleaned)
     warnings: list[str] = []
 
@@ -143,7 +187,7 @@ def _evaluate_primer_qc_canonical(
     binding_site_count: int | None = None
     off_target_site_count: int | None = None
     if template_sequence:
-        forward_sites = _resolve_primer_binding_sites_canonical(
+        forward_sites = _primer_binding_sites(
             template_sequence,
             cleaned,
             reverse=False,
@@ -151,7 +195,7 @@ def _evaluate_primer_qc_canonical(
             sequence_type=sequence_type,
             min_anneal_length=min_binding_anneal_length,
         )
-        reverse_sites = _resolve_primer_binding_sites_canonical(
+        reverse_sites = _primer_binding_sites(
             template_sequence,
             cleaned,
             reverse=True,
@@ -206,12 +250,7 @@ def evaluate_primer_pair_qc(
     reverse_primer: str,
 ) -> PrimerPairQcMetrics:
     heterodimer = _longest_contiguous_complement(forward_primer, reverse_primer)
-    three_prime_heterodimer = _longest_contiguous_complement(
-        forward_primer,
-        reverse_primer,
-        anchor_left_3=True,
-        anchor_right_3=True,
-    )
+    three_prime_heterodimer = _three_prime_dimer_length(forward_primer, reverse_primer)
     warnings: list[str] = []
     if heterodimer >= 8:
         warnings.append(f"Strong heterodimer complementarity detected ({heterodimer} contiguous bases)")

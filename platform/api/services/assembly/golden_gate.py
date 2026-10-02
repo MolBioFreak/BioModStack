@@ -1,8 +1,10 @@
 """Validated Golden Gate assembly resolved through the immutable restriction catalog."""
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 
+from services.molbio_ops import reverse_complement
 from services.restriction_analysis import AnalysisLimitError, InvalidDNAError, analyze_sequence
 from services.restriction_catalog import (
     CatalogUnavailable,
@@ -173,6 +175,20 @@ def simulate_golden_gate(
 
     product = simulate_ligation(fragments, circular=circular, mode="golden_gate")
     warnings = list(product.warnings)
+    overhang_counts = Counter(
+        junction.overhang_sequence for junction in product.junctions if junction.overhang_sequence
+    )
+    for overhang, count in sorted(overhang_counts.items()):
+        if count > 1:
+            warnings.append(
+                f"Overhang {overhang} is used at {count} junctions; parts can ligate in more than "
+                "one order, so this single product is not the only expected assembly"
+            )
+        if overhang == reverse_complement(overhang):
+            warnings.append(
+                f"Overhang {overhang} is palindromic; a part can ligate to a copy of itself or "
+                "insert in either orientation"
+            )
     if _site_count(product.sequence, circular=product.circular, enzyme=enzyme):
         warnings.append(
             f"Final product still contains at least one {enzyme.name} recognition site "
