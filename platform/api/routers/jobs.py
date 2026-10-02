@@ -9380,6 +9380,34 @@ async def get_bindcraft2_native_results(
         raise HTTPException(status_code=409, detail="Verified native results unavailable") from exc
 
 
+@router.get("/{job_id}/bindcraft2-results/trajectory")
+async def get_bindcraft2_native_trajectory(
+    job_id: str,
+    design: str = Query(..., min_length=1),
+    arm: Optional[str] = None,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(1000, ge=1, le=1000),
+    session: AsyncSession = Depends(get_session),
+):
+    """Read recorded native trajectory updates from the verified publication."""
+    from services.bindcraft2_result_readback import read_bindcraft2_trajectory
+    from services.bindcraft2_publication import PublicationError
+    from services.bindcraft2_native_results import NativeResultError
+
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.model_id != "bindcraft2":
+        raise HTTPException(status_code=400, detail="Job is not a BindCraft2 campaign")
+    try:
+        return await read_bindcraft2_trajectory(
+            job, session, design=design, arm=arm, offset=offset, limit=limit,
+        )
+    except (PublicationError, NativeResultError, OSError) as exc:
+        logger.warning("BC2 native trajectory unavailable for job %s: %s", job_id, exc)
+        raise HTTPException(status_code=409, detail="Verified native trajectory unavailable") from exc
+
+
 @router.get("/{job_id}/execution-settings", response_model=ExecutionSettings)
 async def job_execution_settings(job_id: str, session: AsyncSession = Depends(get_session)):
     from services.core_protein_execution_settings import verify_receipts

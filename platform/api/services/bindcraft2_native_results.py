@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
+import statistics
+from collections import Counter
 import json
 import math
 import re
@@ -389,6 +392,85 @@ def read_native_publication(root: Path) -> NativePublication:
     if any((root / arm).is_symlink() or not (root / arm).is_dir() for arm in arms):
         raise NativeResultError("missing or unsafe sweep arm directory")
     return NativePublication(tuple(_arm(root, root / arm, arm) for arm in arms if arm is not None))
+
+
+# These are recorded optimizer updates, not the native selected/re-predicted
+# acceptance score. Never promote a last/min/max reading into a filter verdict.
+TRACE_INTERPRETATION = (
+    "Recorded update confidence/loss is not native verdict confidence: native "
+    "selection uses best total loss and re-predicts; the last CSV row is not an acceptance score."
+)
+
+
+def _finite(value: str | None) -> float | None:
+    try:
+        number = float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    return number if number is not None and math.isfinite(number) else None
+
+
+def native_loss_trace(data: bytes) -> tuple[list[dict], list[str]]:
+    """Interpret named native loss columns only; missing evidence stays readable."""
+    try:
+        reader = csv.DictReader(io.StringIO(data.decode("utf-8-sig")))
+        names = reader.fieldnames or []
+        if not {"phase", "round"}.issubset(names) or len(set(names)) != len(names):
+            return [], ["Unsupported trajectory trace header"]
+        raw = list(reader)
+        if any(None in row or not row.get("phase") for row in raw):
+            return [], ["Unsupported trajectory trace rows"]
+        # Metadata can look numeric (especially hashes and version identifiers).
+        # The trace schema carries phase/round plus numeric loss observations.
+        excluded = {"phase", "round", "design", "trajectory", "length", "hash",
+                    "recipe_hash", "bms_attempt_sha256", "bindcraft_version", "Timing"}
+        columns = [name for name in names if name not in excluded
+                   and not any(token in name.lower() for token in ("hash", "version"))
+                   and all(row.get(name) in (None, "") or _is_number(row[name]) for row in raw)]
+        if not columns or not raw:
+            return [], ["No supported numeric trajectory observations"]
+        rows = [{"phase": row["phase"], "round": _finite(row.get("round")),
+                 **{name: _finite(row.get(name)) for name in columns}} for row in raw]
+        nonfinite = any(row.get(name) not in (None, "") and _finite(row.get(name)) is None
+                        for row in raw for name in ["round", *columns])
+        return rows, (["Nonfinite trajectory values represented as null"] if nonfinite else [])
+    except (UnicodeError, csv.Error, ValueError):
+        return [], ["Unsupported trajectory trace encoding or CSV"]
+
+
+def trajectory_analytics(row: NativeRow, trace: list[dict]) -> dict:
+    timing = dict(part.split("=", 1) for part in (row.values.get("Timing") or "").split(";") if "=" in part)
+    phases: dict[str, dict] = {}
+    for point in trace:
+        metrics = phases.setdefault(point["phase"], {})
+        for name, value in point.items():
+            if name in ("phase", "round"):
+                continue
+            if name not in metrics:
+                metrics[name] = {"first": value, "last": value, "min": value, "max": value, "samples": int(value is not None)}
+            else:
+                metric = metrics[name]
+                metric["last"] = value
+                if value is not None:
+                    metric["min"] = value if metric["min"] is None else min(metric["min"], value)
+                    metric["max"] = value if metric["max"] is None else max(metric["max"], value)
+                    metric["samples"] += 1
+    return {"duration_seconds": _finite(timing.get("design")),
+            "compiled": {"0": False, "1": True}.get(timing.get("compiled", "")),
+            "phase_metrics": phases, "trace_available": bool(trace)}
+
+
+def campaign_analytics(rows: tuple[NativeRow, ...], analytics: dict[str, dict], warnings: list[str]) -> dict:
+    durations = [analytics[row.design]["duration_seconds"] for row in rows
+                 if analytics[row.design]["duration_seconds"] is not None]
+    total = sum(durations) if durations else None
+    return {"trajectory_count": len(rows),
+            "termination_counts": dict(Counter(row.terminated or "unknown" for row in rows)),
+            "timing_seconds": {"samples": len(durations), "median": statistics.median(durations) if durations else None,
+                               "total": total if total is None or math.isfinite(total) else None},
+            "complete": all(analytics[row.design]["trace_available"] and
+                            analytics[row.design]["duration_seconds"] is not None for row in rows),
+            "warnings": list(dict.fromkeys([TRACE_INTERPRETATION, *warnings]))}
 
 
 def native_result_page(publication: NativePublication, *, arm: str | None = None,
