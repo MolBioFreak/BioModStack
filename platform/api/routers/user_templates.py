@@ -6,8 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional, List, Dict, Any
+from typing import Annotated, Optional, List, Dict, Any
 from datetime import datetime
+import json
 import uuid
 
 from antibody_pipeline_contract import is_antibody_pipeline_mode
@@ -55,6 +56,47 @@ class UserTemplateResponse(BaseModel):
     updated_at: Optional[datetime]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+def _validate_bioxp_workflow_draft(
+    mode: Optional[str],
+    model_id: Optional[str],
+    base_template_id: Optional[str],
+    params: Any,
+) -> None:
+    """Validate only the saved representation, never scientific completeness.
+
+    Keep the caller's JSON untouched: draft intents are not executable requests.
+    """
+    if mode != "bioxp_workflow":
+        return
+    if model_id is not None or base_template_id is not None:
+        raise HTTPException(422, "BioXP workflow drafts have no model or base template")
+    if (
+        not isinstance(params, dict)
+        or set(params) != {"schema", "steps", "editor_state"}
+        or params["schema"] != "bms.bioxp-workflow-draft.v1"
+        or not isinstance(params["steps"], list)
+        or not isinstance(params["editor_state"], dict)
+    ):
+        raise HTTPException(422, "Invalid BioXP workflow draft envelope")
+    seen = set()
+    for step in params["steps"]:
+        if (
+            not isinstance(step, dict)
+            or set(step) != {"step_id", "intent"}
+            or not isinstance(step["step_id"], str)
+            or not step["step_id"]
+            or not isinstance(step["intent"], dict)
+        ):
+            raise HTTPException(422, "Invalid BioXP workflow draft step")
+        if step["step_id"] in seen:
+            raise HTTPException(422, "BioXP workflow draft step_id values must be distinct")
+        seen.add(step["step_id"])
+    try:
+        json.dumps(params, allow_nan=False)
+    except (ValueError, TypeError):
+        raise HTTPException(422, "BioXP workflow drafts require finite JSON values") from None
 
 
 def _is_antibody_template(template: UserTemplate) -> bool:
@@ -149,7 +191,9 @@ async def list_user_templates(
     model_id: Optional[str] = Query(None, description="Filter by model ID"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    mode: Annotated[Optional[str], Query(description="Include this exact mode")] = None,
+    exclude_mode: Annotated[Optional[str], Query(description="Exclude this exact mode")] = None,
 ):
     """List all user-defined templates."""
     query = select(UserTemplate).order_by(desc(UserTemplate.created_at))
@@ -163,6 +207,12 @@ async def list_user_templates(
     
     if model_id:
         query = query.where(UserTemplate.model_id == model_id)
+    if mode is not None:
+        query = query.where(UserTemplate.mode == mode)
+    if exclude_mode is not None:
+        query = query.where(
+            UserTemplate.mode.is_(None) | (UserTemplate.mode != exclude_mode)
+        )
     
     query = query.limit(limit).offset(offset)
     result = await session.execute(query)
@@ -178,6 +228,7 @@ async def create_user_template(
     session: AsyncSession = Depends(get_session)
 ):
     """Create a new user-defined template."""
+    _validate_bioxp_workflow_draft(data.mode, data.model_id, data.base_template_id, data.params)
     # Check for duplicate name
     existing = await session.execute(
         select(UserTemplate).where(UserTemplate.name == data.name)
@@ -240,6 +291,13 @@ async def update_user_template(
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     
+    # Validate the effective saved row, including name-only edits. Explicit null
+    # params is malformed for this mode, not an instruction to erase the draft.
+    _validate_bioxp_workflow_draft(
+        template.mode, template.model_id, template.base_template_id,
+        data.params if "params" in data.model_fields_set else template.params,
+    )
+
     # Update fields if provided
     if data.name is not None:
         # Check for duplicate name

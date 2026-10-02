@@ -1663,7 +1663,7 @@ export function BioXpCockpit() {
                     invokePending={invokeOperatorAction.isPending}
                     invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
                 />
-                <BioXpWellPipettingPanel key={`well:${generation}:${active}`} generation={generation} connected={linkConnected}
+                <BioXpWellPipettingPanel generation={generation} connected={linkConnected}
                     destinations={selectionAction?.destination_options ?? []}
                     positionTableRevision={selectionAction?.position_table_revision} />
                 <details className="mt-4 rounded border border-slate-700 p-3">
