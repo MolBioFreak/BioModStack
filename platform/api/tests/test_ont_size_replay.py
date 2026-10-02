@@ -14,6 +14,9 @@ from test_ont_pooled_reference_assignment import pooled_context
 
 CASES = [
     pytest.param({}, {}, 7000, id="legacy-missing"),
+    pytest.param({}, {"execution_plan_approval": "unavailable"}, 7000, id="unavailable-plan"),
+    pytest.param({}, {"execution_plan_approval": {"plan": {"native_parameters_json": "unavailable"}}},
+                 7000, id="unavailable-native-observation"),
     pytest.param({}, {"execution_plan_approval": {"plan": {
         "native_parameters_json": {"expected_plasmid_size": 4321}}}}, 4321, id="retained-native"),
     pytest.param({"expected_plasmid_size": 7000}, {}, 7000, id="explicit-7000"),
@@ -116,3 +119,18 @@ def test_new_direct_compilation_keeps_auto(tmp_path):
                                                       str(tmp_path / "output"))
     assert invocation.native_parameters.get("expected_plasmid_size") is None
     assert "expected_plasmid_size" not in params
+
+
+@pytest.mark.parametrize("mode", ["ont_basecall_dna", "basecall_dna", "ont_basecall_rna"])
+def test_replay_does_not_add_size_to_unrelated_modes(mode):
+    from services.ont_ngs_contract import replay_expected_plasmid_size
+    assert replay_expected_plasmid_size({}, mode=mode) == {}
+
+
+def test_recorded_size_uses_real_selected_plan_serialization(tmp_path):
+    from services.ont_ngs_contract import replay_expected_plasmid_size
+    invocation = nextflow.compile_nextflow_invocation("nanopore", "fastq_qc",
+        {"ont_workflow_id": "ont_fastq_qc", "fastq_input": str(tmp_path / "reads.fastq"),
+         "expected_plasmid_size": 4321}, str(tmp_path / "output"))
+    provenance = {"execution_plan_approval": {"plan": invocation.execution_plan.to_dict()}}
+    assert replay_expected_plasmid_size({}, provenance, mode="fastq_qc")["expected_plasmid_size"] == 4321

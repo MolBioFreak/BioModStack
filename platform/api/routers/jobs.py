@@ -9518,7 +9518,7 @@ async def resubmit_job(
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
     if original_job.model_id == "nanopore":
         resubmit_params = ont_ngs_contract.replay_expected_plasmid_size(
-            resubmit_params, original_job.provenance,
+            resubmit_params, original_job.provenance, mode=original_job.mode,
         )
     resubmit_params.pop("remote_result_policy", None)
     from services.msa_policy import apply_msa_policy
@@ -11090,7 +11090,7 @@ async def resume_job(
     }
     if job.model_id == "nanopore":
         merged_params = ont_ngs_contract.replay_expected_plasmid_size(
-            merged_params, job.provenance,
+            merged_params, job.provenance, mode=job.mode,
         )
     from services.msa_policy import apply_msa_policy
     try:

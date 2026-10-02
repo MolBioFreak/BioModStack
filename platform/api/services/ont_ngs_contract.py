@@ -74,6 +74,7 @@ def effective_expected_plasmid_size(requested: Any, reference_length: int | None
 
 def replay_expected_plasmid_size(
     params: Mapping[str, Any], provenance: Mapping[str, Any] | None = None,
+    *, mode: str | None = None,
 ) -> dict[str, Any]:
     """Replay saved Jobs, not new requests, with their historical size semantics.
 
@@ -82,12 +83,17 @@ def replay_expected_plasmid_size(
     7000 bp default. Never mutate the saved request or inspect result files.
     """
     replay = dict(params)
+    workflow = replay.get("ont_workflow_id") or replay.get("ont_request_workflow_id") or replay.get("workflow_id") or mode
+    if workflow and resolve_ont_workflow_alias(str(workflow)) not in {
+        "ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation",
+    }:
+        return replay
     if "expected_plasmid_size" not in replay:
-        approval = (provenance or {}).get("execution_plan_approval") or {}
-        plan = approval.get("plan") or {}
-        native = plan.get("native_parameters_json") or {}
-        recorded = native.get("expected_plasmid_size")
-        replay["expected_plasmid_size"] = recorded if recorded is not None else 7000
+        # Optional historical observations are not a new replay prerequisite.
+        recorded: Any = provenance
+        for key in ("execution_plan_approval", "plan", "native_parameters_json", "expected_plasmid_size"):
+            recorded = recorded.get(key) if isinstance(recorded, Mapping) else None
+        replay["expected_plasmid_size"] = recorded if type(recorded) is int and recorded > 0 else 7000
     return replay
 
 

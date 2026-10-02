@@ -4108,7 +4108,7 @@ def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: b
     prepared = workflow_params(job, params)
     if job.model_id == 'nanopore':
         from services.ont_ngs_contract import replay_expected_plasmid_size
-        prepared = replay_expected_plasmid_size(prepared, job.provenance)
+        prepared = replay_expected_plasmid_size(prepared, job.provenance, mode=job.mode)
     msa_authority = (job.provenance or {}).get('esmf_msa_preparation')
     if job.model_id in {'esmfold2', 'esmfold2_experimental'} and msa_authority is not None:
         prepared['esmf_msa_preparation_json'] = json.dumps(msa_authority, allow_nan=False, sort_keys=True)
