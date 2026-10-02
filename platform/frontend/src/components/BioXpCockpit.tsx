@@ -313,6 +313,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const operationalVisible = documentVisible && controlTab !== 'workflows';
     const robotVisible = documentVisible && controlTab === 'robot';
     const liveDeckVisible = documentVisible && controlTab === 'live-deck';
+    const controlsVisible = operationalVisible && controlTab !== 'live-deck';
     const [pipettesOpened, setPipettesOpened] = useState(initialTab === 'pipettes');
     const [workflowsOpened, setWorkflowsOpened] = useState(initialTab === 'workflows');
     const [liveDeckOpened, setLiveDeckOpened] = useState(initialTab === 'live-deck');
@@ -443,7 +444,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         if (identity) setXYSubmission({ generation, commandId: identity.commandId, receipt: null });
     };
     const historyPagination = useBioXpHistoryPagination(linkConnected ? generation : 0, historyLimit);
-    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected && operationalVisible && historyOpen, historyLimit, historyPagination.cursor);
+    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected && controlsVisible && historyOpen, historyLimit, historyPagination.cursor);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
 
@@ -1348,7 +1349,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             <details onToggle={event => { setWorkflowVisible(event.currentTarget.open); if (event.currentTarget.open) setWorkflowOpen(true); }}>
                 <summary className="cursor-pointer text-lg font-semibold">Prepared workflows</summary>
                 {workflowOpen && <BioXpWorkflowControls key={generation} generation={generation} connected={active}
-                    controlsEnabled={robotControlReady} visible={operationalVisible && workflowVisible} />}
+                    controlsEnabled={robotControlReady} visible={controlsVisible && workflowVisible} />}
             </details>
 
             <BioXpQuickDashboard
@@ -1363,7 +1364,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={reportsOpen} onToggle={(event) => setReportsOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Operator reports</summary>
-                {reportsOpen && operationalVisible && <div className="mt-4"><BioXpOperatorReports generation={generation} connected={linkConnected} /></div>}
+                {reportsOpen && controlsVisible && <div className="mt-4"><BioXpOperatorReports generation={generation} connected={linkConnected} /></div>}
             </details>
 
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
@@ -1794,13 +1795,13 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             </div>
                 <details className="w-full max-w-xs self-start rounded-lg border border-slate-800 bg-slate-950/70 p-2 xl:sticky xl:top-4 xl:order-last" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
                     <summary className="cursor-pointer text-sm font-semibold">Camera</summary>
-                    {cameraOpen && <div className="mt-2"><BioXpCameraPanel visible={operationalVisible} connected={active} connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>}
+                    {cameraOpen && <div className="mt-2"><BioXpCameraPanel visible={controlsVisible} connected={active} connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>}
                 </details>
             </div>
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
-                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">Additional service, recovery and diagnostic controls.</p><div className="mt-4"><BioXpOperatorControlTabs visible={operationalVisible} generation={generation} connected={robotControlReady} catalogObservation={operatorCatalog} zTargetSteps={Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined} /></div></>}
+                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">Additional service, recovery and diagnostic controls.</p><div className="mt-4"><BioXpOperatorControlTabs visible={controlsVisible} generation={generation} connected={robotControlReady} catalogObservation={operatorCatalog} zTargetSteps={Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined} /></div></>}
             </details>
 
             <section className="rounded-xl border border-red-800/70 bg-red-950/30 p-4">
@@ -1856,7 +1857,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 ) : (
                     <div className="mt-3 space-y-2">
                         {recentCommands.map((record) => (
-                            <BioXpHistoryReceiptCard key={`${generation}:${record.command_id}`} receipt={record} generation={generation} connected={linkConnected && operationalVisible && historyOpen} />
+                            <BioXpHistoryReceiptCard key={`${generation}:${record.command_id}`} receipt={record} generation={generation} connected={linkConnected && controlsVisible && historyOpen} />
                         ))}
                     </div>
                 )}

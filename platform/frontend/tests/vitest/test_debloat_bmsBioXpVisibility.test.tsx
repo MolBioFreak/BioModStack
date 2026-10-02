@@ -41,6 +41,7 @@ beforeEach(() => {
         else if (url.endsWith('/camera/stream/state')) data = { active: cameraActive, connection_generation: 1, state: cameraActive ? 'live' : 'off', stream_id: 'other-client' };
         else if (url.endsWith('/camera/status')) data = { available: true, state: 'off', connection_generation: 1, frame_sequence: null, frame_age_seconds: null, freshness_budget_seconds: 5 };
         else if (url.includes('/user-templates')) data = [];
+        else if (url === '/api/bioxp/calibration-settings') data = { active_positions: [], saved_positions: [], active_motion_positions: [], saved_motion_positions: [] };
         requests.push({ url, method: config.method ?? '', detail: config.params?.detail, bytes: new TextEncoder().encode(JSON.stringify(data)).length });
         if (config.method !== 'get') throw new Error('No mutation authorized by this test');
         return { data, status: 200, statusText: 'OK', headers: {}, config };
@@ -92,15 +93,59 @@ it('uses idle camera discovery rather than 2s status polling and discovers anoth
     await advance(100); requests = []; await advance();
     expect(count('/camera/')).toBe(0);
 });
-it('refreshes unresolved recovery while Robot controls is visible, with zero hidden receipt bytes for a full minute', async () => {
-    recoveryVisible = true; await mount(); requests = []; await advance();
+it('refreshes unresolved recovery while Live deck is visible, with zero hidden receipt bytes for a full minute', async () => {
+    recoveryVisible = true; await mount(); await click('#control-tab-live-deck'); requests = []; await advance();
     expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === true).length).toBeGreaterThan(20);
     expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === false).length).toBeGreaterThan(20);
     await click('#control-tab-workflows'); requests = []; await advance();
     expect(requests.filter(r => r.url.includes('/receipts/'))).toEqual([]);
     await click('#control-tab-robot'); requests = []; await advance(3_000);
+    expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === true)).toEqual([]);
+    await click('#control-tab-live-deck'); requests = []; await advance(3_000);
     expect(count('/receipts/')).toBeGreaterThan(0);
 });
+
+it('observes relocated transfers only under the open Live deck disclosure, retaining the active owner and drafts', async () => {
+    await mount(); await click('#control-tab-live-deck');
+    expect(count('/calibration-settings')).toBe(1);
+    const transfer = host.querySelector('[aria-label="Plate and cover transfer"]')!;
+    const disclosure = transfer.closest('details')!;
+    requests = []; await advance();
+    expect(count('/protocols/jobs')).toBe(0);
+    expect(count('/camera/')).toBe(0);
+    await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); });
+    await advance(100); requests = []; await advance();
+    expect(requests.filter(r => r.url.endsWith('/protocols/jobs')).length).toBeGreaterThan(0);
+    liveJob = { job_id: 'transfer-original', status: 'dispatched', command: { command_id: 'transfer-original', idempotency_key: 'transfer-key', ownership_generation: 7, state_version: 1, status: 'dispatched', terminal: false },
+        execution: { dry_run: false, runtime_state: { workflow: { command_id: 'transfer-original', phase: 'executing', child_command_ids: [] } } } };
+    rows = [liveJob]; await advance(11_000);
+    expect(transfer.textContent).toContain('transfer-original');
+    await act(async () => { disclosure.open = false; disclosure.dispatchEvent(new Event('toggle')); });
+    await advance(100); requests = []; await advance();
+    expect(requests.filter(r => r.url.endsWith('/protocols/jobs'))).toEqual([]);
+    expect(count('/protocols/jobs/transfer-original')).toBeGreaterThan(0);
+    await click('#control-tab-robot'); requests = []; await advance();
+    expect(host.querySelector('[aria-label="Plate and cover transfer"]')).toBe(transfer);
+    expect(requests.filter(r => r.url.endsWith('/protocols/jobs'))).toEqual([]);
+    expect(count('/protocols/jobs/transfer-original')).toBeGreaterThan(0);
+    liveJob = { ...liveJob, command: { ...liveJob.command, terminal: true, status: 'completed' } };
+    await advance(3_000); requests = []; await advance();
+    expect(count('/protocols/jobs')).toBe(0);
+    await click('#control-tab-live-deck');
+    await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); });
+    await advance(100);
+    await act(async () => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); });
+    await advance(100); requests = [];
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp-live-deck-geometry'] }); });
+    await advance();
+    expect(requests).toEqual([]);
+    await act(async () => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' }); document.dispatchEvent(new Event('visibilitychange')); });
+    await advance(11_000);
+    expect(count('/calibration-settings')).toBe(1);
+    expect(requests.filter(r => r.url.endsWith('/protocols/jobs')).length).toBeGreaterThan(0);
+    expect(requests.every(r => r.method === 'get')).toBe(true);
+});
+
 it('discovers cross-client jobs only with Runs visible and retains the original active outcome owner across Build navigation', async () => {
     await mount();
     const prepared = [...host.querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent === 'Prepared workflows')!;
