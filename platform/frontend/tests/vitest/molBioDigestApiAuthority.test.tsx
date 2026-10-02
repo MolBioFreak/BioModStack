@@ -24,6 +24,32 @@ const simulation = { fragments: [
 ] } as unknown as RestrictionDigestSimulation;
 
 describe('DigestPanel backend authority', () => {
+    it.each([false, true])('keeps the current saved result when a previous save finishes late (failure=%s)', async (lateFailure) => {
+        const preview = { ...simulation, source: { kind: 'molecular_revision', sequence_id: 'source', revision_id: 'revision', content_sha256: 'a'.repeat(64), topology: 'linear' }, catalog, selected_enzyme_ids: ['EcoRI'], simulation_sha256: null } as RestrictionDigestSimulation;
+        const next = { ...preview, source: { ...preview.source, revision_id: 'next-revision' } };
+        let finishFirst!: (response: Response) => void;
+        let finishSecond!: (response: Response) => void;
+        vi.stubGlobal('fetch', vi.fn()
+            .mockImplementationOnce(() => new Promise<Response>(resolve => { finishFirst = resolve; }))
+            .mockImplementationOnce(() => new Promise<Response>(resolve => { finishSecond = resolve; })));
+        try {
+            container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+            const render = (value: RestrictionDigestSimulation) => root?.render(<DigestPanel sequenceData={sequence} sequenceId="source" onHighlight={vi.fn()} catalog={catalog} catalogRecords={[record]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={value} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={vi.fn()} />);
+            const save = () => [...container!.querySelectorAll('button')].find(row => row.textContent === 'Save digest & fragments')!;
+            await act(async () => render(preview));
+            await act(async () => save().click());
+            await act(async () => render(next));
+            await act(async () => save().click());
+            await act(async () => finishSecond(new Response(JSON.stringify({ operation_id: 'second' }))));
+            expect(container.querySelector('a')?.getAttribute('href')).toBe('/api/molbio/restriction/digests/second');
+            await act(async () => finishFirst(lateFailure
+                ? new Response(JSON.stringify({ detail: { code: 'analysis_busy' } }), { status: 503 })
+                : new Response(JSON.stringify({ operation_id: 'first' }))));
+            expect(container.querySelector('a')?.getAttribute('href')).toBe('/api/molbio/restriction/digests/second');
+            expect(save().disabled).toBe(true);
+        } finally { vi.unstubAllGlobals(); }
+    });
+
     it('saves a hash-free preview from the mounted control and retains retry identity', async () => {
         const preview = { ...simulation, source: { kind: 'molecular_revision', sequence_id: 'source', revision_id: 'revision', content_sha256: 'a'.repeat(64), topology: 'linear' }, catalog, selected_enzyme_ids: ['EcoRI'], simulation_sha256: null } as RestrictionDigestSimulation;
         const transport = vi.fn()

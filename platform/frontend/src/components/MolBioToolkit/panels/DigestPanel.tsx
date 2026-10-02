@@ -97,9 +97,9 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         setSaveState({ simulation: digestSimulation, pending: true });
         try {
             const operationId = await saveRestrictionDigest(digestSimulation, saveRequest.current.key);
-            setSaveState({ simulation: digestSimulation, operationId });
+            setSaveState(current => current?.simulation === digestSimulation ? { simulation: digestSimulation, operationId } : current);
         } catch (error) {
-            setSaveState({ simulation: digestSimulation, error: error instanceof Error ? error.message : 'Digest save failed.' });
+            setSaveState(current => current?.simulation === digestSimulation ? { simulation: digestSimulation, error: error instanceof Error ? error.message : 'Digest save failed.' } : current);
         }
     };
     const currentSave = saveState?.simulation === digestSimulation ? saveState : null;
