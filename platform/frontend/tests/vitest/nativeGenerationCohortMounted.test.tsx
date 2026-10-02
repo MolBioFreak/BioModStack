@@ -1,3 +1,4 @@
+import { CohortMetricPicker } from '../../src/components/CohortMetricPicker';
 import React, { useState } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -28,9 +29,9 @@ let blobs: Map<string, Blob>;
 const changes = vi.fn();
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
 const button = (label: string) => tree.root.findAllByType('button').find(node => text(node) === label)!;
-const control = (label: string) => tree.root.findByProps({ 'aria-label': label });
+const control = (label: string) => tree.root.findAllByType(CohortMetricPicker).find(node => node.props.label === ({ 'X metric': '2D X metric', 'Y metric': '2D Y metric' }[label] ?? label)) ?? tree.root.findByProps({ 'aria-label': label });
 const click = async (label: string) => { await act(async () => button(label).props.onClick()); };
-const change = async (label: string, value: string | boolean) => { await act(async () => control(label).props.onChange({ target: typeof value === 'boolean' ? { checked: value } : { value } })); };
+const change = async (label: string, value: string | boolean) => { await act(async () => { const field = control(label); field.props.onChange(field.type === CohortMetricPicker ? value : { target: typeof value === 'boolean' ? { checked: value } : { value } }); }); };
 const flush = async () => { for (let i = 0; i < 10; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
 const tableRows = () => control('Candidate data table').findByType('tbody').findAllByType('tr');
 const visibleIds = () => tableRows().map(row => text(row.findAllByType('button')[0]));
@@ -80,9 +81,9 @@ it('loads 1205 records through native pages while bounding the table and chartin
     expect(cohortIds()).toEqual(rows.map(row => row.candidate_key));
     expect(scatter().props.data[0].customdata).toHaveLength(1205);
     expect(scatter().props.data[0].x).toEqual(rows.map(row => (row.metrics as any).seq_length));
-    await click('Analytics');
+    await click('Plotly Lab');
     const stats = tree.root.findAllByType('table').find(table => table.findAllByType('caption').some(caption => text(caption) === 'Descriptive statistics for the full filtered cohort'))!;
-    const seq = stats.findByType('tbody').findAllByType('tr').find(row => text(row.findByType('code')) === 'seq_length')!;
+    const seq = stats.findByType('tbody').findAllByType('tr').find(row => row.findByType('th').props.title === 'seq_length')!;
     expect(text(seq.findAllByType('td')[0])).toBe('1,205');
     await change('Rows per page', '100'); expect(tableRows()).toHaveLength(100);
     await click('Next native records'); expect(visibleIds()[0]).toBe('native:100');

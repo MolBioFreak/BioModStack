@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { cohortPhases, describeCohortMetric, splitCohortMetric, type CohortMetricParts } from '../lib/cohortMetricPresentation';
+import React, { useRef, useState } from 'react';
+import { cohortPhases, cohortPhaseLabel, describeCohortMetric, splitCohortMetric, type CohortMetricParts } from '../lib/cohortMetricPresentation';
 
 export interface CohortMetricPickerProps { label: string; keys: string[]; value: string; onChange: (key: string) => void; allowEmpty?: boolean }
 const control = 'rounded border border-[var(--border-color)] bg-[var(--bg-primary)] p-1.5 text-[var(--text-primary)] min-w-0';
@@ -10,12 +10,14 @@ const unique = (values: string[]) => [...new Set(values)];
 /** One measurement list, with orthogonal context controls. Never falls back to a different metric. */
 export function CohortMetricPicker({ label, keys, value, onChange, allowEmpty = false }: CohortMetricPickerProps) {
     const id = React.useId();
+    const disclosure = useRef<HTMLDetailsElement>(null);
     const [query, setQuery] = useState('');
     const [page, setPage] = useState(0);
     const [draft, setDraft] = useState<{ source: string; parts: CohortMetricParts } | null>(null);
     const current = draft?.source === value ? draft.parts : splitCohortMetric(value);
     const entries = unique(keys).map(key => ({ key, parts: splitCohortMetric(key), info: describeCohortMetric(key, keys) }));
-    const families = [...new Map(entries.map(entry => [family(entry.parts), entry])).values()];
+    const groupOrder = ['Confidence', 'Record properties', 'Other measurements', 'Optimization objectives'];
+    const families = [...new Map(entries.map(entry => [family(entry.parts), entry])).values()].sort((a,b) => groupOrder.indexOf(a.info.group) - groupOrder.indexOf(b.info.group));
     const matches = families.filter(entry => entries.some(e => family(e.parts) === family(entry.parts) && `${e.info.shortLabel} ${e.info.group} ${e.key}`.toLowerCase().includes(query.toLowerCase())));
     const safePage = Math.min(page, Math.max(0, Math.ceil(matches.length / 12) - 1));
     const visible = matches.slice(safePage * 12, safePage * 12 + 12);
@@ -31,12 +33,12 @@ export function CohortMetricPicker({ label, keys, value, onChange, allowEmpty = 
     const context = (field: 'target' | 'phase' | 'reading', title: string, values: string[]) => values.length > 0 && <label className="flex min-w-0 flex-col gap-1">{title}
         <select aria-label={`${label} ${title.toLowerCase()}`} className={control} value={current[field]} onChange={e => update({ ...current, [field]: e.target.value })}>
             {!values.includes(current[field]) && <option value={current[field]}>{current[field] || `Choose ${title.toLowerCase()}`}</option>}
-            {values.map(v => <option key={v} value={v}>{v === 'last recorded' ? 'Last recorded' : v === 'peak recorded' ? 'Peak recorded (maximum)' : v || 'No target'}</option>)}
+            {values.map(v => <option key={v} value={v}>{v === 'last recorded' ? 'Last update' : v === 'peak recorded' ? 'Peak (maximum)' : field === 'phase' ? cohortPhaseLabel(v) : v.replaceAll('_', ' ') || 'No target'}</option>)}
         </select>
     </label>;
-    return <fieldset className="min-w-0 rounded border border-[var(--border-color)] p-2 text-xs text-[var(--text-primary)]" aria-describedby={`${id}-help`}>
+    return <details ref={disclosure} onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }} className="relative min-w-0 text-[var(--text-primary)]"><summary className="cursor-pointer list-none rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] p-2 text-sm"><span className="block text-xs text-[var(--text-secondary)]">{label.replace(' metric', '')}</span><span className="block truncate font-medium">{value ? describeCohortMetric(value, keys).label : allowEmpty && /color/i.test(label) ? 'No color measurement' : 'Choose a measurement'} ▾</span></summary><fieldset className="absolute left-0 top-full z-50 mt-1 w-80 max-w-full min-w-0 rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] p-3 text-xs shadow-xl" aria-describedby={`${id}-help`}>
         <legend className="px-1 font-medium">{label}</legend>
-        <label className="flex flex-col gap-1">Find measurement<input type="search" aria-label={`${label} search`} className={control} value={query} placeholder="Search measurements or native keys" onChange={e => { setQuery(e.target.value); setPage(0); }} /></label>
+        <label className="flex flex-col gap-1">Find measurement<input type="search" aria-label={`${label} search`} className={control} value={query} placeholder="Find confidence, length, time…" onChange={e => { setQuery(e.target.value); setPage(0); }} /></label>
         <label className="mt-2 flex flex-col gap-1">Measurement<select aria-label={label} className={control} value={value || draft ? family(current) : ''} onChange={e => {
             if (!e.target.value) { setDraft(null); onChange(''); return; }
             const entry = families.find(f => family(f.parts) === e.target.value);
@@ -45,7 +47,7 @@ export function CohortMetricPicker({ label, keys, value, onChange, allowEmpty = 
             // A new trajectory measurement keeps explicit context; incomplete combinations stay pending.
             update(p.kind === current.kind ? { ...current, measurement: p.measurement } : { ...p, target: unique(entries.filter(e => family(e.parts) === family(p)).map(e => e.parts.target)).length === 1 ? p.target : '', phase: p.kind === 'trajectory' ? '' : p.phase, reading: p.kind === 'trajectory' ? '' : p.reading });
         }}>
-            <option value="" disabled={!allowEmpty}>{allowEmpty ? 'No color / none' : 'Choose measurement'}</option>
+            <option value="" disabled={!allowEmpty}>{allowEmpty ? 'None' : 'Choose measurement'}</option>
             {!selectedFamily && value && <option value={family(current)} disabled>Selected measurement unavailable</option>}
             {unique(options.map(e => e.info.group)).map(group => <optgroup key={group} label={group}>{options.filter(e => e.info.group === group).map(e => <option key={family(e.parts)} value={family(e.parts)}>{e.info.shortLabel}{families.some(other => family(other.parts) !== family(e.parts) && other.info.shortLabel === e.info.shortLabel) ? ` (${e.parts.kind}; ${e.parts.measurement})` : ''}</option>)}</optgroup>)}
         </select></label>
@@ -54,10 +56,11 @@ export function CohortMetricPicker({ label, keys, value, onChange, allowEmpty = 
         <div className="mt-2 grid grid-cols-2 gap-2">
             {context('phase', 'Stage', cohortPhases.filter(p => relatives.some(e => e.parts.phase === p)))}
             {context('reading', 'Reading', unique(relatives.map(e => e.parts.reading).filter(Boolean)))}
-            {(current.target || relatives.some(e => e.parts.target)) && context('target', 'Target', unique(relatives.map(e => e.parts.target)))}
+            {unique(relatives.map(e => e.parts.target)).length > 1 && context('target', 'Target', unique(relatives.map(e => e.parts.target)))}
         </div>
         <div id={`${id}-help`} className="mt-2 text-[var(--text-secondary)]">
-            {resolved ? <details><summary className="cursor-pointer">Measurement help & native key</summary><p className="break-words">{resolved.info.description}</p></details> : value || draft ? <p role="status">This combination is not available. Choose its stage, reading or target. Existing chart selection is unchanged.{value && <span className="block break-words">Current: {describeCohortMetric(value).label}<code className="block">{value}</code></span>}</p> : <span>{allowEmpty ? 'No measurement selected.' : 'Choose a measurement to begin.'}</span>}
+            {resolved ? <details><summary className="cursor-pointer">About this measurement</summary><p className="my-2 break-words">{resolved.info.description}</p><code className="block break-all">{resolved.info.nativeKey}</code></details> : value || draft ? <p role="status">This combination is not available. Choose its stage, reading or target. Existing chart selection is unchanged.{value && <span className="block break-words">Current: {describeCohortMetric(value).label}<code className="block">{value}</code></span>}</p> : <span>{allowEmpty ? 'No measurement selected.' : 'Choose a measurement to begin.'}</span>}
         </div>
-    </fieldset>;
+        <button type="button" className={`${control} mt-2`} onClick={() => { if (disclosure.current) disclosure.current.open = false; }}>Close</button>
+    </fieldset></details>;
 }

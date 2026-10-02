@@ -81,6 +81,8 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
     const [colorChoice, setColorChoice] = useState('');
     const [dragMode, setDragMode] = useState<'zoom' | 'select' | 'lasso'>('zoom');
     const [heatChoice, setHeatChoice] = useState<string[] | null>(null);
+    const [heatAdd, setHeatAdd] = useState('');
+    const [labDimension, setLabDimension] = useState<'2D' | '3D'>('2D');
     const [metricSearch, setMetricSearch] = useState('');
     const [metricPage, setMetricPage] = useState(0);
     const [zChoice, setZChoice] = useState('radius_of_gyration');
@@ -103,7 +105,7 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
     const active = rows.find(row => row.id === activeId);
     const composition = secondaryStructureComposition(active);
     const spacePoints = rows.filter(row => isFiniteMetric(row.values[xKey]) && isFiniteMetric(row.values[yKey]) && isFiniteMetric(row.values[zKey]));
-    const heatKeys = (heatChoice ?? numeric.slice(0, 6)).filter(key => numeric.includes(key));
+    const heatKeys = (heatChoice ?? (initialMetrics ? [...new Set([initialMetrics.x, initialMetrics.y, initialMetrics.distribution, 'seq_length', 'duration_seconds', ...numeric].filter((key): key is string => !!key && numeric.includes(key)))].slice(0, 6) : numeric.slice(0, 6))).filter(key => numeric.includes(key));
     const heatKeyIdentity = JSON.stringify(heatKeys);
     const correlations = useMemo(() => {
         const keys: string[] = JSON.parse(heatKeyIdentity);
@@ -163,13 +165,13 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
     });
     return <section aria-label={mode === 'dashboard' ? 'Cohort dashboard charts' : 'Cohort exploratory analytics'} className="space-y-3 text-[var(--text-primary)]">
         {!numeric.length ? <p role="status" className={card}>No finite numeric observations in this cohort. Missing, explicit null, boolean, string and nonfinite values are not plotted.</p> : <>
-            {mode === 'analytics' && <PlotlyLab keys={numeric} getMetricLabel={getMetricLabel} renderMetricPicker={renderMetricPicker}
+            {mode === 'analytics' && <PlotlyLab dimension={labDimension} onDimensionChange={setLabDimension} keys={numeric} getMetricLabel={getMetricLabel} renderMetricPicker={renderMetricPicker}
                 palette={palette} onPalette={setPalette} reverse={reverse} onReverse={setReverse}
                 axes2d={{ x: xKey, y: yKey, color: colorKey, onX: setXChoice, onY: setYChoice, onColor: setColorChoice }}
                 axes3d={{ x: xKey, y: yKey, z: zKey, color: color3dKey, onX: setXChoice, onY: setYChoice, onZ: setZChoice, onColor: setColor3dChoice }}
                 plot2d={<article className={card}>
-                    <div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-sm font-semibold">Candidate landscape</h4><span className="text-xs text-[var(--text-secondary)]">{pairs.length} plotted · {rows.length - pairs.length} omitted</span></div>
-                    <p className="text-xs">One point per candidate. {description(xKey)} {description(yKey)}</p>
+                    <div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-sm font-semibold">Compare measurements</h4><span className="text-xs text-[var(--text-secondary)]">{pairs.length} plotted · {rows.length - pairs.length} omitted</span></div>
+                    <p className="text-xs">Each point is one record. Compare {caption(xKey)} on the horizontal axis with {caption(yKey)} on the vertical axis.</p>
                     {pairs.length ? <CohortPlot label={`Candidate scatter: ${caption(xKey)} versus ${caption(yKey)}`} data={scatterData}
                         layout={{ ...base, xaxis: axis(caption(xKey)), yaxis: axis(caption(yKey)), dragmode: dragMode,
                             uirevision: JSON.stringify([xKey, yKey, rows.map(row => row.id)]) }} onClick={inspect} onSelected={selectPoints} />
@@ -182,8 +184,8 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
                     </div>
                     {colorKey && <p className="mt-1 text-xs text-[var(--text-secondary)]">{pairs.filter(row => !isFiniteMetric(row.values[colorKey])).length} with unavailable color shown gray.</p>}
                 </article>} plot3d={<article className={card}>
-                <div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-sm font-semibold">Explore native metrics in 3D</h4><span className="text-xs text-[var(--text-secondary)]">{spacePoints.length} plotted · {rows.length - spacePoints.length} omitted</span></div>
-                <p className="text-xs">One point per candidate with all three readings. {description(xKey)} {description(yKey)} {description(zKey)}</p>
+                <div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-sm font-semibold">3D comparison</h4><span className="text-xs text-[var(--text-secondary)]">{spacePoints.length} plotted · {rows.length - spacePoints.length} omitted</span></div>
+                <p className="text-xs">Each point has all three selected measurements. Rotate the plot to compare them.</p>
                 {spacePoints.length ? <CohortPlot label={`Native 3D scatter: ${caption(xKey)}, ${caption(yKey)}, ${caption(zKey)}`}
                     height={440} data={color3dKey ? [spaceTrace(spacePoints.filter(row => isFiniteMetric(row.values[color3dKey])), true), spaceTrace(spacePoints.filter(row => !isFiniteMetric(row.values[color3dKey])), false)] : [spaceTrace(spacePoints, false)]}
                     layout={{ ...base, margin: { l: 0, r: 0, t: 18, b: 0 }, scene: {
@@ -197,8 +199,8 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
             <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
                 {mode === 'dashboard' && <>
                 <article className={card}>
-                    <div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-sm font-semibold">Candidate landscape</h4><span className="text-xs text-[var(--text-secondary)]">{pairs.length} plotted · {rows.length - pairs.length} omitted</span></div>
-                    <p className="text-xs">One point per candidate. {description(xKey)} {description(yKey)}</p>
+                    <div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-sm font-semibold">Compare measurements</h4><span className="text-xs text-[var(--text-secondary)]">{pairs.length} plotted · {rows.length - pairs.length} omitted</span></div>
+                    <p className="text-xs">Each point is one record. Compare {caption(xKey)} on the horizontal axis with {caption(yKey)} on the vertical axis.</p>
                     {pairs.length ? <CohortPlot label={`Candidate scatter: ${caption(xKey)} versus ${caption(yKey)}`} data={scatterData}
                         layout={{ ...base, xaxis: axis(caption(xKey)), yaxis: axis(caption(yKey)), dragmode: dragMode,
                             uirevision: JSON.stringify([xKey, yKey, rows.map(row => row.id)]) }} onClick={inspect} onSelected={selectPoints} />
@@ -224,7 +226,7 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
                         uirevision: JSON.stringify([distKey, rows.map(row => row.id)]) }} />
                     <p className="pt-2 text-xs text-[var(--text-secondary)]">Median {formatMetric(distributionSummary.median)} · Q1–Q3 {formatMetric(distributionSummary.q1)}–{formatMetric(distributionSummary.q3)}.</p>
                 </article>
-                {barRows.length > 0 && <article className={card}>
+                {mode === 'analytics' && barRows.length > 0 && <article className={card}>
                     <div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-sm font-semibold">Candidates by recorded value</h4><span className="text-xs text-[var(--text-secondary)]">{barRows.length} of {rows.filter(row => isFiniteMetric(row.values[barKey])).length} observed</span></div>
                     {mode === 'analytics' && picker('Bar metric', barKey, setBarChoice)}
                     <p className="text-xs">Each bar is one candidate’s recorded value. {description(barKey)}</p>
@@ -234,7 +236,7 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
                         hovertemplate: `%{x}<br>${escape(caption(barKey))}: %{y}<extra></extra>`,
                     } as Data]} layout={{ ...base, margin: { l: 60, r: 24, t: 24, b: 95 },
                         xaxis: { type: 'category', tickangle: -45, automargin: true, color: theme.text }, yaxis: axis(caption(barKey)) }} onClick={inspect} />
-                    <p className="pt-2 text-xs text-[var(--text-secondary)]">Highest 20 observed values in this filtered view, not a binder-quality rank. Click a bar to inspect its exact document.</p>
+                    <p className="pt-2 text-xs text-[var(--text-secondary)]">The highest recorded values in this view, not an acceptance ranking. Click a bar to inspect the record.</p>
                 </article>}
                 {composition && <article className={card}>
                     <h4 className="mb-2 text-sm font-semibold">Selected candidate: secondary structure</h4>
@@ -247,18 +249,16 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
                     <p className="pt-2 text-xs text-[var(--text-secondary)]">Shown only when this record reports a complete coil/helix/strand partition. Not a campaign or binding composition.</p>
                 </article>}
             </div>
-            <p className="text-xs text-[var(--text-secondary)]">Full filtered cohort · Finite observations only, native scales unchanged; not a verdict. Click to inspect; box/lasso adds selection (also available in the table). Double-click resets zoom; camera exports SVG. Change axes, color and palette in Plotly Lab.</p>
+            <p className="text-xs text-[var(--text-secondary)]">Click a point to inspect it. Box or lasso selection adds records to your selection; the camera downloads an SVG. Use Plotly Lab to change measurements and colors.</p>
         </>}
         {mode === 'analytics' && <>
             {numeric.length > 0 && <article className={card}>
-                <h4 className="text-sm font-semibold">Pairwise correlation</h4>
-                <p className="my-2 text-xs text-[var(--text-secondary)]">Pearson r, pairwise complete observations; at least 3 pairs and nonzero variance. Blank cells are undefined, not zero. No p-values or causal claims. Select up to 8 metrics ({heatKeys.length} of {numeric.length} selected{heatChoice === null ? '; initial selection is the first 6 available metrics' : ''}).</p>
-                <label className="flex max-w-lg flex-col gap-1 text-xs">Correlation metrics (Ctrl/Cmd-click to choose)
-                    <select multiple size={Math.min(6, numeric.length)} aria-label="Correlation metrics" className={control} value={heatKeys}
-                        onChange={event => { const keys = Array.from(event.target.selectedOptions, option => option.value); if (keys.length <= 8) setHeatChoice(keys); }}>
-                        {numeric.map(key => <option key={key} value={key} disabled={heatKeys.length >= 8 && !heatKeys.includes(key)}>{caption(key)}</option>)}
-                    </select>
-                </label>
+                <h4 className="text-sm font-semibold">How measurements vary together</h4>
+                <p className="my-2 text-xs text-[var(--text-secondary)]">Compare up to eight measurements. Blue/red cells show opposite/similar variation; blank cells have insufficient data or no variation. Correlation does not show causation.</p>
+                <div aria-label="Correlation metrics" className="my-3 flex flex-wrap items-center gap-2">
+                    {heatKeys.map(key => <button type="button" key={key} title={key} aria-label={`Remove correlation ${getMetricLabel(key)}`} className={control} onClick={() => setHeatChoice(heatKeys.filter(value => value !== key))}>{getMetricLabel(key)} ×</button>)}
+                    {heatKeys.length < 8 && <div className="min-w-48">{picker('Add correlation measurement', heatAdd, value => { if (numeric.includes(value) && !heatKeys.includes(value)) setHeatChoice([...heatKeys, value]); setHeatAdd(''); }, true)}</div>}
+                </div>
                 {heatKeys.length ? <CohortPlot label="Pearson correlation heatmap" height={Math.max(380, heatKeys.length * 52)} data={[
                     { type: 'heatmap', x: heatKeys.map(caption), y: heatKeys.map(caption), z: correlations.map(row => row.map(cell => cell.r)),
                         customdata: correlations.map(row => row.map(cell => `n=${cell.pairs}; ${cell.reason ?? `r=${formatMetric(cell.r)}`}`)),
@@ -280,13 +280,13 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
             </article>}
             <article className={card}>
                 <h4 className="text-sm font-semibold">Descriptive metric summary</h4>
-                <p className="my-2 text-xs text-[var(--text-secondary)]">All filtered records, independently per metric. Quartiles use linear interpolation at (n − 1) × p. SD is sample SD (n − 1); unavailable below 2 observations. “—” means undefined or outside numeric range. Missing includes absent/undefined; null and nonnumeric (including nonfinite numbers) are counted separately. Native values are never coerced.</p>
+                <p className="my-2 text-xs text-[var(--text-secondary)]">Statistics for the records currently in view. “—” means unavailable.</p><details className="text-xs"><summary>Calculation details</summary><p>Quartiles use linear interpolation; standard deviation uses n − 1. Missing, null and nonnumeric values are counted separately and never replaced with zero.</p></details>
                 <label className="flex max-w-md flex-col gap-1 text-xs">Find summary metrics<input className={control} type="search" aria-label="Find summary metrics" value={metricSearch} onChange={event => { setMetricSearch(event.target.value); setMetricPage(0); }} /></label>
                 <div className="mt-3 max-h-[480px] overflow-auto"><table className="w-full text-right text-xs tabular-nums">
                     <caption className="sr-only">Descriptive statistics for the full filtered cohort</caption>
                     <thead className="sticky top-0 bg-[var(--bg-primary)]"><tr><th className="p-2 text-left">Metric / native key</th>{['n', 'Missing', 'Null', 'Nonnumeric', 'Min', 'Q1', 'Median', 'Q3', 'Max', 'Mean', 'Sample SD'].map(name => <th key={name} className="whitespace-nowrap p-2">{name}</th>)}</tr></thead>
                     <tbody>{summaryKeys.map(key => { const summary = summaryMap.get(key)!; return <tr key={key} className="border-t border-[var(--border-color)]">
-                        <th scope="row" className="p-2 text-left font-normal">{getMetricLabel(key)}<code className="block text-[var(--text-secondary)]">{key}</code></th>
+                        <th scope="row" className="p-2 text-left font-normal" title={key}>{getMetricLabel(key)}</th>
                         {(['observed', 'missing', 'nulls', 'nonNumeric', 'min', 'q1', 'median', 'q3', 'max', 'mean', 'stdDev'] as const).map(field => <td key={field} className="whitespace-nowrap p-2" title={summary[field] === null ? 'Undefined or outside numeric range' : String(summary[field])}>{summary[field] === null ? '—' : formatMetric(summary[field])}</td>)}
                     </tr>; })}</tbody>
                 </table></div>

@@ -14,15 +14,17 @@ const control = 'min-w-0 w-full rounded border border-[var(--border-color)] bg-[
  * Consumers retain their own data authority, trace builders, selection and axis state.
  */
 export function PlotlyLab({ keys, getMetricLabel, renderMetricPicker, axes2d, axes3d, plot2d, plot3d,
-    palette, onPalette, reverse, onReverse, palettes = ['Viridis', 'Plasma', 'Cividis', 'Turbo', 'Inferno', 'Magma', 'Electric', 'Portland', 'Bluered', 'RdBu'],
+    dimension: controlledDimension, onDimensionChange, palette, onPalette, reverse, onReverse, palettes = ['Viridis', 'Plasma', 'Cividis', 'Turbo', 'Inferno', 'Magma', 'Electric', 'Portland', 'Bluered', 'RdBu'],
 }: {
     keys: string[]; getMetricLabel: (key: string) => string;
     renderMetricPicker?: (props: MetricPickerProps) => ReactNode;
     axes2d: PlotlyLabAxes; axes3d: PlotlyLabAxes; plot2d: ReactNode; plot3d: ReactNode;
     palette: string; onPalette: (value: string) => void; reverse: boolean; onReverse: (value: boolean) => void;
-    palettes?: string[];
+    palettes?: string[]; dimension?: '2D' | '3D'; onDimensionChange?: (value: '2D' | '3D') => void;
 }) {
-    const [dimension, setDimension] = useState<'2D' | '3D'>('2D');
+    const [localDimension, setLocalDimension] = useState<'2D' | '3D'>('2D');
+    const dimension = controlledDimension ?? localDimension;
+    const setDimension = (value: '2D' | '3D') => { setLocalDimension(value); onDimensionChange?.(value); };
     const axes = dimension === '2D' ? axes2d : axes3d;
     const picker = (label: string, value: string, onChange: (value: string) => void, allowEmpty = false) => {
         const props = { label, keys, value, onChange, allowEmpty };

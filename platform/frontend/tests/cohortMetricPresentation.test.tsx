@@ -29,13 +29,14 @@ test('real inventory collapses to 14 measurements without losing any of 102 iden
     for (const k of fixture) {
         const d = describeCohortMetric(k, fixture);
         assert.equal(d.nativeKey, k);
-        assert.ok(d.description.includes(k));
+        assert.ok(!d.description.includes('Native key:'));
+        assert.ok(d.description.length > 0);
         assert.ok(!d.shortLabel.includes(' · '));
     }
     assert.equal(describeCohortMetric(key('iptm')).shortLabel, 'Interface confidence (iPTM)');
     assert.equal(describeCohortMetric(key('ptm')).shortLabel, 'Overall structure confidence (pTM)');
     assert.match(describeCohortMetric(key('iptm_loss')).shortLabel, /loss objective/);
-    assert.match(describeCohortMetric(key('interface_contacts')).description, /not a physical contact count or distance/);
+    assert.match(describeCohortMetric(key('interface_contacts')).description, /not a physical count or distance/);
     assert.match(describeCohortMetric(key('iptm', 'refine', 'peak recorded')).description, /not necessarily the best/);
     assert.equal(splitCohortMetric(key('iptm', 'refine', 'last recorded', 'arbitrary.target_A')).target, 'arbitrary.target_A');
     assert.equal(describeCohortMetric('novel_field').shortLabel, 'Novel field');

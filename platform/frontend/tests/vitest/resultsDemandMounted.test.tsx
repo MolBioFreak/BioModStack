@@ -1,3 +1,4 @@
+import { CohortMetricPicker } from '../../src/components/CohortMetricPicker';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -86,13 +87,14 @@ it('dashboard defers candidate PDB work until first inspection, then retains the
     transport(); await mount(<NativeBinderGenerationResults jobId="parent" status="completed" />);
     expect(downloads).not.toHaveBeenCalled();
     expect(tree!.root.findAllByProps({ 'aria-label': 'Published document' })).toHaveLength(0);
-    const axis = () => tree!.root.findByProps({ 'aria-label': 'X metric' });
-    await act(async () => axis().props.onChange({ target: { value: 'count' } }));
+    await click('Plotly Lab');
+    const axis = () => tree!.root.findAllByType(CohortMetricPicker).find(node => node.props.label === '2D X metric')!;
+    await act(async () => axis().props.onChange('count'));
     await click('producer:exact');
     expect(engines.mounts).toBe(1);
     expect(engines.urls).toEqual([doc.download_url]);
     const inspector = tree!.root.findByProps({ 'aria-label': 'Published document' });
-    await click('Dashboard');
+    await click('Plotly Lab');
     expect(tree!.root.findByProps({ 'aria-label': 'Published document' })).toBe(inspector);
     expect(axis().props.value).toBe('count');
     await click('Structure');

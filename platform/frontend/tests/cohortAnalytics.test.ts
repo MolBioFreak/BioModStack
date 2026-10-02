@@ -177,7 +177,7 @@ test('mounted chart contract: full cohort, exact inspection, explicit selection,
     const select = (label: string) => renderer!.root.findByProps({ 'aria-label': label });
     try {
         await act(async () => { renderer = create(React.createElement(CohortAnalytics, props), { createNodeMock: () => ({ clientWidth: 620 }) }); });
-        assert.equal(plots().length, 3, 'scatter, distribution and bounded native bars are visible without disclosure');
+        assert.equal(plots().length, 2, 'dashboard shows the explained scatter and distribution without a ranking chart');
         const scatter = plots()[0].props;
         assert.equal(scatter.data[0].x.length, 1000);
         assert.equal(scatter.data[0].y[999], 0.999, 'native fractions are never multiplied');
@@ -187,9 +187,6 @@ test('mounted chart contract: full cohort, exact inspection, explicit selection,
         assert.equal(scatter.layout.width, 620);
         assert.equal(plots()[1].props.data.length, 1, 'default histogram has no unexplained box strip');
         assert.equal(plots()[1].props.layout.yaxis2, undefined);
-        assert.equal(plots()[2].props.data[0].type, 'bar');
-        assert.equal(plots()[2].props.data[0].customdata.length, 20);
-        assert.equal(plots()[2].props.data[0].customdata[0], 'row:999');
         assert.equal(plots()[0].props.layout.xaxis.title.text, 'Sequence length');
         assert.deepEqual(selections, [], 'mount must not select candidates');
         await act(async () => {
@@ -204,6 +201,9 @@ test('mounted chart contract: full cohort, exact inspection, explicit selection,
         assert.equal(plots()[0].props.layout.dragmode, 'lasso');
         await act(async () => { renderer!.update(React.createElement(CohortAnalytics, { ...props, mode: 'analytics' })); });
         assert.equal(plots().length, 4);
+        assert.equal(plots()[2].props.data[0].type, 'bar');
+        assert.equal(plots()[2].props.data[0].customdata.length, 20);
+        assert.equal(plots()[2].props.data[0].customdata[0], 'row:999');
         await act(async () => { select('Plotly Lab view').props.onChange({ target: { value: '3D' } }); });
         assert.ok(renderer!.root.findByProps({ 'aria-label': 'Metric summary pages' }));
         assert.equal(plots()[0].props.data[0].type, 'scatter3d');
@@ -214,11 +214,16 @@ test('mounted chart contract: full cohort, exact inspection, explicit selection,
         assert.deepEqual(inspected, ['row:999', 'row:998', 'row:997']);
         await act(async () => { select('3D Z metric').props.onChange({ target: { value: 'color' } }); });
         assert.equal(plots()[0].props.data[0].z.length, 500, 'the third axis omits missing rather than filling zero');
+        await act(async () => { renderer!.update(React.createElement(CohortAnalytics, { ...props, mode: 'dashboard' })); });
+        await act(async () => { renderer!.update(React.createElement(CohortAnalytics, { ...props, mode: 'analytics' })); });
+        assert.equal(select('Plotly Lab view').props.value, '3D', 'explicit dimension survives leaving and returning to the Lab');
+        assert.equal(plots()[0].props.data[0].z.length, 500);
         await act(async () => { select('Plotly Lab view').props.onChange({ target: { value: '2D' } }); });
         await act(async () => { select('2D color metric').props.onChange({ target: { value: 'color' } }); });
         assert.equal(plots()[0].props.data[0].x.length, 500);
         assert.equal(plots()[0].props.data[1].x.length, 500, 'missing color never removes complete coordinate pairs');
-        await act(async () => { select('Correlation metrics').props.onChange({ target: { selectedOptions: [{ value: 'seq_length' }, { value: 'dsasa' }] } }); });
+        await act(async () => { select('Remove correlation Constant').props.onClick(); });
+        await act(async () => { select('Remove correlation Color').props.onClick(); });
         assert.equal(plots()[3].props.data[0].z.length, 2);
         const compositionRows = rowsOf([{ seq_length: 50, dsasa: 715, radius_of_gyration: 10.45,
             coil_percent: 0.4, helix_percent: 0.24, strand_percent: 0.36 }]);

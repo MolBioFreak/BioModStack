@@ -1,6 +1,7 @@
 import { metricLabel } from './cohortAnalytics';
 
 export const cohortPhases = ['screen', 'refine', 'anneal', 'harden', 'mutate'];
+export const cohortPhaseLabel = (phase: string) => ({ screen: 'Screening', refine: 'Refinement', anneal: 'Annealing', harden: 'Hardening', mutate: 'Mutation' }[phase] ?? phase);
 export interface CohortMetricParts { measurement: string; target: string; phase: string; reading: string; kind: string }
 /** Parse only the adapter's explicit phase/reading grammar; never change the key. */
 export function splitCohortMetric(key: string): CohortMetricParts {
@@ -29,10 +30,12 @@ export function describeCohortMetric(key: string, keys: string[] = []) {
     const shortLabel = objective || ({ iptm: 'Interface confidence (iPTM)', ptm: 'Overall structure confidence (pTM)', seq_length: 'Sequence length', duration_seconds: 'Duration' }[name] ?? metricLabel(p.measurement));
     const group = objective ? 'Optimization objectives' : ['iptm', 'ptm', 'plddt'].includes(name) ? 'Confidence' : ['seq_length', 'duration_seconds', 'rank'].includes(name) ? 'Record properties' : 'Other measurements';
     // Keep target identity whenever present: charts may compare different targets.
-    const context = [p.target, p.phase && metricLabel(p.phase), p.reading === 'last recorded' ? 'Last' : p.reading === 'peak recorded' ? 'Peak' : ''].filter(Boolean);
+    const multipleTargets = new Set(keys.map(other => splitCohortMetric(other).target).filter(Boolean)).size > 1;
+    const context = [p.target && (!keys.length || multipleTargets) ? metricLabel(p.target) : ''].filter(Boolean);
     const collisions = keys.filter(other => other !== key && splitCohortMetric(other).measurement !== p.measurement && metricLabel(splitCohortMetric(other).measurement) === shortLabel);
-    const label = `${shortLabel}${collisions.length ? ` (${p.measurement})` : ''}${context.length ? ` — ${context.join(' / ')}` : ''}`;
-    const meaning = objective ? 'Native optimization objective term; not a physical contact count or distance.' : name === 'iptm' ? 'Model-reported interface confidence.' : name === 'ptm' ? 'Model-reported overall structure confidence.' : 'Native numeric measurement; no additional meaning, units or preferred direction inferred.';
-    const reading = p.reading === 'peak recorded' ? ' Peak is the maximum recorded value in this stage, not necessarily the best value.' : p.reading ? ' Last is the final recorded value in this stage, not a fresh validation prediction.' : '';
-    return { label, shortLabel, description: `${meaning}${reading} Native key: ${key}`, group, nativeKey: key };
+    const metric = name === 'iptm' ? 'iPTM' : name === 'ptm' ? 'pTM' : shortLabel;
+    const label = `${p.phase ? `${cohortPhaseLabel(p.phase)} ${metric} (${p.reading === 'last recorded' ? 'last update' : 'peak'})` : shortLabel}${collisions.length ? ` (${p.measurement})` : ''}${context.length ? ` · ${context.join(' / ')}` : ''}`;
+    const meaning = objective ? 'An optimization objective term, not a physical count or distance.' : name === 'iptm' ? 'The model’s confidence in the interface between interacting chains.' : name === 'ptm' ? 'The model’s confidence in the overall structure.' : name === 'seq_length' ? 'The number of amino acids in the sequence.' : name === 'duration_seconds' ? 'Time spent on the attempt, in seconds.' : 'A recorded model measurement.';
+    const reading = p.reading === 'peak recorded' ? ` Highest recorded value during ${cohortPhaseLabel(p.phase).toLowerCase()}, not necessarily the best result.` : p.reading ? ` Last recorded value during ${cohortPhaseLabel(p.phase).toLowerCase()}; not the final acceptance prediction.` : '';
+    return { label, shortLabel, description: `${meaning}${reading}`, group, nativeKey: key };
 }

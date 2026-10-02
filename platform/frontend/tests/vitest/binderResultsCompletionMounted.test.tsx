@@ -1,3 +1,4 @@
+import { CohortMetricPicker } from '../../src/components/CohortMetricPicker';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -111,7 +112,7 @@ it('BC2 zero-yield Results routes directly into the shared cohort dashboard desp
                 analytics: { duration_seconds: i + 90, trace_available: false, phase_metrics: { anneal: { 'human_EGFR.iptm': { last: i / 1000, max: i / 1000 } } } } })) }) };
     }));
     await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>, '/designs/parent');
-    expect(text(mounted!.root)).toContain('BindCraft2 campaign dashboard');
+    expect(text(mounted!.root)).toContain('Campaign overview');
     expect(text(mounted!.root)).toContain('0 retained sequences');
     expect(text(mounted!.root)).not.toContain('Results could not be loaded');
     expect(button('Overview')).toBeUndefined();
@@ -218,13 +219,14 @@ it('real selected workspace browses native files, binds author masks and shares 
 
 it('keeps chart axes and cohort filters when drilling into a structure and returning', async () => {
     transport(); await mount(<NativeBinderGenerationResults jobId="parent" status="completed" />);
-    const field = (label: string) => mounted!.root.findByProps({ 'aria-label': label });
-    await act(async () => field('X metric').props.onChange({ target: { value: 'native_zero' } }));
+    await act(async () => button('Plotly Lab').props.onClick());
+    const field = (label: string) => mounted!.root.findAllByType(CohortMetricPicker).find(node => node.props.label === (label === 'X metric' ? '2D X metric' : label)) ?? mounted!.root.findByProps({ 'aria-label': label });
+    await act(async () => field('X metric').props.onChange('native_zero'));
     await act(async () => field('Search candidates').props.onChange({ target: { value: 'producer-key' } }));
     await act(async () => button('producer-key').props.onClick());
     expect(button('Structure').props['aria-selected']).toBe(true);
     expect(mounted!.root.findByType(StructureWorkbench).props.structureUrl).toBe(doc.download_url);
-    await act(async () => button('Analytics').props.onClick());
+    await act(async () => button('Plotly Lab').props.onClick());
     expect(field('X metric').props.value).toBe('native_zero');
     expect(field('Search candidates').props.value).toBe('producer-key');
     expect(mounted!.root.findByProps({ 'aria-label': 'Candidate data table' }).findByType('tbody').findAllByType('tr')).toHaveLength(1);

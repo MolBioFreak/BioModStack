@@ -3378,6 +3378,7 @@ function ResultsViewerContent() {
         ? nativeRedesignCount == null ? 'Candidate count unavailable' : `${nativeRedesignCount.toLocaleString()} published candidates`
         : null;
     const activeBadgeLabel = useMemo(() => {
+        if (activeJob?.model_id === 'bindcraft2') return 'Campaign results';
         if (isShapeResultJob(activeJob)) return 'Native Shape results';
         if (nativeSequenceResultKind(activeJob)) return 'Native sequence results';
         if (isNativeGeneration) return nativeGenerationCount == null ? 'Generated count unavailable' : `${nativeGenerationCount.toLocaleString()} generated candidates`;
