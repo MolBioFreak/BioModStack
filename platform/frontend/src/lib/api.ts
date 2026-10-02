@@ -3419,9 +3419,11 @@ export interface AssemblyProduct {
     golden_gate_authority: GoldenGateCatalogAuthority | null;
 }
 
+export type SavedSequenceMetadata = Omit<NucleotideSequence, 'sequence'>;
+
 export interface AssemblyOperationResponse {
     product: AssemblyProduct;
-    saved_sequence?: NucleotideSequence | null;
+    saved_sequence?: SavedSequenceMetadata | null;
     message: string;
 }
 
@@ -3551,7 +3553,7 @@ export interface GibsonDesignResponse {
     selected_product: AssemblyProduct;
     warnings: string[];
     source_provenance: Array<Record<string, unknown>>;
-    saved_sequence?: NucleotideSequence | null;
+    saved_sequence?: SavedSequenceMetadata | null;
     message: string;
 }
 
@@ -3982,13 +3984,13 @@ export const simulateLigationAssembly = (data: LigationAssemblyRequest, signal?:
     api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/simulate', data, { signal });
 
 export const saveLigationAssembly = (data: LigationAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/save', data);
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/ligation/save', data, { params: { response_view: 'compact' } });
 
 export const simulateGibsonAssembly = (data: GibsonAssemblyRequest, signal?: AbortSignal) =>
     api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/simulate', data, { signal });
 
 export const saveGibsonAssembly = (data: GibsonAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/save', data);
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/save', data, { params: { response_view: 'compact' } });
 
 export const planDnaWeaverGibsonAssembly = (data: DnaWeaverPlanRequest, signal?: AbortSignal) =>
     api.post<DnaWeaverPlanResponse>('/api/molbio/assembly/gibson/dnaweaver/plan', data, { signal });
@@ -4000,7 +4002,7 @@ export const designGibsonAssembly = (data: GibsonDesignRequest, signal?: AbortSi
     api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design', data, { signal });
 
 export const saveDesignedGibsonAssembly = (data: GibsonDesignRequest) =>
-    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design/save', data);
+    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design/save', data, { params: { response_view: 'compact' } });
 
 export const fetchGoldenGateAssemblyOptions = (signal?: AbortSignal) =>
     api.get<GoldenGateAssemblyOptionsResponse>('/api/molbio/assembly/golden-gate/options', { signal });
@@ -4012,7 +4014,7 @@ export const simulateGoldenGateAssembly = (data: GoldenGateAssemblyRequest, sign
     });
 
 export const saveGoldenGateAssembly = (data: GoldenGateAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/save', data).then((response) => {
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/save', data, { params: { response_view: 'compact' } }).then((response) => {
         requireGoldenGateAssemblyResponse(response.data);
         return response;
     });

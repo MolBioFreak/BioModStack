@@ -35,6 +35,24 @@ export interface RestrictionAnalysisBatch {
 export interface RestrictionDigestEnd { kind: 'natural' | 'blunt' | 'five_prime_overhang' | 'three_prime_overhang' | 'no_cut_circular'; enzyme_created: boolean; side: 'left' | 'right'; protruding_strand: 'top' | 'bottom' | null; overhang_sequence_5to3: string | null; length_nt: number; contributing_enzyme_ids: string[]; contributor_group_id: string | null; [key: string]: unknown }
 export interface RestrictionDigestFragment { fragment_index: number; topology: Topology; top_strand_sequence: string; reference_span_bp: number; source_segments: Array<[number, number]>; wraps_origin: boolean; left_end: RestrictionDigestEnd; right_end: RestrictionDigestEnd; contributing_enzyme_ids: string[]; [key: string]: unknown }
 export interface RestrictionDigestSimulation { schema: 'bms.molbio.restriction-digest-simulation.v1'; cleavage_state: 'uncut' | 'linearized' | 'fragmented'; source: RestrictionAnalysisResponse['source']; catalog: RestrictionCatalogReceipt; selected_enzyme_ids: string[]; selected_enzymes: RestrictionRecord[]; occurrences: RestrictionOccurrence[]; cleavages: unknown[]; fragments: RestrictionDigestFragment[]; warnings: string[]; limitations: string[]; simulation_sha256: string | null; [key: string]: unknown }
+export interface RestrictionCatalogSummary {
+    enzyme_id: string;
+    canonical_name: string;
+    aliases: string[];
+    site_iupac: string;
+    site_alternatives_iupac: string[];
+    palindromic: boolean;
+    cleavage_status: RestrictionRecord['cleavage']['status'];
+    overhang_kinds: Array<'blunt' | 'five_prime' | 'three_prime'>;
+    nick_strand: 'top' | 'bottom' | null;
+    enzyme_kind: RestrictionRecord['enzyme_kind'];
+    analysis_capability: RestrictionRecord['analysis_capability'];
+    golden_gate_compatible: boolean;
+    exclusion_reason: string | null;
+    reported_commercial: boolean;
+    historical_supplier_codes: string[];
+}
+export interface RestrictionCatalogBrowsePage { schema: 'bms.molbio.restriction-catalog-browse-page.v1'; catalog: RestrictionCatalogReceipt; items: RestrictionCatalogSummary[]; next_cursor: string | null }
 export interface RestrictionCatalogPage { schema: 'bms.molbio.restriction-catalog-page.v1'; catalog: RestrictionCatalogReceipt; items: RestrictionRecord[]; next_cursor: string | null }
 export interface RestrictionProductPermissionReceipt { receipt_id: string; receipt_sha256: string; decided_on: string }
 export interface RestrictionProductEvidence { source_id: string; source_sha256: string; observed_on: string }
@@ -102,6 +120,44 @@ function parseNick(value: unknown, path: string, length: number, topology: Topol
 function parseOccurrence(value: unknown, path: string, sequenceLength: number, topology: Topology): RestrictionOccurrence { const v = object(value, ['occurrence_id','occurrence_ordinal','enzyme_id','canonical_name','orientation','certainty','recognition_pattern','site_start','site_end_unwrapped','site_segments','wraps_origin','matched_reference_sequence','double_strand_events','nicks','limitations','activity_assessment','methylation_context'], path); const occurrenceId = id(v.occurrence_id, `${path}.occurrence_id`); nonnegative(v.occurrence_ordinal, `${path}.occurrence_ordinal`); const enzymeId = id(v.enzyme_id, `${path}.enzyme_id`); string(v.canonical_name, `${path}.canonical_name`); const orientation = literal(v.orientation, ['forward','reverse'], `${path}.orientation`); literal(v.certainty, ['definite','possible'], `${path}.certainty`); string(v.recognition_pattern, `${path}.recognition_pattern`, DNA); const start = nonnegative(v.site_start, `${path}.site_start`); const end = nonnegative(v.site_end_unwrapped, `${path}.site_end_unwrapped`); const segments = pairs(v.site_segments, `${path}.site_segments`); const wraps = bool(v.wraps_origin, `${path}.wraps_origin`); string(v.matched_reference_sequence, `${path}.matched_reference_sequence`, DNA); const dsbs = array(v.double_strand_events, `${path}.double_strand_events`).map((row, i) => parseDsb(row, `${path}.double_strand_events[${i}]`, sequenceLength, topology)); const nicks = array(v.nicks, `${path}.nicks`).map((row, i) => parseNick(row, `${path}.nicks[${i}]`, sequenceLength, topology)); [...dsbs, ...nicks].forEach((event) => { if (event.occurrence_id !== occurrenceId || event.enzyme_id !== enzymeId || event.orientation !== orientation) fail(path, 'event authority mismatch'); }); unique([...dsbs, ...nicks].map((event) => String(event.event_ordinal)), `${path}.events.event_ordinal`); strings(v.limitations, `${path}.limitations`); literal(v.activity_assessment, ['not_evaluated'], `${path}.activity_assessment`); literal(v.methylation_context, ['unknown'], `${path}.methylation_context`); if (start >= sequenceLength || end <= start || (topology === 'linear' && (wraps || end > sequenceLength)) || wraps !== (end > sequenceLength) || segments.some(([a,b]) => a < 0 || b > sequenceLength)) fail(path, 'recognition geometry mismatch'); return value as RestrictionOccurrence; }
 
 export function parseRestrictionCatalogPage(value: unknown): RestrictionCatalogPage { const v = object(value, ['schema','catalog','items','next_cursor'], '$'); literal(v.schema, ['bms.molbio.restriction-catalog-page.v1'], '$.schema'); const receipt = parseReceipt(v.catalog, '$.catalog'); const items = array(v.items, '$.items').map((row, i) => parseRecord(row, `$.items[${i}]`)); unique(items.map((row) => row.enzyme_id), '$.items'); if (v.next_cursor !== null) string(v.next_cursor, '$.next_cursor'); if (items.length > (receipt.bounds as Record<string, number>).maximum_limit) fail('$.items', 'page exceeds bound'); return value as RestrictionCatalogPage; }
+export function parseRestrictionCatalogBrowsePage(value: unknown): RestrictionCatalogBrowsePage {
+    const v = object(value, ['schema', 'catalog', 'items', 'next_cursor'], '$');
+    literal(v.schema, ['bms.molbio.restriction-catalog-browse-page.v1'], '$.schema');
+    const receipt = parseReceipt(v.catalog, '$.catalog');
+    const items = array(v.items, '$.items').map((row, i) => {
+        const p = `$.items[${i}]`;
+        const r = object(row, ['enzyme_id', 'canonical_name', 'aliases', 'site_iupac', 'site_alternatives_iupac', 'palindromic', 'cleavage_status', 'overhang_kinds', 'nick_strand', 'enzyme_kind', 'analysis_capability', 'golden_gate_compatible', 'exclusion_reason', 'reported_commercial', 'historical_supplier_codes'], p);
+        id(r.enzyme_id, `${p}.enzyme_id`);
+        string(r.canonical_name, `${p}.canonical_name`);
+        unique(strings(r.aliases, `${p}.aliases`), `${p}.aliases`);
+        string(r.site_iupac, `${p}.site_iupac`, DNA);
+        strings(r.site_alternatives_iupac, `${p}.site_alternatives_iupac`).forEach(s => string(s, `${p}.site_alternatives_iupac`, DNA));
+        bool(r.palindromic, `${p}.palindromic`);
+        literal(r.cleavage_status, ['known_double_strand', 'known_single_strand_nick', 'unknown'], `${p}.cleavage_status`);
+        array(r.overhang_kinds, `${p}.overhang_kinds`).forEach(k => literal(k, ['blunt', 'five_prime', 'three_prime'], `${p}.overhang_kinds`));
+        if (r.nick_strand !== null) literal(r.nick_strand, ['top', 'bottom'], `${p}.nick_strand`);
+        literal(r.enzyme_kind, ['double_strand_endonuclease', 'nicking_endonuclease', 'restriction_enzyme_geometry_unresolved'], `${p}.enzyme_kind`);
+        literal(r.analysis_capability, ['digest_simulation', 'nicking_analysis', 'recognition_only'], `${p}.analysis_capability`);
+        bool(r.golden_gate_compatible, `${p}.golden_gate_compatible`);
+        nullableString(r.exclusion_reason, `${p}.exclusion_reason`);
+        bool(r.reported_commercial, `${p}.reported_commercial`);
+        strings(r.historical_supplier_codes, `${p}.historical_supplier_codes`);
+        return row as RestrictionCatalogSummary;
+    });
+    unique(items.map(r => r.enzyme_id), '$.items');
+    nullableString(v.next_cursor, '$.next_cursor');
+    if (items.length > (receipt.bounds.maximum_limit as number)) fail('$.items', 'page exceeds bound');
+    return value as RestrictionCatalogBrowsePage;
+}
+
+/** Browse records never impersonate complete cleavage/provenance records. */
+export function isRestrictionCatalogSummary(record: RestrictionRecord | RestrictionCatalogSummary): record is RestrictionCatalogSummary {
+    return typeof record.site_iupac === 'string';
+}
+export function restrictionRecognitionSite(record: RestrictionRecord | RestrictionCatalogSummary): string {
+    return isRestrictionCatalogSummary(record) ? record.site_iupac : record.recognition.site_iupac;
+}
+
 function productDate(value: unknown, path: string): string { const result = string(value, path, /^\d{4}-\d{2}-\d{2}$/u); const parsed = new Date(`${result}T00:00:00Z`); if (Number.isNaN(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== result) fail(path, 'expected valid date'); return result; }
 function productTimestamp(value: unknown, path: string): string { const result = string(value, path); if (!/^\d{4}-\d{2}-\d{2}T/u.test(result) || Number.isNaN(Date.parse(result))) fail(path, 'expected valid timestamp'); return result; }
 function boundedProductString(value: unknown, path: string, maximum: number): string { const result = string(value, path); if (!result || result.length > maximum || result !== result.trim()) fail(path, 'expected bounded nonempty string'); return result; }
@@ -165,6 +221,40 @@ async function json(response: Response): Promise<unknown> {
     try { return await response.json(); } catch { throw new Error('Restriction API returned malformed JSON.'); }
 }
 export async function fetchRestrictionCatalog({ transport = fetch, signal, onPage }: { transport?: Transport; signal?: AbortSignal; onPage?: (page: { catalog: RestrictionCatalogReceipt; items: RestrictionRecord[] }) => void } = {}): Promise<{ catalog: RestrictionCatalogReceipt; items: RestrictionRecord[] }> { let cursor: string | null = null; let authority: RestrictionCatalogReceipt | null = null; const items: RestrictionRecord[] = []; do { const url = `/api/molbio/restriction/catalog?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`; const page = parseRestrictionCatalogPage(await json(await transport(url, { signal, credentials: 'same-origin' }))); if (authority && (authority.catalog_id !== page.catalog.catalog_id || authority.catalog_sha256 !== page.catalog.catalog_sha256)) throw new Error('Restriction catalog authority changed during pagination.'); authority = page.catalog; items.push(...page.items); onPage?.({ catalog: authority, items: [...items] }); cursor = page.next_cursor; } while (cursor); if (!authority || items.length !== authority.counts.total) throw new Error('Restriction catalog page count is incomplete.'); unique(items.map((item) => item.enzyme_id), 'catalog'); return { catalog: authority, items }; }
+async function fetchCatalogProjection<T extends RestrictionRecord | RestrictionCatalogSummary>(
+    parse: (value: unknown) => { catalog: RestrictionCatalogReceipt; items: T[]; next_cursor: string | null },
+    responseView: 'compact' | 'full',
+    { transport = fetch, signal, enzymeIds, catalog }: { transport?: Transport; signal?: AbortSignal; enzymeIds?: string[]; catalog?: RestrictionCatalogBinding },
+): Promise<{ catalog: RestrictionCatalogReceipt; items: T[] }> {
+    const params = new URLSearchParams({ limit: '200', response_view: responseView });
+    const selected = enzymeIds ? [...new Set(enzymeIds)].sort() : undefined;
+    selected?.forEach(value => params.append('enzyme_ids', value));
+    let authority: RestrictionCatalogReceipt | null = null;
+    const items: T[] = [];
+    const cursors = new Set<string>();
+    do {
+        const page = parse(await json(await transport(`/api/molbio/restriction/catalog?${params}`, { signal, credentials: 'same-origin' })));
+        if ((authority && (authority.catalog_id !== page.catalog.catalog_id || authority.catalog_sha256 !== page.catalog.catalog_sha256)) ||
+            (catalog && (catalog.catalog_id !== page.catalog.catalog_id || catalog.expected_catalog_sha256 !== page.catalog.catalog_sha256))) throw new Error('Restriction catalog authority changed during pagination.');
+        authority = page.catalog;
+        items.push(...page.items);
+        if (page.next_cursor === null) break;
+        if (cursors.has(page.next_cursor)) throw new Error('Restriction catalog cursor repeated during pagination.');
+        cursors.add(page.next_cursor);
+        params.set('cursor', page.next_cursor);
+    } while (true);
+    unique(items.map(item => item.enzyme_id), 'catalog');
+    if (selected ? !sameSet(items.map(item => item.enzyme_id), selected) : items.length !== authority.counts.total) throw new Error('Restriction catalog page count is incomplete.');
+    return { catalog: authority, items };
+}
+export function fetchRestrictionCatalogBrowse(options: { transport?: Transport; signal?: AbortSignal } = {}) {
+    return fetchCatalogProjection(parseRestrictionCatalogBrowsePage, 'compact', options);
+}
+export async function fetchRestrictionCatalogDetails(options: { enzymeIds: string[]; catalog: RestrictionCatalogBinding; transport?: Transport; signal?: AbortSignal }): Promise<RestrictionRecord[]> {
+    if (options.enzymeIds.length === 0) return [];
+    return (await fetchCatalogProjection(parseRestrictionCatalogPage, 'full', options)).items;
+}
+
 export async function fetchRestrictionProducts({ transport = fetch, signal }: { transport?: Transport; signal?: AbortSignal } = {}): Promise<RestrictionProductsResponse> { let cursor: string | null = null; let authority: RestrictionProductReleaseReceipt | null = null; let authorityBytes: string | null = null; const seenCursors = new Set<string>(); const items: RestrictionProductRecord[] = []; do { const url = `/api/molbio/restriction/products?limit=250${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`; const page = parseRestrictionProducts(await json(await transport(url, { signal, credentials: 'same-origin' }))); const receiptBytes = JSON.stringify(page.product_release); if (authorityBytes !== null && receiptBytes !== authorityBytes) throw new Error('Restriction product authority changed during pagination.'); authority = page.product_release; authorityBytes = receiptBytes; items.push(...page.items); cursor = page.next_cursor; if (cursor !== null) { if (seenCursors.has(cursor)) throw new Error('Restriction product cursor repeated during pagination.'); seenCursors.add(cursor); } } while (cursor); if (!authority || items.length !== authority.record_count) throw new Error('Restriction product page count is incomplete.'); unique(items.map((item) => item.product_id), 'products.product_id'); unique(items.map((item) => `${normalizeProductIdentity(item.supplier.supplier_id)}\u0000${normalizeProductIdentity(item.catalog_number)}`), 'products.product_identity'); if (authority.redistribution_permission_state === 'approved' && authority.permission_receipt) { const active = items.reduce((sum, item, index) => sum + parseProductRecord(item, `products[${index}]`, authority!.permission_receipt!).active, 0); if (active !== authority.active_claim_count) throw new Error('Restriction product active claim count is inconsistent.'); } return { schema: 'bms.molbio.restriction-products-page.v1', product_release: authority, items, next_cursor: null }; }
 function canonicalSource(source: RestrictionSource): RestrictionSource {
     if (source.kind !== 'inline_dna') return source;
@@ -200,7 +290,7 @@ export async function fetchRestrictionAnalysis({ source, catalog, enzymeIds, tra
     return response;
 }
 
-export async function fetchRestrictionAnalysisBatch({ source, catalog, records, transport = fetch, signal, enzymeIds: selectedIds, onProgress }: { source: RestrictionSource; catalog: RestrictionCatalogReceipt; records: RestrictionRecord[]; transport?: Transport; signal?: AbortSignal; enzymeIds?: string[]; onProgress?: (batch: RestrictionAnalysisBatch) => void }): Promise<RestrictionAnalysisBatch> {
+export async function fetchRestrictionAnalysisBatch({ source, catalog, records, transport = fetch, signal, enzymeIds: selectedIds, onProgress }: { source: RestrictionSource; catalog: RestrictionCatalogReceipt; records: Array<Pick<RestrictionRecord, 'enzyme_id'>>; transport?: Transport; signal?: AbortSignal; enzymeIds?: string[]; onProgress?: (batch: RestrictionAnalysisBatch) => void }): Promise<RestrictionAnalysisBatch> {
     if (!selectedIds && records.length !== catalog.counts.total) throw new Error('Restriction catalog record count is incomplete.');
     const enzymeIds = selectedIds ? [...new Set(selectedIds)].sort() : records
         .map((record) => record.enzyme_id)
@@ -278,9 +368,32 @@ export async function fetchRestrictionAnalysisBatch({ source, catalog, records, 
 }
 export async function simulateRestrictionDigest({ source, catalog, enzymeIds, transport = fetch, signal }: { source: RestrictionSource; catalog: RestrictionCatalogBinding; enzymeIds: string[]; transport?: Transport; signal?: AbortSignal }): Promise<RestrictionDigestSimulation> { source = canonicalSource(source); unique(enzymeIds, 'enzymeIds'); const response = parseRestrictionDigestSimulation(await json(await transport('/api/molbio/restriction/digests/simulate', { method: 'POST', credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ schema: 'bms.molbio.restriction-digest-simulation-request.v1', ...requestBody(source, catalog), enzyme_ids: enzymeIds }) }))); if (response.catalog.catalog_id !== catalog.catalog_id || response.catalog.catalog_sha256 !== catalog.expected_catalog_sha256 || response.selected_enzyme_ids.length !== enzymeIds.length || response.selected_enzyme_ids.some((idValue,i) => idValue !== enzymeIds[i]) || !await sourceIdentityMatches(source, response.source)) throw new Error('Restriction digest authority mismatch.'); return response; }
 
+export interface RestrictionDigestSaveAcknowledgement {
+    schema: 'bms.molbio.restriction-digest-saved-ack.v1';
+    operation_id: string; source_revision_id: string; catalog_id: string; catalog_sha256: string;
+    request_sha256: string; result_sha256: string;
+    outputs: Array<{ fragment_index: number; document_id: string; revision_id: string; output_edge_id: string; name: string; topology: Topology; content_sha256: string; content_length: number }>;
+}
+export function parseRestrictionDigestSaveAcknowledgement(value: unknown): RestrictionDigestSaveAcknowledgement {
+    const v = object(value, ['schema', 'operation_id', 'source_revision_id', 'catalog_id', 'catalog_sha256', 'request_sha256', 'result_sha256', 'outputs'], '$');
+    literal(v.schema, ['bms.molbio.restriction-digest-saved-ack.v1'], '$.schema');
+    for (const key of ['operation_id', 'source_revision_id', 'catalog_id']) string(v[key], `$.${key}`);
+    for (const key of ['catalog_sha256', 'request_sha256', 'result_sha256']) hash(v[key], `$.${key}`);
+    array(v.outputs, '$.outputs').forEach((output, i) => {
+        const p = `$.outputs[${i}]`;
+        const o = object(output, ['fragment_index', 'document_id', 'revision_id', 'output_edge_id', 'name', 'topology', 'content_sha256', 'content_length'], p);
+        for (const key of ['document_id', 'revision_id', 'output_edge_id', 'name']) string(o[key], `${p}.${key}`);
+        nonnegative(o.fragment_index, `${p}.fragment_index`);
+        nonnegative(o.content_length, `${p}.content_length`);
+        hash(o.content_sha256, `${p}.content_sha256`);
+        literal(o.topology, ['linear', 'circular'], `${p}.topology`);
+    });
+    return value as RestrictionDigestSaveAcknowledgement;
+}
+
 export async function saveRestrictionDigest(simulation: RestrictionDigestSimulation, idempotencyKey: string): Promise<string> {
     const source = simulation.source;
-    const result = await json(await fetch('/api/molbio/restriction/digests', {
+    const result = await json(await fetch('/api/molbio/restriction/digests?response_view=compact', {
         method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             schema: 'bms.molbio.restriction-digest-save-request.v1',
@@ -290,5 +403,5 @@ export async function saveRestrictionDigest(simulation: RestrictionDigestSimulat
             idempotency_key: idempotencyKey, persistence_mode: 'operation_and_fragments',
         }),
     }));
-    return string((result as Record<string, unknown>).operation_id, '$.operation_id');
+    return parseRestrictionDigestSaveAcknowledgement(result).operation_id;
 }

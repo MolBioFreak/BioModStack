@@ -11,14 +11,15 @@ import { ngsResultHref } from '../../lib/ngsResultRouting';
 import { createLatestAsyncResourceController } from '../../lib/latestAsyncResource';
 import {
     fetchRestrictionAnalysisBatch,
-    fetchRestrictionCatalog,
+    fetchRestrictionCatalogBrowse,
+    fetchRestrictionCatalogDetails,
     parseRestrictionProducts,
     simulateRestrictionDigest,
     type RestrictionAnalysisBatch,
     type RestrictionCatalogReceipt,
     type RestrictionDigestSimulation,
     type RestrictionProductReleaseReceipt,
-    type RestrictionRecord,
+    type RestrictionCatalogSummary,
     type RestrictionSource,
 } from '../../lib/restrictionAnalysis';
 import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
@@ -877,7 +878,7 @@ export function MolBioToolkitV2() {
 
     const queryClient = useQueryClient();
     const [restrictionCatalog, setRestrictionCatalog] = useState<RestrictionCatalogReceipt | null>(null);
-    const [restrictionCatalogRecords, setRestrictionCatalogRecords] = useState<RestrictionRecord[]>([]);
+    const [restrictionCatalogRecords, setRestrictionCatalogRecords] = useState<RestrictionCatalogSummary[]>([]);
     const [restrictionProductEvidence, setRestrictionProductEvidence] = useState<RestrictionProductReleaseReceipt | null>(null);
     const [restrictionAnalysis, setRestrictionAnalysis] = useState<RestrictionAnalysisBatch | null>(null);
     const [restrictionAuthorityLoading, setRestrictionAuthorityLoading] = useState(false);
@@ -886,7 +887,7 @@ export function MolBioToolkitV2() {
     const [restrictionDigestLoading, setRestrictionDigestLoading] = useState(false);
     const [restrictionDigestError, setRestrictionDigestError] = useState<string | null>(null);
 
-    const restrictionCatalogRecordsRef = useRef<RestrictionRecord[]>([]);
+    const restrictionCatalogRecordsRef = useRef<RestrictionCatalogSummary[]>([]);
     const restrictionAnalysisAbortRef = useRef<AbortController | null>(null);
     const restrictionAnalysisControllerRef = useRef(createLatestAsyncResourceController());
     const restrictionAuthorityControllerRef = useRef(createLatestAsyncResourceController());
@@ -2299,7 +2300,7 @@ export function MolBioToolkitV2() {
         let cancelled = false;
         void queryClient.fetchQuery({
             queryKey: ['molbio-restriction-catalog'],
-            queryFn: ({ signal }) => fetchRestrictionCatalog({ signal }),
+            queryFn: ({ signal }) => fetchRestrictionCatalogBrowse({ signal }),
             staleTime: 300_000,
         }).then((page) => {
             if (cancelled) return;
@@ -2311,6 +2312,16 @@ export function MolBioToolkitV2() {
         });
         return () => { cancelled = true; };
     }, [queryClient, restrictionConsumerVisible]);
+
+    const readRestrictionDetails = useCallback((enzymeIds: string[]) => {
+        if (!restrictionCatalog) return Promise.resolve([]);
+        const ids = [...new Set(enzymeIds)].sort();
+        return queryClient.fetchQuery({
+            queryKey: ['molbio-restriction-details', restrictionCatalog.catalog_id, restrictionCatalog.catalog_sha256, ids],
+            queryFn: ({ signal }) => fetchRestrictionCatalogDetails({ enzymeIds: ids, catalog: { catalog_id: restrictionCatalog.catalog_id, expected_catalog_sha256: restrictionCatalog.catalog_sha256 }, signal }),
+            staleTime: 300_000,
+        });
+    }, [queryClient, restrictionCatalog]);
 
     // Supplier products do not own recognition-site or cleavage geometry.
     useEffect(() => {
@@ -3185,6 +3196,7 @@ export function MolBioToolkitV2() {
                         catalog={restrictionCatalog}
                         productEvidence={restrictionProductEvidence}
                         catalogRecords={restrictionCatalogRecords}
+                        onReadEnzymeDetails={readRestrictionDetails}
                         analysis={restrictionAnalysis}
                         authorityLoading={restrictionAuthorityLoading}
                         authorityError={restrictionAuthorityError}
@@ -3714,6 +3726,7 @@ export function MolBioToolkitV2() {
                         catalog={restrictionCatalog}
                         productEvidence={restrictionProductEvidence}
                         catalogRecords={restrictionCatalogRecords}
+                        onReadEnzymeDetails={readRestrictionDetails}
                         analysis={restrictionAnalysis}
                         authorityLoading={restrictionAuthorityLoading}
                         authorityError={restrictionAuthorityError}

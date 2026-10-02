@@ -29,9 +29,9 @@ vi.mock('../../src/components/experiments/GlobalExperimentContext', async () => 
  }};
 });
 vi.mock('../../src/components/MolBioToolkit/utils/annotationSources', async (original) => ({...await original<any>(),fetchAnnotationSourceStatus:vi.fn().mockResolvedValue({}),retrieveNcbiAnnotationSource:mocks.annotationDownload}));
-vi.mock('../../src/lib/restrictionAnalysis', async (original) => ({...await original<any>(),fetchRestrictionCatalog:mocks.catalog,fetchRestrictionProducts:mocks.products,fetchRestrictionAnalysisBatch:mocks.analyze}));
+vi.mock('../../src/lib/restrictionAnalysis', async (original) => ({...await original<any>(),fetchRestrictionCatalogBrowse:mocks.catalog,fetchRestrictionProducts:mocks.products,fetchRestrictionAnalysisBatch:mocks.analyze}));
 vi.mock('../../src/lib/api', async (original) => ({...await original<any>(),fetchNucleotideSequences:vi.fn().mockResolvedValue({data:[]}),fetchNucleotideSequence:mocks.get,createNucleotideSequence:mocks.create,updateNucleotideSequence:mocks.update,fetchPrimerTmOptions:mocks.tmOptions}));
-import { RECEIPT, RECORD } from './molBioRestrictionCatalogFixture';
+import { RECEIPT, SUMMARY } from './molBioRestrictionCatalogFixture';
 import { MolBioToolkitV2 } from '../../src/components/MolBioToolkit/MolBioToolkitV2';
 let root:Root, host:HTMLDivElement, client:QueryClient;
 function RouteProbe(){const location=useLocation();return <output data-route-search>{location.search}</output>}
@@ -119,14 +119,14 @@ it('release fetch counts stay constant across construct edits and switch; hidden
 it('empty View makes zero release calls; Digest demands every continuation and retains the exact full catalog', async () => {
  expect(mocks.catalog).not.toHaveBeenCalled();expect(mocks.products).not.toHaveBeenCalled();
  const actual = await vi.importActual<typeof import('../../src/lib/restrictionAnalysis')>('../../src/lib/restrictionAnalysis');
- const records = Array.from({length:123}, (_, i) => ({...RECORD, enzyme_id:`Enzyme${i}`, canonical_name:`Enzyme${i}`}));
+ const records = Array.from({length:123}, (_, i) => ({...SUMMARY, enzyme_id:`Enzyme${i}`, canonical_name:`Enzyme${i}`}));
  const receipt = {...RECEIPT, counts:{...RECEIPT.counts,total:records.length,geometry_ready:records.length,commercial_geometry_ready:records.length}};
  const transport = vi.fn(async (input:RequestInfo | URL) => {
    const url = new URL(String(input), 'https://fixture.invalid');
    const offset = Number(url.searchParams.get('cursor') ?? 0);
-   return {ok:true,json:async()=>({schema:'bms.molbio.restriction-catalog-page.v1',catalog:receipt,items:records.slice(offset,offset+50),next_cursor:offset+50<records.length?String(offset+50):null})} as Response;
+   return {ok:true,json:async()=>({schema:'bms.molbio.restriction-catalog-browse-page.v1',catalog:receipt,items:records.slice(offset,offset+50),next_cursor:offset+50<records.length?String(offset+50):null})} as Response;
  });
- mocks.catalog.mockImplementation(({signal})=>actual.fetchRestrictionCatalog({signal,transport}));
+ mocks.catalog.mockImplementation(({signal})=>actual.fetchRestrictionCatalogBrowse({signal,transport}));
  await create();
  expect(mocks.catalog).not.toHaveBeenCalled();
  const digest=[...host.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent?.trim()==='Digest');
@@ -146,12 +146,12 @@ it('late catalog completion after leaving Digest stays cached and does not repla
  await act(async()=>tool('Digest').click());expect(mocks.catalog).toHaveBeenCalledTimes(1);
  await act(async()=>tool('View').click());
  await create('Newer');
- const page={catalog:RECEIPT,items:[RECORD]};
+ const page={catalog:RECEIPT,items:[SUMMARY]};
  await act(async()=>response.resolve(page));
  expect(mocks.header.sequenceData.name).toBe('Newer');
  expect(client.getQueryData(['molbio-restriction-catalog'])).toBe(page);
  await act(async()=>tool('Digest').click());
- expect(mocks.digest.catalogRecords).toEqual([RECORD]);expect(mocks.catalog).toHaveBeenCalledTimes(1);
+ expect(mocks.digest.catalogRecords).toEqual([SUMMARY]);expect(mocks.catalog).toHaveBeenCalledTimes(1);
  expect(mocks.header.sequenceData.name).toBe('Newer');
  await act(async()=>tool('View').click());
  await act(async()=>client.invalidateQueries({queryKey:['molbio-restriction-catalog']}));

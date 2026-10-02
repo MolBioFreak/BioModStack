@@ -23,6 +23,8 @@ const simulation = { fragments: [
     { fragment_index: 1, reference_span_bp: 7, source_segments: [[3, 10]], left_end: end('left', 'blunt'), right_end: end('right', 'blunt') },
 ] } as unknown as RestrictionDigestSimulation;
 
+const ack = (operation_id: string) => ({ schema: 'bms.molbio.restriction-digest-saved-ack.v1', operation_id, source_revision_id: 'revision', catalog_id: 'catalog-v1', catalog_sha256: 'a'.repeat(64), request_sha256: 'b'.repeat(64), result_sha256: 'c'.repeat(64), outputs: [] });
+
 describe('DigestPanel backend authority', () => {
     it.each([false, true])('keeps the current saved result when a previous save finishes late (failure=%s)', async (lateFailure) => {
         const preview = { ...simulation, source: { kind: 'molecular_revision', sequence_id: 'source', revision_id: 'revision', content_sha256: 'a'.repeat(64), topology: 'linear' }, catalog, selected_enzyme_ids: ['EcoRI'], simulation_sha256: null } as RestrictionDigestSimulation;
@@ -40,11 +42,11 @@ describe('DigestPanel backend authority', () => {
             await act(async () => save().click());
             await act(async () => render(next));
             await act(async () => save().click());
-            await act(async () => finishSecond(new Response(JSON.stringify({ operation_id: 'second' }))));
+            await act(async () => finishSecond(new Response(JSON.stringify(ack('second')))));
             expect(container.querySelector('a')?.getAttribute('href')).toBe('/api/molbio/restriction/digests/second');
             await act(async () => finishFirst(lateFailure
                 ? new Response(JSON.stringify({ detail: { code: 'analysis_busy' } }), { status: 503 })
-                : new Response(JSON.stringify({ operation_id: 'first' }))));
+                : new Response(JSON.stringify(ack('first')))));
             expect(container.querySelector('a')?.getAttribute('href')).toBe('/api/molbio/restriction/digests/second');
             expect(save().disabled).toBe(true);
         } finally { vi.unstubAllGlobals(); }
@@ -54,7 +56,7 @@ describe('DigestPanel backend authority', () => {
         const preview = { ...simulation, source: { kind: 'molecular_revision', sequence_id: 'source', revision_id: 'revision', content_sha256: 'a'.repeat(64), topology: 'linear' }, catalog, selected_enzyme_ids: ['EcoRI'], simulation_sha256: null } as RestrictionDigestSimulation;
         const transport = vi.fn()
             .mockResolvedValueOnce(new Response(JSON.stringify({ detail: { code: 'analysis_busy' } }), { status: 503 }))
-            .mockResolvedValueOnce(new Response(JSON.stringify({ operation_id: 'saved-operation' })));
+            .mockResolvedValueOnce(new Response(JSON.stringify(ack('saved-operation'))));
         vi.stubGlobal('fetch', transport);
         try {
             container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
