@@ -1148,6 +1148,19 @@ export interface BioXpWorkflowJob {
         };
     };
 }
+// Discovery is intentionally not selected-job detail. Older robots may still
+// return full rows; consumers select by identity and fetch detail separately.
+export interface BioXpWorkflowJobSummary {
+    job_id: string;
+    status: string;
+    dry_run: boolean;
+    protocol_id: string;
+    source_type: 'native' | 'oem_xml';
+    created_at: string;
+    updated_at: string;
+    pending_review: { stage_id: string | null; action_id: string | null; reason: string | null } | null;
+    command?: BioXpWorkflowCommand | null;
+}
 export interface BioXpWorkflowInput {
     source_type: 'native' | 'oem_xml';
     document?: Record<string, unknown> | null;
@@ -2622,7 +2635,7 @@ export const useDisconnectBioXp = () => useRefreshMutation(
 const workflowJobsKey = ['bioxp', 'protocols', 'jobs'] as const;
 export const useBioXpWorkflowJobs = (generation: number, enabled: boolean) => useQuery({
     queryKey: [...workflowJobsKey, generation],
-    queryFn: async () => (await api.get<{ rows: BioXpWorkflowJob[] }>('/api/bioxp/protocols/jobs', {
+    queryFn: async () => (await api.get<{ rows: (BioXpWorkflowJob | BioXpWorkflowJobSummary)[] }>('/api/bioxp/protocols/jobs', {
         params: { expected_connection_generation: generation },
     })).data.rows,
     enabled: enabled && generation > 0,

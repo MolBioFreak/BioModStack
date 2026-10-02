@@ -49,7 +49,7 @@ async def _query(runtime, route, expected_generation, *, job_id=None, limit=None
         if job_id is not None:
             kwargs["path_params"] = {"job_id": job_id}
         if limit is not None:
-            kwargs["params"] = {"limit": limit}
+            kwargs["params"] = {"limit": limit, "summary": True}
         return await runtime.connection.request_active_v2_query(
             route, expected_generation=generation, **kwargs,
         )
