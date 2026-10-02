@@ -281,6 +281,7 @@ dependencies = [
     { name = "biotite", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "biotite", version = "1.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "biotite", version = "1.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "dnachisel" },
     { name = "dnaweaver" },
     { name = "duckdb" },
     { name = "fastapi" },
@@ -330,6 +331,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.19.0" },
     { name = "biopython", specifier = ">=1.87,<2" },
     { name = "biotite", specifier = ">=0.42.0" },
+    { name = "dnachisel", specifier = "==3.2.16" },
     { name = "dnaweaver", specifier = "==0.3.10" },
     { name = "duckdb", specifier = ">=1.4.0,<2" },
     { name = "fastapi", specifier = ">=0.139.2" },
@@ -1086,6 +1088,25 @@ wheels = [
 ]
 
 [[package]]
+name = "dnachisel"
+version = "3.2.16"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "biopython" },
+    { name = "docopt" },
+    { name = "flametree" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "proglog" },
+    { name = "python-codon-tables" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ba/84/3353ca63bdd00c340491b1b04bf5ffbb0fe522bf9989ff91b78fa4b1f648/dnachisel-3.2.16.tar.gz", hash = "sha256:de872bf5c92b110e0b3c78e09e7bacafa711a3a61ee707449574b5c096974497", size = 116191, upload-time = "2025-05-10T09:47:21.408Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/20/c0/1489e78e116c415dca9d6bccd5cc33abbd81810e0cbd8e02eb11e9099f60/dnachisel-3.2.16-py3-none-any.whl", hash = "sha256:ec557276867b864a0cedb3b376f59d677c7b25699bbef884acad09131321e76f", size = 147218, upload-time = "2025-05-10T09:47:19.616Z" },
+]
+
+[[package]]
 name = "dnaweaver"
 version = "0.3.10"
 source = { registry = "https://pypi.org/simple" }
@@ -1108,6 +1129,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/bf/71/ce6fce63717f78d7e
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b8/b2/a552a6794f78e42a87737869f96e8bf6de1f38a9a573ecf53e94b223fcfb/dnaweaver-0.3.10-py3-none-any.whl", hash = "sha256:e09936a0f9b0da33a74bf6c42712eb5ba894d2c3af1bdceca88905aa73d599ba", size = 312941, upload-time = "2025-05-12T11:44:11.426Z" },
 ]
+
+[[package]]
+name = "docopt"
+version = "0.6.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a2/55/8f8cab2afd404cf578136ef2cc5dfb50baa1761b68c9da1fb1e4eed343c9/docopt-0.6.2.tar.gz", hash = "sha256:49b3a825280bd66b3aa83585ef59c4a8c82f2c8a522dbe754a8bc8d08c85c491", size = 25901, upload-time = "2014-06-16T11:18:57.406Z" }
 
 [[package]]
 name = "duckdb"
@@ -3711,6 +3738,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/59/3c/f9b58e57830e58980dbe8867d0e348f45701d3f3ea065672d448f4366da5/pytest_socket-0.8.0.tar.gz", hash = "sha256:af9bb5f487da72be63573a6194cfac033b6c7a1c1561e150521105970f9e99f2", size = 13912, upload-time = "2026-05-21T16:50:22.552Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3f/e8/4a8568580bae3dcd678599ed8e86a82d505a44df71c1ced4246c1aa14b4b/pytest_socket-0.8.0-py3-none-any.whl", hash = "sha256:81821ba59f07d7600fe2b551d8714f40b068bd46e8b6704c48664e9d60cdacb8", size = 8414, upload-time = "2026-05-21T16:50:21.022Z" },
+]
+
+[[package]]
+name = "python-codon-tables"
+version = "0.1.18"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/14/db/da662b0ba76f97c34c10fd603a8237e63bed7b49cbe8a3c7997506c56804/python_codon_tables-0.1.18.tar.gz", hash = "sha256:73f552980ad292afb8e8bcd6debf824041b59b0a7cec009b67b11690c3863907", size = 11435, upload-time = "2025-05-09T18:12:08.39Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/eb/99/4d8045a5323c6258db35ffc2e3ff4babe73d22ca5ee0080560a198a6aaac/python_codon_tables-0.1.18-py3-none-any.whl", hash = "sha256:3539d041d561f972ddca3601cf9bd4e19bedc32c36d1c459d63f069f973bbedc", size = 13434, upload-time = "2025-05-09T18:12:07.172Z" },
 ]
 
 [[package]]
