@@ -2768,8 +2768,8 @@ export interface BatchAnalytics {
 export const fetchJobAnalytics = (jobId: string) =>
     api.get<JobAnalytics>(`/api/analytics/job/${jobId}`).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
 
-export const fetchJobDesignMetrics = (jobId: string) =>
-    api.get<unknown>(`/api/analytics/job/${jobId}/designs`).then(response => ({...response, data: parseMetricPoints(response.data)}));
+export const fetchJobDesignMetrics = (jobId: string, includeChildren?: boolean) =>
+    api.get<unknown>(`/api/analytics/job/${jobId}/designs`, includeChildren === undefined ? undefined : { params: { include_children: includeChildren } }).then(response => ({...response, data: parseMetricPoints(response.data)}));
 
 export const fetchBatchAnalytics = (jobIds: string[]) =>
     api.post<BatchAnalytics>('/api/analytics/batch', jobIds).then(response => ({...response, data: validateScientificEnvelope(response.data)}));

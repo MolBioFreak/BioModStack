@@ -1,23 +1,51 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchJobs, fetchBatchAnalytics } from '../lib/api';
+import { fetchJobs, fetchBatchAnalytics, fetchJobDesignMetrics } from '../lib/api';
+import { ScientificAnalytics } from './ScientificAnalytics';
+import type { ScientificPoint } from '../lib/scientificAnalytics';
 import type { Job } from '../lib/api';
 import { isNgsJob } from '../lib/ngsResultRouting';
+import { bc2Page, bc2Label, fetchBC2Page } from '../lib/bindcraft2Results';
+import { isNativeBinderGeneration } from '../lib/nativeBinderResults';
+import { fetchJobById } from '../lib/api';
+const NativeResults = lazy(() => import('./NativeBinderGenerationResults').then(m => ({ default: m.NativeBinderGenerationResults })));
+
+function NativeObservations({ jobId, launchContextId }: { jobId: string; launchContextId?: string | null }) {
+    const [open, setOpen] = useState(false);
+    const job = useQuery({ queryKey: ['job', jobId], queryFn: () => fetchJobById(jobId), enabled: open });
+    return <div className="rounded border border-[var(--border-color)] p-2">
+        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>Native observations · {jobId}</button>
+        {open && <Suspense fallback={<p>Loading native observations…</p>}>
+            {job.isError ? <p>Native job could not be loaded.</p> : job.isPending ? <p>Loading job…</p>
+                : job.data.data.model_id === 'bindcraft2' ? <NativeResults jobId={jobId} launchContextId={launchContextId} adapter={{
+                    key: 'comparison-retained', title: 'BC2 retained observations', compact: true,
+                    fetchPage: async (offset, signal) => bc2Page(await fetchBC2Page(jobId, null, 'retained', offset, signal)), label: bc2Label,
+                }} /> : isNativeBinderGeneration(job.data.data) ? <NativeResults jobId={jobId} launchContextId={launchContextId} />
+                    : <p>Use canonical metrics or candidate confidence for this result type.</p>}
+        </Suspense>}
+    </div>;
+}
 // Remove unused DistributionChart import
 // import { DistributionChart } from './MetricCharts'; 
 
 interface BatchComparePaneProps {
     initialJobId?: string;
+    jobIds?: string[];
+    onJobIdsChange?: (ids: string[]) => void;
+    nativeMetrics?: boolean;
+    launchContextId?: string | null;
 }
 
 
-export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
-    const [selectedJobIds, setSelectedJobIds] = useState<string[]>(initialJobId ? [initialJobId] : []);
+export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeMetrics = false, launchContextId }: BatchComparePaneProps) {
+    const [localIds, setLocalIds] = useState<string[]>(initialJobId ? [initialJobId] : []);
+    const selectedJobIds = jobIds ?? localIds;
+    const setSelectedJobIds = (ids: string[]) => { setLocalIds(ids); onJobIdsChange?.(ids); };
 
     // Fetch all jobs for the selector
     const { data: jobsData } = useQuery({
-        queryKey: ['jobs'],
-        queryFn: ({ signal }) => fetchJobs({ limit: 500, summary: true }, undefined, signal),
+        queryKey: ['jobs', 'comparison', nativeMetrics],
+        queryFn: ({ signal }) => fetchJobs({ limit: 500, summary: true, include_children: nativeMetrics }, undefined, signal),
     });
     const jobs = useMemo(
         () => (jobsData?.data.jobs ?? []).filter((j: Job) => !isNgsJob(j)),
@@ -25,14 +53,11 @@ export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
     );
 
     useEffect(() => {
-        if (!jobs.length) {
-            if (selectedJobIds.length > 0) {
-                setSelectedJobIds([]);
-            }
-            return;
-        }
-        setSelectedJobIds((prev) => prev.filter((id) => jobs.some((j) => j.id === id)));
-    }, [jobs, selectedJobIds.length]);
+        // A bounded job selector must not erase explicit or historical selections.
+        if (jobIds !== undefined || !jobsData) return;
+        const filtered = localIds.filter(id => !jobsData.data.jobs.some(j => j.id === id && isNgsJob(j)));
+        if (filtered.length !== localIds.length) setLocalIds(filtered);
+    }, [jobsData, jobIds, localIds]);
 
     // Fetch batch analytics for selected jobs
     const { data: batchData, isLoading } = useQuery({
@@ -42,13 +67,16 @@ export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
     });
 
     const comparison = batchData?.data;
+    const points = useQuery({
+        queryKey: ['comparison-native-points', selectedJobIds],
+        queryFn: async () => (await Promise.all(selectedJobIds.map(id => fetchJobDesignMetrics(id, false))))
+            .flatMap(response => response.data).filter((point): point is ScientificPoint => point.contract_revision === 1),
+        enabled: nativeMetrics && selectedJobIds.length > 0,
+    });
 
     const toggleJob = (id: string) => {
-        setSelectedJobIds(prev =>
-            prev.includes(id)
-                ? prev.filter(x => x !== id)
-                : [...prev, id]
-        );
+        setSelectedJobIds(selectedJobIds.includes(id)
+            ? selectedJobIds.filter(x => x !== id) : [...selectedJobIds, id]);
     };
 
     // Transform BatchAnalytics data to row format for table
@@ -121,6 +149,15 @@ export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
                     </div>
                 ) : comparison ? (
                     <div className="space-y-8">
+                        {nativeMetrics && <>
+                            <p>Native measurements stay in their producer cohorts; parent and descendant jobs are not pooled. Missing measurements are not zero. Open native observations to compare original record sets without turning them into Designs.</p>
+                            {selectedJobIds.map(id => <NativeObservations key={id} jobId={id} launchContextId={launchContextId} />)}
+                            {points.isError ? <p role="alert">Native comparison measurements could not be loaded.</p>
+                                : points.isPending ? <p>Loading native measurements…</p>
+                                : points.data.length ? <ScientificAnalytics points={points.data} cohorts={comparison.scientific_cohorts ?? []} />
+                                : <p>No canonical native measurements reported for this selection.</p>}
+                        </>}
+                        {!nativeMetrics && <>
                         {/* Summary Table */}
                         <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700/50">
                             <h3 className="text-lg font-semibold text-white mb-4">Summary Statistics</h3>
@@ -175,6 +212,7 @@ export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
                                 </div>
                             </div>
                         </div>
+                        </>}
                     </div>
                 ) : (
                     <div className="text-center text-red-400">Failed to load comparison data</div>

@@ -12,6 +12,8 @@ interface Design {
 interface DesignComparePaneProps {
     designs: Design[];
     preSelectedId?: string;
+    selectedDesignIds?: string[];
+    onSelectedDesignIdsChange?: (ids: string[]) => void;
 }
 
 const COLORS = [
@@ -25,22 +27,16 @@ const COLORS = [
     '#f97316', // orange
 ];
 
-export function DesignComparePane({ designs, preSelectedId }: DesignComparePaneProps) {
-    const [selectedIds, setSelectedIds] = useState<string[]>(
+export function DesignComparePane({ designs, preSelectedId, selectedDesignIds, onSelectedDesignIdsChange }: DesignComparePaneProps) {
+    const [localIds, setLocalIds] = useState<string[]>(
         preSelectedId ? [preSelectedId] : designs.slice(0, 3).map(d => d.id)
     );
 
-    // Fetch metrics for ALL selected designs
-    // We use a list of queries, but useQuery only supports one.
-    // Use useQueries or just standard Promise.all useEffect manually.
-    // Since useQueries hooks are tricky with dynamic array lengths in older React Query versions
-    // (or just verbose), let's implement a custom hook effect or just a single aggregated query.
-    // Actually, simpler: Use separate useQuery for each if list is small, or
-    // fetch all on mount? No, that's wasteful.
-    // Let's use a composite query key that fetches all selected.
+    const selectedIds = (selectedDesignIds ?? localIds).filter(id => designs.some(d => d.id === id));
+    const label = (id: string) => `${designs.find(d => d.id === id)?.name ?? id} (${id})`;
 
     const { data: metricsMap, isLoading } = useQuery({
-        queryKey: ['multiResidueMetrics', selectedIds.sort().join(',')],
+        queryKey: ['multiResidueMetrics', [...selectedIds].sort().join(',')],
         queryFn: async () => {
             const results = await Promise.all(
                 selectedIds.map(async (id) => {
@@ -60,40 +56,30 @@ export function DesignComparePane({ designs, preSelectedId }: DesignComparePaneP
     });
 
     const toggleDesign = (id: string) => {
-        setSelectedIds(prev =>
-            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-        );
+        const next = selectedIds.includes(id) ? selectedIds.filter(x => x !== id) : [...selectedIds, id];
+        setLocalIds(next);
+        onSelectedDesignIdsChange?.(next);
     };
 
     // Prepare Chart Data
     const chartData = useMemo(() => {
         if (!metricsMap) return [];
 
-        // Find max length to align
-        let maxLen = 0;
-        metricsMap.forEach(m => {
-            if (m.data?.residue_numbers) {
-                maxLen = Math.max(maxLen, m.data.residue_numbers.length);
-            }
+        // Use reported residue positions, never an inferred correspondence.
+        const positions = [...new Set(metricsMap.flatMap(m => m.data?.residue_numbers ?? []))].sort((a, b) => a - b);
+        return positions.map(residue => {
+            const point: { residue: number; [key: string]: number } = { residue };
+            metricsMap.forEach(m => {
+                const index = m.data?.residue_numbers.indexOf(residue) ?? -1;
+                const value = index < 0 ? undefined : m.data?.plddt[index];
+                if (typeof value === 'number' && Number.isFinite(value)) point[`${designs.find(d => d.id === m.id)?.name ?? m.id} (${m.id})`] = value;
+            });
+            return point;
         });
 
-        if (maxLen === 0) return [];
-
-        const dataPoints: Array<{ residue: number; [key: string]: number }> = [];
-        for (let i = 0; i < maxLen; i++) {
-            const point: { residue: number; [key: string]: number } = { residue: i + 1 };
-            metricsMap.forEach(m => {
-                const design = designs.find(d => d.id === m.id);
-                if (m.data && m.data.plddt && m.data.plddt[i] !== undefined) {
-                    point[design?.name || m.id] = m.data.plddt[i];
-                }
-            });
-            dataPoints.push(point);
-        }
-        return dataPoints;
     }, [metricsMap, designs]);
 
-    const designNames = selectedIds.map(id => designs.find(d => d.id === id)?.name || id);
+    const designNames = selectedIds.map(label);
 
     return (
         <div className="flex h-[800px] gap-6">
@@ -101,7 +87,7 @@ export function DesignComparePane({ designs, preSelectedId }: DesignComparePaneP
             <div className="w-80 border-r border-slate-800 bg-slate-900/30 flex flex-col">
                 <div className="p-4 border-b border-slate-800">
                     <h3 className="font-semibold text-slate-200">Select Designs</h3>
-                    <p className="text-xs text-slate-500 mt-1">Select up to 8 designs to overlay</p>
+                    <p className="text-xs text-slate-500 mt-1">Select designs to overlay</p>
                 </div>
                 <div className="flex-1 overflow-y-auto p-2">
                     {designs.map(design => (
@@ -136,7 +122,7 @@ export function DesignComparePane({ designs, preSelectedId }: DesignComparePaneP
             <div className="flex-1 p-6 overflow-y-auto">
                 <div className="mb-6">
                     <h2 className="text-xl font-bold text-white mb-2">Confidence Overlay</h2>
-                    <p className="text-slate-400 text-sm">Comparing per-residue pLDDT scores across {selectedIds.length} designs.</p>
+                    <p className="text-slate-400 text-sm">Comparing reported per-residue pLDDT across {selectedIds.length} designs. Residue numbers are not a structural alignment; verify compatible chains and producer scales.</p>
                 </div>
 
                 {isLoading ? (
@@ -174,7 +160,8 @@ export function DesignComparePane({ designs, preSelectedId }: DesignComparePaneP
                                     const d = designs.find(d => d.id === id);
                                     if (!dm || !dm.plddt) return null;
 
-                                    const vals = dm.plddt;
+                                    const vals = dm.plddt.filter(Number.isFinite);
+                                    if (!vals.length) return null;
                                     const min = Math.min(...vals);
                                     const max = Math.max(...vals);
 
