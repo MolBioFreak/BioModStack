@@ -35,8 +35,13 @@ def _score(design, settings, request):
     junction_by_end = {}
     if design.solutions:
         for i, junction in enumerate(design.solutions[0].junctions):
-            junction_by_end[(junction.left_fragment_id, 'right')] = str(i)
-            junction_by_end[(junction.right_fragment_id, 'left')] = str(i)
+            for part_id, side in ((junction.left_fragment_id, 'right'), (junction.right_fragment_id, 'left')):
+                part = parts[part_id]
+                # Donor/prepared inventories describe the original molecule;
+                # PCR/synthesis preparations are already in product orientation.
+                if part.orientation == 'reverse' and part.preparation.kind in {'donor', 'prepared'}:
+                    side = 'left' if side == 'right' else 'right'
+                junction_by_end[(part_id, side)] = str(i)
     for digest in design.digests:
         for fragment, material_id in zip(digest.fragments, digest.fragment_material_ids):
             for side in ('left', 'right'):
@@ -56,7 +61,7 @@ def _score(design, settings, request):
         for side in ('left', 'right'):
             end = getattr(parts[preparation.part_id].preparation, side + '_end')
             inventory.append(fidelity.EndInstance(instance_id=f'{material.id}:{preparation.part_id}:{side}',
-                sequence=end.overhang if end else None, role='insert',
+                sequence=end.overhang if end else None, role=parts[preparation.part_id].role or 'insert',
                 intended_junction_id=junction_by_end.get((preparation.part_id, side)),
                 polarity=end.type if end else None))
     junctions = [j.overhang_sequence for j in design.solutions[0].junctions if j.overhang_sequence] if design.solutions else []

@@ -1342,7 +1342,7 @@ class MolBioOperationAdapter:
         digest = _canonical_json_sha256(payload)
         contract_digest = operation.request_fingerprint or digest
         contract_digest = _sha256(contract_digest, "molecular operation contract digest")
-        first_output = outputs[0] if outputs else None
+        first_output = next((row for row in outputs if row.role == "product"), outputs[0] if outputs else None)
         if first_output is not None:
             output_revision = revisions[first_output.revision_id]
             reopen_uri = _query_uri(
