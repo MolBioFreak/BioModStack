@@ -56,6 +56,7 @@ def _simulate(
     }
     catalog_receipt["digest_enabled"] = True
     return simulate_digest(
+        persisted_identity=True,
         sequence=sequence,
         topology=topology,
         catalog=view,

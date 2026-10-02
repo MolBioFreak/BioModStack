@@ -183,18 +183,18 @@ class DigestSimulation(StrictModel):
     selected_enzymes: tuple[RestrictionRecord, ...]
     analysis_algorithm_id: Literal["bms-restriction-analysis"] = ANALYSIS_ALGORITHM_ID
     analysis_algorithm_version: str = ANALYSIS_ALGORITHM_VERSION
-    analysis_result_sha256: str
+    analysis_result_sha256: str | None = None
     digest_algorithm_id: Literal["bms-restriction-duplex-digest"] = DIGEST_ALGORITHM_ID
     digest_algorithm_version: Literal["1.0.0"] = DIGEST_ALGORITHM_VERSION
     resource_policy: DigestResourcePolicy
-    resource_policy_sha256: str
-    request_sha256: str
+    resource_policy_sha256: str | None = None
+    request_sha256: str | None = None
     occurrences: tuple[AnalysisOccurrence, ...]
     cleavages: tuple[PhysicalCleavage, ...]
     fragments: tuple[DigestFragment, ...]
     warnings: tuple[str, ...]
     limitations: tuple[str, ...]
-    simulation_sha256: str
+    simulation_sha256: str | None = None
 
     def canonical_unsigned_bytes(self) -> bytes:
         payload = self.model_dump(mode="json", by_alias=True)
@@ -514,13 +514,14 @@ def simulate_digest_canonical(
     selected_enzyme_ids: Sequence[str],
     source_receipt: dict[str, Any],
     catalog_receipt: dict[str, Any],
+    persisted_identity: bool = True,
 ) -> tuple[DigestSimulation, bytes]:
     normalized = normalize_dna(sequence)
     return _simulate_normalized_digest_canonical(
         sequence=normalized, source_sha=hashlib.sha256(normalized.encode("ascii")).hexdigest(),
         topology=topology, catalog=catalog, records=records,
         selected_enzyme_ids=selected_enzyme_ids, source_receipt=source_receipt,
-        catalog_receipt=catalog_receipt,
+        catalog_receipt=catalog_receipt, persisted_identity=persisted_identity,
     )
 
 
@@ -529,6 +530,7 @@ def _simulate_normalized_digest_canonical(
     catalog: CatalogView, records: Sequence[RestrictionRecord],
     selected_enzyme_ids: Sequence[str], source_receipt: dict[str, Any],
     catalog_receipt: dict[str, Any],
+    persisted_identity: bool = True,
 ) -> tuple[DigestSimulation, bytes]:
     """Internal pipeline using the source boundary's canonical DNA and digest."""
     selected_ids = tuple(selected_enzyme_ids)
@@ -543,7 +545,7 @@ def _simulate_normalized_digest_canonical(
             raise DigestGeometryError("nicking_enzyme_not_digestible", "selected nicking enzyme cannot produce digest fragments")
     analysis = _analyze_normalized_sequence(
         sequence=sequence, source_sha=source_sha, topology=topology, catalog=catalog, records=selected,
-        include_possible_sites=True,
+        include_possible_sites=True, persisted_identity=persisted_identity,
     )
     if analysis.limitations:
         raise DigestGeometryError(
@@ -561,19 +563,21 @@ def _simulate_normalized_digest_canonical(
     fragments = _construct_fragments(sequence, topology, cuts)
     state = "uncut" if not cuts else "linearized" if topology == "circular" and len(cuts) == 1 else "fragmented"
     policy = resource_policy_receipt()
-    policy_sha = hashlib.sha256(rfc8785.dumps(policy.model_dump(mode="json", by_alias=True))).hexdigest()
-    request_authority = {
-        "source": source_receipt, "catalog_id": catalog.catalog_id,
-        "catalog_sha256": catalog.content_sha256, "selected_enzyme_ids": selected_ids,
-        "analysis_algorithm_id": ANALYSIS_ALGORITHM_ID,
-        "analysis_algorithm_version": ANALYSIS_ALGORITHM_VERSION,
-        "analysis_result_sha256": analysis.result_sha256,
-        "digest_algorithm_id": DIGEST_ALGORITHM_ID,
-        "digest_algorithm_version": DIGEST_ALGORITHM_VERSION,
-        "resource_policy_sha256": policy_sha,
-        "activity_assessment": "not_evaluated",
-    }
-    request_sha = hashlib.sha256(rfc8785.dumps(request_authority)).hexdigest()
+    policy_sha = request_sha = None
+    if persisted_identity:
+        policy_sha = hashlib.sha256(rfc8785.dumps(policy.model_dump(mode="json", by_alias=True))).hexdigest()
+        request_authority = {
+            "source": source_receipt, "catalog_id": catalog.catalog_id,
+            "catalog_sha256": catalog.content_sha256, "selected_enzyme_ids": selected_ids,
+            "analysis_algorithm_id": ANALYSIS_ALGORITHM_ID,
+            "analysis_algorithm_version": ANALYSIS_ALGORITHM_VERSION,
+            "analysis_result_sha256": analysis.result_sha256,
+            "digest_algorithm_id": DIGEST_ALGORITHM_ID,
+            "digest_algorithm_version": DIGEST_ALGORITHM_VERSION,
+            "resource_policy_sha256": policy_sha,
+            "activity_assessment": "not_evaluated",
+        }
+        request_sha = hashlib.sha256(rfc8785.dumps(request_authority)).hexdigest()
     occurrences = tuple(row for row in analysis.occurrences if row.certainty == "definite")
     payload = {
         "schema": "bms.molbio.restriction-digest-simulation.v1",
@@ -590,12 +594,12 @@ def _simulate_normalized_digest_canonical(
         "cleavages": cuts, "fragments": fragments,
         "warnings": tuple(analysis.warnings), "limitations": (),
     }
-    unsigned = DigestSimulation.model_validate({**payload, "simulation_sha256": "0" * 64})
-    result = DigestSimulation.model_validate({
-        **payload,
-        "simulation_sha256": hashlib.sha256(unsigned.canonical_unsigned_bytes()).hexdigest(),
-    })
-    canonical = result.canonical_bytes()
+    result = DigestSimulation.model_validate(payload)
+    if persisted_identity:
+        result = result.model_copy(update={
+            "simulation_sha256": hashlib.sha256(result.canonical_unsigned_bytes()).hexdigest(),
+        })
+    canonical = result.canonical_bytes() if persisted_identity else result.model_dump_json(by_alias=True).encode("utf-8")
     if len(canonical) > MAX_SIMULATION_RESPONSE_BYTES:
         raise DigestLimitError("simulation response exceeds digest byte limit")
     return result, canonical
@@ -610,6 +614,7 @@ def simulate_digest(
     selected_enzyme_ids: Sequence[str],
     source_receipt: dict[str, Any],
     catalog_receipt: dict[str, Any],
+    persisted_identity: bool = False,
 ) -> DigestSimulation:
     result, _canonical = simulate_digest_canonical(
         sequence=sequence,
@@ -618,7 +623,7 @@ def simulate_digest(
         records=records,
         selected_enzyme_ids=selected_enzyme_ids,
         source_receipt=source_receipt,
-        catalog_receipt=catalog_receipt,
+        catalog_receipt=catalog_receipt, persisted_identity=persisted_identity,
     )
     return result
 

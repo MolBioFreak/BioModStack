@@ -527,10 +527,10 @@ def test_analyze_inline_contract_is_strict_deterministic_and_has_no_db_write() -
     assert body["source"]["kind"] == "inline_dna"
     assert body["source"]["content_sha256"] == hashlib.sha256(b"TTGAATTCAA").hexdigest()
     assert body["analysis"]["counts"]["double_strand_break_count"] == 1
-    assert len(body["request_sha256"]) == len(body["result_sha256"]) == 64
+    assert body["request_sha256"] is body["result_sha256"] is None
 
 
-def test_public_request_and_result_hashes_bind_exact_resource_policy(monkeypatch) -> None:
+def test_public_preview_retains_exact_resource_policy(monkeypatch) -> None:
     import services.restriction_analysis as analysis_module
 
     client = _client(_authority())
@@ -567,9 +567,8 @@ def test_public_request_and_result_hashes_bind_exact_resource_policy(monkeypatch
 
     monkeypatch.setattr(analysis_module, "MAX_SCAN_WORK", analysis_module.MAX_SCAN_WORK + 1)
     second = client.post("/api/molbio/restriction/analyze", json=_inline_request()).json()
-    assert second["request_sha256"] != first["request_sha256"]
-    assert second["analysis"]["result_sha256"] != first["analysis"]["result_sha256"]
-    assert second["result_sha256"] != first["result_sha256"]
+    assert second["analysis"]["resource_policy_sha256"] != first["analysis"]["resource_policy_sha256"]
+    assert second["request_sha256"] is second["result_sha256"] is None
 
 
 def test_complete_public_response_bound_rejects_wrapper_overflow_and_admits_exact_limit(
@@ -597,55 +596,6 @@ def test_complete_public_response_bound_rejects_wrapper_overflow_and_admits_exac
     assert admitted.json() == public_document
     assert len(rfc8785.dumps(admitted.json())) == len(complete_bytes)
 
-
-@pytest.mark.parametrize(
-    ("path", "replacement"),
-    [
-        (("schema",), "bms.molbio.restriction-analysis-response.changed"),
-        (("catalog", "counts", "total"), 1093),
-        (("catalog", "source_age_notice"), "changed source-age notice"),
-        (("catalog", "analysis_enabled"), False),
-        (("catalog", "bounds", "maximum_limit"), 251),
-        (("catalog", "resource_policy", "policy_version"), "changed"),
-    ],
-)
-def test_outer_result_digest_binds_each_public_wrapper_field(
-    path: tuple[str, ...], replacement: object,
-) -> None:
-    body = _client(_authority()).post(
-        "/api/molbio/restriction/analyze", json=_inline_request(),
-    ).json()
-    unsigned = copy.deepcopy(body)
-    claimed = unsigned.pop("result_sha256")
-    baseline_digest = hashlib.sha256(rfc8785.dumps(unsigned)).hexdigest()
-    mutated = copy.deepcopy(unsigned)
-    cursor = mutated
-    for key in path[:-1]:
-        cursor = cursor[key]
-    cursor[path[-1]] = replacement
-    mutated_digest = hashlib.sha256(rfc8785.dumps(mutated)).hexdigest()
-
-    assert mutated["analysis"] == body["analysis"]
-    assert claimed == baseline_digest
-    assert mutated_digest != baseline_digest
-
-
-def test_unsigned_response_model_keyset_is_exactly_public_response_without_digest() -> None:
-    assert set(molbio_restriction.UnsignedAnalysisResponse.model_fields) == (
-        set(molbio_restriction.AnalysisResponse.model_fields) - {"result_sha256"}
-    )
-    assert set(molbio_restriction.AnalysisResponse.model_fields) == (
-        set(molbio_restriction.UnsignedAnalysisResponse.model_fields) | {"result_sha256"}
-    )
-    response = _client(_authority()).post(
-        "/api/molbio/restriction/analyze", json=_inline_request(),
-    ).json()
-    unsigned = molbio_restriction.UnsignedAnalysisResponse.model_validate({
-        key: value for key, value in response.items() if key != "result_sha256"
-    })
-    assert set(unsigned.model_dump(mode="json", by_alias=True)) == (
-        set(response) - {"result_sha256"}
-    )
 
 
 @pytest.mark.asyncio
@@ -887,16 +837,15 @@ async def test_complete_cpu_pipeline_does_not_block_lightweight_routes(
 
         monkeypatch.setattr(molbio_restriction, "normalize_dna", blocked_normalize)
     else:
-        original = molbio_restriction.rfc8785.dumps
+        original = molbio_restriction.AnalysisResponse.model_dump_json
 
-        def blocked_serialize(value):
-            if isinstance(value, dict) and value.get("schema") == "bms.molbio.restriction-analysis-response.v1":
-                assert threading.get_ident() != event_loop_thread
-                started.set()
-                assert release.wait(3)
-            return original(value)
+        def blocked_serialize(value, **kwargs):
+            assert threading.get_ident() != event_loop_thread
+            started.set()
+            assert release.wait(3)
+            return original(value, **kwargs)
 
-        monkeypatch.setattr(molbio_restriction.rfc8785, "dumps", blocked_serialize)
+        monkeypatch.setattr(molbio_restriction.AnalysisResponse, "model_dump_json", blocked_serialize)
 
     def controller() -> None:
         assert started.wait(3)
@@ -917,29 +866,19 @@ async def test_complete_cpu_pipeline_does_not_block_lightweight_routes(
     assert lightweight.status_code == analysis.status_code == 200
 
 
-def test_analysis_returns_exact_validated_worker_canonical_bytes() -> None:
+def test_analysis_returns_exact_validated_worker_json_bytes() -> None:
     response = _client(_authority()).post(
         "/api/molbio/restriction/analyze", json=_inline_request(),
     )
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/json"
     assert len(response.content) <= molbio_restriction.MAX_RESPONSE_BYTES
-    assert response.content == rfc8785.dumps(response.json())
+    assert response.content == molbio_restriction.AnalysisResponse.model_validate(response.json()).model_dump_json(by_alias=True).encode("utf-8")
     strict = molbio_restriction.AnalysisResponse.model_validate_json(
         response.content, strict=True,
     )
     body = strict.model_dump(mode="json", by_alias=True)
-    analysis = body["analysis"]
-    inner_preimage = dict(analysis)
-    inner_digest = inner_preimage.pop("result_sha256")
-    assert inner_digest == hashlib.sha256(rfc8785.dumps(inner_preimage)).hexdigest()
-    outer_preimage = dict(body)
-    outer_digest = outer_preimage.pop("result_sha256")
-    assert set(outer_preimage) == set(body) - {"result_sha256"}
-    molbio_restriction.UnsignedAnalysisResponse.model_validate_json(
-        rfc8785.dumps(outer_preimage), strict=True,
-    )
-    assert outer_digest == hashlib.sha256(rfc8785.dumps(outer_preimage)).hexdigest()
+    assert body["analysis"]["result_sha256"] is body["request_sha256"] is body["result_sha256"] is None
 
 
 @pytest.mark.asyncio
@@ -993,14 +932,13 @@ async def test_capacity_survives_waiter_loss_until_complete_pipeline_finishes(
 
         monkeypatch.setattr(molbio_restriction, "normalize_dna", blocked_normalize)
     else:
-        original_dumps = molbio_restriction.rfc8785.dumps
+        original_dumps = molbio_restriction.AnalysisResponse.model_dump_json
 
-        def blocked_serialize(value):
-            if isinstance(value, dict) and value.get("schema") == "bms.molbio.restriction-analysis-response.v1":
-                mark_and_wait()
-            return original_dumps(value)
+        def blocked_serialize(value, **kwargs):
+            mark_and_wait()
+            return original_dumps(value, **kwargs)
 
-        monkeypatch.setattr(molbio_restriction.rfc8785, "dumps", blocked_serialize)
+        monkeypatch.setattr(molbio_restriction.AnalysisResponse, "model_dump_json", blocked_serialize)
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
     monkeypatch.setattr(molbio_restriction, "_analysis_executor", executor)

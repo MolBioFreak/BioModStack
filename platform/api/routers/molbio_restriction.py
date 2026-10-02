@@ -483,16 +483,13 @@ class AnalysisSourceReceipt(StrictResponse):
     topology: Literal["linear", "circular"]
 
 
-class UnsignedAnalysisResponse(StrictResponse):
+class AnalysisResponse(StrictResponse):
     schema_: Literal["bms.molbio.restriction-analysis-response.v1"] = Field(alias="schema")
     source: AnalysisSourceReceipt
     catalog: CatalogReceipt
-    request_sha256: str
+    request_sha256: str | None = None
     analysis: AnalysisResult
-
-
-class AnalysisResponse(UnsignedAnalysisResponse):
-    result_sha256: str
+    result_sha256: str | None = None
 
 
 class DigestSimulationRequest(StrictResponse):
@@ -520,7 +517,7 @@ class DigestSaveRequest(StrictResponse):
         min_length=1, max_length=MAX_SELECTED_ENZYMES,
         json_schema_extra={"maxItems": MAX_SELECTED_ENZYMES},
     )
-    simulation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    simulation_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     idempotency_key: str = Field(min_length=1, max_length=255, pattern=r".*\S.*")
     persistence_mode: Literal["operation_only", "operation_and_fragments"]
     fragment_name_prefix: str | None = Field(
@@ -1039,12 +1036,6 @@ class _ResolvedRevisionSource:
 
 
 @dataclass(frozen=True, slots=True)
-class _CanonicalAnalysisOutput:
-    response: AnalysisResponse
-    canonical_bytes: bytes
-
-
-@dataclass(frozen=True, slots=True)
 class _CanonicalSimulationOutput:
     simulation: DigestSimulation
     canonical_bytes: bytes
@@ -1223,8 +1214,8 @@ def _complete_analysis_pipeline(
     payload: AnalysisRequest,
     authority: CatalogAuthority,
     resolved_revision: _ResolvedRevisionSource | None,
-) -> _CanonicalAnalysisOutput:
-    """Own preprocessing, analysis, model authority, hashing, and final bytes."""
+) -> bytes:
+    """Own source validation, analysis and response serialization in the worker."""
     view = _require_view(authority)
     if payload.catalog.catalog_id != view.catalog_id:
         raise _error(404, "catalog_not_found", "restriction catalog was not found")
@@ -1237,24 +1228,6 @@ def _complete_analysis_pipeline(
         )
     sequence, topology, source_receipt = _analysis_source(payload.source, resolved_revision)
     records = _analysis_records(view, payload.scope)
-    normalized_request = payload.model_dump(mode="json", by_alias=True)
-    normalized_request["source"] = {
-        **normalized_request["source"],
-        **({"dna": sequence, "name": source_receipt.name} if source_receipt.kind == "inline_dna" else {}),
-    }
-    if isinstance(payload.scope, ExplicitAnalysisScope):
-        normalized_request["scope"]["enzyme_ids"] = sorted(payload.scope.enzyme_ids)
-    normalized_request["regions"] = sorted(
-        normalized_request["regions"], key=lambda row: (row["start"], row["end"]),
-    )
-    policy_receipt = resource_policy_receipt()
-    policy_sha256 = resource_policy_sha256(
-        policy_receipt.model_dump(mode="json", by_alias=True)
-    )
-    request_sha256 = hashlib.sha256(rfc8785.dumps({
-        "request": normalized_request,
-        "resource_policy_sha256": policy_sha256,
-    })).hexdigest()
     analysis = _analyze_normalized_sequence(
         sequence=sequence, source_sha=source_receipt.content_sha256,
         topology=topology,
@@ -1262,25 +1235,17 @@ def _complete_analysis_pipeline(
         records=records,
         include_possible_sites=payload.include_possible_sites,
         regions=tuple((region.start, region.end) for region in payload.regions),
+        persisted_identity=False,
     )
     catalog_receipt = _receipt(authority)
-    unsigned_response = UnsignedAnalysisResponse(
+    response = AnalysisResponse(
         schema="bms.molbio.restriction-analysis-response.v1",
-        source=source_receipt,
-        catalog=catalog_receipt,
-        request_sha256=request_sha256,
-        analysis=analysis,
+        source=source_receipt, catalog=catalog_receipt, analysis=analysis,
     )
-    unsigned_document = unsigned_response.model_dump(mode="json", by_alias=True)
-    result_sha256 = hashlib.sha256(rfc8785.dumps(unsigned_document)).hexdigest()
-    response = AnalysisResponse.model_validate({
-        **unsigned_document,
-        "result_sha256": result_sha256,
-    })
-    canonical_bytes = rfc8785.dumps(response.model_dump(mode="json", by_alias=True))
+    canonical_bytes = response.model_dump_json(by_alias=True).encode("utf-8")
     if len(canonical_bytes) > MAX_RESPONSE_BYTES:
         raise AnalysisLimitError("analysis response exceeds byte limit")
-    return _CanonicalAnalysisOutput(response=response, canonical_bytes=canonical_bytes)
+    return canonical_bytes
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
@@ -1327,7 +1292,7 @@ async def analyze_restriction_sites(
         raise _error(504, "analysis_timeout", "restriction analysis exceeded its wait timeout") from exc
     except Exception as exc:
         raise _error(500, "analysis_failed", "restriction analysis failed") from exc
-    return Response(content=output.canonical_bytes, media_type="application/json")
+    return Response(content=output, media_type="application/json")
 
 
 def _digest_records(view: CatalogView, enzyme_ids: list[str]) -> tuple[RestrictionRecord, ...]:
@@ -1340,6 +1305,7 @@ def _digest_records(view: CatalogView, enzyme_ids: list[str]) -> tuple[Restricti
 def _complete_digest_pipeline(
     *, payload: DigestSimulationRequest, authority: CatalogAuthority,
     resolved_revision: _ResolvedRevisionSource | None,
+    persisted_identity: bool = False,
 ) -> _CanonicalSimulationOutput:
     view = _require_view(authority)
     if payload.catalog.catalog_id != view.catalog_id:
@@ -1353,6 +1319,7 @@ def _complete_digest_pipeline(
         selected_enzyme_ids=tuple(payload.enzyme_ids),
         source_receipt=source_receipt.model_dump(mode="json", by_alias=True),
         catalog_receipt=_receipt(authority).model_dump(mode="json", by_alias=True),
+        persisted_identity=persisted_identity,
     )
     return _CanonicalSimulationOutput(simulation=simulation, canonical_bytes=canonical)
 
@@ -1973,8 +1940,6 @@ async def save_restriction_digest(
     authority: CatalogAuthority = Depends(get_catalog_authority),
     molbio_session: AsyncSession = Depends(get_molbio_session),
 ) -> Response:
-    save_receipt = _save_receipt(payload)
-    fingerprint = save_request_fingerprint(save_receipt)
     existing = (
         await molbio_session.execute(
             select(MolecularOperation).where(
@@ -1983,7 +1948,12 @@ async def save_restriction_digest(
         )
     ).scalar_one_or_none()
     if existing is not None:
-        if existing.operation_kind != "restriction_digest" or existing.request_fingerprint != fingerprint:
+        if existing.operation_kind != "restriction_digest":
+            raise _error(409, "idempotency_conflict", "idempotency key is bound to another request")
+        if payload.simulation_sha256 is None:
+            payload = payload.model_copy(update={"simulation_sha256": existing.parameters.get("simulation_sha256")})
+        fingerprint = _save_fingerprint(payload)
+        if existing.request_fingerprint != fingerprint:
             raise _error(409, "idempotency_conflict", "idempotency key is bound to another request")
         canonical = await _load_saved_digest(molbio_session, str(existing.id))
         return Response(content=canonical, media_type="application/json")
@@ -2004,16 +1974,19 @@ async def save_restriction_digest(
     try:
         simulation_output = await _run_capacity_owned(
             _complete_digest_pipeline, payload=simulation_request, authority=authority,
-            resolved_revision=resolved,
+            resolved_revision=resolved, persisted_identity=True,
         )
     except HTTPException:
         raise
     except Exception as exc:
         raise _digest_http_error(exc) from exc
     simulation = simulation_output.simulation
-    if simulation.simulation_sha256 != payload.simulation_sha256:
+    if payload.simulation_sha256 is not None and simulation.simulation_sha256 != payload.simulation_sha256:
         raise _error(409, "simulation_digest_mismatch", "digest simulation digest does not match")
 
+    payload = payload.model_copy(update={"simulation_sha256": simulation.simulation_sha256})
+    save_receipt = _save_receipt(payload)
+    fingerprint = save_request_fingerprint(save_receipt)
     operation_id = str(uuid.uuid4())
     result_id = str(uuid.uuid4())
     normalized_fragment_name_prefix = (

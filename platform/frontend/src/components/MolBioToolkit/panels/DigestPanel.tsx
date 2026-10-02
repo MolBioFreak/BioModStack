@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { saveRestrictionDigest } from '../../../lib/restrictionAnalysis';
 import type { HighlightedRegion, SelectionInfo, SequenceData } from '../types';
 import type {
     RestrictionAnalysisBatch,
@@ -88,6 +89,20 @@ const QUICK: Array<[QuickMapGroup, string]> = [['unique','Map all 1x'],['double'
 
 export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, productEvidence }: DigestPanelProps) {
     const [digestEnzymes, setDigestEnzymes] = useState<string[]>([]);
+    const [saveState, setSaveState] = useState<{ simulation: RestrictionDigestSimulation; pending?: boolean; operationId?: string; error?: string } | null>(null);
+    const saveRequest = useRef<{ simulation: RestrictionDigestSimulation; key: string } | null>(null);
+    const saveDigest = async () => {
+        if (!digestSimulation) return;
+        if (saveRequest.current?.simulation !== digestSimulation) saveRequest.current = { simulation: digestSimulation, key: crypto.randomUUID() };
+        setSaveState({ simulation: digestSimulation, pending: true });
+        try {
+            const operationId = await saveRestrictionDigest(digestSimulation, saveRequest.current.key);
+            setSaveState({ simulation: digestSimulation, operationId });
+        } catch (error) {
+            setSaveState({ simulation: digestSimulation, error: error instanceof Error ? error.message : 'Digest save failed.' });
+        }
+    };
+    const currentSave = saveState?.simulation === digestSimulation ? saveState : null;
     const [searchQuery, setSearchQuery] = useState('');
     const [displayPage, setDisplayPage] = useState(0);
     const [cutFilter, setCutFilter] = useState<CutFilter>('all');
@@ -199,7 +214,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             <div><strong>{analysis.analysis.counts.nick_count}</strong> nicks</div>
         </div>}
         {analysis && <p className="px-3 text-xs text-slate-500">Each enzyme is counted separately. Shared motifs and context-dependent enzymes may overlap at one sequence position.</p>}
-        {analysis && <details className="mx-3 text-xs text-slate-400"><summary>{analysis.chunks.length} exact analysis authority chunk{analysis.chunks.length === 1 ? '' : 's'}</summary>{analysis.chunks.map((chunk, index) => <code key={chunk.result_sha256} data-restriction-chunk-result-sha256={chunk.result_sha256} className="block break-all">Chunk {index + 1}: sha256:{chunk.result_sha256}</code>)}</details>}
+
         <div data-digest-mobile-sticky-search={mobile ? 'true' : undefined} className="space-y-2 px-3">
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search enzyme or recognition site…" data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 ${mobile ? 'min-h-12 min-w-12' : ''}`} />
             {!compactLandscape && <><div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{CUT_FILTERS.map(([value,label]) => <button key={value} onClick={() => setCutFilter(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${cutFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div><div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{GROUP_FILTERS.map(([value,label]) => <button key={value} onClick={() => setGroupFilter(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${groupFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div><div data-digest-bulk-map="true" className="flex gap-1 overflow-x-auto"><button disabled={filteredMapIds.length === 0} onClick={mapFiltered} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border border-cyan-600 bg-cyan-950/50 px-2 disabled:opacity-40`}>Map filtered ({filteredMapIds.length})</button><button disabled={selectedEnzymes.length === 0} onClick={clearMap} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Clear map ({selectedEnzymes.length})</button></div><div data-digest-quick-map="true" className="flex gap-1 overflow-x-auto">{QUICK.map(([value,label]) => <button key={value} onClick={() => toggleQuick(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2`}>{label}</button>)}</div></>}
@@ -215,6 +230,11 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         <div data-digest-mobile-footer={mobile ? 'true' : undefined} data-digest-compact-landscape={mobile && compactLandscape ? 'true' : undefined} className="border-t border-slate-700 bg-slate-950 p-3">
             <div className="mb-2 flex gap-1 overflow-x-auto">{digestEnzymes.map((id) => <button key={id} onClick={() => toggleDigest(id)} className="rounded border border-amber-500 px-2">{id} ×</button>)}</div>
             <button onClick={() => onSimulateDigest(digestEnzymes)} disabled={digestLoading || digestEnzymes.length === 0} data-digest-mobile-run={mobile ? 'true' : undefined} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded bg-cyan-600 py-2 disabled:bg-slate-600 ${mobile ? 'min-h-12 min-w-12' : ''}`}>{digestLoading ? 'Digesting…' : `Run Digest (${digestEnzymes.length} enzyme${digestEnzymes.length === 1 ? '' : 's'})`}</button>
+            {digestSimulation?.source?.kind === 'molecular_revision' && <div>
+                <button type="button" onClick={saveDigest} disabled={currentSave?.pending || !!currentSave?.operationId} className="rounded border px-3 py-2 disabled:opacity-40">{currentSave?.pending ? 'Saving…' : 'Save digest & fragments'}</button>
+                {currentSave?.operationId && <a className="ml-2 underline" href={`/api/molbio/restriction/digests/${encodeURIComponent(currentSave.operationId)}`} target="_blank" rel="noreferrer">Open saved digest</a>}
+                {currentSave?.error && <p role="alert">{currentSave.error}</p>}
+            </div>}
             {digestSimulation && <div data-digest-mobile-result={mobile ? 'true' : undefined} className="mt-2 space-y-1 rounded border border-cyan-700 p-2"><div>{digestSimulation.fragments.length} exact sequence fragments</div>{digestSimulation.fragments.map((fragment) => <div key={fragment.fragment_index} data-fragment-index={fragment.fragment_index} className="rounded bg-slate-800 p-2 text-xs"><strong>#{fragment.fragment_index + 1} · {fragment.reference_span_bp} bp</strong><div>Left: {endLabel(fragment.left_end)}</div><div>Right: {endLabel(fragment.right_end)}</div></div>)}</div>}
         </div>
     </div>;

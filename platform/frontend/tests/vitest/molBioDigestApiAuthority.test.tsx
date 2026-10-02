@@ -24,6 +24,29 @@ const simulation = { fragments: [
 ] } as unknown as RestrictionDigestSimulation;
 
 describe('DigestPanel backend authority', () => {
+    it('saves a hash-free preview from the mounted control and retains retry identity', async () => {
+        const preview = { ...simulation, source: { kind: 'molecular_revision', sequence_id: 'source', revision_id: 'revision', content_sha256: 'a'.repeat(64), topology: 'linear' }, catalog, selected_enzyme_ids: ['EcoRI'], simulation_sha256: null } as RestrictionDigestSimulation;
+        const transport = vi.fn()
+            .mockResolvedValueOnce(new Response(JSON.stringify({ detail: { code: 'analysis_busy' } }), { status: 503 }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ operation_id: 'saved-operation' })));
+        vi.stubGlobal('fetch', transport);
+        try {
+            container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+            await act(async () => root?.render(<DigestPanel sequenceData={sequence} sequenceId="source" onHighlight={vi.fn()} catalog={catalog} catalogRecords={[record]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={preview} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={vi.fn()} />));
+            const button = [...container.querySelectorAll('button')].find(row => row.textContent === 'Save digest & fragments')!;
+            await act(async () => button.click());
+            expect(container.querySelector('[role="alert"]')).not.toBeNull();
+            await act(async () => button.click());
+            const first = JSON.parse(transport.mock.calls[0][1].body);
+            const second = JSON.parse(transport.mock.calls[1][1].body);
+            expect(second).toEqual(first);
+            expect(second).toMatchObject({ simulation_sha256: null, enzyme_ids: ['EcoRI'], persistence_mode: 'operation_and_fragments', source: { expected_content_sha256: 'a'.repeat(64), revision_id: 'revision' }, catalog: { expected_catalog_sha256: catalog.catalog_sha256 } });
+            expect(second.idempotency_key).toBeTruthy();
+            expect(button.disabled).toBe(true);
+            expect(container.querySelector('a')?.getAttribute('href')).toBe('/api/molbio/restriction/digests/saved-operation');
+        } finally { vi.unstubAllGlobals(); }
+    });
+
     let root: Root | undefined;
     let container: HTMLDivElement | undefined;
     afterEach(async () => { if (root) await act(async () => root?.unmount()); container?.remove(); });
@@ -78,14 +101,14 @@ describe('DigestPanel backend authority', () => {
         expect(container.querySelector('[data-fragment-index="0"]')).toBeTruthy();
     });
 
-    it('renders complete catalog discovery and exact ordered chunk hashes', async () => {
+    it('renders complete catalog discovery without transient hash receipts', async () => {
         container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
         await act(async () => root?.render(<DigestPanel sequenceData={sequence} sequenceId={null} onHighlight={vi.fn()} selectedEnzymes={[]} onEnzymesChange={vi.fn()} catalog={catalog} productEvidence={products} catalogRecords={[record, recognitionOnly]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={vi.fn()} />));
         const all = [...container.querySelectorAll('button')].find((button) => button.textContent === 'All');
         await act(async () => all?.click());
         expect(container.textContent).toContain('MysteryI');
         expect(container.textContent).toContain('geometry unavailable');
-        expect(container.querySelector(`[data-restriction-chunk-result-sha256="${'b'.repeat(64)}"]`)).toBeTruthy();
+        expect(container.querySelector("[data-restriction-chunk-result-sha256]")).toBeNull();
     });
 
     it('clears fragment highlights when digest authority disappears and on unmount', async () => {

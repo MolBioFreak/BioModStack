@@ -39,9 +39,9 @@ Historical supplier codes are provenance only. They do not establish current ava
 1. immutable `sequence_id`, `revision_id`, and normalized sequence `content_sha256`;
 2. exact `catalog_id` and catalog `content_sha256`;
 3. a unique ordered set of `enzyme_ids` only;
-4. the exact algorithm/version, topology, definite-site-only rule, and fail-closed geometry policies;
-5. exact request and simulation SHA-256 result binding;
-6. idempotency and persistence policy.
+4. idempotency and persistence policy.
+
+The server owns algorithm/version and geometry policies. `simulation_sha256` is optional on save: omit it (or send `null`) for a current preview; a supplied historical identity must still match the recomputed simulation. Saved results retain their existing request/result identities, canonical bytes, and integrity-checked reopen path.
 
 The server must reload and verify both immutable authorities and rerun simulation before a saved write. Stale source/catalog receipts, unknown enzymes, recognition-only records, nickases, out-of-bounds linear cuts, non-identical overlapping geometry, crossing geometry, or result-digest disagreement reject without a partial saved result.
 
@@ -49,7 +49,7 @@ The server must reload and verify both immutable authorities and rerun simulatio
 
 Catalog and manifest bytes are RFC 8785/JCS canonical JSON. Each record, catalog, and manifest digest omits only its own digest field from the canonical preimage. Generated wall-clock time is deliberately omitted (`null`) under `omitted_for_deterministic_release_bytes`; Git history records publication chronology. Updates are reviewed source changes, generated twice to exact-byte equality, and never fetched or activated at runtime.
 
-Analysis results include ordered per-enzyme summaries, complete enzyme/occurrence/event identities on raw cleavage evidence, and an explicit ordered grouped-cleavage projection with all contributor references. These fields, typed limitations, and the closed resource-policy receipt are inside the RFC 8785 inner analysis-result hash. The outer public `result_sha256` binds the complete strict analysis-response document—exact response schema, source receipt, complete catalog receipt, request digest, and complete analysis—omitting only that outer digest field from its JCS preimage. The resource-policy SHA-256 is also bound into normalized request authority and the cache key, so a policy revision cannot reuse prior-policy authority or cached results.
+Analysis results retain ordered per-enzyme summaries, enzyme/occurrence/event identities, grouped-cleavage contributors, typed limitations, and the resource-policy receipt. Pure analysis and digest previews serialize ordinary JSON without constructing full-result hashes or canonical receipts. Their transient request/result identity fields are `null`; source/catalog identity checks and numerical results are unchanged. Explicit digest saves compute the historical persisted identities. The analysis cache continues to bind source, catalog, scope, region and resource policy, and separates preview from persisted-identity results.
 
 Readiness, OpenAPI, and every result publish `bms.molbio.restriction-analysis-resource-policy.v1`. The receipt includes sequence, explicit-enzyme, region, actual scanner-job, charged-work, occurrence, event, response-byte and conservative incremental response-budget limits; worker concurrency, queue, timeout and cancellation behavior; and cache entry, total retained-weight and per-result thresholds. The current policy identity uses:
 
@@ -57,6 +57,6 @@ Readiness, OpenAPI, and every result publish `bms.molbio.restriction-analysis-re
 - `candidate-starts-times-motif-width` version `1.0.0`, charging `max(L-m+1, 0) × m` for each linear job and `L × m` for each circular job when `m <= L`; circular `m > L` jobs charge zero and produce the typed unsupported limitation without scanning;
 - 32,000,000 charged motif comparisons, 25,000 occurrences, 50,000 events, and a 32 MiB encoded response;
 - two process-wide analysis worker threads, no queue (`reject_when_all_workers_busy`), a 60-second request wait timeout, and capacity retained until the CPU future completes after timeout or caller cancellation;
-- a 32-entry LRU cache with a 64 MiB complete retained-container-graph bound and an 8 MiB complete retained-entry cacheability threshold, measured by `canonical-json-entry-and-complete-cache-graph` version `2.0.0`; entries retain immutable canonical JSON bytes and exact keys, and hits strictly reconstruct fresh result models.
+- a 32-entry LRU cache with a 64 MiB complete retained-container-graph bound and an 8 MiB complete retained-entry cacheability threshold, measured by `canonical-json-entry-and-complete-cache-graph` version `2.0.0`; entries retain immutable JSON bytes and exact keys, and hits strictly reconstruct fresh result models.
 
 Admission builds one exact immutable scanner-job plan before `_scan`; execution consumes only that admitted plan. Matching and result construction remain incremental and fail closed. Final serialization is a backstop rather than the first resource gate. Phase 2 performs analysis only: it does not construct or persist fragments.

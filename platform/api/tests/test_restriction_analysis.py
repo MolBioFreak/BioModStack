@@ -23,6 +23,7 @@ from services.restriction_analysis import (
 def _analyze(sequence: str, enzymes: list[str], *, topology: str = "linear", possible: bool = True):
     view = catalog_authority.require()
     return analyze_sequence(
+        persisted_identity=True,
         sequence=sequence,
         topology=topology,
         catalog=view,
