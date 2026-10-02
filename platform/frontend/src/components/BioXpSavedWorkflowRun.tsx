@@ -55,8 +55,8 @@ export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEn
         <h3>Run saved workflow</h3>
         <p>Runs the last saved readback, not unsaved edits. Native controller checks remain authoritative. Run starts live execution; it does not connect or prepare the robot.</p>
         <p>{saved ? `Saved selection: ${saved.name}` : 'Save or open a workflow to run its saved snapshot.'}</p>
-        <label><input type="checkbox" checked={ack} onChange={event => setAck(event.target.checked)} /> Acknowledge live robot execution</label>
-        <button type="button" disabled={!saved || !connected || !ack || busy} onClick={() => void runSaved()}>Run saved workflow</button>
+        <label className="block"><input type="checkbox" className="mr-2" checked={ack} onChange={event => setAck(event.target.checked)} /> Acknowledge live robot execution</label>
+        <button type="button" className="bioxp-primary" disabled={!saved || !connected || !ack || busy} onClick={() => void runSaved()}>Run saved workflow</button>
         {warning && <p role="status">{warning}</p>}
         {error && <p role="alert">{error} No automatic submission retry. Reconcile the original job before starting another run.</p>}
         {runs.length > 0 && <label>Retained original run<select value={activeId ?? ''} onChange={event => setActiveId(event.target.value)}>
