@@ -228,7 +228,7 @@ def test_origin_wrapping_pcr_region_and_truncated_feature():
     product = result.solutions[0]
     assert product.sequence == "AATG" + A + "GGAG" + B
     cds = next(f for f in product.features if f.type == "CDS")
-    assert cds.status == "truncated" and cds.frame_preserved is False
+    assert cds.status == "disrupted" and cds.frame_preserved is False  # internal six-base deletion
     feature = next(f for f in product.features if f.type == "misc_feature")
     assert feature.status == "intact"
 

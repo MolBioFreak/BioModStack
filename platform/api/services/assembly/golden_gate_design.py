@@ -81,25 +81,52 @@ def _map_features(features: list[Feature], parent: Material, positions: Sequence
             lookup.setdefault(coordinate, []).append(out)
     mapped = []
     for feature in features:
-        original = [p for segment in feature.segments for p in _positions(segment, parent)]
-        traversal = original if strand == 1 else list(reversed(original))
-        # Keep compound/origin-spanning location traversal, not sorted bounds.
-        # Sorting would silently move a CDS's first codon to the display origin.
-        retained = list(dict.fromkeys(out for p in traversal for out in lookup.get(p, [])))
+        # Match the shared GenBank owner: ordered location parts, each traversed
+        # biologically on its own strand. Reverse orientation must not swap exons.
+        chunks = []
+        for segment in feature.segments:
+            coordinates = _positions(segment, parent)
+            if segment.wraps_origin:
+                split = len(parent.sequence) - segment.start
+                chunks.extend((coordinates[:split], coordinates[split:]))
+            else:
+                chunks.append(coordinates)
+        original = [p for chunk in chunks for p in (reversed(chunk) if feature.strand == -1 else chunk)]
+        retained_indices = [i for i, p in enumerate(original) if p in lookup]
+        retained = list(dict.fromkeys(out for i in retained_indices for out in lookup[original[i]]))
         if not retained:
             continue
+        direction = (feature.strand or 1) * strand
         segments = []
         start = previous = retained[0]
         for coordinate in retained[1:]:
-            if coordinate != previous + 1:
-                segments.append(Region(start=start, end=previous + 1))
+            if coordinate != previous + direction:
+                segments.append(Region(start=min(start, previous), end=max(start, previous) + 1))
                 start = coordinate
             previous = coordinate
-        segments.append(Region(start=start, end=previous + 1))
-        intact = all(p in lookup for p in original)
-        status = feature.status if intact else "truncated"
+        segments.append(Region(start=min(start, previous), end=max(start, previous) + 1))
+        intact = len(retained_indices) == len(original)
+        internal_loss = any(b != a + 1 for a, b in zip(retained_indices, retained_indices[1:]))
+        status = feature.status if intact else "disrupted" if internal_loss or feature.status == "disrupted" else "truncated"
+        qualifiers = dict(feature.qualifiers)
+        codon_start = feature.codon_start
+        if feature.type == "CDS" and not intact:
+            if feature.strand:
+                old = codon_start if codon_start is not None else qualifiers.get("codon_start", 1)
+                if isinstance(old, list):
+                    old = old[0] if old else None
+                if old in (1, 2, 3, "1", "2", "3"):
+                    codon_start = (int(old) - 1 - retained_indices[0]) % 3 + 1
+                    if "codon_start" in qualifiers:
+                        previous_value = qualifiers["codon_start"]
+                        qualifiers["codon_start"] = ([str(codon_start)] if isinstance(previous_value, list)
+                            else str(codon_start) if isinstance(previous_value, str) else codon_start)
+            # Original translation remains on the source; it no longer describes
+            # this truncated/disrupted feature. This annotation never blocks use.
+            qualifiers.pop("translation", None)
         mapped.append(feature.model_copy(update={
             "segments": segments, "strand": feature.strand * strand, "status": status,
+            "codon_start": codon_start, "qualifiers": qualifiers,
             "frame_preserved": (feature.frame_preserved if feature.frame_preserved is not None else True)
             if intact and feature.type == "CDS" else (False if feature.type == "CDS" else None),
         }))
