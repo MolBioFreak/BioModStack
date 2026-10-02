@@ -2322,6 +2322,48 @@ export function buildPreflightScript() {
     }
   }
 
+  function sameAssetList(left, right) {
+    const a = Array.isArray(left) ? left : [];
+    const b = Array.isArray(right) ? right : [];
+    return a.length === b.length && a.every((value, index) => String(value) === String(b[index]));
+  }
+
+  function isSameUiBundle(installed, candidate) {
+    return Boolean(
+      installed
+      && candidate
+      && String(installed.version || '') === String(candidate.version || '')
+      && sameAssetList(installed.entryJs, candidate.entryJs)
+      && sameAssetList(installed.entryCss, candidate.entryCss)
+    );
+  }
+
+  // The installed UI bundle is the plugin's active slot, not bootStatus: in
+  // remote-live mode bootStatus describes the mirrored Tailnet page.
+  // An unreadable or malformed descriptor counts as not installed, so the
+  // ordinary download path repairs it.
+  function tryNormalizeInstalledDescriptor(rawDescriptor) {
+    try {
+      return rawDescriptor ? normalizeBundleDescriptor(rawDescriptor) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function readInstalledUiDescriptor() {
+    let status = null;
+    try {
+      status = await callUiBundlePlugin('getStatus');
+    } catch (_) {
+      status = null;
+    }
+    if (status && typeof status === 'object' && typeof status.installed === 'boolean') {
+      return status.installed ? tryNormalizeInstalledDescriptor(status.descriptor) : null;
+    }
+    const storedBundle = readBundleState();
+    return tryNormalizeInstalledDescriptor(storedBundle && storedBundle.descriptor);
+  }
+
   async function checkUiUpdate(panel, apiBaseUrl, uiUpdateChannel) {
     try {
       const manifest = await fetchManifest(panel, apiBaseUrl, uiUpdateChannel);
@@ -2331,11 +2373,11 @@ export function buildPreflightScript() {
         return null;
       }
 
-      const currentSnapshot = getCurrentUiSnapshot();
-      if (currentSnapshot.descriptor && currentSnapshot.descriptor.version === manifest.descriptor.version) {
+      const installed = await readInstalledUiDescriptor();
+      if (isSameUiBundle(installed, manifest.descriptor)) {
         setStatus(panel, 'UI is already on ' + manifest.descriptor.version + '.', 'success');
       } else {
-        setStatus(panel, 'Update available: ' + describeDescriptor(currentSnapshot.descriptor, defaults.bundledUiVersion || 'bundled') + ' → ' + describeDescriptor(manifest.descriptor, manifest.descriptor.version) + '.', 'success');
+        setStatus(panel, 'Update available: ' + describeDescriptor(installed || bundledDescriptor, defaults.bundledUiVersion || 'bundled') + ' → ' + describeDescriptor(manifest.descriptor, manifest.descriptor.version) + '.', 'success');
       }
       return manifest;
     } catch (error) {
@@ -2355,6 +2397,13 @@ export function buildPreflightScript() {
       const shellApiVersion = Number.parseInt(defaults.shellApiVersion ?? runtime.shellApiVersion ?? 1, 10) || 1;
       if (manifest.descriptor.shellApiVersion !== shellApiVersion) {
         setStatus(panel, 'Update ' + manifest.descriptor.version + ' targets shell API ' + manifest.descriptor.shellApiVersion + ', not this APK shell API ' + shellApiVersion + '.', 'error');
+        return;
+      }
+
+      const installed = await readInstalledUiDescriptor();
+      if (isSameUiBundle(installed, manifest.descriptor)) {
+        setActiveUiLabel(panel, { source: 'downloaded', descriptor: installed });
+        setStatus(panel, 'UI is already on ' + manifest.descriptor.version + '; nothing to download.', 'success');
         return;
       }
 

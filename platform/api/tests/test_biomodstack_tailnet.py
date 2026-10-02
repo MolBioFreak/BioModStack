@@ -445,6 +445,17 @@ def test_canonical_environment_root_requires_exact_clean_durable_branch(tmp_path
         tailnet._validate_canonical_environment_root(root, "development")
 
     subprocess.run(["git", "-C", str(root), "restore", "tracked.txt"], check=True)
+
+    # Managed Development sync keeps the canonical checkout detached at origin/test.
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "--detach", head], check=True)
+    assert tailnet._validate_canonical_environment_root(root, "development") == head
+
+    (root / "tracked.txt").write_text("ahead\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-am", "ahead"], check=True)
+    with pytest.raises(tailnet.TailnetEnvironmentError, match="does not exactly match origin/test"):
+        tailnet._validate_canonical_environment_root(root, "development")
+
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "test"], check=True)
     subprocess.run(["git", "-C", str(root), "branch", "-m", "main"], check=True)
     with pytest.raises(tailnet.TailnetEnvironmentError, match="must be branch test"):
         tailnet._validate_canonical_environment_root(root, "development")
