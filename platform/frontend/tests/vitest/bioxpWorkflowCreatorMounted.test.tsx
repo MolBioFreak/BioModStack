@@ -6,14 +6,14 @@ import { writeFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
 import { MemoryRouter } from 'react-router-dom';
-import { BioXpWorkflowPage } from '../../src/pages/BioXpWorkflowPage';
+import { BioXpWorkflowEditor } from '../../src/components/BioXpWorkflowEditor';
 import { api } from '../../src/lib/api';
 
 let host: HTMLDivElement, root: Root, client: QueryClient;
 let requests: any[], db: Record<string, any>, fail: string | null;
 const exported: any[] = [], adapter = api.defaults.adapter;
 async function mount() {
-    await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={["/bioxp/workflows"]}><BioXpWorkflowPage /></MemoryRouter></QueryClientProvider>));
+    await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={["/bioxp/workflows"]}><BioXpWorkflowEditor /></MemoryRouter></QueryClientProvider>));
 }
 async function fresh() {
     await act(async () => root.unmount()); client.clear(); root = createRoot(host);
@@ -59,7 +59,7 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = adapter; vi.unstubAllGlobals(); });
 afterAll(() => { if (process.env.BIOXP_WORKFLOW_UI_EXPORT) writeFileSync(process.env.BIOXP_WORKFLOW_UI_EXPORT, JSON.stringify({ fixture_only: true, requests: exported }, null, 2)); });
 
-it('actual cockpit keeps manual controls but no saved-workflow authoring', async () => {
+it('Pipettes keeps manual controls separate from saved workflows', async () => {
     const templateAdapter = api.defaults.adapter as (config: any) => Promise<any>;
     let connection = { active: false, configured: false, generation: 0 };
     const robotPosts: string[] = [];
@@ -80,6 +80,54 @@ it('actual cockpit keeps manual controls but no saved-workflow authoring', async
     connection = { active: false, configured: true, generation: 3 };
     await act(async () => { await client.invalidateQueries(); await new Promise(resolve => setTimeout(resolve, 30)); });
     expect(rows()).toEqual(ids); expect(writes()).toEqual([]); expect(robotPosts).toEqual([]);
+});
+
+it('authors offline in the robot Workflows tab and retains unsaved edits across tabs and connections', async () => {
+    const templateAdapter = api.defaults.adapter as (config: any) => Promise<any>;
+    let connection = { active: false, configured: false, generation: 0 };
+    const robotPosts: string[] = [];
+    api.defaults.adapter = async config => {
+        if (config.url?.startsWith('/api/user-templates')) return templateAdapter(config);
+        if (config.method !== 'get') { robotPosts.push(config.url!); throw new Error('No robot mutation expected'); }
+        if (config.url === '/api/bioxp/status') return { data: { connection }, status: 200, statusText: 'OK', config, headers: {} };
+        throw new Error('Robot observations unavailable');
+    };
+    await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+    await click('Workflows');
+    const panel = host.querySelector('#control-panel-workflows') as HTMLElement;
+    expect(panel.hidden).toBe(false);
+    expect(host.querySelector('[aria-label="Saved workflow"]')?.closest('[role="tabpanel"]')).toBe(panel);
+    await change('Workflow name', 'Robot workspace draft'); await change('Location number', '4'); await append('lower');
+    const ids = rows();
+    await click('Robot controls'); expect(panel.hidden).toBe(true);
+    await click('Pipettes');
+    expect(host.querySelector('#control-panel-pipettes [aria-label="Saved workflow"]')).toBeNull();
+    await click('Workflows');
+    expect((panel.querySelector('[aria-label="Workflow name"]') as HTMLInputElement).value).toBe('Robot workspace draft');
+    expect(panel.querySelector('[data-step-id]')?.getAttribute('data-step-id')).toBe(ids[0]);
+    connection = { active: true, configured: true, generation: 2 };
+    await act(async () => { await client.invalidateQueries(); await new Promise(resolve => setTimeout(resolve, 30)); });
+    connection = { active: false, configured: true, generation: 3 };
+    await act(async () => { await client.invalidateQueries(); await new Promise(resolve => setTimeout(resolve, 30)); });
+    expect(panel.querySelector('[data-step-id]')?.getAttribute('data-step-id')).toBe(ids[0]);
+    await click('Save workflow');
+    expect(writes()[0].body.params.steps[0]).toMatchObject({ step_id: ids[0], intent: { operation: 'lower', location_id: '4' } });
+    expect(panel.textContent).toContain('Saved draft.');
+    expect(robotPosts).toEqual([]);
+    expect([...panel.querySelectorAll('button')].some(el => el.textContent?.endsWith(' now'))).toBe(false);
+});
+
+it('cycles all three robot tabs with keyboard navigation', async () => {
+    api.defaults.adapter = async config => ({ data: { connection: { active: false, configured: false, generation: 0 } }, status: 200, statusText: 'OK', config, headers: {} });
+    await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+    const key = async (tab: string, key: string) => act(async () => host.querySelector(`#control-tab-${tab}`)!.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })));
+    const selected = () => host.querySelector('[role="tab"][aria-selected="true"]')?.id;
+    await key('robot', 'ArrowRight'); expect(selected()).toBe('control-tab-pipettes');
+    await key('pipettes', 'ArrowRight'); expect(selected()).toBe('control-tab-workflows');
+    await key('workflows', 'ArrowRight'); expect(selected()).toBe('control-tab-robot');
+    await key('robot', 'ArrowLeft'); expect(selected()).toBe('control-tab-workflows');
+    await key('workflows', 'Home'); expect(selected()).toBe('control-tab-robot');
+    await key('robot', 'End'); expect(selected()).toBe('control-tab-workflows');
 });
 
 it('creates a named empty workflow offline and verifies the exact ID without any robot access', async () => {

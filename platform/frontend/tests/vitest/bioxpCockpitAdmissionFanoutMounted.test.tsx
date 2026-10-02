@@ -3648,7 +3648,7 @@ describe('Well pipetting cockpit integration', () => {
         const tab = (name: string) => container.querySelector(`#control-tab-${name}`) as HTMLButtonElement;
         const panel = (name: string) => container.querySelector(`#control-panel-${name}`) as HTMLElement;
         const click = async (name: string) => act(async () => tab(name).click());
-        const field = (name: string) => container.querySelector(`[aria-label="${name}"]`) as HTMLInputElement;
+        const field = (name: string) => panel('pipettes').querySelector(`[aria-label="${name}"]`) as HTMLInputElement;
         const set = async (name: string, value: string) => act(async () => {
             const input = field(name);
             Object.getOwnPropertyDescriptor(input.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(input, value);
@@ -3718,6 +3718,11 @@ describe('Well pipetting cockpit integration', () => {
             expect(tab('robot').getAttribute('aria-selected')).toBe('true');
             expect(document.activeElement).toBe(tab('robot'));
             await act(async () => tab('robot').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })));
+            expect(tab('workflows').getAttribute('aria-selected')).toBe('true');
+            expect(document.activeElement).toBe(tab('workflows'));
+            expect(panel('workflows').querySelector('[aria-label="Saved workflow"]')).not.toBeNull();
+            expect(stops.closest('[hidden]')).toBeNull();
+            await click('pipettes');
             expect(panel('pipettes').textContent).toContain('Robot job: completed');
             expect(panel('pipettes').textContent).toContain('Physical effect verifiedfalse');
             expect(field('Volume (µL)')).toBe(original);

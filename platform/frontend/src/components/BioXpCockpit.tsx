@@ -40,6 +40,7 @@ import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
 import { BioXpCalibrationSettings } from './BioXpCalibrationSettings';
 import { BioXpPipetteSettings } from './BioXpPipetteSettings';
 import { BioXpWellPipettingPanel } from './BioXpWellPipettingPanel';
+import { BioXpWorkflowEditor } from './BioXpWorkflowEditor';
 import { BioXpQuickDashboard } from './BioXpQuickDashboard';
 import { BioXpWorkflowControls } from './BioXpWorkflowControls';
 import { BioXpTransferControls } from './BioXpTransferControls';
@@ -258,7 +259,10 @@ function InterruptOutcome({ label, receipt, error, pending, generation, connecte
     </div>;
 }
 
-export function BioXpCockpit() {
+const CONTROL_TABS = ['robot', 'pipettes', 'workflows'] as const;
+type ControlTab = typeof CONTROL_TABS[number];
+
+export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab }) {
     const statusQuery = useBioXpStatus(true);
     const status = statusQuery.data;
     const connection = status?.connection;
@@ -291,9 +295,16 @@ export function BioXpCockpit() {
     const [workflowOpen, setWorkflowOpen] = useState(false);
     const [workflowVisible, setWorkflowVisible] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
-    const [cameraOpen, setCameraOpen] = useState(true);
-    const [controlTab, setControlTab] = useState<'robot' | 'pipettes'>('robot');
-    const [pipettesOpened, setPipettesOpened] = useState(false);
+    const [cameraOpen, setCameraOpen] = useState(initialTab !== 'workflows');
+    const [controlTab, setControlTab] = useState<ControlTab>(initialTab);
+    const [pipettesOpened, setPipettesOpened] = useState(initialTab === 'pipettes');
+    const [workflowsOpened, setWorkflowsOpened] = useState(initialTab === 'workflows');
+    const selectControlTab = (tab: ControlTab) => {
+        setControlTab(tab);
+        if (tab === 'pipettes') setPipettesOpened(true);
+        if (tab === 'workflows') setWorkflowsOpened(true);
+    };
+    useEffect(() => { selectControlTab(initialTab); }, [initialTab]);
     const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'z' | 'g', number>>({ x: 60, z: 65000, g: 0 });
     const operatorCatalog = useBioXpOperatorControlCatalog(
         generation,
@@ -1075,6 +1086,41 @@ export function BioXpCockpit() {
                 <p className="mt-1 text-sm text-slate-400">Operator controls</p>
             </header>
 
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded bg-slate-950 p-2">
+                <div role="tablist" aria-label="Robot controls" className="flex flex-wrap gap-2">
+                    {CONTROL_TABS.map(tab => <button key={tab} type="button" role="tab"
+                        id={`control-tab-${tab}`} aria-controls={`control-panel-${tab}`} aria-selected={controlTab === tab}
+                        tabIndex={controlTab === tab ? 0 : -1}
+                        onKeyDown={event => {
+                            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                            event.preventDefault();
+                            const index = CONTROL_TABS.indexOf(tab);
+                            const next = event.key === 'Home' ? 'robot' : event.key === 'End' ? 'workflows'
+                                : CONTROL_TABS[(index + (event.key === 'ArrowRight' ? 1 : -1) + CONTROL_TABS.length) % CONTROL_TABS.length];
+                            selectControlTab(next);
+                            document.getElementById(`control-tab-${next}`)?.focus();
+                        }}
+                        onClick={() => selectControlTab(tab)}
+                        className={`rounded px-4 py-2 font-semibold ${controlTab === tab ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-200'}`}>
+                        {tab === 'robot' ? 'Robot controls' : tab === 'pipettes' ? 'Pipettes' : 'Workflows'}
+                    </button>)}
+                </div>
+                <div aria-label="Stop controls" className="flex flex-wrap gap-2">
+                    {(['x', 'y', 'z'] as const).map(axis => <button key={axis} type="button"
+                        disabled={!linkConnected || generation <= 0 || interruptPending(`oem.${axis}.stop`)}
+                        title={`Immediate ${axis.toUpperCase()} stop`}
+                        onClick={() => axis === 'y' ? interruptY() : stopAxis(axis)} className="rounded bg-red-800 px-3 py-2 text-sm disabled:opacity-35">Stop {axis.toUpperCase()}</button>)}
+                    <button type="button" disabled={!linkConnected || generation <= 0 || operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true || operatorActionForPath('/motion/diagnostics/stop')?.safety_class !== 'stop' || componentStop.isPending}
+                        onClick={() => stopAxis('g')} className="rounded bg-red-800 px-3 py-2 text-sm disabled:opacity-35">Stop gripper</button>
+                    <button type="button" disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all') || v2InterruptActionById('oem.abort_all')?.enabled !== true}
+                        title={v2InterruptActionById('oem.abort_all')?.disabled_reason ?? 'Software Abort cancels waiters only; motors may continue. Use Stop for motors.'}
+                        onClick={abortXAggregate} className="rounded bg-red-950 px-3 py-2 text-sm ring-1 ring-red-600 disabled:opacity-35">Software Abort (cancel waiters)</button>
+                </div>
+            </div>
+            <div role="tabpanel" id="control-panel-workflows" aria-labelledby="control-tab-workflows" hidden={controlTab !== 'workflows'}>
+                {workflowsOpened && <BioXpWorkflowEditor />}
+            </div>
+            <div hidden={controlTab === 'workflows'} className="space-y-4">
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
@@ -1184,35 +1230,6 @@ export function BioXpCockpit() {
                 <YOperatorError label="Activation / recovery receipt" error={lifecycleReceiptQuery.error} />
             </section>
 
-            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded bg-slate-950 p-2">
-                <div role="tablist" aria-label="Robot controls" className="flex gap-2">
-                    {(['robot', 'pipettes'] as const).map(tab => <button key={tab} type="button" role="tab"
-                        id={`control-tab-${tab}`} aria-controls={`control-panel-${tab}`} aria-selected={controlTab === tab}
-                        tabIndex={controlTab === tab ? 0 : -1}
-                        onKeyDown={event => {
-                            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-                            event.preventDefault();
-                            const next = event.key === 'Home' ? 'robot' : event.key === 'End' ? 'pipettes' : tab === 'robot' ? 'pipettes' : 'robot';
-                            setControlTab(next); if (next === 'pipettes') setPipettesOpened(true);
-                            document.getElementById(`control-tab-${next}`)?.focus();
-                        }}
-                        onClick={() => { setControlTab(tab); if (tab === 'pipettes') setPipettesOpened(true); }}
-                        className={`rounded px-4 py-2 font-semibold ${controlTab === tab ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-200'}`}>
-                        {tab === 'robot' ? 'Robot controls' : 'Pipettes'}
-                    </button>)}
-                </div>
-                <div aria-label="Stop controls" className="flex flex-wrap gap-2">
-                    {(['x', 'y', 'z'] as const).map(axis => <button key={axis} type="button"
-                        disabled={!linkConnected || generation <= 0 || interruptPending(`oem.${axis}.stop`)}
-                        title={`Immediate ${axis.toUpperCase()} stop`}
-                        onClick={() => axis === 'y' ? interruptY() : stopAxis(axis)} className="rounded bg-red-800 px-3 py-2 text-sm disabled:opacity-35">Stop {axis.toUpperCase()}</button>)}
-                    <button type="button" disabled={!linkConnected || generation <= 0 || operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true || operatorActionForPath('/motion/diagnostics/stop')?.safety_class !== 'stop' || componentStop.isPending}
-                        onClick={() => stopAxis('g')} className="rounded bg-red-800 px-3 py-2 text-sm disabled:opacity-35">Stop gripper</button>
-                    <button type="button" disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all') || v2InterruptActionById('oem.abort_all')?.enabled !== true}
-                        title={v2InterruptActionById('oem.abort_all')?.disabled_reason ?? 'Software Abort cancels waiters only; motors may continue. Use Stop for motors.'}
-                        onClick={abortXAggregate} className="rounded bg-red-950 px-3 py-2 text-sm ring-1 ring-red-600 disabled:opacity-35">Software Abort (cancel waiters)</button>
-                </div>
-            </div>
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
             <div className="min-w-0">
             <div role="tabpanel" id="control-panel-robot" aria-labelledby="control-tab-robot" hidden={controlTab !== 'robot'} className="space-y-4">
@@ -1763,6 +1780,7 @@ export function BioXpCockpit() {
 
             {error && <p role="alert" className="rounded border border-red-800 p-3 text-sm text-red-300">{bioXpErrorText(error)}</p>}
             {statusQuery.isError && <p role="alert" className="text-sm text-red-300">BioXP status unavailable.</p>}
+            </div>
         </div>
     );
 }

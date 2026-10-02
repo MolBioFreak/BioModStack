@@ -473,7 +473,8 @@ export function Layout({ children }: LayoutProps) {
     const [showDevFeatures, setShowDevFeatures] = useState<boolean>(() => readShowDevFeatures());
     const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures, bmsFeatureState.known);
 
-    const isActive = (path: string) => location.pathname === path;
+    const isActive = (path: string) => location.pathname === path
+        || (path === '/bioxp' && location.pathname.startsWith('/bioxp/'));
     const isProjectManagerActive = location.pathname === '/projects' || location.pathname.startsWith('/projects/');
     const showSystemMenus = location.pathname !== '/ngs';
 
@@ -629,20 +630,6 @@ export function Layout({ children }: LayoutProps) {
                                     Stats Toolkit
                                 </Link>
 
-                                {showBioXpDevFeature && (
-                                    <Link
-                                        to="/bioxp/workflows"
-                                        data-bms-primary-nav-active={isActive('/bioxp/workflows') ? 'true' : undefined}
-                                        className={TOPBAR_NAV_ITEM_CLASSNAME}
-                                        style={{
-                                            backgroundColor: isActive('/bioxp/workflows') ? 'color-mix(in srgb, var(--warning) 20%, transparent)' : 'transparent',
-                                            color: isActive('/bioxp/workflows') ? 'var(--warning)' : 'var(--text-secondary)'
-                                        }}
-                                        title="Create and manage saved BioXP workflows"
-                                    >
-                                        BioXP Workflows
-                                    </Link>
-                                )}
                                 {showBioXpDevFeature && (
                                     <Link
                                         to="/bioxp"
