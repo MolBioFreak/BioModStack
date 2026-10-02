@@ -1731,25 +1731,6 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
         sequence_type="dna",
         settings=resolved_tm_settings,
     )
-    forward_snapshot = {
-        "sequence": forward_primer,
-        "sha256": hashlib.sha256(forward_primer.encode("utf-8")).hexdigest(),
-        "tm": forward_tm.model_dump(),
-    }
-    reverse_snapshot = {
-        "sequence": reverse_primer,
-        "sha256": hashlib.sha256(reverse_primer.encode("utf-8")).hexdigest(),
-        "tm": reverse_tm.model_dump(),
-    }
-    tm_snapshot = {
-        "settings": resolved_tm_settings.model_dump(),
-        "forward": forward_tm.model_dump(),
-        "reverse": reverse_tm.model_dump(),
-        "algorithm_definition": TM_ALGORITHM_DEFS.get(resolved_tm_settings.algorithm),
-        "salt_correction_definition": TM_SALT_CORRECTION_DEFS.get(
-            resolved_tm_settings.salt_correction
-        ),
-    }
     provenance = dict(request.provenance)
     provenance.update(
         {
@@ -1761,70 +1742,94 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
         }
     )
 
-    template_revision = (
-        await current_molecular_revision(session, parent.id)
-        if request.sequence_id
-        else None
-    )
-    template_projection_snapshot = sequence_snapshot(parent)
-    if not request.sequence_id:
-        # The generated ORM identity is not part of an inline request.
-        template_projection_snapshot.pop("id", None)
-        template_projection_snapshot.pop("created_at", None)
-        template_projection_snapshot.pop("updated_at", None)
-    request_fingerprint = canonical_request_fingerprint(
-        {
-            "schema": "pcr-request-v1",
-            "template": {
-                "document_id": request.sequence_id,
-                "revision_id": template_revision.id if template_revision else None,
-                "revision_sha256": template_revision.content_sha256
-                if template_revision
-                else None,
-                "revision_snapshot": template_revision.snapshot
-                if template_revision
-                else None,
-                "projection_sha256": hashlib.sha256(
-                    parent.sequence.encode("utf-8")
-                ).hexdigest(),
-                "projection_snapshot": template_projection_snapshot,
-            },
-            "forward_primer_snapshot": forward_snapshot,
-            "reverse_primer_snapshot": reverse_snapshot,
-            "tm_snapshot": tm_snapshot,
-            "tm_model_revision": tm_model_revision_identity(tm_snapshot),
-            "polymerase_preset_revision_id": request.polymerase_preset_revision_id,
-            "reaction_settings": request.reaction_settings,
-            "cycling_assumptions": request.cycling_assumptions,
-            "save_intent": {
-                "save": request.save,
-                "persist_experiment": request.persist_experiment,
-                "new_name": request.new_name,
-            },
-            "experiment": {
-                "notes": request.notes,
-                "review_state": request.review_state,
-            },
-            "provenance": provenance,
-            "implementation": "services.molbio_ops.pcr_product:v1",
+    forward_snapshot: dict[str, Any] = {}
+    reverse_snapshot: dict[str, Any] = {}
+    tm_snapshot: dict[str, Any] = {}
+    request_fingerprint = ""
+    if request.persist_experiment:
+        forward_snapshot = {
+            "sequence": forward_primer,
+            "sha256": hashlib.sha256(forward_primer.encode("utf-8")).hexdigest(),
+            "tm": forward_tm.model_dump(),
         }
-    )
+        reverse_snapshot = {
+            "sequence": reverse_primer,
+            "sha256": hashlib.sha256(reverse_primer.encode("utf-8")).hexdigest(),
+            "tm": reverse_tm.model_dump(),
+        }
+        tm_snapshot = {
+            "settings": resolved_tm_settings.model_dump(),
+            "forward": forward_tm.model_dump(),
+            "reverse": reverse_tm.model_dump(),
+            "algorithm_definition": TM_ALGORITHM_DEFS.get(resolved_tm_settings.algorithm),
+            "salt_correction_definition": TM_SALT_CORRECTION_DEFS.get(
+                resolved_tm_settings.salt_correction
+            ),
+        }
+        template_revision = (
+            await current_molecular_revision(session, parent.id)
+            if request.sequence_id
+            else None
+        )
+        template_projection_snapshot = sequence_snapshot(parent)
+        if not request.sequence_id:
+            # The generated ORM identity is not part of an inline request.
+            template_projection_snapshot.pop("id", None)
+            template_projection_snapshot.pop("created_at", None)
+            template_projection_snapshot.pop("updated_at", None)
+        request_fingerprint = canonical_request_fingerprint(
+            {
+                "schema": "pcr-request-v1",
+                "template": {
+                    "document_id": request.sequence_id,
+                    "revision_id": template_revision.id if template_revision else None,
+                    "revision_sha256": template_revision.content_sha256
+                    if template_revision
+                    else None,
+                    "revision_snapshot": template_revision.snapshot
+                    if template_revision
+                    else None,
+                    "projection_sha256": hashlib.sha256(
+                        parent.sequence.encode("utf-8")
+                    ).hexdigest(),
+                    "projection_snapshot": template_projection_snapshot,
+                },
+                "forward_primer_snapshot": forward_snapshot,
+                "reverse_primer_snapshot": reverse_snapshot,
+                "tm_snapshot": tm_snapshot,
+                "tm_model_revision": tm_model_revision_identity(tm_snapshot),
+                "polymerase_preset_revision_id": request.polymerase_preset_revision_id,
+                "reaction_settings": request.reaction_settings,
+                "cycling_assumptions": request.cycling_assumptions,
+                "save_intent": {
+                    "save": request.save,
+                    "persist_experiment": request.persist_experiment,
+                    "new_name": request.new_name,
+                },
+                "experiment": {
+                    "notes": request.notes,
+                    "review_state": request.review_state,
+                },
+                "provenance": provenance,
+                "implementation": "services.molbio_ops.pcr_product:v1",
+            }
+        )
 
-    if request.persist_experiment and request.idempotency_key:
-        try:
-            existing = await get_pcr_by_idempotency_key(
-                session,
-                request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-            )
-        except IdempotencyConflictError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if existing is not None:
-            return _pcr_replay_response(existing)
-        # Release the read snapshot before persistence acquires SQLite's writer
-        # lock. Loaded immutable identity data remains available because the
-        # Mol Bio session factory uses expire_on_commit=False.
-        await session.commit()
+        if request.idempotency_key:
+            try:
+                existing = await get_pcr_by_idempotency_key(
+                    session,
+                    request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+            except IdempotencyConflictError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if existing is not None:
+                return _pcr_replay_response(existing)
+            # Release the read snapshot before persistence acquires SQLite's writer
+            # lock. Loaded immutable identity data remains available because the
+            # Mol Bio session factory uses expire_on_commit=False.
+            await session.commit()
 
     try:
         product = await run_in_threadpool(pcr_product,
@@ -1847,11 +1852,6 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
     warnings = list(forward_tm.warnings) + list(reverse_tm.warnings)
     if product.wraps_origin:
         warnings.append("PCR product crosses the circular sequence origin.")
-    product_snapshot = {
-        **product_payload.model_dump(),
-        "sha256": hashlib.sha256(product.sequence.encode("utf-8")).hexdigest(),
-    }
-
     saved_sequence = None
     operation_id = None
     if request.save:
@@ -1880,7 +1880,10 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
                 polymerase_preset_revision_id=request.polymerase_preset_revision_id,
                 reaction_settings=request.reaction_settings,
                 cycling_assumptions=request.cycling_assumptions,
-                product_snapshot=product_snapshot,
+                product_snapshot={
+                    **product_payload.model_dump(),
+                    "sha256": hashlib.sha256(product.sequence.encode("utf-8")).hexdigest(),
+                },
                 warnings=warnings,
                 notes=request.notes,
                 review_state=request.review_state,
