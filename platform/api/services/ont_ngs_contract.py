@@ -72,6 +72,25 @@ def effective_expected_plasmid_size(requested: Any, reference_length: int | None
     return requested
 
 
+def replay_expected_plasmid_size(
+    params: Mapping[str, Any], provenance: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Replay saved Jobs, not new requests, with their historical size semantics.
+
+    New typed requests carry the field (including Auto/null). Older Jobs may
+    omit it; prefer their retained native plan value, otherwise the original
+    7000 bp default. Never mutate the saved request or inspect result files.
+    """
+    replay = dict(params)
+    if "expected_plasmid_size" not in replay:
+        approval = (provenance or {}).get("execution_plan_approval") or {}
+        plan = approval.get("plan") or {}
+        native = plan.get("native_parameters_json") or {}
+        recorded = native.get("expected_plasmid_size")
+        replay["expected_plasmid_size"] = recorded if recorded is not None else 7000
+    return replay
+
+
 def resolve_expected_plasmid_size(params: dict[str, Any], reference_length: int) -> None:
     """Keep requested intent beside the effective execution value in saved params."""
     requested = params.get("expected_plasmid_size")
