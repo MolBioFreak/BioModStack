@@ -19,9 +19,16 @@ it('mounted cockpit and opened Advanced share the exact catalog including draft 
             dashboard: metadata.catalog.dashboard.telemetry, canonical: structuredClone(metadata.catalog), source_authority_verified: true };
     // Freshness clock is a mounted cadence fixture; producer fields are otherwise unchanged.
     catalog.canonical.dashboard.generated_at = Date.now() / 1000;
-    vi.mocked(api.get).mockImplementation(async url => {
+    const split = (body: {actions: Array<Record<string, unknown>>}, view: string) => view === 'metadata'
+        ? {catalog_view: 'metadata', metadata_revision: 'test-fixture', actions: body.actions.map(({action_id}) => ({action_id}))}
+        : {...body, catalog_view: 'assessment', metadata_revision: 'test-fixture', actions: undefined,
+            action_states: body.actions.map(({action_id: _id, ...state}) => state), action_state_indices: body.actions.map((_,i) => i)};
+    vi.mocked(api.get).mockImplementation(async (url, options) => {
         if (url === '/api/bioxp/status') return { data: { connection: { active: true, configured: true, generation: 7, reachable: true } } };
-        if (url === '/api/bioxp/operator-controls/catalog') return { data: catalog };
+        if (url === '/api/bioxp/operator-controls/catalog') {
+            const view = options?.params?.view;
+            return { data: {...split(catalog, view), canonical: split(catalog.canonical, view)} };
+        }
         if (url.startsWith('/api/bioxp/operator-controls/history?')) return { data: { items: [], next_cursor: null } };
         throw new Error(`Unexpected GET ${url}`);
     });
@@ -36,13 +43,14 @@ it('mounted cockpit and opened Advanced share the exact catalog including draft 
         expect(count() - started).toBe(2); // one five-second catalog cadence, not one per surface
         for (const [url, options] of vi.mocked(api.get).mock.calls) {
             expect(url).not.toMatch(/operator-controls\/(v2\/catalog|dashboard)$/);
-            if (url.endsWith('/catalog')) expect(options?.params).toEqual({ z_target_steps: 65000 });
+            if (url.endsWith('/catalog')) expect(options?.params).toEqual(options?.params?.view === 'metadata'
+                ? {view: 'metadata'} : {view: 'assessment', z_target_steps: 65000});
         }
         expect(host.textContent).toContain('Individual Controls');
         if (process.env.BMS_CONSUMER_FINISH_METRICS) writeFileSync(process.env.BMS_CONSUMER_FINISH_METRICS + '.catalog.json', JSON.stringify({
             scope: 'mounted fixture response UTF-8 JSON bytes, no compression; not robot traffic or latency',
             windowMs: 10000, catalogRequests: count() - started,
-            bytesPerResponse: new TextEncoder().encode(JSON.stringify(catalog)).length,
+            bytesPerResponse: new TextEncoder().encode(JSON.stringify({...split(catalog, "assessment"), canonical: split(catalog.canonical, "assessment")})).length,
             surfaces: ['cockpit', 'Advanced'],
         }, null, 2));
     } finally { await act(async () => root.unmount()); client.clear(); host.remove(); vi.useRealTimers(); }

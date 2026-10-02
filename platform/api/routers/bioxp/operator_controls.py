@@ -251,20 +251,22 @@ async def operator_command_status_v2(
 @router.get("/operator-controls/catalog", response_model=None)
 async def operator_control_catalog(
     z_target_steps: int | None = Query(default=None, ge=-2147483648, le=2147483647),
+    view: Literal["full", "metadata", "assessment"] = Query(default="full"),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> Any:
     generation = runtime.connection.generation
+    view_params = {"view": view} if view != "full" else {}
     queries = [asyncio.create_task(query) for query in (
         runtime.connection.request_active_query(
             "operator_control_catalog",
-            params={"z_target_steps": z_target_steps} if z_target_steps is not None else None,
+            params={**view_params, **({"z_target_steps": z_target_steps} if z_target_steps is not None else {})} or None,
             expected_generation=generation,
             require_fresh=False,
         ),
         runtime.connection.request_active_v2_query(
             "operator_control_catalog_v2",
             expected_generation=generation,
-            params={"schema_version": "bioxp.operator_control_catalog.v2"},
+            params={"schema_version": "bioxp.operator_control_catalog.v2", **view_params},
         ),
     )]
     try:
@@ -277,6 +279,8 @@ async def operator_control_catalog(
             if not query.done():
                 query.cancel()
         await asyncio.gather(*queries, return_exceptions=True)
+    if view != "full" and any(not isinstance(body, dict) or body.get("catalog_view") != view for body in (catalog, canonical)):
+        raise HTTPException(426, detail="Robot catalog split-view release required; no full-poll fallback")
     if isinstance(catalog, dict):
         catalog = {**catalog, "canonical": canonical}
     return catalog
