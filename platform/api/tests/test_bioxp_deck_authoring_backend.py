@@ -359,6 +359,88 @@ def test_native_clone_identity_numeric_spelling_and_explicit_fields():
     assert clone(document)["draft"] is None
 
 
+# Exact protocol.document from live-clone-attempt.json audit GET (completed
+# protocol-live-ab09ea7e43b3cb006de8ab57c68c252a8ddb81dab7b3dc14999faddeccc2921e).
+LIVE_LEGACY_DOCUMENT = {
+    "metadata": {"manual_scope": "explicit_steps_only", "well_alignment": "source_machine_tip_location"},
+    "protocol_id": "bms-manual-pipetting", "version": 1,
+    "stages": [{"stage_id": "manual", "title": "Manual pipetting", "metadata": {}, "review_required": False,
+        "actions": [{"action_id": "manual-0-0", "description": None, "kind": "pipette_manual_physical",
+            "metadata": {"manual_step": 0}, "oem_opcode": None,
+            "params": {"diagnostic": {"action": "eject", "channels": [0, 1, 2, 3]}, "operation": "diagnostic_pipette"},
+            "pause_message": None, "required_capability": "motion", "review_required": False,
+            "source_key": None, "source_occurrence_id": None, "stage_id": "manual"}]}],
+}
+
+
+def test_live_legacy_clone_preserves_original_requirement():
+    original = deepcopy(LIVE_LEGACY_DOCUMENT)
+    result = clone(original)
+    assert result["issues"] == []
+    assert result["draft"]["steps"] == [{"step_id": "cloned-action-0",
+        "intent": original["stages"][0]["actions"][0]["params"], "required_capability": "motion"}]
+    rebuilt = preview(WorkflowPreviewRequest.model_validate(dict(protocol_id="new-job", draft=result["draft"]))).document
+    assert rebuilt is not None
+    assert _same_json(_clone_behavior(original), _clone_behavior(rebuilt))
+    assert original == LIVE_LEGACY_DOCUMENT
+    omitted = deepcopy(original)
+    del omitted["stages"][0]["actions"][0]["required_capability"]
+    assert clone(omitted)["draft"] is None
+    assert not _same_json(_clone_behavior(omitted), _clone_behavior(rebuilt))
+
+
+@pytest.mark.parametrize("capability", [None, "motion", "special", ""])
+def test_row_capability_structural_presence_and_expansion(capability):
+    mix = dict(operation="mix", channels=[0], volume_ul=1, aspirate_speed=20, dispense_speed=30, cycles=2)
+    value = draft(transfer(), mix, dict(operation="lower", location_id=0))
+    baseline = WorkflowPreviewRequest.model_validate(dict(protocol_id="test", draft=value))
+    assert baseline.draft.model_dump(by_alias=True) == value
+    ordinary = preview(baseline).document
+    assert ordinary is not None
+    assert all(a["required_capability"] is None for a in ordinary["stages"][0]["actions"])
+    value["steps"][0]["required_capability"] = capability
+    value["steps"][1]["required_capability"] = capability
+    request = WorkflowPreviewRequest.model_validate(dict(protocol_id="test", draft=value))
+    assert request.draft.model_dump(by_alias=True) == value
+    assert "required_capability" in request.draft.steps[0].model_fields_set
+    assert "required_capability" not in request.draft.steps[2].model_fields_set
+    document = preview(request).document
+    assert document is not None
+    actions = document["stages"][0]["actions"]
+    assert [a["required_capability"] for a in actions] == [capability] * 20 + [None]
+    assert preview(baseline).document == ordinary
+    assert clone(snapshot_document(value))["draft"]["steps"] == value["steps"]
+
+
+@pytest.mark.parametrize("capability", [None, "motion", "special", ""])
+def test_native_clone_preserves_explicit_capabilities_without_inference(capability):
+    document = run(dict(operation="lower", location_id=0))["document"]
+    document["stages"][0]["actions"][0]["required_capability"] = capability
+    result = clone(document)
+    assert not result["issues"]
+    row = result["draft"]["steps"][0]
+    assert ("required_capability" in row) is (capability is not None)
+    rebuilt = preview(WorkflowPreviewRequest.model_validate(dict(protocol_id="new", draft=result["draft"]))).document
+    assert rebuilt is not None
+    assert _same_json(_clone_behavior(document), _clone_behavior(rebuilt))
+
+
+@pytest.mark.asyncio
+async def test_row_capability_sqlite_presence_roundtrip_without_readiness(store):
+    value = draft({}, {}, {})
+    value["steps"][0]["required_capability"] = "unproven-original-requirement"
+    value["steps"][1]["required_capability"] = None
+    async with store() as (client, _):
+        response = await create(client, params=value)
+        assert response.status_code == 201, response.text
+        identifier = response.json()["id"]
+        assert (await client.get(f"{URL}/{identifier}")).json()["params"] == value
+        invalid = deepcopy(value)
+        invalid["steps"][0]["required_capability"] = False
+        assert (await client.put(f"{URL}/{identifier}", json={"params": invalid})).status_code == 422
+        assert (await client.get(f"{URL}/{identifier}")).json()["params"] == value
+
+
 def test_native_clone_all_actions_flat_lossless_and_export():
     cases = []
     for intents in [native_cases(), [transfer()]]:
@@ -377,6 +459,9 @@ def test_native_clone_all_actions_flat_lossless_and_export():
             for s in ([native_intent(intent)] if intent["operation"] != "transfer" else [s for s, *_ in expand_transfer(intent)])]},
             "source": document, "projected_request": {"protocol_id": "new-job", "steps": [row["intent"] for row in value["steps"]]},
             "recomposed": rebuilt})
+    result = clone(LIVE_LEGACY_DOCUMENT)
+    rebuilt = preview(WorkflowPreviewRequest.model_validate(dict(protocol_id="new-job", draft=result["draft"]))).document
+    cases.append({"source": deepcopy(LIVE_LEGACY_DOCUMENT), "recomposed": rebuilt, "captured_live": True})
     if os.getenv("BIOXP_CLONE_DIFFERENTIAL_EXPORT"):
         Path(os.environ["BIOXP_CLONE_DIFFERENTIAL_EXPORT"]).write_text(json.dumps(cases, indent=2))
 
@@ -387,7 +472,7 @@ def test_native_clone_all_actions_flat_lossless_and_export():
     (("stages", 0, "metadata", "unknown"), None),
     (("stages", 0, "actions", 0, "review_required"), True),
     (("stages", 0, "actions", 0, "pause_message"), "Stop here"),
-    (("stages", 0, "actions", 0, "required_capability"), "special"),
+    (("stages", 0, "actions", 0, "required_capability"), False),
     (("stages", 0, "actions", 0, "description"), "preserve me"),
     (("stages", 0, "actions", 0, "metadata", "unknown"), 0),
     (("stages", 0, "actions", 0, "kind"), "unknown"),

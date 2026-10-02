@@ -3,7 +3,7 @@ import type { BioXpManualStep } from './bioxpManualPipetting';
 
 export type DraftObject = { [key: string]: DraftValue };
 export type DraftValue = null | boolean | number | string | DraftValue[] | DraftObject;
-export type WorkflowDraftRow = { step_id: string; intent: DraftObject };
+export type WorkflowDraftRow = { step_id: string; intent: DraftObject; required_capability?: string | null };
 export type WorkflowDraft = { schema: 'bms.bioxp-workflow-draft.v1'; steps: WorkflowDraftRow[]; editor_state: DraftObject };
 export type NativeDraft<T> = T extends number ? number | string : T extends object ? { [K in keyof T]: NativeDraft<T[K]> } : T;
 export const isDraftObject = (value: unknown): value is DraftObject => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -82,7 +82,8 @@ export function readWorkflowDraft(value: unknown): WorkflowDraft | WorkflowPlan 
     const ids = new Set<string>();
     for (const row of value.steps) {
         if (!isDraftObject(row) || typeof row.step_id !== 'string' || !row.step_id.trim() || ids.has(row.step_id) || !isDraftObject(row.intent)
-            || Object.keys(row).some(k => !['step_id', 'intent'].includes(k))) throw new Error('Invalid workflow draft row.');
+            || Object.keys(row).some(k => !['step_id', 'intent', 'required_capability'].includes(k))
+            || Object.hasOwn(row, 'required_capability') && row.required_capability !== null && typeof row.required_capability !== 'string') throw new Error('Invalid workflow draft row.');
         ids.add(row.step_id);
     }
     return value as unknown as WorkflowDraft | WorkflowPlan;

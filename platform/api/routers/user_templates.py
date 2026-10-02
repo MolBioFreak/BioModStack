@@ -88,7 +88,9 @@ def _validate_bioxp_workflow_draft(
     for step in params["steps"]:
         if (
             not isinstance(step, dict)
-            or set(step) != {"step_id", "intent"}
+            or not {"step_id", "intent"} <= set(step) <= {"step_id", "intent", "required_capability"}
+            or ("required_capability" in step and step["required_capability"] is not None
+                and not isinstance(step["required_capability"], str))
             or not isinstance(step["step_id"], str)
             or not step["step_id"]
             or not isinstance(step["intent"], dict)

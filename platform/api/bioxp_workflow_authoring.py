@@ -15,7 +15,7 @@ import re
 from typing import Annotated, Any, Literal
 
 from jsonschema import Draft202012Validator
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_serializer, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_serializer, field_validator, model_serializer, model_validator
 
 
 class Structure(BaseModel):
@@ -25,6 +25,14 @@ class Structure(BaseModel):
 class WorkflowDraftRow(Structure):
     step_id: str = Field(min_length=1)
     intent: dict[str, Any]
+    required_capability: str | None = None
+
+    @model_serializer(mode="wrap")
+    def retain_capability_presence(self, handler):
+        value = handler(self)
+        if "required_capability" not in self.model_fields_set:
+            value.pop("required_capability", None)
+        return value
 
 
 class WorkflowLabware(Structure):
@@ -236,7 +244,12 @@ def clone_job(request: WorkflowJobCloneRequest) -> WorkflowJobClone:
                 else:
                     raise ValueError(f"action {index}: unsupported native kind {kind!r}")
                 native_intent(intent)
-                rows.append({"step_id": f"cloned-action-{index}", "intent": intent})
+                row = {"step_id": f"cloned-action-{index}", "intent": intent}
+                # Preserve an original native requirement, never infer one from
+                # kind or metadata. Canonical explicit null needs no override.
+                if action.get("required_capability") is not None:
+                    row["required_capability"] = action["required_capability"]
+                rows.append(row)
             value = {"schema": "bms.bioxp-workflow-draft.v1", "steps": rows, "editor_state": {}}
             rebuilt = preview(WorkflowPreviewRequest.model_validate({"draft": value, "protocol_id": "clone-comparison"}))
             if rebuilt.document is None or not _same_json(_clone_behavior(document), _clone_behavior(rebuilt.document)):
@@ -381,7 +394,7 @@ def preview(request: WorkflowPreviewRequest) -> WorkflowPreviewResponse:
     for row in request.draft.steps:
         try:
             entries = expand_transfer(row.intent) if row.intent.get("operation") == "transfer" else [(native_intent(row.intent), None, None, None)]
-            expanded.extend((row.step_id, *entry) for entry in entries)
+            expanded.extend((row, *entry) for entry in entries)
         except (ValueError, TypeError, OverflowError) as exc:
             issues.append({"step_id": row.step_id, "message": str(exc)})
     if issues:
@@ -390,11 +403,14 @@ def preview(request: WorkflowPreviewRequest) -> WorkflowPreviewResponse:
     document["protocol_id"] = request.protocol_id
     actions = document["stages"][0]["actions"] = []
     visible = []
-    for native_index, (step_id, step, pair, station, well) in enumerate(expanded):
+    for native_index, (row, step, pair, station, well) in enumerate(expanded):
+        step_id = row.step_id
         for kind, params in _actions(step):
             index = len(actions)
             action = deepcopy(_NATIVE["document_template"]["stages"][0]["actions"][0])
             action.update(action_id=f"manual-{native_index}-{index}", kind=kind, params=params, metadata={"manual_step": native_index})
+            if "required_capability" in row.model_fields_set:
+                action["required_capability"] = row.required_capability
             actions.append(action)
             visible.append(dict(index=index, step_id=step_id, pair_index=pair, kind=kind, params=deepcopy(params), label=step["operation"] if step["operation"] != "mix" else kind.removeprefix("pipette_"), station=station, well=well or (str(step["well"]) if "well" in step else None)))
     return WorkflowPreviewResponse(document=document, actions=visible, issues=[])

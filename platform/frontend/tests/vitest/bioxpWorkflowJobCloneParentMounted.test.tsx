@@ -76,8 +76,11 @@ beforeEach(async () => {
             if (source) data = { name: `${source.name} copy`, draft: { ...structuredClone(source.draft), editor_state: { ...source.draft.editor_state, cloned_from_job_id: body.job_id, cloned_from_workflow_id: source.id } }, issues: [] };
             else {
                 // Known single-action native fixture; no browser production projection.
-                const { channels, volume_ul, speed } = body.document.stages[0].actions[0].params;
-                data = { name: null, draft: { schema: 'bms.bioxp-workflow-draft.v1', steps: [{ step_id: 'cloned-action-0', intent: { operation: 'aspirate', channels, volume_ul, speed } }], editor_state: { cloned_from_job_id: body.job_id } }, issues: [] };
+                const action = body.document.stages[0].actions[0];
+                const { channels, volume_ul, speed } = action.params;
+                const intent = action.kind === 'pipette_manual_physical' ? action.params : { operation: 'aspirate', channels, volume_ul, speed };
+                const row = { step_id: 'cloned-action-0', intent, ...(action.required_capability ? { required_capability: action.required_capability } : {}) };
+                data = { name: null, draft: { schema: 'bms.bioxp-workflow-draft.v1', steps: [row], editor_state: { cloned_from_job_id: body.job_id } }, issues: [] };
             }
             exported.push({ ...request, expected: structuredClone(data) });
         } else if (config.url?.startsWith('/api/user-templates')) {
@@ -137,6 +140,27 @@ it('adopts a lossless native projection without a saved authoring name as a new 
     expect(saved.params.editor_state.cloned_from_job_id).toBe(run.jobId);
     expect(localStorage.getItem(pendingWorkflowRunStorageKey)).toBe(retained);
     noRobotRequests();
+});
+
+it('preserves the original native controller requirement through job clone, step copy and cold reopen', async () => {
+    const document = structuredClone(nativeFixture.document_template) as any;
+    document.protocol_id = 'Native capability transport fixture';
+    document.stages[0].actions = [{ ...document.stages[0].actions[0], kind: 'pipette_manual_physical',
+        params: { operation: 'diagnostic_pipette', diagnostic: { action: 'eject', channels: [0, 1, 2, 3] } }, required_capability: 'motion' }];
+    run.document = document; expect(retainPendingWorkflowRun(run)).toBeNull();
+    const original = structuredClone(document);
+    await mount(); await cloneRetained();
+    expect(input('Workflow name').value).toBe('Cloned job');
+    await act(async () => (host.querySelector('[aria-label="Clone step 1"]') as HTMLButtonElement).click());
+    await click('Save workflow');
+    const saved = Object.values(db)[0];
+    expect(saved.params.steps).toHaveLength(2);
+    expect(new Set(saved.params.steps.map((row: any) => row.step_id)).size).toBe(2);
+    expect(saved.params.steps.every((row: any) => row.required_capability === 'motion')).toBe(true);
+    expect(saved.params.steps[0].intent).toEqual(document.stages[0].actions[0].params);
+    await fresh(); await click('Open workflow'); await click('Cloned job'); await click('Review');
+    expect(host.querySelector('[aria-label="Workflow review"]')?.textContent).toContain('Original controller requirement: motion');
+    expect(run.document).toEqual(original); noRobotRequests();
 });
 
 it('does not let a late clone overwrite edits made after the clone started', async () => {

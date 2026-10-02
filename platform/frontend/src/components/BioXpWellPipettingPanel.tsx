@@ -372,7 +372,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
                 <div className="bioxp-step-tools">
                     <button type="button" aria-label={`Move step ${index + 1} up`} title="Move up" disabled={index === 0} onClick={() => reorder(index, -1)}>↑</button>
                     <button type="button" aria-label={`Move step ${index + 1} down`} title="Move down" disabled={index === steps.length - 1} onClick={() => reorder(index, 1)}>↓</button>
-                    <button type="button" aria-label={`Clone step ${index + 1}`} onClick={() => setSteps(current => [...current, { step_id: crypto.randomUUID(), intent: structuredClone(step.intent) }])}>Copy</button>
+                    <button type="button" aria-label={`Clone step ${index + 1}`} onClick={() => setSteps(current => [...current, { ...step, step_id: crypto.randomUUID(), intent: structuredClone(step.intent) }])}>Copy</button>
                     <button type="button" aria-label={`Remove step ${index + 1}`} onClick={() => { setSteps(current => current.filter(row => row.step_id !== step.step_id)); if (editingId === step.step_id) cancelEdit(); }}>Remove</button>
                 </div>
             </li>)}</ol>
@@ -389,7 +389,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
                 <span>{index + 1}. Draft · {description(step.intent)}</span>
                 <button type="button" aria-label={`Edit step ${index + 1}`} onClick={() => edit(index, true)}>Edit step</button>
                 <button type="button" aria-label={`Copy step ${index + 1} to editor`} onClick={() => edit(index)}>Copy to editor</button>
-                <button type="button" aria-label={`Clone step ${index + 1}`} onClick={() => setSteps(current => [...current, { step_id: crypto.randomUUID(), intent: structuredClone(step.intent) }])}>Clone step</button>
+                <button type="button" aria-label={`Clone step ${index + 1}`} onClick={() => setSteps(current => [...current, { ...step, step_id: crypto.randomUUID(), intent: structuredClone(step.intent) }])}>Clone step</button>
                 <button type="button" aria-label={`Move step ${index + 1} up`} disabled={index === 0} onClick={() => reorder(index, -1)}>↑</button>
                 <button type="button" aria-label={`Move step ${index + 1} down`} disabled={index === steps.length - 1} onClick={() => reorder(index, 1)}>↓</button>
                 <button type="button" aria-label={`Remove step ${index + 1}`} onClick={() => { setSteps(current => current.filter(row => row.step_id !== step.step_id)); if (editingId === step.step_id) cancelEdit(); }}>Remove</button>
@@ -442,7 +442,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             {editingId && <p className="bioxp-notice">The selected step has a separate editing form. Use Update step to apply it to this list before saving.</p>}
             <ol className="mt-4 space-y-3">{steps.map((row, index) => <li key={row.step_id}>
                 <button type="button" onClick={() => { edit(index, true); setWorkflowView('build'); }} className="bioxp-review-step">{index + 1}. {workflowLabel(row.intent)} — {workflowSummary(row.intent)}</button>
-                <details><summary>Step settings</summary><p className="bioxp-muted">{description(row.intent)}</p><pre className="bioxp-native-json">{JSON.stringify(row.intent, null, 2)}</pre></details>
+                <details><summary>Step settings</summary><p className="bioxp-muted">{description(row.intent)}</p>{Object.hasOwn(row, 'required_capability') && <p>Original controller requirement: {row.required_capability ?? 'none'}</p>}<pre className="bioxp-native-json">{JSON.stringify(row.intent, null, 2)}</pre></details>
             </li>)}</ol>
             {!steps.length && <p className="bioxp-empty">No steps yet. Return to Build to add your first action.</p>}
             <button type="button" className="mt-4" disabled={previewBusy} onClick={() => void requestPreview()}>{previewBusy ? 'Previewing…' : 'Preview workflow'}</button>
