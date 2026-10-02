@@ -1,5 +1,6 @@
 """Raw Golden Gate routes, separate from historical prepared semantics."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
+from services.assembly.golden_gate_workflow_exports import PortableWorkflow, workflow_zip
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from molbio_database import get_molbio_session
@@ -27,6 +28,35 @@ async def save(request: SaveDesignRequest, session: AsyncSession = Depends(get_m
     except (AssemblyError, ValueError) as exc:
         await session.rollback()
         raise HTTPException(422, str(exc)) from exc
+
+
+async def _export_response(result: WorkflowResult) -> Response:
+    try:
+        data = await run_in_threadpool(workflow_zip, result)
+    except (AssemblyError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return Response(data, media_type='application/zip', headers={
+        'Content-Disposition': 'attachment; filename="golden-gate-workflow.zip"'})
+
+
+@router.post('/design/export', response_class=Response,
+    responses={200: {'content': {'application/zip': {}}}})
+async def export_preview(result: WorkflowResult):
+    """Download caller-owned displayed evidence, without persistence or reruns."""
+    return await _export_response(result)
+
+
+@router.post('/design/import', response_model=WorkflowResult)
+async def import_workflow(document: PortableWorkflow):
+    """Typed offline read/display, not recomputation or revision admission."""
+    return document.result
+
+
+@router.get('/design/{operation_id}/export', response_class=Response,
+    responses={200: {'content': {'application/zip': {}}}})
+async def export_saved(operation_id: str, session: AsyncSession = Depends(get_molbio_session)):
+    saved = await read_workup(session, operation_id)
+    return await _export_response(saved.result)
 
 
 @router.get('/design/{operation_id}', response_model=SavedDesign)
