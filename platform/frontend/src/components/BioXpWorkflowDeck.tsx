@@ -9,6 +9,7 @@ export type BioXpDeckLiveIntent = {
     onWell: (locationId: number, well: string) => void;
     stationDisabledReason: (target: string) => string | null;
     wellDisabledReason: string | null;
+    selectedStation?: string | null;
 };
 export type BioXpWorkflowDeckProps = {
     selection: BioXpDeckSelection; onChange: (selection: BioXpDeckSelection) => void; readOnly?: boolean;
@@ -99,6 +100,23 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
         if (live && (event.detail > 1 || suppressClick.current || event.button !== 0)) return;
         fn();
     };
+    const moveButton = (target: string, label: string, x: number, y: number) => live && !readOnly &&
+        <g key={target} className="bwd-move" role="button" tabIndex={0} data-move-to={target}
+            aria-label={`Move to ${label}`} aria-disabled={!!live.stationDisabledReason(target)}
+            onClick={event => activate(event, () => chooseStation(target))} onKeyDown={event => keyboardStation(event, target)}>
+            <title>{live.stationDisabledReason(target) ?? `Move to ${label}`}</title>
+            <rect x={x} y={y} width="72" height="30" rx="6" />
+            <text x={x + 36} y={y + 21} textAnchor="middle">Move</text>
+        </g>;
+    const chosenResource = live?.selectedStation ? deckResources.find(resource => resource.id === live.selectedStation) : undefined;
+    const chosenRegion = live?.selectedStation ? deckRegions.find(region => region.id === live.selectedStation) : undefined;
+    const chosenBounds = chosenResource ? {
+        x: chosenResource.bounds.x - (chosenResource.kind === 'strip' ? 14 : 26),
+        y: chosenResource.bounds.y - (chosenResource.kind === 'strip' ? 21 : 49),
+        width: chosenResource.bounds.width + (chosenResource.kind === 'strip' ? 28 : 52),
+        height: chosenResource.bounds.height + (chosenResource.kind === 'strip' ? 42 : 76),
+    } : chosenRegion ? { x: chosenRegion.bounds.x - 5, y: chosenRegion.bounds.y - 5,
+        width: chosenRegion.bounds.width + 10, height: chosenRegion.bounds.height + 10 } : null;
     const strips = deckResources.filter(r => r.kind === 'strip');
     const stripBounds = deckBounds(strips.flatMap(r => r.points));
     return <section className="bioxp-workflow-deck" aria-label={live ? "BioXP live deck map" : "BioXP planned deck selection"}>
@@ -166,6 +184,17 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                     <title>{live?.stationDisabledReason(deckPark.id) ?? 'Park target'}</title>
                     <circle cx={deckPark.point[0]} cy={deckPark.point[1]} r="6" /><text className="bwd-map-label" x={deckPark.point[0] + 12} y={deckPark.point[1] + 4}>Park target</text>
                 </g>
+                {live && <g aria-label="Station move buttons">
+                    {deckResources.filter(resource => resource.kind !== 'strip').map(resource => moveButton(resource.id, resource.label,
+                        resource.bounds.x + resource.bounds.width - 55, resource.bounds.y - 41))}
+                    {deckRegions.map(region => moveButton(region.id, region.label,
+                        region.bounds.x + region.bounds.width - 84, region.bounds.y + 12))}
+                    {moveButton(deckPark.id, deckPark.label, deckPark.point[0] - 86, deckPark.point[1] - 15)}
+                </g>}
+                {live?.selectedStation && (chosenBounds || live.selectedStation === deckPark.id) &&
+                    <g className="bwd-chosen-outline" data-selected-station={live.selectedStation} aria-label="Selected dropdown destination">
+                        {chosenBounds ? <rect {...chosenBounds} rx="10" /> : <circle cx={deckPark.point[0]} cy={deckPark.point[1]} r="13" />}
+                    </g>}
                 {overlay}
             </svg>
         </div>

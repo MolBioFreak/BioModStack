@@ -133,12 +133,52 @@ it('relocates deck controls to a fourth tab without changing the default robot l
     expect(mutations()).toEqual([]);
 });
 
-it('opens the real robot-local deep link without mounting a camera or sending a robot command', async () => {
+it('opens the real robot-local deep link with one default-open camera and no robot command', async () => {
     await mount('live-deck', '/bioxp/live-deck');
     expect(host.querySelector('#control-tab-live-deck')?.getAttribute('aria-selected')).toBe('true');
     expect(panel().hidden).toBe(false); expect(live()).not.toBeNull();
-    expect(host.querySelector('[data-testid="parent-test-camera"]')).toBeNull();
+    expect(host.querySelectorAll('[data-testid="parent-test-camera"]')).toHaveLength(1);
+    expect(panel().querySelector<HTMLDetailsElement>('[data-testid="live-deck-camera"]')?.open).toBe(true);
     expect(mutations()).toEqual([]);
+});
+
+it('wires the actual Robot destination dropdown to a nonmoving highlight, not the inspection selector or last submitted target', async () => {
+    await mount();
+    await click(well('LOC_OC', 'H12'));
+    const writes = structuredClone(mutations());
+    const guns = [...live().querySelectorAll('[data-gun-module]')].map(e => e.getAttribute('transform'));
+    const select = [...live().querySelectorAll('label')].find(el => el.textContent?.trim().startsWith('Robot destination'))!.querySelector('select')!;
+    for (const [value, mapped] of [['LOC_TC', 'LOC_TC'], ['LOC_TC_BARCODE', 'LOC_TC'], ['TECANRACK2', 'TECANRACK2'], ['', null]]) {
+        await act(async () => { select.value = value!; select.dispatchEvent(new Event('change', { bubbles: true })); }); await advance();
+        expect([...live().querySelectorAll('g[data-selected-station]')].map(e => e.getAttribute('data-selected-station'))).toEqual(mapped ? [mapped] : []);
+        expect(live().querySelector('[aria-label="Reported pose"]')?.textContent).toContain('Requested destinationOutput chiller · H12');
+        expect([...live().querySelectorAll('[data-gun-module]')].map(e => e.getAttribute('transform'))).toEqual(guns);
+        expect(mutations()).toEqual(writes);
+    }
+});
+it('serializes one exact named request per explicit SVG Move click or key through the existing owner', async () => {
+    await mount();
+    const moves = [...live().querySelectorAll('svg g[data-move-to]')]; expect(moves).toHaveLength(13);
+    for (const move of moves) {
+        const before = deckWrites().length, target = move.getAttribute('data-move-to');
+        await click(move); await click(move, 2); await key(move, 'Enter', true);
+        expect(deckWrites()).toHaveLength(before + 1);
+        expect(deckWrites().at(-1)?.body.inputs).toEqual({ target, camera_offset: false });
+        expect(deckWrites().at(-1)?.url).toBe('/api/bioxp/operator-controls/v2/actions/oem.deck.move_to_location');
+        await key(move, 'Enter'); expect(deckWrites()).toHaveLength(before + 2);
+        expect(deckWrites().at(-1)?.body.inputs).toEqual({ target, camera_offset: false });
+    }
+    expect(mutations()).toHaveLength(26);
+    expect(new Set(deckWrites().map(r => r.body.idempotency_key)).size).toBe(26);
+}, 90000);
+it('honors native disabled named action for explicit Move controls without adding pose gates', async () => {
+    const action = catalog.actions.find((a: any) => a.action_id === 'oem.deck.move_to_location');
+    action.enabled = false; action.disabled_reason = 'Native action unavailable';
+    await mount();
+    for (const move of live().querySelectorAll('svg g[data-move-to]')) {
+        expect(move.getAttribute('aria-disabled')).toBe('true'); await click(move); await key(move, ' ');
+    }
+    expect(live().querySelectorAll('svg g[data-move-to]')).toHaveLength(13); expect(mutations()).toEqual([]);
 });
 
 it('sends native named travel from map regions and keeps selector camera offset out of map and well intent', async () => {

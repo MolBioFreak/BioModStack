@@ -4,8 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
 import { BioXpLiveDeck, type BioXpLiveDeckProps } from '../../src/components/BioXpLiveDeck';
-import type { BioXpOperatorDashboardV2 } from '../../src/lib/bioxpClient';
-import { deckResources } from '../../src/lib/bioxpWorkflowDeck';
+import { BioXpWorkflowDeck } from '../../src/components/BioXpWorkflowDeck';
+import destinations from '../fixtures/bioxp_deck_admission_catalog.json';
+import type { BioXpDeckDestinationV1, BioXpOperatorDashboardV2 } from '../../src/lib/bioxpClient';
+import { deckResources, deckStations, projectDeckPoint } from '../../src/lib/bioxpWorkflowDeck';
 
 let host: HTMLDivElement, root: Root, query: QueryClient;
 let props: BioXpLiveDeckProps;
@@ -35,6 +37,98 @@ beforeEach(() => {
         doorControls: <div>Door slot</div>, movementControls: <div>Movement slot</div>, commandDetails: <div>Receipt slot</div>, transferControls: <div>Transfer slot</div> };
 });
 afterEach(async () => { await act(async () => root.unmount()); query.clear(); host.remove(); vi.restoreAllMocks(); });
+
+const destination = (target: string): BioXpDeckDestinationV1 => structuredClone(destinations.action.destination_options.find(d => d.target === target)!) as BioXpDeckDestinationV1;
+const majorIds = ['LOC_MS', 'LOC_OC', 'LOC_TC', 'LOC_RC', 'TECANRACK1', 'TECANRACK2', 'TECANRACK3', 'TECANRACK4', 'WASTE_BIN', 'LOC_TROUGH', 'LOC_OC_COVER_STORAGE', 'LOC_RC_COVER_STORAGE', 'LOC_PARK'];
+
+it('keeps dropdown highlight separate from submitted selection and reported gun pose, replacing and clearing without movement', async () => {
+    await render({ selection: { station: 'LOC_OC', wells: ['H12'] }, selectedDestination: destination('LOC_TC') });
+    const guns = [...host.querySelectorAll('[data-gun-module]')].map(g => g.getAttribute('transform'));
+    const requested = host.querySelector('g.bwd-resource.is-active');
+    expect(requested?.textContent).toContain('Output chiller');
+    expect(host.querySelectorAll('g[data-selected-station]')).toHaveLength(1);
+    expect(host.querySelector('g[data-selected-station="LOC_TC"]')).not.toBeNull();
+    expect(host.querySelector('g[data-selected-station="LOC_TC"]')).not.toBe(requested);
+    expect(el('Reported pose').textContent).toContain('Requested destinationOutput chiller · H12');
+    await render({ selectedDestination: destination('TECANRACK2') });
+    expect(host.querySelector('g[data-selected-station="LOC_TC"]')).toBeNull();
+    expect(host.querySelector('g[data-selected-station="TECANRACK2"]')).not.toBeNull();
+    await render({ selectedDestination: null });
+    expect(host.querySelector('[data-selected-station]')).toBeNull();
+    expect(host.querySelector('g.bwd-resource.is-active')).toBe(requested);
+    expect([...host.querySelectorAll('[data-gun-module]')].map(g => g.getAttribute('transform'))).toEqual(guns);
+    expect(station).not.toHaveBeenCalled(); expect(well).not.toHaveBeenCalled(); expect(api.post).not.toHaveBeenCalled();
+});
+it.each([
+    ['native target', destination('LOC_TC'), 'LOC_TC'],
+    ['barcode location', destination('LOC_TC_BARCODE'), 'LOC_TC'],
+    ['alias', { ...destination('LOC_TC'), target: 'fixture-alias', aliases: ['LOC_TC'], location_id: 999 }, 'LOC_TC'],
+    ['location ID', { ...destination('LOC_RC'), target: 'fixture-location', aliases: [] }, 'LOC_RC'],
+] satisfies Array<[string, BioXpDeckDestinationV1, string]>)('maps selected %s without submitting', async (_name, selectedDestination, expected) => {
+    await render({ selectedDestination });
+    expect(host.querySelectorAll('g[data-selected-station]')).toHaveLength(1);
+    expect(host.querySelector(`g[data-selected-station="${expected}"]`)).not.toBeNull();
+    expect(station).not.toHaveBeenCalled(); expect(well).not.toHaveBeenCalled(); expect(api.post).not.toHaveBeenCalled();
+});
+it('marks an unmapped named destination only at its exact active calibration anchor, never saved or invented geometry', async () => {
+    const active = { location_id: 'LOC_P_MS', base_coordinates: { x: 45000, y: 22000 }, inc_factor: 1 };
+    vi.mocked(api.get).mockResolvedValue({ data: { ...settings, active_motion_positions: [active], saved_motion_positions: [{ ...active, base_coordinates: { x: 1, y: 2 } }] } });
+    await render({ selectedDestination: destination('LOC_P_MS') });
+    await vi.waitFor(() => expect(host.querySelector('g[data-selected-destination="LOC_P_MS"]')).not.toBeNull());
+    const marker = host.querySelector('g[data-selected-destination="LOC_P_MS"]')!;
+    const [x, y] = projectDeckPoint(45000, 22000);
+    // Projection may be on the group or its ring; both must identify the active anchor.
+    const ring = marker.querySelector('circle');
+    if (marker.hasAttribute('transform')) expect(marker.getAttribute('transform')).toBe(`translate(${x} ${y})`);
+    else { expect(Number(ring?.getAttribute('cx'))).toBeCloseTo(x); expect(Number(ring?.getAttribute('cy'))).toBeCloseTo(y); }
+    expect(host.querySelector('[data-selected-station]')).toBeNull();
+    await render({ selectedDestination: destination('LOC_P_OC') });
+    expect(host.querySelector('[data-selected-destination]')).toBeNull();
+    vi.mocked(api.get).mockResolvedValue({ data: { ...settings, active_motion_positions: [], saved_motion_positions: [active] } });
+    await render({ generation: 2, selectedDestination: destination('LOC_P_MS') });
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    expect(host.querySelector('[data-selected-destination]')).toBeNull();
+    expect(api.post).not.toHaveBeenCalled(); expect(station).not.toHaveBeenCalled();
+});
+it('offers exactly thirteen explicit SVG Move buttons with unchanged station callbacks and single click/keyboard activation', async () => {
+    await render();
+    expect([...host.querySelectorAll('svg g[data-move-to]')].map(e => e.getAttribute('data-move-to')).sort()).toEqual([...majorIds].sort());
+    for (const id of majorIds) {
+        const label = `Move to ${deckStations.find(s => s.id === id)!.label}`;
+        expect(el(label).tagName.toLowerCase()).toBe('g'); expect(el(label).getAttribute('role')).toBe('button');
+        expect(el(label).getAttribute('tabindex')).toBe('0');
+        station.mockClear(); await click(label); await click(label, { detail: 2 });
+        expect(station.mock.calls).toEqual([[id]]);
+        station.mockClear(); await key(label, 'Enter'); await key(label, 'Enter', { repeat: true });
+        expect(station.mock.calls).toEqual([[id]]);
+        station.mockClear(); await key(label, ' '); await key(label, ' ', { repeat: true });
+        expect(station.mock.calls).toEqual([[id]]);
+    }
+    expect(well).not.toHaveBeenCalled(); expect(api.post).not.toHaveBeenCalled();
+});
+it('suppresses explicit Move drag gestures and native-disabled activation while preserving the next deliberate click', async () => {
+    await render(); const label = 'Move to Thermal cycler'; const target = el(label);
+    const pointer = async (name: string, x: number) => act(async () => target.dispatchEvent(new MouseEvent(name, { bubbles: true, button: 0, clientX: x, clientY: 10 })));
+    await pointer('pointerdown', 10); await pointer('pointermove', 40); await pointer('pointerup', 40);
+    await click(label); expect(station).not.toHaveBeenCalled();
+    await pointer('pointerdown', 10); await pointer('pointerup', 10); await click(label);
+    expect(station.mock.calls).toEqual([['LOC_TC']]); station.mockClear();
+    await render({ stationDisabledReason: () => 'Native action unavailable' });
+    for (const id of majorIds) {
+        const name = `Move to ${deckStations.find(s => s.id === id)!.label}`;
+        expect(el(name).getAttribute('aria-disabled')).toBe('true');
+        await click(name); await key(name, 'Enter'); await key(name, ' ');
+    }
+    expect(station).not.toHaveBeenCalled(); expect(api.post).not.toHaveBeenCalled();
+});
+it('keeps explicit Move controls out of saved workflow authoring and preview', async () => {
+    for (const readOnly of [false, true]) {
+        await act(async () => root.render(<BioXpWorkflowDeck selection={{ station: 'LOC_TC', wells: [] }} onChange={vi.fn()} readOnly={readOnly} />));
+        expect(host.querySelector('[data-move-to]')).toBeNull();
+        expect(host.querySelector('[aria-label^="Move to "]')).toBeNull();
+    }
+    expect(api.post).not.toHaveBeenCalled();
+});
 
 it('shares the full deck with exact station/well callbacks for every rendered address; GET only', async () => {
     await render();

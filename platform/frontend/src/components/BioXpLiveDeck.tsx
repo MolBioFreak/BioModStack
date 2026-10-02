@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { BioXpOperatorDashboardV2 } from '../lib/bioxpClient';
+import type { BioXpDeckDestinationV1, BioXpOperatorDashboardV2 } from '../lib/bioxpClient';
 import { readCalibrationSettings } from '../lib/bioxpCalibration';
 import { deckResources, deckSize, deckStations, projectDeckPoint, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import { activeDeckResources, alignmentReference, gunCenters, poseIsLastKnown, readReportedPose, retainReportedPose } from '../lib/bioxpLiveDeck';
@@ -14,6 +14,8 @@ export type BioXpLiveDeckProps = {
     dashboard: BioXpOperatorDashboardV2 | null | undefined;
     stale: boolean;
     selection: BioXpDeckSelection;
+    selectedDestination?: BioXpDeckDestinationV1 | null;
+    cameraControls?: React.ReactNode;
     onMoveToStation: (target: string) => void;
     onMoveToWell: (locationId: number, well: string) => void;
     stationDisabledReason: (target: string) => string | null;
@@ -37,6 +39,14 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
     });
     const settings = geometry.data?.generation === generation ? geometry.data.settings : undefined;
     const { resources, calibrated } = activeDeckResources(settings);
+    const destination = props.selectedDestination;
+    // Selection is display-only; preserve the exact native target for submission.
+    const selectedStation = destination ? deckStations.find(station => station.id === destination.target
+        || destination.aliases.includes(station.id) || station.locationId === destination.location_id) : undefined;
+    const selectedCoordinates = !selectedStation && destination
+        ? settings?.active_motion_positions?.find(row => row.location_id === destination.target)?.base_coordinates : undefined;
+    const selectedPoint = selectedCoordinates && Number.isFinite(selectedCoordinates.x) && Number.isFinite(selectedCoordinates.y)
+        ? projectDeckPoint(selectedCoordinates.x, selectedCoordinates.y) : null;
     // Render-time derived state retains the last complete same-connection observation.
     // No effect can invoke movement, collect authority or schedule a pose refresh.
     const [observation, setObservation] = useState(() => ({ generation, dashboard,
@@ -62,9 +72,13 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
         <div className="bld-workspace">
             <div className="bld-map-pane">
                 <BioXpWorkflowDeck selection={selection} onChange={() => { /* Authoring selection is not a live intent. */ }}
-                    resources={resources} live={{ onStation: props.onMoveToStation, onWell: props.onMoveToWell,
+                    resources={resources} live={{ onStation: props.onMoveToStation, onWell: props.onMoveToWell, selectedStation: selectedStation?.id,
                         stationDisabledReason: props.stationDisabledReason, wellDisabledReason: props.wellDisabledReason }}
-                    overlay={pose && point ? <g className={`bld-pose${lastKnown ? ' is-last-known' : ''}`} data-testid="reported-gantry" aria-label={lastKnown ? 'Last known gantry position' : 'Reported gantry position'}>
+                    overlay={<>{selectedPoint && <g className="bld-chosen-point" data-selected-destination={destination?.target}
+                        aria-label={`Selected destination: ${destination?.label}`}>
+                        <circle cx={selectedPoint[0]} cy={selectedPoint[1]} r="14" />
+                        <title>{destination?.label} · selected native destination anchor</title>
+                    </g>}{pose && point ? <g className={`bld-pose${lastKnown ? ' is-last-known' : ''}`} data-testid="reported-gantry" aria-label={lastKnown ? 'Last known gantry position' : 'Reported gantry position'}>
                         <title>Reported gantry; four schematic gun housings, not measured outlines or tip-presence observations</title>
                         <rect data-testid="vertical-deck-arm" className="bld-rail" x={point[0] - 45} y="25" width="13" height={deckSize.height - 50} rx="5" />
                         <path className="bld-carriage" d={`M ${point[0] - 39} ${guns[0].point[1]} L ${point[0] - 39} ${guns[3].point[1]}`} />
@@ -78,19 +92,21 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
                         </g>)}
                         <path className="bld-gantry-anchor" d={`M ${point[0] - 7} ${point[1]} H ${point[0] + 7} M ${point[0]} ${point[1] - 7} V ${point[1] + 7}`} />
                         {reference && <g data-testid="alignment-reference"><circle className="bld-alignment" cx={reference[0]} cy={reference[1]} r="9" /><title>Published alignment-reference projection, not measured tip contact</title></g>}
-                    </g> : null} />
-                <div className="bld-legend"><span>Solid cross: reported gantry</span><span>Ring: alignment reference</span><span>Outlined station / well: requested destination</span></div>
+                    </g> : null}</>} />
+                <div className="bld-legend"><span>Solid cross: reported gantry</span><span>Ring: alignment reference</span><span>Outlined station / well: requested destination</span><span className="bld-selection-key">Amber outline: dropdown selection</span></div>
                 <p className="bld-note">Intermittent controller observations. Gun housings and deck outlines are schematic; tips and occupancy are not inferred.</p>
                 {geometry.isError && <p role="status">Geometry read unavailable. Showing {settings ? 'last known geometry' : 'the reference layout'}; the robot evaluates movement requests.</p>}
             </div>
             <aside className="bld-controls" aria-label="Live movement controls">
                 {props.doorControls}
                 {props.movementControls}
+                {props.cameraControls}
                 <section className="bld-pose-card" aria-label="Reported pose"><h3>{pose ? lastKnown ? 'Last known position' : 'Reported gantry position' : 'Position unavailable'}</h3>
                     <dl className="bld-coordinates"><div><dt>X steps</dt><dd>{pose?.x ?? 'Unavailable'}</dd></div><div><dt>Y steps</dt><dd>{pose?.y ?? 'Unavailable'}</dd></div><div><dt>Z steps</dt><dd>{pose?.z ?? 'Unavailable'}</dd></div></dl>
                     <p>{time}</p>{dashboard?.telemetry?.snapshot?.clock_skew_detected && <p>Source clock skew reported.</p>}{pose && <p>{pose.reference}</p>}{outside && <p>Reported gantry is outside the reference deck view.</p>}
                     <dl><dt>Published alignment</dt><dd>{tipLabel}</dd><dt>Alignment projection</dt><dd>{reference ? 'Source-addressing reference; not a physical measurement' : 'Unavailable'}</dd>
                         <dt>Recorded location</dt><dd>{dashboard?.deck?.current_location ?? 'Unavailable'}{dashboard?.deck?.current_well != null ? ` · well ID ${dashboard.deck.current_well}` : ''}</dd>
+                        <dt>Selected destination</dt><dd>{destination?.label ?? 'None'}</dd>
                         <dt>Requested destination</dt><dd title={selection.station || undefined}>{deckStations.find(s => s.id === selection.station)?.label ?? (selection.station || 'None')}{selection.wells.length ? ` · ${selection.wells.join(', ')}` : ''}</dd></dl>
                     <p className="bld-note">Recorded location and requested destination do not establish arrival.</p>
                 </section>

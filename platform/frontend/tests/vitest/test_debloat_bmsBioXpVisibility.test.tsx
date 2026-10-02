@@ -12,6 +12,7 @@ import parkReceipt from '../fixtures/bioxp_park_completed_receipt.json';
 const originalAdapter = api.defaults.adapter;
 let host: HTMLDivElement, root: Root, client: QueryClient;
 let requests: { url: string; method: string; bytes: number; detail?: boolean }[];
+let mutationAttempts = 0;
 let cameraActive = false;
 let recoveryVisible = false;
 let rows: any[] = [];
@@ -26,7 +27,7 @@ async function advance(ms = 60_000) {
 async function click(selector: string) { await act(async () => (host.querySelector(selector) as HTMLElement).click()); await advance(100); }
 function count(fragment: string) { return requests.filter(r => r.url.includes(fragment)).length; }
 beforeEach(() => {
-    vi.useFakeTimers(); cameraActive = false; recoveryVisible = false; rows = []; liveJob = null; requests = [];
+    vi.useFakeTimers(); mutationAttempts = 0; cameraActive = false; recoveryVisible = false; rows = []; liveJob = null; requests = [];
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
@@ -44,11 +45,11 @@ beforeEach(() => {
         else if (url.includes('/user-templates')) data = [];
         else if (url === '/api/bioxp/calibration-settings') data = { active_positions: [], saved_positions: [], active_motion_positions: [], saved_motion_positions: [] };
         requests.push({ url, method: config.method ?? '', detail: config.params?.detail, bytes: new TextEncoder().encode(JSON.stringify(data)).length });
-        if (config.method !== 'get') throw new Error('No mutation authorized by this test');
+        if (config.method !== 'get') { mutationAttempts += 1; throw new Error('No mutation authorized by this test'); }
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
 });
-afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = originalAdapter; vi.useRealTimers(); });
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = originalAdapter; vi.useRealTimers(); expect(mutationAttempts).toBe(0); });
 async function mount() {
     await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
     await advance(500);
@@ -57,6 +58,8 @@ it('deletes irrelevant observations for a full Build minute after visiting opera
     await mount();
     await click('#control-tab-pipettes');
     const manual = host.querySelector('#control-panel-pipettes input') as HTMLInputElement;
+    await click('#control-tab-live-deck');
+    expect(host.querySelectorAll('section[aria-label="Camera"]')).toHaveLength(1);
     await click('#control-tab-workflows');
     const editor = host.querySelector('[aria-label="Saved workflow"]');
     const name = host.querySelector('[aria-label="Workflow name"]') as HTMLInputElement;
@@ -74,15 +77,48 @@ it('deletes irrelevant observations for a full Build minute after visiting opera
     console.info('Build 60s', JSON.stringify({ requests: requests.length, bytes: requests.reduce((n, r) => n + r.bytes, 0), irrelevantRequests: irrelevant.length, irrelevantBytes: 0 }));
 });
 it('disables all idle transport for a full hidden-document minute and resumes visible demand', async () => {
-    await mount();
+    await mount(); await click('#control-tab-live-deck');
     await act(async () => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); });
     await advance(100); requests = []; await advance();
     expect(requests).toEqual([]);
     await act(async () => { Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' }); document.dispatchEvent(new Event('visibilitychange')); });
     await advance(500); expect(requests.length).toBeGreaterThan(0);
 });
+it('retains one default-open Live deck camera node through collapse and every tab, with no hidden polling or automatic POST', async () => {
+    await mount();
+    expect(host.querySelector('[data-testid="live-deck-camera"]')).toBeNull();
+    expect(count('/camera/')).toBe(0);
+    await click('#control-tab-pipettes');
+    expect(count('/camera/')).toBe(0);
+    await click('#control-tab-live-deck');
+    const disclosure = host.querySelector<HTMLDetailsElement>('[data-testid="live-deck-camera"]')!;
+    expect(disclosure.open).toBe(true); expect(disclosure.querySelector('summary')?.textContent).toBe('Camera');
+    const camera = disclosure.querySelector('section[aria-label="Camera"]');
+    expect(camera).not.toBeNull();
+    expect(host.querySelectorAll('[data-testid="live-deck-camera"]')).toHaveLength(1);
+    expect(host.querySelectorAll('section[aria-label="Camera"]')).toHaveLength(1);
+    for (const tab of ['robot', 'pipettes', 'workflows']) {
+        await click(`#control-tab-${tab}`);
+        expect(disclosure.contains(camera)).toBe(true);
+        expect(host.querySelector('#control-panel-live-deck')?.contains(disclosure)).toBe(true);
+        expect(host.querySelector(`#control-panel-${tab}`)?.contains(camera)).toBe(false);
+        requests = []; await advance(); expect(count('/camera/')).toBe(0);
+        await click('#control-tab-live-deck');
+        expect(host.querySelector('[data-testid="live-deck-camera"]')).toBe(disclosure);
+        expect(disclosure.querySelector('section[aria-label="Camera"]')).toBe(camera);
+        expect(disclosure.open).toBe(true);
+    }
+    await act(async () => { disclosure.open = false; disclosure.dispatchEvent(new Event('toggle')); }); await advance(100);
+    requests = []; await advance(); expect(count('/camera/')).toBe(0);
+    await click('#control-tab-robot'); await click('#control-tab-live-deck');
+    expect(disclosure.open).toBe(false); expect(disclosure.contains(camera)).toBe(true);
+    await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); }); await advance(500);
+    expect(disclosure.querySelector('section[aria-label="Camera"]')).toBe(camera);
+    requests = []; await advance(); expect(count('/camera/stream')).toBeGreaterThan(0);
+    expect(requests.every(r => r.method === 'get')).toBe(true);
+});
 it('uses idle camera discovery rather than 2s status polling and discovers another visible client stream', async () => {
-    await mount(); requests = []; await advance();
+    await mount(); await click('#control-tab-live-deck'); requests = []; await advance();
     expect(count('/camera/status')).toBe(0);
     expect(count('/camera/stream')).toBeGreaterThanOrEqual(3);
     expect(count('/camera/stream')).toBeLessThanOrEqual(4);
@@ -108,6 +144,10 @@ it('refreshes unresolved recovery while Live deck is visible, with zero hidden r
 
 it('observes relocated transfers only under the open Live deck disclosure, retaining the active owner and drafts', async () => {
     await mount(); await click('#control-tab-live-deck');
+    const camera = host.querySelector<HTMLDetailsElement>('[data-testid="live-deck-camera"]')!;
+    expect(camera.open).toBe(true);
+    await act(async () => { camera.open = false; camera.dispatchEvent(new Event('toggle')); });
+    await advance(100);
     expect(count('/calibration-settings')).toBe(1);
     const transfer = host.querySelector('[aria-label="Plate and cover transfer"]')!;
     const disclosure = transfer.closest('details')!;

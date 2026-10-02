@@ -308,7 +308,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const [workflowOpen, setWorkflowOpen] = useState(false);
     const [workflowVisible, setWorkflowVisible] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
-    const [cameraOpen, setCameraOpen] = useState(initialTab === 'robot' || initialTab === 'pipettes');
+    const [cameraOpen, setCameraOpen] = useState(true);
     const [controlTab, setControlTab] = useState<ControlTab>(initialTab);
     const operationalVisible = documentVisible && controlTab !== 'workflows';
     const robotVisible = documentVisible && controlTab === 'robot';
@@ -1189,6 +1189,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                     <BioXpLiveDeck generation={generation} connected={linkConnected} visible={liveDeckVisible}
                         dashboard={catalogV2Query.data?.dashboard} stale={showingLastKnown || !linkHealthy}
                         selection={liveDeckIntent?.generation === generation ? liveDeckIntent.selection : { station: '', wells: [] }}
+                        selectedDestination={selectedDeckDestination}
                         onMoveToStation={target => invokeNamedDeckMove(target, false)} onMoveToWell={invokeWellDeckMove}
                         stationDisabledReason={target => {
                             const reason = stationDisabledReason(target);
@@ -1214,6 +1215,11 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         || invokeOperatorAction.variables?.actionId === operatorActionForPath('/motion/thermal_door/close')?.action_id
                         ? <YOperatorError label="Thermal door" error={invokeOperatorAction.error} /> : null}
                 </div>}
+                        cameraControls={<details className="bld-camera" data-testid="live-deck-camera" open={cameraOpen} onToggle={event => setCameraOpen(event.currentTarget.open)}>
+                            <summary className="cursor-pointer text-sm font-semibold">Camera</summary>
+                            <div className="mt-2"><BioXpCameraPanel visible={liveDeckVisible && cameraOpen} connected={active}
+                                connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>
+                        </details>}
                         movementControls={<div className="space-y-3 text-sm">
                     <label className="block">
                         Robot destination
@@ -1413,7 +1419,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 <YOperatorError label="Activation / recovery receipt" error={lifecycleReceiptQuery.error} />
             </section>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
+            <div className="grid gap-4">
             <div className="min-w-0">
             <div role="tabpanel" id="control-panel-robot" aria-labelledby="control-tab-robot" hidden={controlTab !== 'robot'} className="space-y-4">
 
@@ -1793,10 +1799,6 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 )}
             </section>
             </div>
-                <details className="w-full max-w-xs self-start rounded-lg border border-slate-800 bg-slate-950/70 p-2 xl:sticky xl:top-4 xl:order-last" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
-                    <summary className="cursor-pointer text-sm font-semibold">Camera</summary>
-                    {cameraOpen && <div className="mt-2"><BioXpCameraPanel visible={controlsVisible} connected={active} connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>}
-                </details>
             </div>
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>

@@ -3525,12 +3525,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 
     it.each(['status-error', 'unreachable-observation'])('retains the passive camera session during %s without a status-observation lock', async (failure) => {
-        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const camera = () => JSON.parse(container.querySelector('[data-testid="camera-session"]')!.textContent!);
         expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: true });
         if (failure === 'status-error') state.statusError = true;
         else state.connectionReachable = false;
-        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: true });
         const xy = container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
         expect([...xy.querySelectorAll('button')].every(button => button.disabled)).toBe(false);
@@ -3539,19 +3539,19 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(state.invokeCalls).toHaveLength(0);
         state.statusError = false;
         state.connectionReachable = null;
-        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: true });
     });
 
     it('fences the passive camera on real disconnect and binds its new connection generation', async () => {
-        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const camera = () => JSON.parse(container.querySelector('[data-testid="camera-session"]')!.textContent!);
         state.connected = false;
-        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         expect(camera()).toMatchObject({ connected: false, connectionGeneration: null, mutationEnabled: false });
         state.connected = true;
         state.connectionGeneration = 2;
-        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+        await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         expect(camera()).toMatchObject({ connected: true, connectionGeneration: 2 });
         expect(state.xyCalls).toHaveLength(0);
         expect(state.invokeCalls).toHaveLength(0);
