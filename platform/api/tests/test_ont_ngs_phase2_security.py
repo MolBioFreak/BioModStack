@@ -97,6 +97,12 @@ def test_construct_verify_shell_quotes_every_runtime_derived_executable_path() -
     assert 'def topologyScript = shellQuote("${codeRoot}/scripts/build_construct_topology_evidence.py")' in source
     assert 'def verifierScript = shellQuote("${codeRoot}/scripts/verify_construct.py")' in source
     assert 'def profileConfig = shellQuote("${codeRoot}/config/ngs/construct_verify_profiles.json")' in source
-    assert 'def doradoImage = shellQuote("${containerDir}/dorado.sif")' in source
+    # The selected native runtime now owns executables; no nested image path.
+    assert "doradoImage" not in source
+    assert "containerDir" not in source
+    assert "SAMTOOLS_ARGS=(--samtools-command samtools)" in source
+    assert '"\\${PYTHON_CMD[@]}" ${topologyScript}' in source
+    assert '"\\${PYTHON_CMD[@]}" ${verifierScript}' in source
+    assert '"\\${SAMTOOLS_ARGS[@]}"' in source
     assert '"${codeRoot}/scripts/build_construct_topology_evidence.py" \\' not in source
     assert '[[ -f "${containerDir}/dorado.sif" ]]' not in source

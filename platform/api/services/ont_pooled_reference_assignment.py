@@ -858,7 +858,15 @@ async def get_pooled_assignment_targets(
 ) -> dict[str, Any]:
     row = await _manifest_row_for_job(session, assignment_job_id)
     _, targets = await _read_manifest(session, row)
+    # Result observations do not control discovery or release eligibility.
+    read_assignments = None
+    try:
+        context = await _load_release_context(session, assignment_job_id)
+        read_assignments = context["summary"]["read_assignments"]
+    except PooledAssignmentError:
+        pass  # Historical, pending or unavailable evidence: keep identities readable.
     return {
+        "read_assignments": read_assignments,
         "schema": TARGET_LIST_SCHEMA,
         "assignment_job_id": assignment_job_id,
         "reference_set_id": str(row.id),
@@ -1274,6 +1282,12 @@ async def _load_release_context(
     seen_assignments: set[str] = set()
     counted_dispositions: dict[str, int] = {}
     for index, raw_assignment in enumerate(raw_assignments, start=1):
+        # Numerical observations are optional for historical summaries and do not
+        # participate in release admission. Keep the identity contract exact.
+        numerical_fields = {
+            "best_alignment_score", "second_alignment_score",
+            "alignment_score_delta", "best_mapq",
+        }
         row = _require_exact_keys(
             raw_assignment,
             {
@@ -1284,7 +1298,7 @@ async def _load_release_context(
                 "disposition",
                 "target_id",
                 "reason",
-            },
+            } | (numerical_fields.intersection(raw_assignment) if type(raw_assignment) is dict else set()),
             f"read assignment {index}",
         )
         occurrence_id = row.get("occurrence_id")

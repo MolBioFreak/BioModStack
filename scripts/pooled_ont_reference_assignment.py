@@ -1143,6 +1143,10 @@ def run_classify(
             "input_ordinal": assignment.record.ordinal,
             "disposition": assignment.disposition,
             "target_id": assignment.target_id,
+            "best_alignment_score": assignment.best_score,
+            "second_alignment_score": assignment.second_score,
+            "alignment_score_delta": assignment.score_delta,
+            "best_mapq": assignment.best_mapq,
             "reason": assignment.reason,
         }
         for assignment in assignments

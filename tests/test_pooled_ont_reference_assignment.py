@@ -227,6 +227,9 @@ def test_native_mapq_zero_competitor_and_real_output(tmp_path, native_tools, mar
     assert tuple(int(row[key]) for key in ("best_alignment_score", "second_alignment_score", "alignment_score_delta", "best_mapq")) == (4000, 3976, 24, 37)
     summary = json.loads((output / "assignment_summary.json").read_text())
     assert summary["read_assignments"][0]["disposition"] == disposition
+    assert tuple(summary["read_assignments"][0][key] for key in (
+        "best_alignment_score", "second_alignment_score", "alignment_score_delta", "best_mapq"
+    )) == (4000, 3976, 24, 37)
     assert summary["scientific_status"] == "REVIEW"
     assert summary["release_state"] == "awaiting_operator_release"
     assert summary["policy"]["min_mapq"] == 20
@@ -471,6 +474,16 @@ def test_exact_count_closure_and_review_artifacts(tmp_path: Path) -> None:
     summary = json.loads((output / "assignment_summary.json").read_text(encoding="utf-8"))
     assert summary["scientific_status"] == "REVIEW"
     assert summary["release_state"] == "awaiting_operator_release"
+    numerical_keys = ("best_alignment_score", "second_alignment_score", "alignment_score_delta", "best_mapq")
+    assert [tuple(row[key] for key in numerical_keys) for row in summary["read_assignments"]] == [
+        (100, None, None, 60), (None, None, None, None), (100, 95, 5, 60),
+    ]
+    with (output / "per_read_assignment.tsv").open() as handle:
+        tsv_rows = list(csv.DictReader(handle, delimiter="\t"))
+    for tsv_row, json_row in zip(tsv_rows, summary["read_assignments"], strict=True):
+        assert {key: int(tsv_row[key]) if tsv_row[key] else None for key in numerical_keys} == {
+            key: json_row[key] for key in numerical_keys
+        }
     assert summary["counts"] == {
         "input_fastq_records": 4,
         "valid_fastq_reads": 3,
