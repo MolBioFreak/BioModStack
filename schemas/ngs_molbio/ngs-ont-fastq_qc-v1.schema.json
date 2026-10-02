@@ -3,6 +3,33 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "samtools_consensus_config": {
+      "default": null,
+      "enum": [
+        null,
+        "hiseq",
+        "hifi",
+        "r10.4_sup",
+        "r10.4_dup",
+        "ultima"
+      ],
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Samtools 1.24 consensus quality preset. Null leaves the existing Bayesian defaults unchanged; select only for known input chemistry.",
+      "x-bms-native-key": "samtools consensus --config",
+      "x-bms-ui-control": "select",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-applicability": "samtools consensus stages",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Consensus quality calibration preset; not construct-profile experimental calibration",
+      "x-bms-supported-runtime-range": "samtools=1.24",
+      "x-bms-units": "not_applicable",
+      "x-bms-incompatibilities": []
+    },
     "enable_rotating_reference_frames": {
       "default": true,
       "type": "boolean",

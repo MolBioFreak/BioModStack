@@ -15,6 +15,7 @@ single_ref_support="0"
 dominant_junction_pos="NA"
 dominant_junction_support="0"
 threads="1"
+consensus_config=()
 out_consensus="dominant_dimer_consensus.fasta"
 out_log="dominant_dimer_consensus.log"
 out_metadata="dominant_dimer_consensus_metadata.tsv"
@@ -34,6 +35,7 @@ while [[ $# -gt 0 ]]; do
         --single-ref-support) single_ref_support="$2"; shift 2 ;;
         --dominant-junction-pos) dominant_junction_pos="$2"; shift 2 ;;
         --dominant-junction-support) dominant_junction_support="$2"; shift 2 ;;
+        --config) consensus_config=(--config "$2"); shift 2 ;;
         --threads) threads="$2"; shift 2 ;;
         --out-consensus) out_consensus="$2"; shift 2 ;;
         --out-log) out_log="$2"; shift 2 ;;
@@ -205,7 +207,7 @@ if [[ -n "$candidate_pos" ]]; then
     if ! samtools index "$tmpdir/subset.bam" >> "$out_log" 2>&1; then
         critical_failure "DOMINANT_CONSENSUS_INDEX_FAILED"
     fi
-    if ! samtools consensus --mode bayesian -f fasta "$tmpdir/subset.bam" > "$out_consensus" 2>> "$out_log"; then
+    if ! samtools consensus --mode bayesian "${consensus_config[@]}" -f fasta "$tmpdir/subset.bam" > "$out_consensus" 2>> "$out_log"; then
         critical_failure "SAMTOOLS_CONSENSUS_FAILED"
     fi
     if ! has_called_consensus_base "$out_consensus"; then

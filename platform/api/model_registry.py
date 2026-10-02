@@ -681,6 +681,15 @@ class ModelRegistry:
                     data = yaml.safe_load(f)
                     if data:
                         model = ModelDefinition(**data)
+                        if model.id == "nanopore":
+                            from services.ont_ngs_contract import samtools_consensus_setting
+                            setting = samtools_consensus_setting()
+                            for field in model.params:
+                                if field.name == "samtools_consensus_config":
+                                    field.enum = [value for value in setting["enum"] if value is not None]
+                                    field.accepted_types = setting["type"]
+                                    field.default = setting["default"]
+                                    field.description = setting["description"]
                         self._validate_integration(model)
                         loaded_models[model.id] = model
             except Exception as e:

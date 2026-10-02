@@ -539,9 +539,10 @@ def _assessment_result(
     if verdict == "FAIL":
         return "FAIL"
     if verdict == "PASS":
-        # load_sequence_qc_manifest preserves PASS only when the server-owned
-        # canonical profile registry explicitly authorizes automatic PASS.
-        return "PASS"
+        # Configured-check PASS is reporting, not automatic release authority.
+        from services.sequence_qc_manifest import _profile_is_canonically_pass_eligible
+
+        return "PASS" if _profile_is_canonically_pass_eligible(manifest.get("threshold_profile")) else "REVIEW"
     return "REVIEW"
 
 

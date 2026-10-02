@@ -274,7 +274,7 @@ The construction and wire boundaries enforce the following applicable rules; dis
 16. stage status and output counts are displayed as recorded; missing receipts and counts other than historical 5/6/8/6 do not gate the report;
 17. a result session summary that differs from its governed session; missing optional presentations do not prevent scientific result access;
 18. a threshold-profile digest that differs from SHA-256 over UTF-8 canonical JSON using sorted keys, comma/colon separators, and `allow_nan=false` for the exact `values` object, or outer version/calibration/public-accuracy metadata that differs from those values;
-19. a PASS verdict unless every check passes, all aggregate and row reason-code arrays are empty, every threshold is satisfied, `automatic_pass_eligible=true`, and `public_accuracy_validated=true`; any review/fail check or nonempty reason array requires REVIEW or FAIL as producer-defined;
+19. a PASS verdict unless configured checks and thresholds pass; actual review/fail checks remain REVIEW or FAIL as producer-defined. Profile calibration, public accuracy validation, and automatic release eligibility are separate metadata and do not downgrade the configured-check verdict;
 20. artifact counts inconsistent with the declared descriptor states, or an `artifact_set_sha256` that does not recompute through AUTH-8. The historical 36/34/2 inventory is not a fixed cardinality requirement.
 
 Backend construction must pass the canonical complete-source fixture. Backend serialization and frontend parsing must pass the same canonical bounded wire fixture and one adversarial fixture per wire invariant. A construction-only adversarial case is tested only at construction boundaries and must carry no fabricated browser-side proof.

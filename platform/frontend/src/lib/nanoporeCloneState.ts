@@ -68,6 +68,7 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         enableRotatingReferenceFrames: p.enable_rotating_reference_frames !== false,
         rotationScanStepBp: p.rotation_scan_step_bp ?? 1,
         minFastqReadLength: p.min_fastq_read_length ?? 0,
+        samtools_consensus_config: p.samtools_consensus_config,
         fastqMinimap2Preset: p.fastq_minimap2_preset ?? 'map-ont',
         fastqMinimap2AllowSecondary: p.fastq_minimap2_allow_secondary ?? true,
         igvTrackWindowBp: p.igv_track_window_bp ?? 100,

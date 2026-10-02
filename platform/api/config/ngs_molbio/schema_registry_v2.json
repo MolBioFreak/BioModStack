@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
   "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
-  "content_sha256": "5c67639765f6615c84114cc60ea606565a71a97173f30defce5dda9bce6301f3",
+  "content_sha256": "9f98d2430289f85a14bcedad7a00250348f604b9d4569b5ca3618f429427478e",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -455,21 +455,21 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-clone_validation-v1.schema.json",
-      "schema_canonical_sha256": "2f7d8ec16f232889b649189f1904b00b1fdded96e514dca665e783cf890f2131",
+      "schema_canonical_sha256": "77e4e4e8528bb45253c28f1091ff0f6f58b53b3d232aac03b6ed2ff2d08580ad",
       "schema_id": "bms.workflow-parameters.ngs.ont.clone_validation.v1",
-      "schema_sha256": "fab469822940c0663f8d9a2191146378f43c56300159d7cf3442895da3839d9a"
+      "schema_sha256": "37af416c78b8d0f97e43cfb716e88975595fe81d7a3d3d50201930e4db3b2975"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-construct_screening-v1.schema.json",
-      "schema_canonical_sha256": "46c5e4eda584964d3b1ef19c62775cf0f8495ca95aa7a02a329c42b5c32d3a11",
+      "schema_canonical_sha256": "59dd7fb4b702ff6a1e22bac494e8f2fbf4af55b26710158c438af58e0ef679cc",
       "schema_id": "bms.workflow-parameters.ngs.ont.construct_screening.v1",
-      "schema_sha256": "6380d2eed31bc3df28ea3347f7edd9a3c657a0de2a53116ed42c2e0373871c9d"
+      "schema_sha256": "ba6990657c99441d65a0a8ba4bf6e85509aeb12b2513e0876acafa882c6de752"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-fastq_qc-v1.schema.json",
-      "schema_canonical_sha256": "8d599c216946c628c33d9a574182879181aef38e645ee0dfdc4b4a356201c32c",
+      "schema_canonical_sha256": "31698d78fc60e5f60823921a1aa65fd7c37e1f8e20423dabb65c624940170650",
       "schema_id": "bms.workflow-parameters.ngs.ont.fastq_qc.v1",
-      "schema_sha256": "1a5c5c7040b052df5a7693a0f7705e52b4fdd6d10aadbfef9cc543b2e669aed1"
+      "schema_sha256": "f19a7f9a4c3d30c4f656627f34db475d22a6909d85c43ab1ffe46d78f13deb64"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-methylation_analysis-v1.schema.json",
@@ -479,9 +479,9 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-plasmid_qc-v1.schema.json",
-      "schema_canonical_sha256": "88bb6380fd00992c67fe7269163d7402c0e95f1821eb0d043f76763516dd7ab0",
+      "schema_canonical_sha256": "442ce34bc7e63885e1d14672adbbeea056aa182126bfd570289250600a6eb0aa",
       "schema_id": "bms.workflow-parameters.ngs.ont.plasmid_qc.v1",
-      "schema_sha256": "f06ddaebea85c76c1a871f244e58166aabe581e9d12e9d2d63e0febaabf8b3fe"
+      "schema_sha256": "c02d773d946b58cc8508692a272fb3dcd96e0f9071d0ee2d9cfc4506be9baff5"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-pooled_reference_assignment-v1.schema.json",

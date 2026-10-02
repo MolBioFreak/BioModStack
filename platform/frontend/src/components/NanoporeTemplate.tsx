@@ -1,3 +1,4 @@
+import ontConsensusSchema from '../../../../schemas/ngs_molbio/ngs-ont-fastq_qc-v1.schema.json';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { ExecutionPolicyControl } from './ExecutionPolicyControl';
 import { newJobExecutionPolicy, normalizeResultPolicy, type ExecutionPolicy } from '../lib/executionPolicy';
@@ -920,6 +921,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         0,
         FASTQ_MAX_MIN_READ_LENGTH_BP,
     ));
+    const [samtoolsConsensusConfig, setSamtoolsConsensusConfig] = useState<string | null>(
+        initialValues?.samtools_consensus_config as string | null ?? ontConsensusSchema.properties.samtools_consensus_config.default,
+    );
     const [fastqMinimap2Preset, setFastqMinimap2Preset] = useState<MinimapPreset>(() => normalizeFastqMinimapPreset(
         initialValues?.fastqMinimap2Preset ?? initialValues?.fastq_minimap2_preset,
     ));
@@ -1391,6 +1395,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         ...(wfCloneSample.trim() && { wf_clone_sample: wfCloneSample.trim() }),
                     }),
                     ...((selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc') && {
+                        samtools_consensus_config: samtoolsConsensusConfig,
                         enable_rotating_reference_frames: enableRotatingReferenceFrames,
                         rotation_scan_step_bp: rotationScanStepBp,
                         single_ref_split_min_mapq: singleRefSplitMinMapq,
@@ -2138,6 +2143,20 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 {selectedWorkflow === 'clone' ? 'Required by the selected clone-validation workflow.' : 'Optional for construct screening.'}
                             </p>
                         </div>
+                    </label>
+                )}
+
+                {usesExpectedPlasmidSize && (
+                    <label className="text-sm text-[var(--text-primary)]">
+                        Samtools consensus preset
+                        <select aria-label="Samtools consensus preset" value={samtoolsConsensusConfig ?? ''}
+                            onChange={(event) => setSamtoolsConsensusConfig(event.target.value || null)}
+                            className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5">
+                            {ontConsensusSchema.properties.samtools_consensus_config.enum.map((preset) => (
+                                <option key={preset ?? ''} value={preset ?? ''}>{preset ?? 'Unchanged — native Bayesian defaults'}</option>
+                            ))}
+                        </select>
+                        <p className="text-xs text-[var(--text-secondary)]">{ontConsensusSchema.properties.samtools_consensus_config.description}</p>
                     </label>
                 )}
 

@@ -127,6 +127,7 @@ modes:
       - bam_min_mapq
       - run_fastq_qc
       - expected_plasmid_size
+      - samtools_consensus_config
       - min_fastq_read_length
       - fastq_minimap2_preset
       - fastq_minimap2_allow_secondary
@@ -157,6 +158,7 @@ modes:
       - bam_min_mapq
       - run_fastq_qc
       - expected_plasmid_size
+      - samtools_consensus_config
       - min_fastq_read_length
       - fastq_minimap2_preset
       - fastq_minimap2_allow_secondary
@@ -183,6 +185,7 @@ modes:
       - fastq_path
       - reference_fasta
       - expected_plasmid_size
+      - samtools_consensus_config
       - run_fastq_qc
       - min_fastq_read_length
       - fastq_minimap2_preset
@@ -233,6 +236,7 @@ modes:
       - fastq_path
       - reference_fasta
       - expected_plasmid_size
+      - samtools_consensus_config
       - dorado_model
       - dorado_device
       - min_qscore
@@ -444,6 +448,12 @@ params:
     required: false
     default: 0
     minimum: 0
+
+  - name: samtools_consensus_config
+    type: string
+    description: Samtools consensus preset; null preserves native Bayesian defaults. Choices are owned by the ONT fastq_qc parameter schema.
+    required: false
+    default: null
 
   - name: fastq_minimap2_preset
     type: string

@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from services.sequence_qc_manifest import find_manifest_for_job, load_sequence_qc_manifest
 
 
@@ -113,7 +115,7 @@ def test_invalid_check_status_degrades_to_review(tmp_path: Path) -> None:
     assert "MALFORMED_VERIFICATION_MANIFEST" in manifest["reason_codes"]
 
 
-def test_experimental_profile_pass_is_downgraded_by_public_consumer(tmp_path: Path) -> None:
+def test_experimental_profile_pass_reports_checks_without_calibration_downgrade(tmp_path: Path) -> None:
     payload = verification_payload()
     payload["threshold_profile"].update(
         {
@@ -133,9 +135,43 @@ def test_experimental_profile_pass_is_downgraded_by_public_consumer(tmp_path: Pa
 
     manifest = load_sequence_qc_manifest(manifest_path)
 
-    assert manifest["verdict"] == "REVIEW"
-    assert "UNCALIBRATED_PROFILE" in manifest["reason_codes"]
+    assert manifest["verdict"] == "PASS"
+    assert "UNCALIBRATED_PROFILE" not in manifest["reason_codes"]
     assert "ALL_CHECKS_PASS" in manifest["reason_codes"]
+
+
+@pytest.mark.parametrize("verdict", ["PASS", "REVIEW", "FAIL"])
+def test_http_reader_preserves_configured_verdict_and_profile(tmp_path, monkeypatch, verdict):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers import sequence_qc
+
+    payload = verification_payload()
+    payload["verdict"] = verdict
+    payload["threshold_profile"].update(calibration_status="experimental", public_accuracy_validated=False)
+    if verdict != "PASS":
+        payload["checks"]["coverage"]["status"] = verdict.lower()
+        payload["reason_codes"] = ["COVERAGE_FIXTURE"]
+    manifest_path = tmp_path / "verification" / "qc_manifest.json"
+    manifest_path.parent.mkdir()
+    original = json.dumps(payload)
+    manifest_path.write_text(original)
+    @asynccontextmanager
+    async def pinned_root(_job):
+        yield tmp_path
+    monkeypatch.setattr(sequence_qc, "_validated_pinned_result_root", pinned_root)
+    app = FastAPI()
+    app.include_router(sequence_qc.router, prefix="/api")
+    app.dependency_overrides[sequence_qc.require_alignment_job] = lambda: SimpleNamespace(
+        id="fixture-job", params={"ont_workflow_id": "ont_construct_screening", "ont_input_mode": "fastq"})
+    response = TestClient(app).get("/api/jobs/fixture-job/manifest")
+    assert response.status_code == 200, response.text
+    assert response.json()["verdict"] == verdict
+    assert response.json()["threshold_profile"]["calibration_status"] == "experimental"
+    assert response.json()["threshold_profile"]["public_accuracy_validated"] is False
+    assert manifest_path.read_text() == original
 
 
 def test_profile_pass_identity_uses_verifier_canonical_selected_policy_digest(
@@ -169,6 +205,10 @@ def test_profile_pass_identity_uses_verifier_canonical_selected_policy_digest(
     }
 
     assert service._profile_is_canonically_pass_eligible(profile) is True
+    from services.molbio_ngs_evidence import _assessment_result, ASSESSMENT_RULE_REGISTRY
+    assert _assessment_result(lifecycle="completed", manifest_integrity="valid",
+        manifest={"verdict": "PASS", "threshold_profile": profile}, manifest_schema=service.VERIFICATION_SCHEMA,
+        rule=ASSESSMENT_RULE_REGISTRY["server-owned-rule"]) == "PASS"
     profile["sha256"] = hashlib.sha256(config_path.read_bytes()).hexdigest()
     assert service._profile_is_canonically_pass_eligible(profile) is False
 

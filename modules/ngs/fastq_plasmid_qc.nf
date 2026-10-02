@@ -55,6 +55,7 @@ process FastqPlasmidQC {
     def igvTrackWindowBp = (params.igv_track_window_bp ?: 100) as Integer
     def igvReportMaxSites = (params.igv_report_max_sites ?: 40) as Integer
     def igvReportFlankingBp = (params.igv_report_flanking_bp ?: 200) as Integer
+    def consensusConfig = params.samtools_consensus_config == null ? '' : "--config ${shellQuote(params.samtools_consensus_config.toString())}"
     def codeRoot = params.code_root ?: projectDir
     def manifestJobId = ((params.job_id ?: '') as String).trim()
     if (!manifestJobId) {
@@ -250,7 +251,7 @@ process FastqPlasmidQC {
     workflow_status="completed"
     verification_reason_code="phase1_manual_review_required"
     rm -f fastq_consensus.fasta fastq_consensus.fasta.fai
-    if ! "\${SAMTOOLS_CMD[@]}" consensus --mode bayesian -f fasta "${bam}" > fastq_consensus.fasta 2> fastq_consensus.log; then
+    if ! "\${SAMTOOLS_CMD[@]}" consensus --mode bayesian ${consensusConfig} -f fasta "${bam}" > fastq_consensus.fasta 2> fastq_consensus.log; then
         echo "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_FAILED" | tee -a fastq_consensus.log >&2
         rm -f fastq_consensus.fasta fastq_consensus.fasta.fai
         exit 86

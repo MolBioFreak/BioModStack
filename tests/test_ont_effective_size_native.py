@@ -88,7 +88,8 @@ process.beforeScript='export PATH="{binary}:$PATH"; export BASH_ENV="{hook}"; ex
 singularity.enabled=false
 docker.enabled=false
 """)
-    params = dict(reference=str(reference), fastq=str(fastq), bam=str(tmp_path / "reads.bam"),
+    consensus_config = "r10.4_sup" if override is not None else None
+    params = dict(samtools_consensus_config=consensus_config, reference=str(reference), fastq=str(fastq), bam=str(tmp_path / "reads.bam"),
                   bai=str(tmp_path / "reads.bam.bai"), code_root=str(ROOT), job_id="size-fixture",
                   reference_sequence_sha256=hashlib.sha256(sequence.encode()).hexdigest(),
                   expected_plasmid_size=override, out_dir=str(tmp_path / "out"))
@@ -106,6 +107,10 @@ docker.enabled=false
         assert float(values[4]) == pytest.approx(ratio, abs=0.00005)
     commands = list((tmp_path / "work").rglob(".command.sh"))
     assert len(commands) == 1
+    rendered = commands[0].read_text()
+    expected_config = "--config 'r10.4_sup'" if consensus_config else ""
+    assert f"consensus --mode bayesian {expected_config} -f fasta" in rendered
+    assert ("--config 'r10.4_sup'" in rendered) == (consensus_config is not None)
     assert 'expected_size="null"' not in commands[0].read_text()
     assert commands[0].with_name(".exitcode").read_text().strip() == "42"
     if process == "FastqDimerAnalysis":

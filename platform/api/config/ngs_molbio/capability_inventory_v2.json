@@ -1925,6 +1925,7 @@
         "enable_rotating_reference_frames",
         "min_qscore",
         "rotation_scan_step_bp",
+        "samtools_consensus_config",
         "single_ref_split_max_query_gap_bp",
         "single_ref_split_min_mapq",
         "single_ref_split_min_segment_bp",
@@ -1945,7 +1946,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "acf3157ee7a130c6edf7a0a84e80c89442c793e736060b794e961b5635f77953",
+      "inventory_sha256": "73d849b6160766b455a7df8775d6bb9cf03fde22c9928f3f86f83858f9af1ad7",
       "label": "ONT Clone Validation",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -1969,6 +1970,7 @@
         "pod5_dir",
         "reference_fasta",
         "rotation_scan_step_bp",
+        "samtools_consensus_config",
         "server_bound_input_mode",
         "single_ref_split_max_query_gap_bp",
         "single_ref_split_min_mapq",
@@ -1990,7 +1992,7 @@
         "wf_clone_trim_length"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.clone_validation.v1",
-      "parameter_schema_sha256": "fab469822940c0663f8d9a2191146378f43c56300159d7cf3442895da3839d9a",
+      "parameter_schema_sha256": "37af416c78b8d0f97e43cfb716e88975595fe81d7a3d3d50201930e4db3b2975",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -2102,6 +2104,7 @@
         "rotation_scan_step_bp",
         "run_assembly",
         "run_fastq_qc",
+        "samtools_consensus_config",
         "single_ref_split_max_query_gap_bp",
         "single_ref_split_min_mapq",
         "single_ref_split_min_segment_bp",
@@ -2122,7 +2125,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "4e797c9c52fc89ae7a80812331e440e899d017a1da4f3393ce4ab1142e271e26",
+      "inventory_sha256": "ab731ffa326ab631c12eab4b77af249200d13ff1c9ec8e4b847d20eb4a456f3b",
       "label": "ONT Construct Screening",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -2157,6 +2160,7 @@
         "rotation_scan_step_bp",
         "run_assembly",
         "run_fastq_qc",
+        "samtools_consensus_config",
         "server_bound_input_mode",
         "single_ref_split_max_query_gap_bp",
         "single_ref_split_min_mapq",
@@ -2178,7 +2182,7 @@
         "wf_clone_trim_length"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.construct_screening.v1",
-      "parameter_schema_sha256": "6380d2eed31bc3df28ea3347f7edd9a3c657a0de2a53116ed42c2e0373871c9d",
+      "parameter_schema_sha256": "ba6990657c99441d65a0a8ba4bf6e85509aeb12b2513e0876acafa882c6de752",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -2282,13 +2286,14 @@
         "igv_track_window_bp",
         "min_fastq_read_length",
         "rotation_scan_step_bp",
+        "samtools_consensus_config",
         "single_ref_split_max_query_gap_bp",
         "single_ref_split_min_mapq",
         "single_ref_split_min_segment_bp"
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "9a910a27957d51c3feee63a5dbb817f4d76f5c13a0993a5b7b945754611b457e",
+      "inventory_sha256": "e5babbae00b04f6990646eff44f19f509d4632ecea9fdecd7ff84f2a64beb52d",
       "label": "ONT FASTQ QC",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -2311,12 +2316,13 @@
         "reference_fasta",
         "rotation_scan_step_bp",
         "run_fastq_qc",
+        "samtools_consensus_config",
         "single_ref_split_max_query_gap_bp",
         "single_ref_split_min_mapq",
         "single_ref_split_min_segment_bp"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.fastq_qc.v1",
-      "parameter_schema_sha256": "1a5c5c7040b052df5a7693a0f7705e52b4fdd6d10aadbfef9cc543b2e669aed1",
+      "parameter_schema_sha256": "f19a7f9a4c3d30c4f656627f34db475d22a6909d85c43ab1ffe46d78f13deb64",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -2550,6 +2556,7 @@
         "min_qscore",
         "rotation_scan_step_bp",
         "run_fastq_qc",
+        "samtools_consensus_config",
         "single_ref_split_max_query_gap_bp",
         "single_ref_split_min_mapq",
         "single_ref_split_min_segment_bp",
@@ -2557,7 +2564,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "028035bcf1275bd9e902017635ddd9e3aa2e98e7f89b08d2a7814cae5015683b",
+      "inventory_sha256": "1eeb934616d0e16e94bddd085d7e1c42689e2a0d0dde5a179b4002c02f99b6b1",
       "label": "ONT Plasmid QC",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -2591,6 +2598,7 @@
         "reference_fasta",
         "rotation_scan_step_bp",
         "run_fastq_qc",
+        "samtools_consensus_config",
         "server_bound_input_mode",
         "single_ref_split_max_query_gap_bp",
         "single_ref_split_min_mapq",
@@ -2598,7 +2606,7 @@
         "trim_adapters"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.plasmid_qc.v1",
-      "parameter_schema_sha256": "f06ddaebea85c76c1a871f244e58166aabe581e9d12e9d2d63e0febaabf8b3fe",
+      "parameter_schema_sha256": "c02d773d946b58cc8508692a272fb3dcd96e0f9071d0ee2d9cfc4506be9baff5",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -2908,7 +2916,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "2f3ee26a9638a1410e165db3edc1772e9f98e28b6f05858226ad68410eda1a3f",
+  "content_sha256": "df6ac3f4d573b86171d345857988a6159b410359e40cf2732cd746bcba16a099",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
@@ -2934,7 +2942,7 @@
   ],
   "payload_ownership_manifest_sha256": "a0a8e0ae952565e5f8dacbd84567e65853c8fbd1ab6b1bb7454ceefcab4aa6cb",
   "schema": "bms.ngs-molbio.capability-inventory.v2",
-  "schema_registry_sha256": "82b9e403c5ba409a312e1d8f667b300be7d2140cb7d37d89c63930f5492441e7",
+  "schema_registry_sha256": "0d91d8c7a54bb827424504a33a2bdd0d406975e5e6669107d9f248b80fa72856",
   "schema_version": 2,
   "source_pin_sha256": "c24afa91cc42054da3899c0f9a024769be96b444a444e8ab714443836856f1a4"
 }

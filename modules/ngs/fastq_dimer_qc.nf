@@ -92,6 +92,7 @@ process FastqDimerAnalysis {
     def singleRefMinMapq = (params.single_ref_split_min_mapq != null ? params.single_ref_split_min_mapq : 20) as Integer
     def singleRefMinSegBp = (params.single_ref_split_min_segment_bp ?: 250) as Integer
     def singleRefMaxGapBp = (params.single_ref_split_max_query_gap_bp != null ? params.single_ref_split_max_query_gap_bp : 500) as Integer
+    def consensusConfig = params.samtools_consensus_config == null ? '' : "--config ${shellQuote(params.samtools_consensus_config.toString())}"
     def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
     def minimapAllowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     def codeRoot = params.code_root ?: projectDir
@@ -1171,7 +1172,7 @@ process FastqDimerAnalysis {
         }
 
         rm -f dimer_consensus.fasta dimer_consensus.fasta.fai dimer_consensus.fasta.tmp
-        if ! samtools consensus --mode bayesian -f fasta dimer_candidates.aligned.bam > dimer_consensus.fasta 2> dimer_consensus.log; then
+        if ! samtools consensus --mode bayesian ${consensusConfig} -f fasta dimer_candidates.aligned.bam > dimer_consensus.fasta 2> dimer_consensus.log; then
             echo "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_FAILED" | tee -a dimer_consensus.log >&2
             rm -f dimer_consensus.fasta dimer_consensus.fasta.fai
             exit 86
@@ -1203,6 +1204,7 @@ process FastqDimerAnalysis {
             --dominant-junction-pos "\${dominant_junction_pos}" \\
             --dominant-junction-support "\${dominant_junction_support}" \\
             --threads ${task.cpus} \\
+            ${consensusConfig} \\
             --out-consensus dominant_dimer_consensus.fasta \\
             --out-log dominant_dimer_consensus.log \\
             --out-metadata dominant_dimer_consensus_metadata.tsv

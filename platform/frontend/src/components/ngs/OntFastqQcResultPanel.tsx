@@ -264,7 +264,9 @@ export function OntFastqQcResultPanel({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <div className="text-xs text-[var(--text-secondary)]">{result.job.name}</div>
-                        <h4 className="text-lg font-semibold">Scientific verdict: {verdictLabel}</h4>
+                        <h4 className="text-lg font-semibold">Configured-check verdict: {verdictLabel}</h4>
+                        {verification.verdict === 'PASS' && <div>Passes configured checks; not automatic release approval.</div>}
+                        {verification.threshold_profile.calibration_status !== 'calibrated' && <div>Profile uncalibrated; biological accuracy is not validated.</div>}
                         <div className="mt-1 text-xs text-[var(--text-secondary)]">
                             Execution {result.job.status} · ont_fastq_qc · FASTQ · Job {result.job.id}
                         </div>

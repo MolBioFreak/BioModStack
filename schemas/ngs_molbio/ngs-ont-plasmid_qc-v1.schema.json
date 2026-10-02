@@ -3,6 +3,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "samtools_consensus_config": {
+      "$ref": "bms.workflow-parameters.ngs.ont.fastq_qc.v1#/properties/samtools_consensus_config",
+      "default": null
+    },
     "bam_force_realign": {
       "default": false,
       "type": "boolean",

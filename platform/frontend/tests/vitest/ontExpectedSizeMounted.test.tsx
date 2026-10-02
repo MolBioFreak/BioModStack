@@ -144,6 +144,33 @@ async function refreshReference(length: number) {
 }
 
 describe('expected plasmid size mounted authoring', () => {
+    it.each([undefined, null, 'hiseq', 'hifi', 'r10.4_sup', 'r10.4_dup', 'ultima'])(
+        'reopens consensus preset %s through clone and serialized save, then submits unchanged', async (preset) => {
+            const initial = normalizeNanoporeCloneState({ id: 'consensus', name: 'consensus', model_id: 'nanopore', params: {
+                fastq_path: '/data/input.fastq', ont_workflow_id: 'ont_construct_screening', run_fastq_qc: true,
+                ngs_reference_revision_id: 'reference-revision-1', samtools_consensus_config: preset,
+            } } as never)!;
+            await renderTemplate(JSON.parse(JSON.stringify(initial)));
+            const control = container.querySelector<HTMLSelectElement>('[aria-label="Samtools consensus preset"]')!;
+            expect(Array.from(control.options).map((option) => option.value)).toEqual(['', 'hiseq', 'hifi', 'r10.4_sup', 'r10.4_dup', 'ultima']);
+            expect(control.value).toBe(preset ?? '');
+            await refreshReference(12000);
+            expect(control.value).toBe(preset ?? '');
+            await submitSize();
+            expect(apiMocks.submitOntNgsJob.mock.calls[0][1].params.samtools_consensus_config).toBe(preset ?? null);
+        },
+    );
+    it('lets unknown-input users explicitly choose and clear a consensus preset', async () => {
+        await renderTemplate();
+        const control = container.querySelector<HTMLSelectElement>('[aria-label="Samtools consensus preset"]')!;
+        expect(control.value).toBe('');
+        for (const value of ['r10.4_sup', '']) {
+            await act(async () => { control.value = value; control.dispatchEvent(new Event('change', { bubbles: true })); });
+            expect(control.value).toBe(value);
+        }
+        await submitSize();
+        expect(apiMocks.submitOntNgsJob.mock.calls[0][1].params.samtools_consensus_config).toBeNull();
+    });
     it('defaults to Auto, displays resolved reference updates and sends null', async () => {
         await renderTemplate();
         expect(sizeMode().value).toBe('auto');

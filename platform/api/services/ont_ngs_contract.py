@@ -535,6 +535,12 @@ def _normalize_wf_clone_controls(normalized: dict[str, Any]) -> None:
             normalized.pop(key, None)
 
 
+def samtools_consensus_setting() -> dict[str, Any]:
+    return json.loads(
+        (Path(__file__).resolve().parents[3] / "schemas/ngs_molbio/ngs-ont-fastq_qc-v1.schema.json").read_text()
+    )["properties"]["samtools_consensus_config"]
+
+
 def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | None) -> dict[str, Any]:
     """Apply canonical ONT product/quality defaults without mutating caller params."""
     canonical_id = resolve_ont_workflow_alias(workflow_id)
@@ -543,6 +549,10 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized.update(dict(params or {}))
     if canonical_id in {"ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}:
         normalized["expected_plasmid_size"] = effective_expected_plasmid_size(normalized.get("expected_plasmid_size"))
+        consensus_setting = samtools_consensus_setting()
+        consensus_config = normalized.setdefault("samtools_consensus_config", consensus_setting["default"])
+        if consensus_config not in consensus_setting["enum"]:
+            raise ValueError("samtools_consensus_config must be an installed samtools preset or null (unchanged)")
 
     if canonical_id == "ont_fastq_qc":
         def fastq_bool(name: str, default: bool) -> bool:
