@@ -38,7 +38,7 @@ test('operator polling budget retains bounded live catalog and cross-client hist
     assert.match(catalog, /1_000 : 5_000/);
     assert.doesNotMatch(admission, /refetchInterval:/);
     assert.match(history, /refetchInterval/);
-    assert.match(camera, /refetchInterval: enabled \? 2_000 : false/);
+    assert.match(camera, /refetchInterval: enabled \? interval : false/);
 });
 
 test('generic mutation refresh no longer extends pending state', () => {

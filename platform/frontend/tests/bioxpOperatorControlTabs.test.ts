@@ -79,7 +79,7 @@ test('main tab has a compact live status dashboard for motion axes temperatures 
     // R5: current embedded telemetry, not an extra retired dashboard poll.
     // Same-generation read-only catalog polling recovers status observation loss;
     // robot action flags remain authoritative; age only changes the display.
-    assert.match(cockpit, /useBioXpOperatorControlCatalog\(\s*generation,\s*linkConnected,/);
+    assert.match(cockpit, /useBioXpOperatorControlCatalog\(\s*generation,\s*linkConnected && operationalVisible,/);
     assert.match(cockpit, /const currentDashboardV2 = currentCatalogV2\?\.dashboard/);
     assert.match(cockpit, /const displayTelemetry = displayDashboardV2\?\.telemetry \?\? undefined/);
     assert.match(cockpit, /data=\{displayTelemetry\}/);

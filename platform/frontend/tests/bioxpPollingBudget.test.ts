@@ -24,7 +24,10 @@ test('one catalog owns live enablement and embedded dashboards; camera status is
     assert.match(catalog, /signal, timeout: 12_000/);
     assert.match(catalog, /refetchIntervalInBackground: false/);
     assert.doesNotMatch(client, /export const useBioXpOperatorDashboard|export const useBioXpOperatorControlCatalogV2/);
-    assert.match(hookSource('export const useBioXpCameraStatus', 'export const useBioXpCameraStreamState'), /refetchInterval: enabled \? 2_000 : false/);
+    assert.match(hookSource('export const useBioXpCameraStatus', 'export const useBioXpCameraStreamState'), /refetchInterval: enabled \? interval : false/);
+    assert.match(cameraPanel, /streamQuery.data\?\.active === true \? 2_000 : false/);
+    assert.match(client, /query.state.data\?\.active \? 2_000 : 15_000/);
+    assert.match(cameraPanel, /connected && observing/);
 });
 
 test('cockpit keeps one bounded catalog loop and uses age only as presentation', () => {
@@ -36,7 +39,7 @@ test('cockpit keeps one bounded catalog loop and uses age only as presentation',
     assert.match(cockpit, /localAgeMs >= 15_000 \|\| upstreamAgeMs >= 15_000/);
     assert.doesNotMatch(cockpit, /setInterval/);
     assert.match(quickDashboard, /Last-known observation/);
-    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected, historyLimit, historyPagination.cursor\)/);
+    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected && operationalVisible && historyOpen, historyLimit, historyPagination.cursor\)/);
     assert.match(cockpit, /!displayConnected \? \[\]/);
 });
 

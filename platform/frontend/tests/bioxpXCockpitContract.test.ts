@@ -90,7 +90,7 @@ test('receipt history keeps typed terminal proof and loads selected retained evi
     const history = readFileSync('src/components/BioXpHistoryReceiptCard.tsx', 'utf8');
     const evidence = readFileSync('src/components/BioXpReceiptEvidence.tsx', 'utf8');
     assert.match(history, /Terminal proof verified/);
-    assert.match(history, /connected && expanded, false/);
+    assert.match(history, /connected && expanded && documentVisible, false/);
     assert.match(history, /BioXpReceiptEvidence/);
     assert.match(evidence, /child_receipts/);
     assert.doesNotMatch(history, /JSON.stringify/);
