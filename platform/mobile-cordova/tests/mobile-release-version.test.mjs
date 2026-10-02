@@ -13,9 +13,9 @@ test('native shell release version advances to the themed nick-label repair', as
   const packageJson = JSON.parse(packageJsonText);
   const packageLock = JSON.parse(packageLockText);
 
-  assert.match(configXml, /version="0\.4\.14"/);
-  assert.match(configXml, /android-versionCode="414"/);
-  assert.equal(packageJson.version, '0.4.14');
-  assert.equal(packageLock.version, '0.4.14');
-  assert.equal(packageLock.packages[''].version, '0.4.14');
+  assert.match(configXml, /version="0\.4\.15"/);
+  assert.match(configXml, /android-versionCode="415"/);
+  assert.equal(packageJson.version, '0.4.15');
+  assert.equal(packageLock.version, '0.4.15');
+  assert.equal(packageLock.packages[''].version, '0.4.15');
 });

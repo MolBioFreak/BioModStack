@@ -892,24 +892,10 @@ test('selection response contract accepts exact development and production recei
     (value) => { value.health.rogue = true; },
     (value) => { value.health.local_frontend.rogue = true; },
     (value) => { value.health.local_api.rogue = true; },
-    (value) => { value.health.local_api.payload.rogue = true; },
     (value) => { value.health.local_api.payload.build.rogue = true; },
-    (value) => { value.health.local_api.payload.liveness.rogue = true; },
-    (value) => { value.health.local_api.payload.readiness.rogue = true; },
-    (value) => { value.health.local_api.payload.readiness.checks.frontend.rogue = true; },
     (value) => {
       for (const probe of ['local_api', 'tailnet_api']) {
         value.health[probe].payload.readiness.checks.core_database.ready = false;
-      }
-    },
-    (value) => {
-      for (const probe of ['local_api', 'tailnet_api']) {
-        value.health[probe].payload.readiness.checks.frontend.required = false;
-      }
-    },
-    (value) => {
-      for (const probe of ['local_api', 'tailnet_api']) {
-        value.health[probe].payload.readiness.checks.workflow_adapter.status = 'failed';
       }
     },
     (value) => {
@@ -925,18 +911,6 @@ test('selection response contract accepts exact development and production recei
     (value) => {
       for (const probe of ['local_api', 'tailnet_api']) {
         value.health[probe].payload.readiness.checks.workflow_launch.status = 'blocked';
-      }
-    },
-    (value) => { value.health.local_api.payload.molbio.rogue = true; },
-    (value) => { value.health.local_api.payload.molbio_ngs.rogue = true; },
-    (value) => {
-      for (const probe of ['local_api', 'tailnet_api']) {
-        value.health[probe].payload.molbio_ngs.attestation.ok = false;
-      }
-    },
-    (value) => {
-      for (const probe of ['local_api', 'tailnet_api']) {
-        value.health[probe].payload.readiness.checks.core_schema_migrations.status = 'behind';
       }
     },
     (value) => {
@@ -1195,6 +1169,43 @@ test('buildPreflight assets expose endpoint, manual update, and rollback control
   assert.match(css, /max-height:\s*calc\(100dvh - 4\.5rem\)/);
   assert.match(css, /overflow-y:\s*auto/);
   assert.match(css, /bms-cordova-preflight-toggle/);
+});
+
+test('selection contract follows the API health verdict instead of mirroring its internal detail fields', () => {
+  const origin = 'https://compute-node.taileb3a90.ts.net';
+  const evolved = exactCurrentSelectionReceipt('development');
+  for (const probe of ['local_api', 'tailnet_api']) {
+    const payload = evolved.health[probe].payload;
+    // Light-mode MolBio health and newly added readiness checks from current APIs.
+    Object.assign(payload.molbio, {
+      check_mode: 'light', integrity_checks_run: false, quick_check: 'not_run',
+      foreign_key_violations: null, database_schema_current: null, sequence_parent_cycle_count: null,
+    });
+    payload.molbio_ngs.attestation.data_integrity_checked = false;
+    payload.readiness.checks.restriction_catalog = { ready: true, required: true, status: 'ready', catalog_id: 'x' };
+    payload.readiness.checks.restriction_products = { ready: true, required: true, status: 'evidence_unavailable' };
+    payload.readiness.checks.telemetry_collection.future_sample_count = 0;
+  }
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(evolved, 'development', origin));
+
+  for (const mutation of [
+    (value) => { value.health.local_api.payload.status = 'degraded'; },
+    (value) => { value.health.local_api.payload.readiness.checks.restriction_catalog = { ready: false, required: true, status: 'missing' }; },
+    (value) => { value.health.tailnet_api.payload.readiness.checks.core_database.ready = false; },
+    (value) => { value.health.local_api.payload.readiness.checks.workflow_launch.allowed = false; },
+    (value) => { delete value.health.local_api.payload.readiness.checks.workflow_launch; },
+    (value) => { value.health.local_api.payload.readiness.checks = {}; },
+    (value) => { value.health.tailnet_api.payload.build.revision = 'b'.repeat(40); },
+    (value) => { value.health.local_api.payload.service = 'other-service'; },
+  ]) {
+    const malformed = structuredClone(evolved);
+    mutation(malformed);
+    assert.throws(
+      () => prepareAssets.validateTailnetSelectionPayload(malformed, 'development', origin),
+      /mismatched runtime identity/,
+      mutation.toString(),
+    );
+  }
 });
 
 test('native APK state reducer rejects malformed and stale events and normalizes valid bounded state', () => {
