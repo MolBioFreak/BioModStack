@@ -275,7 +275,7 @@ def test_list_keeps_canonical_bundles_and_historical_summaries_distinct(monkeypa
     response = client.get(BASE + '/jobs', params={'expected_connection_generation': 77, 'limit': 20})
     assert response.status_code == 200, response.text
     assert response.json() == payload
-    assert runtime.connection.client.calls[0][1]['params'] == {'limit': 20}
+    assert runtime.connection.client.calls[0][1]['params'] == {'limit': 20, 'summary': True}
 
 
 def test_dry_run_is_nonphysical_robot_result_not_local_live_authority(monkeypatch):

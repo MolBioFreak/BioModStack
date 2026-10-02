@@ -35,7 +35,7 @@ beforeEach(() => {
         document: structuredClone(documentFixture), saved: { ...structuredClone(documentFixture.metadata.bms_saved_workflow),
             draft: structuredClone(documentFixture.metadata.bms_saved_workflow.draft) as NonNullable<WorkflowJobClone['draft']> } }], onClone: vi.fn() };
     vi.mocked(api.get).mockImplementation(async url => {
-        if (url === '/api/bioxp/protocols/jobs') return { data: { rows: [{ job_id: 'history-job', status: 'failed', protocol: { document: { staleSummary: true } } }] } } as never;
+        if (url === '/api/bioxp/protocols/jobs') return { data: { rows: [{ job_id: 'history-job', status: 'failed', dry_run: false, protocol_id: 'original', source_type: 'native', created_at: 'created', updated_at: 'updated', pending_review: null }] } } as never;
         return { data: { job_id: decodeURIComponent(String(url).split('/').at(-1)!), status: 'ambiguous', protocol: { document: documentFixture } } } as never;
     });
     vi.mocked(api.post).mockImplementation(async url => {

@@ -7,7 +7,7 @@ import { setTimeout as realTimeout } from 'node:timers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BioXpWorkflowControls } from '../../src/components/BioXpWorkflowControls';
 import { api } from '../../src/lib/api';
-import type { BioXpWorkflowJob, BioXpWorkflowState } from '../../src/lib/bioxpClient';
+import type { BioXpWorkflowJob, BioXpWorkflowJobSummary, BioXpWorkflowState } from '../../src/lib/bioxpClient';
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 
 const workflow = (updates: Partial<BioXpWorkflowState> = {}): BioXpWorkflowState => ({
@@ -28,7 +28,7 @@ let root: Root;
 let host: HTMLDivElement;
 let client: QueryClient;
 let job: BioXpWorkflowJob;
-let rows: BioXpWorkflowJob[];
+let rows: (BioXpWorkflowJob | BioXpWorkflowJobSummary)[];
 let failDetail: boolean;
 let props: { generation: number; connected: boolean; controlsEnabled: boolean };
 async function tick(ms = 20) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
@@ -87,6 +87,20 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('canonical prepared workflow controls', () => {
+    it('discovers compact rows and fetches full selected review detail', async () => {
+        job = jobFixture({ phase: 'waiting', gate: 'review', gate_id: 'review-action' });
+        rows = [{ job_id: job.job_id, status: job.status, command: job.command,
+            dry_run: false, protocol_id: 'prepared', source_type: 'native',
+            created_at: 'created', updated_at: 'updated', pending_review: null }];
+        await render();
+        expect(api.get).toHaveBeenCalledWith('/api/bioxp/protocols/jobs/job-one',
+            { params: { expected_connection_generation: 9 } });
+        expect(host.textContent).toContain('Phase: waiting');
+        expect(button('Acknowledge protocol review')).toBeTruthy();
+        await tick(20_100);
+        expect(vi.mocked(api.get).mock.calls.filter(([path]) => path === '/api/bioxp/protocols/jobs').length).toBeGreaterThan(1);
+        expect(api.post).not.toHaveBeenCalled();
+    });
     it.each(['control', 'review'])('serializes prepared hashing with %s, including same-turn clicks', async kind => {
         if (kind === 'review') job = jobFixture({ phase: 'waiting', gate: 'review', gate_id: 'review-action' });
         rows = [job]; await render(); await pick(prepared);
