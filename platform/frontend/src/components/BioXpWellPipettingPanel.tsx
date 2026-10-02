@@ -3,7 +3,7 @@ import { BioXpPipetteResults } from './BioXpPipetteResults';
 import { BioXpWorkflowMaterials } from './BioXpWorkflowMaterials';
 import { BioXpWorkflowTransferEditor } from './BioXpWorkflowTransferEditor';
 import { BioXpSavedWorkflowRun } from './BioXpSavedWorkflowRun';
-import { emptyDeckPlan, emptyTransferIntent, previewBioXpWorkflow, type WorkflowDeckPlan, type WorkflowTransferIntent, type SavedWorkflowSnapshot, type WorkflowPreview } from '../lib/bioxpWorkflowPlan';
+import { emptyDeckPlan, emptyTransferIntent, previewBioXpWorkflow, type WorkflowDeckPlan, type WorkflowTransferIntent, type SavedWorkflowSnapshot, type WorkflowPreview, type WorkflowJobClone } from '../lib/bioxpWorkflowPlan';
 import { BioXpWorkflowDeck } from './BioXpWorkflowDeck';
 import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import './BioXpWorkflowEditor.css';
@@ -231,6 +231,29 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         const result = await fetchUserTemplates(undefined, undefined, 'bioxp_workflow');
         if (mounted.current) setOpenList(result.data.filter(row => row.mode === 'bioxp_workflow'));
     });
+    const hydrateWorkflow = (saved: ReturnType<typeof readWorkflowDraft>) => {
+        setSchema(saved.schema); setDeckPlan(saved.schema === 'bms.bioxp-workflow-draft.v2' ? saved.deck_plan : emptyDeckPlan());
+        editingChanged.current = false;
+        storedEditor.current = saved.editor_state;
+        loadedForm.current = isDraftObject(saved.editor_state.form) ? saved.editor_state.form : {};
+        hydrateForm(loadedForm.current); captureHydratedForm.current = true;
+        setSteps(saved.steps);
+        const selected = saved.editor_state.editing_step_id;
+        setEditingId(typeof selected === 'string' && saved.steps.some(row => row.step_id === selected) ? selected : null);
+        editBaseline.current = isDraftObject(saved.editor_state.edit_baseline) ? saved.editor_state.edit_baseline : null;
+    };
+    // The request's callback captures the editor it was started from. A late job
+    // read/clone cannot replace newer edits or an in-flight template save.
+    const cloningEditor = currentEditor.current;
+    const adoptJobClone = (clone: WorkflowJobClone) => {
+        if (!mounted.current) return;
+        if (storageLock.current || currentEditor.current !== cloningEditor) throw new Error('Editor changed while cloning. Your draft was retained; clone again when ready.');
+        if (!clone.draft) throw new Error(clone.issues.map(issue => issue.message).join('; ') || 'No authoring draft was returned.');
+        hydrateWorkflow(readWorkflowDraft(structuredClone(clone.draft)));
+        setWorkflowId(null); setSavedWorkflow(null); setPreview(null); setOpenList(null);
+        setWorkflowName(clone.name ?? 'Cloned job'); setWorkflowView('build'); setError(null);
+        setSavedNotice('Cloned job as an unsaved workflow. Save creates a new template; the original job is unchanged.');
+    };
     const openWorkflow = (id: string) => void storage(async () => {
         const openingSnapshot = currentEditor.current;
         const result = await fetchUserTemplate(id);
@@ -238,16 +261,9 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         if (result.data.id !== id || result.data.mode !== 'bioxp_workflow' || result.data.model_id !== null || result.data.base_template_id !== null) throw new Error('Not a BioXP workflow draft.');
         const saved = readWorkflowDraft(result.data.params);
         if (!mounted.current) return;
-        setSchema(saved.schema); setDeckPlan(saved.schema === 'bms.bioxp-workflow-draft.v2' ? saved.deck_plan : emptyDeckPlan());
+        hydrateWorkflow(saved);
         setSavedWorkflow({ id, name: result.data.name, draft: structuredClone(saved) }); setPreview(null);
-        editingChanged.current = false;
-        storedEditor.current = saved.editor_state;
-        loadedForm.current = isDraftObject(saved.editor_state.form) ? saved.editor_state.form : {};
-        hydrateForm(loadedForm.current); captureHydratedForm.current = true;
-        setSteps(saved.steps); setWorkflowId(id); setWorkflowName(result.data.name); setOpenList(null);
-        const selected = saved.editor_state.editing_step_id;
-        setEditingId(typeof selected === 'string' && saved.steps.some(row => row.step_id === selected) ? selected : null);
-        editBaseline.current = isDraftObject(saved.editor_state.edit_baseline) ? saved.editor_state.edit_baseline : null;
+        setWorkflowId(id); setWorkflowName(result.data.name); setOpenList(null);
         setSavedNotice('Opened draft from database.');
     });
     async function run(op?: Operation, explicitStep?: BioXpManualStep) {
@@ -406,7 +422,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             <div className="flex flex-wrap gap-2">
                 <button type="button" className="bioxp-primary" disabled={storageBusy} onClick={save}>Save workflow</button>
                 <button type="button" disabled={storageBusy} onClick={listWorkflows}>Open workflow</button>
-                <button type="button" disabled={storageBusy} onClick={() => { setWorkflowId(null); setSavedWorkflow(null); setPreview(null); setWorkflowName(`${workflowName || 'Untitled workflow'} copy`); setSavedNotice('Cloned as an unsaved workflow. Save creates a new template; the original is unchanged.'); }}>Clone workflow</button>
+                <button type="button" disabled={storageBusy} onClick={() => { if (workflowId) storedEditor.current = { ...storedEditor.current, cloned_from_workflow_id: workflowId }; setWorkflowId(null); setSavedWorkflow(null); setPreview(null); setWorkflowName(`${workflowName || 'Untitled workflow'} copy`); setSavedNotice('Cloned as an unsaved workflow. Save creates a new template; the original is unchanged.'); }}>Clone workflow</button>
                 <button type="button" disabled={storageBusy} onClick={() => { setWorkflowId(null); setSavedWorkflow(null); setPreview(null); setSchema('bms.bioxp-workflow-draft.v1'); setDeckPlan(emptyDeckPlan()); setTransfer(emptyTransferIntent()); setWorkflowName(''); setSteps([]); cancelEdit(); storedEditor.current = {}; loadedForm.current = {}; setDeck({ station: '', wells: [] }); setWorkflowView('build'); setSavedNotice('New empty workflow.'); }}>New workflow</button>
             </div>
             <div className="bioxp-view-tabs" role="tablist" aria-label="Workflow views">
@@ -446,7 +462,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
                     <details><summary>Native document</summary><pre className="bioxp-native-json">{JSON.stringify(preview.result.document, null, 2)}</pre></details>
                 </>}
             </section>}
-            <BioXpSavedWorkflowRun saved={savedWorkflow} generation={generation} connected={connected} controlsEnabled={controlsEnabled} />
+            <BioXpSavedWorkflowRun saved={savedWorkflow} generation={generation} connected={connected} controlsEnabled={controlsEnabled} onClone={adoptJobClone} authoringBusy={storageBusy} />
             <button type="button" className="mt-4" onClick={() => setWorkflowView('build')}>Back to Build</button>
         </section>}
         <div className={workflowAuthoring ? 'bioxp-build-grid' : undefined} hidden={workflowAuthoring && workflowView !== 'build'}>

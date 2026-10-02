@@ -20,6 +20,10 @@ export type WorkflowPreviewAction = {
 };
 export type WorkflowPreviewIssue = { step_id: string | null; message: string };
 export type WorkflowPreview = { document: Record<string, unknown> | null; actions: WorkflowPreviewAction[]; issues: WorkflowPreviewIssue[] };
+export type WorkflowJobClone = { name: string | null; draft: WorkflowPlan | WorkflowDraft | null; issues: WorkflowPreviewIssue[] };
+export async function cloneBioXpWorkflowJob(job_id: string, document: Record<string, unknown>): Promise<WorkflowJobClone> {
+    return (await api.post<WorkflowJobClone>('/api/bioxp/workflows/clone', { job_id, document })).data;
+}
 export type SavedWorkflowSnapshot = { id: string; name: string; draft: WorkflowPlan | WorkflowDraft };
 export const emptyDeckPlan = (): WorkflowDeckPlan => ({ labware: [], materials: [], assignments: [] });
 export const emptyTransferIntent = (): WorkflowTransferIntent => ({

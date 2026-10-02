@@ -1124,6 +1124,7 @@ export interface BioXpWorkflowSourceModel {
 export interface BioXpWorkflowJob {
     job_id: string;
     status: string;
+    protocol?: { document?: Record<string, unknown> | null } | null;
     command?: BioXpWorkflowCommand | null;
     operator?: { manual_review_required: boolean; pending_review: { stage_id: string | null; action_id: string | null; reason: string | null } | null };
     execution?: {

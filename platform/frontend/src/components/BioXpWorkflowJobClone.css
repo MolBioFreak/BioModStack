@@ -1,0 +1,6 @@
+.bioxp-job-clone { min-width: 0; margin-bottom: 1rem; }
+.bioxp-job-clone-body { display: grid; gap: .65rem; max-width: 40rem; margin-top: .65rem; }
+.bioxp-job-clone-body label { display: grid; gap: .3rem; min-width: 0; }
+.bioxp-job-clone-body input, .bioxp-job-clone-body select { min-width: 0; width: 100%; max-width: 100%; }
+.bioxp-job-clone-body button { justify-self: start; max-width: 100%; overflow-wrap: anywhere; }
+.bioxp-job-clone-body p { margin: 0; overflow-wrap: anywhere; }

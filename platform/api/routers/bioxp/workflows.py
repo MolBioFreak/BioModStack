@@ -2,6 +2,7 @@
 from fastapi import APIRouter
 from bioxp_workflow_authoring import (
     WorkflowPreviewRequest, WorkflowPreviewResponse, discovery, preview,
+    WorkflowJobCloneRequest, WorkflowJobClone, clone_job,
 )
 
 router = APIRouter()
@@ -15,3 +16,8 @@ async def workflow_schema():
 @router.post("/workflows/preview", response_model=WorkflowPreviewResponse)
 async def workflow_preview(request: WorkflowPreviewRequest):
     return preview(request)
+
+
+@router.post("/workflows/clone", response_model=WorkflowJobClone)
+async def workflow_clone(request: WorkflowJobCloneRequest):
+    return clone_job(request)

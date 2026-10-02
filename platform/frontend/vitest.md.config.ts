@@ -124,6 +124,8 @@ export default defineConfig({
             './tests/vitest/bioxpWorkflowTransferEditorMounted.test.tsx',
             './tests/vitest/bioxpWorkflowPlanMounted.test.tsx',
             './tests/vitest/bioxpSavedWorkflowRunMounted.test.tsx',
+            './tests/vitest/bioxpWorkflowJobCloneMounted.test.tsx',
+            './tests/vitest/bioxpWorkflowJobCloneParentMounted.test.tsx',
             './tests/vitest/bioxpPipetteRealProducerMounted.test.tsx',
             './tests/vitest/bioxpCalibrationSettingsMounted.test.tsx',
             './tests/vitest/bioxpCalibrationRunMounted.test.tsx',

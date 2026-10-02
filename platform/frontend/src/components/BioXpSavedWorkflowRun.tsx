@@ -4,9 +4,12 @@ import { previewBioXpWorkflow, type SavedWorkflowSnapshot } from '../lib/bioxpWo
 import { canonicalWorkflowJobId, copyWorkflowValue, readPendingWorkflowRuns, retainPendingWorkflowRun,
     type PendingWorkflowRun } from '../lib/bioxpSavedWorkflowRun';
 import { BioXpWorkflowJobMonitor } from './BioXpWorkflowJobMonitor';
+import { BioXpWorkflowJobClone } from './BioXpWorkflowJobClone';
+import type { WorkflowJobClone } from '../lib/bioxpWorkflowPlan';
 
-export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEnabled }: {
+export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEnabled, onClone, authoringBusy = false }: {
     saved: SavedWorkflowSnapshot | null; generation: number; connected: boolean; controlsEnabled: boolean;
+    onClone?: (clone: WorkflowJobClone) => void; authoringBusy?: boolean;
 }) {
     const [retained] = useState(readPendingWorkflowRuns);
     const [runs, setRuns] = useState(retained.runs);
@@ -52,6 +55,7 @@ export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEn
         finally { busyRef.current = false; setBusy(false); }
     }
     return <section aria-label="Saved workflow run" className="space-y-3">
+        {onClone && <BioXpWorkflowJobClone generation={generation} connected={connected} retained={runs} onClone={onClone} disabled={authoringBusy} />}
         <h3>Run saved workflow</h3>
         <p>Runs the last saved readback, not unsaved edits. Native controller checks remain authoritative. Run starts live execution; it does not connect or prepare the robot.</p>
         <p>{saved ? `Saved selection: ${saved.name}` : 'Save or open a workflow to run its saved snapshot.'}</p>

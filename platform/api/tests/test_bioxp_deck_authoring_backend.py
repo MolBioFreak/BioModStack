@@ -9,7 +9,8 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import text
 
-from bioxp_workflow_authoring import WorkflowPreviewRequest, preview, native_intent, expand_transfer, discovery
+from bioxp_workflow_authoring import (WorkflowPreviewRequest, preview, native_intent, expand_transfer, discovery,
+    WorkflowJobCloneRequest, clone_job, _clone_behavior, _same_json)
 from routers.bioxp import router
 from test_bioxp_workflow_drafts import store, create, URL
 
@@ -295,3 +296,179 @@ def test_v1_acceptance_and_empty_preview():
     value.pop("deck_plan")
     assert preview(WorkflowPreviewRequest.model_validate(dict(protocol_id="legacy", draft=value))).document
     assert run()["issues"][0]["step_id"] is None
+
+
+def clone(document, job_id="original-job"):
+    return clone_job(WorkflowJobCloneRequest(job_id=job_id, document=document)).model_dump(by_alias=True)
+
+
+def snapshot_document(value, **extra):
+    return {"metadata": {"bms_saved_workflow": {"id": "source-template", "name": "Source", "draft": value}}, **extra}
+
+
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_clone_exact_raw_snapshot_preferred_over_native_and_detached(version):
+    value = draft({"operation": "future", "raw": [False, 0, None, "", "0.000", {"unknown": []}]}, {})
+    value["editor_state"].update(selected_step_id="s1", pending={"operation": "unknown", "blank": ""})
+    if version == "v1":
+        value["schema"] = "bms.bioxp-workflow-draft.v1"
+        value.pop("deck_plan")
+    else:
+        value["deck_plan"]["assignments"] = [dict(id="a", labware_id="", well="", material_id="", volume_ul=0)]
+    document = snapshot_document(value, stages="not a native document", submission_key="never copy", generation=5,
+                                 ack={"job_id": "original-job"})
+    original = deepcopy(document)
+    result = clone(document)
+    expected = deepcopy(value)
+    expected["editor_state"].update(cloned_from_job_id="original-job", cloned_from_workflow_id="source-template")
+    assert result == {"name": "Source copy", "draft": expected, "issues": []}
+    assert json.dumps(result["draft"], sort_keys=True) == json.dumps(expected, sort_keys=True)
+    result["draft"]["steps"][0]["intent"]["raw"].append("edited")
+    assert document == original
+
+
+@pytest.mark.parametrize("snapshot", [None, {}, {"draft": {}}, {"draft": draft(), "name": False},
+    {"draft": draft(), "id": 3}, {"draft": {**draft(), "unknown_top_level": True}}])
+def test_malformed_snapshot_does_not_fall_back_to_native(snapshot):
+    document = run(*native_cases())["document"]
+    document["metadata"]["bms_saved_workflow"] = snapshot
+    result = clone(document)
+    assert result["draft"] is None and result["issues"]
+
+
+def test_snapshot_without_optional_identity_and_name():
+    result = clone({"metadata": {"bms_saved_workflow": {"draft": draft()}}})
+    assert result["name"] is None and not result["issues"]
+    assert result["draft"]["editor_state"]["cloned_from_job_id"] == "original-job"
+    assert "cloned_from_workflow_id" not in result["draft"]["editor_state"]
+
+
+def test_native_clone_identity_numeric_spelling_and_explicit_fields():
+    document = run(dict(operation="aspirate", channels=[0], volume_ul=1, speed=1))["document"]
+    document["protocol_id"] = "original"
+    action = document["stages"][0]["actions"][0]
+    action["action_id"] = "original-action"
+    action["metadata"]["manual_step"] = 17
+    action["params"]["volume_ul"] = 1  # Browser JSON erases integral-float spelling.
+    assert not clone(document)["issues"]
+    for field in list(action["params"]):
+        omitted = deepcopy(document)
+        del omitted["stages"][0]["actions"][0]["params"][field]
+        assert clone(omitted)["draft"] is None, field
+    document["stages"].append(deepcopy(document["stages"][0]))
+    assert clone(document)["draft"] is None
+
+
+def test_native_clone_all_actions_flat_lossless_and_export():
+    cases = []
+    for intents in [native_cases(), [transfer()]]:
+        document = run(*intents)["document"]
+        original = deepcopy(document)
+        result = clone(document)
+        assert result["issues"] == []
+        value = result["draft"]
+        assert "deck_plan" not in value
+        assert len(value["steps"]) == len(document["stages"][0]["actions"])
+        assert not any(row["intent"]["operation"] in ("mix", "transfer") for row in value["steps"])
+        rebuilt = preview(WorkflowPreviewRequest.model_validate(dict(protocol_id="new-job", draft=value))).document
+        assert _same_json(_clone_behavior(document), _clone_behavior(rebuilt))
+        assert document == original
+        cases.append({"original_request": {"protocol_id": "differential", "steps": [s for intent in intents
+            for s in ([native_intent(intent)] if intent["operation"] != "transfer" else [s for s, *_ in expand_transfer(intent)])]},
+            "source": document, "projected_request": {"protocol_id": "new-job", "steps": [row["intent"] for row in value["steps"]]},
+            "recomposed": rebuilt})
+    if os.getenv("BIOXP_CLONE_DIFFERENTIAL_EXPORT"):
+        Path(os.environ["BIOXP_CLONE_DIFFERENTIAL_EXPORT"]).write_text(json.dumps(cases, indent=2))
+
+
+@pytest.mark.parametrize("path,value", [
+    (("future",), True), (("version",), 2), (("metadata", "unknown"), False),
+    (("stages", 0, "review_required"), True), (("stages", 0, "review_required"), 0),
+    (("stages", 0, "metadata", "unknown"), None),
+    (("stages", 0, "actions", 0, "review_required"), True),
+    (("stages", 0, "actions", 0, "pause_message"), "Stop here"),
+    (("stages", 0, "actions", 0, "required_capability"), "special"),
+    (("stages", 0, "actions", 0, "description"), "preserve me"),
+    (("stages", 0, "actions", 0, "metadata", "unknown"), 0),
+    (("stages", 0, "actions", 0, "kind"), "unknown"),
+    (("stages", 0, "actions", 0, "params", "air_gap_ul"), 5),
+    (("stages", 0, "actions", 0, "params", "pressure_profile"), "2R"),
+    (("stages", 0, "actions", 0, "params", "source"), "well"),
+    (("stages", 0, "actions", 0, "params", "metadata", "unknown"), True),
+    (("stages", 0, "actions", 0, "params", "speed"), None),
+])
+def test_native_clone_never_drops_noncanonical_effects(path, value):
+    document = run(dict(operation="aspirate", channels=[0], volume_ul=1, speed=1))["document"]
+    target = document
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    original = deepcopy(document)
+    result = clone(document)
+    assert result["draft"] is None and result["issues"]
+    assert document == original
+
+
+@pytest.mark.parametrize("document", [{}, {"stages": []}, {"stages": [None]}, {"stages": [{"actions": []}]},
+    {"stages": [{"actions": [None]}]}, {"stages": [{"actions": [{"params": {}}]}]}])
+def test_native_clone_unknown_shapes_are_reported(document):
+    result = clone(document)
+    assert result["draft"] is None and result["issues"][0]["message"].startswith("Clone unavailable:")
+
+
+@pytest.mark.asyncio
+async def test_clone_receiving_typed_discovery_inert_transport(monkeypatch):
+    from services.bioxp.robot_client import BioXpRobotClient
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Clone must not construct robot client")
+    async def network(*args, **kwargs):
+        raise AssertionError("Clone must not send outbound HTTP")
+    monkeypatch.setattr(BioXpRobotClient, "__init__", forbidden)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", network)
+    app = FastAPI()
+    app.include_router(router, prefix="/api/bioxp")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://inert-test") as c:
+        value = draft({"raw": [False, 0, None, ""]})
+        value["deck_plan"]["assignments"] = [dict(id="a", labware_id="", well="", material_id="", volume_ul=0)]
+        document = snapshot_document(value)
+        response = await c.post("/api/bioxp/workflows/clone", json={"job_id": "failed-or-nonterminal", "document": document})
+        assert response.status_code == 200, response.text
+        assert response.json() == clone(document, "failed-or-nonterminal")
+        assert type(response.json()["draft"]["deck_plan"]["assignments"][0]["volume_ul"]) is int
+        schemas = (await c.get("/api/bioxp/workflows/schema")).json()
+        assert schemas["clone_request"]["title"] == "WorkflowJobCloneRequest"
+        assert "WorkflowPlan" in schemas["clone_response"]["$defs"]
+        assert app.openapi()["paths"]["/api/bioxp/workflows/clone"]["post"]["responses"]["200"]
+        for body in [{}, {"job_id": "", "document": {}}, {"job_id": 1, "document": {}},
+                     {"job_id": "j", "document": []}, {"job_id": "j", "document": {}, "generation": 1}]:
+            assert (await c.post("/api/bioxp/workflows/clone", json=body)).status_code == 422
+        unsupported = await c.post("/api/bioxp/workflows/clone", json={"job_id": "j", "document": {}})
+        assert unsupported.status_code == 200 and unsupported.json()["draft"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete_source", [False, True])
+async def test_clone_run_snapshot_after_template_changed_or_deleted_new_save_reopen(store, delete_source):
+    value = draft({"operation": "future", "raw": [False, 0, None, ""]})
+    async with store() as (client, _):
+        source = (await create(client, name="Original", params=value)).json()
+        document = {"metadata": {"bms_saved_workflow": {"id": source["id"], "name": source["name"], "draft": source["params"]}}}
+        original_run = deepcopy(document)
+        if delete_source:
+            assert (await client.delete(f"{URL}/{source['id']}")).status_code in (200, 204)
+        else:
+            assert (await client.put(f"{URL}/{source['id']}", json={"name": "Changed", "params": draft()})).status_code == 200
+        result = clone(document)
+        assert result["name"] == "Original copy" and not result["issues"]
+        result["draft"]["steps"][0]["intent"]["edited"] = "new only"
+        created = await create(client, name=result["name"], params=result["draft"])
+        assert created.status_code == 201, created.text
+        new_id = created.json()["id"]
+        assert new_id != source["id"]
+    async with store() as (client, _):
+        assert (await client.get(f"{URL}/{new_id}")).json()["params"] == result["draft"]
+        old = await client.get(f"{URL}/{source['id']}")
+        assert old.status_code == (404 if delete_source else 200)
+        if not delete_source:
+            assert old.json()["params"] == draft()
+    assert document == original_run
