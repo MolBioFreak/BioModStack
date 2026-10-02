@@ -1,13 +1,27 @@
 import { api } from './api';
 import type { FrozenSelection, SavedDesign, SaveDesignRequest, WorkflowResult, WorkflowRequest } from './goldenGateWorkflowTypes';
+import { expandGoldenGateWire, projectGoldenGateWire, type WorkflowWire } from './goldenGateWorkflowWire';
 const route = '/api/molbio/assembly/golden-gate/design';
-export const designGoldenGate = (request: WorkflowRequest, signal?: AbortSignal) => api.post<WorkflowResult>(route, request, { signal });
-export const saveGoldenGateDesign = (request: SaveDesignRequest) => api.post<SavedDesign>(`${route}/save`, request);
-export const readGoldenGateDesign = (operationId: string, signal?: AbortSignal) => api.get<SavedDesign>(`${route}/${encodeURIComponent(operationId)}`, { signal });
+const params = { view: 'normalized' };
+export const designGoldenGate = async (request: WorkflowRequest, signal?: AbortSignal) => {
+  const response = await api.post<WorkflowResult | WorkflowWire>(route, projectGoldenGateWire(request, 'request'), { signal, params });
+  return { ...response, data: expandGoldenGateWire<WorkflowResult>(response.data, 'result') };
+};
+export const saveGoldenGateDesign = async (request: SaveDesignRequest) => {
+  const response = await api.post<SavedDesign | WorkflowWire>(`${route}/save`, projectGoldenGateWire(request, 'save'), { params });
+  return { ...response, data: expandGoldenGateWire<SavedDesign>(response.data, 'saved') };
+};
+export const readGoldenGateDesign = async (operationId: string, signal?: AbortSignal) => {
+  const response = await api.get<SavedDesign | WorkflowWire>(`${route}/${encodeURIComponent(operationId)}`, { signal, params });
+  return { ...response, data: expandGoldenGateWire<SavedDesign>(response.data, 'saved') };
+};
 export const exportGoldenGateDesign = (result: WorkflowResult, operationId?: string) => operationId
   ? api.get<Blob>(`${route}/${encodeURIComponent(operationId)}/export`, { responseType: 'blob' })
-  : api.post<Blob>(`${route}/export`, result, { responseType: 'blob' });
-export const importGoldenGateDesign = (document: unknown) => api.post<WorkflowResult>(`${route}/import`, document);
+  : api.post<Blob>(`${route}/export`, projectGoldenGateWire(result, 'result'), { responseType: 'blob' });
+export const importGoldenGateDesign = async (document: unknown) => {
+  const response = await api.post<WorkflowResult | WorkflowWire>(`${route}/import`, projectGoldenGateWire(document, 'portable'), { params });
+  return { ...response, data: expandGoldenGateWire<WorkflowResult>(response.data, 'result') };
+};
 /** Same fixed-selection projection as native freeze_selection; never submit the optimizer again to Save. */
 export function freezeGoldenGateSelection(result: WorkflowResult, id: string): FrozenSelection {
   const selected = result.solutions.find(s => s.id === id);

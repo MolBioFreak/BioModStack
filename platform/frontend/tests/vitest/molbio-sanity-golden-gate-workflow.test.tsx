@@ -12,6 +12,7 @@ import fixture from '../fixtures/golden-gate/workflow-receiving.json';
 import traffic from '../fixtures/molBioTrafficPairing.json';
 import {parseRestrictionDigestSimulation} from '../../src/lib/restrictionAnalysis';
 import {exportGoldenGateDesign,importGoldenGateDesign} from '../../src/lib/goldenGateWorkflow';
+import {expandGoldenGateWire,type WorkflowWireKind} from '../../src/lib/goldenGateWorkflowWire';
 import type {WorkflowResult} from '../../src/lib/goldenGateWorkflowTypes';
 import {digestFragmentsForAssembly} from '../../src/lib/digestAssemblyTransfer';
 import type {RestrictionDigestSimulation} from '../../src/lib/restrictionAnalysis';
@@ -23,7 +24,7 @@ let hold=false;
 const loaded=vi.fn();
 const empty:SequenceData={name:'source',sequence:fixture.split_target.request.target.source.sequence,sequenceType:'dna',circular:false,features:[]};
 function evidence(name:string,payload:unknown){if(process.env.BMS_GG_UI_EVIDENCE){mkdirSync(process.env.BMS_GG_UI_EVIDENCE,{recursive:true});writeFileSync(join(process.env.BMS_GG_UI_EVIDENCE,name+'.json'),JSON.stringify(payload,null,2));}}
-function transport(){api.defaults.adapter=async config=>{const url=config.url!;const data=typeof config.data==='string'?JSON.parse(config.data):config.data;calls.push({url,method:config.method!,data,signal:config.signal});const response=(data:unknown)=>({data,status:200,statusText:'OK',headers:{},config});
+function transport(){api.defaults.adapter=async config=>{const url=config.url!;const wire=typeof config.data==='string'?JSON.parse(config.data):config.data;let data=wire;if(wire?.schema_version==='bms.golden-gate-wire.v1'){const kind:WorkflowWireKind=url.endsWith('/save')?'save':url.endsWith('/import')?'portable':url.endsWith('/export')?'result':'request';data=expandGoldenGateWire(wire,kind);if(!url.endsWith('/export'))expect(config.params).toEqual({view:'normalized'});}calls.push({url,method:config.method!,data,signal:config.signal});const response=(data:unknown)=>({data,status:200,statusText:'OK',headers:{},config});
  if(url.endsWith('/golden-gate/options'))return response(fixture.options);
  if(url.endsWith('/primer-tm/options'))return response(fixture.tm_options);
  if(url.endsWith('/design/save'))return response(fixture.saved);
