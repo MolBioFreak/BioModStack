@@ -254,7 +254,7 @@ def test_trusted_external_alignment_authority_survives_canonical_submit_normaliz
         lambda value, _key, **_kwargs: str(value),
     )
     monkeypatch.setattr(
-        ont_runs, "normalized_fasta_sequence_sha256", lambda _path: "e" * 64,
+        ont_runs, "normalized_fasta_sequence_identity", lambda _path: ("e" * 64, 4),
     )
     monkeypatch.setattr(ont_submission_trust, "get_inputs_dir", lambda: inputs_root)
     server_params = {

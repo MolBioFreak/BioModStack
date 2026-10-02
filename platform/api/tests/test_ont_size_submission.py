@@ -14,7 +14,7 @@ from test_ont_policy_regression import policy_context, pooled_context  # noqa: F
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("workflow", ["ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"])
-@pytest.mark.parametrize("reference_length,requested", [(3000, "omitted"), (3000, None), (12000, None), (12000, 7000)])
+@pytest.mark.parametrize("reference_length,requested", [(3000, "omitted"), (3000, None), (12000, None), (12000, 7000), (12000, 100000001)])
 async def test_typed_submission_persists_requested_and_effective_size(policy_context, monkeypatch, workflow, reference_length, requested):
     context = policy_context
     receipt = await context.session.get(MolBioNgsReceipt, context.receipt_ids[0])

@@ -437,7 +437,6 @@ params:
     required: false
     default: null
     minimum: 1
-    maximum: 100000000
 
   - name: min_fastq_read_length
     type: integer

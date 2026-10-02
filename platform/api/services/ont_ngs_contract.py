@@ -67,8 +67,8 @@ def effective_expected_plasmid_size(requested: Any, reference_length: int | None
     """
     if requested is None:
         return reference_length
-    if isinstance(requested, bool) or not isinstance(requested, int) or not 1 <= requested <= 100_000_000:
-        raise ValueError("expected_plasmid_size must be null (Auto) or an integer from 1 through 100000000")
+    if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
+        raise ValueError("expected_plasmid_size must be null (Auto) or a positive integer")
     return requested
 
 

@@ -49,13 +49,13 @@ def test_new_omission_is_auto_and_does_not_mutate_caller():
     assert source == {}
 
 
-@pytest.mark.parametrize("value", [True, False, 0, -1, 1.5, "7000", 100000001])
+@pytest.mark.parametrize("value", [True, False, 0, -1, 1.5, "7000"])
 def test_invalid_size_retains_bounded_integer_contract(value):
     with pytest.raises(ValueError, match="expected_plasmid_size"):
         normalize_ont_launch_params("ont_fastq_qc", {"expected_plasmid_size": value})
 
 
-@pytest.mark.parametrize("value", [1, 100000000, 7000])
+@pytest.mark.parametrize("value", [1, 100000000, 100000001, 7000])
 def test_positive_override_boundaries(value):
     assert effective_expected_plasmid_size(value, 3000) == value
 
@@ -76,7 +76,7 @@ def test_model_and_public_schema_auto_defaults():
     model = get_registry().get_model("nanopore")
     assert model is not None
     field = next(p for p in model.params if p.name == "expected_plasmid_size")
-    assert field.default is None and field.minimum == 1 and field.maximum == 100000000
+    assert field.default is None and field.minimum == 1 and field.maximum is None
     for mode in model.modes:
         if mode.id in {"fastq_qc", "plasmid_qc", "construct_screening", "clone_validation"}:
             assert "expected_plasmid_size" in mode.params
