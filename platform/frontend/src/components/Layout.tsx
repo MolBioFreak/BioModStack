@@ -631,6 +631,20 @@ export function Layout({ children }: LayoutProps) {
 
                                 {showBioXpDevFeature && (
                                     <Link
+                                        to="/bioxp/workflows"
+                                        data-bms-primary-nav-active={isActive('/bioxp/workflows') ? 'true' : undefined}
+                                        className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                        style={{
+                                            backgroundColor: isActive('/bioxp/workflows') ? 'color-mix(in srgb, var(--warning) 20%, transparent)' : 'transparent',
+                                            color: isActive('/bioxp/workflows') ? 'var(--warning)' : 'var(--text-secondary)'
+                                        }}
+                                        title="Create and manage saved BioXP workflows"
+                                    >
+                                        BioXP Workflows
+                                    </Link>
+                                )}
+                                {showBioXpDevFeature && (
+                                    <Link
                                         to="/bioxp"
                                         data-bms-primary-nav-active={isActive('/bioxp') ? 'true' : undefined}
                                         className={TOPBAR_NAV_ITEM_CLASSNAME}

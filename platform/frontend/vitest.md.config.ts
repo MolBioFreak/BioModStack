@@ -117,6 +117,7 @@ export default defineConfig({
             './tests/vitest/bioxpTransferControlsMounted.test.tsx',
             './tests/vitest/bioxpWellPipettingMounted.test.tsx',
             './tests/vitest/bioxpWorkflowCreatorMounted.test.tsx',
+            './tests/vitest/bioxpWorkflowRouteMounted.test.tsx',
             './tests/vitest/bioxpPipetteRealProducerMounted.test.tsx',
             './tests/vitest/bioxpCalibrationSettingsMounted.test.tsx',
             './tests/vitest/bioxpCalibrationRunMounted.test.tsx',

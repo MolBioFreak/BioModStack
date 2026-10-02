@@ -5,14 +5,15 @@ import { webcrypto } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
-import { BioXpWellPipettingPanel } from '../../src/components/BioXpWellPipettingPanel';
+import { MemoryRouter } from 'react-router-dom';
+import { BioXpWorkflowPage } from '../../src/pages/BioXpWorkflowPage';
 import { api } from '../../src/lib/api';
 
 let host: HTMLDivElement, root: Root, client: QueryClient;
 let requests: any[], db: Record<string, any>, fail: string | null;
 const exported: any[] = [], adapter = api.defaults.adapter;
-async function mount(connected = false, generation = 1) {
-    await act(async () => root.render(<QueryClientProvider client={client}><BioXpWellPipettingPanel connected={connected} generation={generation} /></QueryClientProvider>));
+async function mount() {
+    await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={["/bioxp/workflows"]}><BioXpWorkflowPage /></MemoryRouter></QueryClientProvider>));
 }
 async function fresh() {
     await act(async () => root.unmount()); client.clear(); root = createRoot(host);
@@ -58,7 +59,7 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = adapter; vi.unstubAllGlobals(); });
 afterAll(() => { if (process.env.BIOXP_WORKFLOW_UI_EXPORT) writeFileSync(process.env.BIOXP_WORKFLOW_UI_EXPORT, JSON.stringify({ fixture_only: true, requests: exported }, null, 2)); });
 
-it('actual cockpit exposes offline authoring and keeps it mounted across connection changes', async () => {
+it('actual cockpit keeps manual controls but no saved-workflow authoring', async () => {
     const templateAdapter = api.defaults.adapter as (config: any) => Promise<any>;
     let connection = { active: false, configured: false, generation: 0 };
     const robotPosts: string[] = [];
@@ -70,13 +71,15 @@ it('actual cockpit exposes offline authoring and keeps it mounted across connect
     };
     await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
-    await click('Pipettes'); await change('Workflow name', 'Cockpit offline'); await append('lower'); const ids = rows();
+    await click('Pipettes'); await change('Location number', '4'); await append('lower'); const ids = rows();
+    expect(host.querySelector('[aria-label="Workflow name"]')).toBeNull();
+    expect([...host.querySelectorAll('button')].some(el => ['Save workflow', 'Open workflow'].includes(el.textContent!))).toBe(false);
+    expect(button('Move now')).toBeTruthy();
     connection = { active: true, configured: true, generation: 2 };
     await act(async () => { await client.invalidateQueries(); await new Promise(resolve => setTimeout(resolve, 30)); });
     connection = { active: false, configured: true, generation: 3 };
     await act(async () => { await client.invalidateQueries(); await new Promise(resolve => setTimeout(resolve, 30)); });
-    expect(rows()).toEqual(ids); await click('Save workflow');
-    expect(writes()[0].body.name).toBe('Cockpit offline'); expect(robotPosts).toEqual([]);
+    expect(rows()).toEqual(ids); expect(writes()).toEqual([]); expect(robotPosts).toEqual([]);
 });
 
 it('creates a named empty workflow offline and verifies the exact ID without any robot access', async () => {
@@ -85,7 +88,7 @@ it('creates a named empty workflow offline and verifies the exact ID without any
     expect(writes()[0].body).toMatchObject({ name: 'Empty offline workflow', mode: 'bioxp_workflow', model_id: null, base_template_id: null,
         params: { schema: 'bms.bioxp-workflow-draft.v1', steps: [], editor_state: {} } });
     expect(requests.map(r => [r.method, r.url])).toEqual([['post', '/api/user-templates'], ['get', '/api/user-templates/workflow-1']]);
-    expect(host.textContent).toContain('Saved draft'); expect(button('Run ordered steps').disabled).toBe(true);
+    expect(host.textContent).toContain('Saved draft'); expect([...host.querySelectorAll('button')].some(el => el.textContent === 'Run ordered steps')).toBe(false);
 });
 
 it('updates the stable selected row after reordering, clones a new ID and cancels removed selection', async () => {
@@ -135,9 +138,9 @@ it('fresh mount and fresh cache Open use a mode-only list then exact ID, not lis
 
 it('unknown and incomplete steps stay visible drafts, save unchanged, and never silently execute', async () => {
     const steps = [{ step_id: 'unknown', intent: { operation: 'future_operation', n: null } }, { step_id: 'incomplete', intent: { operation: 'source_mix' } }];
-    seed(steps); await mount(true); await open(); await click('Save workflow');
+    seed(steps); await mount(); await open(); await click('Save workflow');
     expect(writes()[0].body.params.steps).toEqual(steps); expect(host.textContent).toContain('Draft · future_operation');
-    await click('Run ordered steps'); expect(host.textContent).toContain('Incomplete or unknown draft');
+    expect([...host.querySelectorAll('button')].some(el => el.textContent?.endsWith(' now') || el.textContent === 'Run ordered steps')).toBe(false);
     expect(requests.filter(r => r.url.includes('/bioxp/'))).toHaveLength(0);
 });
 
@@ -158,11 +161,12 @@ it('retains the accepted create ID if readback fails, so retry updates instead o
 });
 
 it('keeps unselected source tip controls blank instead of selecting pipette zero', async () => {
-    await mount(true); await change('Workflow name', 'Unselected tips');
+    await mount(); await change('Workflow name', 'Unselected tips');
     await change('Tip size', ''); await change('Pipettes to load', ''); await append('source_load_tips');
     await click('Save workflow');
     expect(writes()[0].body.params.steps[0].intent).toEqual({ operation: 'source_load_tips', tip_type: '', pipette: '', force_new_tip: false });
-    await click('Load selected tips now'); expect(requests.filter(r => r.url.includes('/bioxp/'))).toHaveLength(0);
+    expect([...host.querySelectorAll('button')].some(el => el.textContent === 'Load selected tips now')).toBe(false);
+    expect(requests.filter(r => r.url.includes('/bioxp/'))).toHaveLength(0);
 });
 
 it('network Save/Open errors retain unsaved name, rows, selection and native form', async () => {
@@ -175,9 +179,10 @@ it('network Save/Open errors retain unsaved name, rows, selection and native for
     expect(writes().at(-1).body.params.steps[0].intent.location_id).toBe('11');
 });
 
-it('keeps unsaved authoring across robot connection generation changes', async () => {
+it('standalone authoring has no dependency on robot connection cache changes', async () => {
     await mount(); await change('Workflow name', 'Connection independent'); await append('lower'); const ids = rows();
-    await mount(true, 2); await mount(false, 3);
+    await act(async () => client.setQueryData(['bioxp', 'status'], { connection: { active: true, generation: 2 } }));
+    await act(async () => client.setQueryData(['bioxp', 'status'], { connection: { active: false, generation: 3 } }));
     expect(rows()).toEqual(ids); await click('Save workflow');
     expect(writes()[0].body.name).toBe('Connection independent'); expect(writes()[0].body.params.steps[0].step_id).toBe(ids[0]);
 });

@@ -14,6 +14,7 @@ const JobDetailPage = lazy(() => import('./components/JobDetailPage').then((modu
 const MolBioToolkitV2 = lazy(() => import('./components/MolBioToolkit/indexV2').then((module) => ({ default: module.MolBioToolkitV2 })));
 const NGSToolkit = lazy(() => import('./components/NGSToolkit').then((module) => ({ default: module.NGSToolkit })));
 const BioXpCockpit = lazy(() => import('./components/BioXpCockpit').then((module) => ({ default: module.BioXpCockpit })));
+const BioXpWorkflowPage = lazy(() => import('./pages/BioXpWorkflowPage').then((module) => ({ default: module.BioXpWorkflowPage })));
 const StatsToolkitLauncher = lazy(() => import('./components/StatsToolkitLauncher').then((module) => ({ default: module.StatsToolkitLauncher })));
 
 function RouteLoadingFallback() {
@@ -105,6 +106,15 @@ function App() {
             <Route path="/stats" element={<StatsToolkitLauncher />} />
             {/* Historical analytics route now resolves to Dashboard telemetry. */}
             <Route path="/infra" element={<Navigate replace to="/" />} />
+            {/* Standalone authoring, independent of the live robot cockpit. */}
+            <Route
+              path="/bioxp/workflows"
+              element={!bmsFeaturesResolved
+                ? <RouteLoadingFallback />
+                : bmsFeatures.bioxp || !bmsFeaturesKnown
+                  ? <BioXpWorkflowPage />
+                  : <Navigate replace to="/" />}
+            />
             {/* BioXP Handler Controls */}
             <Route
               path="/bioxp"

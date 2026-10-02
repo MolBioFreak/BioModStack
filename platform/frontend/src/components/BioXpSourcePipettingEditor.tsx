@@ -27,7 +27,7 @@ export function sourceEditorDraft(op: BioXpSourceStep['operation'], value: Draft
         : d.action === 'eject' ? { action: '', channels: [] } : d.action === 'plunger_up' || d.action === 'plunger_down' ? { action: '', steps: '' } : { action: '' };
     return { operation: op, diagnostic: blank(sample as DraftObject, d) } as unknown as NativeDraft<BioXpSourceStep>;
 }
-export function BioXpSourcePipettingEditor({ drafts, onChange, enabled, run }: { drafts: Record<BioXpSourceStep['operation'], NativeDraft<BioXpSourceStep>>; onChange: (step: NativeDraft<BioXpSourceStep>) => void; enabled: boolean; run: (operation: BioXpSourceStep['operation']) => void }) {
+export function BioXpSourcePipettingEditor({ drafts, onChange, enabled, run }: { drafts: Record<BioXpSourceStep['operation'], NativeDraft<BioXpSourceStep>>; onChange: (step: NativeDraft<BioXpSourceStep>) => void; enabled: boolean; run?: (operation: BioXpSourceStep['operation']) => void }) {
     return <div className="space-y-3 [&_select]:mt-1 [&_select]:block [&_select]:w-full [&_select]:rounded [&_select]:bg-slate-950 [&_select]:p-2">
         {Object.values(drafts).map(raw => {
             const step = sourceEditorDraft(raw.operation, raw as unknown as DraftObject);
@@ -64,7 +64,7 @@ export function BioXpSourcePipettingEditor({ drafts, onChange, enabled, run }: {
                     {(step.diagnostic.action === 'aspirate' || step.diagnostic.action === 'dispense') && <>{num('Diagnostic volume (µL)', step.diagnostic.volume_ul, volume_ul => update({ diagnostic: { ...step.diagnostic, volume_ul } }))}{num('Diagnostic speed', step.diagnostic.speed, speed => update({ diagnostic: { ...step.diagnostic, speed } }))}</>}
                     {(step.diagnostic.action === 'plunger_up' || step.diagnostic.action === 'plunger_down') && num('Diagnostic Z steps', step.diagnostic.steps, steps => update({ diagnostic: { ...step.diagnostic, steps } }))}
                 </>}
-                <button className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35" type="button" disabled={!enabled} onClick={() => run(step.operation)}>{sourceLabels[step.operation]} now</button>
+                {run && <button className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35" type="button" disabled={!enabled} onClick={() => run(step.operation)}>{sourceLabels[step.operation]} now</button>}
             </div></details>;
         })}
     </div>;
