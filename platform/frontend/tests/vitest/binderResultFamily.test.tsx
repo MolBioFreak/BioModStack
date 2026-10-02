@@ -18,7 +18,7 @@ const mount = async (jobId: string, open = vi.fn(), compare = vi.fn()) => {
     await act(async () => { renderer = create(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <BinderResultFamily jobId={jobId} launchContextId="destination" onOpenJob={open} onCompareJobs={compare} />
     </QueryClientProvider>); });
-    await vi.waitFor(() => expect(JSON.stringify(renderer!.toJSON())).toContain('Current'));
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect(JSON.stringify(renderer!.toJSON())).toContain('Current'); });
 };
 
 test('fresh reopen uses persisted family and keeps native and rejected zero-design jobs navigable', async () => {
@@ -43,7 +43,7 @@ test('fresh reopen uses persisted family and keeps native and rejected zero-desi
     await act(async () => renderer!.unmount()); renderer = undefined;
     await mount('round2');
     expect(requests).toEqual(['round3', 'round2']);
-    expect(JSON.stringify(renderer!.toJSON())).toContain('Scheduler parent (legacy evidence)');
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Execution parent');
     expect(familyRoot(rows[4], rows)).toBe('root');
     expect(familyReferences(rows[4])).toEqual({ root: 'root', source: 'accepted', scheduler: 'scheduler' });
     expect(familyRoot(rows[5], rows)).toBe('root');

@@ -30,6 +30,7 @@ export default defineConfig({
             './tests/vitest/binderAuthoringMounted.test.tsx',
             './tests/vitest/binderProjectAuthoringCompletionMounted.test.tsx',
             './tests/vitest/binderResultsCompletionMounted.test.tsx',
+            './tests/vitest/binderResultFamily.test.tsx',
             './tests/vitest/bindcraft2ResultsDashboardMounted.test.tsx',
             './tests/vitest/binderEvidencePollingMounted.test.tsx',
             './tests/vitest/nativeGenerationWorkbenchMounted.test.tsx',

@@ -174,7 +174,7 @@ export const BC2_HELP: Record<string, string> = {
   "save_design_trajectory": "Keep only the fold the trajectory ended on, before redesign: one file per target state, plus the unbound binder where the trajectory predicted one.",
   "save_design_animations": "Keep interactive trajectory viewers; also enables frames.",
   "save_loss_plots": "Keep metric plots; also enables frames.",
-  "save_failed_trajectories": "Keep structures from attempts that produced no accepted sequence. False retains metric records.",
+  "save_failed_trajectories": "Prevent deletion of structures already recorded for unsuccessful attempts. This does not turn recording on: also choose final-trajectory or frame recording to retain coordinates. Metric records alone cannot recover a molecule.",
   "save_failed_refolds": "Keep predicted structures for rejected ProteinMPNN candidates. Rows remain recorded if false.",
   "save_binder_monomers": "Keep a free-binder structure when that state was predicted.",
   "archive_trajectories": "Zip each completed trajectory folder.",

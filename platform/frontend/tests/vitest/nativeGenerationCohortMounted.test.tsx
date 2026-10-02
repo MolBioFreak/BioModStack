@@ -64,6 +64,7 @@ async function exported(label: string): Promise<string> {
     return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsText(blob!); });
 }
 beforeEach(() => {
+    sessionStorage.clear();
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     requests = []; blobs = new Map(); changes.mockClear();
     vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { const url = `blob:test-${blobs.size}`; blobs.set(url, blob as Blob); return url; });
@@ -157,14 +158,14 @@ it('preserves parent/off-view selection through page toggles, matching selection
     expect(changes.mock.lastCall![0]).toEqual(['external-design', ...Array.from({ length: 50 }, (_, i) => `design/${i}`)]);
 });
 
-it('maps Plotly native identities to canonical Design IDs, ignores unjoined/unknown IDs, and separates inspection', async () => {
+it('maps linked Plotly records to Design IDs while retaining native-only records for export', async () => {
     const rows = fixture(); delete rows[1203].design_id;
     await mount(rows, { selectedDesignIds: ['external-design'] });
     await change('Scatter drag mode', 'lasso');
     expect(scatter().props.layout.dragmode).toBe('lasso');
     await act(async () => scatter().props.onSelected({ points: [{ customdata: 'native:1204' }, { customdata: 'native:1204' }, { customdata: 'native:1203' }, { customdata: 'unknown' }, { pointIndex: 1 }] }));
     expect(changes).toHaveBeenLastCalledWith(['external-design', 'design/1204']);
-    expect(tree.root.findByType(CohortAnalytics).props.selectedIds).toEqual(['native:1204']);
+    expect(tree.root.findByType(CohortAnalytics).props.selectedIds).toEqual(['native:1203', 'native:1204']);
     const count = changes.mock.calls.length;
     await act(async () => scatter().props.onClick({ points: [{ customdata: 'native:1204' }] }));
     expect(tree.root.findByType(StructureWorkbench).props.structureUrl).toBe('/api/files/1204.pdb');

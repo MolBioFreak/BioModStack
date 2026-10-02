@@ -35,6 +35,7 @@ function fixture() {
         if (config.url === '/api/jobs') data = { jobs: models.map(id => ({ id, name: id, model_id: id, mode: 'protein_binder', created_at: '2026-01-01' })), total: 5 };
         else if (config.url === '/api/analytics/batch') data = { job_ids: JSON.parse(config.data), metrics_summary: {}, common_metrics: [], scientific_cohorts: [] };
         else if (config.url?.startsWith('/api/analytics/job/')) data = [point(config.url.split('/')[4])];
+        else if (config.url?.startsWith('/api/jobs/bc2-')) data = { id: config.url.split('/').pop(), model_id: 'bindcraft2', mode: 'campaign' };
         else if (config.url === '/api/jobs/boltzgen') data = { id: 'boltzgen', model_id: 'boltzgen', mode: 'protein_binder' };
         else if (config.url === '/api/jobs/boltzgen/generation-results') data = { records: [{ candidate_key: 'observation-only', metrics: { native_score: null }, structures: [] }], total: 1, offset: 0, limit: 1000, receipt: {}, publication: {} };
         else if (config.url === '/api/designs') { const job = config.params.job_id; data = { designs: [{ id: `${job}-design`, job_id: job, name: 'Same name', plddt_overall: null }], total: 1 }; }
@@ -43,13 +44,13 @@ function fixture() {
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
 }
-afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; client?.clear(); container?.remove(); api.defaults.adapter = oldAdapter; });
+afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; client?.clear(); container?.remove(); api.defaults.adapter = oldAdapter; vi.unstubAllGlobals(); });
 
 it('demand-mounts real batch comparison for all native families and explicit prediction descendants', async () => {
     fixture(); await mount({ jobId: 'bindcraft2', jobIds: models, launchContextId: 'launch' });
     expect(requests).toEqual([]);
     await click('Compare result sets');
-    expect(requests.find(r => r.url === '/api/analytics/batch')?.data).toEqual(models);
+    await vi.waitFor(async () => { await settle(); expect(requests.find(r => r.url === '/api/analytics/batch')?.data).toEqual(models); });
     expect(requests.filter(r => r.url?.startsWith('/api/analytics/job/')).every(r => (r.params as {include_children: boolean}).include_children === false)).toBe(true);
     expect(requests.find(r => r.url === '/api/jobs')?.params).toMatchObject({ include_children: true, limit: 500 });
     for (const job of models) expect(container.textContent).toContain(`v1:${job}:${job}`);
@@ -63,6 +64,30 @@ it('demand-mounts real batch comparison for all native families and explicit pre
     await click('Return to native results');
     expect(container.textContent).not.toContain('Scientific result analytics');
     expect(JSON.parse(localStorage.getItem('binder-result-comparison:launch:bindcraft2')!).jobs).toEqual(models);
+});
+
+it('compares two zero-retained BC2 campaigns through their native stage selector', async () => {
+    fixture();
+    const reads: URL[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (raw: string) => {
+        const url = new URL(raw, 'http://localhost'); reads.push(url);
+        const stage = url.searchParams.get('stage');
+        return { ok: true, json: async () => ({ arm: null, stage, offset: 0, limit: 100, total: 1,
+            arms: [{ name: null }], metadata: {}, artifacts: [],
+            accounting: { emitted_trajectories: 1, scored_draws: 1, retained_sequences: 0 },
+            rows: [{ design: 'rejected-native', terminated: 'anneal', outcome: 'rejected', values: { trajectory: '1', i_pTM: '0.2' } }],
+        }) };
+    }));
+    await mount({ jobId: 'bc2-one', jobIds: ['bc2-one', 'bc2-two'] });
+    await click('Compare result sets');
+    await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('Native observations · bc2-one'); });
+    for (const id of ['bc2-one', 'bc2-two']) await click(`Native observations · ${id}`);
+    await vi.waitFor(async () => { await settle(); expect(container.querySelectorAll('select[aria-label="Native records"]')).toHaveLength(2); });
+    const selectors = [...container.querySelectorAll<HTMLSelectElement>('select[aria-label="Native records"]')];
+    for (const selector of selectors) await act(async () => { selector.value = 'draw'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
+    await vi.waitFor(async () => { await settle(); expect(reads.filter(url => url.searchParams.get('stage') === 'draw')).toHaveLength(2); });
+    expect(reads.filter(url => url.searchParams.get('stage') === 'trajectory')).toHaveLength(2);
+    await vi.waitFor(async () => { await settle(); expect([...container.querySelectorAll('button')].filter(button => button.textContent === 'Trajectory 1')).toHaveLength(2); });
 });
 
 it('reuses actual design comparison with exact IDs, explicit descendant scope, missing values and fresh reopen', async () => {

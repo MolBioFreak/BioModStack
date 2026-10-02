@@ -56,6 +56,8 @@ it('requires explicit multi-document selection and preserves exact receiving-edi
     await act(async () => tree.root.findByProps({ 'aria-label': 'Select states' }).props.onChange({ target: { checked: true } }));
     expect(readBinderNativeSources('job')).toEqual([]);
     await act(async () => button('states').props.onClick());
+    expect(tree.root.findByProps({ 'aria-label': 'Published document' }).props.value).toBe('');
+    expect(tree.root.findAllByProps({ 'aria-label': 'Continue exact native document' })).toHaveLength(0);
     await act(async () => tree.root.findByProps({ 'aria-label': 'Published document' }).props.onChange({ target: { value: '1' } }));
     await act(async () => tree.root.findByProps({ 'aria-label': 'Use native document alternate' }).props.onChange({ target: { checked: true } }));
     expect(readBinderNativeSources('job').map(s => s.artifact_id)).toEqual(['alternate']);

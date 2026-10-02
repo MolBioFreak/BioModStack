@@ -23,8 +23,11 @@ async def resolve_root(session: AsyncSession, source_job_id: str) -> tuple[Job, 
         params = current.params or {}
         root_id = (current.lineage_root_job_id or params.get('lineage_root_job_id')
                    or params.get('iteration_source_root_job_id'))
-        next_id = root_id if root_id and root_id != current.id else current.parent_job_id
-        if not next_id:
+        source_id = (current.selection_source_job_id or current.source_stage_job_id
+                     or params.get('selection_source_job_id') or params.get('source_stage_job_id')
+                     or params.get('iteration_source_job_id'))
+        next_id = root_id or source_id or current.parent_job_id
+        if not next_id or next_id == current.id:
             return source, current
         parent = await session.get(Job, next_id)
         if parent is None:
@@ -187,8 +190,8 @@ def individual_model_requests(base: JobCreate, operation: str, selection_dir: Pa
         params.update(iteration_source_design_ids=[item['design_id']] if item['design_id'] else [], source_selection_count=1,
                       source_design_id=item['design_id'], source_pdb_path=path,
                       source_stage_job_id=item['design_job_id'])
-        if item.get('native_source'):
-            params['native_sources'] = [item['native_source']]
+        params['native_sources'] = [item['native_source']] if item.get('native_source') else []
+        params['selection_source_type'] = 'selected_native_artifacts' if item.get('native_source') else 'selected_designs'
         if operation in {'fampnn', 'proteinmpnn'}:
             params['input_pdb'] = path
             # The single-input child must not retain the batch CSV as a path;

@@ -70,7 +70,9 @@ import {
     isRFD3LocalRedesignResultJob,
 } from './rfd3LocalRedesignResultsView';
 import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from './ProteinLocalRedesignResultsPane';
-import { readBinderSelection, writeBinderSelection, readBinderCandidateDocuments, writeBinderCandidateDocuments } from '../lib/binderContinuation';
+import { readBinderSelection, writeBinderSelection, readBinderCandidateDocuments, writeBinderCandidateDocuments, readBinderNativeSources, writeBinderNativeSources, type NativeCandidateSource } from '../lib/binderContinuation';
+import { BinderResultFamily } from './BinderResultFamily';
+const BinderResultComparison = lazy(() => import('./BinderResultComparison').then(module => ({ default: module.BinderResultComparison })));
 import {
     parseFrustraMpnnExperimentContext,
     parseWorkflowResultViewState,
@@ -1133,17 +1135,6 @@ const ANALYSIS_LENS_LABELS: Record<AnalysisLens, string> = {
     frustrampnn: 'FrustraMPNN',
     protenix: 'Protenix',
 };
-const LINEAGE_GROUP_ORDER: Record<string, number> = {
-    rfantibody: 0,
-    boltzgen: 1,
-    fampnn: 2,
-    caliby: 3,
-    ppiflow: 4,
-    imported: 5,
-    validation: 6,
-    frustrampnn: 7,
-    child: 8,
-};
 const normalizeLoopScopeLabel = (value: unknown): string | null => {
     if (Array.isArray(value)) {
         const loops = value.map((item) => String(item).trim().toUpperCase()).filter(Boolean);
@@ -1249,72 +1240,6 @@ const getLineageGroupLabel = (job: Job): string => {
     }
     if (family === 'child') return 'Child Outputs';
     return ANALYSIS_LENS_LABELS[family as AnalysisLens] ?? 'Child Outputs';
-};
-const getLineageOutputLabel = (job: Job): string => {
-    const family = getLineageFamily(job);
-    const stageMode = String(job.stage_mode || '').trim().toLowerCase();
-    if (family === 'imported') return 'Imported';
-    if (family === 'boltzgen') {
-        if (stageMode === 'nanobody_binder') return 'Nanobody Generation';
-        if (stageMode === 'antibody_binder') return 'Antibody Generation';
-        return 'BoltzGen';
-    }
-    if (family === 'caliby') {
-        return 'Caliby Sequence Design';
-    }
-    if (family === 'ppiflow') {
-        if (stageMode === 'generator_backbone_refine') return 'Seeded Generation';
-        if (stageMode === 'backbone_refine' || stageMode === 'post_rfantibody') return 'Backbone Refinement';
-        if (stageMode === 'post_ppiflow') return 'Backbone Reattempt';
-        if (stageMode === 'maturation' || stageMode === 'post_fampnn') return 'Maturation';
-        if (stageMode === 'post_validation') return 'Post-Validation Repair';
-        return 'PPIFlow';
-    }
-    if (family === 'validation') {
-        const validator = String(job.params?.structure_validator || '').toLowerCase();
-        if (validator === 'protenix') return 'Protenix';
-        if (validator === 'boltz2') return 'Boltz-2';
-    }
-    return getLineageGroupLabel(job);
-};
-const getLineageOutputScopeLabel = (job: Job): string | null => {
-    const scopeRecord = (job.selected_loop_scope && typeof job.selected_loop_scope === 'object'
-        ? job.selected_loop_scope
-        : {}) as Record<string, unknown>;
-    const paramsScopeRecord = {
-        region_mode: job.params?.ppiflow_region_mode ?? job.params?.ppiflow_backbone_region_mode ?? job.params?.ppiflow_maturation_region_mode,
-        selected_loops: job.params?.ppiflow_selected_loops,
-    };
-    const stageMode = String(job.stage_mode || '').trim().toLowerCase();
-    const candidates: unknown[] = stageMode === 'generator_backbone_refine' || stageMode === 'backbone_refine' || stageMode === 'post_rfantibody' || stageMode === 'post_ppiflow'
-        ? [
-            scopeRecord,
-            paramsScopeRecord,
-            scopeRecord.ppiflow_backbone_loop_scope,
-            job.params?.ppiflow_backbone_loop_scope,
-            scopeRecord.ppiflow_selected_loops,
-            job.params?.ppiflow_selected_loops,
-        ]
-        : stageMode === 'maturation' || stageMode === 'post_fampnn'
-            ? [
-                scopeRecord,
-                paramsScopeRecord,
-                scopeRecord.ppiflow_maturation_loop_scope,
-                job.params?.ppiflow_maturation_loop_scope,
-                scopeRecord.ppiflow_selected_loops,
-                job.params?.ppiflow_selected_loops,
-            ]
-            : [
-                scopeRecord,
-                paramsScopeRecord,
-                scopeRecord.ppiflow_selected_loops,
-                job.params?.ppiflow_selected_loops,
-            ];
-    for (const candidate of candidates) {
-        const label = normalizeLoopScopeLabel(candidate);
-        if (label) return label;
-    }
-    return null;
 };
 const normalizeRfScreeningScope = (value: unknown): RfScreeningScope | null =>
     value === 'whole_antibody' ? 'whole_antibody' : (value === 'cdr_loops' ? 'cdr_loops' : null);
@@ -1883,7 +1808,6 @@ function ResultsViewerContent() {
     const [jobSelectorSearch, setJobSelectorSearch] = useState('');
     const [debouncedJobSelectorSearch, setDebouncedJobSelectorSearch] = useState('');
     const [showOverviewAnalysisMenu, setShowOverviewAnalysisMenu] = useState(false);
-    const [expandedLineageGroups, setExpandedLineageGroups] = useState<Set<string>>(new Set());
     const [activeTab, setActiveTab] = useState<TabId>('overview');
     const requestedDesignId = new URLSearchParams(location.search).get('design_id')?.trim() ?? '';
     const destinationLaunchContextId = new URLSearchParams(location.search).get('launch_context_id');
@@ -1906,6 +1830,13 @@ function ResultsViewerContent() {
         });
     }, [selectedJobId]);
     useEffect(() => { writeBinderSelection(designSelection.jobId, designSelection.ids); }, [designSelection]);
+    const [nativeSelection, setNativeSelection] = useState(() => ({ jobId: selectedJobId, sources: readBinderNativeSources(selectedJobId) }));
+    const selectedNativeSources = nativeSelection.jobId === selectedJobId ? nativeSelection.sources : readBinderNativeSources(selectedJobId);
+    const setSelectedNativeSources = useCallback((sources: NativeCandidateSource[]) => {
+        writeBinderNativeSources(selectedJobId, sources);
+        setNativeSelection({ jobId: selectedJobId, sources });
+    }, [selectedJobId]);
+    const [comparison, setComparison] = useState<{ jobId: string; ids: string[] }>();
     useEffect(() => {
         if (!requestedDesignId || !exactArtifactId) return;
         writeBinderCandidateDocuments(selectedJobId, { ...readBinderCandidateDocuments(selectedJobId), [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } });
@@ -2157,12 +2088,6 @@ function ResultsViewerContent() {
         () => activeChildJobs.some((job) => (job.design_count || 0) > 0),
         [activeChildJobs],
     );
-    const activeParentHasDesignBearingChildren = useMemo(
-        () => activeParentJob
-            ? nonNgsJobs.some((job: Job) => job.parent_job_id === activeParentJob.id && (job.design_count || 0) > 0)
-            : false,
-        [activeParentJob, nonNgsJobs],
-    );
     const selectableLineageChildJobs = useMemo(
         () => nonNgsJobs.filter((job: Job) => {
             if (!job.parent_job_id || (job.design_count || 0) <= 0) return false;
@@ -2328,56 +2253,6 @@ function ResultsViewerContent() {
             options: filteredJobSelectorOptions.filter((option) => option.group === 'lineage'),
         },
     ]).filter((group) => group.options.length > 0), [filteredJobSelectorOptions]);
-    const activeLineageRootJob = useMemo(() => {
-        if (isPostRfantibodyStage(activeJob)) return activeJob;
-        if (activeParentJob && isPostRfantibodyStage(activeParentJob)) return activeParentJob;
-        if (activeJob && activeJobHasDesignBearingChildren) return activeJob;
-        if (activeParentJob && activeParentHasDesignBearingChildren) return activeParentJob;
-        return null;
-    }, [activeJob, activeJobHasDesignBearingChildren, activeParentHasDesignBearingChildren, activeParentJob]);
-    const activeLineageOutputJobs = useMemo(
-        () => activeLineageRootJob
-            ? nonNgsJobs
-                .filter((job: Job) => job.parent_job_id === activeLineageRootJob.id && (job.design_count || 0) > 0)
-                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-            : [],
-        [activeLineageRootJob, nonNgsJobs],
-    );
-    const activeLineageOutputGroups = useMemo(() => {
-        const groups = new Map<string, {
-            key: string;
-            label: string;
-            family: string;
-            jobs: Job[];
-            designCount: number;
-        }>();
-        activeLineageOutputJobs.forEach((job) => {
-            const family = getLineageFamily(job);
-            const key = family || 'child';
-            const existing = groups.get(key);
-            if (existing) {
-                existing.jobs.push(job);
-                existing.designCount += job.design_count || 0;
-                return;
-            }
-            groups.set(key, {
-                key,
-                label: getLineageGroupLabel(job),
-                family,
-                jobs: [job],
-                designCount: job.design_count || 0,
-            });
-        });
-        return Array.from(groups.values()).sort((a, b) => {
-            const orderDelta = (LINEAGE_GROUP_ORDER[a.family] ?? 999) - (LINEAGE_GROUP_ORDER[b.family] ?? 999);
-            if (orderDelta !== 0) return orderDelta;
-            return a.label.localeCompare(b.label);
-        });
-    }, [activeLineageOutputJobs]);
-    const activeLineageOutputDesignCount = useMemo(
-        () => activeLineageOutputJobs.reduce((sum, job) => sum + (job.design_count || 0), 0),
-        [activeLineageOutputJobs],
-    );
     const isAntibodyContext = useMemo(() => {
         if (!activeJob) return false;
         const modelId = (activeJob.model_id || '').toLowerCase();
@@ -2523,7 +2398,7 @@ function ResultsViewerContent() {
         if (newId) {
             const params = new URLSearchParams(location.search);
             if (newId !== selectedJobId) {
-                ['design_id', 'artifact_id', 'target_state', 'result_model', 'candidate_id', 'invocation_id', 'frustrampnn_scope'].forEach(key => params.delete(key));
+                ['design_id', 'artifact_id', 'target_state', 'native_candidate', 'native_scope', 'native_page', 'result_model', 'candidate_id', 'invocation_id', 'frustrampnn_scope'].forEach(key => params.delete(key));
             }
             const query = params.toString();
             navigate(`/designs/${newId}${query ? `?${query}` : ''}`, replace ? { replace: true } : undefined);
@@ -2531,32 +2406,6 @@ function ResultsViewerContent() {
             navigate('/designs', replace ? { replace: true } : undefined);
         }
     }, [navigate, location.search, selectedJobId]);
-    const handleSelectLineageGroup = useCallback((family: string) => {
-        if (!activeLineageRootJob?.id) return;
-        const sourceFilter = isScopedOutputSourceFilter(family) ? family : 'all';
-        manualOutputSourceSelectionRef.current = true;
-        outputSourceSelectionJobRef.current = activeLineageRootJob.id;
-        setOutputSourceFilter(sourceFilter);
-        setAntibodySourceFilter(sourceFilter);
-        setSelectedBackboneId(null);
-        setSelectedDesignId('');
-        setCurrentPage(1);
-        const params = new URLSearchParams(location.search);
-        params.delete('design_id');
-        params.delete('artifact_id'); params.delete('target_state');
-        params.delete('result_model');
-        const query = params.toString();
-        navigate(`/designs/${activeLineageRootJob.id}${query ? `?${query}` : ''}`, { replace: true });
-    }, [activeLineageRootJob, navigate, location.search]);
-    const toggleExpandedLineageGroup = useCallback((groupKey: string) => {
-        setExpandedLineageGroups((current) => {
-            const next = new Set(current);
-            if (next.has(groupKey)) next.delete(groupKey);
-            else next.add(groupKey);
-            return next;
-        });
-    }, []);
-
     useEffect(() => {
         if (!showJobSelectorMenu) return;
         const handlePointerDown = (event: MouseEvent) => {
@@ -5396,15 +5245,20 @@ function ResultsViewerContent() {
         </div>;
     }
 
+    const showResultFamily = !!activeJob && (
+        ['bindcraft2', 'boltzgen', 'ppiflow', 'rfantibody', 'template_antibody_denovo', 'binder_refinement'].includes(activeJob.model_id)
+        || isRFD3GenerationResultJob(activeJob) || isRFD3LocalRedesignResultJob(activeJob)
+        || !!(activeJob.lineage_root_job_id || activeJob.selection_source_job_id || activeJob.source_stage_job_id
+            || activeJob.params?.lineage_root_job_id || activeJob.params?.iteration_source_root_job_id));
     const selectedCandidateControls = activeJob && <>
         <BinderSelectedControls key={`binder-${activeJob.id}`}
-            sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds}
+            sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds} selectedNativeSources={selectedNativeSources}
             launchContextId={destinationLaunchContextId}
             candidateDocuments={{ ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } } : {}) }}
             inspectDesignId={exactArtifactId ? requestedDesignId : undefined}
             onOpenJob={handleSelectJob}
             onStartMD={designId => navigate(mdRoute(activeJob.id, designId))} />
-        {!((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
+        {selectedDesignIds.length > 0 && !((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
             || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) && <BlindPoseSelectedControls
             key={activeJob.id}
             sourceJobId={activeJob.id}
@@ -5601,6 +5455,12 @@ function ResultsViewerContent() {
                     />
                 )}
 
+                {showResultFamily && <BinderResultFamily key={`family-${selectedJobId}`}
+                    jobId={selectedJobId} launchContextId={destinationLaunchContextId} onOpenJob={handleSelectJob}
+                    onCompareJobs={ids => setComparison({ jobId: selectedJobId, ids })} />}
+                {showResultFamily && <BinderResultComparison key={`comparison-${selectedJobId}`}
+                    jobId={selectedJobId} jobIds={comparison?.jobId === selectedJobId ? comparison.ids : undefined}
+                    selectedDesignIds={selectedDesignIds} launchContextId={destinationLaunchContextId} />}
                 {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
                     <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                 )}
@@ -5629,9 +5489,10 @@ function ResultsViewerContent() {
                             <BindCraft2JobResults key={selectedJobId} jobId={selectedJobId} status={activeJob.status}
                                 launchContextId={destinationLaunchContextId} selectedDesignId={requestedDesignId}
                                 selectedDesignIds={selectedDesignIds} onSelectedDesignIdsChange={setSelectedDesignIds}
+                                selectedNativeSources={selectedNativeSources} onSelectedNativeSourcesChange={setSelectedNativeSources}
                                 artifactId={exactArtifactId} targetState={exactTargetState}
                                 onInspectDocument={(row, document) => { if (row.design_id) navigate(nativeCandidateRoute(selectedJobId, row.design_id, document, destinationLaunchContextId), { replace: true }); }} />
-                            {selectedDesignIds.length > 0 && <SelectedCandidateOperations key={`operations-${activeJob.id}`} count={selectedDesignIds.length}>{selectedCandidateControls}</SelectedCandidateOperations>}
+                            {(selectedDesignIds.length + selectedNativeSources.length) > 0 && <SelectedCandidateOperations key={`operations-${activeJob.id}`} count={selectedDesignIds.length + selectedNativeSources.length}>{selectedCandidateControls}</SelectedCandidateOperations>}
                         </>
                     ) : isNativeBinderGeneration(activeJob) ? (
                         <>
@@ -5641,11 +5502,12 @@ function ResultsViewerContent() {
                                 selectedDesignId={requestedDesignId}
                                 selectedDesignIds={selectedDesignIds}
                                 onSelectedDesignIdsChange={setSelectedDesignIds}
+                                selectedNativeSources={selectedNativeSources} onSelectedNativeSourcesChange={setSelectedNativeSources}
                                 artifactId={exactArtifactId} targetState={exactTargetState}
                                 onInspectDocument={(row, document) => {
                                     if (row.design_id) navigate(nativeCandidateRoute(selectedJobId, row.design_id, document, destinationLaunchContextId), { replace: true });
                                 }} />
-                            <SelectedCandidateOperations key={`operations-${activeJob.id}`} count={selectedDesignIds.length}>
+                            <SelectedCandidateOperations key={`operations-${activeJob.id}`} count={selectedDesignIds.length + selectedNativeSources.length}>
                                 {selectedCandidateControls}
                             </SelectedCandidateOperations>
                         </>
@@ -5663,151 +5525,12 @@ function ResultsViewerContent() {
                         />
                     ) : (
                     <>
-                        {activeLineageRootJob && (
-                            <div className={`mb-4 rounded-xl border p-4 ${isPostRFantibodyReview ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-sky-500/20 bg-sky-500/5'}`}>
-                                <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                                    <div>
-                                        <div className={`text-sm font-semibold ${isPostRFantibodyReview ? 'text-emerald-200' : 'text-sky-200'}`}>
-                                            {isPostRFantibodyReview
-                                                ? 'Paused after RFantibody backbone generation'
-                                                : `Viewing persisted downstream outputs from ${activeLineageRootJob.name}`}
-                                        </div>
-                                        <div className="text-xs text-slate-300">
-                                            {selectedDesignSupportsAntibodyAnalysis && isPostRFantibodyReview ? (
-                                                <>
-                                                    Review this stage by backbone family first. The UI is using existing <span className="font-mono text-emerald-300">backbone_id</span> as the first family primitive.
-                                                </>
-                                            ) : (
-                                                <>
-                                                    This lineage already has persisted downstream child outputs. Switch between them directly here without losing access to the paused RF review parent.
-                                                </>
-                                            )}
-                                            {(!isPostRFantibodyReview && formatSourceSummary(activeJob)) && (
-                                                <span className="ml-2 text-sky-200">Launch source: {formatSourceSummary(activeJob)}</span>
-                                            )}
-                                        </div>
-                                    </div>
-                                    <div className="flex flex-wrap gap-2 text-[11px] text-slate-300">
-                                        {isPostRFantibodyReview && gateRawBackboneSummary?.total != null && (
-                                            <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
-                                                Raw {gateRawBackboneSummary.total}
-                                            </span>
-                                        )}
-                                        {isPostRFantibodyReview && (gateFilteredBackboneSummary?.total != null || gateCandidateBackboneSummary?.total != null) && (
-                                            <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
-                                                Screened {gateFilteredBackboneSummary?.total ?? gateCandidateBackboneSummary?.total ?? 0}
-                                            </span>
-                                        )}
-                                        {isPostRFantibodyReview && (
-                                            <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
-                                                Backbone families {availableReviewBackboneFamilyCount}
-                                            </span>
-                                        )}
-                                        {activeLineageOutputJobs.length > 0 && (
-                                            <>
-                                                <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
-                                                    Stage groups {activeLineageOutputGroups.length}
-                                                </span>
-                                                <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
-                                                    Child shards {activeLineageOutputJobs.length}
-                                                </span>
-                                                <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
-                                                    Persisted outputs {activeLineageOutputDesignCount.toLocaleString()}
-                                                </span>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                                {activeLineageOutputJobs.length > 0 && (
-                                    <div className="mt-4 border-t border-slate-800/70 pt-4">
-                                        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                                            Downstream lineage outputs
-                                        </div>
-                                        <div className="grid gap-3 lg:grid-cols-2">
-                                            {activeLineageOutputGroups.map((group) => (
-                                                <div
-                                                    key={group.key}
-                                                    className="rounded-xl border border-slate-800/80 bg-slate-950/50 p-3"
-                                                >
-                                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                                                        <div className="min-w-0">
-                                                            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">
-                                                                {group.label}
-                                                            </div>
-                                                            <div className="mt-1 text-[11px] text-slate-400">
-                                                                {group.designCount.toLocaleString()} outputs
-                                                            </div>
-                                                            {group.jobs.length > 1 && (
-                                                                <div className="mt-1 text-[10px] text-slate-500">
-                                                                    Produced across {group.jobs.length} execution shard{group.jobs.length === 1 ? '' : 's'}
-                                                                </div>
-                                                            )}
-                                                            {group.jobs.some((job) => getLineageOutputScopeLabel(job)) && (
-                                                                <div className="mt-1 text-[10px] text-cyan-300">
-                                                                    Loop scopes: {Array.from(new Set(group.jobs.map((job) => getLineageOutputScopeLabel(job)).filter(Boolean) as string[])).join(' • ')}
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                        <div className="flex flex-wrap gap-2">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleSelectLineageGroup(group.family)}
-                                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors ${((activeLineageRootJob?.id === selectedJobId && outputSourceFilter === (isScopedOutputSourceFilter(group.family) ? group.family : 'all')) || selectedLineageGroupKey === `${group.jobs[0].parent_job_id}:${group.family}`)
-                                                                    ? 'border-sky-400/60 bg-sky-500/15 text-white'
-                                                                    : 'border-slate-700 bg-slate-900/70 text-slate-200 hover:border-slate-600'
-                                                                    }`}
-                                                            >
-                                                                Open {group.label}
-                                                            </button>
-                                                            {group.jobs.length > 1 && (
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => toggleExpandedLineageGroup(group.key)}
-                                                                    className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-slate-600"
-                                                                >
-                                                                    {expandedLineageGroups.has(group.key) ? 'Hide Child Jobs' : `Show Child Jobs (${group.jobs.length})`}
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                    {expandedLineageGroups.has(group.key) && (
-                                                        <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-800/70 pt-3">
-                                                            {group.jobs.map((job) => {
-                                                                const isSelectedLineageJob = selectedJobId === job.id;
-                                                                const scopeLabel = getLineageOutputScopeLabel(job);
-                                                                return (
-                                                                    <button
-                                                                        key={job.id}
-                                                                        type="button"
-                                                                        onClick={() => handleSelectJob(job.id)}
-                                                                        className={`min-w-[220px] rounded-lg border px-3 py-2 text-left transition-colors ${isSelectedLineageJob
-                                                                            ? 'border-sky-400/60 bg-sky-500/15 text-white'
-                                                                            : 'border-slate-700 bg-slate-900/70 text-slate-200 hover:border-slate-600'
-                                                                            }`}
-                                                                    >
-                                                                        <div className="text-xs font-semibold">
-                                                                            {getLineageOutputLabel(job)} • {job.design_count.toLocaleString()} output{job.design_count === 1 ? '' : 's'}
-                                                                        </div>
-                                                                        <div className="mt-1 text-[11px] text-slate-500">
-                                                                            Child job detail
-                                                                        </div>
-                                                                        {scopeLabel && (
-                                                                            <div className="mt-1 text-[10px] text-cyan-300">
-                                                                                Loops: {scopeLabel}
-                                                                            </div>
-                                                                        )}
-                                                                    </button>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
+                        {isPostRFantibodyReview && <p className="mb-3 text-sm text-slate-300">
+                            Paused after RFantibody backbone generation.
+                            {gateRawBackboneSummary?.total != null && <> Raw {gateRawBackboneSummary.total}.</>}
+                            {(gateFilteredBackboneSummary?.total != null || gateCandidateBackboneSummary?.total != null) && <> Screened {gateFilteredBackboneSummary?.total ?? gateCandidateBackboneSummary?.total}.</>}
+                            {' '}{availableReviewBackboneFamilyCount} backbone families.
+                        </p>}
 
                         {clientDerivedResultsBlocked && (
                             <div role="alert" className="mb-4 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">

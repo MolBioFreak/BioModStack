@@ -157,6 +157,11 @@ async def resolve_structure_source(request: StructureSourceRequest, session):
         from services.job_result_roots import resolve_persisted_job_result_root
         path = path.resolve() if path.is_absolute() else resolve_allowed_path(str(path))
         path.relative_to(resolve_persisted_job_result_root(job).resolve())
+    elif request.job_id and request.document and request.document.artifact_id:
+        from services.binder_native_selection import resolve_native_source
+        path, identity = await resolve_native_source(session, request.job_id, request.document.artifact_id)
+        if request.document.target_state is not None and request.document.target_state != identity.get("target_state"):
+            raise ValueError("Requested state does not match the selected native document")
     elif request.path and not request.document and not request.job_id:
         path = resolve_allowed_path(request.path)
     else:

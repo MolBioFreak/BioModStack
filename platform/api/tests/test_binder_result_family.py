@@ -19,17 +19,20 @@ async def test_family_reopens_every_round_without_scheduler_or_design_count_gate
                    mode="default", params=kw.pop("params", {}), **kw)
     async with factory() as session:
         session.add_all([
-            row("root"), row("scheduler"), row("unrelated"),
+            row("root", lineage_root_job_id="root", parent_job_id="scheduler"), row("scheduler"), row("unrelated"),
             row("accepted", lineage_root_job_id="root", selection_source_job_id="root"),
             row("rejected-zero", lineage_root_job_id="root", source_stage_job_id="root"),
             row("native-zero", model_id="ppiflow", lineage_root_job_id="root"),
             row("round2", model_id="boltzgen", lineage_root_job_id="root", selection_source_job_id="accepted", parent_job_id="scheduler"),
             row("round3", params={"iteration_source_root_job_id": "root", "iteration_source_job_id": "round2"}),
             row("legacy", parent_job_id="root"),
-            row("source-only", params={"source_stage_job_id": "round3"}),
+            row("source-only", parent_job_id="scheduler", params={"source_stage_job_id": "round3"}),
         ])
         session.add(Design(id="design", job_id="accepted", name="accepted", pdb_path="test-only.pdb"))
         await session.commit()
+        from services.binder_continuation import resolve_root
+        for reopened in ("root", "round3", "source-only"):
+            assert (await resolve_root(session, reopened))[1].id == "root"
     async def scoped():
         async with factory() as session:
             yield session

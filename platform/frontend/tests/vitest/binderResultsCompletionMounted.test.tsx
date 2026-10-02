@@ -123,6 +123,44 @@ it('BC2 zero-yield Results routes directly into the shared cohort dashboard desp
     expect(mounted!.root.findAllByType(StructureWorkbench)).toHaveLength(0);
 });
 
+it('BC2 rejected saved molecule reaches the real operation editor and survives Results reopen', async () => {
+    transport({ ...baseJob, model_id: 'bindcraft2', mode: 'campaign' }, true, true);
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        if (url.includes('/bindcraft2-results?')) return { ok: true, json: async () => ({
+            arm: null, stage: 'trajectory', offset: 0, limit: 100, total: 1,
+            accounting: { emitted_trajectories: 1, scored_draws: 0, retained_sequences: 0 },
+            arms: [{ name: null }], metadata: {}, artifacts: [],
+            rows: [{ design: 'rejected-attempt', stage: 'trajectory', terminated: 'harden',
+                values: { trajectory: '1', length: '120' }, structures: [{ ...doc, primary: true }],
+                analytics: { duration_seconds: 90, trace_available: false, phase_metrics: {} } }],
+        }) };
+        return { ok: false, status: 404 };
+    }));
+    const element = <Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>;
+    const route = '/designs/parent?launch_context_id=destination';
+    await mount(element, route);
+    await act(async () => mounted!.root.findByProps({ 'aria-label': 'Select Trajectory 1' }).props.onChange({ target: { checked: true } }));
+    await openCandidateOperations();
+    expect(mounted!.root.findByType(BinderSelectedControls).props.selectedDesignIds).toEqual([]);
+    expect(mounted!.root.findByType(BinderSelectedControls).props.selectedNativeSources).toEqual([
+        expect.objectContaining({ job_id: 'parent', artifact_id: 'alternate' }),
+    ]);
+    await act(async () => button('Run selected operation').props.onClick());
+    const request = calls.find(call => call.url === '/api/binder-continuation/selected')!.body;
+    expect(request.design_ids).toEqual([]);
+    expect(request.native_sources).toEqual([{ job_id: 'parent', artifact_id: 'alternate' }]);
+    expect(request.execution_target_id).toBeNull();
+    expect(request.launch_context_id).toBe('destination');
+    expect(request.params).not.toHaveProperty('native_sources');
+    await act(async () => mounted!.unmount()); client.clear();
+    await mount(element, route);
+    await openCandidateOperations();
+    expect(mounted!.root.findByType(BinderSelectedControls).props.selectedNativeSources).toEqual([
+        expect.objectContaining({ job_id: 'parent', artifact_id: 'alternate' }),
+    ]);
+    expect(mounted!.root.findByProps({ 'aria-label': 'Select Trajectory 1' }).props.checked).toBe(true);
+});
+
 it('general generation mounts shared sequence progress independently of the generic Design query', async () => {
     const job = { ...baseJob, model_id: 'protein_modification_experimental', mode: 'de_novo_design',
         params: { generator: 'disco' }, sequence_design: {

@@ -81,6 +81,25 @@ async def test_native_ingestion_to_selected_job(selected, stage, name, placement
         child = await session.get(Job, single.json()['launched_jobs'][0]['id'])
         assert child.params['iteration_source_design_ids'] == []
         assert Path(child.params['input_pdb']).read_text() == PDB.replace('ALA', 'GLY')
+        mixed_sources = [row['native_source'], alt['structures'][0]['native_source']]
+        mixed = await client.post('/api/binder-continuation/selected', json={
+            'source_job_id': source.id, 'design_ids': ['d1'], 'native_sources': mixed_sources,
+            'operation': 'proteinmpnn', 'params': {'mpnn_relax_max_cycles': 0}})
+        assert mixed.status_code == 201, mixed.text
+        children = [await session.get(Job, item['id']) for item in mixed.json()['launched_jobs']]
+        assert len(children) == 3
+        for child, identities, expected in zip(children, [[], [mixed_sources[0]], [mixed_sources[1]]],
+                                                [PDB, PDB, PDB.replace('ALA', 'GLY')]):
+            assert child.params['native_sources'] == identities
+            assert child.params['selection_source_type'] == ('selected_native_artifacts' if identities else 'selected_designs')
+            assert Path(child.params['input_pdb']).read_text() == expected
+        source_only = Job(id='source-only', name='source-only', model_id='proteinmpnn', mode='design',
+                          status='completed', params={}, selection_source_job_id=child.id)
+        session.add(source_only); await session.commit()
+        payload['source_job_id'] = source_only.id
+        continued = await client.post('/api/binder-continuation/selected', json=payload)
+        assert continued.status_code == 201, continued.text
+        assert continued.json()['root_job_id'] == root.id
     _, after = await read_published_native_results(owner, session)
     assert after == receipt
     saved.unlink()

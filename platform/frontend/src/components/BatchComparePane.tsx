@@ -5,7 +5,7 @@ import { ScientificAnalytics } from './ScientificAnalytics';
 import type { ScientificPoint } from '../lib/scientificAnalytics';
 import type { Job } from '../lib/api';
 import { isNgsJob } from '../lib/ngsResultRouting';
-import { bc2Page, bc2Label, fetchBC2Page } from '../lib/bindcraft2Results';
+const BC2Results = lazy(() => import('./BindCraft2JobResults').then(m => ({ default: m.BindCraft2JobResults })));
 import { isNativeBinderGeneration } from '../lib/nativeBinderResults';
 import { fetchJobById } from '../lib/api';
 const NativeResults = lazy(() => import('./NativeBinderGenerationResults').then(m => ({ default: m.NativeBinderGenerationResults })));
@@ -17,16 +17,11 @@ function NativeObservations({ jobId, launchContextId }: { jobId: string; launchC
         <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>Native observations · {jobId}</button>
         {open && <Suspense fallback={<p>Loading native observations…</p>}>
             {job.isError ? <p>Native job could not be loaded.</p> : job.isPending ? <p>Loading job…</p>
-                : job.data.data.model_id === 'bindcraft2' ? <NativeResults jobId={jobId} launchContextId={launchContextId} adapter={{
-                    key: 'comparison-retained', title: 'BC2 retained observations', compact: true,
-                    fetchPage: async (offset, signal) => bc2Page(await fetchBC2Page(jobId, null, 'retained', offset, signal)), label: bc2Label,
-                }} /> : isNativeBinderGeneration(job.data.data) ? <NativeResults jobId={jobId} launchContextId={launchContextId} />
+                : job.data.data.model_id === 'bindcraft2' ? <BC2Results jobId={jobId} launchContextId={launchContextId} /> : isNativeBinderGeneration(job.data.data) ? <NativeResults jobId={jobId} launchContextId={launchContextId} />
                     : <p>Use canonical metrics or candidate confidence for this result type.</p>}
         </Suspense>}
     </div>;
 }
-// Remove unused DistributionChart import
-// import { DistributionChart } from './MetricCharts'; 
 
 interface BatchComparePaneProps {
     initialJobId?: string;

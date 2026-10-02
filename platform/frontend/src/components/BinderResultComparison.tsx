@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { fetchDesigns } from '../lib/api';
 
@@ -32,8 +32,13 @@ function Comparison({ jobId, jobIds, selectedDesignIds, launchContextId }: Binde
     // Explicit family selections replace the old comparison, including while it is open.
     const jobSignature = JSON.stringify(jobIds);
     const designSignature = JSON.stringify(selectedDesignIds);
+    const priorJobSignature = useRef(jobSignature);
     useEffect(() => {
-        if (jobIds) setSelection(previous => ({ ...previous, jobs: jobIds }));
+        if (jobIds) {
+            setSelection(previous => ({ ...previous, jobs: jobIds }));
+            if (jobSignature !== priorJobSignature.current) setOpen(true);
+        }
+        priorJobSignature.current = jobSignature;
     }, [jobSignature]); // Array identity is not a new selection.
     useEffect(() => {
         if (selectedDesignIds) setSelection(previous => ({ ...previous, designs: selectedDesignIds }));

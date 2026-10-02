@@ -379,7 +379,8 @@ async def read_published_native_results(job: Job, session) -> tuple[NativePublic
     # Readback handles are derived from the verified registry, not persisted
     # candidate bindings: saved rejected structures remain native artifacts.
     native_documents = [{**_native_document_identity(arm, document),
-                         "artifact_id": registered[document.path].id, "job_id": job.id}
+                         "artifact_id": registered[document.path].id, "job_id": job.id,
+                         "logical_path": registered[document.path].logical_path}
                         for arm in publication.arms for document in arm.documents]
     return publication, {**receipt, "native_documents": native_documents}
 
