@@ -5364,7 +5364,7 @@ function ResultsViewerContent() {
         && !resultModelHierarchy.some(item => item.modelId === resultSurface)) {
         return <div role="alert">Requested model {resultSurface} is unavailable in this Job lineage. {resultModelSelector}</div>;
     }
-    if (requestedDesignId && !isNativeBinderGeneration(activeJob) && (selectedDesignError || (!selectedDesignLoading && !selectedDesign)
+    if (requestedDesignId && activeJob?.model_id !== 'bindcraft2' && !isNativeBinderGeneration(activeJob) && (selectedDesignError || (!selectedDesignLoading && !selectedDesign)
         || (scopedModelId && selectedDesign && selectedDesign.provenance?.producer_model_id !== scopedModelId))) {
         return <div role="alert">Requested Design {requestedDesignId} is unavailable in this Job lineage. No other candidate has been selected.</div>;
     }
@@ -5612,9 +5612,6 @@ function ResultsViewerContent() {
                 {activeJob && ['rfantibody', 'template_antibody_denovo'].includes(activeJob.model_id) && (
                     <BinderPredictionEvidence jobId={selectedJobId} sourceDesignId={selectedDesignId ?? undefined} launchContextId={destinationLaunchContextId} />
                 )}
-                {activeJob?.model_id === 'bindcraft2' && (
-                    <BindCraft2JobResults key={selectedJobId} jobId={selectedJobId} launchContextId={destinationLaunchContextId} />
-                )}
                 {activeJob && ((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
                     || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) &&
                     <BlindPoseSelectedControls key={activeJob.id} sourceJobId={activeJob.id}
@@ -5626,6 +5623,15 @@ function ResultsViewerContent() {
                         <ShapeResultsWorkspace key={activeJob.id} job={activeJob} />
                     ) : nativeSequenceResultKind(activeJob) ? (
                         <NativeSequenceResults key={activeJob.id} job={activeJob} />
+                    ) : activeJob.model_id === 'bindcraft2' ? (
+                        <>
+                            <BindCraft2JobResults key={selectedJobId} jobId={selectedJobId} status={activeJob.status}
+                                launchContextId={destinationLaunchContextId} selectedDesignId={requestedDesignId}
+                                selectedDesignIds={selectedDesignIds} onSelectedDesignIdsChange={setSelectedDesignIds}
+                                artifactId={exactArtifactId} targetState={exactTargetState}
+                                onInspectDocument={(row, document) => { if (row.design_id) navigate(nativeCandidateRoute(selectedJobId, row.design_id, document, destinationLaunchContextId), { replace: true }); }} />
+                            {selectedDesignIds.length > 0 && <SelectedCandidateOperations key={`operations-${activeJob.id}`} count={selectedDesignIds.length}>{selectedCandidateControls}</SelectedCandidateOperations>}
+                        </>
                     ) : isNativeBinderGeneration(activeJob) ? (
                         <>
                             <NativeBinderGenerationResults key={selectedJobId}

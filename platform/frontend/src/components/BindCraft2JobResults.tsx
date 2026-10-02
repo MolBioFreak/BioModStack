@@ -1,10 +1,13 @@
 import { useState } from 'react';
+import { NativeBinderGenerationResults, type Props as WorkbenchProps } from './NativeBinderGenerationResults';
+import { BindCraft2Trajectory, BindCraft2OutcomeSummary } from './BindCraft2Trajectory';
+import { bc2Page, bc2Label, fetchBC2Page } from '../lib/bindcraft2Results';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { isAxiosError } from 'axios';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { nativeActionDefaults, submitBindCraft2Lifecycle, type BC2ActionField, type BC2Actions } from '../lib/bindcraft2Lifecycle';
 import { useQuery } from '@tanstack/react-query';
-import { BindCraft2NativeResults, BindCraft2SettingsReadback, type BindCraft2NativePage, type BindCraft2Stage } from './BindCraft2NativeResults';
+import { BindCraft2SettingsReadback, type BindCraft2NativePage, type BindCraft2Stage } from './BindCraft2NativeResults';
 
 interface CampaignSettings {
   requested_settings: Record<string, unknown>;
@@ -101,30 +104,46 @@ export function BindCraft2NativeActions({ jobId, page, launchContextId }: { jobI
 }
 
 /** Native evidence supplements the existing selectable Design workbench. */
-export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchContextId }: { jobId: string; resultsAvailable?: boolean; launchContextId?: string | null }) {
+export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchContextId, ...workbench }: WorkbenchProps & { resultsAvailable?: boolean }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [query, setQuery] = useState<{ arm: string | null; stage: BindCraft2Stage; offset: number; limit: number }>({
-    arm: null, stage: 'trajectory', offset: 0, limit: 25,
+    arm: null, stage: workbench.selectedDesignId || workbench.artifactId ? 'retained' : 'trajectory', offset: 0, limit: 100,
   });
   const settings = useQuery<CampaignSettings>({
-    queryKey: ['bindcraft2-campaign-settings', jobId],
+    queryKey: ['bindcraft2-campaign-settings', jobId], enabled: settingsOpen,
     queryFn: async () => {
       const response = await fetch(`/api/models/bindcraft2/campaign/jobs/${encodeURIComponent(jobId)}/settings`);
       if (!response.ok) throw new Error('Native compilation settings unavailable');
       return response.json();
     },
   });
-  const { data, isLoading, isError } = useQuery<BindCraft2NativePage>({
+  const { data, isLoading, isError, refetch } = useQuery<BindCraft2NativePage>({
     queryKey: ['bindcraft2-native-results', jobId, query],
     enabled: resultsAvailable,
-    queryFn: async () => {
-      const params = new URLSearchParams({ stage: query.stage, offset: String(query.offset), limit: String(query.limit) });
-      if (query.arm !== null) params.set('arm', query.arm);
-      const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/bindcraft2-results?${params}`);
-      if (!response.ok) throw new Error('Verified native results unavailable');
-      return response.json();
-    },
+    queryFn: ({ signal }) => fetchBC2Page(jobId, query.arm, query.stage, 0, signal),
+    retry: false, refetchOnWindowFocus: false,
   });
   return <div className="space-y-4 min-w-0">
+    {data && <div className="flex flex-wrap items-center gap-4 text-sm">
+      <label>Campaign arm <select className="rounded border bg-[var(--bg-primary)] p-2" aria-label="Campaign arm" value={data.arm ?? ''} onChange={event => setQuery({ ...query, arm: event.target.value || null })}>
+        {data.arms.map(arm => <option key={arm.name ?? ''} value={arm.name ?? ''}>{arm.name ?? 'Main campaign'}</option>)}
+      </select></label>
+      <label>Native records <select className="rounded border bg-[var(--bg-primary)] p-2" aria-label="Native records" value={query.stage} onChange={event => setQuery({ ...query, arm: data.arm, stage: event.target.value as BindCraft2Stage })}>
+        <option value="trajectory">Trajectories</option><option value="draw">Scored draws</option><option value="retained">Retained sequences</option><option value="attempt">Attempt settings</option><option value="document">Structure states</option>
+      </select></label>
+      <span>{data.accounting.emitted_trajectories ?? 'Unknown'} trajectories · {data.accounting.scored_draws ?? 'Unknown'} scored draws · {data.accounting.retained_sequences ?? 'Unknown'} retained sequences</span>
+    </div>}
+    {!resultsAvailable ? <p>Native results will appear after publication.</p> : isLoading ? <p>Loading BindCraft2 native records...</p>
+      : isError || !data ? <p role="status">BindCraft2 native records are not available for this job. <button type="button" onClick={() => void refetch()}>Retry native readback</button></p>
+      : <NativeBinderGenerationResults {...workbench} jobId={jobId} launchContextId={launchContextId} adapter={{
+          key: JSON.stringify(['bindcraft2', query.arm, query.stage]), title: 'BindCraft2 campaign dashboard',
+          fetchPage: async (offset, signal) => bc2Page(offset === 0 ? data : await fetchBC2Page(jobId, query.arm, query.stage, offset, signal)),
+          label: bc2Label, preferredColumns: ['seq_length', 'duration_seconds', 'terminated', ...Object.keys(bc2Page(data).records[0]?.metrics ?? {}).filter(key => /iptm.*last recorded/i.test(key)).slice(0, 1), ...(query.stage === 'trajectory' ? [] : ['outcome', 'rank'])],
+          inspect: row => <BindCraft2Trajectory key={row.candidate_key} jobId={jobId} row={row} arm={data.arm} />,
+          summary: rows => <><BindCraft2OutcomeSummary rows={rows} />{data.analytics?.complete === false && <p role="status">Trajectory analytics are incomplete. Plots cover available recorded observations only.</p>}{data.analytics?.warnings?.map((warning, i) => <p key={i} role="status">{warning}</p>)}</>,
+        }} />}
+    <details onToggle={event => setSettingsOpen(event.currentTarget.open)}><summary className="cursor-pointer font-semibold">Native campaign settings</summary>
     <section aria-label="BindCraft2 campaign settings">
       <h3 className="font-semibold">Native campaign settings</h3>
       {settings.isLoading ? <p>Loading compiled settings...</p> : settings.isError || !settings.data
@@ -144,11 +163,9 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
             <BindCraft2SettingsReadback value={settings.data.sweep_budget} />
           </details>
         </>}
-    </section>
-    <BinderPredictionEvidence jobId={jobId} launchContextId={launchContextId} />
+    </section></details>
+    <details onToggle={event => setEvidenceOpen(event.currentTarget.open)}><summary className="cursor-pointer">Prediction and follow-on evidence</summary>{evidenceOpen && <BinderPredictionEvidence jobId={jobId} launchContextId={launchContextId} />}</details>
     <BindCraft2NativeActions key={jobId} jobId={jobId} page={data} launchContextId={launchContextId} />
-    {!resultsAvailable ? <p>Native results will appear after publication.</p> : isLoading ? <p>Loading BindCraft2 native records...</p>
-      : isError || !data ? <p role="status">BindCraft2 native records are not available for this job.</p>
-        : <BindCraft2NativeResults page={data} onPage={setQuery} jobId={jobId} launchContextId={launchContextId} />}
+
   </div>;
 }

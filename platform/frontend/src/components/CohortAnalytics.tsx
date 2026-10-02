@@ -20,7 +20,7 @@ const card = 'min-w-0 rounded-lg border border-[var(--border-color)] bg-[var(--b
 const caption = (key: string) => `${metricLabel(key)} (${key})`;
 const escape = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
-function usePlotTheme() {
+export function usePlotTheme() {
     const [theme, setTheme] = useState({ text: '#94a3b8', grid: '#64748b', background: 'transparent' });
     useEffect(() => {
         const update = () => {
@@ -41,7 +41,7 @@ function usePlotTheme() {
 }
 
 /** Observe the actual panel, including side-panel and tab layout changes, not just window resizes. */
-function CohortPlot({ label, data, layout, onClick, onSelected, height = 350 }: {
+export function CohortPlot({ label, data, layout, onClick, onSelected, height = 350 }: {
     label: string; data: Data[]; layout: Partial<Layout>; height?: number;
     onClick?: (event: PlotMouseEvent) => void; onSelected?: (event: PlotSelectionEvent) => void;
 }) {

@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+beforeEach(() => vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
 import { JobDetailsPanel } from '../../src/components/JobDetailsPanel';
 import { ResultsViewer } from '../../src/components/ResultsViewer';
 import { BindCraft2JobResults, BindCraft2NativeActions } from '../../src/components/BindCraft2JobResults';
@@ -15,8 +16,10 @@ vi.mock('../../src/components/ExecutionTargetPicker', () => ({
   ExecutionTargetPicker: ({ value, onChange }: { value: string | null; onChange: (value: string | null) => void }) =>
     <select aria-label="Action execution target" value={value ?? ''} onChange={event => onChange(event.target.value || null)}><option value="">Local</option><option value="vast:fixture">Remote fixture</option></select>,
 }));
-import { BindCraft2NativeResults, type BindCraft2NativePage } from '../../src/components/BindCraft2NativeResults';
+import { type BindCraft2NativePage } from '../../src/components/BindCraft2NativeResults';
 import type { Job } from '../../src/lib/api';
+import { bc2Page } from '../../src/lib/bindcraft2Results';
+vi.mock('react-plotly.js', () => ({ default: () => <div data-plot-renderer /> }));
 
 let mounted: ReactTestRenderer | undefined;
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
@@ -35,11 +38,11 @@ it('mounts verified BC2-native pages without a generic Design results link', asy
     const query = new URL(url, 'http://example.test').searchParams;
     return { ok: true, json: async () => ({
       schema: 'bindcraft2.native-readback.v1', arm: 'native_arm', stage: query.get('stage'),
-      offset: Number(query.get('offset')), limit: 25, total: 26,
+      offset: Number(query.get('offset')), limit: 100, total: 26,
       accounting: { claimed_attempts: 30, generated_rows: 26 },
       arms: [{ name: 'native_arm', accounting: {} }],
       metadata: null,
-      rows: [{ design: 'native-1', native_score: 0.91 }],
+      rows: Array.from({ length: 26 }, (_, i) => ({ design: `native-${i + 1}`, stage: query.get('stage'), values: { score: String(i / 100) } })),
     }) };
   }));
   const job = { id: 'bc2', model_id: 'bindcraft2', mode: 'native', status: 'completed',
@@ -47,8 +50,8 @@ it('mounts verified BC2-native pages without a generic Design results link', asy
   await act(async () => { mounted = create(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <MemoryRouter><JobDetailsPanel job={job} onClose={() => {}} /><BindCraft2JobResults jobId={job.id} resultsAvailable={job.status === 'completed'} /></MemoryRouter>
   </QueryClientProvider>); });
-  expect(paths).toHaveLength(2);
-  expect(paths).toContain('/api/models/bindcraft2/campaign/jobs/bc2/settings');
+  expect(paths).toHaveLength(1);
+  expect(paths).not.toContain('/api/models/bindcraft2/campaign/jobs/bc2/settings');
   expect(paths.find(path => path.includes('/bindcraft2-results?'))).not.toContain('arm=');
   await vi.waitFor(() => expect(text(mounted!.root)).toContain('native-1'));
   expect(text(mounted!.root)).not.toContain('Selection unavailable');
@@ -57,9 +60,10 @@ it('mounts verified BC2-native pages without a generic Design results link', asy
   await act(async () => mounted!.root.findByProps({ 'aria-label': 'Native records' }).props.onChange({ target: { value: 'attempt' } }));
   await vi.waitFor(() => expect(paths.at(-1)).toContain('stage=attempt'));
   expect(paths.at(-1)).toContain('arm=native_arm');
-  await vi.waitFor(() => expect(mounted!.root.findAllByType('button').some(n => text(n) === 'Next')).toBe(true));
-  await act(async () => mounted!.root.findAllByType('button').find(n => text(n) === 'Next')!.props.onClick());
-  await vi.waitFor(() => expect(paths.at(-1)).toContain('offset=25'));
+  await vi.waitFor(() => expect(mounted!.root.findAllByType('button').some(n => text(n) === 'Next native records')).toBe(true));
+  const before = paths.length;
+  await act(async () => mounted!.root.findAllByType('button').find(n => text(n) === 'Next native records')!.props.onClick());
+  expect(paths).toHaveLength(before);
 });
 
 const base: BindCraft2NativePage = {
@@ -75,22 +79,15 @@ const base: BindCraft2NativePage = {
   artifacts: [{ path: 'arm-A/3_Ranked/!_Ranked.csv', media_type: 'text/csv', bytes: 20, download_url: '/api/files/download/bms_results/job/bindcraft2/campaign/arm-A/3_Ranked/!_Ranked.csv' }],
 };
 
-it('renders real metric columns, native order/ranks, exact state downloads and no invented selectable join', async () => {
-  const navigate = vi.fn();
-  await act(async () => { mounted = create(<BindCraft2NativeResults page={base} jobId="job" onPage={navigate} />); });
-  const rows = mounted!.root.findAllByType('tbody')[0].findAllByType('tr');
-  expect(rows.map(row => row.findAllByType('th')[0].children.join(''))).toEqual(['retained-A', 'unassociated']);
-  expect(rows.map(row => row.findAllByType('td')[0].children.join(''))).toEqual(['7', '2']);
-  expect(text(rows[0])).toContain('stateAUnknown / not emitted');
-  expect(mounted!.root.findAllByType('a').filter(a => text(a) === 'Candidate workbench')).toHaveLength(1);
-  expect(rows[1].findAllByType('a')).toHaveLength(0);
-  expect(mounted!.root.findAllByType('a').map(a => a.props.href)).toContain('/designs/job?design_id=design-exact');
-  expect(mounted!.root.findAllByType('a').map(a => a.props.href)).toContain(base.artifacts![0].download_url);
-  expect(mounted!.root.findAllByType('pre')).toHaveLength(0);
-  await act(async () => mounted!.root.findByProps({ 'aria-label': 'Campaign arm' }).props.onChange({ target: { value: 'arm-B' } }));
-  expect(navigate).toHaveBeenLastCalledWith({ arm: 'arm-B', stage: 'retained', offset: 0, limit: 25 });
-  await act(async () => mounted!.root.findByProps({ 'aria-label': 'Rows per page' }).props.onChange({ target: { value: '100' } }));
-  expect(navigate).toHaveBeenLastCalledWith({ arm: 'arm-A', stage: 'retained', offset: 0, limit: 100 });
+it('projects native ranks, target-state readings and exact structures without inventing selectable joins', () => {
+  const page = bc2Page(base);
+  expect(page.records.map(row => row.native_input_id)).toEqual(['retained-A', 'unassociated']);
+  expect(page.records.map(row => (row.metrics as any).rank)).toEqual([7, 2]);
+  expect(page.records[0].metrics).toMatchObject({ 'stateB · i_pTM': 0.9, 'stateA · i_pTM': null, 'off · i_pTM': 0.1 });
+  expect(page.records[0].structures).toEqual(base.rows[0].structures);
+  expect(page.records[1].design_id).toBeUndefined();
+  expect(page.records[1].structures).toEqual([]);
+  expect(page.artifacts![0].download_url).toBe(base.artifacts![0].download_url);
 });
 
 it('keeps zero yield and missing native settings independently readable and opens existing comparison workbench for Designs', async () => {
@@ -101,10 +98,12 @@ it('keeps zero yield and missing native settings independently readable and open
   await act(async () => { mounted = create(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <MemoryRouter><JobDetailsPanel job={job} onClose={() => {}} /><BindCraft2JobResults jobId={job.id} resultsAvailable={job.status === 'completed'} /></MemoryRouter>
   </QueryClientProvider>); });
-  await vi.waitFor(() => expect(text(mounted!.root)).toContain('0 records; showing 0–0'));
+  await vi.waitFor(() => expect(text(mounted!.root)).toContain('published zero-yield result'));
+  await act(async () => mounted!.root.findAllByType('details').find(n => text(n.findAllByType('summary')[0]) === 'Native campaign settings')!.props.onToggle({ currentTarget: { open: true } }));
+  await vi.waitFor(() => expect(text(mounted!.root)).toContain('Native compilation settings are not available'));
   expect(text(mounted!.root)).toContain('Native compilation settings are not available');
   expect(mounted!.root.findAllByType('a').some(a => a.props.href === '/designs/job')).toBe(true);
-  expect(mounted!.root.findAllByType('button').find(button => text(button) === 'Next')?.props.disabled).toBe(true);
+  expect(mounted!.root.findAllByProps({ 'aria-label': 'Candidate data table' })).toHaveLength(0);
 });
 
 it('reads saved requested and effective settings during execution without polling unpublished native results', async () => {
@@ -118,6 +117,8 @@ it('reads saved requested and effective settings during execution without pollin
   await act(async () => { mounted = create(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <MemoryRouter><JobDetailsPanel job={job} onClose={() => {}} /><BindCraft2JobResults jobId={job.id} resultsAvailable={job.status === 'completed'} /></MemoryRouter>
   </QueryClientProvider>); });
+  expect(fetcher).not.toHaveBeenCalled();
+  await act(async () => mounted!.root.findAllByType('details').find(n => text(n.findAllByType('summary')[0]) === 'Native campaign settings')!.props.onToggle({ currentTarget: { open: true } }));
   await vi.waitFor(() => expect(text(mounted!.root)).toContain('Compiled effective settings'));
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect(fetcher).toHaveBeenCalledWith('/api/models/bindcraft2/campaign/jobs/running/settings');

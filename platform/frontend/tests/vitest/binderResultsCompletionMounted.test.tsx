@@ -99,6 +99,29 @@ it('Results mounts zero-yield publication even when its generic query fails', as
     expect(button('Overview')).toBeUndefined();
 });
 
+it('BC2 zero-yield Results routes directly into the shared cohort dashboard despite failed generic Designs', async () => {
+    transport({ ...baseJob, model_id: 'bindcraft2', mode: 'campaign' }, true, true);
+    const nativeReads: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        nativeReads.push(url);
+        if (!url.includes('/bindcraft2-results?')) throw new Error(`Unexpected native request ${url}`);
+        return { ok: true, json: async () => ({ arm: null, stage: 'trajectory', offset: 0, limit: 100, total: 100,
+            accounting: { emitted_trajectories: 100, scored_draws: 0, retained_sequences: 0 }, arms: [{ name: null }], metadata: {},
+            rows: Array.from({ length: 100 }, (_, i) => ({ design: `native-${i}`, stage: 'trajectory', terminated: 'anneal', values: { trajectory: String(i + 1), length: '120' },
+                analytics: { duration_seconds: i + 90, trace_available: false, phase_metrics: { anneal: { 'human_EGFR.iptm': { last: i / 1000, max: i / 1000 } } } } })) }) };
+    }));
+    await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>, '/designs/parent');
+    expect(text(mounted!.root)).toContain('BindCraft2 campaign dashboard');
+    expect(text(mounted!.root)).toContain('0 retained sequences');
+    expect(text(mounted!.root)).not.toContain('Results could not be loaded');
+    expect(button('Overview')).toBeUndefined();
+    expect(mounted!.root.findAllByProps({ 'aria-label': 'Cohort dashboard charts' })).toHaveLength(1);
+    expect(mounted!.root.findByProps({ 'aria-label': 'Candidate data table' }).findByType('tbody').findAllByType('tr')).toHaveLength(25);
+    expect(nativeReads).toHaveLength(1);
+    expect(calls.some(call => call.url.endsWith('/generation-results'))).toBe(false);
+    expect(mounted!.root.findAllByType(StructureWorkbench)).toHaveLength(0);
+});
+
 it('general generation mounts shared sequence progress independently of the generic Design query', async () => {
     const job = { ...baseJob, model_id: 'protein_modification_experimental', mode: 'de_novo_design',
         params: { generator: 'disco' }, sequence_design: {
