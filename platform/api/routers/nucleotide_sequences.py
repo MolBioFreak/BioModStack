@@ -811,6 +811,7 @@ async def list_saved_gibson_workups(
 
     # Missing keys fall through; explicit null/wrong types must not fall through.
     fragment_count = case(
+        (NucleotideSequence.operation == 'golden_gate_design', func.coalesce(func.json_extract(params, '$.fragment_count'), 0)),
         (func.json_type(params, "$.ordered_fragments").is_not(None), array_count("ordered_fragments")),
         (func.json_type(params, "$.source_fragments").is_not(None), array_count("source_fragments")),
         else_=array_count("fragments"),
@@ -821,9 +822,11 @@ async def list_saved_gibson_workups(
             NucleotideSequence.length, NucleotideSequence.is_circular,
             NucleotideSequence.created_at, NucleotideSequence.updated_at,
             text_field("engine").label("engine"), text_field("engine_version").label("engine_version"),
-            fragment_count.label("fragment_count"), array_count("primers").label("primer_count"),
+            fragment_count.label("fragment_count"), case(
+                (NucleotideSequence.operation == 'golden_gate_design', func.coalesce(func.json_extract(params, '$.primer_count'), 0)),
+                else_=array_count('primers')).label('primer_count'),
         )
-        .where(NucleotideSequence.operation == "gibson")
+        .where(NucleotideSequence.operation.in_(['gibson', 'golden_gate_design']))
         .order_by(NucleotideSequence.updated_at.desc(), NucleotideSequence.created_at.desc(), NucleotideSequence.id.asc())
         .offset(offset).limit(limit)
     )).all()

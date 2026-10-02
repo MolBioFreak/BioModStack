@@ -2912,11 +2912,118 @@
       "unclassified_parameter_keys": [],
       "unsupported_parameter_keys": [],
       "viewer_destination": "/ngs?mode=ideal-comparison&comparison_job_id={comparison_job_id}"
+    },
+    {
+      "accepted_source_roles": [
+        "molecular_revision:fragment"
+      ],
+      "allowed_domain_modes": [
+        "assembly_validation"
+      ],
+      "canonical_source_destination": "/molbio",
+      "capability_id": "molbio.assembly.golden_gate_design",
+      "capability_kind": "domain_operation",
+      "capability_version": "1",
+      "classified_parameter_keys": [
+        "schema_version",
+        "selection",
+        "name",
+        "description",
+        "idempotency_key"
+      ],
+      "entrypoint_owner": "services.assembly.golden_gate_workflow.run_workflow",
+      "exposure_state": "internal",
+      "inventory_sha256": "35e53a51c075ba707aa16fcff1446cab7c0573f03ec96a93a8122d354a698932",
+      "label": "Golden Gate raw design",
+      "launch_mode": "domain_operation",
+      "materializer_owner": "services.assembly.golden_gate_workflow_persistence.resolve_sources",
+      "native_mapping": {
+        "id": "molbio.assembly.golden_gate_design",
+        "kind": "domain_operation",
+        "native_request_compatibility": "exact_native_mapping",
+        "source": "POST /api/molbio/assembly/golden-gate/design/save"
+      },
+      "observed_parameter_keys": [
+        "schema_version",
+        "selection",
+        "name",
+        "description",
+        "idempotency_key"
+      ],
+      "parameter_schema_id": "bms.golden-gate-workflow-save.v1",
+      "parameter_schema_sha256": "7e41df57fccfae1af3612f74f5b56a173950c48bbcd542029d36c772712f653a",
+      "parity_ledger": [
+        {
+          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "gate": "installed_inventory",
+          "state": "pass"
+        },
+        {
+          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "gate": "global_schema",
+          "state": "pass"
+        },
+        {
+          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "gate": "browser_controls",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native immutable-revision resolution and frozen save/read exercised by test_golden_gate_workflow_receiving; Project creation/link lifecycle remains separate acceptance.",
+          "gate": "agent_parity",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native immutable-revision resolution and frozen save/read exercised by test_golden_gate_workflow_receiving; Project creation/link lifecycle remains separate acceptance.",
+          "gate": "persistence",
+          "state": "partial"
+        },
+        {
+          "evidence": "Native immutable-revision resolution and frozen save/read exercised by test_golden_gate_workflow_receiving; Project creation/link lifecycle remains separate acceptance.",
+          "gate": "execution",
+          "state": "partial"
+        },
+        {
+          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "gate": "receipt",
+          "state": "missing"
+        },
+        {
+          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "gate": "global_result_experience",
+          "state": "partial"
+        },
+        {
+          "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
+          "gate": "workflow_reuse",
+          "state": "not_applicable"
+        },
+        {
+          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "gate": "live_agreement",
+          "state": "missing"
+        }
+      ],
+      "plannable": false,
+      "preparation_owner": null,
+      "readiness_authority": "bms.ngs-molbio.capability-readiness.v1",
+      "receipt_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "result_contracts": [
+        "bms.molbio.molecular-operation.v1"
+      ],
+      "scientific_role": "assembly_validation",
+      "server_owned_parameter_keys": [],
+      "submission_owner": "routers.molbio_golden_gate_design.save",
+      "unclassified_parameter_keys": [],
+      "unsupported_parameter_keys": [],
+      "viewer_destination": "/molbio?operation_id={operation_id}"
     }
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "df6ac3f4d573b86171d345857988a6159b410359e40cf2732cd746bcba16a099",
+  "content_sha256": "fa1be86b477a68f1b0bfa801808763f96235f2eeb627d023958464015917ec8e",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",

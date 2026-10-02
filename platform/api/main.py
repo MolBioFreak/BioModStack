@@ -407,6 +407,8 @@ app.include_router(telemetry.router, prefix="/api", tags=["telemetry"])
 app.include_router(frameworks.router)  # /api/frameworks/* - SAbDab integration
 app.include_router(boltzgen.router)
 app.include_router(molbio_ops.router)
+from routers import molbio_golden_gate_design
+app.include_router(molbio_golden_gate_design.router)
 app.include_router(molbio_restriction.router)
 app.include_router(rna_structure.router)
 app.include_router(msa.router)
