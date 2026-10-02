@@ -98,7 +98,6 @@
     "schema",
     "source_commit",
     "source_tree",
-    "runtime_implementation_sha256",
     "static_package_fingerprint",
     "migration_receipts",
     "connector_acceptance_receipt",

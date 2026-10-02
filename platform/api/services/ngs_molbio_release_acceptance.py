@@ -63,10 +63,6 @@ from services.ngs_molbio_quiescence import (
     NgsMolBioQuiescenceError,
     package_acceptance_exclusive_fence,
 )
-from services.ngs_molbio_runtime_status import (
-    NgsMolBioRuntimeAuthorityError,
-    runtime_implementation_record,
-)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCHEMA_PATH = _REPO_ROOT / "schemas/ngs_molbio_runtime/shared-global-package-acceptance-v1.schema.json"
@@ -262,7 +258,7 @@ def _validate_closed_package_evidence(
     body: Mapping[str, Any],
     *,
     receipt_id: str,
-    expected_runtime_implementation_sha256: str,
+    expected_runtime_implementation_sha256: str | None = None,
 ) -> None:
     schema = _read(_EVIDENCE_SCHEMA_PATH)
     errors = sorted(Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(dict(body)), key=lambda error: list(error.absolute_path))
@@ -272,7 +268,9 @@ def _validate_closed_package_evidence(
         raise SharedPackageAcceptanceError(
             f"operational receipt {receipt_id} violates its closed evidence schema at {location}: {first.message}"
         )
-    if body.get("runtime_implementation_sha256") != expected_runtime_implementation_sha256:
+    # Historical package receipts still cross-check their retained record digest.
+    if (expected_runtime_implementation_sha256 is not None
+            and body.get("runtime_implementation_sha256") != expected_runtime_implementation_sha256):
         raise SharedPackageAcceptanceError(
             f"operational receipt {receipt_id} runtime implementation digest mismatch"
         )
@@ -499,24 +497,15 @@ async def persist_shared_package_evidence(
     if not verifier_id.strip():
         raise SharedPackageAcceptanceError("authenticated package evidence verifier identity is required")
     candidate = copy.deepcopy(dict(evidence))
-    try:
-        runtime = runtime_implementation_record()
-    except NgsMolBioRuntimeAuthorityError as exc:
-        raise SharedPackageAcceptanceError(
-            "package-local NGS/MolBio runtime implementation authority is unavailable"
-        ) from exc
-    runtime_sha256 = runtime["content_sha256"]
-    source_commit = runtime["successor_source_commit"]
-    source_tree = runtime["successor_source_tree"]
     _validate_closed_package_evidence(
         candidate,
         receipt_id="<submitted-package-evidence>",
-        expected_runtime_implementation_sha256=runtime_sha256,
     )
     if candidate.get("verifier_id") != verifier_id:
         raise SharedPackageAcceptanceError(
             "package evidence verifier_id does not match the authenticated operator"
         )
+    source_commit, source_tree = candidate["source_commit"], candidate["source_tree"]
     _validate_receipt_source_identities(
         candidate,
         expected_commit=source_commit,
@@ -1123,14 +1112,6 @@ async def validate_shared_package_acceptance(
         )
     if candidate["content_sha256"] != _content_sha256(candidate):
         raise SharedPackageAcceptanceError("shared package acceptance content digest mismatch")
-    runtime = runtime_implementation_record(fresh=True)
-    if candidate["runtime_implementation_sha256"] != runtime["content_sha256"]:
-        raise SharedPackageAcceptanceError("acceptance binds a different runtime implementation record")
-    if (
-        candidate["source_commit"] != runtime["successor_source_commit"]
-        or candidate["source_tree"] != runtime["successor_source_tree"]
-    ):
-        raise SharedPackageAcceptanceError("acceptance source identity differs from successor runtime authority")
     n0_receipt = _read(_N0_RECEIPT_PATH)
     static_fingerprint = candidate.get("static_package_fingerprint")
     n0_fingerprint = n0_receipt.get("payload_fingerprint_sha256")
@@ -1192,9 +1173,7 @@ async def validate_shared_package_acceptance(
             _validate_closed_package_evidence(
                 body,
                 receipt_id=row.receipt_id,
-                expected_runtime_implementation_sha256=candidate[
-                    "runtime_implementation_sha256"
-                ],
+                expected_runtime_implementation_sha256=candidate.get("runtime_implementation_sha256"),
             )
             for digest, size in _package_evidence_artifacts(body).items():
                 previous = retained_package_artifacts.setdefault(digest, size)

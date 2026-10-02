@@ -12,7 +12,6 @@ from jsonschema.exceptions import _WrappedReferencingError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from services import ngs_molbio_capabilities as caps
-from services import ngs_molbio_runtime_status as runtime
 from services import ngs_molbio_n5 as n5
 from services import ngs_molbio_connector as connector
 from services import ngs_molbio_release_acceptance as release
@@ -92,64 +91,6 @@ def test_cached_validator_rechecks_referenced_schema_bytes(tmp_path, monkeypatch
     # referencing wraps the typed retrieval error; it must never accept stale bytes.
     with pytest.raises(_WrappedReferencingError):
         validator.is_valid(1)
-
-
-def test_runtime_generation_reuses_full_scan_and_fresh_detects_drift(tmp_path, monkeypatch):
-    # Small genuine source/denominator/N0 record fixture; only the schema is minimal.
-    monkeypatch.setattr(runtime, "_REPO_ROOT", tmp_path)
-    paths = {"_SCHEMA": tmp_path / "schema.json", "_DENOMINATOR": tmp_path / "denominator.json", "_RECORD": tmp_path / "record.json", "_N0_RECEIPT": tmp_path / "n0.json"}
-    for name, path in paths.items():
-        monkeypatch.setattr(runtime, name, path)
-    monkeypatch.setattr(runtime, "_DENOMINATOR_RELATIVE", "denominator.json")
-    monkeypatch.setattr(runtime, "capability_inventory", lambda: {})
-    paths["_SCHEMA"].write_text('{"type":"object"}')
-    denominator = {"schema": runtime._DENOMINATOR_SCHEMA, "paths": ["denominator.json", "source.py"]}
-    denominator["content_sha256"] = runtime._content_sha256(denominator)
-    paths["_DENOMINATOR"].write_text(json.dumps(denominator))
-    source = tmp_path / "source.py"
-    source.write_text("original source")
-    n0 = {"payload_fingerprint_sha256": "a" * 64}
-    n0["content_sha256"] = runtime._content_sha256(n0)
-    paths["_N0_RECEIPT"].write_text(json.dumps(n0))
-    record = {"source_denominator": {"path": "denominator.json", "content_sha256": denominator["content_sha256"]},
-              "n0_receipt_content_sha256": n0["content_sha256"], "n0_package_fingerprint": n0["payload_fingerprint_sha256"],
-              "successor_source_commit": "a" * 40, "successor_source_tree": "b" * 40,
-              "phases": [{"phase_id": "N" + str(i)} for i in range(1, 7)],
-              "source_authorities": [{"path": p, "size_bytes": len((tmp_path / p).read_bytes()), "sha256": runtime._sha256((tmp_path / p).read_bytes())} for p in denominator["paths"]]}
-    record["content_sha256"] = runtime._content_sha256(record)
-    paths["_RECORD"].write_text(json.dumps(record))
-    runtime._verified_runtime_generation.cache_clear()
-    reads = []
-    read_bytes = Path.read_bytes
-    monkeypatch.setattr(Path, "read_bytes", lambda path: (reads.append(path), read_bytes(path))[1])
-    returned = runtime.runtime_implementation_record()
-    cold = len(reads)
-    returned["phases"].clear()
-    for _ in range(100):
-        assert len(runtime.runtime_implementation_record()["phases"]) == 6
-    assert len(reads) == cold
-    from services.ngs_molbio_source_authority import source_build_revision
-    original_copy = runtime.copy.deepcopy
-    copies = []
-    with monkeypatch.context() as scoped:
-        scoped.setattr(runtime.copy, "deepcopy", lambda value: (copies.append(value), original_copy(value))[1])
-        for _ in range(100):
-            assert source_build_revision() == record["successor_source_commit"]
-    assert copies == []
-    assert len(reads) == cold
-    public_copy = runtime.runtime_implementation_record()
-    public_copy["phases"].clear()
-    assert len(runtime.runtime_implementation_record()["phases"]) == 6
-    paths["_RECORD"].write_text(json.dumps(record) + "\n")
-    assert runtime.runtime_implementation_record() == record
-    assert len(reads) == cold * 2
-    source.write_text("drifted source")
-    with pytest.raises(runtime.NgsMolBioRuntimeAuthorityError, match="digest or size mismatch"):
-        runtime.runtime_implementation_record(fresh=True)
-    # Failed fresh attestation must not leave the prior success reusable.
-    with pytest.raises(runtime.NgsMolBioRuntimeAuthorityError):
-        runtime.runtime_implementation_record()
-    print(f"F runtime counter: cold reads={cold}; 100 warm reads=0; fresh detects source drift")
 
 
 @pytest.mark.asyncio
@@ -304,3 +245,31 @@ async def test_convergence_covers_more_than_old_ceiling_and_late_divergence(tmp_
             print(f"F convergence: {total} settled pairs; 512-row scalar batches; late mismatch and missing event/command peer detected")
     finally:
         await engine.dispose()
+
+
+
+def test_payload_scan_uses_declared_source_and_real_sqlite_not_whole_source_record(tmp_path):
+    import sqlite3
+    from services import payload_ownership_audit as owner
+    contract = owner.load_installed_payload_ownership_contract()
+    database = tmp_path / "payloads.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, status TEXT, params TEXT)")
+        connection.execute("INSERT INTO jobs VALUES ('completed', 'completed', '{}')")
+        connection.execute("CREATE TABLE payloads (id TEXT PRIMARY KEY, payload TEXT)")
+    targets = [owner.SQLiteColumnTarget("jobs", "scratch", database, "core", "jobs", ("id",), ("id",),
+        "params", "*", "json", "projection")]
+    for index, row in enumerate(contract.manifest["classes"]):
+        targets.append(owner.SQLiteColumnTarget(f"owner_{index}", "scratch", database,
+            row["active_authority"], "payloads", ("id",), ("id",), "payload", row["payload_class"], "text", "owner"))
+    plan = owner.PayloadOwnershipScanPlan(owner.ReleaseSourceIdentity("a" * 40, "b" * 40), tuple(targets),
+        (owner.SQLiteActiveJobCheck("active", "scratch", database, "jobs", "id", "status", ("queued", "running")),))
+    result = owner.run_payload_ownership_scan(plan)
+    assert result.audit["source_commit"] == "a" * 40
+    assert result.audit["source_tree"] == "b" * 40
+    assert result.audit["no_active_jobs"] is True
+    assert result.scan_sources[0]["source_kind"] == "sqlite_snapshot"
+    with sqlite3.connect(database) as connection:
+        connection.execute("INSERT INTO jobs VALUES ('running', 'running', '{}')")
+    with pytest.raises(owner.ActiveJobsPresent):
+        owner.run_payload_ownership_scan(plan)

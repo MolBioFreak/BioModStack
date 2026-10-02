@@ -25,10 +25,6 @@ from urllib.parse import quote
 import rfc8785
 from jsonschema import Draft202012Validator, FormatChecker
 
-from services.ngs_molbio_runtime_status import (
-    NgsMolBioRuntimeAuthorityError,
-    runtime_implementation_record,
-)
 
 _API_ROOT = Path(__file__).resolve().parents[1]
 _REPO_ROOT = _API_ROOT.parents[1]
@@ -355,19 +351,6 @@ def _validate_plan(
         raise PayloadOwnershipConfigurationError("release source_commit must be a lowercase 40-hex identity")
     if _GIT_OBJECT_RE.fullmatch(plan.release.source_tree) is None:
         raise PayloadOwnershipConfigurationError("release source_tree must be a lowercase 40-hex identity")
-    try:
-        runtime = runtime_implementation_record()
-    except (NgsMolBioRuntimeAuthorityError, ImportError, OSError) as exc:
-        raise PayloadOwnershipConfigurationError(
-            "package-local runtime source authority is unavailable"
-        ) from exc
-    if (
-        plan.release.source_commit != runtime["successor_source_commit"]
-        or plan.release.source_tree != runtime["successor_source_tree"]
-    ):
-        raise PayloadOwnershipConfigurationError(
-            "release source identity differs from package-local runtime authority"
-        )
     if not plan.active_job_checks:
         raise PayloadOwnershipConfigurationError(
             "at least one exact active-job check is required"

@@ -70,57 +70,26 @@ reviewed retention/distribution decision; remove its exception and update the
 artifact documentation in the same change. No blanket archive/weight suffix
 purge is safe: some scientific fixtures deliberately use those formats.
 
-## Explicit NGS source-audit binding
+## Deployed source metadata
 
-The NGS source-audit record binds its reviewed committed source tree with
-`runtime_implementation_v2.json` removed. It is evidence for that frozen review,
-not admission for ordinary Development deployment, successor installation, or
-rollback. The managed synchronizer preserves its clean-tree, fast-forward,
-pause, active-work, source-identity and rollback checks without requiring an
-unrelated BioXP, UI, documentation or test change to regenerate the NGS record.
+Runtime consumers use the deployed build revision and existing `SourceIdentity`
+Git commit/tree metadata, not a generated whole-source implementation record.
+Dirty tracked files do not prevent metadata reads. Packaged builds without Git
+retain `BMS_BUILD_SHA`; missing revision/tree metadata is reported as `unknown`,
+not fabricated and not a new execution condition. Remote bundle admission keeps
+its existing clean-source checks.
 
-When an explicit NGS source audit is being updated, rebind its final reviewed
-tree with the procedure below. Do not hand-edit hashes or acceptance fields.
+The former `/api/operations/ngs-molbio/runtime-implementation` endpoint and record
+builder are retired. Operator metadata is available at
+`/api/operations/ngs-molbio/source-identity` (`source_revision`, `source_tree`).
+Historical receipt digests remain readable and are checked against their retained
+receipt peers, never against a newly synthesized implementation record. New package
+evidence need not contain `runtime_implementation_sha256`. Backup/export verification
+and staging recovery verify their retained creation receipts and scientific bytes;
+a later deployment does not invalidate the creation revision.
 
-After final source edits and focused checks, in the isolated worktree:
-
-```bash
-set -euo pipefail
-root="$(git rev-parse --show-toplevel)"
-cd "$root"
-record='platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json'
-git rm -- "$record"
-git diff --cached --check
-git commit -m 'chore(repo): finalize reviewed source before runtime binding'
-source_commit="$(git rev-parse HEAD)"
-source_tree="$(git rev-parse 'HEAD^{tree}')"
-evidence="$(mktemp -d "${TMPDIR:-/tmp}/bms-source-binding.XXXXXXXX")"
-mkdir "$evidence/source"
-git cat-file commit "$source_commit" > "$evidence/source.commit-object"
-git archive --format=tar "$source_commit" | tar -xf - -C "$evidence/source"
-(
-  cd "$root/platform/api"
-  PYTHONDONTWRITEBYTECODE=1 uv run --frozen --group dev python \
-    "$evidence/source/scripts/build_ngs_molbio_runtime_implementation_record.py" \
-    --successor-source-commit "$source_commit" \
-    --successor-source-tree "$source_tree" \
-    --successor-commit-object "$evidence/source.commit-object"
-)
-cp "$evidence/source/$record" "$root/$record"
-git add -- "$record"
-git diff --cached --check
-git commit -m 'build(runtime): bind reviewed source tree'
-```
-
-Keep the record-free intermediate commit off shared integration/deployment tips.
-Validate the final bound commit using
-`validate_candidate_runtime_authority(root, revision)` from
-[scripts/biomodstack_dev_sync.py](../scripts/biomodstack_dev_sync.py), and run the
-locked runtime-record tests and applicable existing review lane. Invoke only
-that read-only validator, not the synchronizer's service/deployment entrypoint.
-Any further source change invalidates that exact audit-tree claim, not general
-deployment eligibility. Preserve external build/test evidence until review is
-complete; do not commit it as local runtime output.
+The managed synchronizer preserves clean-tree, fast-forward, pause, active-work,
+deployed-identity and rollback checks. No freeze/bind commits are required.
 
 The hygiene workflow is read-only. Making its check required is a separate
 repository-administration decision; a workflow file alone does not enforce

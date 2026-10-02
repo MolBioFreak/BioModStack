@@ -46,24 +46,6 @@ runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)
 
 
-def test_runtime_denominator_covers_alignment_session_authority() -> None:
-    denominator_path = (
-        Path(__file__).parents[3]
-        / "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
-    )
-    denominator = json.loads(denominator_path.read_text(encoding="utf-8"))
-
-    assert "platform/api/services/ngs_alignment_sessions.py" in denominator["paths"]
-
-
-def test_runtime_denominator_covers_source_pin_authority() -> None:
-    denominator_path = (
-        Path(__file__).parents[3]
-        / "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
-    )
-    denominator = json.loads(denominator_path.read_text(encoding="utf-8"))
-
-    assert "platform/api/config/ngs_molbio/source_pin_v1.json" in denominator["paths"]
 
 
 def test_profile_sourced_base_shift_requires_bound_profile_authority() -> None:

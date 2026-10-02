@@ -24,6 +24,7 @@ from experiment_operations import (
     create_online_backup,
     register_external_entity_receipt,
     verify_backup,
+    restore_backup_to_staging,
     verify_workspace_export,
     workspace_analytics,
 )
@@ -125,7 +126,13 @@ def _domain_payload() -> dict:
 
 
 @pytest.mark.asyncio
-async def test_backup_export_and_global_analytics_are_hash_verified(operation_store):
+@pytest.mark.parametrize("git_available", [True, False])
+async def test_backup_export_and_global_analytics_are_hash_verified(operation_store, monkeypatch, tmp_path, git_available):
+    from build_identity import deployed_source_identity
+    from experiment_migrations import LATEST_MIGRATION_VERSION
+    if not git_available:
+        monkeypatch.setattr("build_identity.get_code_root", lambda: tmp_path)
+    creation_source = deployed_source_identity()
     _db_path, factory = operation_store
     async with factory() as session:
         workspace = await create_experiment_workspace(session, "operations", "test")
@@ -135,15 +142,25 @@ async def test_backup_export_and_global_analytics_are_hash_verified(operation_st
 
     assert summary["bounded"] is True
     assert any(point["dimension"] == "resource_kind" for point in summary["points"])
-    export_verification = verify_workspace_export(exported["export_id"])
+    backup = create_online_backup()
+    # A different deployment (including no Git) must not block historical recovery.
+    monkeypatch.setenv("BMS_BUILD_SHA", "c" * 40)
+    monkeypatch.setattr("build_identity.get_code_root", lambda: tmp_path)
+    digest = lambda document: hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+    export_verification = verify_workspace_export(exported["export_id"], verifier_id="test",
+        creation_receipt=exported, creation_receipt_sha256=digest(exported))
     assert export_verification["verified"] is True
     assert export_verification["provenance_valid"] is True
 
-    backup = create_online_backup()
-    assert backup["schema_version"] == 8
-    assert backup["source_revision"] == "test-build-sha"
+    assert backup["schema_version"] == LATEST_MIGRATION_VERSION
+    assert (backup["source_revision"], backup["source_tree"]) == creation_source
     assert backup["object_counts"]
-    backup_verification = verify_backup(backup["backup_id"])
+    backup_verification = verify_backup(backup["backup_id"], verifier_id="test",
+        creation_receipt=backup, creation_receipt_sha256=digest(backup))
+    restored = restore_backup_to_staging(backup["backup_id"], verifier_id="test",
+        creation_receipt=backup, creation_receipt_sha256=digest(backup))
+    assert restored["verified"] is True
+    assert (restored["source_revision"], restored["source_tree"]) == creation_source
     assert backup_verification["verified"] is True
     assert backup_verification["provenance_valid"] is True
 
@@ -359,3 +376,46 @@ async def test_server_verified_receipt_rejects_availability_disagreement_before_
         )
         assert unavailable.id != available.id
         assert unavailable.availability == "unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("historical", [False, True])
+async def test_package_evidence_retains_content_and_historical_source_without_runtime_record(operation_store, historical):
+    from experiment_models import ExperimentArtifactBlob, ExperimentOperationalReceipt
+    from services import ngs_molbio_release_acceptance as owner
+    _db_path, factory = operation_store
+    raw = b"retained focused-check output\n"
+    digest = hashlib.sha256(raw).hexdigest()
+    root = Path(os.environ["BMS_EXPERIMENT_ARTIFACT_ROOT"])
+    root.mkdir(exist_ok=True)
+    (root / digest).write_bytes(raw)
+    evidence = {
+        "schema": "bms.shared-package.focused-check.v1", "evidence_kind": "focused_check",
+        "native_identity": "retained-check", "source_commit": "a" * 40, "source_tree": "b" * 40,
+        "outcome": "pass", "verifier_id": "test", "verification_authority": "authenticated_operator",
+        "verified_at": "2026-01-01T00:00:00Z", "check_id": "test-check", "check_status": "pass",
+        "command_sha256": hashlib.sha256(b"test-command").hexdigest(), "output_sha256": digest,
+        "evidence_artifacts": [{"artifact_id": digest, "sha256": digest, "size_bytes": len(raw)}],
+    }
+    if historical:
+        evidence["runtime_implementation_sha256"] = hashlib.sha256(b"historical record fixture").hexdigest()
+    async with factory() as session:
+        session.add(ExperimentArtifactBlob(sha256=digest, size_bytes=len(raw), media_type="text/plain",
+            storage_key=digest, state="present", verified_at=evidence["verified_at"]))
+        await session.commit()
+        pointer = await owner.persist_shared_package_evidence(session, evidence, verifier_id="test")
+        await session.commit()
+    async with factory() as session:
+        row = await session.get(ExperimentOperationalReceipt, pointer["receipt_id"])
+        assert owner._receipt_document(row) == evidence
+        owner._validate_closed_package_evidence(evidence, receipt_id=row.receipt_id,
+            expected_runtime_implementation_sha256=evidence.get("runtime_implementation_sha256"))
+        assert row.source_revision == "a" * 40
+        assert await owner.persist_shared_package_evidence(session, evidence, verifier_id="test") == pointer
+        if historical:
+            with pytest.raises(owner.SharedPackageAcceptanceError, match="digest mismatch"):
+                owner._validate_closed_package_evidence(evidence, receipt_id=row.receipt_id,
+                    expected_runtime_implementation_sha256="f" * 64)
+        (root / digest).write_bytes(b"corrupted scientific bytes")
+        with pytest.raises(owner.SharedPackageAcceptanceError, match="digest or size mismatch"):
+            await owner.persist_shared_package_evidence(session, evidence, verifier_id="test")

@@ -58,7 +58,7 @@ def recovery(tmp_path, monkeypatch):
     monkeypatch.setattr(sync, "_git_blob", lambda *args: b"candidate")
     monkeypatch.setattr(sync, "_active_development_work", lambda root: (False, 0))
     monkeypatch.setattr(sync, "_deployed_revision", lambda root: "a" * 40)
-    monkeypatch.setattr(sync, "validate_candidate_runtime_authority", lambda *args: pytest.fail("NGS audit must not gate rollback"))
+    assert not hasattr(sync, "validate_candidate_runtime_authority")
     return sync, root, state, installed, marker, calls, current
 
 
@@ -164,7 +164,7 @@ def test_recovery_restores_absent_installed_baseline(recovery):
 def test_failed_marker_still_blocks_normal_deploy(recovery):
     sync, root, state, installed, marker, calls, _ = recovery
     # The normal candidate path is not a recovery authorization.
-    sync.validate_candidate_runtime_authority = lambda *args: {}
+    assert not hasattr(sync, "validate_candidate_runtime_authority")
     with pytest.raises(RuntimeError, match="failed rollback evidence"):
         sync._deploy_candidate(root, state, "deploy-current", "b" * 40, "b" * 40, "a" * 40)
     assert calls == []

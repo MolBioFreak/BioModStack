@@ -56,7 +56,7 @@ async def native_http(setup_store, native_core_store, tmp_path, monkeypatch):
         raise AssertionError('Native Protein must never consult a frozen NGS source audit')
     monkeypatch.setattr(pm, 'exact_local_launch_authority', irrelevant_connector)
     monkeypatch.setattr(ngs_molbio_n5, 'require_domain_hierarchy', irrelevant_connector)
-    monkeypatch.setattr(resource_owner, 'runtime_implementation_record', irrelevant_source_audit)
+    monkeypatch.setattr(resource_owner, 'deployed_source_identity', irrelevant_source_audit)
 
     @app.middleware('http')
     async def operator(request, call_next):
@@ -201,20 +201,14 @@ async def test_native_setup_handoff_launch_and_bound_job(native_http, setup_stor
         assert all(params[key] == value for key, value in scheduler['params'].items())
 
 
-def test_connector_resource_source_keeps_existing_authority(monkeypatch):
+def test_connector_resource_source_is_metadata_not_admission(monkeypatch):
     from services import ngs_molbio_n5 as owner
-    def unavailable():
-        raise owner.NgsMolBioRuntimeAuthorityError('existing frozen connector source is unavailable')
-    monkeypatch.setattr(owner, 'runtime_implementation_record', unavailable)
-    with pytest.raises(owner.ResourceAdmissionDenied) as error:
-        owner._runtime_source_authority([])
-    assert error.value.code == 'resource_source_revision_unavailable'
-    # Committed native source metadata comes from the same existing owner used
-    # by execution-plan compilation, not from invented fixture identifiers.
+    monkeypatch.setattr(owner, 'deployed_source_identity', lambda: ('unknown', 'unknown'))
+    assert owner._runtime_source_authority() == ('unknown', 'unknown')
     from component_runtime import SourceIdentity
     from paths import get_code_root
     source = SourceIdentity.from_checkout(get_code_root())
-    assert owner._runtime_source_authority([], source_identity=source) == (source.revision, source.tree)
+    assert owner._runtime_source_authority(source_identity=source) == (source.revision, source.tree)
 
 
 @pytest.mark.asyncio

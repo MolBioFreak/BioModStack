@@ -1046,33 +1046,6 @@ def test_canonical_ont_docs_preserve_acquired_authority_and_do_not_overclaim_liv
     assert "live acceptance" in docs
 
 
-def test_runtime_source_denominator_v2_covers_comparison_surface_and_preserves_v1() -> None:
-    import hashlib
-    import rfc8785
-
-    v1_path = REPO_ROOT / "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
-    v2_path = REPO_ROOT / "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
-    v1 = _load(v1_path)
-    v2 = _load(v2_path)
-    assert v1["schema"] == "bms.ngs-molbio.runtime-source-denominator.v1"
-    required = {
-        "docker/ont-squigulator.Dockerfile",
-        "docker/ont-squigualiser-comparison.Dockerfile",
-        "platform/api/migrations/add_ont_signal_comparisons.py",
-        "platform/api/migrations/ont_signal_comparison_schema_contract.py",
-        "platform/api/config/ont_signal_workbench/squigulator_ideal_comparison_schema_v1.json",
-        "platform/frontend/src/components/ngs/OntSignalIdealComparison.tsx",
-        "platform/frontend/tests/vitest/ontSignalIdealComparison.test.tsx",
-        "docs/Lab_Automation_MolBio_and_Sequencing.md",
-        "nextflow.config",
-        "platform/api/runtime_policy.py",
-        "scripts/biomodstack_dev_sync.py",
-        "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json",
-    }
-    assert required <= set(v2["paths"])
-    unsigned = {key: value for key, value in v2.items() if key != "content_sha256"}
-    assert v2["content_sha256"] == hashlib.sha256(rfc8785.dumps(unsigned)).hexdigest()
-
 
 def test_capability_inventory_v2_adds_squigulator_without_relabeling_squigualiser() -> None:
     inventory = _load(REPO_ROOT / "platform/api/config/ngs_molbio/capability_inventory_v2.json")
