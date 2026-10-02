@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from .common import orient_fragment, overhangs_compatible
-from .types import AssemblyError, AssemblyFragment, AssemblyJunction, AssemblyProduct
+from .types import AssemblyError, AssemblyFragment, AssemblyJunction, AssemblyProduct, OrientedFragment
 
 
 def simulate_ligation(
@@ -14,7 +14,15 @@ def simulate_ligation(
     if len(fragments) == 0:
         raise AssemblyError("At least one fragment is required for ligation")
 
-    oriented = [orient_fragment(fragment) for fragment in fragments]
+    return _ligate_oriented_fragments(
+        [orient_fragment(fragment) for fragment in fragments], circular=circular, mode=mode,
+    )
+
+
+def _ligate_oriented_fragments(
+    oriented: list[OrientedFragment], *, circular: bool, mode: str = "ligation",
+) -> AssemblyProduct:
+    """Join already-oriented physical spans; callers own orientation/validation."""
     if len(oriented) == 1 and circular:
         single = oriented[0]
         compatible, notes = overhangs_compatible(single.right_end, single.left_end)

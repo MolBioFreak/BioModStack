@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, List, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, case
 from datetime import datetime, timezone
 import hashlib
 import re
@@ -793,34 +793,46 @@ async def list_sequences(
 async def list_saved_gibson_workups(
     session: AsyncSession = Depends(get_molbio_session),
     limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
-    """List only server-persisted Gibson workups; product DNA remains loaded on demand."""
-    result = await session.execute(
-        select(NucleotideSequence)
-        .where(NucleotideSequence.operation == "gibson")
-        .order_by(NucleotideSequence.updated_at.desc(), NucleotideSequence.created_at.desc())
-        .limit(limit)
+    """Page historical Gibson summaries without materializing DNA or replay blobs."""
+    params = case(
+        (func.json_valid(NucleotideSequence.operation_params), NucleotideSequence.operation_params),
+        else_="{}",
     )
-    workups = result.scalars().all()
-    payload: list[SavedGibsonWorkupListItem] = []
-    for seq in workups:
-        params = seq.operation_params if isinstance(seq.operation_params, dict) else {}
-        fragments = params.get("ordered_fragments", params.get("source_fragments", params.get("fragments", [])))
-        primers = params.get("primers", [])
-        payload.append(SavedGibsonWorkupListItem(
-            id=seq.id,
-            name=seq.name,
-            description=seq.description,
-            length=seq.length,
-            topology=topology_for(seq.is_circular),
-            engine=params.get("engine") if isinstance(params.get("engine"), str) else None,
-            engine_version=params.get("engine_version") if isinstance(params.get("engine_version"), str) else None,
-            fragment_count=len(fragments) if isinstance(fragments, list) else 0,
-            primer_count=len(primers) if isinstance(primers, list) else 0,
-            created_at=seq.created_at,
-            updated_at=seq.updated_at,
-        ))
-    return payload
+
+    def text_field(key):
+        path = f"$.{key}"
+        return case((func.json_type(params, path) == "text", func.json_extract(params, path)), else_=None)
+
+    def array_count(key):
+        path = f"$.{key}"
+        return case((func.json_type(params, path) == "array", func.json_array_length(params, path)), else_=0)
+
+    # Missing keys fall through; explicit null/wrong types must not fall through.
+    fragment_count = case(
+        (func.json_type(params, "$.ordered_fragments").is_not(None), array_count("ordered_fragments")),
+        (func.json_type(params, "$.source_fragments").is_not(None), array_count("source_fragments")),
+        else_=array_count("fragments"),
+    )
+    rows = (await session.execute(
+        select(
+            NucleotideSequence.id, NucleotideSequence.name, NucleotideSequence.description,
+            NucleotideSequence.length, NucleotideSequence.is_circular,
+            NucleotideSequence.created_at, NucleotideSequence.updated_at,
+            text_field("engine").label("engine"), text_field("engine_version").label("engine_version"),
+            fragment_count.label("fragment_count"), array_count("primers").label("primer_count"),
+        )
+        .where(NucleotideSequence.operation == "gibson")
+        .order_by(NucleotideSequence.updated_at.desc(), NucleotideSequence.created_at.desc(), NucleotideSequence.id.asc())
+        .offset(offset).limit(limit)
+    )).all()
+    return [SavedGibsonWorkupListItem(
+        id=row.id, name=row.name, description=row.description, length=row.length,
+        topology=topology_for(row.is_circular), engine=row.engine, engine_version=row.engine_version,
+        fragment_count=row.fragment_count, primer_count=row.primer_count,
+        created_at=row.created_at, updated_at=row.updated_at,
+    ) for row in rows]
 
 
 @router.get(

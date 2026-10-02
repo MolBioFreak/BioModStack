@@ -96,6 +96,8 @@ _PRODUCT_QUERY_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9._:+ -]{0,126}[A-Za-z0-9._:+
 
 _ALLOWED_QUERY_FIELDS = {
     "query",
+    "response_view",
+    "enzyme_ids",
     "geometry_status",
     "commercial",
     "supplier_code",
@@ -288,6 +290,46 @@ class CatalogPage(StrictResponse):
     schema_: Literal["bms.molbio.restriction-catalog-page.v1"] = Field(alias="schema")
     catalog: CatalogReceipt
     items: list[RestrictionRecord]
+    next_cursor: str | None
+
+
+class CatalogBrowseItem(StrictResponse):
+    enzyme_id: str
+    canonical_name: str
+    aliases: tuple[str, ...]
+    site_iupac: str
+    site_alternatives_iupac: tuple[str, ...]
+    palindromic: bool
+    cleavage_status: Literal["known_double_strand", "known_single_strand_nick", "unknown"]
+    overhang_kinds: tuple[Literal["blunt", "five_prime", "three_prime"], ...]
+    nick_strand: Literal["top", "bottom"] | None
+    enzyme_kind: Literal["double_strand_endonuclease", "nicking_endonuclease", "restriction_enzyme_geometry_unresolved"]
+    analysis_capability: Literal["digest_simulation", "nicking_analysis", "recognition_only"]
+    golden_gate_compatible: bool
+    exclusion_reason: str | None
+    reported_commercial: bool
+    historical_supplier_codes: tuple[str, ...]
+
+    @classmethod
+    def from_record(cls, record: RestrictionRecord) -> "CatalogBrowseItem":
+        return cls(
+            enzyme_id=record.enzyme_id, canonical_name=record.canonical_name, aliases=record.aliases,
+            site_iupac=record.recognition.site_iupac,
+            site_alternatives_iupac=record.recognition.site_alternatives_iupac,
+            palindromic=record.recognition.palindromic, cleavage_status=record.cleavage.status,
+            overhang_kinds=tuple(dict.fromkeys(event.overhang_kind for event in record.cleavage.events)),
+            nick_strand=record.cleavage.nick.strand if record.cleavage.nick else None,
+            enzyme_kind=record.enzyme_kind, analysis_capability=record.analysis_capability,
+            golden_gate_compatible=record.golden_gate_compatible, exclusion_reason=record.exclusion_reason,
+            reported_commercial=record.supplier_provenance.reported_commercial,
+            historical_supplier_codes=record.supplier_provenance.historical_supplier_codes,
+        )
+
+
+class CatalogBrowsePage(StrictResponse):
+    schema_: Literal["bms.molbio.restriction-catalog-browse-page.v1"] = Field(alias="schema")
+    catalog: CatalogReceipt
+    items: list[CatalogBrowseItem]
     next_cursor: str | None
 
 
@@ -543,16 +585,31 @@ class DigestOutputIdentity(StrictResponse):
     content_length: int
 
 
-class SavedDigestResponse(StrictResponse):
-    schema_: Literal["bms.molbio.restriction-digest-saved-result.v1"] = Field(alias="schema")
+class _SavedDigestIdentity(StrictResponse):
     operation_id: str
     source_revision_id: str
     catalog_id: str
     catalog_sha256: str
     request_sha256: str
     result_sha256: str
-    simulation: DigestSimulation
     outputs: list[DigestOutputIdentity]
+
+
+class SavedDigestAcknowledgement(_SavedDigestIdentity):
+    schema_: Literal["bms.molbio.restriction-digest-saved-ack.v1"] = Field(alias="schema")
+
+
+class SavedDigestResponse(_SavedDigestIdentity):
+    schema_: Literal["bms.molbio.restriction-digest-saved-result.v1"] = Field(alias="schema")
+    simulation: DigestSimulation
+
+
+def _compact_digest_save_response(canonical: bytes) -> Response:
+    # CPU worker projection only; retained bytes and integrity checks stay intact.
+    payload = json.loads(canonical)
+    payload.pop("simulation")
+    payload["schema"] = "bms.molbio.restriction-digest-saved-ack.v1"
+    return JSONResponse(content=payload)
 
 
 _ANALYZE_EXAMPLE = {
@@ -831,9 +888,14 @@ def list_products(
     })
 
 
-@router.get("/catalog", response_model=CatalogPage)
+@router.get("/catalog", response_model=CatalogPage | CatalogBrowsePage)
 def list_catalog(
     request: Request,
+    response_view: Annotated[Literal["full", "compact"], Query(examples=["compact"])] = "full",
+    enzyme_ids: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=128)]] | None,
+        Query(examples=[["BsaI", "EcoRI"]]),
+    ] = None,
     query: Annotated[
         str | None,
         Query(
@@ -882,11 +944,11 @@ def list_catalog(
         Query(min_length=1, max_length=CURSOR_MAX_LENGTH, pattern=_CURSOR_PATTERN),
     ] = None,
     authority: CatalogAuthority = Depends(get_catalog_authority),
-) -> CatalogPage:
+) -> CatalogPage | CatalogBrowsePage:
     unknown = set(request.query_params) - _ALLOWED_QUERY_FIELDS
     if unknown:
         raise _invalid_query("unknown catalog query parameter")
-    if any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
+    if any(len(request.query_params.getlist(key)) != 1 for key in request.query_params if key != "enzyme_ids"):
         raise _invalid_query("duplicate catalog query parameter")
     query = query.strip() if query is not None else None
     palindromic_value = _parse_bool(palindromic)
@@ -896,7 +958,9 @@ def list_catalog(
         raise _invalid_query("limit is invalid")
 
     view = _require_view(authority)
+    selected_ids = set(enzyme_ids) if enzyme_ids is not None else None
     filters = {
+        "enzyme_ids": sorted(selected_ids) if selected_ids is not None else None,
         "query": query,
         "geometry_status": geometry_status,
         "commercial": commercial,
@@ -912,6 +976,8 @@ def list_catalog(
     supplier_upper = supplier_code.upper() if supplier_code else None
 
     def matches(record: RestrictionRecord) -> bool:
+        if selected_ids is not None and record.enzyme_id not in selected_ids:
+            return False
         if query_folded is not None:
             searchable = (
                 record.enzyme_id.casefold(),
@@ -937,6 +1003,8 @@ def list_catalog(
         return palindromic_value is None or record.recognition.palindromic is palindromic_value
 
     indexed_groups: list[tuple[RestrictionRecord, ...]] = []
+    if selected_ids is not None:
+        indexed_groups.append(tuple(view.by_id[item] for item in selected_ids if item in view.by_id))
     if geometry_status != "all":
         indexed_groups.append(view.by_geometry_status.get(geometry_status, ()))
     if commercial != "all":
@@ -973,6 +1041,13 @@ def list_catalog(
         if len(selected) > page_limit
         else None
     )
+    if response_view == "compact":
+        return CatalogBrowsePage(
+            schema="bms.molbio.restriction-catalog-browse-page.v1",
+            catalog=_receipt(authority),
+            items=[CatalogBrowseItem.from_record(record) for record in items],
+            next_cursor=next_cursor,
+        )
     return CatalogPage(
         schema="bms.molbio.restriction-catalog-page.v1",
         catalog=_receipt(authority),
@@ -1934,9 +2009,10 @@ async def _load_saved_digest_snapshot(session: AsyncSession, operation_id: str) 
         ) from exc
 
 
-@router.post("/digests", response_model=SavedDigestResponse)
+@router.post("/digests", response_model=SavedDigestResponse | SavedDigestAcknowledgement)
 async def save_restriction_digest(
     payload: DigestSaveRequest,
+    response_view: Literal["full", "compact"] = "full",
     authority: CatalogAuthority = Depends(get_catalog_authority),
     molbio_session: AsyncSession = Depends(get_molbio_session),
 ) -> Response:
@@ -1956,6 +2032,8 @@ async def save_restriction_digest(
         if existing.request_fingerprint != fingerprint:
             raise _error(409, "idempotency_conflict", "idempotency key is bound to another request")
         canonical = await _load_saved_digest(molbio_session, str(existing.id))
+        if response_view == "compact":
+            return await _run_digest_cpu(_compact_digest_save_response, canonical=canonical)
         return Response(content=canonical, media_type="application/json")
 
     try:
@@ -2121,6 +2199,8 @@ async def save_restriction_digest(
     except BaseException:
         await molbio_session.rollback()
         raise
+    if response_view == "compact":
+        return await _run_digest_cpu(_compact_digest_save_response, canonical=canonical)
     return Response(content=canonical, media_type="application/json")
 
 
