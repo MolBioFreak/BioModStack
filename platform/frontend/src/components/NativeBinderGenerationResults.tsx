@@ -5,6 +5,8 @@ import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 import { metricKeys, numericMetricKeys, formatMetric, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
 import { fetchNativeBinderGeneration, nativeCandidateRoute, nativeGenerationMetrics, nativeGenerationMetricDetail, nativeGenerationMetricUnit, type NativeGenerationPage, type NativeGenerationRecord, type NativeGenerationDocument } from '../lib/nativeBinderResults';
 
+import { readBinderSelection, writeBinderSelection, readBinderNativeSources, writeBinderNativeSources, type NativeCandidateSource } from '../lib/binderContinuation';
+import { continuationHref } from '../lib/deNovoContinuation';
 import type { CohortInitialMetrics } from './CohortAnalytics';
 import { CohortMetricPicker } from './CohortMetricPicker';
 import { describeCohortMetric } from '../lib/cohortMetricPresentation';
@@ -28,6 +30,8 @@ export interface Props {
     jobId: string; status?: string; launchContextId?: string | null;
     selectedDesignId?: string; selectedDesignIds?: string[];
     onSelectedDesignIdsChange?: (ids: string[]) => void;
+    selectedNativeSources?: NativeCandidateSource[];
+    onSelectedNativeSourcesChange?: (sources: NativeCandidateSource[]) => void;
     onInspectDocument?: (row: NativeGenerationRecord, document?: NativeGenerationDocument) => void;
     artifactId?: string | null; targetState?: string | null;
 }
@@ -63,7 +67,7 @@ function Download({ name, content, mime, children }: { name: string; content: st
 export function NativeBinderGenerationResults(props: Props) {
     return <NativeGenerationWorkbench key={`${props.jobId}:${props.adapter?.key ?? "native"}`} {...props} />;
 }
-function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, onInspectDocument, artifactId, targetState }: Props) {
+function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, selectedNativeSources, onSelectedNativeSourcesChange, onInspectDocument, artifactId, targetState }: Props) {
     const [view, setView] = useState<View>(selectedDesignId || artifactId ? 'structure' : 'dashboard');
     const [structureOpened, setStructureOpened] = useState(view === 'structure');
     const [analyticsOpened, setAnalyticsOpened] = useState(view === 'dashboard' || view === 'analytics');
@@ -102,9 +106,16 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const numericKeys = useMemo(() => numericMetricKeys(cohort), [cohort]);
     const label = (key: string) => { const unit = rows.map(item => nativeGenerationMetricUnit(item, key)).find(Boolean); return `${describeCohortMetric(key, keys).label}${unit ? ` (${unit})` : ''}`; };
     const preferred = (adapter?.preferredColumns ?? ['seq_length', 'dsasa', 'radius_of_gyration', 'num_ca_ca_clashes']).filter(key => keys.includes(key));
-    const [nativeSelected, setNativeSelected] = useState<string[]>([]);
-    const selectionId = (item: NativeGenerationRecord) => adapter ? item.candidate_key : item.design_id;
-    const selection = adapter ? Array.from(new Set([...nativeSelected, ...rows.filter(item => item.design_id && selectedDesignIds.includes(item.design_id)).flatMap(item => item.candidate_key ? [item.candidate_key] : [])])) : selectedDesignIds;
+    const selectionScope = `${jobId}:records:${adapter?.key ?? 'native'}`;
+    const [nativeSelected, setNativeSelected] = useState(() => readBinderSelection(selectionScope));
+    const [savedSources, setSavedSources] = useState(() => readBinderNativeSources(jobId));
+    const nativeSources = selectedNativeSources ?? savedSources;
+    const changeSources = (sources: NativeCandidateSource[]) => {
+        const unique = [...new Map(sources.map(source => [JSON.stringify([source.job_id, source.artifact_id]), source])).values()];
+        setSavedSources(unique); writeBinderNativeSources(jobId, unique); onSelectedNativeSourcesChange?.(unique);
+    };
+    const selectionId = (item: NativeGenerationRecord) => rowKey(item, rows.indexOf(item));
+    const selection = Array.from(new Set([...nativeSelected, ...rows.filter(item => item.design_id && selectedDesignIds.includes(item.design_id)).map(selectionId)]));
     const tableKeys = columns ?? (preferred.length ? preferred : keys.slice(0, 6));
     const byId = useMemo(() => new Map(cohort.map((entry, index) => [entry.id, rows[index]])), [cohort, rows]);
     const selectedSet = useMemo(() => new Set(selection), [selection]);
@@ -141,7 +152,8 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const navigationRows = matched.map(entry => byId.get(entry.id)!);
     const pageRows = matched.slice(displayedPage * pageSize, (displayedPage + 1) * pageSize);
     const localSelection = local?.scope === scope ? local : undefined;
-    const activeId = localSelection?.key ?? (selectedDesignId ? cohort.find(entry => byId.get(entry.id)?.design_id === selectedDesignId)?.id : cohort[0]?.id);
+    const returnCandidate = new URLSearchParams(window.location.search).get('native_candidate');
+    const activeId = localSelection?.key ?? (selectedDesignId ? cohort.find(entry => byId.get(entry.id)?.design_id === selectedDesignId)?.id : returnCandidate ?? (artifactId ? cohort.find(entry => byId.get(entry.id)?.structures?.some(doc => doc.artifact_id === artifactId))?.id : cohort[0]?.id));
     const row = activeId ? byId.get(activeId) : undefined;
     const documents = row?.structures ?? [];
     const explicit = localSelection?.document != null || (!localSelection && (artifactId != null || targetState != null));
@@ -157,8 +169,14 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     };
     const changeSelection = (ids: string[], checked: boolean) => {
         const next = checked ? Array.from(new Set([...selection, ...ids])) : selection.filter(id => !ids.includes(id));
-        if (adapter) { setNativeSelected(next); onSelectedDesignIdsChange?.(Array.from(new Set([...selectedDesignIds.filter(id => !rows.some(item => item.design_id === id)), ...rows.filter(item => item.candidate_key && next.includes(item.candidate_key) && item.design_id).map(item => item.design_id!)]))); }
-        else onSelectedDesignIdsChange?.(next);
+        const recordSelection = next.filter(id => !rows.some(item => selectionId(item) === id && item.design_id));
+        setNativeSelected(recordSelection); writeBinderSelection(selectionScope, recordSelection);
+        onSelectedDesignIdsChange?.(Array.from(new Set([...selectedDesignIds.filter(id => !rows.some(item => item.design_id === id)), ...rows.filter(item => next.includes(selectionId(item)) && item.design_id).map(item => item.design_id!)])));
+        const affected = rows.filter(item => ids.includes(selectionId(item)) && !item.design_id);
+        const remaining = nativeSources.filter(source => !affected.some(item => item.structures?.some(doc => source.job_id === jobId && doc.artifact_id === source.artifact_id)));
+        // A sole document is unambiguous. Multiple states require an explicit document choice.
+        const added = checked ? affected.flatMap(item => item.structures?.length === 1 && item.structures[0].artifact_id ? [{ job_id: jobId, artifact_id: item.structures[0].artifact_id, document: item.structures[0] }] : nativeSources.filter(source => item.structures?.some(doc => source.job_id === jobId && doc.artifact_id === source.artifact_id))) : [];
+        changeSources([...remaining, ...added]);
     };
     const designIds = (entries: CohortRow[]) => entries.flatMap(entry => { const id = selectionId(byId.get(entry.id)!); return id ? [id] : []; });
     const pageIds = designIds(pageRows);
@@ -177,7 +195,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-color)] p-4">
             <div><h4 className="font-semibold">{adapter?.recordLabel ?? 'Candidate data'}</h4><p className="text-xs text-[var(--text-secondary)]">{matched.length} matching · {rows.length} loaded · choose a row to inspect its measurements and any available structure</p></div>
             <div className="flex flex-wrap items-center gap-2">
-                {(adapter || onSelectedDesignIdsChange) && <><button className={control} type="button" onClick={() => changeSelection(designIds(matched), true)}>Select all matching ({designIds(matched).length})</button><button className={control} type="button" onClick={() => changeSelection(designIds(matched), false)}>Deselect matching</button></>}
+                {(adapter || onSelectedDesignIdsChange || onSelectedNativeSourcesChange) && <><button className={control} type="button" onClick={() => changeSelection(designIds(matched), true)}>Select all matching ({designIds(matched).length})</button><button className={control} type="button" onClick={() => changeSelection(designIds(matched), false)}>Deselect matching</button></>}
                 <details className="relative"><summary className={`${control} cursor-pointer`}>Columns ({tableKeys.length})</summary><div className="absolute right-0 z-20 mt-2 max-h-72 w-64 overflow-auto rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] p-3 shadow-xl">
                     <label className="mb-2 flex gap-2 border-b border-[var(--border-color)] pb-2"><input aria-label="All native metric columns" type="checkbox" checked={tableKeys.length === keys.length} onChange={event => setColumns(event.target.checked ? keys : null)} />All native metric columns</label>
                     <input type="search" aria-label="Find a table column" placeholder="Find a measurement…" className={`${control} mb-2 w-full`} value={columnSearch} onChange={event => setColumnSearch(event.target.value)} />
@@ -187,10 +205,10 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         </div>
         <div className="max-h-[520px] overflow-auto">
             <table className="w-full border-collapse text-sm"><thead className="sticky top-0 z-10 bg-[var(--bg-primary)] text-left"><tr>
-                <th className="sticky left-0 z-10 min-w-48 bg-[var(--bg-primary)] px-4 py-3" aria-sort={sort.key === '$candidate' ? sort.descending ? 'descending' : 'ascending' : 'none'}><div className="flex items-center gap-3">{(adapter || onSelectedDesignIdsChange) && <input type="checkbox" aria-label="Select this page" checked={allPageSelected} disabled={!pageIds.length} onChange={event => changeSelection(pageIds, event.target.checked)} />}<button type="button" onClick={() => toggleSort('$candidate')}>Candidate {sort.key === '$candidate' ? sort.descending ? '↓' : '↑' : '↕'}</button></div></th>
+                <th className="sticky left-0 z-10 min-w-48 bg-[var(--bg-primary)] px-4 py-3" aria-sort={sort.key === '$candidate' ? sort.descending ? 'descending' : 'ascending' : 'none'}><div className="flex items-center gap-3">{(adapter || onSelectedDesignIdsChange || onSelectedNativeSourcesChange) && <input type="checkbox" aria-label="Select this page" checked={allPageSelected} disabled={!pageIds.length} onChange={event => changeSelection(pageIds, event.target.checked)} />}<button type="button" onClick={() => toggleSort('$candidate')}>Candidate {sort.key === '$candidate' ? sort.descending ? '↓' : '↑' : '↕'}</button></div></th>
                 {tableKeys.map(key => <th key={key} className="whitespace-nowrap px-4 py-3 text-right" title={key} aria-sort={sort.key === key ? sort.descending ? 'descending' : 'ascending' : 'none'}><button type="button" aria-label={`Sort by ${key}`} onClick={() => toggleSort(key)}>{label(key)} {sort.key === key ? sort.descending ? '↓' : '↑' : '↕'}</button></th>)}
             </tr></thead><tbody>{pageRows.map(entry => { const item = byId.get(entry.id)!; return <tr key={entry.id} aria-selected={entry.id === activeId} className={`border-t border-[var(--border-color)] ${entry.id === activeId ? 'bg-blue-500/10' : 'hover:bg-blue-500/5'}`}>
-                <td className="sticky left-0 bg-[var(--bg-secondary)] px-4 py-2"><div className="flex items-center gap-3">{(adapter || onSelectedDesignIdsChange) && selectionId(item) && <input aria-label={`Select ${entry.label}`} type="checkbox" checked={selectedSet.has(selectionId(item)!)} onChange={event => changeSelection([selectionId(item)!], event.target.checked)} />}<button type="button" className="max-w-72 break-words py-1 text-left font-medium text-[var(--text-primary)] hover:underline" onClick={() => inspect(item)}>{entry.label}</button></div>{!adapter && !item.design_id && <small className="text-[var(--text-secondary)]">Source record · no linked candidate</small>}</td>
+                <td className="sticky left-0 bg-[var(--bg-secondary)] px-4 py-2"><div className="flex items-center gap-3">{(adapter || onSelectedDesignIdsChange || onSelectedNativeSourcesChange) && selectionId(item) && <input aria-label={`Select ${entry.label}`} type="checkbox" checked={selectedSet.has(selectionId(item)!)} onChange={event => changeSelection([selectionId(item)!], event.target.checked)} />}<button type="button" className="max-w-72 break-words py-1 text-left font-medium text-[var(--text-primary)] hover:underline" onClick={() => inspect(item)}>{entry.label}</button></div>{!item.design_id && <small className="text-[var(--text-secondary)]">{!item.structures?.length ? 'No saved molecule · record remains selectable for export' : item.structures.length > 1 ? 'Inspect to select an exact saved molecule' : 'Saved native molecule · usable regardless of outcome'}</small>}</td>
                 {tableKeys.map(key => <td key={key} className="whitespace-nowrap px-4 py-3 text-right tabular-nums" title={[nativeText(entry.values[key]), nativeGenerationMetricDetail(item, key)].filter(Boolean).join(' · ')}>{formatMetric(entry.values[key])}</td>)}
             </tr>; })}</tbody></table>
             {!matched.length && <p className="p-8 text-center text-[var(--text-secondary)]">No candidates match this view. Clear filters to return to the publication.</p>}
@@ -214,7 +232,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                     {[
                         [adapter?.recordLabel ?? 'Published candidates', page.total, `${matched.length} in view · ${rows.length} loaded`],
                         ...headlineMetrics.map(metric => [`Median ${label(metric.key)}`, metric.median == null ? '—' : formatMetric(metric.median), `${metric.observed} observations in this view`]),
-                        ['Selected', selection.length, adapter ? 'Native record selection for export' : 'Shared with candidate operations'],
+                        ['Selected', selection.length, 'Records for export; saved molecules for operations'],
                     ].map(([label, count, detail]) => <div key={String(label)} className={`${panel} px-4 py-2 ${adapter?.compact ? "flex min-w-0 items-center justify-between gap-2" : ""}`}><div title={String(label)} className={`text-xs text-[var(--text-secondary)] ${adapter?.compact ? "truncate" : ""}`}>{label}</div><div title={String(detail)} className={`${adapter?.compact ? "text-lg" : "my-1 text-2xl"} font-semibold tabular-nums`}>{count}</div>{!adapter?.compact && <div className="text-xs text-[var(--text-secondary)]">{detail}</div>}</div>)}
                 </div>
                 <div role="tablist" aria-label="Native result review" className="flex flex-wrap gap-1 border-b border-[var(--border-color)]">{([['dashboard', 'Dashboard'], ['analytics', 'Plotly Lab'], ['table', 'Data table'], ['structure', 'Structure']] as const).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={view === key} className={`border-b-2 px-4 py-2 text-sm font-medium ${view === key ? 'border-blue-500 bg-blue-500/10' : 'border-transparent hover:bg-blue-500/5'}`} onClick={event => { setView(key); const section = event?.currentTarget?.closest('section'); if (section && key === 'analytics') requestAnimationFrame(() => section.scrollIntoView({ block: 'start' })); }}>{adapter && key === 'structure' ? 'Inspect record' : label}</button>)}</div>
@@ -239,7 +257,24 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                 <div ref={inspector} hidden={view !== 'structure'} className={`${panel} p-4`} aria-label="Candidate structure inspector">
                     {(structureOpened || view === 'structure') && <Suspense fallback={<p role="status">Loading native structure…</p>}>{!row ? <p role="status">{!complete ? 'Loading the requested candidate from the publication. ' : 'Requested candidate is unavailable in this publication. '}Another candidate is not substituted.</p> : <>
                         <div className="flex flex-wrap items-center justify-between gap-3"><div><h4 className="text-lg font-semibold">{adapter?.label(row) ?? row.candidate_key ?? row.design_id ?? 'Native record'}</h4><p className="text-xs text-[var(--text-secondary)]">{adapter ? "Native record and phase observations" : "Exact published structure · native measurements are shown without an inferred confidence score"}</p></div><div className="flex gap-2"><button className={control} type="button" disabled={navigationRows.indexOf(row) <= 0} onClick={() => inspect(navigationRows[navigationRows.indexOf(row) - 1])}>Previous candidate</button><button className={control} type="button" disabled={navigationRows.indexOf(row) >= navigationRows.length - 1} onClick={() => inspect(navigationRows[navigationRows.indexOf(row) + 1])}>Next candidate</button></div></div>
+                        {document?.artifact_id && <nav aria-label="Continue exact native document">{(['redesign', 'sequence', 'prediction'] as const).map(destination => {
+                            const href = new URL(continuationHref({ job_id: jobId, ...(row.design_id ? { design_id: row.design_id } : {}), document: { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}) } }, destination), window.location.origin);
+                            const back = new URL(href.searchParams.get('return_to')!, window.location.origin);
+                            back.searchParams.set('native_candidate', activeId!); back.searchParams.set('artifact_id', document.artifact_id);
+                            if (document.target_state != null) back.searchParams.set('target_state', document.target_state); else back.searchParams.delete('target_state');
+                            if (adapter) back.searchParams.set('native_scope', adapter.key);
+                            if (launchContextId) { href.searchParams.set('launch_context_id', launchContextId); back.searchParams.set('launch_context_id', launchContextId); }
+                            href.searchParams.set('return_to', `${back.pathname}${back.search}${back.hash}`);
+                            return <a className="mr-3 underline" key={destination} href={`${href.pathname}${href.search}`}>{destination === 'redesign' ? 'Redesign exact structure' : destination === 'sequence' ? 'Design sequence from exact structure' : 'Predict exact structure'}</a>;
+                        })}</nav>}
                         {adapter?.inspect?.(row)}
+                        {!row.design_id && <div className="my-3">
+                            {!documents.length ? <p>No saved molecule. This record remains available for inspection and export.</p> : documents.filter(doc => doc.artifact_id).map(doc => <label key={doc.artifact_id} className="block"><input type="checkbox" aria-label={`Use native document ${doc.artifact_id}`} checked={nativeSources.some(source => source.job_id === jobId && source.artifact_id === doc.artifact_id)} onChange={event => {
+                                const remaining = nativeSources.filter(source => source.job_id !== jobId || source.artifact_id !== doc.artifact_id);
+                                changeSources(event.target.checked ? [...remaining, { job_id: jobId, artifact_id: doc.artifact_id, document: doc }] : remaining);
+                                if (event.target.checked) { const next = Array.from(new Set([...nativeSelected, selectionId(row)])); setNativeSelected(next); writeBinderSelection(selectionScope, next); }
+                            }} />Use saved molecule for selected operations: {doc.logical_path ?? doc.artifact_id} · {doc.target_state ?? 'Native state'}</label>)}
+                        </div>}
                         {(!adapter || documents.length > 0) && <div className="mt-4 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(220px,1fr)]"><div className="min-w-0">
                             <label className="mb-3 block text-xs">Published document <select className={`mt-1 block w-full min-w-0 ${control}`} aria-label="Published document" value={document ? String(documents.indexOf(document)) : ''} onChange={event => { const doc = documents[Number(event.target.value)]; if (doc) inspect(row, doc); }}>
                                 {!document && <option value="">Requested document unavailable</option>}{documents.map((doc, i) => <option key={`${doc.artifact_id}:${doc.target_state}:${i}`} value={i}>{doc.logical_path ?? doc.artifact_id} · {doc.target_state ?? 'Native state'}{doc.primary ? ' · primary' : ''}</option>)}

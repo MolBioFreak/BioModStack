@@ -44,7 +44,7 @@ export function bc2Record(row: Record<string, unknown>, page: Pick<BindCraft2Nat
     metrics.rank = csvNumber(row.rank);
     return { ...row, candidate_key: JSON.stringify([page.arm, page.stage, row.design ?? row.path ?? row.sha256 ?? row.trajectory]),
         design_id: typeof row.design_id === 'string' ? row.design_id : undefined,
-        structures: Array.isArray(row.structures) ? row.structures as NativeGenerationRecord['structures'] : [],
+        structures: Array.isArray(row.structures) ? row.structures as NativeGenerationRecord['structures'] : page.stage === 'document' && typeof row.artifact_id === 'string' ? [{ artifact_id: row.artifact_id, logical_path: typeof row.path === 'string' ? row.path : undefined, download_url: typeof row.download_url === 'string' ? row.download_url : undefined, target_state: typeof row.target_state === 'string' ? row.target_state : undefined }] : [],
         native_input_id: row.design ?? row.path, native_record: row, metrics };
 }
 export function bc2Page(page: BindCraft2NativePage): NativeGenerationPage {

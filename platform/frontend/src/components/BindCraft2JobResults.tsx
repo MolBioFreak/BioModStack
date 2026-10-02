@@ -107,8 +107,12 @@ export function BindCraft2NativeActions({ jobId, page, launchContextId }: { jobI
 export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchContextId, ...workbench }: WorkbenchProps & { resultsAvailable?: boolean }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
-  const [query, setQuery] = useState<{ arm: string | null; stage: BindCraft2Stage; offset: number; limit: number }>({
-    arm: null, stage: workbench.selectedDesignId || workbench.artifactId ? 'retained' : 'trajectory', offset: 0, limit: 100,
+  const [query, setQuery] = useState<{ arm: string | null; stage: BindCraft2Stage; offset: number; limit: number }>(() => {
+    try {
+      const saved = JSON.parse(new URLSearchParams(window.location.search).get('native_scope') ?? 'null');
+      if (Array.isArray(saved) && saved[0] === 'bindcraft2' && ['trajectory', 'draw', 'retained', 'document', 'attempt'].includes(saved[2])) return { arm: saved[1], stage: saved[2], offset: 0, limit: 100 };
+    } catch { /* ordinary results route */ }
+    return { arm: null, stage: workbench.selectedDesignId || workbench.artifactId ? 'retained' : 'trajectory', offset: 0, limit: 100 };
   });
   const settings = useQuery<CampaignSettings>({
     queryKey: ['bindcraft2-campaign-settings', jobId], enabled: settingsOpen,
@@ -140,7 +144,7 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
     {!resultsAvailable ? <p>Native results will appear after publication.</p> : isLoading ? <p>Loading BindCraft2 native records...</p>
       : isError || !data ? <p role="status">BindCraft2 native records are not available for this job. <button type="button" onClick={() => void refetch()}>Retry native readback</button></p>
       : <NativeBinderGenerationResults {...workbench} jobId={jobId} launchContextId={launchContextId} adapter={{
-          key: JSON.stringify(['bindcraft2', query.arm, query.stage]), title: 'Campaign overview', compact: true,
+          key: JSON.stringify(['bindcraft2', data.arm, query.stage]), title: 'Campaign overview', compact: true,
           recordLabel: ({ trajectory: 'Design attempts', draw: 'Scored sequences', retained: 'Retained sequences', attempt: 'Attempt settings', document: 'Structures' })[query.stage],
           initialMetrics: keys => {
             // Exact per-target confidence only: iptm_loss is not iPTM.
@@ -149,7 +153,7 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
               ?? keys.find(key => /^refine · .+\.iptm · last recorded$/.test(key));
             return { x: screen, y: refine ?? screen, distribution: refine ?? screen, headline: [refine ?? screen, 'duration_seconds'].filter((key): key is string => !!key) };
           },
-          fetchPage: async (offset, signal) => bc2Page(offset === 0 ? data : await fetchBC2Page(jobId, query.arm, query.stage, offset, signal)),
+          fetchPage: async (offset, signal) => bc2Page(offset === 0 ? data : await fetchBC2Page(jobId, data.arm, query.stage, offset, signal)),
           label: bc2Label, preferredColumns: ['seq_length', 'duration_seconds', 'terminated', ...Object.keys(bc2Page(data).records[0]?.metrics ?? {}).filter(key => /^(?:refine|screen) · .+\.iptm · last recorded$/.test(key)).sort((a, b) => Number(b.startsWith('refine · ')) - Number(a.startsWith('refine · '))).slice(0, 1), ...(query.stage === 'trajectory' ? [] : ['outcome', 'rank'])],
           inspect: row => <BindCraft2Trajectory key={row.candidate_key} jobId={jobId} row={row} arm={data.arm} />,
           summary: rows => <><BindCraft2OutcomeSummary rows={rows} />{data.analytics?.complete === false && <p role="status">Trajectory analytics are incomplete. Plots cover available recorded observations only.</p>}</>,

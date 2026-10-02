@@ -3,10 +3,30 @@ import { api, submitJob, type Job } from './api';
 import type { FrustraMpnnRequestedSettings } from '../components/frustrampnn/frustraMpnnSettingsState';
 import type { CandidateDocuments } from './binderDiagnosticSelection';
 
+import type { NativeGenerationDocument } from './nativeBinderResults';
+
+/** The document is display metadata only; requests contain registered identities. */
+export interface NativeCandidateSource {
+    job_id: string;
+    artifact_id: string;
+    document?: NativeGenerationDocument;
+    // No native key is a Design ID; only registered artifact identities are submitted.
+}
+export function readBinderNativeSources(jobId: string): NativeCandidateSource[] {
+    try {
+        const value: unknown = JSON.parse(sessionStorage.getItem(`bms:selected-designs:${jobId}:native`) ?? '[]');
+        return Array.isArray(value) ? value.filter((item): item is NativeCandidateSource => item && typeof item.job_id === 'string' && typeof item.artifact_id === 'string' && !!item.artifact_id) : [];
+    } catch { return []; }
+}
+export function writeBinderNativeSources(jobId: string, sources: NativeCandidateSource[]) {
+    try { sessionStorage.setItem(`bms:selected-designs:${jobId}:native`, JSON.stringify(sources)); } catch { /* storage unavailable */ }
+}
+
 export type BinderOperation = 'refine' | 'caliby' | 'frustrampnn' | 'fampnn' | 'proteinmpnn' | 'predict_boltz2' | 'predict_protenix';
 export interface BinderSelectedRequest {
     source_job_id: string;
     design_ids: string[];
+    native_sources?: Array<Pick<NativeCandidateSource, 'job_id' | 'artifact_id'>>;
     operation: BinderOperation;
     params?: Record<string, unknown>;
     frustrampnn_settings?: FrustraMpnnRequestedSettings;

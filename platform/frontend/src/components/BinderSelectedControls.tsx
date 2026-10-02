@@ -3,7 +3,7 @@ import { useQueries } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { downloadDesignPdb, fetchDesignById, fetchJobById, fetchModelById, fetchFiles } from '../lib/api';
 import { fetchDiagnosticSelectionContext, type CandidateDocuments, type DiagnosticSelectionContext } from '../lib/binderDiagnosticSelection';
-import { submitBinderSelected, readBinderCandidateDocuments, writeBinderCandidateDocuments, type BinderOperation } from '../lib/binderContinuation';
+import { submitBinderSelected, readBinderCandidateDocuments, writeBinderCandidateDocuments, type BinderOperation, type NativeCandidateSource } from '../lib/binderContinuation';
 import { BinderWorkflowWorkspace } from './BinderWorkflowWorkspace';
 import { SequenceManager } from './SequenceManager';
 import { StructuralSourceFiles } from './StructuralSourceFiles';
@@ -29,6 +29,7 @@ const modelFields = (model: UntypedApiValue, operation: Exclude<BinderOperation,
 interface Props {
     sourceJobId: string;
     selectedDesignIds: string[];
+    selectedNativeSources?: NativeCandidateSource[];
     onOpenJob: (id: string) => void;
     onStartMD: (designId: string) => void;
     candidateDocuments?: CandidateDocuments;
@@ -37,7 +38,7 @@ interface Props {
 }
 
 /** Reuse global model parameter metadata and native FrustraMPNN settings. */
-export default function BinderSelectedControls({ sourceJobId, selectedDesignIds, onOpenJob, onStartMD, candidateDocuments, launchContextId, inspectDesignId }: Props) {
+export default function BinderSelectedControls({ sourceJobId, selectedDesignIds, selectedNativeSources = [], onOpenJob, onStartMD, candidateDocuments, launchContextId, inspectDesignId }: Props) {
     const [section, setSection] = useState('sources');
     const [inspectId, setInspectId] = useState<string | null>(inspectDesignId ?? null);
     useEffect(() => { if (inspectDesignId) { setInspectId(inspectDesignId); setSection('sources'); } }, [inspectDesignId]);
@@ -90,31 +91,36 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
     const [frustra, setFrustra] = useState(() => hydrateFrustraMpnnSettings(undefined));
     const [inspectionSource, setInspectionSource] = useState<File | null>(null);
     const [inspectionError, setInspectionError] = useState<string | null>(null);
-    const firstSelectedId = inspectId ?? selectedDesignIds[0];
+    const nativeSourceKey = (source: NativeCandidateSource) => JSON.stringify([source.job_id, source.artifact_id]);
+    const firstSelectedId = inspectId ?? selectedDesignIds[0] ?? (selectedNativeSources[0] && nativeSourceKey(selectedNativeSources[0]));
+    const inspectedNative = selectedNativeSources.find(source => nativeSourceKey(source) === firstSelectedId);
+    const selectedCount = selectedDesignIds.length + selectedNativeSources.length;
     const inspectedDocument = documentSelections[firstSelectedId];
     const inspectedRow = sourceRows[firstSelectedId];
     useEffect(() => {
         const controller = new AbortController();
         setInspectionSource(null); setInspectionDocument(null); setInspectionModel(null); setCdrChain(''); setInspectionResidues(new Set()); setInspectionError(null);
         if ((!inspectId && operation !== 'frustrampnn') || !firstSelectedId) return;
-        void fetchDesignById(firstSelectedId).then(async ({ data }) => {
+        void (async () => {
+            const data = inspectedNative ? null : (await fetchDesignById(firstSelectedId)).data;
             const explicit = inspectedDocument && (inspectedDocument.artifact_id !== undefined || inspectedDocument.target_state !== undefined);
             const matches = inspectedRow?.documents.filter(doc => (!inspectedDocument?.artifact_id || doc.artifact_id === inspectedDocument.artifact_id)
                 && (inspectedDocument?.target_state === undefined || doc.target_state === inspectedDocument.target_state)) ?? [];
             const document = matches.length === 1 ? matches[0] as typeof matches[number] & { download_url?: string } : undefined;
             if (explicit && !document?.download_url) throw new Error('Selected document inspection is not available yet');
-            const url = explicit ? document!.download_url! : downloadDesignPdb(firstSelectedId);
+            if (inspectedNative && (!inspectedNative.document?.download_url || inspectedNative.document.artifact_id !== inspectedNative.artifact_id)) throw new Error('Exact saved native document inspection is unavailable. No primary is substituted.');
+            const url = inspectedNative ? inspectedNative.document!.download_url! : explicit ? document!.download_url! : downloadDesignPdb(firstSelectedId);
             const response = await fetch(url, { credentials: 'same-origin', signal: controller.signal });
             if (!response.ok) throw new Error(`Selected source inspection failed (${response.status})`);
             const bytes = await response.arrayBuffer();
-            const suffix = /\.(cif|mmcif)$/i.test(explicit ? matches[0]?.logical_path ?? '' : data.pdb_path ?? '') ? '.cif' : '.pdb';
+            const suffix = /\.(cif|mmcif)$/i.test(inspectedNative ? inspectedNative.document?.logical_path ?? '' : explicit ? matches[0]?.logical_path ?? '' : data?.pdb_path ?? '') ? '.cif' : '.pdb';
             const file = new File([bytes], `${firstSelectedId}${suffix}`);
             if (!controller.signal.aborted) setInspectionSource(file);
             const parsed = await parseBC2Document(new TextDecoder().decode(bytes), file.name);
             if (!controller.signal.aborted) setInspectionDocument(parsed);
-        }).catch(reason => { if (!controller.signal.aborted) setInspectionError(String(reason)); });
+        })().catch(reason => { if (!controller.signal.aborted) setInspectionError(String(reason)); });
         return () => controller.abort();
-    }, [operation, inspectId, firstSelectedId, sourceJobId, inspectedDocument, inspectedRow]);
+    }, [operation, inspectId, firstSelectedId, sourceJobId, inspectedDocument, inspectedRow, inspectedNative]);
     const [target, setTarget] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
@@ -150,7 +156,7 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
         setBusy(true); setError(null); setChildren([]);
         try {
             const result = await submitBinderSelected({ source_job_id: sourceJobId,
-                design_ids: [...selectedDesignIds], operation,
+                design_ids: [...selectedDesignIds], native_sources: selectedNativeSources.map(({ job_id, artifact_id }) => ({ job_id, artifact_id })), operation,
                 candidate_documents: Object.fromEntries(selectedDesignIds.filter(id => documentSelections[id]).map(id => [id, documentSelections[id]])),
                 ...(launchContextId ? { launch_context_id: launchContextId } : {}),
                 execution_target_id: target,
@@ -168,7 +174,7 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
         activeSection={section} onSectionChange={setSection}
         summary={<p>Destination: {launchContextId ? `explicit Project launch context ${launchContextId}` : 'standalone (no Project destination)'}. Source ancestry is unchanged.</p>}>
         <h3 className="font-semibold">Continue selected candidates</h3>
-        <p>{selectedDesignIds.length} selected across all pages. Each action starts a separate model-owned round from these exact states; no diagnostic is required.</p>
+        <p>{selectedCount} selected saved molecules across all pages. Each action starts a separate model-owned round from these exact states; no diagnostic is required.</p>
         <div hidden={section !== 'sources'}><details open className="mt-2"><summary>Selected sources</summary>
             <ul>{selectedDesignIds.map(id => <li key={id}>{id} · Source Job {sourceRows[id]?.owner ?? sourceJobId}
                 <label>Document / state <select aria-label={`Document for ${id}`} value={JSON.stringify(documentSelections[id] ?? {})}
@@ -183,11 +189,14 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
                 </select></label>
                 <button type="button" onClick={() => setInspectId(id)}>Inspect exact source {id}</button>
                 <button type="button" onClick={() => onStartMD(id)}>Use as GROMACS MD starting structure</button></li>)}</ul>
+            <ul>{selectedNativeSources.map(source => <li key={nativeSourceKey(source)}>{source.document?.logical_path ?? source.artifact_id} · Source Job {source.job_id} · Exact artifact {source.artifact_id} · {source.document?.target_state ?? 'Native state'}
+                <button type="button" onClick={() => setInspectId(nativeSourceKey(source))}>Inspect exact native source {source.artifact_id}</button>
+            </li>)}</ul>
             <p>GROMACS uses its separate Design starting-structure handoff; this document choice applies to the selected operation.</p>
             {sourceError && <p>Document inventory unavailable: {sourceError}. Primary selection and submitted exact identities remain available.</p>}
         </details>
         {inspectionDocument && <section aria-label="Exact selected source inspection">
-            <p>Inspecting {firstSelectedId} · {inspectedDocument?.artifact_id ?? 'Design primary document'}. Inspection does not change the selected document.</p>
+            <p>Inspecting {firstSelectedId} · {inspectedNative?.artifact_id ?? inspectedDocument?.artifact_id ?? 'Design primary document'}. Inspection does not change the selected document.</p>
             {inspectionDocument.format !== 'fasta' && <EpitopeMolstarViewer pdbData={inspectedModel?.content ?? inspectionDocument.content} format={inspectionDocument.format} documentId={`${firstSelectedId}:${inspectedDocument?.artifact_id ?? 'primary'}:${inspectedModel?.number ?? 'all-models'}`} defaultFullView selectedResidues={inspectionResidues} onResidueClick={residue => setInspectionResidues(current => { const next = new Set(current); if (next.has(residue)) next.delete(residue); else next.add(residue); return next; })} />}
             {inspectionDocument.models.length > 1 && <label>Inspected model<select aria-label="Inspected model" value={inspectionModel ?? ''} onChange={event => { setInspectionModel(Number(event.target.value)); setInspectionResidues(new Set()); }}><option value="" disabled>Choose a model for residue inspection</option>{inspectionDocument.models.map(model => <option key={model.number} value={model.number}>{model.number}</option>)}</select></label>}
             <EpitopeSelector chains={inspectedModel?.chains ?? []} selectedResidues={inspectionResidues} onSelectionChange={setInspectionResidues} selectedLabel="Inspected author residues" />
@@ -244,10 +253,10 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
         {showSequences && <SequenceManager onClose={() => setShowSequences(false)} onSelect={sequence => { updateParam(sequenceField, sequence.sequence); setShowSequences(false); }} />}
         </div>
         <div hidden={section !== 'review'}><h4>Review selected request</h4>
-            <p>Source Job {sourceJobId}; {selectedDesignIds.length} exact selected candidates. Operation: {operation}.</p>
-            <BindCraft2SettingsReadback value={{ design_ids: selectedDesignIds, candidate_documents: Object.fromEntries(selectedDesignIds.filter(id => documentSelections[id]).map(id => [id, documentSelections[id]])), execution_target_id: target, ...(operation === 'frustrampnn' ? { frustrampnn_settings: frustra } : { params }) }} />
+            <p>Source Job {sourceJobId}; {selectedCount} exact selected candidates. Operation: {operation}.</p>
+            <BindCraft2SettingsReadback value={{ design_ids: selectedDesignIds, native_sources: selectedNativeSources.map(({ job_id, artifact_id }) => ({ job_id, artifact_id })), candidate_documents: Object.fromEntries(selectedDesignIds.filter(id => documentSelections[id]).map(id => [id, documentSelections[id]])), execution_target_id: target, ...(operation === 'frustrampnn' ? { frustrampnn_settings: frustra } : { params }) }} />
         </div>
-        <button type="button" disabled={busy || !selectedDesignIds.length || (operation !== 'frustrampnn' && !model)} onClick={() => void run()}>Run selected operation</button>
+        <button type="button" disabled={busy || !selectedCount || (operation !== 'frustrampnn' && !model)} onClick={() => void run()}>Run selected operation</button>
         {busy && <p role="status">Submitting selected operation…</p>}
         {error && <p role="alert">{error}</p>}
         {children.map((child, index) => <p role="status" key={child.id}>{childQueries[index]?.data?.status ?? 'Queued'} {child.name} ({child.id}). <button type="button" onClick={() => onOpenJob(child.id)}>Open child Job</button></p>)}
