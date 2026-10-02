@@ -1501,28 +1501,77 @@ export const useBioXpStatus = (enabled = true) => useQuery({
 });
 
 
+type CatalogMetadata = {
+    catalog_view: 'metadata'; metadata_revision: string;
+    actions: Array<Record<string, unknown>>;
+    canonical: Omit<CatalogMetadata, 'canonical'>;
+};
+type CatalogAssessment = Omit<BioXpOperatorControlCatalog, 'actions' | 'canonical'> & {
+    catalog_view: 'assessment'; metadata_revision: string;
+    action_states: Array<Record<string, unknown>>; action_state_indices: number[];
+    canonical: Omit<BioXpOperatorControlCatalogV2, 'actions'> & {
+        catalog_view: 'assessment'; metadata_revision: string;
+        action_states: Array<Record<string, unknown>>; action_state_indices: number[];
+    };
+};
+
+export function composeBioXpCatalog(metadata: CatalogMetadata, assessment: CatalogAssessment): BioXpOperatorControlCatalog {
+    const compose = (definitions: Omit<CatalogMetadata, 'canonical'>, current: Pick<CatalogAssessment, 'metadata_revision' | 'action_states' | 'action_state_indices'>) => {
+        if (definitions.metadata_revision !== current.metadata_revision || definitions.actions.length !== current.action_state_indices.length) {
+            throw new Error('Robot catalog definitions changed during read');
+        }
+        return definitions.actions.map((definition, index) => {
+            const stateIndex = current.action_state_indices[index];
+            if (!Number.isInteger(stateIndex) || stateIndex < 0 || stateIndex >= current.action_states.length) throw new Error('Invalid robot catalog assessment index');
+            return { ...definition, ...current.action_states[stateIndex] };
+        });
+    };
+    return { ...assessment, actions: compose(metadata, assessment),
+        canonical: { ...assessment.canonical, actions: compose(metadata.canonical, assessment.canonical) },
+    } as unknown as BioXpOperatorControlCatalog;
+}
+
 export const useBioXpOperatorControlCatalog = (
     connectionGeneration: number,
     enabled = true,
     lifecycleState?: string | null,
     zTargetSteps?: number,
-) => useQuery<BioXpOperatorControlCatalog>({
-    queryKey: [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null, zTargetSteps],
-    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[operatorCatalogKey.length] === connectionGeneration ? previous : undefined,
-    // This catalog also owns live gripper/door availability, not just labels.
-    // An expired cached response triggers a refresh on the robot; read again
-    // rather than leaving every remaining manual control disabled indefinitely.
-    queryFn: async ({ signal }) => (
-        await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog', { signal, timeout: 12_000, params: Number.isInteger(zTargetSteps) ? { z_target_steps: zTargetSteps } : undefined })
-    ).data,
-    enabled: enabled && connectionGeneration > 0,
-    gcTime: 0,
-    retry: false,
-    refetchInterval: (query) => enabled && connectionGeneration > 0
-        ? query.state.data?.actions.some(action => action.disabled_reason === 'cached_projection_stale') ? 1_000 : 5_000
-        : false,
-    refetchIntervalInBackground: false,
-});
+) => {
+    const queryClient = useQueryClient();
+    return useQuery<BioXpOperatorControlCatalog>({
+        queryKey: [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null, zTargetSteps],
+        placeholderData: (previous, previousQuery) => previousQuery?.queryKey[operatorCatalogKey.length] === connectionGeneration ? previous : undefined,
+        queryFn: async ({ signal }) => {
+            const assessment = (await api.get<CatalogAssessment>('/api/bioxp/operator-controls/catalog', {
+                signal, timeout: 12_000,
+                params: { view: 'assessment', ...(Number.isInteger(zTargetSteps) ? { z_target_steps: zTargetSteps } : {}) },
+            })).data;
+            if (assessment.catalog_view !== 'assessment' || assessment.canonical?.catalog_view !== 'assessment') throw new Error('Robot catalog split-view release required');
+            const metadata = await queryClient.fetchQuery<CatalogMetadata>({
+                queryKey: ['bioxp', 'operator-definitions', connectionGeneration, assessment.metadata_revision, assessment.canonical.metadata_revision],
+                staleTime: Infinity, gcTime: Infinity, retry: false,
+                queryFn: async () => (await api.get<CatalogMetadata>('/api/bioxp/operator-controls/catalog', {
+                    signal, timeout: 12_000, params: { view: 'metadata' },
+                })).data,
+            });
+            return composeBioXpCatalog(metadata, assessment);
+        },
+        enabled: enabled && connectionGeneration > 0,
+        gcTime: 0,
+        retry: false,
+        // Unsupported peers may ignore view=assessment and send the old bulk.
+        // Surface that protocol error once, rather than repeat megabyte reads.
+        // This affects observation scheduling only, never mutation admission.
+        refetchInterval: (query) => {
+            const error = query.state.error as { message?: string; response?: { status?: number } } | null;
+            if (error?.response?.status === 426 || error?.message === 'Robot catalog split-view release required') return false;
+            return enabled && connectionGeneration > 0
+                ? query.state.data?.actions.some(action => action.disabled_reason === 'cached_projection_stale') ? 1_000 : 5_000
+                : false;
+        },
+        refetchIntervalInBackground: false,
+    });
+};
 
 export const BIOXP_Y_RELATIVE_MIN_STEPS = -(2 ** 31);
 export const BIOXP_Y_RELATIVE_MAX_STEPS = 2 ** 31 - 1;
