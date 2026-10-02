@@ -1,0 +1,51 @@
+.bioxp-live-deck { color: var(--text-primary); min-width: 0; }
+.bld-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+.bld-heading h2 { font-size: 21px; font-weight: 650; margin: 0 0 4px; }
+.bld-heading p { margin: 0; color: var(--text-secondary); }
+.bld-status { color: var(--text-secondary); font-size: 12px; }
+.bld-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 330px); gap: 18px; align-items: start; }
+.bld-map-pane, .bld-controls, .bld-controls > *, .bld-details { min-width: 0; max-width: 100%; }
+.bld-controls { display: grid; gap: 14px; overflow-wrap: anywhere; }
+.bld-pose-card { border: 1px solid var(--border-secondary); border-radius: 12px; background: var(--bg-secondary); padding: 15px; font-size: 12px; }
+.bld-pose-card h3 { font-size: 15px; font-weight: 650; margin: 0 0 12px; }
+.bld-pose-card dt { color: var(--text-secondary); margin-top: 9px; }
+.bld-pose-card dd { margin: 2px 0 0; }
+.bld-pose-card p { margin-top: 8px; color: var(--text-secondary); }
+.bld-coordinates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.bld-coordinates dd { font-size: 16px; font-variant-numeric: tabular-nums; }
+.bld-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 0; color: var(--text-secondary); font-size: 12px; }
+.bld-note { font-size: 12px; color: var(--text-secondary); }
+.bld-details { border: 1px solid var(--border-secondary); border-radius: 9px; margin-top: 14px; padding: 12px; overflow-wrap: anywhere; }
+.bld-details summary { cursor: pointer; font-weight: 600; }
+.bld-details[open] summary { margin-bottom: 12px; }
+/* Fit the whole deck without changing its equal-axis projection. Shared authoring
+   keeps its own square workspace; only the live view uses a bounded viewport. */
+.bioxp-live-deck .bwd-map { aspect-ratio: auto; height: clamp(330px, calc(100dvh - 550px), 720px); }
+.bioxp-live-deck .bwd-map svg { touch-action: none; }
+.bioxp-live-deck .bwd-station-control { padding: 10px 12px; }
+.bioxp-live-deck .bwd-navigation { padding: 8px 12px; }
+.bioxp-live-deck .bwd-live-context { margin: 0; padding: 5px 12px; font-size: 12px; color: var(--bwd-muted); }
+.bioxp-live-deck .bwd-help { padding: 3px 12px 8px; }
+.bioxp-live-deck .bwd-well.is-selected .bwd-core { fill: var(--bwd-inset); }
+.bioxp-live-deck .bwd-well.is-selected .bwd-hit { stroke: var(--bwd-accent); stroke-width: 2; stroke-dasharray: 3 2; }
+.bioxp-live-deck .bwd-park.is-active circle { fill: none; stroke: var(--bwd-accent); stroke-dasharray: 3 2; }
+.bioxp-live-deck [aria-disabled="true"] { cursor: not-allowed; }
+.bld-pose, .bld-pose * { pointer-events: none; }
+.bld-rail { fill: var(--bg-tertiary, var(--bg-secondary)); fill-opacity: .8; stroke: var(--text-secondary); stroke-width: 1.5; }
+.bld-carriage { fill: none; stroke: var(--text-secondary); stroke-width: 7; }
+.bld-gun-bracket { fill: var(--text-secondary); }
+.bld-gun-housing { fill: var(--bg-secondary); stroke: var(--text-primary); stroke-width: 1.8; }
+.bld-gun-motor { fill: var(--text-secondary); stroke: var(--text-primary); stroke-width: 1; }
+.bld-gun-seam { fill: none; stroke: var(--text-secondary); stroke-width: 1; }
+.bld-gun-axis { fill: var(--accent-primary); stroke: var(--bg-primary); stroke-width: 1; }
+.bld-gun-number { fill: var(--text-primary); stroke: var(--bg-primary); stroke-width: 3; paint-order: stroke; font-size: 12px; font-weight: 700; }
+.bld-gantry-anchor { fill: none; stroke: var(--accent-primary); stroke-width: 2.5; }
+.bld-alignment { fill: none; stroke: var(--text-primary); stroke-width: 2; }
+.bld-pose.is-last-known { opacity: .55; }
+/* Relocated legacy slots used dark-only slate utilities. Map those exact text
+   surfaces to existing theme tokens; do not recolor status/Stop semantics. */
+.bioxp-live-deck :is(.text-slate-100, .text-slate-200, .text-slate-300) { color: var(--text-primary); }
+.bioxp-live-deck :is(.text-slate-400, .text-slate-500) { color: var(--text-secondary); }
+.bioxp-live-deck :is(.bg-slate-800, .bg-slate-900) { background-color: var(--bg-secondary); }
+.bioxp-live-deck :is(.border-slate-600, .border-slate-700, .border-slate-800) { border-color: var(--border-secondary); }
+@media (max-width: 900px) { .bld-workspace { grid-template-columns: minmax(0, 1fr); } .bld-controls { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); } }

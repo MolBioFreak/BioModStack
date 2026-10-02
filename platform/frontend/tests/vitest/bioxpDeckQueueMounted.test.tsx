@@ -24,11 +24,11 @@ let lookup: any;
 let completed: Set<number>;
 const receipt = (index: number) => ({ ...park, command_id: `queue-${index}`, terminal_receipt_id: null, status: 'dispatched', terminal: false, completion_class: null });
 const advance = async (ms = 1) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
-const render = async () => { await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>)); await advance(); };
+const render = async () => { await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>)); await advance(); };
 const panel = () => container.querySelector('[data-testid="oem-deck-movement"]')!;
 const move = () => [...panel().querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
 const submit = async (target: string, cameraOffset = false) => {
-    await act(async () => { const select = panel().querySelector('select')!; select.value = target; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    await act(async () => { const select = [...panel().querySelectorAll('label')].find(label => label.textContent?.startsWith('Robot destination'))!.querySelector('select')!; select.value = target; select.dispatchEvent(new Event('change', { bubbles: true })); });
     await act(async () => { const checkbox = panel().querySelector('input[type=checkbox]') as HTMLInputElement; if (!checkbox.disabled && checkbox.checked !== cameraOffset) checkbox.click(); });
     await act(async () => move().click()); await advance();
 };
@@ -43,6 +43,7 @@ beforeEach(() => {
     catalog.actions = catalog.actions.filter((a: any) => a.action_id !== 'oem.deck.move_to_location').concat(structuredClone(deckCatalog.action));
     admissions = []; lookup = null; completed = new Set();
     vi.mocked(api.get).mockImplementation(async (url) => {
+        if (url === "/api/bioxp/calibration-settings") return { data: { active_motion_positions: [] } };
         if (url.endsWith('/catalog')) { catalog.dashboard.generated_at = Date.now() / 1000; return { data: { actions: [], dashboard: {}, canonical: structuredClone(catalog) } }; }
         if (url.includes('/requests/')) { if (lookup == null) throw { response: { status: 404 } }; return { data: lookup }; }
         if (url.includes('/receipts/')) { const id = Number(url.split('queue-')[1]); return { data: completed.has(id) ? { ...receipt(id), terminal: true, status: 'completed', completion_class: 'completed' } : receipt(id) }; }

@@ -78,6 +78,11 @@ it('Pipettes keeps manual controls separate from saved workflows', async () => {
     expect(host.querySelector('[aria-label="Workflow name"]')).toBeNull();
     expect([...host.querySelectorAll('button')].some(el => ['Save workflow', 'Open workflow'].includes(el.textContent!))).toBe(false);
     expect(button('Move now')).toBeTruthy();
+    await click('Live deck movement');
+    expect(host.querySelector('#control-panel-pipettes')?.hasAttribute('hidden')).toBe(true);
+    await click('Pipettes');
+    expect(rows()).toEqual(ids);
+    expect((host.querySelector('#control-panel-pipettes [aria-label="Location number"]') as HTMLInputElement).value).toBe('4');
     connection = { active: true, configured: true, generation: 2 };
     await act(async () => { await client.invalidateQueries(); await new Promise(resolve => setTimeout(resolve, 30)); });
     connection = { active: false, configured: true, generation: 3 };
@@ -105,6 +110,9 @@ it('authors offline in the robot Workflows tab and retains unsaved edits across 
     await click('Robot controls'); expect(panel.hidden).toBe(true);
     await click('Pipettes');
     expect(host.querySelector('#control-panel-pipettes [aria-label="Saved workflow"]')).toBeNull();
+    await click('Live deck movement');
+    expect(panel.hidden).toBe(true);
+    expect(robotPosts).toEqual([]);
     await click('Workflows');
     expect((panel.querySelector('[aria-label="Workflow name"]') as HTMLInputElement).value).toBe('Robot workspace draft');
     expect(panel.querySelector('[data-step-id]')?.getAttribute('data-step-id')).toBe(ids[0]);
@@ -120,17 +128,19 @@ it('authors offline in the robot Workflows tab and retains unsaved edits across 
     expect([...panel.querySelectorAll('button')].some(el => el.textContent?.endsWith(' now'))).toBe(false);
 });
 
-it('cycles all three robot tabs with keyboard navigation', async () => {
+it('cycles all four robot tabs with keyboard navigation', async () => {
     api.defaults.adapter = async config => ({ data: { connection: { active: false, configured: false, generation: 0 } }, status: 200, statusText: 'OK', config, headers: {} });
     await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
     const key = async (tab: string, key: string) => act(async () => host.querySelector(`#control-tab-${tab}`)!.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })));
     const selected = () => host.querySelector('[role="tab"][aria-selected="true"]')?.id;
     await key('robot', 'ArrowRight'); expect(selected()).toBe('control-tab-pipettes');
     await key('pipettes', 'ArrowRight'); expect(selected()).toBe('control-tab-workflows');
-    await key('workflows', 'ArrowRight'); expect(selected()).toBe('control-tab-robot');
-    await key('robot', 'ArrowLeft'); expect(selected()).toBe('control-tab-workflows');
+    await key('workflows', 'ArrowRight'); expect(selected()).toBe('control-tab-live-deck');
+    await key('live-deck', 'ArrowRight'); expect(selected()).toBe('control-tab-robot');
+    await key('robot', 'ArrowLeft'); expect(selected()).toBe('control-tab-live-deck');
+    await key('live-deck', 'ArrowLeft'); expect(selected()).toBe('control-tab-workflows');
     await key('workflows', 'Home'); expect(selected()).toBe('control-tab-robot');
-    await key('robot', 'End'); expect(selected()).toBe('control-tab-workflows');
+    await key('robot', 'End'); expect(selected()).toBe('control-tab-live-deck');
 });
 
 it('creates a named empty workflow offline and verifies the exact ID without any robot access', async () => {

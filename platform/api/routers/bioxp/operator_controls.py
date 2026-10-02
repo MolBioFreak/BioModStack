@@ -20,6 +20,7 @@ from services.bioxp.operator_requests import (
     OperatorAdmissionRequest,
     OperatorAssessmentRequest,
     OperatorDeckMoveInputsV1,
+    OperatorDeckMoveToWellInputsV2,
     OperatorEmptyInputsV2,
     OperatorInterruptRequestV1,
     OperatorMethodRequestV1,
@@ -118,6 +119,7 @@ _V2_NORMAL_INPUT_TYPES = {
     "oem.xy.home": OperatorEmptyInputsV2,
     "oem.deck.collect_authority": OperatorEmptyInputsV2,
     "oem.deck.move_to_location": OperatorDeckMoveInputsV1,
+    "oem.deck.move_to_well": OperatorDeckMoveToWellInputsV2,
 }
 
 

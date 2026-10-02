@@ -42,6 +42,8 @@ import { BioXpCalibrationSettings } from './BioXpCalibrationSettings';
 import { BioXpPipetteSettings } from './BioXpPipetteSettings';
 import { BioXpWellPipettingPanel } from './BioXpWellPipettingPanel';
 import { BioXpWorkflowEditor } from './BioXpWorkflowEditor';
+import { BioXpLiveDeck } from './BioXpLiveDeck';
+import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import { BioXpQuickDashboard } from './BioXpQuickDashboard';
 import { BioXpWorkflowControls } from './BioXpWorkflowControls';
 import { BioXpTransferControls } from './BioXpTransferControls';
@@ -66,8 +68,12 @@ function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
         : item.state === 'uncertain' ? 'admission uncertain / checking request; do not resubmit'
         : item.state === 'not_sent' ? 'not sent / connection changed'
         : item.state === 'rejected' ? 'not accepted' : `robot ${receipt?.status ?? 'accepted'}`;
+    const captured = item.request;
+    const destinationLabel = captured.action_id === 'oem.deck.move_to_well'
+        ? `${deckStations.find(station => station.locationId === captured.inputs.location_id)?.label ?? String(captured.inputs.location_id)} · ${String(captured.inputs.well)}`
+        : `${captured.inputs.target}${captured.inputs.camera_offset === true ? ' + camera offset' : ''}`;
     return <p data-request-key={item.request.idempotency_key}>
-        {String(item.request.inputs.target)}{item.request.inputs.camera_offset === true ? ' + camera offset' : ''} · {label}
+        {destinationLabel} · {label}
         {' · '}{item.request.idempotency_key}
         {commandId && <button type="button" disabled={!current} onClick={() => onSelect(commandId)}>
             {' · '}{commandId}
@@ -153,6 +159,7 @@ const nextIdempotencyKey = (prefix: string): string => {
 
 const CANONICAL_DECK_ACTION_IDS = new Set([
     'oem.deck.move_to_location',
+    'oem.deck.move_to_well',
     'oem.deck._mov_execution',
     'oem.deck._finite_operation',
 ]);
@@ -262,7 +269,7 @@ function InterruptOutcome({ label, receipt, error, pending, generation, connecte
     </div>;
 }
 
-const CONTROL_TABS = ['robot', 'pipettes', 'workflows'] as const;
+const CONTROL_TABS = ['robot', 'pipettes', 'workflows', 'live-deck'] as const;
 type ControlTab = typeof CONTROL_TABS[number];
 
 export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab }) {
@@ -301,16 +308,20 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const [workflowOpen, setWorkflowOpen] = useState(false);
     const [workflowVisible, setWorkflowVisible] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
-    const [cameraOpen, setCameraOpen] = useState(initialTab !== 'workflows');
+    const [cameraOpen, setCameraOpen] = useState(initialTab === 'robot' || initialTab === 'pipettes');
     const [controlTab, setControlTab] = useState<ControlTab>(initialTab);
     const operationalVisible = documentVisible && controlTab !== 'workflows';
     const robotVisible = documentVisible && controlTab === 'robot';
+    const liveDeckVisible = documentVisible && controlTab === 'live-deck';
     const [pipettesOpened, setPipettesOpened] = useState(initialTab === 'pipettes');
     const [workflowsOpened, setWorkflowsOpened] = useState(initialTab === 'workflows');
+    const [liveDeckOpened, setLiveDeckOpened] = useState(initialTab === 'live-deck');
+    const [liveDeckIntent, setLiveDeckIntent] = useState<{ generation: number; selection: BioXpDeckSelection } | null>(null);
     const selectControlTab = (tab: ControlTab) => {
         setControlTab(tab);
         if (tab === 'pipettes') setPipettesOpened(true);
         if (tab === 'workflows') setWorkflowsOpened(true);
+        if (tab === 'live-deck') setLiveDeckOpened(true);
     };
     useEffect(() => { selectControlTab(initialTab); }, [initialTab]);
     const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'z' | 'g', number>>({ x: 60, z: 65000, g: 0 });
@@ -391,7 +402,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         ? (deckMutationGeneration === generation ? deckCommandId : null) ?? dashboardDeckReceipt?.command_id ?? null
         : null;
     const [settledDeck, setSettledDeck] = useState<string | null>(null);
-    const deckReceiptQuery = useBioXpOperatorReceiptDetailV2(effectiveDeckCommandId, generation, active && documentVisible && (robotVisible || (settledDeck !== effectiveDeckCommandId && (deckCommandId !== null || dashboardDeckReceipt?.terminal === false))));
+    const deckReceiptQuery = useBioXpOperatorReceiptDetailV2(effectiveDeckCommandId, generation, active && documentVisible && (liveDeckVisible || (settledDeck !== effectiveDeckCommandId && (deckCommandId !== null || dashboardDeckReceipt?.terminal === false))));
     useEffect(() => { if (deckReceiptQuery.data?.terminal) setSettledDeck(effectiveDeckCommandId); }, [deckReceiptQuery.data, effectiveDeckCommandId]);
     const invokeLifecycleActionMutation = useInvokeBioXpOperatorActionV2();
     const invokeYAction = useInvokeBioXpOperatorActionV2();
@@ -560,6 +571,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             )
         : undefined;
     const deckAction = v2NormalActionById('oem.deck.move_to_location');
+    const deckWellAction = v2NormalActionById('oem.deck.move_to_well');
     const dashboardDeck = currentDashboardV2?.deck;
     const deckAuthorityCoherent = v2AuthorityCoherent && deckAction !== undefined;
     // Retained options are intent only, never retained motion authority. Empty
@@ -568,8 +580,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const deckDestinations = active && deckSelectionCatalog?.generation === generation
         ? deckSelectionCatalog.options : [];
     const selectedDeckDestination = deckDestinations.find((destination) => destination.target === deckTarget);
-    const currentDeckDestination = deckAction?.destination_options?.find((destination) => destination.target === deckTarget);
-    useEffect(() => {
+        useEffect(() => {
         if (!active) {
             setDeckSelectionCatalog(null);
             setDeckTarget('');
@@ -948,9 +959,10 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         });
     };
     const submitDeckV2 = (request: BioXpOperatorActionV2Request) => {
-        if (!deckAuthorityCoherent || request.action_id !== 'oem.deck.move_to_location') return;
-        setDeckMutationGeneration(generation);
-        invokeDeckAction.submit(request);
+        if (!v2AuthorityCoherent || !['oem.deck.move_to_location', 'oem.deck.move_to_well'].includes(request.action_id)) return false;
+        const captured = invokeDeckAction.submit(request);
+        if (captured) setDeckMutationGeneration(generation);
+        return captured;
     };
     const v2NormalEnvelope = (actionId?: 'oem.deck.collect_authority') => {
         const authority = actionId === 'oem.deck.collect_authority' && active
@@ -988,36 +1000,61 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     // polling, recovery panel) but never disable a new movement. The robot's
     // admission re-evaluates current state on every submission, so a stale
     // record cannot wedge the deck lane.
-    const deckDisabledReason = (invokeDeckAction.isPending
+    const deckDestinationFor = (target: string) => deckAction?.destination_options?.find(destination => destination.target === target)
+        ?? deckAction?.destination_options?.find(destination => destination.aliases.includes(target));
+    const stationDisabledReason = (target: string): string | null => {
+        if (invokeDeckAction.isPending) return 'A deck command submission is in flight; wait for its response.';
+        if (!v2AuthorityCoherent) return 'Robot action catalog is unavailable.';
+        if (!deckAuthorityCoherent || deckAction == null) return 'Robot deck movement action is unavailable.';
+        if (deckAction.enabled !== true) return deckAction.disabled_reason ?? 'Robot deck movement action is unavailable.';
+        const destination = deckDestinationFor(target);
+        if (!destination) return 'This destination is not in the robot catalog.';
+        return destination.enabled === true ? null : destination.disabled_reason ?? 'Selected robot destination is unavailable.';
+    };
+    const deckDisabledReason = selectedDeckDestination == null
+        ? 'Choose a robot destination.' : stationDisabledReason(selectedDeckDestination.target);
+    const wellDisabledReason = invokeDeckAction.isPending
         ? 'A deck command submission is in flight; wait for its response.'
-        : !v2AuthorityCoherent
-        ? 'Robot action catalog is unavailable.'
-        : !deckAuthorityCoherent
-            ? 'Robot deck action is unavailable.'
-        : deckAction == null
-            ? 'Robot deck movement action is unavailable.'
-            : deckAction.enabled !== true
-                ? deckAction.disabled_reason ?? 'Robot deck movement action is unavailable.'
-                : selectedDeckDestination == null
-                        ? 'Robot destination catalog is empty.'
-                        : currentDeckDestination?.enabled !== true
-                            ? currentDeckDestination?.disabled_reason ?? 'Selected robot destination is unavailable.'
-                            : null);
-    const invokeDeckMove = () => {
-        if (deckDisabledReason !== null || selectedDeckDestination == null) return;
-        const envelope = v2NormalEnvelope();
-        if (!envelope) return;
-        // Only an explicit new user action may supersede this reconciled
-        // predecessor. Its ambiguous receipt remains unchanged in history.
+        : !v2AuthorityCoherent ? 'Robot action catalog is unavailable.'
+            : deckWellAction == null ? 'Robot well-positioning action is unavailable.'
+                : deckWellAction.enabled !== true ? deckWellAction.disabled_reason ?? 'Robot well-positioning action is unavailable.' : null;
+    const captureDeckIntent = (request: BioXpOperatorActionV2Request, selection: BioXpDeckSelection) => {
+        // The shared hook reserves synchronously. A dropped duplicate must not
+        // change the requested-target marker or become a deferred intent.
+        if (!submitDeckV2(request)) return false;
+        setLiveDeckIntent({ generation, selection });
         if (deckRecoveryResolved && effectiveDeckCommandId !== null) {
             setReconciledDeckPredecessor({ commandId: effectiveDeckCommandId, generation });
         }
-        submitDeckV2({
+        return true;
+    };
+    const invokeNamedDeckMove = (target: string, cameraOffset: boolean) => {
+        if (stationDisabledReason(target) !== null) return;
+        const destination = deckDestinationFor(target);
+        const envelope = v2NormalEnvelope();
+        if (!destination || !envelope) return;
+        const station = deckStations.find(item => item.id === destination.target || destination.aliases.includes(item.id));
+        if (captureDeckIntent({
             ...envelope,
             action_id: 'oem.deck.move_to_location',
             expected_board_epoch_by_board: deckAction?.expected_board_epoch_by_board ?? {},
-            inputs: { target: selectedDeckDestination.target, camera_offset: currentDeckDestination?.camera_offset_option === true && deckCameraOffset },
-        });
+            inputs: { target: destination.target, camera_offset: destination.camera_offset_option === true && cameraOffset },
+        }, { station: station?.id ?? destination.target, wells: [] })) setDeckTarget(destination.target);
+    };
+    const invokeDeckMove = () => {
+        if (selectedDeckDestination) invokeNamedDeckMove(selectedDeckDestination.target, deckCameraOffset);
+    };
+    const invokeWellDeckMove = (locationId: number, well: string) => {
+        if (wellDisabledReason !== null) return;
+        const envelope = v2NormalEnvelope();
+        if (!envelope) return;
+        const station = deckStations.find(item => item.locationId === locationId);
+        captureDeckIntent({
+            ...envelope,
+            action_id: 'oem.deck.move_to_well',
+            expected_board_epoch_by_board: deckWellAction?.expected_board_epoch_by_board ?? {},
+            inputs: { location_id: locationId, well, position_flag: 1 },
+        }, { station: station?.id ?? String(locationId), wells: [well] });
     };
     const invokeYMoveSteps = (steps: number) => {
         const envelope = v2NormalEnvelope();
@@ -1102,13 +1139,13 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const error = currentDeckInvokeError ?? lifecycleAggregateError ?? currentYInvokeError ?? currentXYInvokeError ?? interruptXStop.error ?? interruptYStop.error ?? interruptZStop.error ?? interruptAggregateAbort.error ?? invokeOperatorAction.error ?? connect.error ?? disconnect.error;
 
     return (
-        <div className="space-y-4 p-4 text-slate-100 md:p-6">
+        <div className="space-y-4 p-4 md:p-6" style={{ color: controlTab === 'live-deck' ? 'var(--text-primary)' : '#f1f5f9' }}>
             <header>
                 <h1 className="text-2xl font-bold">BioXP 3200</h1>
                 <p className="mt-1 text-sm text-slate-400">Operator controls</p>
             </header>
 
-            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded bg-slate-950 p-2">
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded p-2" style={{ background: 'var(--bg-secondary)' }}>
                 <div role="tablist" aria-label="Robot controls" className="flex flex-wrap gap-2">
                     {CONTROL_TABS.map(tab => <button key={tab} type="button" role="tab"
                         id={`control-tab-${tab}`} aria-controls={`control-panel-${tab}`} aria-selected={controlTab === tab}
@@ -1117,17 +1154,18 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                             if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
                             event.preventDefault();
                             const index = CONTROL_TABS.indexOf(tab);
-                            const next = event.key === 'Home' ? 'robot' : event.key === 'End' ? 'workflows'
+                            const next = event.key === 'Home' ? CONTROL_TABS[0] : event.key === 'End' ? CONTROL_TABS[CONTROL_TABS.length - 1]
                                 : CONTROL_TABS[(index + (event.key === 'ArrowRight' ? 1 : -1) + CONTROL_TABS.length) % CONTROL_TABS.length];
                             selectControlTab(next);
                             document.getElementById(`control-tab-${next}`)?.focus();
                         }}
                         onClick={() => selectControlTab(tab)}
-                        className={`rounded px-4 py-2 font-semibold ${controlTab === tab ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-200'}`}>
-                        {tab === 'robot' ? 'Robot controls' : tab === 'pipettes' ? 'Pipettes' : 'Workflows'}
+                        className={`rounded px-4 py-2 font-semibold ${controlTab === tab ? 'bg-cyan-700 text-white' : ''}`}
+                        style={controlTab === tab ? undefined : { background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+                        {tab === 'robot' ? 'Robot controls' : tab === 'pipettes' ? 'Pipettes' : tab === 'workflows' ? 'Workflows' : 'Live deck movement'}
                     </button>)}
                 </div>
-                <div aria-label="Stop controls" className="flex flex-wrap gap-2">
+                <div aria-label="Stop controls" className="flex flex-wrap gap-2 text-white">
                     {(['x', 'y', 'z'] as const).map(axis => <button key={axis} type="button"
                         disabled={!linkConnected || generation <= 0 || interruptPending(`oem.${axis}.stop`)}
                         title={`Immediate ${axis.toUpperCase()} stop`}
@@ -1142,7 +1180,129 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             <div role="tabpanel" id="control-panel-workflows" aria-labelledby="control-tab-workflows" hidden={controlTab !== 'workflows'}>
                 {workflowsOpened && <BioXpWorkflowEditor visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />}
             </div>
-            <div hidden={controlTab === 'workflows'} className="space-y-4">
+            <div role="tabpanel" id="control-panel-live-deck" aria-labelledby="control-tab-live-deck" hidden={controlTab !== 'live-deck'}>
+                {liveDeckOpened && <>
+                    <p className="mb-2 text-sm" style={{ color: 'var(--text-secondary)' }}>{connectedLabel}
+                        {statusQuery.isError && ' · Status refresh unavailable; showing last-known observations.'}
+                    </p>
+                    <BioXpLiveDeck generation={generation} connected={linkConnected} visible={liveDeckVisible}
+                        dashboard={catalogV2Query.data?.dashboard} stale={showingLastKnown || !linkHealthy}
+                        selection={liveDeckIntent?.generation === generation ? liveDeckIntent.selection : { station: '', wells: [] }}
+                        onMoveToStation={target => invokeNamedDeckMove(target, false)} onMoveToWell={invokeWellDeckMove}
+                        stationDisabledReason={target => {
+                            const reason = stationDisabledReason(target);
+                            return reason === null ? null : bioXpDeckReadinessText(reason);
+                        }} wellDisabledReason={wellDisabledReason === null ? null : bioXpDeckReadinessText(wellDisabledReason)}
+                        doorControls={<div data-testid="live-deck-door-controls" className="space-y-2">
+                    <h3 className="font-semibold">Thermal door</h3>
+                    <div className="flex gap-2">
+                        {(['open', 'close'] as const).map(operation => {
+                            const action = operatorActionForPath(`/motion/thermal_door/${operation}`);
+                            const enabled = linkConnected && !operatorCatalog.isLoading && action?.enabled === true;
+                            return <button key={operation} type="button" disabled={!enabled}
+                                title={action?.enabled === true ? 'Robot control' : action?.disabled_reason ?? 'Robot action unavailable.'}
+                                onClick={() => runControl('door', operation)}
+                                className="flex-1 rounded border px-3 py-2 text-sm font-semibold disabled:opacity-35"
+                                style={{ borderColor: 'var(--border-primary)', background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+                                {operation === 'open' ? 'Open' : 'Close'}
+                            </button>;
+                        })}
+                    </div>
+                    <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Direct door controls; not a state toggle.</p>
+                    {invokeOperatorAction.variables?.actionId === operatorActionForPath('/motion/thermal_door/open')?.action_id
+                        || invokeOperatorAction.variables?.actionId === operatorActionForPath('/motion/thermal_door/close')?.action_id
+                        ? <YOperatorError label="Thermal door" error={invokeOperatorAction.error} /> : null}
+                </div>}
+                        movementControls={<div className="space-y-3 text-sm">
+                    <label className="block">
+                        Robot destination
+                        <select value={selectedDeckDestination?.target ?? ''}
+                            disabled={!active || deckDestinations.length === 0}
+                            onChange={event => setDeckTarget(event.target.value)}
+                            className="mt-1 w-full rounded border p-2"
+                            style={{ color: 'var(--text-primary)', background: 'var(--bg-primary)', borderColor: 'var(--border-primary)' }}>
+                            {selectedDeckDestination == null && <option value="">Choose a destination</option>}
+                            {deckDestinations.map(destination => <option key={destination.target} value={destination.target}>{destination.label}</option>)}
+                        </select>
+                    </label>
+                    <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={selectedDeckDestination?.camera_offset_option === true && deckCameraOffset}
+                            disabled={selectedDeckDestination?.camera_offset_option !== true}
+                            onChange={event => setDeckCameraOffset(event.target.checked)} />
+                        Add camera offset
+                    </label>
+                    <button type="button" disabled={deckDisabledReason !== null}
+                        title={deckDisabledReason ? bioXpDeckReadinessText(deckDisabledReason) : 'Move to the selected destination'}
+                        onClick={invokeDeckMove}
+                        className="w-full rounded bg-teal-700 px-4 py-2 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-35">
+                        Move to destination
+                    </button>
+                    {deckDisabledReason && <p role="status">{bioXpDeckReadinessText(deckDisabledReason)}</p>}
+                    <p role="status" data-testid="deck-current-command" className="break-words text-xs">
+                        Current command: {invokeDeckAction.isPending ? 'submitting' : deckReceipt?.status ?? (deckReceiptUnavailable ? 'outcome uncertain' : 'none')}
+                        {bioXpReceiptFailureText(deckReceipt)}
+                    </p>
+                    <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Travel only. No pickup, liquid handling or tip loading.</p>
+                </div>}
+                        commandDetails={<div className="space-y-2 break-words">
+                <button
+                    type="button"
+                    disabled={v2ActionDisabledReason('oem.deck.collect_authority') !== null}
+                    title={v2ActionDisabledReason('oem.deck.collect_authority') ?? 'Read current axes and latch; no activation, homing or movement.'}
+                    onClick={() => {
+                        const envelope = v2NormalEnvelope('oem.deck.collect_authority');
+                        if (envelope) submitV2({ ...envelope, action_id: 'oem.deck.collect_authority', inputs: {} });
+                    }}
+                    className="ml-3 mt-3 rounded bg-slate-700 px-4 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-35"
+                >Refresh deck readiness (no motion)</button>
+                {invokeYAction.variables?.request.action_id === 'oem.deck.collect_authority' && <YOperatorError label="Deck readiness" error={invokeYAction.error} />}
+                {deckReceiptUnavailable && (
+                    <p role="status" className="mt-3 rounded border border-amber-700 bg-amber-950/30 p-2 text-sm text-amber-100">
+                        receipt unavailable / outcome uncertain. Do not resubmit. Reconcile by command ID until a terminal receipt is available.
+                    </p>
+                )}
+                <div data-testid="canonical-command-queue" className="mt-3 text-xs">
+                    <p>Robot command queue: {currentDashboardV2?.command_queue == null ? 'unknown' : `${currentDashboardV2.command_queue.items.length} pending`}</p>
+                    {currentDashboardV2?.command_queue != null && <details><summary>Pending command details</summary>
+                        {currentDashboardV2.command_queue.items.map(item => <p key={item.command_id}>
+                            #{item.sequence} · {item.command_id} · {item.status}
+                        </p>)}
+                    </details>}
+                </div>
+                <details data-testid="deck-submissions" className="mt-3 space-y-1 text-xs">
+                    <summary>Local submission details ({invokeDeckAction.submissions.length})</summary>
+                    {invokeDeckAction.submissions.map(item => <DeckSubmissionRow key={item.request.idempotency_key}
+                        item={item} generation={generation} active={active} onTerminal={invokeDeckAction.retire}
+                        onSelect={commandId => { setDeckMutationGeneration(generation); setDeckCommandId(commandId); }} />)}
+                    <p>Settled receipts remain in command history.</p>
+                </details>
+                <details className="mt-3 text-xs">
+                <summary className="cursor-pointer text-slate-400">Deck command details</summary>
+                <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Command ID</dt><dd className="font-mono">{effectiveDeckCommandId ?? '—'}</dd></div>
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Lifecycle</dt><dd className="font-mono">{deckReceipt?.status ?? (deckReceiptUnavailable ? 'unavailable' : '—')}</dd></div>
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Pending</dt><dd>{deckPending ? 'pending' : deckReceipt ? 'not pending' : 'unknown'}</dd></div>
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Receipt availability</dt><dd>{deckReceiptUnavailable ? 'unavailable' : deckReceipt ? 'available' : 'not requested'}</dd></div>
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Ambiguous outcome</dt><dd>{deckAmbiguous ? 'ambiguous' : deckReceipt ? 'not ambiguous' : 'unknown'}</dd></div>
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Recovery required</dt><dd>{deckRecoveryRequired ? 'required' : deckReceipt ? 'not required' : 'unknown'}</dd></div>
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Robot-selected source branch</dt><dd>{deckReceipt?.deck_movement?.source_branch ?? 'unknown'}</dd></div>
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Controller completion</dt><dd>{truthLabel(deckReceipt?.deck_movement?.controller_completion_verified, 'verified', 'not verified')}</dd></div>
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Semantic state commit</dt><dd>{truthLabel(deckReceipt?.deck_movement?.semantic_state_committed, 'committed', 'not committed')}</dd></div>
+                    <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><dt className="text-slate-400">Physical observation</dt><dd>{truthLabel(deckReceipt?.deck_movement?.physical_observation_verified, 'observed', 'not observed')}</dd></div>
+                    <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><dt className="text-slate-400">Physical effect receipt</dt><dd>{deckReceipt ? (deckReceipt.physical_effect_verified ? 'verified' : 'not verified') : 'unknown'}</dd></div>
+                </dl>
+                </details>
+                <YOperatorError label="Deck enqueue" error={currentDeckInvokeError} />
+                {deckResolution && <p className="text-sm text-slate-300">Earlier move reconciled. Historical outcome remains {deckReceipt?.status}; this does not retry the command. {deckRecoveryResolved ? 'The robot checks each new request.' : 'Current recovery revision is not yet observed.'}</p>}
+                <YOperatorError label="Deck receipt" error={deckReceiptQuery.error} />
+
+                        </div>}
+                        transferControls={visible => <BioXpTransferControls visible={visible} key={`${generation}:${active}`} generation={generation} connected={linkConnected} />}
+                    />
+                    {error && <p role="alert" className="mt-3 rounded border border-red-600 p-3 text-sm" style={{ color: 'var(--text-primary)' }}>{bioXpErrorText(error)}</p>}
+                </>}
+            </div>
+            <div hidden={controlTab === 'workflows' || controlTab === 'live-deck'} className="space-y-4">
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
@@ -1255,103 +1415,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
             <div className="min-w-0">
             <div role="tabpanel" id="control-panel-robot" aria-labelledby="control-tab-robot" hidden={controlTab !== 'robot'} className="space-y-4">
-            <section data-testid="oem-deck-movement" className="rounded-xl border border-teal-700/60 bg-teal-950/20 p-4">
-                <h2 className="text-lg font-semibold">Deck Movement</h2>
-                <p className="mt-1 text-sm text-slate-300">Travel only: moves the tool to a destination. It does not pick up or transfer a plate or cover.</p>
-                <div className="mt-3 grid gap-3">
-                    <label className="text-sm text-slate-300">
-                        Robot destination
-                        <select
-                            value={selectedDeckDestination?.target ?? ''}
-                            disabled={!active || deckDestinations.length === 0}
-                            onChange={(event) => setDeckTarget(event.target.value)}
-                            className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 text-slate-100"
-                        >
-                            {selectedDeckDestination == null && <option value="">Choose a destination</option>}
-                            {deckDestinations.map((destination) => (
-                                <option key={destination.target} value={destination.target}>{destination.label}</option>
-                            ))}
-                        </select>
-                    </label>
-                </div>
-                <label className="mt-3 block text-sm text-slate-300">
-                    <input type="checkbox" checked={selectedDeckDestination?.camera_offset_option === true && deckCameraOffset}
-                        disabled={selectedDeckDestination?.camera_offset_option !== true}
-                        onChange={(event) => setDeckCameraOffset(event.target.checked)} />
-                    {' '}Add camera offset
-                </label>
-                <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current location</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_location ?? '—'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current well</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_well ?? '—'}</dd></div>
-                </dl>
-                <p className={`mt-3 text-sm ${deckDisabledReason ? 'text-amber-200' : 'text-slate-300'}`}>
-                    {deckDisabledReason ? bioXpDeckReadinessText(deckDisabledReason) : 'Select a destination, then Move. The robot checks readiness when you send the command.'}
-                </p>
-                <button
-                    type="button"
-                    disabled={deckDisabledReason !== null}
-                    title={deckDisabledReason ? bioXpDeckReadinessText(deckDisabledReason) : 'Move to the selected destination'}
-                    onClick={invokeDeckMove}
-                    className="mt-3 rounded bg-teal-700 px-4 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-35"
-                >Move to destination</button>
-                <p role="status" data-testid="deck-current-command" className="mt-2 text-sm">
-                    Current command: {invokeDeckAction.isPending ? 'submitting' : deckReceipt?.status ?? (deckReceiptUnavailable ? 'outcome uncertain' : 'none')}
-                    {effectiveDeckCommandId ? ` · ${effectiveDeckCommandId}` : ''}
-                    {bioXpReceiptFailureText(deckReceipt)}
-                    {' · Command state is not an observation of physical motion.'}
-                </p>
-                <button
-                    type="button"
-                    disabled={v2ActionDisabledReason('oem.deck.collect_authority') !== null}
-                    title={v2ActionDisabledReason('oem.deck.collect_authority') ?? 'Read current axes and latch; no activation, homing or movement.'}
-                    onClick={() => {
-                        const envelope = v2NormalEnvelope('oem.deck.collect_authority');
-                        if (envelope) submitV2({ ...envelope, action_id: 'oem.deck.collect_authority', inputs: {} });
-                    }}
-                    className="ml-3 mt-3 rounded bg-slate-700 px-4 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-35"
-                >Refresh deck readiness (no motion)</button>
-                {invokeYAction.variables?.request.action_id === 'oem.deck.collect_authority' && <YOperatorError label="Deck readiness" error={invokeYAction.error} />}
-                {deckReceiptUnavailable && (
-                    <p role="status" className="mt-3 rounded border border-amber-700 bg-amber-950/30 p-2 text-sm text-amber-100">
-                        receipt unavailable / outcome uncertain. Do not resubmit. Reconcile by command ID until a terminal receipt is available.
-                    </p>
-                )}
-                <div data-testid="canonical-command-queue" className="mt-3 text-xs">
-                    <p>Robot command queue: {currentDashboardV2?.command_queue == null ? 'unknown' : `${currentDashboardV2.command_queue.items.length} pending`}</p>
-                    {currentDashboardV2?.command_queue != null && <details><summary>Pending command details</summary>
-                        {currentDashboardV2.command_queue.items.map(item => <p key={item.command_id}>
-                            #{item.sequence} · {item.command_id} · {item.status}
-                        </p>)}
-                    </details>}
-                </div>
-                <details data-testid="deck-submissions" className="mt-3 space-y-1 text-xs">
-                    <summary>Local submission details ({invokeDeckAction.submissions.length})</summary>
-                    {invokeDeckAction.submissions.map(item => <DeckSubmissionRow key={item.request.idempotency_key}
-                        item={item} generation={generation} active={active} onTerminal={invokeDeckAction.retire}
-                        onSelect={commandId => { setDeckMutationGeneration(generation); setDeckCommandId(commandId); }} />)}
-                    <p>Settled receipts remain in command history.</p>
-                </details>
-                <details className="mt-3 text-xs">
-                <summary className="cursor-pointer text-slate-400">Deck command details</summary>
-                <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Command ID</dt><dd className="font-mono">{effectiveDeckCommandId ?? '—'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Lifecycle</dt><dd className="font-mono">{deckReceipt?.status ?? (deckReceiptUnavailable ? 'unavailable' : '—')}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Pending</dt><dd>{deckPending ? 'pending' : deckReceipt ? 'not pending' : 'unknown'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Receipt availability</dt><dd>{deckReceiptUnavailable ? 'unavailable' : deckReceipt ? 'available' : 'not requested'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Ambiguous outcome</dt><dd>{deckAmbiguous ? 'ambiguous' : deckReceipt ? 'not ambiguous' : 'unknown'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Recovery required</dt><dd>{deckRecoveryRequired ? 'required' : deckReceipt ? 'not required' : 'unknown'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Robot-selected source branch</dt><dd>{deckReceipt?.deck_movement?.source_branch ?? 'unknown'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Controller completion</dt><dd>{truthLabel(deckReceipt?.deck_movement?.controller_completion_verified, 'verified', 'not verified')}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Semantic state commit</dt><dd>{truthLabel(deckReceipt?.deck_movement?.semantic_state_committed, 'committed', 'not committed')}</dd></div>
-                    <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><dt className="text-slate-400">Physical observation</dt><dd>{truthLabel(deckReceipt?.deck_movement?.physical_observation_verified, 'observed', 'not observed')}</dd></div>
-                    <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><dt className="text-slate-400">Physical effect receipt</dt><dd>{deckReceipt ? (deckReceipt.physical_effect_verified ? 'verified' : 'not verified') : 'unknown'}</dd></div>
-                </dl>
-                </details>
-                <YOperatorError label="Deck enqueue" error={currentDeckInvokeError} />
-                {deckResolution && <p className="text-sm text-slate-300">Earlier move reconciled. Historical outcome remains {deckReceipt?.status}; this does not retry the command. {deckRecoveryResolved ? 'The robot checks each new request.' : 'Current recovery revision is not yet observed.'}</p>}
-                <YOperatorError label="Deck receipt" error={deckReceiptQuery.error} />
-                <BioXpTransferControls visible={robotVisible} key={`${generation}:${active}`} generation={generation} connected={linkConnected} />
-            </section>
+
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
                 <div className="grid gap-4">

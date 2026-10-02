@@ -114,6 +114,15 @@ function App() {
                   ? <BioXpCockpit initialTab="workflows" />
                   : <Navigate replace to="/" />}
             />
+            {/* Live travel stays within the same robot workspace. */}
+            <Route
+              path="/bioxp/live-deck"
+              element={!bmsFeaturesResolved
+                ? <RouteLoadingFallback />
+                : bmsFeatures.bioxp || !bmsFeaturesKnown
+                  ? <BioXpCockpit initialTab="live-deck" />
+                  : <Navigate replace to="/" />}
+            />
             {/* BioXP Handler Controls */}
             <Route
               path="/bioxp"

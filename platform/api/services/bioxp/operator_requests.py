@@ -132,6 +132,15 @@ class OperatorDeckMoveInputsV1(BaseModel):
         return self
 
 
+class OperatorDeckMoveToWellInputsV2(BaseModel):
+    """Explicit native well intent; resource/well semantics remain robot-owned."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    location_id: StrictInt
+    well: str | StrictInt
+    position_flag: Annotated[StrictInt, Field(ge=0, le=2)]
+
+
 def _canonical_board_epoch_map(value: dict[str, int]) -> dict[str, int]:
     if any(not key.isdecimal() or str(int(key)) != key for key in value):
         raise ValueError("board epoch keys must be canonical nonnegative decimal board IDs")

@@ -331,7 +331,7 @@ export interface BioXpOperatorDashboard {
     } | null;
     temperatures: Array<{ sensor: string; label: string; unit: '°C'; temperature_c: number | null; available: boolean }>;
     pipettes: BioXpPipettes | null;
-    snapshot: { snapshot_id: string | null; freshness: { state?: string; age_s?: number | null; fresh_for_s?: number | null }; collection_triggered: false };
+    snapshot: { snapshot_id: string | null; freshness: { state?: string; age_s?: number | null; fresh_for_s?: number | null }; collection_triggered: false; observed_at?: number | null; domain_observed_at?: Record<string, number | null>; clock_skew_detected?: boolean };
     successive_move_queue: Record<string, BioXpOperatorSuccessiveMoveQueueAxis>;
 }
 
@@ -530,6 +530,14 @@ export interface BioXpOperatorActionHistory {
     limit: number;
 }
 
+export interface BioXpDeckHeadAlignment {
+    tip_location: number | null;
+    semantic_state_revision: number;
+    producer_operation: string | null;
+    producer_command_id: string | null;
+    ownership_generation: number | null;
+}
+
 export interface BioXpOperatorDashboardV2 {
     schema_version: 'bioxp.operator_dashboard.v2';
     generated_at: number;
@@ -541,6 +549,7 @@ export interface BioXpOperatorDashboardV2 {
     latest_receipts: BioXpOperatorReceiptV2[];
     telemetry: BioXpOperatorDashboard | null;
     deck?: {
+        head_alignment?: BioXpDeckHeadAlignment | null;
         current_location: string | null;
         current_well: number | null;
         position_table_revision: string | null;
@@ -1530,6 +1539,15 @@ function assertCanonicalBoardEpochMap(value: Record<string, number>): void {
 
 export function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV2Request): void {
     assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
+    if (request.action_id === 'oem.deck.move_to_well') {
+        if (Object.keys(request.inputs).sort().join(',') !== 'location_id,position_flag,well'
+            || !Number.isSafeInteger(request.inputs.location_id)
+            || !(typeof request.inputs.well === 'string' || Number.isSafeInteger(request.inputs.well))
+            || !Number.isSafeInteger(request.inputs.position_flag)
+            || ![0, 1, 2].includes(request.inputs.position_flag)) {
+            throw new Error('Well movement inputs must contain explicit location_id, well and position_flag only');
+        }
+    }
     if (request.action_id === 'oem.deck.move_to_location') {
         const keys = Object.keys(request.inputs).sort().join(',');
         if (keys !== 'camera_offset,target'
@@ -1587,7 +1605,8 @@ export type BioXpOperatorActionV2Request =
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_absolute'; inputs: { target_steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.manual_panel_home'; inputs: Record<string, never> })
-    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_location'; inputs: { target: string; camera_offset: boolean } });
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_location'; inputs: { target: string; camera_offset: boolean } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_well'; inputs: { location_id: number; well: string | number; position_flag: 0 | 1 | 2 } });
 
 export interface BioXpOperatorInterruptV1Request {
     expected_connection_generation: number;
@@ -1647,7 +1666,7 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
             assertBioXpOperatorActionV2Request(request);
             const { action_id: actionId, ...body } = request;
             const path = `/api/bioxp/operator-controls/v2/actions/${encodeURIComponent(actionId)}`;
-            return (await (actionId === 'oem.deck.move_to_location'
+            return (await ((actionId === 'oem.deck.move_to_location' || actionId === 'oem.deck.move_to_well')
                 ? api.post<BioXpOperatorReceiptV2>(path, body, { timeout: 12000 })
                 : api.post<BioXpOperatorReceiptV2>(path, body))).data;
         },
@@ -1662,7 +1681,7 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
 export const useInvokeBioXpOperatorActionV2 = () => useInvokeBioXpOperatorActionV2Mutation();
 
 export interface BioXpDeckSubmission {
-    request: Extract<BioXpOperatorActionV2Request, { action_id: 'oem.deck.move_to_location' }>;
+    request: Extract<BioXpOperatorActionV2Request, { action_id: 'oem.deck.move_to_location' | 'oem.deck.move_to_well' }>;
     state: 'submitting' | 'accepted' | 'uncertain' | 'rejected' | 'not_sent';
     commandId?: string;
     receipt?: BioXpOperatorReceiptV2;
@@ -1755,14 +1774,15 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
             });
         },
         submit: (request: BioXpOperatorActionV2Request) => {
-            if (!active || request.expected_connection_generation !== generation || request.action_id !== 'oem.deck.move_to_location') return;
-            if (reserved.current !== null || sending.current !== null) return;
+            if (!active || request.expected_connection_generation !== generation
+                || (request.action_id !== 'oem.deck.move_to_location' && request.action_id !== 'oem.deck.move_to_well')) return false;
+            if (reserved.current !== null || sending.current !== null) return false;
             assertBioXpOperatorActionV2Request(request);
             reserved.current = request.idempotency_key;
             // Capture values, not the mutable picker; no admission batch gate.
-            const captured = { ...request, inputs: { ...request.inputs },
-                expected_board_epoch_by_board: { ...request.expected_board_epoch_by_board } };
+            const captured = structuredClone(request);
             setSubmissions(items => [...items, { request: captured, state: 'submitting' }]);
+            return true;
         },
     };
 };
@@ -1830,7 +1850,7 @@ export const bioXpDeckRecoveryResolution = (receipt: (BioXpOperatorReceiptV2 & P
         || !Number.isSafeInteger(value.transition_sequence) || value.transition_sequence < 1
         || value.command_id !== receipt?.command_id || receipt.terminal !== true
         || !['failed', 'ambiguous', 'interrupted', 'stopped', 'aborted', 'cancelled'].includes(receipt.status)
-        || !['oem.deck.move_to_location', 'oem.deck._mov_execution', 'oem.deck._finite_operation'].includes(receipt.action_id)) {
+        || !['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.deck._mov_execution', 'oem.deck._finite_operation'].includes(receipt.action_id)) {
         throw new Error('Invalid deck recovery resolution');
     }
     return value;
