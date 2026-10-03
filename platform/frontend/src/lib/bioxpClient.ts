@@ -1528,6 +1528,52 @@ type CatalogAssessment = Omit<BioXpOperatorControlCatalog, 'actions' | 'canonica
     };
 };
 
+type CatalogUpdate = {
+    catalog_view: 'assessment'; assessment_revision: string;
+    assessment_base?: Record<string, unknown>;
+    assessment_changes: Array<[(string | number)[], unknown?, (string | number)[]?]>;
+};
+type CatalogBase = { revision: string; body: Record<string, unknown> };
+type CatalogObservation = BioXpOperatorControlCatalog & {
+    assessmentBases?: { legacy: CatalogBase; canonical: CatalogBase };
+};
+
+export function applyBioXpCatalogUpdate(update: CatalogUpdate, previous?: CatalogBase) {
+    if (!update.assessment_revision || !Array.isArray(update.assessment_changes)) {
+        throw new Error('Robot catalog update release required');
+    }
+    const base = update.assessment_base !== undefined
+        ? { revision: update.assessment_revision, body: update.assessment_base } : previous;
+    if (!base || base.revision !== update.assessment_revision) throw new Error('Robot catalog update baseline missing');
+    const body = structuredClone(base.body);
+    for (const change of update.assessment_changes) {
+        const path = change[0];
+        if (!Array.isArray(path) || path.length === 0) throw new Error('Invalid robot catalog update path');
+        let target: Record<string | number, unknown> = body;
+        for (const key of path.slice(0, -1)) {
+            if (!Object.hasOwn(target, key) || target[key] === null || typeof target[key] !== 'object') throw new Error('Invalid robot catalog update path');
+            target = target[key] as Record<string | number, unknown>;
+        }
+        const key = path[path.length - 1];
+        // Define own properties rather than invoking __proto__ setters.
+        if (change.length === 1) {
+            if (Array.isArray(target)) target.splice(Number(key), 1);
+            else delete target[key];
+        } else {
+            let value = change[1];
+            if (change.length === 3) {
+                value = base.body;
+                for (const source of change[2]!) {
+                    if (value === null || typeof value !== 'object' || !Object.hasOwn(value, source)) throw new Error('Invalid robot catalog update source');
+                    value = (value as Record<string | number, unknown>)[source];
+                }
+            }
+            Object.defineProperty(target, key, { value: structuredClone(value), enumerable: true, configurable: true, writable: true });
+        }
+    }
+    return { base, body };
+}
+
 export function composeBioXpCatalog(metadata: CatalogMetadata, assessment: CatalogAssessment): BioXpOperatorControlCatalog {
     const compose = (definitions: Omit<CatalogMetadata, 'canonical'>, current: Pick<CatalogAssessment, 'metadata_revision' | 'action_states' | 'action_state_indices'>) => {
         if (definitions.metadata_revision !== current.metadata_revision || definitions.actions.length !== current.action_state_indices.length) {
@@ -1551,15 +1597,22 @@ export const useBioXpOperatorControlCatalog = (
     zTargetSteps?: number,
 ) => {
     const queryClient = useQueryClient();
-    return useQuery<BioXpOperatorControlCatalog>({
-        queryKey: [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null, zTargetSteps],
+    const queryKey = [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null, zTargetSteps];
+    return useQuery<CatalogObservation>({
+        queryKey,
         placeholderData: (previous, previousQuery) => previousQuery?.queryKey[operatorCatalogKey.length] === connectionGeneration ? previous : undefined,
         queryFn: async ({ signal }) => {
-            const assessment = (await api.get<CatalogAssessment>('/api/bioxp/operator-controls/catalog', {
+            const previous = queryClient.getQueryData<CatalogObservation>(queryKey)?.assessmentBases;
+            const update = (await api.get<CatalogUpdate & { canonical: CatalogUpdate }>('/api/bioxp/operator-controls/catalog', {
                 signal, timeout: 12_000,
-                params: { view: 'assessment', ...(Number.isInteger(zTargetSteps) ? { z_target_steps: zTargetSteps } : {}) },
+                params: { view: 'assessment', assessment_base: previous?.legacy.revision ?? '',
+                    canonical_assessment_base: previous?.canonical.revision ?? '',
+                    ...(Number.isInteger(zTargetSteps) ? { z_target_steps: zTargetSteps } : {}) },
             })).data;
-            if (assessment.catalog_view !== 'assessment' || assessment.canonical?.catalog_view !== 'assessment') throw new Error('Robot catalog split-view release required');
+            if (update.catalog_view !== 'assessment' || update.canonical?.catalog_view !== 'assessment') throw new Error('Robot catalog split-view release required');
+            const legacy = applyBioXpCatalogUpdate(update, previous?.legacy);
+            const canonical = applyBioXpCatalogUpdate(update.canonical, previous?.canonical);
+            const assessment = { ...legacy.body, canonical: canonical.body } as CatalogAssessment;
             const metadata = await queryClient.fetchQuery<CatalogMetadata>({
                 queryKey: ['bioxp', 'operator-definitions', connectionGeneration, assessment.metadata_revision, assessment.canonical.metadata_revision],
                 staleTime: Infinity, gcTime: Infinity, retry: false,
@@ -1567,7 +1620,7 @@ export const useBioXpOperatorControlCatalog = (
                     signal, timeout: 12_000, params: { view: 'metadata' },
                 })).data,
             });
-            return composeBioXpCatalog(metadata, assessment);
+            return { ...composeBioXpCatalog(metadata, assessment), assessmentBases: { legacy: legacy.base, canonical: canonical.base } };
         },
         enabled: enabled && connectionGeneration > 0,
         gcTime: 0,
@@ -1577,7 +1630,7 @@ export const useBioXpOperatorControlCatalog = (
         // This affects observation scheduling only, never mutation admission.
         refetchInterval: (query) => {
             const error = query.state.error as { message?: string; response?: { status?: number } } | null;
-            if (error?.response?.status === 426 || error?.message === 'Robot catalog split-view release required') return false;
+            if (error?.response?.status === 426 || error?.message === 'Robot catalog split-view release required' || error?.message === 'Robot catalog update release required') return false;
             return enabled && connectionGeneration > 0
                 ? query.state.data?.actions.some(action => action.disabled_reason === 'cached_projection_stale') ? 1_000 : 5_000
                 : false;

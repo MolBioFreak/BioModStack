@@ -15,6 +15,11 @@ const fixture = () => structuredClone(actual ?? {
     metadata: { catalog_view: 'metadata', metadata_revision: 'v1', actions: [{action_id: 'a', inputs: []}], canonical: {catalog_view: 'metadata', metadata_revision: 'v2', actions: []}},
     assessment: {catalog_view: 'assessment', metadata_revision: 'v1', ownership_generation: 1, dashboard: {}, action_states: [{ enabled: true, disabled_reason: null, provider_available: false, dependencies: [{met: false, reason: 'offline'}] }], action_state_indices: [0], canonical: {catalog_view: 'assessment', metadata_revision: 'v2', dashboard: {}, action_states: [], action_state_indices: []}},
 });
+const updateFixture = (body: ReturnType<typeof fixture>['assessment']) => {
+    const { canonical, ...legacy } = body;
+    const wrap = (value: object) => ({catalog_view: 'assessment', assessment_revision: 'fixture-baseline', assessment_base: value, assessment_changes: []});
+    return {...wrap(legacy), canonical: wrap(canonical)};
+};
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
 
 it.skipIf(!actual)('recomposes every actual captured legacy and canonical action without defaults', () => {
@@ -55,7 +60,7 @@ it('polls live state at five seconds, definitions once across Z/draft/remount an
     let failed = false;
     vi.mocked(api.get).mockImplementation(async (_url, config) => {
         if (failed) throw new Error('offline');
-        return {data: structuredClone(config?.params?.view === 'metadata' ? wire.metadata : wire.assessment)};
+        return {data: structuredClone(config?.params?.view === 'metadata' ? wire.metadata : updateFixture(wire.assessment))};
     });
     const tick = async (ms = 20) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
     const render = async (generation=7, z=65000, lifecycle='ready') => { await act(async () => root.render(<QueryClientProvider client={client}><Consumer generation={generation} z={z} lifecycle={lifecycle}/></QueryClientProvider>)); await tick(); };
@@ -69,7 +74,7 @@ it('polls live state at five seconds, definitions once across Z/draft/remount an
         expect(count('assessment')).toBe(13);
         expect(count('metadata')).toBe(1);
         await render(7, -2147483648, 'changed');
-        expect(vi.mocked(api.get).mock.calls.at(-1)?.[1]?.params).toEqual({view:'assessment', z_target_steps:-2147483648});
+        expect(vi.mocked(api.get).mock.calls.at(-1)?.[1]?.params).toEqual({view:'assessment', assessment_base:'', canonical_assessment_base:'', z_target_steps:-2147483648});
         expect(count('metadata')).toBe(1);
         wire.assessment.action_states[0] = {...wire.assessment.action_states[0], enabled:false, disabled_reason:'provider unavailable', available:false, provider_available:false, dependencies:[{key:'provider_available', met:false, reason:'offline'}], snapshot_freshness:{state:'missing',age_s:null}};
         await tick(5_000);
@@ -108,7 +113,7 @@ it.each(['assessment', 'metadata'])('cancels the in-flight %s read on detach, wi
     vi.useFakeTimers(); const wire=fixture(); const client=new QueryClient();
     const host=document.createElement('div'); const root=createRoot(host); let aborted=false;
     vi.mocked(api.get).mockImplementation(async (_url, config) => {
-        if(config?.params?.view !== phase) return {data:wire.assessment};
+        if(config?.params?.view !== phase) return {data:updateFixture(wire.assessment)};
         return new Promise((_resolve,reject)=>config?.signal?.addEventListener('abort',()=>{aborted=true; reject(new Error('cancelled'));}));
     });
     function Consumer(){useBioXpOperatorControlCatalog(7);return null;}
