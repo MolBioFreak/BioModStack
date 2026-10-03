@@ -1,6 +1,6 @@
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { bioXpErrorText, useBioXpWorkflowJob, useControlBioXpWorkflow, useReviewBioXpWorkflow,
+import { bioXpErrorText, useBioXpWorkflowJobObservation, useControlBioXpWorkflow, useReviewBioXpWorkflow,
     type BioXpWorkflowAction, type BioXpWorkflowJob } from '../lib/bioxpClient';
 const buttonClass = 'rounded bg-cyan-700 px-3 py-2 text-sm disabled:opacity-35';
 
@@ -27,7 +27,7 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     const [settledJob, setSettledJob] = useState<string | null>(null);
     const observationId = jobId;
     const observeJob = documentVisible && (visible || (observationId !== null && settledJob !== observationId));
-    const query = useBioXpWorkflowJob(observationId, generation, connected && observeJob);
+    const query = useBioXpWorkflowJobObservation(observationId, generation, connected && observeJob);
     useEffect(() => {
         if (query.data?.command?.terminal && query.data.job_id === observationId) setSettledJob(observationId);
     }, [query.data, observationId]);
@@ -84,6 +84,7 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     return <>
         {jobId && <p className="break-all text-sm">Canonical job: {jobId}</p>}
         {(query.isError || discoveryError) && <p role="status">Workflow readback unavailable; checking again. Do not resubmit uncertain work.</p>}
+        {query.data?.command && !('schema_version' in query.data && query.data.schema_version === 'bioxp.protocol_job_observation.v1') && <p role="status">Compact workflow observation unavailable on this robot; retained detail shown. Reopen to refresh.</p>}
         {pending && !job && <p role="status">Submission outcome not yet reconciled. Checking the original job; no automatic retry.</p>}
         {!controlsEnabled && connected && <p className="text-sm">Workflow controls unavailable until current connection status recovers; passive readback continues.</p>}
         {canonical && <>

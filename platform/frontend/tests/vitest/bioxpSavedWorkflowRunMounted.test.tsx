@@ -108,7 +108,7 @@ describe('explicit saved snapshot run and original-job recovery', () => {
         await act(async () => root.unmount()); client.clear(); generation = 10; await mount(); await tick(4100);
         expect(submits()).toHaveLength(1);
         expect(vi.mocked(api.get).mock.calls.every(([url]) => url === `/api/bioxp/protocols/jobs/${id}`)).toBe(true);
-        expect(api.get).toHaveBeenLastCalledWith(`/api/bioxp/protocols/jobs/${id}`, { params: { expected_connection_generation: 10 } });
+        expect(api.get).toHaveBeenLastCalledWith(`/api/bioxp/protocols/jobs/${id}`, { params: { expected_connection_generation: 10, observation: true } });
         expect(host.textContent).toContain('Original connection generation: 9');
         connected = false; await render(); const count = vi.mocked(api.get).mock.calls.length; await tick(4100);
         expect(vi.mocked(api.get).mock.calls).toHaveLength(count); expect(submits()).toHaveLength(1);

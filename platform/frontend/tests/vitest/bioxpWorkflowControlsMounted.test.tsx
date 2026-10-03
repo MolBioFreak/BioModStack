@@ -67,11 +67,16 @@ beforeEach(() => {
     props = { generation: 9, connected: true, controlsEnabled: true };
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } });
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
-    vi.mocked(api.get).mockImplementation(async (path) => {
+    vi.mocked(api.get).mockImplementation(async (path, options) => {
         if (path === '/api/bioxp/protocols/jobs') return { data: { rows } } as never;
         if (String(path).startsWith('/api/bioxp/protocols/jobs/')) {
             if (failDetail) throw new Error('temporary readback loss');
-            return { data: job } as never;
+            return { data: options?.params?.observation ? {
+                schema_version: 'bioxp.protocol_job_observation.v1', job_id: job.job_id, status: job.status,
+                command: job.command, execution: { dry_run: job.execution?.dry_run,
+                    runtime_state: { workflow: job.execution?.runtime_state.workflow } },
+                operator: { pending_review: job.operator?.pending_review },
+            } : job } as never;
         }
         throw new Error(`Unexpected GET ${path}`);
     });
@@ -87,14 +92,14 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('canonical prepared workflow controls', () => {
-    it('discovers compact rows and fetches full selected review detail', async () => {
+    it('discovers compact rows and observes current selected review state', async () => {
         job = jobFixture({ phase: 'waiting', gate: 'review', gate_id: 'review-action' });
         rows = [{ job_id: job.job_id, status: job.status, command: job.command,
             dry_run: false, protocol_id: 'prepared', source_type: 'native',
             created_at: 'created', updated_at: 'updated', pending_review: null }];
         await render();
         expect(api.get).toHaveBeenCalledWith('/api/bioxp/protocols/jobs/job-one',
-            { params: { expected_connection_generation: 9 } });
+            { params: { expected_connection_generation: 9, observation: true } });
         expect(host.textContent).toContain('Phase: waiting');
         expect(button('Acknowledge protocol review')).toBeTruthy();
         await tick(20_100);

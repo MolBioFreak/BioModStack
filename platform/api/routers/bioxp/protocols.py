@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from services.bioxp.errors import ConnectionStateError, RobotResponseError, RobotTransportError
 from services.bioxp.protocol_models import (
     ProtocolSubmission, ProtocolControlRequest, ProtocolControlResponse,
-    ProtocolReviewRequest, ProtocolJob, ProtocolJobs,
+    ProtocolReviewRequest, ProtocolJob, ProtocolJobs, ProtocolJobObservation,
 )
 from services.bioxp.runtime import BioXpRuntime
 
@@ -42,7 +42,7 @@ async def _mutate(runtime, route, request, *, job_id=None):
         raise _translate_robot_error(exc) from exc
 
 
-async def _query(runtime, route, expected_generation, *, job_id=None, limit=None):
+async def _query(runtime, route, expected_generation, *, job_id=None, limit=None, observation=False):
     generation = runtime.connection.generation if expected_generation is None else expected_generation
     try:
         kwargs = {}
@@ -50,6 +50,8 @@ async def _query(runtime, route, expected_generation, *, job_id=None, limit=None
             kwargs["path_params"] = {"job_id": job_id}
         if limit is not None:
             kwargs["params"] = {"limit": limit, "summary": True}
+        elif observation:
+            kwargs["params"] = {"observation": True}
         return await runtime.connection.request_active_v2_query(
             route, expected_generation=generation, **kwargs,
         )
@@ -89,14 +91,20 @@ async def list_protocol_jobs(
     return page
 
 
-@router.get("/protocols/jobs/{job_id}", response_model=ProtocolJob, response_model_exclude_unset=True)
+@router.get("/protocols/jobs/{job_id}", response_model=ProtocolJob | ProtocolJobObservation, response_model_exclude_unset=True)
 async def get_protocol_job(
     job_id: str,
     expected_connection_generation: int | None = Query(default=None, ge=0),
+    observation: bool = Query(default=False),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> ProtocolJob:
-    job = _job(await _query(runtime, "protocol_job", expected_connection_generation, job_id=job_id), job_id=job_id)
-    return job
+) -> ProtocolJob | ProtocolJobObservation:
+    payload = await _query(runtime, "protocol_job", expected_connection_generation, job_id=job_id, observation=observation)
+    if observation and payload.get("schema_version") == "bioxp.protocol_job_observation.v1":
+        job = _validated(ProtocolJobObservation, payload)
+        if job.job_id != job_id:
+            raise HTTPException(status_code=502, detail="BioXP robot returned a different job observation")
+        return job
+    return _job(payload, job_id=job_id)
 
 
 @router.post("/protocols/jobs/{job_id}/control", response_model=ProtocolControlResponse, response_model_exclude_unset=True)
