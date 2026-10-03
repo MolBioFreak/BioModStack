@@ -1,0 +1,2216 @@
+{
+  "baseline_bytes": 19537,
+  "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+  "cold_observation_bytes": 797,
+  "python_decoded_bytes": [
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    364,
+    420,
+    386,
+    361,
+    445,
+    361,
+    386,
+    420,
+    386,
+    361,
+    445,
+    364,
+    388,
+    425,
+    388,
+    364,
+    470,
+    391,
+    407,
+    454,
+    407,
+    391,
+    470,
+    391,
+    407,
+    454,
+    407,
+    391,
+    470,
+    391,
+    407,
+    21069,
+    21103
+  ],
+  "windows": {
+    "idle": {
+      "polls": 30,
+      "full_bytes": 586110,
+      "observation_bytes": 23910,
+      "min_bytes": 797,
+      "max_bytes": 797,
+      "reduction_percent": 95.92056098684547,
+      "rows": [
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": null,
+                "requested_control": null,
+                "last_control_id": null,
+                "reached_control_id": null,
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        }
+      ]
+    },
+    "changing": {
+      "polls": 30,
+      "full_bytes": 586110,
+      "observation_bytes": 25243,
+      "min_bytes": 797,
+      "max_bytes": 903,
+      "reduction_percent": 95.69312927607444,
+      "rows": [
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "waiting",
+                "gate": "review",
+                "gate_id": "gate:0",
+                "source_occurrence_id": "occurrence:0",
+                "requested_control": null,
+                "last_control_id": "control:0",
+                "reached_control_id": "control:0",
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": {
+              "stage_id": "stage:0",
+              "action_id": null,
+              "reason": "review"
+            }
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "executing",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:1",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:1",
+                "reached_control_id": null,
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "executing",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:2",
+                "requested_control": null,
+                "last_control_id": "control:2",
+                "reached_control_id": "control:2",
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "waiting",
+                "gate": "review",
+                "gate_id": "gate:3",
+                "source_occurrence_id": "occurrence:3",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:3",
+                "reached_control_id": null,
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": {
+              "stage_id": "stage:3",
+              "action_id": null,
+              "reason": "review"
+            }
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "executing",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:4",
+                "requested_control": null,
+                "last_control_id": "control:4",
+                "reached_control_id": "control:4",
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "executing",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:5",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:5",
+                "reached_control_id": null,
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "waiting",
+                "gate": "review",
+                "gate_id": "gate:6",
+                "source_occurrence_id": "occurrence:6",
+                "requested_control": null,
+                "last_control_id": "control:6",
+                "reached_control_id": "control:6",
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": {
+              "stage_id": "stage:6",
+              "action_id": null,
+              "reason": "review"
+            }
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "executing",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:7",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:7",
+                "reached_control_id": null,
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "executing",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:8",
+                "requested_control": null,
+                "last_control_id": "control:8",
+                "reached_control_id": "control:8",
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "waiting",
+                "gate": "review",
+                "gate_id": "gate:9",
+                "source_occurrence_id": "occurrence:9",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:9",
+                "reached_control_id": null,
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": {
+              "stage_id": "stage:9",
+              "action_id": null,
+              "reason": "review"
+            }
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "executing",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:10",
+                "requested_control": null,
+                "last_control_id": "control:10",
+                "reached_control_id": "control:10",
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "executing",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:11",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:11",
+                "reached_control_id": null,
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "waiting",
+                "gate": "review",
+                "gate_id": "gate:12",
+                "source_occurrence_id": "occurrence:12",
+                "requested_control": null,
+                "last_control_id": "control:12",
+                "reached_control_id": "control:12",
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": {
+              "stage_id": "stage:12",
+              "action_id": null,
+              "reason": "review"
+            }
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "executing",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:13",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:13",
+                "reached_control_id": null,
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "dispatched",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "executing",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:14",
+                "requested_control": null,
+                "last_control_id": "control:14",
+                "reached_control_id": "control:14",
+                "held_reason": null,
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "dispatched",
+            "terminal": false
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": "review",
+                "gate_id": "gate:15",
+                "source_occurrence_id": "occurrence:15",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:15",
+                "reached_control_id": null,
+                "held_reason": "workflow_owner_lost",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": {
+              "stage_id": "stage:15",
+              "action_id": null,
+              "reason": "review"
+            }
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:16",
+                "requested_control": null,
+                "last_control_id": "control:16",
+                "reached_control_id": "control:16",
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:17",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:17",
+                "reached_control_id": null,
+                "held_reason": "workflow_owner_lost",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": "review",
+                "gate_id": "gate:18",
+                "source_occurrence_id": "occurrence:18",
+                "requested_control": null,
+                "last_control_id": "control:18",
+                "reached_control_id": "control:18",
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": {
+              "stage_id": "stage:18",
+              "action_id": null,
+              "reason": "review"
+            }
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:19",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:19",
+                "reached_control_id": null,
+                "held_reason": "workflow_owner_lost",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:20",
+                "requested_control": null,
+                "last_control_id": "control:20",
+                "reached_control_id": "control:20",
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": "review",
+                "gate_id": "gate:21",
+                "source_occurrence_id": "occurrence:21",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:21",
+                "reached_control_id": null,
+                "held_reason": "workflow_owner_lost",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": {
+              "stage_id": "stage:21",
+              "action_id": null,
+              "reason": "review"
+            }
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:22",
+                "requested_control": null,
+                "last_control_id": "control:22",
+                "reached_control_id": "control:22",
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:23",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:23",
+                "reached_control_id": null,
+                "held_reason": "workflow_owner_lost",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": "review",
+                "gate_id": "gate:24",
+                "source_occurrence_id": "occurrence:24",
+                "requested_control": null,
+                "last_control_id": "control:24",
+                "reached_control_id": "control:24",
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": {
+              "stage_id": "stage:24",
+              "action_id": null,
+              "reason": "review"
+            }
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:25",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:25",
+                "reached_control_id": null,
+                "held_reason": "workflow_owner_lost",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:26",
+                "requested_control": null,
+                "last_control_id": "control:26",
+                "reached_control_id": "control:26",
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": "review",
+                "gate_id": "gate:27",
+                "source_occurrence_id": "occurrence:27",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:27",
+                "reached_control_id": null,
+                "held_reason": "workflow_owner_lost",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": {
+              "stage_id": "stage:27",
+              "action_id": null,
+              "reason": "review"
+            }
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:28",
+                "requested_control": null,
+                "last_control_id": "control:28",
+                "reached_control_id": "control:28",
+                "held_reason": "workflow_settlement_unknown",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        },
+        {
+          "schema_version": "bioxp.protocol_job_observation.v1",
+          "job_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+          "status": "ambiguous",
+          "execution": {
+            "dry_run": false,
+            "runtime_state": {
+              "workflow": {
+                "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+                "phase": "reconciling",
+                "gate": null,
+                "gate_id": null,
+                "source_occurrence_id": "occurrence:29",
+                "requested_control": {
+                  "action": "pause",
+                  "mode": "ordinary"
+                },
+                "last_control_id": "control:29",
+                "reached_control_id": null,
+                "held_reason": "workflow_owner_lost",
+                "child_command_ids": [
+                  "de828d25-6ca5-43bc-a137-036bee49398d"
+                ]
+              }
+            }
+          },
+          "operator": {
+            "pending_review": null
+          },
+          "command": {
+            "command_id": "protocol-live-7b7e665abf81db4f9f2864b0da07b74a1fada67d70697c7cafb6e1fe90681f2b",
+            "ownership_generation": 1,
+            "state_version": 9,
+            "status": "ambiguous",
+            "terminal": true
+          }
+        }
+      ]
+    }
+  }
+}

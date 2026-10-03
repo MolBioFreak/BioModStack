@@ -1,5 +1,6 @@
 """Real BMS routes with native SQLite observation exports at inert transport."""
 import copy
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -48,7 +49,10 @@ def test_malformed_observation_is_visible_read_error(monkeypatch, field):
 def test_actual_native_exports_through_http(monkeypatch):
     source = os.environ.get("BIOXP_OBSERVATION_EVIDENCE")
     if not source:
-        pytest.skip("requires actual native SQLite capture replay export")
+        fixtures = Path(__file__).parent / "fixtures" / "bioxp_methods"
+        source = fixtures / "job-observation-native-latest.json"
+        provenance = json.loads((fixtures / "job-observation-provenance.json").read_text())
+        assert sha256(source.read_bytes()).hexdigest() == provenance["sha256"]
     evidence = json.loads(Path(source).read_text())
     client, runtime = make_client(monkeypatch)
     receiving = copy.deepcopy(evidence)
