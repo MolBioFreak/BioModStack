@@ -42,7 +42,13 @@ async def _mutate(runtime, route, request, *, job_id=None):
             return await client.request(route, **kwargs)
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         translated = _translate_robot_error(exc)
-        # Existing wire error stays unchanged. A lease refusal precedes submit.
+        # Publish local no-dispatch evidence to legacy prepared/saved callers,
+        # not only the in-process methods facade. HTTP status is not evidence.
+        if not dispatch_started:
+            translated = HTTPException(translated.status_code, {
+                "delivery": "not_submitted", "dispatch_state": "not_dispatched",
+                "native_reason": translated.detail,
+            }, headers=translated.headers)
         translated.bioxp_dispatch_started = dispatch_started
         raise translated from exc
 

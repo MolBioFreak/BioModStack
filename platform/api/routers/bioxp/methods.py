@@ -7,7 +7,7 @@ import json
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, StrictInt, TypeAdapter, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
@@ -134,8 +134,9 @@ def catalog():
 def schema():
     from bioxp_method_model import method_schema
     return {"method": method_schema(), "requests": {
-        cls.__name__: cls.model_json_schema() for cls in (
-            DraftCreate, DraftUpdate, DraftImport, CompileRequest, SavedRun, QuickRun, Recovery, ProtocolReviewRequest)
+        **{cls.__name__: cls.model_json_schema() for cls in (
+            DraftCreate, DraftUpdate, DraftImport, CompileRequest, SavedRun, QuickRun, Recovery, ProtocolReviewRequest)},
+        "ProtocolControlRequest": TypeAdapter(ProtocolControlRequest).json_schema(),
     }, "results": {cls.__name__: cls.model_json_schema() for cls in (
         DraftRecord, Compilation, MethodRunResponse, ProtocolJobObservation, ProtocolControlResponse)},
         "openapi": "/openapi.json"}
@@ -326,9 +327,11 @@ async def recovery(job_id: str, data: Recovery,
         raise HTTPException(422, {"code": "lossless_reconstruction_unavailable", "category": "representation",
                                   "path": "/protocol/document/metadata/bms_method_run",
                                   "message": "Original raw method snapshot is unavailable"})
+    assumptions = ({"initial_state": deepcopy(data.initial_state)} if "initial_state" in data.model_fields_set
+                   else {"initial_state": deepcopy(snapshot["initial_state"])} if "initial_state" in snapshot else {})
     return {"method": deepcopy(snapshot["method"]), "bindings": deepcopy(snapshot.get("bindings", {})),
             "dependencies": deepcopy(snapshot.get("dependencies", {})),
-            "initial_state": data.initial_state,
+            **assumptions,
             "recovery": {"original_job_id": job_id, "occurrence": data.occurrence,
                          "automatic_setup": [], "excluded_actions": [], "submitted": False,
                          "strategy": "whole_original_draft_for_explicit_editing"},

@@ -54,11 +54,12 @@ class NativeTransport:
         if route == "protocol_execute":
             body = kwargs["json_data"]
             payload = bundle()
-            payload["job_id"] = JOB
-            payload["command"].update(command_id=JOB, idempotency_key=body["idempotency_key"].strip())
+            job_id = "protocol-live-" + sha256(body["idempotency_key"].strip().encode()).hexdigest()
+            payload["job_id"] = job_id
+            payload["command"].update(command_id=job_id, idempotency_key=body["idempotency_key"].strip())
             state = payload["execution"]["runtime_state"]
-            state["job_id"] = JOB
-            state["workflow"]["command_id"] = JOB
+            state["job_id"] = job_id
+            state["workflow"]["command_id"] = job_id
             payload["protocol"]["document"] = deepcopy(body["document"])
             self.payload = payload  # accepted even when reply gets lost
             self.entered.set()
@@ -97,6 +98,13 @@ class Connection:
         return await self.transport.request(route, **kwargs)
 
 
+@pytest.fixture(autouse=True)
+def compiler_stub(monkeypatch):
+    # Fault-injection/unit cases only; test_bioxp_methods_integrated uses the
+    # shared store with the actual compiler and discovery owners.
+    monkeypatch.setattr(methods, "compile_method", compile_seam)
+
+
 @pytest_asyncio.fixture
 async def store(tmp_path, monkeypatch):
     path = tmp_path / "methods.db"
@@ -115,7 +123,6 @@ async def store(tmp_path, monkeypatch):
     app.dependency_overrides[get_session] = session_dependency
     app.state.bioxp_runtime = SimpleNamespace(connection=Connection(transport))
     monkeypatch.setenv("BMS_BIOXP_MUTATIONS_ENABLED", "1")
-    monkeypatch.setattr(methods, "compile_method", compile_seam)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         yield client, transport, path, sessions
     await engine.dispose()

@@ -13,7 +13,7 @@ def occurrence_outcomes(snapshot, state):
         provenance = []
     results = {}
     for result in state.action_results:
-        action_id = result.get("action_id")
+        action_id = result.get("action_id") or result.get("parent_action_id")
         if isinstance(action_id, str):
             results.setdefault(action_id, []).append(deepcopy(result))
     completed = {action_id for stage in state.stage_states.values() for action_id in stage.completed_actions}
@@ -31,8 +31,12 @@ def occurrence_outcomes(snapshot, state):
             stage = current.get(action_id)
             status = "unknown"
             # A returned explicit failure takes precedence over a stale cursor.
-            if any(result.get("ok") is False for result in evidence):
+            if any(result.get("ok") is False or result.get("status") == "failed" for result in evidence):
                 status = "failed"
+            elif any(result.get("uncertain") is True or result.get("status") == "ambiguous" for result in evidence):
+                status = "unknown"
+            elif any(result.get("pending") is True or result.get("status") == "running" for result in evidence):
+                status = "running"
             elif action_id in completed:
                 status = "completed"
             elif stage is not None:

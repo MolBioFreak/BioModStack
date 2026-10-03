@@ -8,8 +8,9 @@ run-state store, automatic physical retry, or preview admission token.
 ## Discovery and disconnected authoring
 
 - `GET /catalog`: model-owned action/input/status catalog.
-- `GET /schema`: `{method: <model JSON Schema>, requests: {...}, openapi: "/openapi.json"}`.
-  The deployment's `/openapi.json` also defines native control/review requests.
+- `GET /schema`: `{method: <model JSON Schema>, requests: {...}, results: {...}, openapi: "/openapi.json"}`.
+  Requests include the discriminated `ProtocolControlRequest` and native review
+  schema; the deployment's `/openapi.json` defines the same HTTP contracts.
 - `GET /examples`: model-owned scientific skeletons. Unbound scientific values
   are not runnable recipes or evidence of physical qualification.
 - `GET /liquid-classes/starters`: original-source projected class entries; no
@@ -119,6 +120,9 @@ detail includes original job ID/key/generation, snapshot, `native_reason`, and
 that the original key never moved anything. Do not automatically retry or allocate
 a new key. GET the original job. A 404 is not proof of no execution. The facade
 sends only one POST per explicit request and never automatically resubmits.
+Legacy `/api/bioxp/protocols/submit` also publishes local pre-lease refusal as
+`detail.delivery:not_submitted`, `dispatch_state:not_dispatched`, retaining the
+original `native_reason`. Dispatched HTTP errors/conflicts are not relabeled.
 
 ## Observe, control, report and recovery
 
@@ -152,6 +156,9 @@ sends only one POST per explicit request and never automatically resubmits.
   Response retains the **whole original draft** and explicit recovery linkage,
   empty automatic-setup/excluded-action lists, and an advisory to author intended
   recovery actions. It does not claim a partial-transfer suffix is self-contained.
+  Omitted `initial_state` preserves the original run's authored assumptions (not
+  hardware observations); explicit null or a new object replaces them. If both
+  snapshot and request omit assumptions, the response retains that omission.
   Keep the response's `recovery` object when explicitly submitting the new run.
   Missing original snapshots return `lossless_reconstruction_unavailable` instead
   of reconstructing guessed science or replaying a native prefix.
@@ -162,11 +169,18 @@ hardware query is implied by these source/API contracts.
 
 ## Validation scope
 
-`tests/test_bioxp_methods_api.py` drives ASGI, real migrated file SQLite,
-UserTemplate owners and canonical protocol relay with an inert native transport.
-Its compiler/discovery replacements are explicit **function seams**, not native
-compilation evidence. Integration must additionally load the model/classes lane,
-exercise its actual emitted documents against the pinned native parser, and bind
-native outcome producers. Existing protocol/action/control/connection suites
-remain regression controls; retired BMS v2 method relays/types were removed,
-not the ordinary XY actions, protocol path or addressed Stop workers.
+`tests/test_bioxp_methods_integrated.py` exercises actual disconnected discovery,
+class source, compiler, file SQLite/UserTemplate revisions/CAS and frozen submit,
+GET/control/report/recovery. It replays exact captured UI authoring/run requests;
+unbound science remains a representation error. Admission is inert, not hardware.
+Unmodified native ASGI/dispatcher/executor/SQLite thermal exports enter the real
+HTTP robot client and mounted receiver, including combined robot source 0fa5843.
+See `platform/api/tests/fixtures/bioxp_methods/README.md` for producer hashes.
+
+`tests/test_bioxp_methods_api.py` retains focused fault-injection function seams;
+these are not counted as native compilation. Constructed partial owned-child
+faults use actual compiler provenance but are not native execution proof. Final
+integrated bound scientific examples, native parser oracle and native partial/
+failure-hold producers still require cross-owner acceptance. Existing protocol/
+action/control/connection suites remain regression controls; retired BMS v2 method
+relays/types were removed, not ordinary XY actions or addressed Stop workers.
