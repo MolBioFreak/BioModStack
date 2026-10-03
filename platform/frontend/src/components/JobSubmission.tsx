@@ -4,6 +4,7 @@ import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLaunch
 
 
 import { lazy, Suspense, useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { foldCpTopologyMeaning, foldCpConfidenceCaveat } from './FoldCpTopologyControl';
 import { ParamField, compactUiCopy } from './ModelParameterField';
 const CalibyNativeForm = lazy(() => import('./CalibyNativeForm').then(m => ({ default: m.CalibyNativeForm })));
 const LigandMPNNDesignForm = lazy(() => import('./LigandMPNNDesignForm').then(m => ({ default: m.LigandMPNNDesignForm })));
@@ -1965,9 +1966,9 @@ export function JobSubmission() {
                             />
 
                             <div className="space-y-6">
-                                {(isCalibyNative || isLigandNative || ['proteinmpnn', 'fampnn'].includes(selectedModelId ?? '')) && <label className="block text-sm text-slate-300">
+                                {(isCalibyNative || isLigandNative || ['proteinmpnn', 'fampnn', 'boltz_cp_experimental'].includes(selectedModelId ?? '')) && <label className="block text-sm text-slate-300">
                                     Job name
-                                    <input aria-label="Sequence job name" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 p-3" value={jobName} onChange={event => setJobName(event.target.value)} />
+                                    <input aria-label={selectedModelId === 'boltz_cp_experimental' ? 'Fold-CP job name' : 'Sequence job name'} className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 p-3" value={jobName} onChange={event => setJobName(event.target.value)} />
                                 </label>}
                                 {['boltzgen', 'ppiflow'].includes(selectedModelId ?? '') && <label className="block text-sm text-[var(--text-secondary)]">
                                     Job name
@@ -2039,6 +2040,10 @@ export function JobSubmission() {
                                 </>}
                                 {isCalibyNative && <CalibyNativeForm mode={selectedModeId!} parameters={visibleParams} values={params} onChange={updateParam} renderScalar={renderSequenceScalar} />}
                                 {isLigandNative && <LigandMPNNDesignForm parameters={visibleParams} values={params} onChange={updateParam} renderScalar={renderSequenceScalar} />}
+                                {selectedModelId === 'boltz_cp_experimental' && <aside className="text-xs text-slate-400">
+                                    <p>{foldCpTopologyMeaning}</p>
+                                    {(params.cp_topology ?? params.bcp_cp_topology) === '1d' && <p role="note" className="mt-2 text-amber-200">{foldCpConfidenceCaveat}</p>}
+                                </aside>}
                                 {/* Other models, including interface_context, retain their existing editor. */}
                                 {!isNativeBinderGeneration && !isCalibyNative && !isLigandNative && selectedMode && Object.keys(groupedParams).length > 0 && (
                                     <div className="space-y-6 pt-6 border-t border-slate-700/50">

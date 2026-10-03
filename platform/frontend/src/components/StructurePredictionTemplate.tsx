@@ -47,6 +47,7 @@ import {
     type StructureMsaTargetShardMode,
     type StructurePredictorSelection,
 } from './structurePredictionUiState.js';
+import { FoldCpTopologyControl } from './FoldCpTopologyControl';
 import { BoltzApiNativeSettingsPanel } from './BoltzApiNativeSettings';
 import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
@@ -299,6 +300,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     // Parallel jobs
     const [numParallelJobs, setNumParallelJobs] = useState(initialValues?.num_parallel_jobs ?? 1);
 
+    // Keep omitted historical topology sparse; its effective default is 2D.
+    const [bcpCpTopology, setBcpCpTopology] = useState<'2d' | '1d' | undefined>(initialValues?.cp_topology ?? initialValues?.bcp_cp_topology);
     // Boltz-CP-specific settings
     const [bcpRequestedSizeCp, setBcpRequestedSizeCp] = useState(
         Number.isFinite(initialBoltzCpSizeCp) && initialBoltzCpSizeCp > 0 ? initialBoltzCpSizeCp : 4
@@ -720,6 +723,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const boltzCpGpuSettings = deriveBoltzCpGpuLaunchSettings({
         pinnedGpus,
         requestedSizeCp: bcpRequestedSizeCp,
+        cpTopology: bcpCpTopology,
         fallbackGpuIds: boltzCpFallbackGpuIds,
     });
     const boltzCpPlacementError = isBoltzCpLaunch ? (
@@ -760,6 +764,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
                 sizeCp: boltzCpGpuSettings.sizeCp,
+                cpTopology: bcpCpTopology,
             }));
         }
 
@@ -872,7 +877,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [continuationSource, continuationChain, initialValues, executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [continuationSource, continuationChain, initialValues, executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpCpTopology, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     // Project drafts reuse the saved-template scientific projection, not a second serializer.
     const projectDraftJson = JSON.stringify(currentTemplateParams);
     useEffect(() => {
@@ -990,6 +995,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
                 sizeCp: boltzCpGpuSettings.sizeCp,
+                cpTopology: bcpCpTopology,
             }));
         }
 
@@ -2053,6 +2059,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
 
                         {isBoltzCpLaunch && (
                             <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-4 space-y-4">
+                                <FoldCpTopologyControl value={bcpCpTopology} onChange={setBcpCpTopology} />
                                 <div>
                                     <label className="text-xs text-orange-100 block mb-1">Context Parallel Size Request</label>
                                     <input
@@ -2064,7 +2071,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                         className="w-full max-w-xs bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                     />
                                     <p className="mt-2 text-xs text-slate-400">
-                                        OEM Fold-CP uses a square context-parallel mesh. Current GPU resolution: {boltzCpGpuSettings.gpuIds || 'unavailable'} → size_cp {boltzCpGpuSettings.sizeCp}.
+                                        Current GPU resolution: {boltzCpGpuSettings.gpuIds || 'unavailable'} → size_cp {boltzCpGpuSettings.sizeCp}.
                                         {boltzCpGpuSettings.error && <span role="alert"> {boltzCpGpuSettings.error}</span>}
                                     </p>
                                 </div>

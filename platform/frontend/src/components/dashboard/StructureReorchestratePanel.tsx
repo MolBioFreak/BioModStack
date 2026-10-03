@@ -2,6 +2,7 @@ import { Esmfold2SettingsControls } from '../Esmfold2SettingsControls';
 import { MsaProviderReadiness } from '../MsaProviderReadiness';
 import { ColabfoldMsaControls } from '../ColabfoldMsaControls';
 import { NeurosnapMsaControls } from '../NeurosnapMsaControls';
+import { FoldCpTopologyControl } from '../FoldCpTopologyControl';
 import { useMemo } from 'react';
 import type { GpuCatalogEntry } from '../gpuCatalog';
 import { deriveBoltzCpGpuLaunchSettings } from '../structurePredictionUiState.js';
@@ -58,6 +59,7 @@ export function StructureReorchestratePanel({
         ? deriveBoltzCpGpuLaunchSettings({
             pinnedGpus: settings.boltzCp.pinnedGpus,
             requestedSizeCp: settings.boltzCp.sizeCp,
+            cpTopology: settings.boltzCp.cpTopology,
             fallbackGpuIds: boltzCpFallbackGpuIds,
         })
         : null;
@@ -284,6 +286,7 @@ export function StructureReorchestratePanel({
                         )}
                     </div>
 
+                    <FoldCpTopologyControl value={settings.boltzCp.cpTopology} onChange={cpTopology => updateBoltzCp({ cpTopology })} disabled={disabled} />
                     <div>
                         <label className="text-sm text-orange-100/80 block mb-1">Context Parallel Size Request</label>
                         <input
@@ -298,7 +301,7 @@ export function StructureReorchestratePanel({
                             disabled={disabled}
                         />
                         <p className="mt-2 text-xs text-slate-400">
-                            OEM Fold-CP uses a square context-parallel mesh. Current GPU resolution: {boltzCpGpuSettings.gpuIds || 'auto fallback'} → size_cp {boltzCpGpuSettings.sizeCp}.
+                            Current GPU resolution: {boltzCpGpuSettings.gpuIds || 'auto fallback'} → size_cp {boltzCpGpuSettings.sizeCp}.
                         </p>
                     </div>
 

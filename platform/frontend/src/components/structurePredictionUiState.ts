@@ -73,6 +73,7 @@ export interface StructureLaunchConfig {
 
 export interface BoltzCpGpuLaunchInput {
     pinnedGpus: number[];
+    cpTopology?: '2d' | '1d';
     requestedSizeCp?: number | null;
     fallbackGpuIds?: string | null;
 }
@@ -89,6 +90,7 @@ export interface ResolveStructureSubmitTargetInput {
 }
 
 export interface BoltzCpSubmitParamsInput {
+    cpTopology?: '2d' | '1d';
     outputFormat: 'mmcif' | 'pdb';
     writeFullPae: boolean;
     seed?: string | null;
@@ -275,16 +277,25 @@ export const deriveBoltzCpGpuLaunchSettings = ({
     pinnedGpus,
     requestedSizeCp,
     fallbackGpuIds,
+    cpTopology = '2d',
 }: BoltzCpGpuLaunchInput): { gpuIds: string; sizeCp: number; error?: string } => {
     const resolvedGpuIds = parseBoltzCpGpuIds(
         Array.isArray(pinnedGpus) && pinnedGpus.length > 0 ? pinnedGpus : fallbackGpuIds
     );
-    const sizeCp = requestedSizeCp ?? getLargestSquareDivisor(resolvedGpuIds.length);
+    const sizeCp = requestedSizeCp ?? (cpTopology === '1d'
+        ? Array.from({ length: 16 }, (_, index) => 16 - index)
+            .find(candidate => resolvedGpuIds.length > 0 && resolvedGpuIds.length % candidate === 0) ?? 1
+        : getLargestSquareDivisor(resolvedGpuIds.length));
+    const invalid = !Number.isInteger(sizeCp) || sizeCp < 1 || sizeCp > 16
+        || (resolvedGpuIds.length === 0 && sizeCp > 1)
+        || (cpTopology === '1d'
+            ? resolvedGpuIds.length > 0 && resolvedGpuIds.length % sizeCp !== 0
+            : getLargestSquareDivisor(resolvedGpuIds.length, sizeCp) !== sizeCp);
     return {
         gpuIds: resolvedGpuIds.join(','),
         sizeCp,
-        ...((resolvedGpuIds.length === 0 && sizeCp > 1) || getLargestSquareDivisor(resolvedGpuIds.length, sizeCp) !== sizeCp
-            ? { error: `Fold-CP size_cp ${requestedSizeCp} requires a nonempty GPU selection divisible by that square CP size. Select compatible GPUs; CP will not be reduced automatically.` } : {}),
+        ...(invalid
+            ? { error: `Fold-CP size_cp ${requestedSizeCp} requires a nonempty GPU selection divisible by that ${cpTopology === '2d' ? 'square ' : ''}CP size. Select compatible GPUs; CP will not be reduced automatically.` } : {}),
     };
 };
 
@@ -315,6 +326,7 @@ export const buildBoltzCpSubmitParams = ({
     seed,
     gpuIds,
     sizeCp,
+    cpTopology,
 }: BoltzCpSubmitParamsInput): BoltzCpSubmitParams => {
     const params: BoltzCpSubmitParams = {
         num_parallel_jobs: 1,
@@ -322,6 +334,7 @@ export const buildBoltzCpSubmitParams = ({
         bcp_output_format: outputFormat,
         bcp_write_full_pae: writeFullPae,
         bcp_size_cp: sizeCp,
+        ...(cpTopology !== undefined ? { bcp_cp_topology: cpTopology } : {}),
     };
     if (gpuIds && gpuIds.trim()) {
         params.bcp_gpu_ids = gpuIds.trim();
