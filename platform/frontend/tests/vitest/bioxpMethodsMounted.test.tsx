@@ -6,6 +6,7 @@ import { webcrypto, createHash } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { gunzipSync } from 'node:zlib';
 import { BioXpMethodsWorkspace } from '../../src/components/BioXpMethodsWorkspace';
 import { api } from '../../src/lib/api';
 import { previewActionDestination } from '../../src/lib/bioxpWorkflowPlan';
@@ -333,6 +334,73 @@ it('uses existing same-job controls and exact occurrence recovery with no replay
     expect(requests.find(r => r.url.endsWith('/recovery-draft'))!.body.occurrence).toEqual(provenance[0]); expect(submits()).toHaveLength(1);
     expect(host.textContent).toContain('Recovery is an unsaved editable draft');
 });
+it.runIf(!!process.env.BIOXP_NATIVE_BMS_SNAPSHOTS).each([
+    ['bms-46-aspirate.json.gz', 'result'], ['bms-46-dispense.json.gz', 'result'],
+    ['bms-0-error-hold.json.gz', 'held'], ['bms-0-error-hold.json.gz', 'result'],
+])('receives original BMS native snapshot %s/%s and cold reopens explicit recovery through actual ASGI', async (filename, state) => {
+    const original = JSON.parse(gunzipSync(readFileSync(`${process.env.BIOXP_NATIVE_BMS_SNAPSHOTS}/${filename}`)).toString())[state];
+    const unchanged = JSON.stringify(original), transport = api.defaults.adapter as AxiosAdapter;
+    const project = (path: string, body?: unknown) => {
+        const result = spawnSync(process.env.BMS_TEST_PYTHON ?? '../api/.venv/bin/python', ['tests/fixtures/bioxpNativeMethodProjection.py'], { encoding: 'utf8', input: JSON.stringify({ filename, state, path, body }) });
+        expect(result.status, result.stderr).toBe(0); return JSON.parse(result.stdout);
+    };
+    const report = project('report');
+    const metadata = original.protocol.document.metadata;
+    const source = metadata.bms_method_run ?? metadata.bms_method;
+    expect(source.method).toBeTruthy();
+    expect(report.snapshot_available, 'API must losslessly project the original native BMS metadata variant').toBe(true);
+    expect(report.method_snapshot).toMatchObject({ method: source.method, bindings: source.bindings, dependencies: source.dependencies });
+    const snapshot = report.method_snapshot;
+    records[original.job_id] = original;
+    api.defaults.adapter = async config => {
+        const url = config.url!, body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+        if (url.includes(`/runs/${original.job_id}`)) {
+            requests.push({ method: config.method!, url, body, params: config.params });
+            const data = url.endsWith('/report') ? report : url.endsWith('/recovery-draft') ? project('recovery-draft', body) : original;
+            return { config, status: 200, statusText: 'OK', headers: {}, data: structuredClone(data) };
+        }
+        return transport(config);
+    };
+    await mount(); await click('Runs'); await click(`${original.job_id} · ${original.status}`); await click('Load method report');
+    const selected = snapshot.compilation.provenance[0];
+    await input('Exact recovery occurrence', selected.occurrence_id);
+    await input('Recovery native action', selected.native_action_ids[0]);
+    await input('Recovery initial assumptions type', 'object');
+    await input('Recovery initial assumptions new field', 'custody'); await click('Add Recovery initial assumptions field');
+    await input('Recovery initial assumptions.custody type', 'null');
+    await click('Create recovery draft');
+    const sent = requests.find(r => r.url.endsWith('/recovery-draft'))!.body;
+    expect(sent).toEqual({ occurrence: { ...selected, native_action_id: selected.native_action_ids[0] }, initial_state: { custody: null } });
+    await input('Method name', `Recovery ${filename} ${state}`); await click('Save');
+    const saved = Object.values(db).find(r => r.name === `Recovery ${filename} ${state}`)!;
+    expect(saved.method.steps).toEqual(snapshot.method.steps);
+    expect(saved.method.editor_state.run_inputs).toEqual({ bindings: snapshot.bindings ?? {}, dependencies: snapshot.dependencies ?? {}, initial_state: { custody: null } });
+    expect(saved.method.editor_state.recovery_linkage).toMatchObject({ original_job_id: original.job_id, occurrence: sent.occurrence, automatic_setup: [], excluded_actions: [], submitted: false });
+    await act(async () => root.unmount()); client.clear(); await mount();
+    await input('Library entry', saved.id); await click('Open'); await click('Compile');
+    const reopened = requests.filter(r => r.url.endsWith('/compile')).at(-1)!.body;
+    expect(reopened.initial_state).toEqual({ custody: null });
+    expect(reopened.bindings).toEqual(snapshot.bindings ?? {}); expect(reopened.dependencies).toEqual(snapshot.dependencies ?? {});
+    expect(reopened.method).toEqual(saved.method);
+    expect(JSON.stringify(original)).toBe(unchanged); expect(submits()).toHaveLength(0);
+    expect(requests.filter(r => /\/(control|review)$/.test(r.url))).toHaveLength(0);
+}, 30000);
+it('cold reopens edited recovery assumptions and original bindings without replay', async () => {
+    await mount(); await openOriginal(); await acknowledge(); await click('Run saved revision');
+    await click('Load method report'); await input('Exact recovery occurrence', 'loop/0/move-original');
+    await input('Recovery initial assumptions type', 'object');
+    await input('Recovery initial assumptions new field', 'custody'); await click('Add Recovery initial assumptions field');
+    await input('Recovery initial assumptions.custody', 'operator reviewed unknown');
+    await click('Create recovery draft'); await input('Method name', 'Edited recovery');
+    await click('Save');
+    const saved = Object.values(db).find(r => r.name === 'Edited recovery')!;
+    expect(saved).toBeTruthy();
+    await act(async () => root.unmount()); client.clear(); localStorage.clear(); await mount();
+    await input('Library entry', saved.id); await click('Open');
+    expect((host.querySelector('[aria-label="Initial assumptions.custody"]') as HTMLInputElement)?.value).toBe('operator reviewed unknown');
+    expect(saved.method.editor_state.recovery_linkage.occurrence).toEqual(provenance[0]);
+    expect(submits()).toHaveLength(1);
+});
 it.each(['omitted', 'null', 'object'])('recovery %s assumptions are independent from next-draft edits and preserve exact native action', async kind => {
     await mount(); await openOriginal(); await acknowledge(); await click('Run saved revision');
     await click('Load method report'); await input('Exact recovery occurrence', 'loop/0/move-original');
@@ -353,6 +421,13 @@ it.each(['omitted', 'null', 'object'])('recovery %s assumptions are independent 
     const check = requests.filter(r => r.url.endsWith('/compile')).at(-1)!.body;
     expect(Object.hasOwn(check, 'initial_state')).toBe(kind !== 'omitted');
     if (kind !== 'omitted') expect(check.initial_state).toEqual(body.initial_state);
+    await input('Method name', `Recovered ${kind}`); await click('Save');
+    const saved = Object.values(db).find(r => r.name === `Recovered ${kind}`)!;
+    await act(async () => root.unmount()); client.clear(); localStorage.clear(); await mount();
+    await input('Library entry', saved.id); await click('Open'); await click('Compile');
+    const cold = requests.filter(r => r.url.endsWith('/compile')).at(-1)!.body;
+    expect(Object.hasOwn(cold, 'initial_state')).toBe(kind !== 'omitted');
+    if (kind !== 'omitted') expect(cold.initial_state).toEqual(body.initial_state);
     expect(submits()).toHaveLength(1);
 });
 it('compiles separately, presents Water without new acknowledgement and derives map from emitted station', async () => {

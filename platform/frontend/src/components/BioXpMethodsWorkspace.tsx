@@ -46,9 +46,9 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
     const [quickValues, setQuickValues] = useState({ bindings: {} as MethodValue, dependencies: {} as MethodValue, initialState: {} as unknown });
     const { bindings, dependencies, initialState } = tab === 'Quick run' ? quickValues : methodValues;
     const setValues = tab === 'Quick run' ? setQuickValues : setMethodValues;
-    const setBindings = (bindings: MethodValue) => setValues(previous => ({ ...previous, bindings }));
-    const setDependencies = (dependencies: MethodValue) => setValues(previous => ({ ...previous, dependencies }));
-    const setInitialState = (initialState: unknown) => setValues(previous => ({ ...previous, initialState }));
+    const setBindings = (bindings: MethodValue) => { editVersion.current++; setValues(previous => ({ ...previous, bindings })); };
+    const setDependencies = (dependencies: MethodValue) => { editVersion.current++; setValues(previous => ({ ...previous, dependencies })); };
+    const setInitialState = (initialState: unknown) => { editVersion.current++; setValues(previous => ({ ...previous, initialState })); };
     const [check, setCheck] = useState<{ result: MethodCompile; input: MethodValue } | null>(null);
     const { busy, setBusy, busyRef } = useBioXpWorkflowMutationOwner();
     const [storageBusy, setStorageBusy] = useState(false), storageLock = useRef(false);
@@ -64,7 +64,7 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
     const [liveObservation, setLiveObservation] = useState<unknown>(null);
     const [recoveryInitialState, setRecoveryInitialState] = useState<unknown>(undefined);
     const [recoveryEvidence, setRecoveryEvidence] = useState<MethodValue | null>(null);
-    useEffect(() => { setRecoveryInitialState(undefined); setRecoveryEvidence(null); }, [run?.jobId]);
+    useEffect(() => { setRecoveryInitialState(undefined); setRecoveryEvidence(null); setOccurrence(''); setNativeAction(''); }, [run?.jobId]);
     const [occurrence, setOccurrence] = useState('');
     const [nativeAction, setNativeAction] = useState('');
     const [deckSelection, setDeckSelection] = useState<BioXpDeckSelection>({ station: '', wells: [] });
@@ -92,6 +92,11 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
     }
     async function save() {
         const value = clone(activeDraft), version = editVersion.current, lane = collection;
+        // UserTemplate stores the raw method. Keep its authored compile inputs in
+        // presentation state as well, so a cold Open cannot lose recovery science.
+        if (lane === 'library' && (Object.keys(bindings).length || Object.keys(dependencies).length || !recordEqual(initialState, {}) || object(value.editor_state).run_inputs)) {
+            value.editor_state = { ...object(value.editor_state), run_inputs: clone({ bindings, dependencies, ...(initialState !== undefined ? { initial_state: initialState } : {}) }) };
+        }
         await storage(async () => {
             const receipt = await methodsSave(lane, value, saveTargets.current[saveTarget] ?? (tab === 'Quick run' ? null : saved));
             // Keep accepted identity before GET: failed readback retry updates, not a duplicate create.
@@ -112,6 +117,10 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
             if (version !== editVersion.current) { setNotice('Open completed after an edit; editable draft retained. Open again explicitly.'); return; }
             saveTargets.current[saveTarget] = exact;
             (lane === 'liquid-classes' ? setLiquid : tab === 'Quick run' ? setQuick : setDraft)(clone(exact.method));
+            if (lane === 'library') {
+                const retained = object(object(exact.method.editor_state).run_inputs);
+                setValues({ bindings: clone(object(retained.bindings)), dependencies: clone(object(retained.dependencies)), initialState: Object.hasOwn(object(exact.method.editor_state), 'run_inputs') ? clone(retained.initial_state) : {} });
+            }
             if (lane === 'liquid-classes') setSavedLiquid(exact); else if (tab !== 'Quick run') setSavedMethod(exact); editVersion.current++;
             setNotice(`Opened exact revision ${exact.revision}.`);
         });
