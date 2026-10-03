@@ -126,7 +126,7 @@ user_params:
     type: integer
     default: 1
     minimum: 1
-    maximum: 16
+    maximum: 64
     description: OEM context-parallel rank count; divides selected GPUs and must be square for 2d topology.
     condition:
       param: pred_method

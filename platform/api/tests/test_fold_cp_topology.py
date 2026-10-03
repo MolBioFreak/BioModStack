@@ -94,6 +94,8 @@ async def test_discovery_contract():
     field = next(p for p in document['params'] if p['name'] == 'cp_topology')
     assert field['default'] == '2d' and field['enum'] == ['2d', '1d']
     template = TemplateRegistry(ROOT / 'platform/api/config/templates').get_template('structure_prediction')
+    # Adding topology must not tighten the historical template's authoring range.
+    assert next(p for p in template.user_params if p.name == 'bcp_size_cp').maximum == 64
     field = next(p for p in template.user_params if p.name == 'bcp_cp_topology')
     assert field.default == '2d' and field.enum == ['2d', '1d']
 
