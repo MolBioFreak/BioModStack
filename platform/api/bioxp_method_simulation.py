@@ -75,6 +75,8 @@ def plan_tip_policy(occurrences: list[dict], policy: str | dict) -> dict:
                 # Lowered move/aspirate/dispense children share an explicit
                 # logical transfer identity; never eject between its strokes.
                 key = occurrence.get("transfer_id", object())
+            if active and previous and occurrence.get("transfer_id") is not None and occurrence.get("transfer_id") == previous.get("transfer_id"):
+                key = prior
             if not active or key != prior:
                 if active:
                     result.append(generated("tip_eject", previous))
@@ -110,6 +112,7 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
         if not isinstance(endpoint, dict) or "labware_id" not in endpoint or "well" not in endpoint:
             return None, None
         key = f"{endpoint['labware_id']}:{endpoint['well']}"
+        touched_vessels.add(key)
         return vessels.setdefault(key, {"volume_ul": None, "materials": None}), key
 
     def change(container, delta):
@@ -127,6 +130,18 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
         for occurrence in occurrences:
             action, inputs = occurrence.get("action"), occurrence.get("inputs", {})
             oid = occurrence.get("occurrence_id")
+            if occurrence.get("status") in {"not_run", "skipped"}:
+                snapshots.append({"occurrence_id": oid, "state_delta": {}})
+                continue
+            if occurrence.get("status") in {"failed", "partial", "unknown"} and action not in {
+                    "aspirate", "dispense", "transfer", "distribute", "consolidate"}:
+                issue("partial_effects_unknown", occurrence, "Non-liquid partial state is unknown; requested pose/custody is not completion evidence.")
+                snapshots.append({"occurrence_id": oid, "state_delta": {}, "unknown_effects": True})
+                unknown_time.append(oid)
+                continue
+            touched_vessels, touched_channels = set(), set()
+            contact_offsets = {key: len(value.get("contacts", [])) for key, value in channels.items()}
+            changed_other = {}
             duration = _number(inputs.get("duration_ms"))
             if duration is not None and inputs.get("duration_semantics") == "dispatch":
                 known_time += duration
@@ -136,15 +151,20 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                 identity = inputs.get("labware_id")
                 if identity is not None:
                     labware.setdefault(identity, {})["station"] = deepcopy(inputs.get("destination_station"))
+                    changed_other["labware"] = {identity: deepcopy(labware[identity])}
             if action in {"move", "park", "pipette_position"}:
                 state["head_reference"] = deepcopy(inputs)
+                changed_other["head_reference"] = deepcopy(inputs)
             if action in {"cover_move", "move_cover", "catch", "release"}:
                 state.setdefault("custody", {})[str(inputs.get("object_id", "unknown"))] = deepcopy(inputs)
+                changed_other["custody"] = {str(inputs.get("object_id", "unknown")): deepcopy(inputs)}
             if action in {"thermal_start", "thermal_wait", "thermal_profile"}:
                 state.setdefault("thermal_tasks", {})[str(inputs.get("task_id", oid))] = {
                     "action": action, "inputs": deepcopy(inputs), "attainment": "unknown"}
+                changed_other["thermal_tasks"] = {str(inputs.get("task_id", oid)): deepcopy(state["thermal_tasks"][str(inputs.get("task_id", oid))])}
             if action in {"tip_pickup", "tip_eject"}:
                 for channel in inputs.get("channels", []):
+                    touched_channels.add(str(channel))
                     tip = channels.setdefault(str(channel), {})
                     if action == "tip_pickup":
                         tip.update(tip_loaded=True, volume_ul="0", air_ul="0", materials=[], contacts=[])
@@ -164,6 +184,7 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                     continue
                 tip = channels.setdefault(str(channel), {"tip_loaded": None, "volume_ul": None,
                                                          "air_ul": None, "contacts": [], "materials": None})
+                touched_channels.add(str(channel))
                 source, source_key = vessel(row.get("source"))
                 destination, destination_key = vessel(row.get("destination"))
                 if action == "aspirate" and destination is None:
@@ -223,7 +244,17 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                                 "destination": destination_key, "volume_ul": _text(volume),
                                 "kind": kind, "materials": materials,
                                 "transformation": deepcopy(row.get("transformation"))})
-            snapshots.append({"occurrence_id": oid, "state": deepcopy(state)})
+            # Compact per-occurrence deltas avoid copying the whole deck and
+            # cumulative contact history at every primitive in a large method.
+            channel_delta = {}
+            for key in sorted(touched_channels):
+                channel_delta[key] = {k: deepcopy(v) for k, v in channels[key].items() if k != "contacts"}
+                channel_delta[key]["contacts_append"] = deepcopy(channels[key].get("contacts", [])[contact_offsets.get(key, 0):])
+                if action == "tip_pickup":
+                    channel_delta[key]["contacts_reset"] = True
+            snapshots.append({"occurrence_id": oid, "state_delta": {
+                "vessels": {key: deepcopy(vessels[key]) for key in sorted(touched_vessels)},
+                "channels": channel_delta, **changed_other}})
     return {"layer": "planned", "state": state, "observed": None, "issues": issues,
             "lineage": lineage, "strokes": strokes, "after_occurrences": snapshots,
             "accounting": {k: {"known_ul": _text(v), "has_unknown": k in unknown_totals}

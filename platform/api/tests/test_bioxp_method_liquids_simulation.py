@@ -5,7 +5,8 @@ import json
 
 import pytest
 from bioxp_method_liquids import (load_source_catalog, source_catalog_text, starter_entries,
-                                 resolve_liquid_settings, record_liquid_application)
+                                 resolve_liquid_settings, record_liquid_application,
+                                 starter_profiles, recipe_accounting)
 from bioxp_method_simulation import simulate_method, channel_wells, plan_tip_policy
 
 
@@ -38,6 +39,45 @@ def test_source_bytes_counts_numeric_and_null_roundtrip():
         assert json.loads(json.dumps(projected['source']), parse_float=Decimal) == raw
     params = catalog['original_lld_and_stream_defaults']['parameters']
     assert [p['published_default_n2'] for p in params[:2]] == [15, 5]
+
+
+def test_profiles_and_multi_derived_accounting_are_not_calibration_or_source_aggregate():
+    profiles = starter_profiles()
+    assert {p['nominal_capacity_ul'] for p in profiles} == {10, 50, 200, 1000}
+    assert all(p['tool_offsets'] is None and p['adapter_support'] == 'unknown' for p in profiles)
+    values = recipe_accounting(entry('water-multi-p9-column-4')['settings'])
+    assert values['sample_liquid_ul'] == '90'
+    assert values['conditioning_return_ul'] == '30'
+    assert values['reserved_excess_ul'] == '60'
+    assert values['planned_loaded_liquid_ul'] == '180'
+    assert values['commanded_corrected_aspiration_ul'] is None
+    assert values['dispense_to_reaspiration_delay_ms'] is None
+    assert values['final_empty_tip'] is None
+    assert recipe_accounting({'number_of_dispenses': 6, 'dispense_volume_ul': 15})['planned_loaded_liquid_ul'] is None
+
+
+def test_explicit_class_null_and_applicability_are_preserved():
+    water = entry('water-t200-20ul-single-p8')
+    authored = {**deepcopy(water), 'provenance_kind':'authored', 'settings':{'aspirate_speed_ul_s':None}}
+    context = {**water['context'], 'applicable_fields':['aspirate_speed_ul_s']}
+    result = resolve_liquid_settings({}, liquid_class=authored, water=water, context=context)
+    assert result['resolved'] == {'aspirate_speed_ul_s':None}
+    assert result['water_substitutions'] == []
+    result = resolve_liquid_settings({}, water=water, context=context)
+    assert result['resolved'] == {'aspirate_speed_ul_s':50}
+
+
+def test_lowered_transfer_tip_continuity_air_and_noncontact_records():
+    rows = [occurrence('asp',[{'channel':1, 'source':loc('A1'), 'volume_ul':'10', 'air_ul':'2'}], 'aspirate',transfer_id='t'),
+            occurrence('disp',[{'channel':1,'destination':loc('A2'),'volume_ul':'10','air_ul':'2','contact_mode':'free'}],'dispense',transfer_id='t')]
+    policy = plan_tip_policy(rows, {'mode':'per_transfer','tip_pickup':{'channels':[1]},'tip_eject':{'channels':[1]}})
+    assert [o['action'] for o in policy['occurrences']] == ['tip_pickup','aspirate','dispense','tip_eject']
+    result = simulate_method(policy['occurrences'][:-1], {'vessels':{'plate:A1':{'volume_ul':'10','materials':['sample']},'plate:A2':{'volume_ul':'0','materials':[]}}})
+    tip = result['state']['channels']['1']
+    assert tip['air_ul'] == '0'
+    assert tip['volume_ul'] == '0'
+    assert [c['contact'] for c in tip['contacts']] == [True,False]
+    assert result['state']['vessels']['plate:A2']['materials'] == ['sample']
 
 
 @pytest.mark.parametrize('family,corrected,segments', [
@@ -160,6 +200,27 @@ def test_partial_only_known_effects_unknown_fill_and_advisory_deficit():
     assert result['state']['vessels']['plate:A2']['known_delta_ul'] == '3'
     assert {i['code'] for i in result['issues']} == {'partial_effects_unknown','planned_volume_deficit'}
     assert all(i['category'] == 'advisory' for i in result['issues'])
+
+
+def test_segment_displacement_is_not_added_to_intended_liquid():
+    segments = entry('glycerol-t200-20ul-single-p8')['settings']['dispense_segments']
+    result = simulate_method([occurrence('split',[{'channel':1,'source':loc('A1'),'destination':loc('A2'),
+                                                 'volume_ul':'20','commanded_displacement_ul':'22.75',
+                                                 'dispense_segments':segments}])],
+                             {'vessels':{'plate:A1':{'volume_ul':'20'},'plate:A2':{'volume_ul':'0'}}})
+    assert result['state']['vessels']['plate:A2']['volume_ul'] == '20'
+    assert result['strokes'][0]['dispense_segments'] == segments
+    assert result['accounting']['commanded_displacement']['known_ul'] == '22.75'
+
+
+def test_ten_thousand_occurrences_retain_linear_delta_history():
+    result = simulate_method([occurrence(str(i),[{'channel':1,'source':loc('A1','source'),
+                            'destination':loc(f'A{i+1}'),'volume_ul':'0.01'}]) for i in range(10000)],
+                            {'vessels':{'source:A1':{'volume_ul':'100','materials':['sample']}}})
+    assert len(result['after_occurrences']) == len(result['lineage']) == 10000
+    assert result['state']['vessels']['source:A1']['volume_ul'] == '0.00'
+    assert all(len(s['state_delta']['vessels']) == 2 for s in result['after_occurrences'])
+    assert all(len(s['state_delta']['channels']['1']['contacts_append']) == 2 for s in result['after_occurrences'])
 
 
 @pytest.mark.parametrize('mode,pickups',[('manual',0),('per_transfer',3),('per_source',2),('per_step',3)])
