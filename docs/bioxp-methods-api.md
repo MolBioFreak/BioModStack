@@ -149,6 +149,12 @@ original `native_reason`. Dispatched HTTP errors/conflicts are not relabeled.
   evidence comes only from native results. Missing outcomes stay unknown.
   Creation/update timestamps are not execution clocks: duration remains explicitly
   unknown when the native contract provides no execution duration.
+  `duration.action_intervals` reports available native receipt dispatch-to-finish
+  clocks separately; these exclude holds and may overlap, so are never summed
+  into a whole-run duration. `reported_applied.fields` exposes exact Cavro field
+  events, operation indices, source identities, controller evidence and per-channel
+  results, plus explicit thermal/timer completion fields. Parent cursor completion
+  cannot hide nested failed/pending/uncertain `child_outcomes`.
 - POST `/runs/{job_id}/clone` returns the original raw method/bindings/dependencies
   as an unsaved draft. It never reads a mutable library head or submits anything.
 - POST `/runs/{job_id}/recovery-draft` accepts `{occurrence?,initial_state?}`.
@@ -160,6 +166,14 @@ original `native_reason`. Dispatched HTTP errors/conflicts are not relabeled.
   hardware observations); explicit null or a new object replaces them. If both
   snapshot and request omit assumptions, the response retains that omission.
   Keep the response's `recovery` object when explicitly submitting the new run.
+  `recovery.occurrence_resolution` reports `matched`, `unmatched`, `ambiguous`, or
+  `not_requested` against immutable compiler provenance. Supplied `action_id` or
+  `native_action_id` must belong to the same addressed occurrence; all supplied
+  provenance components are compared without normalization. Unmatched component
+  values/reasons are returned as evidence, not an HTTP refusal or motion gate.
+  `original_assumptions` preserves original presence/null/value independently of
+  `assumptions_overridden`. `included_occurrences` explicitly lists retained original
+  intentions; no suffix slicing, replay or automatic setup occurs.
   Missing original snapshots return `lossless_reconstruction_unavailable` instead
   of reconstructing guessed science or replaying a native prefix.
 
@@ -179,8 +193,14 @@ See `platform/api/tests/fixtures/bioxp_methods/README.md` for producer hashes.
 
 `tests/test_bioxp_methods_api.py` retains focused fault-injection function seams;
 these are not counted as native compilation. Constructed partial owned-child
-faults use actual compiler provenance but are not native execution proof. Final
-integrated bound scientific examples, native parser oracle and native partial/
-failure-hold producers still require cross-owner acceptance. Existing protocol/
+faults use actual compiler provenance but are not native execution proof.
+`test_bioxp_methods_close.py` additionally qualifies all eight discovered bound
+companions through actual compiler/library/submit/report/recovery, and consumes six
+immutable native success/partial/error-hold result exports through the HTTP client.
+`native-finish-receiving.json` records producer commit and wrapper/slice hashes;
+JSON job value bytes are sliced unchanged, never relabelled with BMS provenance.
+These native-authored jobs have no BMS snapshot. Complete actual-execution recovery
+still requires native-produced BMS-snapshot partial/held/aborted jobs and control
+receipts; BMS mock admission is not that native dispatch proof. Existing protocol/
 action/control/connection suites remain regression controls; retired BMS v2 method
 relays/types were removed, not ordinary XY actions or addressed Stop workers.

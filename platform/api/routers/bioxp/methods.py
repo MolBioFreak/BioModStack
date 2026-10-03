@@ -19,7 +19,8 @@ from services.bioxp.protocol_models import (
     ProtocolSubmission, ProtocolControlRequest, ProtocolReviewRequest, ProtocolJob,
     ProtocolJobObservation, ProtocolControlResponse,
 )
-from services.bioxp.method_report import occurrence_outcomes
+from services.bioxp.method_report import occurrence_outcomes, application_report, duration_report
+from services.bioxp.method_recovery import resolve_occurrence, original_occurrences
 from . import protocols
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
@@ -295,12 +296,12 @@ async def report(job_id: str, expected_connection_generation: int | None = Query
     return {"job_id": job.job_id, "status": job.status, "command": job.command,
             "method_snapshot": snapshot, "snapshot_available": snapshot is not None,
             "created_at": job.created_at, "updated_at": job.updated_at,
-            "duration": {"value": None, "status": "unknown", "reason": "Creation/update timestamps are not execution clocks"},
+            "duration": duration_report(state),
             "workflow": state.workflow, "stage_states": state.stage_states,
             "occurrences": occurrence_outcomes(snapshot, state),
             "recovery": snapshot.get("recovery") if snapshot else None,
             "action_results": state.action_results, "events": state.events,
-            "reported_applied": {"status": "native_results_only", "results": state.action_results},
+            "reported_applied": application_report(state),
             "operator": job.operator}
 
 
@@ -333,6 +334,10 @@ async def recovery(job_id: str, data: Recovery,
             "dependencies": deepcopy(snapshot.get("dependencies", {})),
             **assumptions,
             "recovery": {"original_job_id": job_id, "occurrence": data.occurrence,
+                         "occurrence_resolution": resolve_occurrence(snapshot, data.occurrence),
+                         "original_assumptions": {"initial_state": deepcopy(snapshot["initial_state"])} if "initial_state" in snapshot else {},
+                         "assumptions_overridden": "initial_state" in data.model_fields_set,
+                         "included_occurrences": original_occurrences(snapshot),
                          "automatic_setup": [], "excluded_actions": [], "submitted": False,
                          "strategy": "whole_original_draft_for_explicit_editing"},
             "issues": [{"code": "recovery_requires_authoring", "category": "advisory", "path": "/method",
