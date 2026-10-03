@@ -2735,9 +2735,8 @@ export const useBioXpWorkflowJobObservation = (jobId: string | null, generation:
     refetchInterval: (query) => {
         if (!enabled) return false;
         const job = query.state.data;
-        // Historical file jobs / peers without this projection get one full
-        // read, not a recurring bulk fallback. This is observation only.
-        if (job && !('schema_version' in job && job.schema_version === 'bioxp.protocol_job_observation.v1')) return false;
+        // Older peers can ignore the projection selector. Preserve their
+        // original outcome cadence; compactness never decides settlement.
         const command = job?.command;
         const workflow = job?.execution?.runtime_state.workflow;
         const settled = command?.command_id === jobId && command.terminal

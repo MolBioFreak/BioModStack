@@ -10,6 +10,8 @@ import { BioXpWorkflowJobMonitor } from '../../src/components/BioXpWorkflowJobMo
 // This is capture replay, not measured live bandwidth or physical execution.
 const path = process.env.BIOXP_OBSERVATION_RECEIVING;
 const evidence = path ? JSON.parse(readFileSync(path, 'utf8')) : null;
+const capturePath = process.env.BIOXP_SELECTED_JOB_CAPTURE;
+const fullCapture = capturePath ? JSON.parse(readFileSync(capturePath, 'utf8')) : null;
 const originalAdapter = api.defaults.adapter;
 let root: Root, host: HTMLDivElement, client: QueryClient;
 let index: number, rows: any[], requests: { at: number; bytes: number; params: any; url: string }[];
@@ -80,12 +82,40 @@ it.skipIf(!evidence)('keeps read errors visible, recovers on cadence, and fences
     visible = true; generation = 8; await render(); expect(requests.at(-1)?.params.expected_connection_generation).toBe(8);
     connected = false; await render(); const disconnected = requests.length; await tick(60000); expect(requests).toHaveLength(disconnected);
 });
-it.skipIf(!evidence)('does not repeatedly hydrate a full old-peer response or change its control authority', async () => {
-    const retained = structuredClone(evidence.windows.changing.rows[0]);
-    retained.schema_version = 'bioxp.protocol_operator_bundle.v1';
+it.skipIf(!evidence || !fullCapture).each([
+    ['dispatched', 'executing', false, 31],
+    ['ambiguous', 'reconciling', true, 31],
+    ['completed', 'terminal', true, 1],
+] as const)('preserves full old-peer %s outcome observation and settlement', async (status, phase, terminal, count) => {
+    const retained = structuredClone(fullCapture);
+    expect(retained.job_id).toBe(evidence.job_id);
+    retained.status = status;
+    retained.command = { ...retained.command, status, terminal };
+    retained.execution.runtime_state.workflow = {
+        ...retained.execution.runtime_state.workflow, phase, requested_control: null,
+    };
     rows = [retained]; await render(); await tick(60000);
-    expect(requests).toHaveLength(1);
-    expect(host.textContent).toContain('Compact workflow observation unavailable');
+    expect(requests).toHaveLength(count);
+    expect(host.textContent).toContain(`Robot status: ${status} · Phase: ${phase}`);
+    expect(host.textContent).not.toContain('Reopen to refresh');
     const button = [...host.querySelectorAll('button')].find(node => node.textContent === 'Request safe-state stop')!;
-    expect(button.disabled).toBe(false);
+    expect(button.disabled).toBe(terminal);
+    for (let n = 1; n < requests.length; n++) expect(requests[n].at - requests[n-1].at).toBeLessThanOrEqual(2020);
+});
+it.skipIf(!evidence || !fullCapture)('continues old-peer recovery, sees later settlement, and keeps the original identity', async () => {
+    const retained = structuredClone(fullCapture);
+    expect(retained.job_id).toBe(evidence.job_id);
+    retained.status = 'ambiguous';
+    retained.command = { ...retained.command, status: 'ambiguous', terminal: true };
+    retained.execution.runtime_state.workflow.phase = 'reconciling';
+    rows = [retained]; await render(); await tick(4000);
+    expect(requests).toHaveLength(3);
+    const settled = structuredClone(retained);
+    settled.status = 'completed'; settled.command.status = 'completed';
+    settled.execution.runtime_state.workflow.phase = 'terminal';
+    rows = [settled]; await tick(2000);
+    expect(host.textContent).toContain('Robot status: completed · Phase: terminal');
+    const reads = requests.length;
+    await tick(60000); expect(requests).toHaveLength(reads);
+    expect(new Set(requests.map(item => item.url))).toEqual(new Set([`/api/bioxp/protocols/jobs/${evidence.job_id}`]));
 });

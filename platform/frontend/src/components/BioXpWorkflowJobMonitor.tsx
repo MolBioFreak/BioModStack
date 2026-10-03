@@ -84,7 +84,6 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     return <>
         {jobId && <p className="break-all text-sm">Canonical job: {jobId}</p>}
         {(query.isError || discoveryError) && <p role="status">Workflow readback unavailable; checking again. Do not resubmit uncertain work.</p>}
-        {query.data?.command && !('schema_version' in query.data && query.data.schema_version === 'bioxp.protocol_job_observation.v1') && <p role="status">Compact workflow observation unavailable on this robot; retained detail shown. Reopen to refresh.</p>}
         {pending && !job && <p role="status">Submission outcome not yet reconciled. Checking the original job; no automatic retry.</p>}
         {!controlsEnabled && connected && <p className="text-sm">Workflow controls unavailable until current connection status recovers; passive readback continues.</p>}
         {canonical && <>
