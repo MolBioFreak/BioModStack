@@ -1803,17 +1803,22 @@ def _normalize_boltz_cp_params_for_validation(
     if gpu_ids:
         normalized["gpu_ids"] = gpu_ids
 
+    cp_topology = normalized.get("cp_topology", normalized.get("bcp_cp_topology", "2d"))
+    if cp_topology not in ("2d", "1d"):
+        raise HTTPException(status_code=422, detail="Fold-CP cp_topology must be one of: 2d, 1d")
+    normalized["cp_topology"] = cp_topology
     size_cp = _coerce_positive_int(normalized.get("size_cp")) or _coerce_positive_int(
         normalized.get("bcp_size_cp")
     )
     requested_cp = normalized.get("size_cp", normalized.get("bcp_size_cp"))
-    if requested_cp not in (None, ""):
+    if requested_cp not in (None, "") or cp_topology == "1d":
         from services.nextflow import _derive_boltz_cp_gpu_launch_settings
         try:
             gpu_ids, size_cp = _derive_boltz_cp_gpu_launch_settings(
                 pinned_gpus=normalized.get("pinned_gpus"),
                 requested_size_cp=requested_cp,
                 fallback_gpu_ids=gpu_ids,
+                cp_topology=cp_topology,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -6174,6 +6179,10 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     # Skip validation for template jobs and mutagenesis batches
     # Mutagenesis uses mutagenesis_variants array instead of top-level sequence
     validation_params = _normalize_boltz_cp_params_for_validation(job_data.model_id, job_data.params)
+    if job_data.model_id == "boltz_cp_experimental":
+        # Persist the effective public setting for saved requests, clones and retries.
+        job_data.params["cp_topology"] = validation_params["cp_topology"]
+        job_data.params.pop("bcp_cp_topology", None)
     is_mutagenesis = 'mutagenesis_variants' in job_data.params
     if native_entrypoint is not None or (not job_data.model_id.startswith('template_') and not is_mutagenesis):
         # Trusted selected-native callers retain schema validation for aliases;
@@ -11137,6 +11146,11 @@ async def resume_job(
     merged_params = _normalize_structure_runtime_paths(job.model_id, merged_params)
     merged_params = _normalize_structure_geometry_params(merged_params)
     merged_params = _normalize_antibody_job_params(merged_params)
+    if job.model_id == "boltz_cp_experimental":
+        merged_params["cp_topology"] = merged_params.get(
+            "cp_topology", merged_params.get("bcp_cp_topology", "2d")
+        )
+        merged_params.pop("bcp_cp_topology", None)
     _validate_antibody_runtime_paths(job.model_id, merged_params)
     resume_selected_input_artifact_class = normalize_antibody_artifact_class(
         merged_params.get("selected_input_artifact_class")

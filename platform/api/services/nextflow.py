@@ -1117,6 +1117,7 @@ def _derive_boltz_cp_gpu_launch_settings(
     requested_size_cp: object,
     fallback_gpu_ids: object = None,
     scheduler_gpu_id: object = None,
+    cp_topology: str = "2d",
 ) -> Tuple[str, int]:
     """Resolve the physical CP launch bridge without assuming host GPU ordinals."""
     raw_gpu_ids = None
@@ -1128,6 +1129,24 @@ def _derive_boltz_cp_gpu_launch_settings(
         raw_gpu_ids = scheduler_gpu_id
 
     parsed_gpu_ids = _parse_boltz_cp_gpu_ids(raw_gpu_ids)
+    if cp_topology not in ("2d", "1d"):
+        raise ValueError("Fold-CP cp_topology must be one of: 2d, 1d")
+    if cp_topology == "1d":
+        gpu_count = len(parsed_gpu_ids)
+        if requested_size_cp in (None, ""):
+            size_cp = next((size for size in range(min(gpu_count, 16), 0, -1)
+                            if gpu_count % size == 0), 1)
+        else:
+            requested = _coerce_int(requested_size_cp, 0)
+            if (isinstance(requested_size_cp, bool) or str(requested) != str(requested_size_cp)
+                    or not 1 <= requested <= 16 or (gpu_count and gpu_count % requested != 0)
+                    or (requested > 1 and not parsed_gpu_ids)):
+                raise ValueError(
+                    f"Fold-CP size_cp {requested_size_cp} requires a positive integer up to 16 "
+                    "and an explicit GPU selection divisible by that CP size; CP cannot be reduced automatically"
+                )
+            size_cp = requested
+        return ",".join(str(gpu_id) for gpu_id in parsed_gpu_ids), size_cp
     size_cp = _largest_square_divisor(len(parsed_gpu_ids), requested_size_cp)
     if requested_size_cp not in (None, ""):
         requested = _coerce_int(requested_size_cp, 0)
@@ -6461,6 +6480,7 @@ def compile_nextflow_invocation(
             'input_path': 'bcp_input_path',
             'gpu_ids': 'bcp_gpu_ids',
             'size_cp': 'bcp_size_cp',
+            'cp_topology': 'bcp_cp_topology',
             'input_format': 'bcp_input_format',
             'output_format': 'bcp_output_format',
             'write_full_pae': 'bcp_write_full_pae',
@@ -6488,11 +6508,13 @@ def compile_nextflow_invocation(
             elif params.get('boltz_diffusion_samples') not in (None, ''):
                 params['bcp_diffusion_samples'] = params['boltz_diffusion_samples']
 
+        params.setdefault('bcp_cp_topology', '2d')
         derived_gpu_ids, derived_size_cp = _derive_boltz_cp_gpu_launch_settings(
             pinned_gpus=params.get('pinned_gpus'),
             requested_size_cp=params.get('bcp_size_cp'),
             fallback_gpu_ids=params.get('bcp_gpu_ids'),
             scheduler_gpu_id=params.get('gpu_id'),
+            cp_topology=params['bcp_cp_topology'],
         )
         if derived_gpu_ids:
             params['bcp_gpu_ids'] = derived_gpu_ids

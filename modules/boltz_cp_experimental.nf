@@ -28,7 +28,12 @@ process RunBoltzCPExperimental {
     }
     def gpuIds = (gpuIdsParam == null ? '' : gpuIdsParam.toString()).split(',').collect { it.trim() }.findAll { it }
     def nproc = gpuIds ? gpuIds.size() : 1
-    def sizeCp = (params.bcp_size_cp ?: 4) as Integer
+    def cpTopology = params.get('bcp_cp_topology', '2d').toString()
+    def rawSizeCp = params.get('bcp_size_cp', 4)
+    if (cpTopology == '1d' && (!(rawSizeCp.toString() ==~ /[1-9][0-9]*/) || new BigInteger(rawSizeCp.toString()) > 16)) {
+        error("bcp_size_cp must be a positive integer up to 16 for 1d topology")
+    }
+    def sizeCp = (rawSizeCp ?: 4) as Integer
     def sizeDp = Math.max((int) (nproc / sizeCp), 1)
     def inputFormat = (params.bcp_input_format ?: 'config_files').toString()
     def outputFormat = (params.bcp_output_format ?: 'mmcif').toString()
@@ -74,6 +79,7 @@ process RunBoltzCPExperimental {
     TASK_ROOT="\$PWD"
     REPO_PATH=${repoPath}
     SIZE_CP=${sizeCp}
+    CP_TOPOLOGY=${shellQuote(cpTopology)}
     NPROC=${nproc}
     SIZE_DP=${sizeDp}
     INPUT_FORMAT=${quotedInputFormat}
@@ -115,7 +121,15 @@ import math
 print(math.isqrt(int("${sizeCp}")))
 PY
 )
-    if [ \$((size_cp_axis * size_cp_axis)) -ne \$SIZE_CP ]; then
+    if [ "\$CP_TOPOLOGY" != "2d" ] && [ "\$CP_TOPOLOGY" != "1d" ]; then
+        echo "bcp_cp_topology must be one of: 2d, 1d" >&2
+        exit 1
+    fi
+    if [ "\$CP_TOPOLOGY" = "1d" ] && [ \$SIZE_CP -gt 16 ]; then
+        echo "bcp_size_cp must be at most 16" >&2
+        exit 1
+    fi
+    if [ "\$CP_TOPOLOGY" = "2d" ] && [ \$((size_cp_axis * size_cp_axis)) -ne \$SIZE_CP ]; then
         echo "bcp_size_cp must be a perfect square" >&2
         exit 1
     fi
@@ -223,6 +237,7 @@ PY
         --cache /boltzcache \
         --size_dp \$SIZE_DP \
         --size_cp \$SIZE_CP \
+        --cp_topology "\$CP_TOPOLOGY" \
         --input_format "\$INPUT_FORMAT" \
         --output_format "\$OUTPUT_FORMAT" \
         --recycling_steps ${params.bcp_recycling_steps ?: 3} \

@@ -10,9 +10,17 @@ workflow BOLTZ_CP_EXPERIMENTAL {
             error("bcp_input_path is required for boltz_cp_experimental")
         }
 
-        def sizeCp = (params.bcp_size_cp ?: 4) as Integer
+        def cpTopology = params.get('bcp_cp_topology', '2d').toString()
+        if (!(cpTopology in ['2d', '1d'])) {
+            error("bcp_cp_topology must be one of: 2d, 1d")
+        }
+        def rawSizeCp = params.get('bcp_size_cp', 4)
+        if (cpTopology == '1d' && (!(rawSizeCp.toString() ==~ /[1-9][0-9]*/) || new BigInteger(rawSizeCp.toString()) > 16)) {
+            error("bcp_size_cp must be a positive integer up to 16 for 1d topology")
+        }
+        def sizeCp = (rawSizeCp ?: 4) as Integer
         def sizeCpAxis = Math.sqrt(sizeCp as double) as Integer
-        if (sizeCpAxis * sizeCpAxis != sizeCp) {
+        if (cpTopology == '2d' && sizeCpAxis * sizeCpAxis != sizeCp) {
             error("bcp_size_cp must be a perfect square")
         }
 

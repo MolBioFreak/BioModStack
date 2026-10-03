@@ -554,6 +554,7 @@ class _NativeAnnotations:
             resources['max_forks'] = 4
         if 'BoltzCP' in labels:
             resources['gpu']['count'] = self.p.get('bcp_size_cp', 4)
+            resources['gpu']['cp_topology'] = self.p.get('bcp_cp_topology', '2d')
             resources['gpu']['count_authority'] = 'modules/boltz_cp_experimental.nf:size_cp'
         component = NativeComponent(name, authority, canonical_bytes({'native_process': native_name,
             'labels': list(labels), 'directives': list(directives)}), depends_on=tuple(after),

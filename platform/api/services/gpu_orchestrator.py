@@ -2851,6 +2851,7 @@ class GPUOrchestrator:
                             _derive_boltz_cp_gpu_launch_settings(
                                 pinned_gpus=requested_remote_gpus,
                                 requested_size_cp=job_params.get("bcp_size_cp", job_params.get("size_cp")),
+                                cp_topology=job_params.get("bcp_cp_topology", job_params.get("cp_topology", "2d")),
                             )
                         except ValueError as exc:
                             job.remote_state = "waiting_remote_gpu"
