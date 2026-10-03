@@ -280,11 +280,8 @@ async def review(job_id: str, data: ProtocolReviewRequest, runtime=Depends(get_b
 
 
 def _snapshot(job):
-    metadata = job.protocol.document.get("metadata")
-    snapshot = metadata.get("bms_method_run") if isinstance(metadata, dict) else None
-    if not isinstance(snapshot, dict) or snapshot.get("schema") != "bms.bioxp-method-run.v1":
-        return None
-    return deepcopy(snapshot) if isinstance(snapshot.get("method"), dict) else None
+    from services.bioxp.method_snapshot import method_snapshot
+    return method_snapshot(job.protocol.document)
 
 
 @router.get("/runs/{job_id}/report")
@@ -315,7 +312,8 @@ async def clone_run(job_id: str, expected_connection_generation: int | None = Qu
                                   "path": "/protocol/document/metadata/bms_method_run",
                                   "message": "Original raw method snapshot is unavailable"})
     result = {key: deepcopy(snapshot[key]) for key in ("method", "bindings", "dependencies", "initial_state") if key in snapshot}
-    return {**result, "original_job_id": job_id, "submitted": False}
+    return {**result, "original_job_id": job_id, "submitted": False,
+            **({"snapshot_evidence": deepcopy(snapshot["snapshot_evidence"])} if "snapshot_evidence" in snapshot else {})}
 
 
 @router.post("/runs/{job_id}/recovery-draft")
@@ -336,6 +334,7 @@ async def recovery(job_id: str, data: Recovery,
             "recovery": {"original_job_id": job_id, "occurrence": data.occurrence,
                          "occurrence_resolution": resolve_occurrence(snapshot, data.occurrence),
                          "original_assumptions": {"initial_state": deepcopy(snapshot["initial_state"])} if "initial_state" in snapshot else {},
+                         **({"snapshot_evidence": deepcopy(snapshot["snapshot_evidence"])} if "snapshot_evidence" in snapshot else {}),
                          "assumptions_overridden": "initial_state" in data.model_fields_set,
                          "included_occurrences": original_occurrences(snapshot),
                          "automatic_setup": [], "excluded_actions": [], "submitted": False,

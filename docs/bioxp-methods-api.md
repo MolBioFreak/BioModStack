@@ -177,6 +177,19 @@ original `native_reason`. Dispatched HTTP errors/conflicts are not relabeled.
   Missing original snapshots return `lossless_reconstruction_unavailable` instead
   of reconstructing guessed science or replaying a native prefix.
 
+Compiler-authored native jobs may retain `metadata.bms_method` rather than the
+facade's complete `bms_method_run` envelope. Report/clone/recovery can read that
+original raw method and the recorded bindings/dependencies/initial state. The
+report labels the projection `bms.bioxp-compiler-snapshot.v1`; `snapshot_evidence`
+retains the exact original metadata and says `complete_run_envelope:false`.
+Occurrence/action linkage comes only from immutable emitted action metadata,
+never current compilation or a result cursor. Recovery and clone expose the same
+evidence limitations. Compiler-recorded null does **not** establish whether the
+original submitter omitted assumptions or explicitly supplied null. Saved revision,
+full compilation/simulation, or missing authored values are not invented. Complete
+facade snapshots take precedence and preserve their original omission/null/object
+semantics unchanged. Neither projection mutates the native document.
+
 Optional SSE is not implemented; GET uses the existing observer. No robot
 execution authorization, physical qualification, deployment, live migration or
 hardware query is implied by these source/API contracts.
@@ -199,8 +212,22 @@ companions through actual compiler/library/submit/report/recovery, and consumes 
 immutable native success/partial/error-hold result exports through the HTTP client.
 `native-finish-receiving.json` records producer commit and wrapper/slice hashes;
 JSON job value bytes are sliced unchanged, never relabelled with BMS provenance.
-These native-authored jobs have no BMS snapshot. Complete actual-execution recovery
-still requires native-produced BMS-snapshot partial/held/aborted jobs and control
-receipts; BMS mock admission is not that native dispatch proof. Existing protocol/
-action/control/connection suites remain regression controls; retired BMS v2 method
-relays/types were removed, not ordinary XY actions or addressed Stop workers.
+These older native-authored jobs have no BMS snapshot.
+
+`test_bioxp_methods_native_snapshots.py` receives all 51 committed native-close BMS
+wrapper results (49 distinct documents plus failure/control variants), plus the
+original error-held readback, through the actual HTTP client and mounted API with
+scratch SQLite. Gzip and decompressed hashes match the unchanged producer manifest;
+job JSON values are sliced verbatim, with original IDs and metadata. The tests
+cover report/child outcomes, clone, exact recovery occurrence and assumptions,
+Save/reopen, mid-aspirate/mid-dispense effects, held/aborted snapshots, and unchanged
+original readback. The producer is `ae006a9a854c2959ab313aac994b396217ac12f6`.
+These jobs actually contain compiler `bms_method` snapshots, not facade
+`bms_method_run`; their missing full-envelope/omission evidence is explicitly
+reported. The complete facade omitted/null/object matrix is separately exercised
+through actual compiler submission in `test_bioxp_methods_integrated.py`.
+Post-pickup native BMS recovery and exact native control-request/receipt replay
+are not supplied by this producer corpus. Held/aborted readbacks and existing
+control-schema regressions do not establish those missing captures. Existing
+protocol/action/control/connection suites remain regression controls; retired BMS
+v2 method relays/types were removed, not ordinary XY actions or addressed Stops.

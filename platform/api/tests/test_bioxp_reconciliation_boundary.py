@@ -31,7 +31,7 @@ def test_passive_v2_reconciliation_survives_status_failure_without_motion(tmp_pa
             if request.url.path.startswith('/camera/'):
                 return await b.transport(request)
             route = next(name for name, (_, path, _) in b.clients[0].routes.items()
-                         if path.replace('{command_id}', receipt['command_id']).replace('{method_id}', 'method-1') == request.url.path)
+                         if path.replace('{command_id}', receipt['command_id']) == request.url.path)
             payload = responses[route]
             if request.url.params.get('detail') == 'true':
                 payload = {**v2_receipt_detail(), **payload}
@@ -41,13 +41,16 @@ def test_passive_v2_reconciliation_survives_status_failure_without_motion(tmp_pa
         b.clients[0]._client._transport._transport = httpx.MockTransport(transport)
         paths = ['/operator-controls/v2/catalog', '/operator-controls/v2/dashboard',
                  '/operator-controls/v2/receipts/xy-current', '/operator-controls/v2/commands/xy-current',
-                 '/operator-controls/v2/methods/method-1',
                  '/operator-controls/v2/receipts/xy-current?detail=true',
                  '/operator-controls/v2/commands/xy-current?detail=true']
         receipt = v2_receipt(action_id='oem.xy.move_absolute', command_id='xy-current')
         responses['operator_action_receipt_v2'] = receipt
         responses['operator_command_status_v2'] = receipt
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=b.app), base_url='http://bms') as browser:
+            # Retired method lookup is not an active reconciliation resource.
+            before = len(calls)
+            assert (await browser.get('/operator-controls/v2/methods/method-1')).status_code == 404
+            assert len(calls) == before
             # Warm the actual schema-parameterized route path before the fault.
             for path in paths:
                 response = await browser.get(path)
