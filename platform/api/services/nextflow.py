@@ -6494,7 +6494,7 @@ def compile_nextflow_invocation(
             if src_key == dest_key:
                 continue
             if src_key in params:
-                if dest_key not in params:
+                if src_key == 'cp_topology' or dest_key not in params:
                     params[dest_key] = params[src_key]
                 params.pop(src_key, None)
 

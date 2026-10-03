@@ -43,6 +43,10 @@ def test_admission_and_compiler_non_square_boundary(size, alias, tmp_path):
     assert command[command.index('--bcp_cp_topology') + 1] == '1d'
     assert command[command.index('--bcp_size_cp') + 1] == str(size)
     assert '--cp_topology' not in command
+    # Compiler agrees with API normalization when public topology replaces a stale alias.
+    mixed = build_nextflow_command('boltz_cp_experimental', 'design',
+                                  {**params(size), 'bcp_cp_topology': '2d'}, str(tmp_path / 'mixed'))
+    assert mixed[mixed.index('--bcp_cp_topology') + 1] == '1d'
 
 
 @pytest.mark.parametrize('size,count', [(3, 4), (8, 6), (0, 3), (-1, 3), (17, 17), (3.5, 3), (True, 3)])
@@ -101,8 +105,12 @@ async def test_discovery_contract():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('topology,size', [(None, 4), ('1d', 3), ('1d', 8)])
-async def test_saved_clone_and_actual_retry_keep_effective_topology(admission, monkeypatch, topology, size):
+@pytest.mark.parametrize('topology,size,overrides', [
+    (None, 4, {}), ('1d', 3, {}), ('1d', 8, {}),
+    ('2d', 4, {'bcp_cp_topology': '1d', 'bcp_size_cp': 3, 'pinned_gpus': [0, 1, 2]}),
+    ('1d', 3, {'cp_topology': '2d', 'size_cp': 4, 'pinned_gpus': [0, 1, 2, 3]}),
+])
+async def test_saved_clone_and_actual_retry_keep_effective_topology(admission, monkeypatch, topology, size, overrides):
     values = params(size, topology)
     values['msa_cache_only'] = True  # Offline persistence fixture, no provider work.
     if topology is None:
@@ -123,11 +131,17 @@ async def test_saved_clone_and_actual_retry_keep_effective_topology(admission, m
     await admission.commit()
     monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *args: None)
     resumed = await jobs.resume_job(saved.id, Request({'type': 'http', 'headers': []}), Response(),
-                                   request=ResumeJobRequest(), background_tasks=BackgroundTasks(), session=admission)
+                                   request=ResumeJobRequest(param_overrides=overrides), background_tasks=BackgroundTasks(), session=admission)
     admission.expire_all()
     retry = await admission.get(Job, resumed['new_job_id'])
-    assert retry.params['cp_topology'] == (topology or '2d')
-    assert retry.params['size_cp'] == size
+    expected_topology = overrides.get('cp_topology', overrides.get('bcp_cp_topology', topology or '2d'))
+    expected_size = overrides.get('size_cp', overrides.get('bcp_size_cp', size))
+    assert retry.params['cp_topology'] == expected_topology
+    assert retry.params['size_cp'] == expected_size
+    assert 'bcp_cp_topology' not in retry.params
+    command = build_nextflow_command(retry.model_id, retry.mode, retry.params, retry.output_dir)
+    assert command[command.index('--bcp_cp_topology') + 1] == expected_topology
+    assert command[command.index('--bcp_size_cp') + 1] == str(expected_size)
 
 
 @pytest.mark.parametrize('size', [3, 8])

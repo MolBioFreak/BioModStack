@@ -11147,6 +11147,11 @@ async def resume_job(
     merged_params = _normalize_structure_geometry_params(merged_params)
     merged_params = _normalize_antibody_job_params(merged_params)
     if job.model_id == "boltz_cp_experimental":
+        # An explicit workflow override must replace the parent's public value.
+        for public_key, workflow_key in (("cp_topology", "bcp_cp_topology"), ("size_cp", "bcp_size_cp")):
+            if public_key in param_overrides or workflow_key in param_overrides:
+                merged_params[public_key] = param_overrides.get(public_key, param_overrides.get(workflow_key))
+                merged_params.pop(workflow_key, None)
         merged_params["cp_topology"] = merged_params.get(
             "cp_topology", merged_params.get("bcp_cp_topology", "2d")
         )
