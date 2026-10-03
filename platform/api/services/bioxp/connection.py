@@ -601,7 +601,7 @@ class BioXpConnectionService:
         passive = route_name in {
             "operator_control_catalog_v2", "operator_dashboard_v2",
             "operator_action_receipt_v2", "operator_command_status_v2",
-            "operator_method_status_v1", "operator_command_identity",
+            "operator_command_identity",
             "protocol_jobs", "protocol_job", "calibration_settings", "calibration_run",
         }
         # Only the parameter-free dashboard/catalog representations are cached.

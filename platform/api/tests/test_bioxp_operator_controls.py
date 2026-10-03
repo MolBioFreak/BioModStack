@@ -233,19 +233,6 @@ def v2_dashboard() -> dict:
     }
 
 
-def v2_method() -> dict:
-    return {
-        "schema_version": "bioxp.operator_method.v1",
-        "method_id": "method-1",
-        "action_id": "oem.xy.home",
-        "status": "queued",
-        "state_version": 1,
-        "child_receipts": [],
-        "accepted_at": 1.0,
-        "finished_at": None,
-    }
-
-
 def catalog():
     dashboard = {
         "schema_version": "bioxp.operator_dashboard.v1",
@@ -548,8 +535,6 @@ class FakeRobotClient:
             "invoke_operator_action_v2": v2_receipt(),
             "operator_action_receipt_v2": v2_receipt(),
             "operator_action_receipt_v2_detail": v2_receipt_detail(),
-            "submit_operator_method_v1": v2_method(),
-            "operator_method_status_v1": v2_method(),
             "operator_command_status_v2": v2_receipt(),
             "operator_command_status_v2_detail": v2_receipt_detail(),
             "operator_action_history": history_page(),
@@ -830,7 +815,7 @@ def test_addressed_y_interrupt_relays_robot_receipt_unchanged(monkeypatch):
     }
 
 
-def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(monkeypatch):
+def test_every_v2_route_relays_and_validates_the_exact_robot_contract(monkeypatch):
     client, runtime = make_client(monkeypatch)
     action_request = {
         "expected_connection_generation": 77,
@@ -840,16 +825,6 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
         "expected_board_epoch_by_board": {},
         "inputs": {"steps": 20},
     }
-    method_request = {
-        "expected_connection_generation": 77,
-        "schema_version": "bioxp.operator_method_request.v1",
-        "idempotency_key": "method-12345678",
-        "method_action_id": "oem.xy.home",
-        "expected_ownership_generation": 1,
-        "expected_board_epoch_by_board": {},
-        "inputs": {},
-    }
-
     responses = [
         client.get("/api/bioxp/operator-controls/v2/catalog"),
         client.get("/api/bioxp/operator-controls/v2/dashboard"),
@@ -857,18 +832,15 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
         client.get("/api/bioxp/operator-controls/history?limit=100"),
         client.get("/api/bioxp/operator-controls/v2/receipts/cmd-1"),
         client.get("/api/bioxp/operator-controls/v2/receipts/cmd-1?detail=true"),
-        client.post("/api/bioxp/operator-controls/v2/methods", json=method_request),
-        client.get("/api/bioxp/operator-controls/v2/methods/method-1"),
         client.get("/api/bioxp/operator-controls/v2/commands/cmd-1"),
         client.get("/api/bioxp/operator-controls/v2/commands/cmd-1?detail=true"),
     ]
 
-    assert [response.status_code for response in responses] == [200, 200, 202, 200, 200, 200, 202, 200, 200, 200]
+    assert [response.status_code for response in responses] == [200, 200, 202, 200, 200, 200, 200, 200]
     assert responses[0].json()["dashboard"]["y_axis"]["active_board_epoch"] == 2
 
     assert responses[2].json()["command_id"] == "cmd-1"
     assert responses[5].json()["canonical_inputs"] == {"steps": 20}
-    assert responses[6].json()["method_id"] == "method-1"
     assert [call[0] for call in runtime.connection.client.calls] == [
         "operator_control_catalog_v2",
         "operator_dashboard_v2",
@@ -876,13 +848,10 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
         "operator_action_history",
         "operator_action_receipt_v2",
         "operator_action_receipt_v2_detail",
-        "submit_operator_method_v1",
-        "operator_method_status_v1",
         "operator_command_status_v2",
         "operator_command_status_v2_detail",
     ]
     assert "expected_connection_generation" not in runtime.connection.client.calls[2][1]["json_data"]
-    assert "expected_connection_generation" not in runtime.connection.client.calls[6][1]["json_data"]
 
 
 @pytest.mark.parametrize("action_id", ["meta.activate_motion", "meta.recover_motion_non_homing"])

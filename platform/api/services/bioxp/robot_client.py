@@ -75,8 +75,6 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "invoke_operator_action": ("POST", "/operator/actions/{action_id}", 900.0),
     "invoke_operator_action_v2": ("POST", "/operator/v2/actions/{action_id}", 15.0),
     "interrupt_operator_action_v1": ("POST", "/operator/v2/actions/{action_id}", 10.0),
-    "submit_operator_method_v1": ("POST", "/operator/v2/methods", 5.0),
-    "operator_method_status_v1": ("GET", "/operator/v2/methods/{method_id}", 5.0),
     "operator_command_identity": ("GET", "/operator/idempotency/command/{key}", 5.0),
     "operator_command_status_v2": ("GET", "/operator/v2/commands/{command_id}", 5.0),
     "operator_action_history": ("GET", "/operator/actions/history", 10.0),

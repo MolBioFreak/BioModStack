@@ -17,6 +17,10 @@ EXPECTED = {
     ('GET', '/jobs'),
     ('GET', '/jobs/{job_id}'),
     ('GET', '/operator-controls/audit-health'),
+    ('GET', '/operator-controls/updates'),
+    ('GET', '/workflows/schema'),
+    ('POST', '/workflows/preview'),
+    ('POST', '/workflows/clone'),
     ('GET', '/operator-controls/catalog'),
     ('GET', '/operator-controls/dashboard'),
     ('GET', '/operator-controls/history'),
@@ -44,7 +48,6 @@ EXPECTED = {
     ('GET', '/operator-controls/v2/commands/{command_id}'),
     ('GET', '/operator-controls/v2/dashboard'),
     ('GET', '/operator-controls/history'),
-    ('GET', '/operator-controls/v2/methods/{method_id}'),
     ('GET', '/operator-controls/v2/receipts/{command_id}'),
     ('GET', '/operator-controls/v2/requests/{key}'),
     ('GET', '/profile'),
@@ -75,12 +78,38 @@ EXPECTED = {
     ('POST', '/operator-controls/reports/exports'),
     ('POST', '/operator-controls/v2/actions/{action_id}'),
     ('POST', '/operator-controls/v2/interrupts/{action_id}'),
-    ('POST', '/operator-controls/v2/methods'),
     ('POST', '/protocols/jobs/{job_id}/control'),
     ('POST', '/protocols/jobs/{job_id}/review'),
     ('POST', '/protocols/submit'),
     ('PUT', '/profile'),
     ('PUT', '/settings/freshness'),
+    ('GET', '/methods/catalog'),
+    ('GET', '/methods/schema'),
+    ('GET', '/methods/examples'),
+    ('POST', '/methods/check'),
+    ('POST', '/methods/compile'),
+    ('POST', '/methods/migrate'),
+    ('GET', '/methods/liquid-classes/starters'),
+    ('GET', '/methods/liquid-classes/source'),
+    ('POST', '/methods/quick-runs'),
+    ('GET', '/methods/runs'),
+    ('GET', '/methods/runs/{job_id}'),
+    ('POST', '/methods/runs/{job_id}/control'),
+    ('POST', '/methods/runs/{job_id}/review'),
+    ('GET', '/methods/runs/{job_id}/report'),
+    ('POST', '/methods/runs/{job_id}/clone'),
+    ('POST', '/methods/runs/{job_id}/recovery-draft'),
+    ('GET', '/methods/{collection}'),
+    ('POST', '/methods/{collection}'),
+    ('POST', '/methods/{collection}/import'),
+    ('GET', '/methods/{collection}/{template_id}'),
+    ('PUT', '/methods/{collection}/{template_id}'),
+    ('GET', '/methods/{collection}/{template_id}/revisions'),
+    ('GET', '/methods/{collection}/{template_id}/revisions/{revision}'),
+    ('GET', '/methods/{collection}/{template_id}/export'),
+    ('GET', '/methods/{collection}/{template_id}/diff'),
+    ('POST', '/methods/{collection}/{template_id}/duplicate'),
+    ('POST', '/methods/library/{template_id}/runs'),
 }
 
 
@@ -106,7 +135,7 @@ def _inventory() -> set[tuple[str, str]]:
 
 def test_compact_api_inventory_is_exact_and_bounded() -> None:
     assert _inventory() == EXPECTED
-    assert len(_inventory()) == 71
+    assert len(_inventory()) == 100
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:
@@ -117,6 +146,17 @@ def test_every_non_read_route_carries_the_global_containment_dependency() -> Non
             "/operator-controls/pipettes/readback",  # query-only, typed/idempotent
             "/operator-controls/pipettes/application/plan",  # no-motion planner
             "/operator-controls/reports/exports",  # retained evidence artifact
+            "/workflows/preview",  # existing pure local compiler
+            "/workflows/clone",  # existing pure snapshot projection
+            "/methods/check",  # local authoring/persistence or passive original-job read
+            "/methods/compile",  # local authoring/persistence or passive original-job read
+            "/methods/migrate",  # local authoring/persistence or passive original-job read
+            "/methods/runs/{job_id}/clone",  # local authoring/persistence or passive original-job read
+            "/methods/runs/{job_id}/recovery-draft",  # local authoring/persistence or passive original-job read
+            "/methods/{collection}",  # local authoring/persistence or passive original-job read
+            "/methods/{collection}/import",  # local authoring/persistence or passive original-job read
+            "/methods/{collection}/{template_id}",  # local authoring/persistence or passive original-job read
+            "/methods/{collection}/{template_id}/duplicate",  # local authoring/persistence or passive original-job read
         }:
             continue
         calls = {dependency.dependency for dependency in route.dependencies}

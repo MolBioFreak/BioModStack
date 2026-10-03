@@ -26,6 +26,7 @@ def _validated(model, payload):
 async def _mutate(runtime, route, request, *, job_id=None):
     if job_id is not None and request.command_id != job_id:
         raise HTTPException(status_code=422, detail="Control command_id must match the addressed job")
+    dispatch_started = False
     try:
         # Retain the original client across I/O without sharing the unrelated
         # v1 workflow lane. Admission and physical ordering belong to the robot.
@@ -37,9 +38,13 @@ async def _mutate(runtime, route, request, *, job_id=None):
                 mode="json", exclude_unset=True, exclude={"expected_connection_generation"})}
             if job_id is not None:
                 kwargs["path_params"] = {"job_id": job_id}
+            dispatch_started = True
             return await client.request(route, **kwargs)
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
-        raise _translate_robot_error(exc) from exc
+        translated = _translate_robot_error(exc)
+        # Existing wire error stays unchanged. A lease refusal precedes submit.
+        translated.bioxp_dispatch_started = dispatch_started
+        raise translated from exc
 
 
 async def _query(runtime, route, expected_generation, *, job_id=None, limit=None, observation=False):

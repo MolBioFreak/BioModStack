@@ -13,6 +13,9 @@ import uuid
 
 from antibody_pipeline_contract import is_antibody_pipeline_mode
 from database import get_session, UserTemplate
+from services.user_template_revisions import (
+    REVISIONED_SCHEMAS, revisioned, current_revision, append_revision,
+)
 
 
 router = APIRouter()
@@ -34,6 +37,7 @@ class UserTemplateCreate(BaseModel):
 
 class UserTemplateUpdate(BaseModel):
     """Request schema for updating a user template."""
+    expected_base_revision: Optional[int] = Field(None, ge=0, strict=True)
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = Field(None, max_length=500)
     icon: Optional[str] = Field(None, max_length=50)
@@ -73,6 +77,12 @@ def _validate_bioxp_workflow_draft(
     if model_id is not None or base_template_id is not None:
         raise HTTPException(422, "BioXP workflow drafts have no model or base template")
     schema = params.get("schema") if isinstance(params, dict) else None
+    if schema in REVISIONED_SCHEMAS:
+        try:
+            json.dumps(params, allow_nan=False)
+        except (ValueError, TypeError):
+            raise HTTPException(422, "BioXP drafts require finite JSON values") from None
+        return  # Scientific completeness belongs to compile, not raw persistence.
     keys = {"schema", "steps", "editor_state"}
     if schema == "bms.bioxp-workflow-draft.v2":
         keys.add("deck_plan")
@@ -264,6 +274,8 @@ async def create_user_template(
         template.params, _ = _normalize_antibody_template_params(data.params)
     
     session.add(template)
+    if revisioned(template):
+        await append_revision(session, template, 1)
     await session.commit()
     await session.refresh(template)
     
@@ -311,6 +323,21 @@ async def update_user_template(
         data.params if "params" in data.model_fields_set else template.params,
     )
 
+    track_revision = revisioned(template) or (
+        template.mode == "bioxp_workflow" and data.params is not None
+        and data.params.get("schema") in REVISIONED_SCHEMAS)
+    if revisioned(template) and data.params is not None and data.params.get("schema") != template.params.get("schema"):
+        raise HTTPException(422, "A revisioned template cannot change collection discriminator")
+    base_revision = 0
+    if track_revision:
+        base_revision = await current_revision(session, template.id)
+        if data.expected_base_revision != base_revision:
+            raise HTTPException(409, {"code": "revision_conflict", "category": "persistence",
+                "message": "Expected base revision is required and must match", "path": "/expected_base_revision",
+                "current_revision": base_revision})
+        if base_revision == 0:
+            await append_revision(session, template, 0)  # Retain original legacy draft.
+
     # Update fields if provided
     if data.name is not None:
         # Check for duplicate name
@@ -324,7 +351,7 @@ async def update_user_template(
             raise HTTPException(status_code=400, detail=f"Template with name '{data.name}' already exists")
         template.name = data.name
     
-    if data.description is not None:
+    if "description" in data.model_fields_set:
         template.description = data.description
     if data.icon is not None:
         template.icon = data.icon
@@ -336,6 +363,8 @@ async def update_user_template(
             params, _ = _normalize_antibody_template_params(params)
         template.params = params
     
+    if track_revision:
+        await append_revision(session, template, base_revision + 1)
     await session.commit()
     await session.refresh(template)
     

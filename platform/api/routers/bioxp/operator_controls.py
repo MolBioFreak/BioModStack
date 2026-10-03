@@ -23,7 +23,6 @@ from services.bioxp.operator_requests import (
     OperatorDeckMoveToWellInputsV2,
     OperatorEmptyInputsV2,
     OperatorInterruptRequestV1,
-    OperatorMethodRequestV1,
     OperatorMoveAbsoluteInputsV2,
     OperatorMoveStepsInputsV2,
     OperatorMoveXYInputsV2,
@@ -247,28 +246,6 @@ async def operator_action_receipt_v2(
 ) -> Any:
     return await _v2_query(runtime, "operator_action_receipt_v2",
                            path_params={"command_id": command_id}, params={"detail": detail})
-
-
-@router.post(
-    "/operator-controls/v2/methods",
-    response_model=None,
-    status_code=202,
-    dependencies=[Depends(require_bioxp_mutation_access)],
-)
-async def submit_operator_method_v1(
-    request: OperatorMethodRequestV1,
-    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> Any:
-    return await _relay(runtime.connection.request_active_v2_enqueue(
-        "submit_operator_method_v1",
-        expected_generation=request.expected_connection_generation,
-        json_data=_robot_request_body(request),
-    ))
-
-
-@router.get("/operator-controls/v2/methods/{method_id}", response_model=None)
-async def operator_method_status_v1(method_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> Any:
-    return await _v2_query(runtime, "operator_method_status_v1", path_params={"method_id": method_id})
 
 
 @router.get("/operator-controls/v2/commands/{command_id}", response_model=None)

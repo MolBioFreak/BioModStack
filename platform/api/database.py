@@ -2322,6 +2322,15 @@ class UserTemplate(Base):
     updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
 
 
+class UserTemplateRevision(Base):
+    """Append-only raw snapshots; composite key provides concurrent-writer CAS."""
+    __tablename__ = "user_template_revisions"
+    template_id = Column(String(36), primary_key=True)
+    revision = Column(Integer, primary_key=True)
+    snapshot = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class NucleotideSequence(Base):
     """Nucleotide sequence for BioDesigner (DNA/RNA with features)."""
     __tablename__ = "nucleotide_sequences"
