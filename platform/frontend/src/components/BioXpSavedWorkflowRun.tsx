@@ -1,4 +1,6 @@
 import { useRef, useState } from 'react';
+import { useBioXpWorkflowMutationOwner } from './BioXpWorkflowMutationOwner';
+import { definiteMethodRefusal } from '../lib/bioxpMethods';
 import { bioXpErrorText, useSubmitBioXpProtocol, type BioXpWorkflowJob } from '../lib/bioxpClient';
 import { previewBioXpWorkflow, type SavedWorkflowSnapshot } from '../lib/bioxpWorkflowPlan';
 import { canonicalWorkflowJobId, copyWorkflowValue, readPendingWorkflowRuns, retainPendingWorkflowRun,
@@ -16,10 +18,9 @@ export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEn
     const [activeId, setActiveId] = useState<string | null>(retained.runs.at(-1)?.jobId ?? null);
     const [warning, setWarning] = useState(retained.warning);
     const [error, setError] = useState<string | null>(null);
-    const [busy, setBusy] = useState(false);
+    const { busy, setBusy, busyRef } = useBioXpWorkflowMutationOwner();
     const [ack, setAck] = useState(false);
     const [accepted, setAccepted] = useState<{ generation: number; job: BioXpWorkflowJob } | null>(null);
-    const busyRef = useRef(false);
     const authority = useRef({ generation, connected });
     authority.current = { generation, connected };
     const submit = useSubmitBioXpProtocol();
@@ -30,6 +31,7 @@ export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEn
         // Capture the exact successful saved readback, not the mutable editor or a later template update.
         const snapshot = copyWorkflowValue(saved);
         const submittedGeneration = generation;
+        let submittedAttempt: PendingWorkflowRun | null = null;
         try {
             const key = crypto.randomUUID();
             const jobId = await canonicalWorkflowJobId(key);
@@ -43,6 +45,7 @@ export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEn
                 bms_saved_workflow: copyWorkflowValue(snapshot) };
             const attempt: PendingWorkflowRun = { version: 1, key, jobId, generation: submittedGeneration,
                 saved: snapshot, document };
+            submittedAttempt = attempt;
             // Retain identity and exact snapshot BEFORE POST. Storage failure is evidence, not a motion gate.
             setWarning(retainPendingWorkflowRun(attempt));
             setRuns(previous => [...previous, attempt].slice(-8)); setActiveId(jobId); setAccepted(null);
@@ -51,7 +54,14 @@ export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEn
                 expected_connection_generation: submittedGeneration });
             if (job.job_id !== jobId) throw new Error('Submission returned a different job identity; checking only the original canonical job.');
             if (authority.current.generation === submittedGeneration) setAccepted({ generation: submittedGeneration, job });
-        } catch (cause) { setError(bioXpErrorText(cause)); }
+        } catch (cause) {
+            if (submittedAttempt && definiteMethodRefusal(cause)) {
+                const refused = { ...submittedAttempt, refused: true };
+                setWarning(retainPendingWorkflowRun(refused));
+                setRuns(previous => previous.map(run => run.jobId === refused.jobId ? refused : run));
+            }
+            setError(bioXpErrorText(cause));
+        }
         finally { busyRef.current = false; setBusy(false); }
     }
     return <section aria-label="Saved workflow run" className="space-y-3">
@@ -71,9 +81,10 @@ export function BioXpSavedWorkflowRun({ saved, generation, connected, controlsEn
             <p className="break-all">Original submission key: {active.key}</p>
             <p>Original connection generation: {active.generation}; current connection generation: {generation}. Readback targets the original job only.</p>
             <details><summary>Exact run snapshot</summary><pre>{JSON.stringify(active.saved, null, 2)}</pre></details>
-            <BioXpWorkflowJobMonitor visible={visible} jobId={active.jobId} generation={generation}
-                connected={connected} controlsEnabled={controlsEnabled} submitting={busy} busyRef={busyRef} onBusyChange={setBusy} pending
-                acceptedJob={accepted?.generation === generation ? accepted.job : null} />
+            {active.refused && <p>Definite pre-admission refusal; nothing started for this submission. Original identity retained without polling a nonexistent job.</p>}
+            {!active.refused && <BioXpWorkflowJobMonitor visible={visible} jobId={active.jobId} generation={generation}
+                connected={connected} controlsEnabled={controlsEnabled} submitting={busy} busyRef={busyRef} onBusyChange={setBusy} pending={!active.refused}
+                acceptedJob={accepted?.generation === generation ? accepted.job : null} />}
         </>}
     </section>;
 }

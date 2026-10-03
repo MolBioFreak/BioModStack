@@ -2,7 +2,7 @@ import type { SavedWorkflowSnapshot } from './bioxpWorkflowPlan';
 
 export type PendingWorkflowRun = {
     version: 1; key: string; jobId: string; generation: number;
-    saved: SavedWorkflowSnapshot; document: Record<string, unknown>;
+    saved: SavedWorkflowSnapshot; document: Record<string, unknown>; refused?: boolean;
 };
 export const pendingWorkflowRunStorageKey = 'bms.bioxp.saved-workflow-runs.v1';
 // A bounded browser association, not a second job ledger. Robot history remains authoritative.

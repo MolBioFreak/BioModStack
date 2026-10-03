@@ -7,11 +7,12 @@ export interface BioXpWorkflowMaterialsProps {
     plan: WorkflowDeckPlan;
     onChange: (plan: WorkflowDeckPlan) => void;
     selection: BioXpDeckSelection;
+    methodAuthoring?: boolean;
 }
 const id = () => crypto.randomUUID();
 const stationLabel = (station: string) => deckStations.find(s => s.id === station)?.label || station || 'No station';
 
-export function BioXpWorkflowMaterials({ plan, onChange, selection }: BioXpWorkflowMaterialsProps) {
+export function BioXpWorkflowMaterials({ plan, onChange, selection, methodAuthoring = false }: BioXpWorkflowMaterialsProps) {
     const [materialId, setMaterialId] = useState('');
     const [labwareId, setLabwareId] = useState('');
     const [amount, setAmount] = useState('');
@@ -42,6 +43,7 @@ export function BioXpWorkflowMaterials({ plan, onChange, selection }: BioXpWorkf
             {plan.labware.map((item, index) => <div className="bioxp-plan-row" key={item.id}>
                 <label>Labware {index + 1} name<input value={item.name ?? ''} onChange={e => onChange({ ...plan, labware: plan.labware.map(l => l.id === item.id ? { ...l, name: e.target.value } : l) })} /></label>
                 <small>{stationLabel(item.station)} · Native layout: {item.profile_id || 'Not set'}</small>
+                {methodAuthoring && <><label>Labware {index + 1} station<select value={item.station} onChange={e => onChange({ ...plan, labware: plan.labware.map(l => l.id === item.id ? { ...l, station: e.target.value } : l) })}>{!deckStations.some(s => s.id === item.station) && <option value={item.station}>{item.station || 'Unspecified'}</option>}{deckStations.map(s => <option key={s.id} value={s.id}>{s.label} · {s.id}</option>)}</select></label><label>Labware {index + 1} profile<input value={item.profile_id ?? ''} onChange={e => onChange({ ...plan, labware: plan.labware.map(l => l.id === item.id ? { ...l, profile_id: e.target.value } : l) })} /></label></>}
                 <button type="button" onClick={() => onChange({ ...plan, labware: plan.labware.filter(l => l.id !== item.id), assignments: plan.assignments.filter(a => a.labware_id !== item.id) })}>Remove labware {index + 1} and its assignments</button>
             </div>)}
         </fieldset>
@@ -49,7 +51,7 @@ export function BioXpWorkflowMaterials({ plan, onChange, selection }: BioXpWorkf
             <div className="bioxp-plan-actions"><button type="button" onClick={() => addMaterial('sample')}>Add sample</button><button type="button" onClick={() => addMaterial('reagent')}>Add reagent</button></div>
             {plan.materials.map((material, index) => <div className="bioxp-plan-row" key={material.id}>
                 <label>Material {index + 1} name<input value={material.name ?? ''} onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, name: e.target.value } : m) })} /></label>
-                <label>Material {index + 1} kind<select value={material.kind} onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, kind: e.target.value as WorkflowMaterial['kind'] } : m) })}><option value="sample">Sample</option><option value="reagent">Reagent</option></select></label>
+                <label>Material {index + 1} kind<select value={material.kind} onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, kind: e.target.value as WorkflowMaterial['kind'] } : m) })}><option value="sample">Sample</option><option value="reagent">Reagent</option>{methodAuthoring && <><option value="product">Product</option><option value="waste">Waste</option></>}</select></label>
                 <label>Material {index + 1} description<input value={material.description ?? ''} onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, description: e.target.value } : m) })} /></label>
                 <button type="button" onClick={() => onChange({ ...plan, materials: plan.materials.filter(m => m.id !== material.id), assignments: plan.assignments.filter(a => a.material_id !== material.id) })}>Remove material {index + 1} and its assignments</button>
             </div>)}

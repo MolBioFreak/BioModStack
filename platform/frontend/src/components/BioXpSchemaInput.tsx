@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { BioXpMethodExpression } from './BioXpMethodExpression';
 import { BioXpNumericInput } from './BioXpNumericInput';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
 
@@ -39,6 +40,16 @@ export function schemaInitialValue(schema: Schema, root = schema): unknown {
     if (schema.type === 'number' || schema.type === 'integer') return 0;
     return '';
 }
+function rawDraftInitial(schema: Schema, root: Schema): unknown {
+    const resolved = resolve(schema, root);
+    if (Object.hasOwn(resolved, 'const')) return structuredClone(resolved.const);
+    if (resolved.anyOf || resolved.oneOf || Array.isArray(resolved.type)) return rawDraftInitial(variants(resolved, root)[0], root);
+    if (resolved.type === 'object' || resolved.properties) return Object.fromEntries(Object.entries(resolved.properties ?? {}).filter(([, child]) => Object.hasOwn(resolve(child, root), 'const')).map(([name, child]) => [name, rawDraftInitial(child, root)]));
+    if (resolved.type === 'array' || resolved.items) return [];
+    if (resolved.type === 'null') return null;
+    if (resolved.type === 'boolean') return false;
+    return ''; // No implicit science/default numeric value in an editable draft.
+}
 export function schemaEditableValue(schema: Schema): unknown {
     const initial = schemaInitialValue(schema);
     if (initial !== null) return initial;
@@ -58,8 +69,8 @@ function matches(schema: Schema, value: unknown, root: Schema): boolean {
 }
 
 /** Schema-driven presentation, not an admission/validation authority. */
-export function BioXpSchemaInput({ label, schema, value, onChange, fallback, rootSchema = schema }: {
-    label: string; schema: Schema; rootSchema?: Schema; value: unknown; onChange: (value: unknown) => void;
+export function BioXpSchemaInput({ label, schema, value, onChange, fallback, rootSchema = schema, rawDraft = false }: {
+    label: string; schema: Schema; rootSchema?: Schema; rawDraft?: boolean; value: unknown; onChange: (value: unknown) => void;
     fallback: (label: string, value: unknown, onChange: (value: unknown) => void) => React.ReactNode;
 }) {
     const [newKey, setNewKey] = useState('');
@@ -70,8 +81,9 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
     const rawChoices = resolved.oneOf ?? resolved.anyOf;
     const mappedIndex = mapped ? rawChoices?.findIndex(choice => choice.$ref === mapped) ?? -1 : -1;
     const selected = Math.max(0, mappedIndex >= 0 ? mappedIndex : choices.findIndex(choice => matches(choice, value, rootSchema)));
+    const initialValue = (field: Schema) => rawDraft ? rawDraftInitial(field, rootSchema) : schemaInitialValue(field, rootSchema);
     const variantValue = (index: number) => {
-        const initial = schemaInitialValue(choices[index], rootSchema);
+        const initial = initialValue(choices[index]);
         const tag = discriminator && Object.entries(discriminator.mapping ?? {}).find(([, ref]) => ref === rawChoices?.[index].$ref)?.[0];
         return discriminator && tag !== undefined && objectValue(initial)
             ? { ...initial, [discriminator.propertyName]: tag } : initial;
@@ -85,8 +97,10 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
         if (next === undefined) delete result[name]; else result[name] = next;
         onChange(result);
     };
+    if (rawDraft && objectValue(value) && objectValue(value.expr)) return <BioXpMethodExpression label={label} value={value} onChange={onChange} literal={(v, change) => fallback(`${label} literal`, v, change)} />;
     return <fieldset className="min-w-0 space-y-2 rounded border border-slate-700 p-2">
         <legend>{label}</legend>
+        {rawDraft && ['string', 'number', 'integer', 'boolean'].includes(String(kind)) && !enums && <button type="button" onClick={() => onChange({ expr: { version: 1, op: 'literal', value } })}>Use expression for {label}</button>}
         {schema.description && <p className="text-xs text-slate-400">{schema.description}</p>}
         {choices.length > 1 && <label>Variant<select aria-label={`${label} variant`} className={classes} value={selected} onChange={event => onChange(variantValue(Number(event.target.value)))}>
             {choices.map((choice, index) => <option key={index} value={index}>{choice.title ?? String(choice.type ?? `Variant ${index + 1}`)}</option>)}
@@ -97,25 +111,25 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
             {[...new Set([...Object.keys(fields), ...Object.keys(value)])].map(name => {
                 const child = resolve(fields[name] ?? (objectValue(active.additionalProperties) ? active.additionalProperties as Schema : {}), rootSchema);
                 return <div key={name}>
-                    <label>{label}.{name}{active.required?.includes(name) ? ' *' : ''}<select aria-label={`${label}.${name} presence`} className={classes} value={value[name] === undefined ? 'omitted' : 'value'} onChange={event => update(name, event.target.value === 'omitted' ? undefined : schemaInitialValue(child, rootSchema))}>
-                        <option value="omitted">Omit (service default{Object.hasOwn(child, 'default') ? `: ${JSON.stringify(child.default)}` : ''})</option><option value="value">Explicit value</option>
+                    <label>{label}.{name}{active.required?.includes(name) ? ' *' : ''}<select aria-label={`${label}.${name} presence`} className={classes} value={value[name] === undefined ? 'omitted' : 'value'} onChange={event => update(name, event.target.value === 'omitted' ? undefined : initialValue(child))}>
+                        <option value="omitted">{rawDraft ? 'Unspecified (preserved)' : `Omit (service default${Object.hasOwn(child, 'default') ? `: ${JSON.stringify(child.default)}` : ''})`}</option><option value="value">Explicit value</option>
                     </select></label>
-                    {value[name] !== undefined && <BioXpSchemaInput label={`${label}.${name}`} schema={child} rootSchema={rootSchema} value={value[name]} onChange={next => update(name, next)} fallback={fallback} />}
+                    {value[name] !== undefined && <BioXpSchemaInput label={`${label}.${name}`} schema={child} rootSchema={rootSchema} rawDraft={rawDraft} value={value[name]} onChange={next => update(name, next)} fallback={fallback} />}
                 </div>;
             })}
             {active.additionalProperties !== false && <>
                 <label>Property name<input aria-label={`${label} property name`} className={classes} value={newKey} onChange={event => setNewKey(event.target.value)} /></label>
-                <button type="button" disabled={Object.hasOwn(value, newKey) || Object.hasOwn(fields, newKey)} onClick={() => { update(newKey, schemaInitialValue(objectValue(active.additionalProperties) ? active.additionalProperties as Schema : {}, rootSchema)); setNewKey(''); }}>Add {label} property</button>
+                <button type="button" disabled={Object.hasOwn(value, newKey) || Object.hasOwn(fields, newKey)} onClick={() => { update(newKey, initialValue(objectValue(active.additionalProperties) ? active.additionalProperties as Schema : {})); setNewKey(''); }}>Add {label} property</button>
             </>}
         </> : kind === 'array' && Array.isArray(value) ? <>
             <p className="text-xs text-slate-400">Items: {active.minItems ?? 'unbounded'} to {active.maxItems ?? 'unbounded'}</p>
-            {value.map((item, index) => <div key={index}><BioXpSchemaInput label={`${label}[${index}]`} schema={active.items ?? {}} rootSchema={rootSchema} value={item} onChange={next => onChange(value.map((old, i) => i === index ? next : old))} fallback={fallback} />
+            {value.map((item, index) => <div key={index}><BioXpSchemaInput label={`${label}[${index}]`} schema={active.items ?? {}} rootSchema={rootSchema} rawDraft={rawDraft} value={item} onChange={next => onChange(value.map((old, i) => i === index ? next : old))} fallback={fallback} />
                 <button type="button" onClick={() => onChange(value.filter((_, i) => i !== index))}>Remove {label}[{index}]</button></div>)}
-            <button type="button" onClick={() => onChange([...value, schemaInitialValue(active.items ?? {}, rootSchema)])}>Add {label} item</button>
+            <button type="button" onClick={() => onChange([...value, initialValue(active.items ?? {})])}>Add {label} item</button>
         </> : kind === 'boolean' ? <label>{label}<input aria-label={label} type="checkbox" checked={value === true} onChange={event => onChange(event.target.checked)} /></label>
             : kind === 'null' ? <p>Explicit null</p>
                 : kind === 'string' || kind === 'number' || kind === 'integer' ? <>
-                    <label>{label}{kind === 'string' ? <input aria-label={label} className={classes} type="text" minLength={active.minLength} maxLength={active.maxLength} value={String(value ?? '')} onChange={event => onChange(event.target.value)} />
+                    <label>{label}{kind === 'string' || rawDraft ? <input aria-label={label} className={classes} type="text" minLength={active.minLength} maxLength={active.maxLength} value={String(value ?? '')} onChange={event => onChange(event.target.value)} />
                         : <BioXpNumericInput aria-label={label} className={classes} step={kind === 'integer' ? 1 : 'any'} min={active.minimum ?? active.exclusiveMinimum} max={active.maximum ?? active.exclusiveMaximum} value={value} onValueChange={onChange} />}</label>
                     {(active.minimum != null || active.maximum != null || active.exclusiveMinimum != null || active.exclusiveMaximum != null) && <p className="text-xs text-slate-400">Allowed: {active.minimum != null ? `≥ ${active.minimum}` : active.exclusiveMinimum != null ? `> ${active.exclusiveMinimum}` : 'unbounded'} to {active.maximum != null ? `≤ ${active.maximum}` : active.exclusiveMaximum != null ? `< ${active.exclusiveMaximum}` : 'unbounded'}</p>}
                 </> : fallback(label, value, onChange)}

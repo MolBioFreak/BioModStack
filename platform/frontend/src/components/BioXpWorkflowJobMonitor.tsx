@@ -6,10 +6,10 @@ const buttonClass = 'rounded bg-cyan-700 px-3 py-2 text-sm disabled:opacity-35';
 
 /** One native readback/control owner for both prepared and saved submissions. */
 export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controlsEnabled, visible = true,
-    acceptedJob = null, submitting = false, pending = false, discoveryError = false, busyRef, onBusyChange }: {
+    acceptedJob = null, submitting = false, pending = false, discoveryError = false, methodsFacade = false, onObserved, busyRef, onBusyChange }: {
     jobId: string | null; generation: number; connected: boolean; controlsEnabled: boolean; visible?: boolean;
     busyRef: RefObject<boolean>; onBusyChange: (busy: boolean) => void;
-    acceptedJob?: BioXpWorkflowJob | null; submitting?: boolean; pending?: boolean; discoveryError?: boolean;
+    onObserved?: (job: unknown) => void; methodsFacade?: boolean; acceptedJob?: BioXpWorkflowJob | null; submitting?: boolean; pending?: boolean; discoveryError?: boolean;
 }) {
     const [abortConfirmed, setAbortConfirmed] = useState(false);
     const [reviewer, setReviewer] = useState('');
@@ -21,23 +21,24 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     useEffect(() => {
         setAbortConfirmed(false); setReviewer(''); setNote(''); setLocalError(null);
     }, [jobId, generation]);
-    const control = useControlBioXpWorkflow();
-    const review = useReviewBioXpWorkflow();
+    const control = useControlBioXpWorkflow(methodsFacade);
+    const review = useReviewBioXpWorkflow(methodsFacade);
     const documentVisible = useBioXpDocumentVisible();
     const [settledJob, setSettledJob] = useState<string | null>(null);
     const observationId = jobId;
-    const observeJob = documentVisible && (visible || (observationId !== null && settledJob !== observationId));
-    const query = useBioXpWorkflowJobObservation(observationId, generation, connected && observeJob);
+    const observeJob = documentVisible && visible && settledJob !== observationId;
+    const query = useBioXpWorkflowJobObservation(observationId, generation, connected && observeJob, methodsFacade);
     useEffect(() => {
-        if (query.data?.command?.terminal && query.data.job_id === observationId) setSettledJob(observationId);
+        if (query.data?.command?.terminal && query.data.execution?.runtime_state.workflow?.phase === 'terminal' && query.data.job_id === observationId) setSettledJob(observationId);
     }, [query.data, observationId]);
     const job = query.data?.job_id === jobId ? query.data : acceptedJob?.job_id === jobId ? acceptedJob : null;
+    useEffect(() => { if (job) onObserved?.(job); }, [job, onObserved]);
     const command = job?.command;
     const runtime = job?.execution?.runtime_state;
     const workflow = runtime?.workflow;
     const canonical = !!command && !!workflow && command.command_id === jobId && workflow.command_id === jobId && job?.execution?.dry_run === false;
     const busy = submitting || control.isPending || review.isPending;
-    const mutable = connected && controlsEnabled && !busy && !query.isError && canonical && !command.terminal
+    const mutable = connected && controlsEnabled && !busy && canonical && !command.terminal
         && workflow.phase !== 'reconciling';
     const pendingControl = workflow?.requested_control != null && workflow.last_control_id !== workflow.reached_control_id;
     // The reached pause owns gate_id. Completed wake reaches a distinct control

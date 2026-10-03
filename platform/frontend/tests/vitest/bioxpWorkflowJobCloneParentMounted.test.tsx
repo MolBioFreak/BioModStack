@@ -6,6 +6,7 @@ import { writeFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BioXpWorkflowEditor } from '../../src/components/BioXpWorkflowEditor';
 import { api } from '../../src/lib/api';
+import { offlineMethodsDiscovery } from '../fixtures/bioxpMethodsDiscovery';
 import nativeFixture from '../../../api/schemas/bioxp_workflow_native.json';
 import { canonicalWorkflowJobId, pendingWorkflowRunStorageKey, retainPendingWorkflowRun, type PendingWorkflowRun } from '../../src/lib/bioxpSavedWorkflowRun';
 
@@ -19,14 +20,15 @@ async function mount() {
     await act(async () => root.render(<QueryClientProvider client={client}><BioXpWorkflowEditor generation={19} connected={false} controlsEnabled={false} /></QueryClientProvider>));
 }
 async function fresh() { await act(async () => root.unmount()); root = createRoot(host); await mount(); }
+const legacy = () => host.querySelector('[aria-label="Workflow editor"]') ?? host;
 function button(text: string) {
-    const el = [...host.querySelectorAll('button')].find(node => node.textContent === text);
+    const el = [...legacy().querySelectorAll('button')].find(node => node.textContent === text);
     expect(el, text).toBeTruthy(); return el!;
 }
 async function click(text: string) { await act(async () => button(text).click()); }
 function input(label: string): HTMLInputElement | HTMLSelectElement {
-    const aria = host.querySelector(`[aria-label="${label}"]`);
-    const wrapped = [...host.querySelectorAll('label')].find(node => node.textContent?.startsWith(label))?.querySelector('input,select');
+    const aria = legacy().querySelector(`[aria-label="${label}"]`);
+    const wrapped = [...legacy().querySelectorAll('label')].find(node => node.textContent?.startsWith(label))?.querySelector('input,select');
     expect(aria || wrapped, label).toBeTruthy(); return (aria || wrapped) as HTMLInputElement | HTMLSelectElement;
 }
 async function change(label: string, value: string) {
@@ -67,6 +69,7 @@ beforeEach(async () => {
         document: { protocol_id: 'fixture-source-document', metadata: { bms_saved_workflow: structuredClone(saved) } } };
     expect(retainPendingWorkflowRun(run)).toBeNull();
     api.defaults.adapter = async config => {
+        const discovery = offlineMethodsDiscovery(config); if (discovery) return discovery;
         const body = config.data ? JSON.parse(config.data) : undefined;
         const request = { method: config.method, url: config.url, body }; requests.push(request);
         let data: any;
@@ -102,7 +105,7 @@ it.each(['changed', 'deleted'])('clones the original retained run when its templ
     const templatesBefore = structuredClone(db);
     await mount(); expect(requests).toEqual([]); await cloneRetained();
     expect(input('Workflow name').value).toBe('Original run settings copy');
-    expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Build');
+    expect(host.querySelector('[aria-label="Saved workflow"] [role="tab"][aria-selected="true"]')?.textContent).toBe('Build');
     expect(host.textContent).toContain('Cloned job as an unsaved workflow');
     expect(input('Volume').value).toBe('000.1250');
     expect(db).toEqual(templatesBefore); expect(requests).toHaveLength(1);

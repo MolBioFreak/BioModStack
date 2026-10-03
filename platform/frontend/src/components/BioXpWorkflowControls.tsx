@@ -1,5 +1,7 @@
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useRef, useState } from 'react';
+import { useBioXpWorkflowMutationOwner } from './BioXpWorkflowMutationOwner';
+import { definiteMethodRefusal } from '../lib/bioxpMethods';
 import {
     bioXpErrorText, useBioXpWorkflowJobs,
     useSubmitBioXpProtocol,
@@ -33,10 +35,9 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled, 
     const [selection, setSelection] = useState<{ name: string; input: BioXpWorkflowInput } | null>(null);
     const [selectionError, setSelectionError] = useState<string | null>(null);
     const [selectedJob, setSelectedJob] = useState<{ generation: number; id: string } | null>(null);
-    const [attempt, setAttempt] = useState<{ generation: number; key: string; jobId: string } | null>(null);
+    const [attempt, setAttempt] = useState<{ generation: number; key: string; jobId: string; refused?: boolean } | null>(null);
     const [acceptedJob, setAcceptedJob] = useState<{ generation: number; job: BioXpWorkflowJob } | null>(null);
     const [localError, setLocalError] = useState<string | null>(null);
-    const busyRef = useRef(false);
     const selectionVersion = useRef(0);
     const currentGeneration = useRef(generation);
     currentGeneration.current = generation;
@@ -45,7 +46,7 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled, 
     const listedActive = jobs.data?.find(job => job.command && (!job.command.terminal || job.command.status === 'ambiguous'));
     const jobId = (selectedJob?.generation === generation ? selectedJob.id : null)
         ?? currentAttempt?.jobId ?? listedActive?.job_id ?? null;
-    const [busy, setBusy] = useState(false);
+    const { busy, setBusy, busyRef } = useBioXpWorkflowMutationOwner();
     const maySubmit = connected && !busy && selection !== null;
 
     async function submitSelected() {
@@ -69,7 +70,10 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled, 
                 setSelectedJob({ generation, id: result.job_id });
                 void jobs.refetch();
             }
-        } catch (error) { if (currentGeneration.current === submittedGeneration) setLocalError(bioXpErrorText(error)); }
+        } catch (error) { if (currentGeneration.current === submittedGeneration) {
+            if (definiteMethodRefusal(error)) setAttempt(value => value ? { ...value, refused: true } : value);
+            setLocalError(bioXpErrorText(error));
+        } }
         finally { busyRef.current = false; setBusy(false); }
     }
 
@@ -99,10 +103,11 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled, 
                 {jobs.data.map(item => <option key={item.job_id} value={item.job_id}>{item.job_id} · {item.command?.status ?? item.status}</option>)}
             </select>
         </label>}
-        <BioXpWorkflowJobMonitor jobId={jobId} generation={generation}
-            connected={connected} controlsEnabled={controlsEnabled} visible={visible} submitting={busy}
-            busyRef={busyRef} onBusyChange={setBusy} pending={!!currentAttempt} discoveryError={jobs.isError}
-            acceptedJob={acceptedJob?.generation === generation ? acceptedJob.job : null} />
+        {!(currentAttempt?.jobId === jobId && currentAttempt.refused) && <BioXpWorkflowJobMonitor jobId={jobId} generation={generation}
+            connected={connected} controlsEnabled={controlsEnabled} visible={visible && !(currentAttempt?.jobId === jobId && currentAttempt.refused)} submitting={busy}
+            busyRef={busyRef} onBusyChange={setBusy} pending={!!currentAttempt && !currentAttempt.refused} discoveryError={jobs.isError}
+            acceptedJob={acceptedJob?.generation === generation ? acceptedJob.job : null} />}
+        {currentAttempt?.refused && <p>Definite pre-admission refusal; nothing started for this submission. No nonexistent-job polling.</p>}
         {localError && <p role="alert">{localError} No automatic submission or control retry; reconcile robot state before further action.</p>}
     </section>;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { bioXpErrorPresentation, bioXpMethodV1IsTerminal, bioXpReceiptIsNonTerminal } from '../../src/lib/bioxpClient';
+import { bioXpErrorPresentation, bioXpReceiptIsNonTerminal } from '../../src/lib/bioxpClient';
 
 describe('BioXP receipt terminality (WP-B)', () => {
     it('treats completed, failed, rejected, blocked, and cleared receipts as terminal', () => {
@@ -20,15 +20,6 @@ describe('BioXP receipt terminality (WP-B)', () => {
         expect(bioXpReceiptIsNonTerminal(undefined)).toBe(false);
         expect(bioXpReceiptIsNonTerminal({})).toBe(false);
         expect(bioXpReceiptIsNonTerminal({ status: 7 })).toBe(false);
-    });
-
-    it('keeps every robot transient XY method status live, including Y STOP stopping', () => {
-        for (const status of ['queued', 'active', 'pause_requested', 'paused', 'cancel_requested', 'stopping', 'aborting']) {
-            expect(bioXpMethodV1IsTerminal({ status })).toBe(false);
-        }
-        for (const status of ['completed', 'completed_partial', 'failed', 'cleared', 'interrupted', 'ambiguous']) {
-            expect(bioXpMethodV1IsTerminal({ status })).toBe(true);
-        }
     });
 
     it('preserves bounded structured error status, summary, and raw evidence', () => {

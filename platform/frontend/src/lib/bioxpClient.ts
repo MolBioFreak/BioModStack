@@ -593,56 +593,6 @@ export interface BioXpOperatorControlCatalogV2 {
 export type BioXpOperatorDashboardWire = BioXpOperatorDashboard | BioXpOperatorDashboardV2;
 export type BioXpOperatorControlCatalogWire = BioXpOperatorControlCatalog | BioXpOperatorControlCatalogV2;
 
-export type BioXpOperatorMethodV1Status =
-    | 'queued'
-    | 'active'
-    | 'pause_requested'
-    | 'paused'
-    | 'cancel_requested'
-    | 'stopping'
-    | 'aborting'
-    | 'completed'
-    | 'completed_partial'
-    | 'failed'
-    | 'cleared'
-    | 'interrupted'
-    | 'ambiguous';
-
-export interface BioXpOperatorMethodV1 {
-    schema_version: 'bioxp.operator_method.v1';
-    method_id: string;
-    action_id: 'oem.xy.move_absolute' | 'oem.xy.home';
-    status: BioXpOperatorMethodV1Status;
-    state_version: number;
-    child_receipts: BioXpOperatorReceiptV2[];
-    accepted_at: number;
-    finished_at: number | null;
-}
-
-interface BioXpOperatorMethodV1Envelope {
-    expected_connection_generation: number;
-    schema_version: 'bioxp.operator_method_request.v1';
-    idempotency_key: string;
-    expected_ownership_generation: number;
-    expected_board_epoch_by_board: Record<string, number>;
-}
-
-export type BioXpOperatorMethodV1Request =
-    | (BioXpOperatorMethodV1Envelope & { method_action_id: 'oem.xy.move_absolute'; inputs: { x_steps: number; y_steps: number } })
-    | (BioXpOperatorMethodV1Envelope & { method_action_id: 'oem.xy.home'; inputs: Record<string, never> });
-
-export function assertBioXpOperatorMethodV1Request(request: BioXpOperatorMethodV1Request): void {
-    assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
-    if (request.method_action_id === 'oem.xy.move_absolute'
-        && (!Number.isSafeInteger(request.inputs.x_steps)
-            || !Number.isSafeInteger(request.inputs.y_steps)
-            || request.inputs.x_steps < BIOXP_Y_ABSOLUTE_MIN_STEPS
-            || request.inputs.x_steps > BIOXP_Y_ABSOLUTE_MAX_STEPS
-            || request.inputs.y_steps < BIOXP_Y_ABSOLUTE_MIN_STEPS
-            || request.inputs.y_steps > BIOXP_Y_ABSOLUTE_MAX_STEPS)) {
-        throw new Error('XY method positions must fit signed int32');
-    }
-}
 export interface BioXpPipetteHardwareEvidence {
     ok: boolean;
     hardware_truth_level?: 'hardware_query' | 'unparsed_hardware_reply' | 'no_readback' | null;
@@ -2175,14 +2125,6 @@ export const useBioXpOperatorReceiptDetailV2 = (
         isError: (observe && status.isError) || detail.isError };
 };
 
-const BIOXP_METHOD_V1_TERMINAL = new Set<BioXpOperatorMethodV1Status>([
-    'completed', 'completed_partial', 'failed', 'cleared', 'interrupted', 'ambiguous',
-]);
-
-export const bioXpMethodV1IsTerminal = (
-    method: Pick<BioXpOperatorMethodV1, 'status'> | { status?: unknown } | null | undefined,
-): boolean => typeof method?.status !== 'string'
-    || BIOXP_METHOD_V1_TERMINAL.has(method.status as BioXpOperatorMethodV1Status);
 
 
 type BioXpDirectLiquidKind = 'readback' | 'application_plan';
@@ -2835,16 +2777,16 @@ export const useBioXpWorkflowJob = (jobId: string | null, generation: number, en
         const command = job?.command;
         const workflow = job?.execution?.runtime_state.workflow;
         const settled = command?.command_id === jobId && command.terminal
-            && command.status !== 'ambiguous' && workflow?.command_id === jobId && workflow.phase === 'terminal';
+            && workflow?.command_id === jobId && workflow.phase === 'terminal';
         return settled ? false : 2_000;
     },
     refetchIntervalInBackground: false,
 });
 // The monitor consumes control/review truth, never source trays or retained
 // action evidence. Explicit detail/clone and their query keys remain full.
-export const useBioXpWorkflowJobObservation = (jobId: string | null, generation: number, enabled: boolean) => useQuery({
+export const useBioXpWorkflowJobObservation = (jobId: string | null, generation: number, enabled: boolean, facade = false) => useQuery({
     queryKey: [...workflowJobsKey, generation, jobId, 'observation'],
-    queryFn: async () => (await api.get<BioXpWorkflowJobObservation | BioXpWorkflowJob>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId!)}`, {
+    queryFn: async () => (await api.get<BioXpWorkflowJobObservation | BioXpWorkflowJob>(`${facade ? '/api/bioxp/methods/runs' : '/api/bioxp/protocols/jobs'}/${encodeURIComponent(jobId!)}`, {
         params: { expected_connection_generation: generation, observation: true },
     })).data,
     enabled: enabled && generation > 0 && jobId !== null,
@@ -2857,7 +2799,7 @@ export const useBioXpWorkflowJobObservation = (jobId: string | null, generation:
         const command = job?.command;
         const workflow = job?.execution?.runtime_state.workflow;
         const settled = command?.command_id === jobId && command.terminal
-            && command.status !== 'ambiguous' && workflow?.command_id === jobId && workflow.phase === 'terminal';
+            && workflow?.command_id === jobId && workflow.phase === 'terminal';
         return settled ? false : 2_000;
     },
     refetchIntervalInBackground: false,
@@ -2868,15 +2810,15 @@ export const useSubmitBioXpProtocol = () => useMutation({
     ).data,
     retry: false,
 });
-export const useControlBioXpWorkflow = () => useMutation({
+export const useControlBioXpWorkflow = (facade = false) => useMutation({
     mutationFn: async ({ jobId, request }: { jobId: string; request: BioXpWorkflowControlRequest }) => (
-        await api.post<BioXpWorkflowControlResponse>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId)}/control`, request)
+        await api.post<BioXpWorkflowControlResponse>(`${facade ? '/api/bioxp/methods/runs' : '/api/bioxp/protocols/jobs'}/${encodeURIComponent(jobId)}/control`, request)
     ).data,
     retry: false,
 });
-export const useReviewBioXpWorkflow = () => useMutation({
+export const useReviewBioXpWorkflow = (facade = false) => useMutation({
     mutationFn: async ({ jobId, request }: { jobId: string; request: BioXpWorkflowReviewRequest }) => (
-        await api.post<BioXpWorkflowJob>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId)}/review`, request)
+        await api.post<BioXpWorkflowJob>(`${facade ? '/api/bioxp/methods/runs' : '/api/bioxp/protocols/jobs'}/${encodeURIComponent(jobId)}/review`, request)
     ).data,
     retry: false,
 });

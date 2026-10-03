@@ -108,9 +108,6 @@ const state = vi.hoisted(() => ({
     quickDashboardProps: undefined as Record<string, unknown> | undefined,
     admissionCalls: 0,
     catalogArgs: [] as unknown[][],
-    methodReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown },
-    methodHookArgs: [] as unknown[][],
-    methodCallbacks: null as null | { onSuccess?: (receipt: Record<string, unknown>) => void },
     historyEnabled: false,
     pipetteProps: null as Record<string, unknown> | null,
     v1DashboardEnabled: null as boolean | null,
@@ -222,7 +219,6 @@ const state = vi.hoisted(() => ({
     yInvokeCalls: [] as Array<Record<string, unknown>>,
     deckInvokeCalls: [] as Array<Record<string, unknown>>,
     yInterruptCalls: [] as Array<Record<string, unknown>>,
-    methodCalls: [] as Array<Record<string, unknown>>,
     yInvokeError: null as unknown,
     lifecycleInvokeError: null as unknown,
     lifecycleInvokeData: undefined as Record<string, unknown> | undefined,
@@ -454,8 +450,6 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
         isError: state.statusError,
         };
     },
-    useBioXpOperatorMethodV1: (...args: unknown[]) => { state.methodHookArgs.push(args); return state.methodReceipt; },
-    bioXpMethodV1IsTerminal: (method: { status?: string } | undefined) => !method?.status || ['completed', 'failed', 'interrupted', 'ambiguous', 'completed_partial', 'cleared'].includes(method.status),
     useBioXpOperatorReceiptV2: (commandId: string | null, generation: number, enabled: boolean) => {
         state.receiptHookCalls.push({ commandId, generation, enabled });
         if (nativeMetadataMode.receipts) return real.useBioXpOperatorReceiptV2(commandId, generation, enabled);
@@ -615,13 +609,6 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
         error: state.yInterruptError,
         isPending: (++state.interruptSlot === 4 && state.softwarePending) || state.interruptPending,
         mutate: (payload: Record<string, unknown>) => state.yInterruptCalls.push(payload),
-        reset: state.stableReset,
-    }),
-    useSubmitBioXpOperatorMethodV1: () => ({
-        data: undefined,
-        error: null,
-        isPending: false,
-        mutate: (payload: Record<string, unknown>, callbacks?: { onSuccess?: (receipt: Record<string, unknown>) => void }) => { state.methodCalls.push(payload); state.methodCallbacks = callbacks ?? null; },
         reset: state.stableReset,
     }),
     useConnectBioXp: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
@@ -1265,9 +1252,6 @@ beforeEach(() => {
     state.history.isLoading = false;
     state.admissionCalls = 0;
     state.catalogArgs = [];
-    state.methodHookArgs = [];
-    state.methodReceipt = { data: undefined, error: null };
-    state.methodCallbacks = null;
     state.v1DashboardEnabled = null;
     state.v1CatalogEnabled = null;
     state.connectionGeneration = 1;
@@ -1284,7 +1268,6 @@ beforeEach(() => {
     state.yInvokeCalls = [];
     state.deckInvokeCalls = [];
     state.yInterruptCalls = [];
-    state.methodCalls = [];
     state.yInvokeError = null;
     state.lifecycleInvokeError = null;
     state.lifecycleInvokeData = undefined;
@@ -3605,7 +3588,6 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         } });
         expect(state.yInvokeCalls).toHaveLength(0);
         expect(state.invokeCalls).toHaveLength(0);
-        expect(state.methodCalls).toHaveLength(0);
     });
 
     it.each([['X', ''], ['Y', ''], ['X', '1.5'], ['Y', '1.5'], ['X', '2147483648'], ['Y', '2147483648']])(
@@ -3646,7 +3628,6 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             status: 'completed', terminal: true,
         }));
         await act(async () => home.click());
-        expect(state.methodCalls).toHaveLength(0);
         expect(state.xyCalls).toHaveLength(2);
         expect(state.xyCalls[0]).toMatchObject({ request: {
             action_id: 'oem.xy.move_absolute',

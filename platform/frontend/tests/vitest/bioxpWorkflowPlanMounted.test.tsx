@@ -6,6 +6,7 @@ import { writeFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BioXpWorkflowEditor } from '../../src/components/BioXpWorkflowEditor';
 import { api } from '../../src/lib/api';
+import { offlineMethodsDiscovery } from '../fixtures/bioxpMethodsDiscovery';
 import { deckStations } from '../../src/lib/bioxpWorkflowDeck';
 import { readWorkflowDraft } from '../../src/lib/bioxpWorkflowDraft';
 
@@ -17,12 +18,13 @@ const source = deckStations.find(s => s.locationId !== null && s.wells.length ==
 const destination = deckStations.find(s => s.locationId !== null && s.wells.length === 96 && s.id !== source.id)!;
 async function mount(connected = false) { await act(async () => root.render(<QueryClientProvider client={client}><BioXpWorkflowEditor generation={12} connected={connected} controlsEnabled={connected} /></QueryClientProvider>)); }
 async function fresh() { await act(async () => root.unmount()); root = createRoot(host); await mount(); }
-function button(text: string) { const el = [...host.querySelectorAll('button')].find(e => e.textContent === text); expect(el, text).toBeTruthy(); return el!; }
+const legacy = () => host.querySelector('[aria-label="Workflow editor"]') ?? host;
+function button(text: string) { const el = [...legacy().querySelectorAll('button')].find(e => e.textContent === text); expect(el, text).toBeTruthy(); return el!; }
 async function click(text: string) { await act(async () => button(text).click()); }
 function input(label: string): HTMLInputElement | HTMLSelectElement {
     const transferField = [...host.querySelectorAll('[aria-label="Transfer editor"] label')].find(e => [...e.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join('') === label)?.querySelector('input,select');
-    const aria = transferField || host.querySelector(`[aria-label="${label}"]`);
-    const wrapped = [...host.querySelectorAll('label')].find(e => [...e.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join('') === label)?.querySelector('input,select');
+    const aria = transferField || legacy().querySelector(`[aria-label="${label}"]`);
+    const wrapped = [...legacy().querySelectorAll('label')].find(e => [...e.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join('') === label)?.querySelector('input,select');
     expect(aria || wrapped, label).toBeTruthy(); return (aria || wrapped) as HTMLInputElement | HTMLSelectElement;
 }
 async function change(label: string, value: string) {
@@ -54,6 +56,7 @@ beforeEach(() => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     api.defaults.adapter = async config => {
+        const discovery = offlineMethodsDiscovery(config); if (discovery) return discovery;
         const body = config.data ? JSON.parse(config.data) : undefined;
         requests.push({ method: config.method, url: config.url, body });
         let data: any;

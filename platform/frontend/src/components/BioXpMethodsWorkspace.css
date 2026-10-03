@@ -1,0 +1,16 @@
+.bioxp-methods { display: grid; gap: 1rem; min-width: 0; }
+.bioxp-methods [role=tablist] { display:flex; flex-wrap:wrap; gap:.5rem; border-bottom:1px solid var(--border-primary, #334155); padding-bottom:.6rem; }
+.bioxp-methods button { border:1px solid var(--border-primary, #475569); border-radius:.35rem; padding:.35rem .65rem; margin:.2rem; }
+.bioxp-methods button[aria-selected=true] { background:var(--accent-primary, #0e7490); color:white; }
+.bioxp-methods button:disabled { opacity:.4; cursor:not-allowed; }
+.bioxp-methods input:not([type=checkbox]):not([type=range]), .bioxp-methods select { max-width:100%; border:1px solid var(--border-primary, #475569); border-radius:.3rem; background:var(--bg-secondary, #0f172a); color:var(--text-primary, #e2e8f0); padding:.35rem; margin:.2rem; }
+.bioxp-methods label { display:inline-flex; flex-wrap:wrap; gap:.3rem; align-items:center; padding:.15rem; }
+.bioxp-methods fieldset { min-width:0; border:1px solid var(--border-primary, #334155); padding:.65rem; border-radius:.4rem; margin:.4rem 0; }
+.bioxp-methods details { border-left:2px solid var(--border-primary, #334155); padding:.4rem .6rem; margin:.4rem 0; }
+.bioxp-methods summary { cursor:pointer; font-weight:600; overflow-wrap:anywhere; }
+.bioxp-methods dl > div { display:grid; grid-template-columns:minmax(9rem, 1fr) minmax(0, 3fr); gap:.5rem; border-bottom:1px solid var(--border-primary, #334155); }
+.bioxp-methods dd, .bioxp-methods td { overflow-wrap:anywhere; }
+.bioxp-methods table { width:100%; border-collapse:collapse; font-size:.85rem; }
+.bioxp-methods th, .bioxp-methods td { text-align:left; vertical-align:top; padding:.4rem; border:1px solid var(--border-primary, #334155); }
+.bioxp-methods [role=alert] { color:var(--text-danger, #fca5a5); }
+.bioxp-methods [role=status] { padding:.35rem; border-left:3px solid #0891b2; }

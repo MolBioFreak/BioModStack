@@ -345,7 +345,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     const workflowSummary = (intent: DraftObject) => {
         if (intent.operation === 'transfer') return `${isDraftObject(intent.source) ? intent.source.station : 'Source'} → ${isDraftObject(intent.destination) ? intent.destination.station : 'Destination'} · ${intent.volume_ul === '' || intent.volume_ul == null ? 'Volume not set' : `${intent.volume_ul} µL`}`;
         const station = deckStations.find(item => String(item.locationId) === String(intent.location_id));
-        if (['move', 'lower', 'lift'].includes(String(intent.operation))) return [station?.label ?? (intent.location_id ? `Location ${intent.location_id}` : 'Choose a station'), intent.well].filter(Boolean).join(' · ');
+        if (['move', 'lower', 'lift'].includes(String(intent.operation))) return [station?.label ?? (intent.location_id !== '' && intent.location_id != null ? `Station ${intent.location_id}` : 'Choose a station'), intent.well, intent.height_steps != null ? `Height ${intent.height_steps} steps` : null, intent.position_flag != null ? `Position ${intent.position_flag}` : null].filter(Boolean).join(' · ');
         if (intent.operation === 'load_tip') return `Tip tray ${intent.tray || '—'} · ${intent.well || 'Choose a well'}`;
         if (Array.isArray(intent.channels)) return `${intent.volume_ul === '' || intent.volume_ul == null ? 'Volume not set' : `${intent.volume_ul} µL`} · ${intent.channels.length ? `pipettes ${intent.channels.map(c => Number(c) + 1).join(', ')}` : 'Choose pipettes'}`;
         if (intent.operation === 'source_load_tips') return `T${intent.tip_type ?? '—'} · ${intent.pipette === -1 ? 'all four' : typeof intent.pipette === 'number' ? `pipette ${intent.pipette + 1}` : 'Choose pipettes'}`;
@@ -503,8 +503,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         {workflowAuthoring && liquidOperation && <p className="text-sm">Choose which pipettes perform liquid strokes. Their spacing is fixed; this does not position the head or load tips.</p>}
         {!workflowAuthoring && <details className="text-xs text-slate-300"><summary>Position details</summary><p>Calibration revision: {positionTableRevision ?? 'unavailable'}. Not every well is usable at every station.</p></details>}
         <div hidden={!show('move', 'lower', 'lift')} className="grid gap-3 sm:grid-cols-3">
-            <label>Block<select aria-label="Block" className="block w-full bg-slate-950 p-2" value={(workflowAuthoring ? deckStations.filter(s => s.locationId !== null).map(s => ({ location_id: s.locationId })) : destinations).some(d => String(d.location_id) === location) ? location : ''} onChange={e => setLocation(e.target.value)}>
-                <option value="">Select a block</option>
+            <label>Station<select aria-label="Station" className="block w-full bg-slate-950 p-2" value={(workflowAuthoring ? deckStations.filter(s => s.locationId !== null).map(s => ({ location_id: s.locationId })) : destinations).some(d => String(d.location_id) === location) ? location : ''} onChange={e => setLocation(e.target.value)}>
+                <option value="">Select a station</option>
                 {workflowAuthoring ? deckStations.filter(s => s.locationId !== null).map(s => <option key={s.id} value={s.locationId!}>{s.label}</option>) : destinations.map(d => <option key={d.target} value={d.location_id}>{d.label}</option>)}
             </select></label>
             <details open={!workflowAuthoring || undefined} className={workflowAuthoring ? 'bioxp-native-detail' : undefined}><summary>Native location ID</summary>

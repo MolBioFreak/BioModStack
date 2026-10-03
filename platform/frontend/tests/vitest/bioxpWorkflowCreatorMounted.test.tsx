@@ -8,6 +8,7 @@ import { BioXpCockpit } from '../../src/components/BioXpCockpit';
 import { MemoryRouter } from 'react-router-dom';
 import { BioXpWorkflowEditor } from '../../src/components/BioXpWorkflowEditor';
 import { api } from '../../src/lib/api';
+import { offlineMethodsDiscovery } from '../fixtures/bioxpMethodsDiscovery';
 import { deckStations } from '../../src/lib/bioxpWorkflowDeck';
 import { nativeIntent } from '../../src/lib/bioxpWorkflowDraft';
 import { manualPipettingDocument } from '../../src/lib/bioxpManualPipetting';
@@ -46,6 +47,7 @@ beforeEach(() => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     api.defaults.adapter = async config => {
+        const discovery = offlineMethodsDiscovery(config); if (discovery) return discovery;
         const body = config.data ? JSON.parse(config.data) : undefined;
         requests.push({ method: config.method, url: config.url, params: config.params, body });
         if (fail === config.method) throw new Error('Storage network unavailable');
@@ -67,6 +69,7 @@ it('Pipettes keeps manual controls separate from saved workflows', async () => {
     let connection = { active: false, configured: false, generation: 0 };
     const robotPosts: string[] = [];
     api.defaults.adapter = async config => {
+        const discovery = offlineMethodsDiscovery(config); if (discovery) return discovery;
         if (config.url?.startsWith('/api/user-templates')) return templateAdapter(config);
         if (config.method !== 'get') { robotPosts.push(config.url!); throw new Error('No robot mutation expected'); }
         if (config.url === '/api/bioxp/status') return { data: { connection }, status: 200, statusText: 'OK', config, headers: {} };
@@ -95,6 +98,7 @@ it('authors offline in the robot Workflows tab and retains unsaved edits across 
     let connection = { active: false, configured: false, generation: 0 };
     const robotPosts: string[] = [];
     api.defaults.adapter = async config => {
+        const discovery = offlineMethodsDiscovery(config); if (discovery) return discovery;
         if (config.url?.startsWith('/api/user-templates')) return templateAdapter(config);
         if (config.method !== 'get') { robotPosts.push(config.url!); throw new Error('No robot mutation expected'); }
         if (config.url === '/api/bioxp/status') return { data: { connection }, status: 200, statusText: 'OK', config, headers: {} };
@@ -235,7 +239,8 @@ it('verifies readback when the API returns canonically ordered object keys', asy
     const normal = api.defaults.adapter as (config: any) => Promise<any>;
     const reordered = (value: any): any => Array.isArray(value) ? value.map(reordered) : value && typeof value === 'object'
         ? Object.fromEntries(Object.keys(value).sort().map(key => [key, reordered(value[key])])) : value;
-    api.defaults.adapter = async config => { const result = await normal(config); return { ...result, data: reordered(result.data) }; };
+    api.defaults.adapter = async config => {
+        const discovery = offlineMethodsDiscovery(config); if (discovery) return discovery; const result = await normal(config); return { ...result, data: reordered(result.data) }; };
     await mount(); await change('Workflow name', 'Canonical JSON'); await change('Location number', '4'); await append('lower');
     await click('Save workflow'); expect(host.textContent).toContain('Saved draft.');
     await fresh(); await click('Open workflow'); await click('Canonical JSON');
@@ -282,6 +287,7 @@ it('retains newer edits while a selected workflow GET is delayed', async () => {
     const normal = api.defaults.adapter as (config: any) => Promise<any>;
     let release!: () => void;
     api.defaults.adapter = async config => {
+        const discovery = offlineMethodsDiscovery(config); if (discovery) return discovery;
         if (config.url === '/api/user-templates/saved') await new Promise<void>(resolve => { release = resolve; });
         return normal(config);
     };
@@ -293,11 +299,11 @@ it('retains newer edits while a selected workflow GET is delayed', async () => {
 
 it('shows only the selected action settings rather than the manual-control wall', async () => {
     await mount();
-    expect(host.querySelector('[aria-label="Block"]')?.closest('[hidden]')).toBeNull();
+    expect(host.querySelector('[aria-label="Station"]')?.closest('[hidden]')).toBeNull();
     expect(host.querySelector('[aria-label="Volume (µL)"]')?.closest('[hidden]')).not.toBeNull();
     expect(host.querySelector('[aria-label="Tip size"]')).toBeNull();
     await change('Step to append', 'aspirate');
-    expect(host.querySelector('[aria-label="Block"]')?.closest('[hidden]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Station"]')?.closest('[hidden]')).not.toBeNull();
     expect(host.querySelector('[aria-label="Volume (µL)"]')?.closest('[hidden]')).toBeNull();
     expect(host.querySelector('[aria-label="Dispense speed"]')?.closest('[hidden]')).not.toBeNull();
     await change('Step to append', 'source_mix');
@@ -365,6 +371,7 @@ it('labels a saved earlier snapshot when native fields change while Save is pend
     const normal = api.defaults.adapter as (config: any) => Promise<any>;
     let release!: () => void;
     api.defaults.adapter = async config => {
+        const discovery = offlineMethodsDiscovery(config); if (discovery) return discovery;
         if (config.method === 'post') await new Promise<void>(resolve => { release = resolve; });
         return normal(config);
     };
