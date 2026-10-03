@@ -3,7 +3,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from sqlalchemy import delete, select
-from molbio_models import MolecularOperationOutput, MolecularRevision
+from molbio_models import MolecularOperation, MolecularOperationInput, MolecularOperationOutput, MolecularRevision
 from services.assembly.golden_gate_workflow import freeze_selection
 from services.assembly.golden_gate_workflow_types import SaveDesignRequest, WorkflowResult
 from services.global_experiments.adapters import MolBioOperationAdapter
@@ -77,6 +77,23 @@ async def test_operation_open_chooses_product_with_historical_fallback(tmp_path,
                 await session.execute(delete(MolecularOperationOutput).where(MolecularOperationOutput.operation_id == saved['operation_id']))
             await session.commit()
             receipt = await MolBioOperationAdapter(molbio_session_factory=sessions).verify(session, saved['operation_id'])
+            operation = await session.get(MolecularOperation, saved['operation_id'])
+            expected_edges = {}
+            for key, model in [('inputs', MolecularOperationInput), ('outputs', MolecularOperationOutput)]:
+                rows = (await session.scalars(select(model)
+                    .where(model.operation_id == operation.id).order_by(model.position, model.id))).all()
+                expected_edges[key] = [dict(revision_id=row.revision_id, role=row.role, ordinal=row.position)
+                                       for row in rows]
+            expected_detail = dict(operation_id=operation.id, operation_type=operation.operation_kind,
+                status=operation.status, request_fingerprint_sha256=operation.request_fingerprint,
+                **expected_edges)
+        # Follow the real shared operation reader used by the browser parent, not just the URI.
+        detail = await client.get('/api/molbio/operations/' + saved['operation_id'])
+        assert detail.status_code == 200, detail.text
+        assert detail.json() == expected_detail
+        reopened = await client.get('/api/molbio/assembly/golden-gate/design/' + saved['operation_id'])
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json() == saved
         query = parse_qs(urlparse(receipt['reopen_uri']).query)
         assert query['operation_id'] == [saved['operation_id']]
         if mode == 'product':
@@ -87,3 +104,11 @@ async def test_operation_open_chooses_product_with_historical_fallback(tmp_path,
             assert query['revision_id'] == [first.id]
         else:
             assert 'sequence_id' not in query and 'revision_id' not in query
+
+
+@pytest.mark.asyncio
+async def test_missing_operation_read_remains_404(tmp_path):
+    async with client_store(tmp_path) as (client, _):
+        response = await client.get('/api/molbio/operations/does-not-exist')
+        assert response.status_code == 404
+        assert response.json() == {'detail': 'molecular operation not found'}

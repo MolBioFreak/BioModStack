@@ -48,6 +48,31 @@ async function enter(){await mount();expect(calls).toHaveLength(0);await click('
 afterEach(async()=>{if(root)await act(async()=>root.unmount());host?.remove();qc?.clear();api.defaults.adapter=original;vi.restoreAllMocks();});
 
 describe('Assembly Golden Gate native receiving',()=>{
+ it('keeps the same Save request after successful acknowledgements',async()=>{
+  await mount(true);await waitFor(()=>expect(host.querySelector('[aria-label="Selected product DNA"]')).toBeTruthy());
+  for(let i=0;i<3;i++){
+   await click('Save fixed selected candidate');await waitFor(()=>expect(host.textContent).toContain('Saved operation'));
+   await settle();
+  }
+  const saves=calls.filter(c=>c.url.endsWith('/design/save'));
+  expect(saves).toHaveLength(3);expect(saves[0].data.idempotency_key).toBeTruthy();
+  expect(saves[1].data).toEqual(saves[0].data);expect(saves[2].data).toEqual(saves[0].data);
+  expect(calls.filter(c=>c.url.endsWith('/design'))).toHaveLength(0);
+ });
+ it('starts a new Save intent for changed metadata while preserving each retry',async()=>{
+  await mount(true);await waitFor(()=>expect(host.querySelector('[aria-label="Selected product DNA"]')).toBeTruthy());
+  const keys:string[]=[];
+  for(const [field,value] of [['Workup name','First'],['Workup name','Second'],['Workup description','Changed notes']]){
+   await change(field,value);
+   await click('Save fixed selected candidate');await settle();
+   await click('Save fixed selected candidate');await settle();
+   const saves=calls.filter(c=>c.url.endsWith('/design/save'));
+   expect(saves.at(-1)!.data).toEqual(saves.at(-2)!.data);
+   keys.push(saves.at(-1)!.data.idempotency_key);
+  }
+  expect(new Set(keys).size).toBe(3);
+ });
+
  it('mounts all four native tasks without automatic design; evaluates through actual HTTP wrapper',async()=>{await enter();expect(calls.filter(c=>c.url.endsWith('/design'))).toHaveLength(0);await change('Golden Gate task','evaluate_overhangs');await change('Intended junction pairs (one representative per physical junction)','GGAG TGAC');await change('Reference dataset','pryor2020-s002');await click('Run Golden Gate task');await waitFor(()=>expect(host.querySelector('[aria-label="Empirical fidelity"]')).toBeTruthy());const call=calls.find(c=>c.url.endsWith('/design'))!;expect(call.data).toEqual(fixture.evaluate_overhangs.request);expect(call.signal).toBeTruthy();evidence('evaluate',call.data);expect(host.textContent).toContain('not yield');expect(calls.filter(c=>c.url.endsWith('/golden-gate/options'))).toHaveLength(1);});
  it('authors deterministic optimize request and consumes actual search evidence',async()=>{await enter();await change('Golden Gate task','optimize_overhangs');await change('Candidate domain','AAAA AAAC AATG CCGT TGAC');await change('Reference dataset','pryor2020-s002');await click('Run Golden Gate task');await waitFor(()=>expect(host.querySelector('[aria-label="Native Golden Gate search results"]')).toBeTruthy());const call=calls.find(c=>c.url.endsWith('/design'))!;expect(call.data).toEqual(fixture.optimize_overhangs.request);evidence('optimize',call.data);await click('Select search candidate 1');expect((field('Golden Gate task') as HTMLSelectElement).value).toBe('evaluate_overhangs');expect(calls.filter(c=>c.url.endsWith('/design'))).toHaveLength(1);});
  it('authors split windows, preparation and native constraints then renders physical product',async()=>{await enter();await change('Golden Gate task','split_target');await change('Catalog enzyme',fixture.split_target.request.enzyme.enzyme_id);for(const [i,start] of [20,80].entries()){await click('Add cut window');await change(`Window ${i+1} start`,String(start));await change(`Window ${i+1} end`,String(start+1));await change(`Window ${i+1} fixed position (optional)`,String(start));}await change('Split clamp','TT');await change('Split spacer','A');await change('Linear terminal right fusion','TGAC');await change('Search ranking mode','lexicographic');await check('Suggest unique reverse-complement classes');await check('Exclude palindromes from suggestions');await click('Run Golden Gate task');await waitFor(()=>expect(host.querySelector('[aria-label="Selected product DNA"]')).toBeTruthy());const call=calls.find(c=>c.url.endsWith('/design'))!;expect(call.data).toEqual({...fixture.split_target.request,target:{...fixture.split_target.request.target,id:'source'}});evidence('split',call.data);await click('Save fixed selected candidate');const save=calls.find(c=>c.url.endsWith('/design/save'))!;expect(save.data.selection.request.task).toBe('assemble_parts');expect(save.data.selection.request).toEqual(fixture.split_target.result.solutions[0].fixed_request);expect(save.data.selection.authored_request.task).toBe('split_target');evidence('split-save',save.data);});
