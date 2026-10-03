@@ -653,6 +653,6 @@ def compile_method(request):
     except (ValueError, TypeError, KeyError, ArithmeticError, RecursionError) as exc:
         result['document'] = None
         result['digest'] = None
-        result['issues'].append({'code': getattr(exc, 'code', 'representation_error'), 'category': 'representation',
-            'message': str(exc), 'path': getattr(exc, 'path', '')})
+        result['issues'].extend(getattr(exc, 'issues', None) or [{'code': getattr(exc, 'code', 'representation_error'),
+            'category': 'representation', 'message': str(exc), 'path': getattr(exc, 'path', '')}])
     return result

@@ -457,3 +457,12 @@ it('does not interpret HTTP status or absent ACK as definitive refusal and displ
     expect(previewActionDestination({ kind: 'thermal', params: {}, station: null, well: null })).toEqual({ station: null, well: null });
     expect(previewActionDestination({ kind: 'pipette_position', params: { location_id: 0, well: 'a1' }, station: null, well: null })).toEqual({ station: 'LOC_MS', well: 'A1' });
 });
+
+it('shows live progress paths carried in native action metadata', async () => {
+    const { renderToStaticMarkup } = await import('react-dom/server');
+    const { BioXpMethodProgress } = await import('../../src/components/BioXpMethodPreview');
+    const html = renderToStaticMarkup(<BioXpMethodProgress report={{ action_results: [{ status: 'failed', source_occurrence_id: 'occ-1',
+        metadata: { bms_method: { path: '/method/steps/0', call_path: [], loop_path: [1] } } }] }} />);
+    expect(html).toContain('/method/steps/0');
+    expect(html).toContain('&quot;loop_path&quot;:[1]');
+});

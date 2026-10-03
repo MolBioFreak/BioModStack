@@ -10,7 +10,8 @@ from bioxp_method_model import method_catalog
 
 
 def test_committed_native_pin_and_registration():
-    assert EXPORT['source_commit'] == '759ee635e851fc447269c59ac69b3e705ab79b34'
+    assert EXPORT['source_commit'] == '960caec98518fb84e96dcd339bb514128f52d188'
+    assert not any('classifier' in k for k in EXPORT['capabilities'])
     for name, schema in EXPORT['method_contract']['action_params'].items():
         assert all(CONTRACTS[name][key] == value for key, value in schema.items())
     from bioxp_method_native import native_action
@@ -20,8 +21,17 @@ def test_committed_native_pin_and_registration():
     for name in ('park', 'led', 'status_light', 'seal_separate', 'cavro_application', 'liquid_recipe', 'fluid_search', 'pipette_settings', 'pressure_stream'):
         assert entries[name]['status']['registered'] is True
         assert entries[name]['source_revision'] == EXPORT['source_commit']
-    assert entries['classifier']['status']['emitted'] is False
+    assert 'classifier' not in entries
 
+
+
+def test_liquid_errors_list_every_step():
+    from bioxp_method_compiler import compile_method
+    steps = [{'step_id': sid, 'type': 'action', 'action': 'transfer', 'inputs': {'liquid': {}, 'channels': [0], 'volume_ul': 5}}
+             for sid in ('first', 'second')]
+    result = compile_method({'method': {'schema': 'bms.bioxp-method.v1', 'steps': steps}})
+    assert result['document'] is None
+    assert [(i['step_id'], i['path']) for i in result['issues']] == [('first', '/method/steps/0'), ('second', '/method/steps/1')]
 
 @pytest.mark.asyncio
 async def test_export_final_immutable_snapshots(store, tmp_path):

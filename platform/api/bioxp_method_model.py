@@ -84,7 +84,7 @@ def method_catalog():
         'illumination': ['camera', 'enabled'], 'status_light': ['color'], 'barcode': ['reader', 'mode'],
         'fluid_search': ['channels', 'search', 'plld'], 'cut_seal': ['location_id'], 'pierce_seal': ['location_id', 'channels'],
         'seal_separate': ['location_id'], 'plunger': ['channels', 'position', 'speed'], 'pipette_settings': ['channels', 'settings'],
-        'pressure_stream': ['channels', 'interval'], 'classifier': ['algorithm', 'conditions'],
+        'pressure_stream': ['channels', 'interval'],
     }
     for name, fields in pending.items():
         status = {'authorable': True, 'emitted': name in ('checkpoint', 'note'), 'registered': True if name in ('checkpoint', 'note') else None, 'connected_tested': False, 'physically_qualified': False}

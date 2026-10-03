@@ -189,7 +189,7 @@ def test_application_all_phases_and_native_settings():
         *[{'operation': op, **selected, 'volume_ul': 1, 'speed_ul_s': 30} for op in ('leading_air', 'aspirate', 'trailing_air', 'dispense', 'reaspirate')],
         {'operation': 'delay', 'duration_ms': 1}, {'operation': 'empty', **selected, 'speed_ul_s': 30}]}
     assert actions(compile_nodes(node('cavro_application', {'application': application})))[0]['params']['application'] == application
-    for field in ('start_speed_ul_s', 'cutoff_speed_ul_s', 'clot_classifier'):
+    for field in ('start_speed_ul_s', 'cutoff_speed_ul_s', 'unknown_setting'):
         invalid = deepcopy(application)
         invalid['operations'][0]['values'][field] = 1
         assert compile_nodes(node('cavro_application', {'application': invalid}))['document'] is None

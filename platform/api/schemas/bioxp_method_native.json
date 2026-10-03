@@ -1,5 +1,5 @@
 {
-  "source_commit": "759ee635e851fc447269c59ac69b3e705ab79b34",
+  "source_commit": "960caec98518fb84e96dcd339bb514128f52d188",
   "application": {
     "$defs": {
       "Delay": {
@@ -1902,20 +1902,7 @@
     },
     "raw_pressure_streaming": {
       "status": "implemented",
-      "classifier": false,
-      "samples_owner": "existing NovoRouter pressure observation/receipt path",
-      "verdict": null
-    },
-    "clot_classifier": {
-      "status": "unsupported",
-      "verdict": null
-    },
-    "air_classifier": {
-      "status": "unsupported",
-      "verdict": null
-    },
-    "adp_detect": {
-      "status": "different_controller_generation"
+      "samples_owner": "existing NovoRouter pressure observation/receipt path"
     },
     "tip_profiles": {
       "T10": {
@@ -5117,20 +5104,7 @@
       },
       "raw_pressure_streaming": {
         "status": "implemented",
-        "classifier": false,
-        "samples_owner": "existing NovoRouter pressure observation/receipt path",
-        "verdict": null
-      },
-      "clot_classifier": {
-        "status": "unsupported",
-        "verdict": null
-      },
-      "air_classifier": {
-        "status": "unsupported",
-        "verdict": null
-      },
-      "adp_detect": {
-        "status": "different_controller_generation"
+        "samples_owner": "existing NovoRouter pressure observation/receipt path"
       },
       "tip_profiles": {
         "T10": {

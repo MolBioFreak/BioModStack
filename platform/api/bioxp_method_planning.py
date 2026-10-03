@@ -201,6 +201,13 @@ def positioned_transfer_recipes(inputs):
     return recipes
 
 
+class RepresentationErrors(ValueError):
+    """Every per-step representation error, each addressed to its occurrence."""
+    def __init__(self, issues):
+        super().__init__(issues[0]['message'])
+        self.issues = issues
+
+
 def prepare_occurrences(occurrences, method, dependencies):
     """Attach logical accounting without changing native addressing or admission."""
     result, notices, resolutions, issues = [], [], [], []
@@ -234,6 +241,7 @@ def prepare_occurrences(occurrences, method, dependencies):
                 raise ValueError('Choose explicit repeated_single transfers; true multi distribute uses mode multi and a native recipe')
         else:
             expanded.append(original)
+    failures = []
     for original in expanded:
         row = deepcopy(original)
         inputs = row['inputs']
@@ -244,9 +252,14 @@ def prepare_occurrences(occurrences, method, dependencies):
             inputs.setdefault('channels', [0, 1, 2, 3])  # native pickup is always four-channel
         if not isinstance(inputs, dict):
             raise ValueError('Action inputs must be an object')
-        if row['action'] == 'transfer' and 'liquid' in inputs:
-            prepare_class_transfer(inputs)
-        resolution = liquid_resolution(inputs, dependencies)
+        try:
+            if row['action'] == 'transfer' and 'liquid' in inputs:
+                prepare_class_transfer(inputs)
+            resolution = liquid_resolution(inputs, dependencies)
+        except ValueError as exc:
+            failures.append({'code': 'representation_error', 'category': 'representation', 'message': str(exc),
+                'path': row.get('path', ''), 'step_id': row.get('step_id'), 'occurrence_id': row['occurrence_id']})
+            continue
         if resolution:
             resolutions.append({'occurrence_id': row['occurrence_id'], **resolution})
             notices.extend({'occurrence_id': row['occurrence_id'], 'step_id': row['step_id'], **n} for n in resolution['water_substitutions'])
@@ -302,6 +315,8 @@ def prepare_occurrences(occurrences, method, dependencies):
             for vessel in labware:
                 if vessel.get('id') == inputs['labware_id']:
                     vessel['station'] = inputs.get('target_location')
+    if failures:
+        raise RepresentationErrors(failures)
     policy = method.get('tip_policy', 'manual')
     if policy is None:
         policy = 'manual'

@@ -16,7 +16,7 @@ slope cutoff_speed_ul_s start_speed_ul_s excess_volume_ul excess_destination dis
 number_of_dispenses number_back_to_source retract_distance_mm aspiration_top_speed_ul_s
  dispense_top_speed_ul_s reaspiration_volume_ul dispense_to_reaspiration_delay_ms slope_n1 slope_n2
 contact_mode dispense_speed_ul_s final_empty_tip search_speed_mm_s tracking touch_off lld
-pressure_streaming classifier_reference correction_points calibration_function channels tip_profile_id
+pressure_streaming correction_points calibration_function channels tip_profile_id
 head_reference tip_policy""".split())
 
 

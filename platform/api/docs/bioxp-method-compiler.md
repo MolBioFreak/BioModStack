@@ -38,7 +38,7 @@ The disconnected native contract is in `bioxp_method_native`; its source revisio
 
 Signed channel accounting uses `dependencies.labware_profiles[].native_addressing:{row_increment,column_increment,reference_channel}` and stable `deck_plan.labware[].id`; a station is not a labware ID and selected plungers are not independent XY. Explicit channel transfers can be authored for recipe accounting. Unknown geometry/material/fill stays advisory. Deck assignments seed planned state; explicit initial assumptions take precedence. Each transfer aspiration/dispense child records its separate planned source/tip/destination effect. Native emitted positions drive simulated-after-occurrence head references; this is not readback. Simulated duration includes known waits/dispatch holds and leaves unknown timing portions unknown.
 
-Remaining source/integration gaps are discoverable rather than replaced by notes: original-ADP start/cutoff mapping and host classifiers; dedicated Park/source seal-separation/pierce/status-light mappings and native multi-pose barcode/fan/ramp additions need the corresponding delivered native contract. Existing source diagnostics/plunger controls remain available through `diagnostic_pipette`. No physical qualification is claimed.
+Remaining source/integration gaps are discoverable rather than replaced by notes: original-ADP start/cutoff mapping; dedicated Park/source seal-separation/pierce/status-light mappings and native multi-pose barcode/fan/ramp additions need the corresponding delivered native contract. Existing source diagnostics/plunger controls remain available through `diagnostic_pipette`. No physical qualification is claimed.
 
 ## Examples and tests
 
