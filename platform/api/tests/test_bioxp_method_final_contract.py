@@ -24,12 +24,12 @@ def test_committed_native_pin_and_registration():
 
 
 @pytest.mark.asyncio
-async def test_export_final_immutable_snapshots(store):
-    if not os.environ.get('BIOXP_FINAL_DOCUMENTS'):
-        return
+async def test_export_final_immutable_snapshots(store, tmp_path):
+    import gzip
     client, transport, _, _ = store
-    source = Path(os.environ['BIOXP_FINAL_DOCUMENTS'])
-    documents = json.loads(source.read_text())
+    source = Path(os.environ.get('BIOXP_FINAL_DOCUMENTS', str(tmp_path / 'documents.json')))
+    fixture = Path(__file__).parent / 'fixtures/bioxp_methods/final-model-documents.json.gz'
+    documents = json.loads(source.read_text()) if 'BIOXP_FINAL_DOCUMENTS' in os.environ else json.loads(gzip.decompress(fixture.read_bytes()))
     captures = []
     for doc in documents:
         metadata = doc['metadata']['bms_method']
