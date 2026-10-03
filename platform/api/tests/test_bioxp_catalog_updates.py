@@ -27,17 +27,19 @@ def test_update_relay_preserves_all_source_bytes_and_selectors():
     app.include_router(router, prefix='/api/bioxp')
     app.dependency_overrides[get_bioxp_runtime] = lambda: runtime
     with TestClient(app) as client:
-        for body in [export['cold'], *export['windows']['idle']['responses'], *export['windows']['changing']['responses']]:
+        for event in [e for window in export['windows'].values() for e in window['events']]:
+            body = event['response']
+            legacy, canonical = event['request']
             response = client.get('/api/bioxp/operator-controls/catalog', params={
-                'view': 'assessment', 'assessment_base': export['cold']['assessment_revision'],
-                'canonical_assessment_base': export['cold']['canonical']['assessment_revision'], 'z_target_steps': -2147483648})
+                'view': 'assessment', 'assessment_base': legacy,
+                'canonical_assessment_base': canonical, 'z_target_steps': -2147483648})
             assert response.status_code == 200, response.text
             assert response.json() == body
-            assert calls[-2][1]['params']['assessment_base'] == export['cold']['assessment_revision']
+            assert calls[-2][1]['params']['assessment_base'] == legacy
             assert calls[-2][1]['params']['z_target_steps'] == -2147483648
-            assert calls[-1][1]['params'] == {'view':'assessment', 'schema_version':'bioxp.operator_control_catalog.v2', 'assessment_base':export['cold']['canonical']['assessment_revision']}
+            assert calls[-1][1]['params'] == {'view':'assessment', 'schema_version':'bioxp.operator_control_catalog.v2', 'assessment_base':canonical}
             assert all(kwargs['expected_generation'] == 7 for _, kwargs in calls[-2:])
-        body = export['windows']['idle']['expected'][0]
+        body = export['windows']['idle']['events'][0]['expected']
         response = client.get('/api/bioxp/operator-controls/catalog', params={'view':'assessment'})
         assert response.json() == body  # Existing callers keep the prior contract.
         response = client.get('/api/bioxp/operator-controls/catalog', params={'view':'assessment', 'assessment_base':'', 'canonical_assessment_base':''})

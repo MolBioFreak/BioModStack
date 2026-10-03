@@ -74,7 +74,7 @@ it('polls live state at five seconds, definitions once across Z/draft/remount an
         expect(count('assessment')).toBe(13);
         expect(count('metadata')).toBe(1);
         await render(7, -2147483648, 'changed');
-        expect(vi.mocked(api.get).mock.calls.at(-1)?.[1]?.params).toEqual({view:'assessment', assessment_base:'', canonical_assessment_base:'', z_target_steps:-2147483648});
+        expect(vi.mocked(api.get).mock.calls.at(-1)?.[1]?.params).toEqual({view:'assessment', assessment_base:'fixture-baseline', canonical_assessment_base:'fixture-baseline', z_target_steps:-2147483648});
         expect(count('metadata')).toBe(1);
         wire.assessment.action_states[0] = {...wire.assessment.action_states[0], enabled:false, disabled_reason:'provider unavailable', available:false, provider_available:false, dependencies:[{key:'provider_available', met:false, reason:'offline'}], snapshot_freshness:{state:'missing',age_s:null}};
         await tick(5_000);

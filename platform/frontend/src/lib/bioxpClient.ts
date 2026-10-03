@@ -1539,6 +1539,8 @@ type CatalogAssessment = Omit<BioXpOperatorControlCatalog, 'actions' | 'canonica
 type CatalogUpdate = {
     catalog_view: 'assessment'; assessment_revision: string;
     assessment_base?: Record<string, unknown>;
+    assessment_source_revision?: string;
+    assessment_overlay?: CatalogUpdate['assessment_changes'];
     assessment_changes: Array<[(string | number)[], unknown?, (string | number)[]?]>;
 };
 type CatalogBase = { revision: string; body: Record<string, unknown> };
@@ -1552,9 +1554,18 @@ export function applyBioXpCatalogUpdate(update: CatalogUpdate, previous?: Catalo
     }
     const base = update.assessment_base !== undefined
         ? { revision: update.assessment_revision, body: update.assessment_base } : previous;
-    if (!base || base.revision !== update.assessment_revision) throw new Error('Robot catalog update baseline missing');
-    const body = structuredClone(base.body);
-    for (const change of update.assessment_changes) {
+    if (!base || base.revision !== (update.assessment_source_revision ?? update.assessment_revision)) throw new Error('Robot catalog update baseline missing');
+    const snapshot = applyCatalogChanges(base.body, update.assessment_changes);
+    // Old immutable-baseline peers remain readable. Advancing peers explicitly
+    // separate the immutable result snapshot from request/display-only fields.
+    if (update.assessment_overlay === undefined) return { base, body: snapshot };
+    return { base: { revision: update.assessment_revision, body: snapshot },
+        body: applyCatalogChanges(snapshot, update.assessment_overlay) };
+}
+
+function applyCatalogChanges(sourceBody: Record<string, unknown>, changes: CatalogUpdate['assessment_changes']) {
+    const body = structuredClone(sourceBody);
+    for (const change of changes) {
         const path = change[0];
         if (!Array.isArray(path) || path.length === 0) throw new Error('Invalid robot catalog update path');
         let target: Record<string | number, unknown> = body;
@@ -1570,7 +1581,7 @@ export function applyBioXpCatalogUpdate(update: CatalogUpdate, previous?: Catalo
         } else {
             let value = change[1];
             if (change.length === 3) {
-                value = base.body;
+                value = sourceBody;
                 for (const source of change[2]!) {
                     if (value === null || typeof value !== 'object' || !Object.hasOwn(value, source)) throw new Error('Invalid robot catalog update source');
                     value = (value as Record<string | number, unknown>)[source];
@@ -1579,7 +1590,7 @@ export function applyBioXpCatalogUpdate(update: CatalogUpdate, previous?: Catalo
             Object.defineProperty(target, key, { value: structuredClone(value), enumerable: true, configurable: true, writable: true });
         }
     }
-    return { base, body };
+    return body;
 }
 
 export function composeBioXpCatalog(metadata: CatalogMetadata, assessment: CatalogAssessment): BioXpOperatorControlCatalog {
@@ -1606,11 +1617,15 @@ export const useBioXpOperatorControlCatalog = (
 ) => {
     const queryClient = useQueryClient();
     const queryKey = [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null, zTargetSteps];
+    // One generation-scoped baseline entry in the existing QueryClient survives
+    // draft-key disposal. Not a per-draft history or an independent poll owner.
+    const baselineKey = [...operatorCatalogKey, connectionGeneration, 'assessment-base'];
     return useQuery<CatalogObservation>({
         queryKey,
         placeholderData: (previous, previousQuery) => previousQuery?.queryKey[operatorCatalogKey.length] === connectionGeneration ? previous : undefined,
         queryFn: async ({ signal }) => {
-            const previous = queryClient.getQueryData<CatalogObservation>(queryKey)?.assessmentBases;
+            const previous = queryClient.getQueryData<CatalogObservation['assessmentBases']>(baselineKey)
+                ?? queryClient.getQueryData<CatalogObservation>(queryKey)?.assessmentBases;
             const update = (await api.get<CatalogUpdate & { canonical: CatalogUpdate }>('/api/bioxp/operator-controls/catalog', {
                 signal, timeout: 12_000,
                 params: { view: 'assessment', assessment_base: previous?.legacy.revision ?? '',
@@ -1628,7 +1643,10 @@ export const useBioXpOperatorControlCatalog = (
                     signal, timeout: 12_000, params: { view: 'metadata' },
                 })).data,
             });
-            return { ...composeBioXpCatalog(metadata, assessment), assessmentBases: { legacy: legacy.base, canonical: canonical.base } };
+            const composed = composeBioXpCatalog(metadata, assessment);
+            const assessmentBases = { legacy: legacy.base, canonical: canonical.base };
+            queryClient.setQueryData(baselineKey, assessmentBases);
+            return { ...composed, assessmentBases };
         },
         enabled: enabled && connectionGeneration > 0,
         gcTime: 0,
