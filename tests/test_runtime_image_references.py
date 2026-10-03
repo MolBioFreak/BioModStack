@@ -11,7 +11,7 @@ from publish_runtime_images import publish_references
 @pytest.mark.parametrize('selector', [
     'BMS_PROTENIX_CONTAINER_PATH', 'BMS_FRUSTRAMPNN_SIF',
     'BMS_NGS_RUNTIME_SIF', 'BMS_CM_CONFORNETS_CONTAINER_PATH',
-    'BMS_FOLD_CP_CONTAINER_PATH',
+    'BMS_FOLD_CP_CONTAINER_PATH', 'BMS_PROTONPOTTSMPNN_CONTAINER_PATH',
 ])
 def test_two_lanes_share_one_object_and_reference_republication_does_not_copy(tmp_path, selector):
     source = tmp_path / 'source.sif'
@@ -58,7 +58,8 @@ def test_bad_digest_keeps_existing_lane_references(tmp_path):
     assert ref.read_bytes() == previous
 
 
-def test_fold_cp_joins_legacy_development_projection_without_other_lane_changes(tmp_path, monkeypatch):
+@pytest.mark.parametrize('new_selector', ['BMS_FOLD_CP_CONTAINER_PATH', 'BMS_PROTONPOTTSMPNN_CONTAINER_PATH'])
+def test_new_engine_joins_legacy_development_projection_without_other_lane_changes(tmp_path, monkeypatch, new_selector):
     from lib.shared_runtime_images import publish_image
     from lib.runtime_image_lifecycle import load_state
     import biomodstack_services as manager
@@ -74,11 +75,11 @@ def test_fold_cp_joins_legacy_development_projection_without_other_lane_changes(
     (refs / 'development.env').write_text(
         '# Managed shared runtime references; image digest is encoded in each path.\n'
         f'BMS_RUNTIME_IMAGE_STORE={store}\n{key}={existing}\n')
-    source.write_bytes(b'Fold-CP fixture')
+    source.write_bytes(f'{new_selector} fixture'.encode())
     cp_digest = hashlib.sha256(source.read_bytes()).hexdigest()
     publish_references(store, 'development', {
         key: {'source': str(existing), 'sha256': digest},
-        'BMS_FOLD_CP_CONTAINER_PATH': {'source': str(source), 'sha256': cp_digest},
+        new_selector: {'source': str(source), 'sha256': cp_digest},
     })
     state = load_state(store)
     assert set(state['current']) == {'development'}
