@@ -169,15 +169,15 @@ def method_catalog():
         if entry['action'] in {'plate_move', 'move_cover', 'plate_catch', 'plate_release', 'plate_press', 'gripper_catch', 'gripper_release', 'gripper_press'}:
             entry['inputs']['properties']['labware_id'] = {'type': 'string', 'description': 'Stable logical identity; retained as metadata, not a controller setting'}
         if entry['action'] in {'cavro_application', 'liquid_recipe', 'fluid_search', 'pipette_settings', 'pressure_stream'}:
-            entry['status']['registered'] = None  # separate native finite-owner qualification
+            entry['status']['registered'] = True  # pinned native finite-owner registration
         if entry['action'] == 'plunger':
             entry['inputs'] = deepcopy(schema['$defs']['DiagnosticPlunger'])
             entry['status'].update(emitted=True, registered=True)
             entry['integration'] = 'Existing diagnostic_pipette physical owner; native all-pipette plunger operation'
         if entry['action'] in {'park', 'led', 'status_light', 'seal_separate'}:
-            entry['source_revision'] = None
-            entry['source_contract'] = 'Native close published interface: Park optional rehome; RGB led; SS source no-op. Final integrated native commit must be pinned separately.'
-            entry['status']['registered'] = None
+            entry['source_revision'] = EXPORT['source_commit']
+            entry['source_contract'] = deepcopy(EXPORT['method_contract']['bindings'][ALIASES.get(entry['action'], entry['action'])])
+            entry['status']['registered'] = True
         if entry['action'] == 'seal_separate':
             entry['effects'] = 'Source SS lower-interpreter no-op; not a physical seal actuator or operator completion claim'
         if entry['action'] == 'park':

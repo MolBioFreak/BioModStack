@@ -91,6 +91,8 @@ for _thermal in (HOLD, CONTRACTS['thermal_setpoint']):
     _thermal['dependentRequired'] = {'cool_rate_c_s': ['heat_rate_c_s'], 'heat_rate_c_s': ['cool_rate_c_s']}
     _thermal.setdefault('allOf', []).append({'if': {'properties': {'bank': {'const': 'pedestal'}}},
         'then': {'not': {'anyOf': [{'required': ['cool_rate_c_s']}, {'required': ['heat_rate_c_s']}]}}})
+# Prefer committed native producer schemas over parallel handwritten copies.
+CONTRACTS.update(deepcopy(EXPORT['method_contract']['action_params']))
 ALIASES = {'status_light': 'led', 'pierce_seal': 'pipette_pierce', 'incubate': 'thermal_hold', 'illumination': 'camera_illumination', 'barcode': 'barcode_read',
            'gripper_catch': 'plate_catch', 'gripper_release': 'plate_release', 'gripper_press': 'plate_press'}
 
@@ -108,8 +110,12 @@ def coerce(value, schema, root=None):
         except (ValueError, TypeError, ValidationError):
             pass
     if isinstance(value, dict):
+        properties = dict(schema.get('properties', {}))
+        for condition in schema.get('allOf', []):
+            if 'if' in condition and NativeValidator(condition['if']).is_valid(value):
+                properties.update(condition.get('then', {}).get('properties', {}))
         extra = schema.get('additionalProperties', {})
-        return {k: coerce(v, schema.get('properties', {}).get(k, extra if isinstance(extra, dict) else {}), root) for k, v in value.items()}
+        return {k: coerce(v, properties.get(k, extra if isinstance(extra, dict) else {}), root) for k, v in value.items()}
     if isinstance(value, list):
         return [coerce(v, schema.get('items', {}), root) for v in value]
     if isinstance(value, str) and schema.get('type') in ('number', 'integer'):
