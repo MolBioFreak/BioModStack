@@ -254,6 +254,8 @@ async def operator_command_status_v2(
 async def operator_control_catalog(
     z_target_steps: int | None = Query(default=None, ge=-2147483648, le=2147483647),
     view: Literal["full", "metadata", "assessment"] = Query(default="full"),
+    assessment_base: str | None = Query(default=None, max_length=64),
+    canonical_assessment_base: str | None = Query(default=None, max_length=64),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> Any:
     generation = runtime.connection.generation
@@ -261,14 +263,18 @@ async def operator_control_catalog(
     queries = [asyncio.create_task(query) for query in (
         runtime.connection.request_active_query(
             "operator_control_catalog",
-            params={**view_params, **({"z_target_steps": z_target_steps} if z_target_steps is not None else {})} or None,
+            params={**view_params,
+                    **({"assessment_base": assessment_base} if view == "assessment" and isinstance(assessment_base, str) else {}),
+                    **({"z_target_steps": z_target_steps} if z_target_steps is not None else {})} or None,
             expected_generation=generation,
             require_fresh=False,
         ),
         runtime.connection.request_active_v2_query(
             "operator_control_catalog_v2",
             expected_generation=generation,
-            params={"schema_version": "bioxp.operator_control_catalog.v2", **view_params},
+            params={"schema_version": "bioxp.operator_control_catalog.v2", **view_params,
+                    **({"assessment_base": canonical_assessment_base}
+                       if view == "assessment" and isinstance(canonical_assessment_base, str) else {})},
         ),
     )]
     try:
@@ -283,6 +289,11 @@ async def operator_control_catalog(
         await asyncio.gather(*queries, return_exceptions=True)
     if view != "full" and any(not isinstance(body, dict) or body.get("catalog_view") != view for body in (catalog, canonical)):
         raise HTTPException(426, detail="Robot catalog split-view release required; no full-poll fallback")
+    if view == "assessment" and any(
+        isinstance(requested, str) and (not isinstance(body, dict) or "assessment_revision" not in body)
+        for requested, body in ((assessment_base, catalog), (canonical_assessment_base, canonical))
+    ):
+        raise HTTPException(426, detail="Robot catalog update release required; no full-poll fallback")
     if isinstance(catalog, dict):
         catalog = {**catalog, "canonical": canonical}
     return catalog

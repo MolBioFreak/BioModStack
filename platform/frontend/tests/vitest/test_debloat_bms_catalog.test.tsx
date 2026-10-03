@@ -27,7 +27,9 @@ it('mounted cockpit and opened Advanced share the exact catalog including draft 
         if (url === '/api/bioxp/status') return { data: { connection: { active: true, configured: true, generation: 7, reachable: true } } };
         if (url === '/api/bioxp/operator-controls/catalog') {
             const view = options?.params?.view;
-            return { data: {...split(catalog, view), canonical: split(catalog.canonical, view)} };
+            const legacy = split(catalog, view), canonical = split(catalog.canonical, view);
+            const wrap = (body: object) => ({catalog_view:'assessment', assessment_revision:'fixture-baseline', assessment_base:body, assessment_changes:[]});
+            return { data: view === 'metadata' ? {...legacy, canonical} : {...wrap(legacy), canonical:wrap(canonical)} };
         }
         if (url.startsWith('/api/bioxp/operator-controls/history?')) return { data: { items: [], next_cursor: null } };
         throw new Error(`Unexpected GET ${url}`);
@@ -44,7 +46,7 @@ it('mounted cockpit and opened Advanced share the exact catalog including draft 
         for (const [url, options] of vi.mocked(api.get).mock.calls) {
             expect(url).not.toMatch(/operator-controls\/(v2\/catalog|dashboard)$/);
             if (url.endsWith('/catalog')) expect(options?.params).toEqual(options?.params?.view === 'metadata'
-                ? {view: 'metadata'} : {view: 'assessment', z_target_steps: 65000});
+                ? {view: 'metadata'} : {view: 'assessment', z_target_steps: 65000, assessment_base:expect.any(String), canonical_assessment_base:expect.any(String)});
         }
         expect(host.textContent).toContain('Individual Controls');
         if (process.env.BMS_CONSUMER_FINISH_METRICS) writeFileSync(process.env.BMS_CONSUMER_FINISH_METRICS + '.catalog.json', JSON.stringify({
