@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { isMethodNumber, methodNumber } from '../lib/bioxpMethodNumber';
 import { BioXpMethodExpression } from './BioXpMethodExpression';
 import { BioXpSchemaInput } from './BioXpSchemaInput';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
@@ -8,12 +9,12 @@ const fieldClass = 'rounded border border-slate-600 bg-slate-900 p-2';
 /** Typed extension editor preserves unknown fields and their types, never a JSON-only escape hatch. */
 export function MethodValueField({ label, value, onChange }: { label: string; value: unknown; onChange: (value: unknown) => void }) {
     const [key, setKey] = useState('');
-    const kind = value === undefined ? 'omitted' : value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+    const kind = isMethodNumber(value) ? 'number' : value === undefined ? 'omitted' : value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
     return <fieldset className="space-y-2 border border-slate-700 p-2"><legend>{label}</legend>
-        <select aria-label={`${label} type`} value={kind} onChange={e => onChange(({ omitted: undefined, null: null, object: {}, array: [], string: '', number: '', boolean: false } as Record<string, unknown>)[e.target.value])}>
+        <select aria-label={`${label} type`} value={kind} onChange={e => onChange(({ omitted: undefined, null: null, object: {}, array: [], string: '', number: methodNumber(''), boolean: false } as Record<string, unknown>)[e.target.value])}>
             {['omitted', 'null', 'string', 'number', 'boolean', 'object', 'array'].map(type => <option key={type}>{type}</option>)}
         </select>
-        {(kind === 'string' || kind === 'number') && <input className={fieldClass} aria-label={label} value={String(value)} onChange={e => onChange(kind === 'number' && e.target.value !== '' && Number.isFinite(Number(e.target.value)) ? Number(e.target.value) : e.target.value)} />}
+        {(kind === 'string' || kind === 'number') && <input className={fieldClass} aria-label={label} value={isMethodNumber(value) ? value.expr.value : String(value)} onChange={e => onChange(kind === 'number' ? methodNumber(e.target.value) : e.target.value)} />}
         {kind === 'boolean' && <input aria-label={label} type="checkbox" checked={value === true} onChange={e => onChange(e.target.checked)} />}
         {kind === 'object' && <>{Object.entries(object(value)).map(([name, child]) => <div key={name}><MethodValueField label={`${label}.${name}`} value={child} onChange={next => { const result = { ...object(value) }; if (next === undefined) delete result[name]; else result[name] = next; onChange(result); }} /></div>)}
             <input aria-label={`${label} new field`} value={key} onChange={e => setKey(e.target.value)} /><button type="button" disabled={!key || Object.hasOwn(object(value), key)} onClick={() => { onChange({ ...object(value), [key]: '' }); setKey(''); }}>Add {label} field</button></>}
@@ -21,6 +22,7 @@ export function MethodValueField({ label, value, onChange }: { label: string; va
     </fieldset>;
 }
 export function MethodFields({ label, schema, value, onChange, rootSchema }: { label: string; schema?: Schema; rootSchema?: Schema; value: unknown; onChange: (v: unknown) => void }) {
+    if (isMethodNumber(value)) return <MethodValueField label={label} value={value} onChange={onChange} />;
     if (object(value).expr) return <BioXpMethodExpression label={label} value={value} onChange={onChange} literal={(v, change) => <MethodValueField label={`${label} literal`} value={v} onChange={change} />} />;
     return schema ? <BioXpSchemaInput rawDraft label={label} schema={schema} rootSchema={rootSchema ?? schema} value={value} onChange={onChange} fallback={(name, v, change) => <MethodValueField label={name} value={v} onChange={change} />} /> : <MethodValueField label={label} value={value} onChange={onChange} />;
 }

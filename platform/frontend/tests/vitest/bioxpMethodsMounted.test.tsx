@@ -5,6 +5,7 @@ import { AxiosError, type AxiosAdapter } from 'axios';
 import { webcrypto, createHash } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { BioXpMethodsWorkspace } from '../../src/components/BioXpMethodsWorkspace';
 import { api } from '../../src/lib/api';
 import { previewActionDestination } from '../../src/lib/bioxpWorkflowPlan';
@@ -105,6 +106,66 @@ it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('mounts committed discovery 
     }
     expect(submits()).toHaveLength(0);
 });
+it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('loads actual bound companion bindings/dependencies and compiles every scientific fixture through the real compiler', async () => {
+    const contracts = JSON.parse(readFileSync(process.env.BIOXP_METHOD_MODEL_CONTRACT!, 'utf8'));
+    const transport = api.defaults.adapter as AxiosAdapter;
+    api.defaults.adapter = async config => {
+        const part = config.url?.split('/').at(-1);
+        if (['catalog', 'schema', 'examples'].includes(part ?? '')) return { config, status: 200, statusText: 'OK', headers: {}, data: contracts[part!] };
+        if (part === 'compile') {
+            const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+            const produced = spawnSync(process.env.BMS_TEST_PYTHON ?? '../api/.venv/bin/python', ['-c', 'import json,sys; from bioxp_method_compiler import compile_method; print(json.dumps(compile_method(json.load(sys.stdin))))'], { cwd: process.env.BIOXP_METHOD_API_DIR ?? '../api', encoding: 'utf8', input: JSON.stringify(body) });
+            expect(produced.status, produced.stderr).toBe(0); const data = JSON.parse(produced.stdout);
+            expect(data.document, JSON.stringify(data.issues)).toBeTruthy();
+            requests.push({ method: config.method!, url: config.url!, body, params: config.params });
+            return { config, status: 200, statusText: 'OK', headers: {}, data };
+        }
+        return transport(config);
+    };
+    await mount();
+    for (const [index, example] of contracts.examples.entries()) {
+        expect(example.bound_fixture).toBeTruthy();
+        await input('Bound software fixture', String(index)); await click('Compile');
+        expect(requests.at(-1)?.body).toMatchObject({ method: example.bound_fixture.method, bindings: example.bound_fixture.bindings, dependencies: example.bound_fixture.dependencies });
+        expect(host.textContent).toContain(example.bound_fixture.fixture_provenance);
+    }
+    expect(submits()).toHaveLength(0);
+}, 30000);
+it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('authors a generic numeric parameter through actual discovery, raw Save/Open and the supported literal compiler contract', async () => {
+    const contracts = JSON.parse(readFileSync(process.env.BIOXP_METHOD_MODEL_CONTRACT!, 'utf8'));
+    const results: any[] = [], transport = api.defaults.adapter as AxiosAdapter;
+    api.defaults.adapter = async config => {
+        const part = config.url?.split('/').at(-1);
+        if (['catalog', 'schema', 'examples'].includes(part ?? '')) return { config, status: 200, statusText: 'OK', headers: {}, data: contracts[part!] };
+        if (part === 'compile') {
+            const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+            const produced = spawnSync(process.env.BMS_TEST_PYTHON ?? '../api/.venv/bin/python', ['-c', 'import json,sys; from bioxp_method_compiler import compile_method; print(json.dumps(compile_method(json.load(sys.stdin))))'], { cwd: process.env.BIOXP_METHOD_API_DIR ?? '../api', encoding: 'utf8', input: JSON.stringify(body) });
+            expect(produced.status, produced.stderr).toBe(0); const data = JSON.parse(produced.stdout); results.push(data);
+            requests.push({ method: config.method!, url: config.url!, body, params: config.params });
+            return { config, status: 200, statusText: 'OK', headers: {}, data };
+        }
+        return transport(config);
+    };
+    await mount(); await input('Method name', 'Numeric contract'); await click('Add Parameters item');
+    await input('Parameters[0].id presence', 'value'); await input('Parameters[0].id', 'precise');
+    await input('Parameters[0].type presence', 'value'); await input('Parameters[0].type', '0');
+    await input('Parameters[0].default presence', 'value'); await input('Parameters[0].default type', 'number');
+    await input('Action palette', 'wait'); await click('Add node');
+    const label = [...host.querySelectorAll('select')].map(e => e.getAttribute('aria-label') ?? '').find(label => label.startsWith('Inputs ') && label.endsWith('.seconds presence'))!;
+    await input(label, 'value'); await input(label.replace(/ presence$/, ''), '001.2500');
+    await click('Save'); await click('Compile');
+    expect(results.at(-1).document).toBeNull(); expect(results.at(-1).issues.length).toBeGreaterThan(0);
+    await click('New'); await input('Library entry', 'm2'); await click('Open');
+    expect((host.querySelector('[aria-label="Parameters[0].default type"]') as HTMLSelectElement).value).toBe('number');
+    await input('Parameters[0].default', '9007199254740993.000100'); await click('Save');
+    await click('New'); await input('Library entry', 'm2'); await click('Open');
+    expect((host.querySelector('[aria-label="Parameters[0].default"]') as HTMLInputElement).value).toBe('9007199254740993.000100');
+    await click('Compile');
+    expect(results.at(-1).document, JSON.stringify(results.at(-1).issues)).toBeTruthy();
+    expect(results.at(-1).resolved.parameters.precise).toBe('9007199254740993.0001');
+    expect(db.m2.method.parameters[0].default).toEqual({ expr: { version: 1, op: 'literal', type: 'number', value: '9007199254740993.000100' } });
+    expect(submits()).toHaveLength(0);
+}, 30000);
 it.runIf(!!process.env.BIOXP_NATIVE_METHOD_PRODUCER)('renders the real native ASGI/executor/SQLite thermal producer without new mutation or outcome rewriting', async () => {
     const producer = JSON.parse(readFileSync(process.env.BIOXP_NATIVE_METHOD_PRODUCER!, 'utf8'));
     const native = producer.execution.runtime_state.action_results;
@@ -122,6 +183,36 @@ it.runIf(!!process.env.BIOXP_NATIVE_METHOD_PRODUCER)('renders the real native AS
     for (const row of native) expect(progress.textContent).toContain(row.source_occurrence_id);
     expect(submits()).toHaveLength(0); expect(button('Pause workflow').disabled).toBe(true);
     expect(requests.filter(r => r.method !== 'get')).toHaveLength(0);
+});
+it.runIf(!!process.env.BIOXP_NATIVE_METHOD_EXPORTS).each(['cavro-device-pause_for_operator.json', 'cavro-device-stop.json', 'cavro-missing-stop.json'])('renders actual native partial/held producer %s without retry/Continue or outcome rewriting', async filename => {
+    const exported = JSON.parse(readFileSync(`${process.env.BIOXP_NATIVE_METHOD_EXPORTS}/${filename}`, 'utf8'));
+    const producer = exported.held ?? exported.result, original = JSON.stringify(producer);
+    localStorage.setItem('bms.bioxp.method-run.v1', JSON.stringify({ jobId: producer.job_id, key: producer.command.idempotency_key, generation, snapshot: { native_document: producer.protocol.document } }));
+    const transport = api.defaults.adapter as AxiosAdapter;
+    api.defaults.adapter = async config => {
+        if (config.url === `/api/bioxp/methods/runs/${producer.job_id}`) {
+            requests.push({ method: config.method!, url: config.url, body: undefined, params: config.params });
+            if (readFailure) fail(config, 503, 'observation unavailable');
+            return { config, status: 200, statusText: 'OK', headers: {}, data: producer };
+        }
+        return transport(config);
+    };
+    await mount();
+    expect(host.textContent).toContain(`Robot status: ${producer.command.status}`);
+    const progress = host.querySelector('[aria-label="Occurrence outcomes"]')!;
+    expect(progress.textContent).toContain('partial_effects');
+    expect(progress.textContent).toContain('sourceCavroApplication');
+    expect([...host.querySelectorAll('button')].some(b => /Continue|Retry|Skip/.test(b.textContent ?? ''))).toBe(false);
+    if (exported.held) {
+        expect(host.textContent).toContain('Held reason: source_error_hold');
+        expect(button('Request safe-state stop').disabled).toBe(false);
+        readFailure = true; await act(async () => { await client.refetchQueries({ predicate: q => q.queryKey.includes('observation') }); }); await settle();
+        expect(button('Request safe-state stop').disabled).toBe(false);
+        await click('Request safe-state stop');
+        expect(requests.filter(r => r.method !== 'get')).toHaveLength(1);
+        expect(requests.find(r => r.url.endsWith('/control'))!.body).toMatchObject({ action: 'safe_stop', command_id: producer.command.command_id, expected_ownership_generation: producer.command.ownership_generation });
+    } else expect(button('Request safe-state stop').disabled).toBe(true);
+    expect(JSON.stringify(producer)).toBe(original); expect(submits()).toHaveLength(0);
 });
 it('opens raw exact revision, edits typed scientific value, preserves unknown/null/precision and saves a revision without robot mutation', async () => {
     await mount(); await openOriginal();
@@ -185,13 +276,48 @@ it('clones the original immutable snapshot through facade without modifying the 
     expect(host.textContent).toContain('Original immutable method cloned as an unsaved draft');
     expect(button('Run saved revision').disabled).toBe(true);
 });
-it('retains accepted create through readback failure and retries PUT rather than duplicate POST', async () => {
-    saveReadFailure = true; await mount(); await input('Method name', 'Incomplete'); await click('Save');
-    expect(button('Run saved revision').disabled).toBe(true);
-    saveReadFailure = false; await click('Save');
+it.each(['Methods', 'Quick run'])('%s retains accepted create through readback failure and retries PUT rather than duplicate POST', async tab => {
+    saveReadFailure = true; await mount(); await click(tab); await input('Method name', 'Incomplete');
+    const save = tab === 'Quick run' ? 'Save as method' : 'Save';
+    await click(save);
+    if (tab === 'Methods') expect(button('Run saved revision').disabled).toBe(true);
+    saveReadFailure = false; await click(save);
     expect(requests.filter(r => r.url.endsWith('/library') && r.method === 'post')).toHaveLength(1);
     expect(requests.filter(r => r.method === 'put')).toHaveLength(1);
     expect(host.textContent).toContain('Saved exact revision 2');
+});
+it('Quick Save retry retains accepted identity independently of Methods and Clear creates a new target', async () => {
+    await mount(); await openOriginal(); await click('Quick run');
+    await input('Method name', 'Quick incomplete'); saveReadFailure = true;
+    await click('Save as method');
+    const create = requests.filter(r => r.url.endsWith('/library') && r.method === 'post');
+    expect(create).toHaveLength(1); expect(db.m2.method.name).toBe('Quick incomplete');
+    await click('Methods'); await click('Save');
+    expect(requests.filter(r => r.method === 'put').at(-1)?.url).toMatch(/library\/m1$/);
+    await click('Quick run'); saveReadFailure = false; await input('Method name', 'Quick edited');
+    await click('Save as method');
+    expect(requests.filter(r => r.url.endsWith('/library') && r.method === 'post')).toHaveLength(1);
+    expect(requests.filter(r => r.method === 'put').at(-1)).toMatchObject({ url: '/api/bioxp/methods/library/m2', body: { expected_base_revision: 1 } });
+    expect(host.textContent).toContain('Saved exact revision 2');
+    expect(db.m1.method.name).toBe(sourceMethod.name); expect(db.m2.method.name).toBe('Quick edited');
+    await click('Save as method'); expect(db.m2.revision).toBe(3);
+    await click('Clear next draft'); await input('Method name', 'Next Quick'); await click('Save as method');
+    expect(requests.filter(r => r.url.endsWith('/library') && r.method === 'post')).toHaveLength(2);
+    expect(db.m3.method.name).toBe('Next Quick'); expect(submits()).toHaveLength(0);
+});
+it('Quick Open, duplicate and late Quick Save do not replace an unrelated Methods saved snapshot', async () => {
+    db.m2 = { id: 'm2', revision: 1, name: 'Other', method: { ...sourceMethod, name: 'Other' } };
+    await mount(); await openOriginal(); await click('Quick run'); await input('Library entry', 'm2'); await click('Open');
+    await click('Duplicate');
+    let finish!: () => void; deferSave = done => { finish = done; };
+    await act(async () => button('Save as method').click()); await settle();
+    await input('Method name', 'Newer Quick'); await act(async () => finish()); await settle();
+    expect(host.textContent).toContain('newer edits remain unsaved');
+    await click('Methods');
+    expect((host.querySelector('[aria-label="Method name"]') as HTMLInputElement).value).toBe(sourceMethod.name);
+    await acknowledge(); await click('Run saved revision');
+    expect(submits()[0].url).toBe('/api/bioxp/methods/library/m1/runs');
+    expect(JSON.parse(localStorage.getItem('bms.bioxp.method-run.v1')!).snapshot.method.name).toBe(sourceMethod.name);
 });
 it('retains newer edits while Save settles and exposes only saved readback', async () => {
     let finish!: () => void; deferSave = done => { finish = done; };
@@ -206,6 +332,28 @@ it('uses existing same-job controls and exact occurrence recovery with no replay
     await click('Load method report'); await input('Exact recovery occurrence', 'loop/0/move-original'); await click('Create recovery draft');
     expect(requests.find(r => r.url.endsWith('/recovery-draft'))!.body.occurrence).toEqual(provenance[0]); expect(submits()).toHaveLength(1);
     expect(host.textContent).toContain('Recovery is an unsaved editable draft');
+});
+it.each(['omitted', 'null', 'object'])('recovery %s assumptions are independent from next-draft edits and preserve exact native action', async kind => {
+    await mount(); await openOriginal(); await acknowledge(); await click('Run saved revision');
+    await click('Load method report'); await input('Exact recovery occurrence', 'loop/0/move-original');
+    await input('Recovery native action', 'a1');
+    await input('Initial assumptions new field', 'next_only'); await click('Add Initial assumptions field');
+    await input('Initial assumptions.next_only', 'not original recovery state');
+    if (kind !== 'omitted') await input('Recovery initial assumptions type', kind);
+    if (kind === 'object') {
+        await input('Recovery initial assumptions new field', 'tips'); await click('Add Recovery initial assumptions field');
+        await input('Recovery initial assumptions.tips type', 'null');
+    }
+    await click('Create recovery draft');
+    const body = requests.find(r => r.url.endsWith('/recovery-draft'))!.body;
+    expect(body.occurrence).toEqual({ ...provenance[0], native_action_id: 'a1' });
+    expect(Object.hasOwn(body, 'initial_state')).toBe(kind !== 'omitted');
+    if (kind !== 'omitted') expect(body.initial_state).toEqual(kind === 'null' ? null : { tips: null });
+    await click('Compile');
+    const check = requests.filter(r => r.url.endsWith('/compile')).at(-1)!.body;
+    expect(Object.hasOwn(check, 'initial_state')).toBe(kind !== 'omitted');
+    if (kind !== 'omitted') expect(check.initial_state).toEqual(body.initial_state);
+    expect(submits()).toHaveLength(1);
 });
 it('compiles separately, presents Water without new acknowledgement and derives map from emitted station', async () => {
     await mount(); await openOriginal(); await click('Compile');

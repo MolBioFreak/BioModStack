@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { isMethodNumber } from '../lib/bioxpMethodNumber';
 import { BioXpMethodExpression } from './BioXpMethodExpression';
 import { BioXpNumericInput } from './BioXpNumericInput';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
@@ -74,13 +75,22 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
     fallback: (label: string, value: unknown, onChange: (value: unknown) => void) => React.ReactNode;
 }) {
     const [newKey, setNewKey] = useState('');
+    // Object unions can share a type and start empty. Keep an explicit choice
+    // while authoring; persisted unique field names identify it on reopen.
+    const [chosenVariant, setChosenVariant] = useState<number | null>(null);
     const resolved = resolve(schema, rootSchema);
     const choices = variants(resolved, rootSchema);
     const discriminator = resolved.discriminator;
     const mapped = discriminator && objectValue(value) ? discriminator.mapping?.[String(value[discriminator.propertyName])] : undefined;
     const rawChoices = resolved.oneOf ?? resolved.anyOf;
     const mappedIndex = mapped ? rawChoices?.findIndex(choice => choice.$ref === mapped) ?? -1 : -1;
-    const selected = Math.max(0, mappedIndex >= 0 ? mappedIndex : choices.findIndex(choice => matches(choice, value, rootSchema)));
+    const scores = choices.map(choice => {
+        if (!matches(choice, value, rootSchema)) return -Infinity;
+        if (!objectValue(value) || !choice.properties) return 0;
+        return Object.keys(value).reduce((score, name) => score + (Object.hasOwn(choice.properties!, name) ? 1 : choice.additionalProperties === false ? -1 : 0), 0);
+    });
+    const inferred = Math.max(0, scores.indexOf(Math.max(...scores)));
+    const selected = mappedIndex >= 0 ? mappedIndex : chosenVariant !== null && choices[chosenVariant] && scores[chosenVariant] >= scores[inferred] ? chosenVariant : inferred;
     const initialValue = (field: Schema) => rawDraft ? rawDraftInitial(field, rootSchema) : schemaInitialValue(field, rootSchema);
     const variantValue = (index: number) => {
         const initial = initialValue(choices[index]);
@@ -97,12 +107,13 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
         if (next === undefined) delete result[name]; else result[name] = next;
         onChange(result);
     };
+    if (rawDraft && isMethodNumber(value)) return fallback(label, value, onChange);
     if (rawDraft && objectValue(value) && objectValue(value.expr)) return <BioXpMethodExpression label={label} value={value} onChange={onChange} literal={(v, change) => fallback(`${label} literal`, v, change)} />;
     return <fieldset className="min-w-0 space-y-2 rounded border border-slate-700 p-2">
         <legend>{label}</legend>
         {rawDraft && ['string', 'number', 'integer', 'boolean'].includes(String(kind)) && !enums && <button type="button" onClick={() => onChange({ expr: { version: 1, op: 'literal', value } })}>Use expression for {label}</button>}
         {schema.description && <p className="text-xs text-slate-400">{schema.description}</p>}
-        {choices.length > 1 && <label>Variant<select aria-label={`${label} variant`} className={classes} value={selected} onChange={event => onChange(variantValue(Number(event.target.value)))}>
+        {choices.length > 1 && <label>Variant<select aria-label={`${label} variant`} className={classes} value={selected} onChange={event => { const index = Number(event.target.value); setChosenVariant(index); onChange(variantValue(index)); }}>
             {choices.map((choice, index) => <option key={index} value={index}>{choice.title ?? String(choice.type ?? `Variant ${index + 1}`)}</option>)}
         </select></label>}
         {enums ? <label>{label}<select aria-label={label} className={classes} value={enums.findIndex(item => JSON.stringify(item) === JSON.stringify(value))} onChange={event => onChange(structuredClone(enums[Number(event.target.value)]))}>
