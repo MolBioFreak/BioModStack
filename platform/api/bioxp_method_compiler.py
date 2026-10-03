@@ -357,7 +357,20 @@ def emit_rows(rows):
         except (ValueError, TypeError) as exc:
             issues.append({'step_id': row['step_id'], 'message': str(exc)})
             continue
-        if direct is not None:
+        if intent.get('operation') == 'transfer' and 'recipe' in intent:
+            from bioxp_method_planning import positioned_transfer_recipes
+            try:
+                recipes = positioned_transfer_recipes({k: v for k, v in intent.items() if k != 'operation'})
+                generated = []
+                for pair, recipe in enumerate(recipes):
+                    kind, params = native_action('liquid_recipe', {'recipe': recipe})
+                    action = deepcopy(_NATIVE['document_template']['stages'][0]['actions'][0])
+                    action.update(kind=kind, params=params, metadata={'pair_index': pair}, required_capability=row.get('required_capability'))
+                    generated.append(action)
+            except (ValueError, TypeError, KeyError) as exc:
+                issues.append({'step_id': row['step_id'], 'message': str(exc)})
+                continue
+        elif direct is not None:
             action = deepcopy(_NATIVE['document_template']['stages'][0]['actions'][0])
             action.update(kind=direct[0], params=direct[1], metadata={}, required_capability=row.get('required_capability'))
             generated = [action]
@@ -397,7 +410,8 @@ def native_cost(intent):
     if operation == 'mix':
         return 2 * int(number(intent.get('cycles', 1)))
     if operation == 'transfer':
-        return 8 * len(intent.get('source', {}).get('wells', []))
+        pairs = len(intent.get('source', {}).get('wells', []))
+        return pairs * (8 + native_cost({'operation': 'liquid_recipe', 'recipe': intent['recipe']}) if 'recipe' in intent else 8)
     if operation == 'thermal_profile':
         return max(1, int(number(intent.get('repeat', 1))) * len(intent.get('segments', [])))
     if operation == 'cavro_application':
@@ -492,17 +506,20 @@ def compile_method(request):
             liquid_actions_by_occurrence = {}
             for visible, action in zip(visible_rows, document['stages'][0]['actions']):
                 if action['params'].get('operation') == 'cavro_liquid_recipe':
-                    liquid_actions_by_occurrence[visible] = action
+                    liquid_actions_by_occurrence.setdefault(visible, []).append(action)
             for record in result['resolved'].get('liquids', []):
-                action = liquid_actions_by_occurrence[record['occurrence_id']]
+                emitted_actions = liquid_actions_by_occurrence[record['occurrence_id']]
+                action = emitted_actions[0]
                 for field in record['fields'].values():
                     emission = field['emitted']
                     if emission.get('status') == 'emitted':
                         actual = action['params']
                         for key in emission['native_path'].strip('/').split('/'):
                             actual = actual[key]
-                        emission.update(value=deepcopy(actual), native_action_id=action['action_id'])
-                action['params']['recipe'].setdefault('liquid_settings', {})['bms_resolution'] = deepcopy(record)
+                        emission.update(value=deepcopy(actual), native_action_id=action['action_id'],
+                                        native_action_ids=[a['action_id'] for a in emitted_actions])
+                for emitted_action in emitted_actions:
+                    emitted_action['params']['recipe'].setdefault('liquid_settings', {})['bms_resolution'] = deepcopy(record)
             for o in occurrences:
                 result['provenance'].append({k: deepcopy(o[k]) for k in ('occurrence_id', 'step_id', 'path', 'call_path', 'loop_path')})
                 result['provenance'][-1]['native_action_ids'] = []
@@ -531,6 +548,33 @@ def compile_method(request):
                             effects.append(effect)
                     action['metadata']['bms_method']['planned_liquid_effects'] = effects
                     action['metadata']['bms_method']['effect_phase'] = 'aspirate' if action['kind'] == 'pipette_aspirate' else 'dispense'
+                if action['params'].get('operation') == 'cavro_liquid_recipe':
+                    recipe = action['params']['recipe']
+                    effects = [deepcopy(e) for e in o['inputs'].get('channel_transfers', [])
+                               if e.get('pair_index', 0) == action['metadata'].get('pair_index', 0)]
+                    phases = []
+                    for channel in recipe['channels']:
+                        effect = next((e for e in effects if e['channel'] == channel), {})
+                        for name in ('leading_air', 'trailing_air'):
+                            air = recipe[name]
+                            if air is not None:
+                                phases.append({'recipe_phase': name, 'channel': channel, 'kind': 'air',
+                                    'volume_ul': 0, 'air_ul': air['volume_ul'],
+                                    'commanded_displacement_ul': air['volume_ul']})
+                        phases.append({'recipe_phase': 'aspirate', 'channel': channel,
+                            'source': deepcopy(effect.get('source')), 'volume_ul': recipe['target_liquid_ul'],
+                            'commanded_displacement_ul': recipe['commanded_aspiration_ul'], 'air_ul': 0})
+                        for index, segment in enumerate(recipe['dispense_segments']):
+                            phases.append({'recipe_phase': 'dispense_segments', 'segment_index': index, 'channel': channel,
+                                'destination': deepcopy(effect.get('destination')), 'volume_ul': None,
+                                'commanded_displacement_ul': segment['volume_ul'], 'air_ul': None})
+                        if recipe['final_empty_speed_ul_s'] is not None:
+                            phases.append({'recipe_phase': 'final_empty', 'channel': channel,
+                                'volume_ul': None, 'air_ul': None, 'commanded_displacement_ul': None})
+                    action['metadata']['bms_method']['planned_recipe_phase_effects'] = phases
+                    action['metadata']['bms_method']['effect_limitations'] = 'Phase selectors are not native child IDs; segment displacement does not measure liquid delivery or completed transfer'
+                if o['action'] in {'aspirate', 'dispense', 'mix'}:
+                    action['metadata']['bms_method']['planned_liquid_effects'] = deepcopy(o['inputs'].get('channel_transfers', []))
                 provenance[o['occurrence_id']]['native_action_ids'].append(action['action_id'])
             # Consecutive structural groups retain native stage boundaries. A
             # repeated group gets a distinct stage; no grouping reorders actions.
@@ -570,6 +614,25 @@ def compile_method(request):
                     head, positions = {}, {}
                     for stage in document['stages']:
                         for action in stage['actions']:
+                            if action['params'].get('operation') == 'cavro_liquid_recipe':
+                                recipe = action['params']['recipe']
+                                motion = [part for phase in ('before_leading_air', 'before_liquid', 'after_liquid') for part in recipe[phase]]
+                                multi = recipe['multi']
+                                if multi is not None:
+                                    motion += multi['conditioning_before'] + multi['conditioning_after']
+                                motion += recipe['before_dispense']
+                                if multi is not None:
+                                    for aliquot in multi['aliquots'] + ([multi['excess']] if multi['excess'] is not None else []):
+                                        motion += aliquot['before'] + aliquot['after']
+                                motion += recipe['after_dispense'] + recipe['final_empty_before']
+                                for part in motion:
+                                    if part.get('operation') == 'position':
+                                        params = part['positioning']
+                                        if params['operation'] == 'move':
+                                            head = deepcopy(params)
+                                        else:
+                                            head.update(deepcopy(params))
+                                        positions[action['source_occurrence_id']] = deepcopy(head)
                             if action['kind'] == 'pipette_position':
                                 if action['params']['operation'] == 'move':
                                     head = deepcopy(action['params'])

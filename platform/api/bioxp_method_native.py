@@ -6,8 +6,18 @@ from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, validators
+from decimal import Decimal
 from jsonschema.exceptions import ValidationError
+
+
+def _decimal_multiple(validator, divisor, instance, schema):
+    if isinstance(instance, (int, float)) and not isinstance(instance, bool):
+        if Decimal(str(instance)) % Decimal(str(divisor)) != 0:
+            yield ValidationError(f'{instance} is not an exact multiple of {divisor}')
+
+
+NativeValidator = validators.extend(Draft202012Validator, {'multipleOf': _decimal_multiple})
 
 EXPORT = json.loads((Path(__file__).parent / 'schemas/bioxp_method_native.json').read_text())
 # Domains are exported documentary parameters; no wire encoder is copied.
@@ -16,6 +26,8 @@ SETTINGS = {'type': 'object', 'additionalProperties': False, 'properties': {
        for name, spec in EXPORT['capabilities']['pressure_parameters'].items()},
     'slope': {'type': 'array', 'items': {'type': 'integer'}, 'minItems': 2, 'maxItems': 2},
     'pressure_streaming': {'type': 'boolean'},
+    'start_speed_ul_s': {'type': 'number', 'minimum': 2.5, 'maximum': 100, 'multipleOf': 0.001},
+    'cutoff_speed_ul_s': {'type': 'number', 'minimum': 2.5, 'maximum': 200, 'multipleOf': 0.001},
 }}
 for _schema in (EXPORT['application'], EXPORT['recipe']):
     _schema['$defs']['Settings']['properties']['values'] = deepcopy(SETTINGS)
@@ -44,6 +56,9 @@ HOLD['allOf'] = [{'if': {'properties': {'start': {'const': 'attainment'}}},
                   'then': {'required': ['tolerance_c', 'timeout_s']}}]
 CONTRACTS = {
     'tip_eject': obj({}),
+    'park': obj({'rehome': B}, []),
+    'led': obj({name: {'type': 'integer', 'minimum': 0, 'maximum': 255} for name in ('red', 'green', 'blue')}),
+    'seal_separate': obj({}),
     'wait': obj({'seconds': NN}),
     'timer_start': obj({'timer_id': {'type': 'string', 'minLength': 1}, 'seconds': NN}),
     'timer_wait': obj({'timer_id': {'type': 'string', 'minLength': 1}}),
@@ -54,7 +69,8 @@ CONTRACTS = {
     'snapshot': obj({}),
     'inspect': obj({}),
     'camera_illumination': obj({'channel': enum(1, 2, 3), 'on': B}),
-    'barcode_read': obj({'mode': enum('stationary')}),
+    'barcode_read': obj({'mode': enum('stationary', 'job_id', 'reagent_id')}),
+    'pipette_pierce': obj({'plate': I, 'well': S, 'pattern': enum('d', 'r', 'h', 't')}),
     'plate_catch': obj({'plate': I, 'run_in_parallel': B}, ['plate']),
     'plate_release': obj({'destination': I, 'press_plate': B, 'run_in_parallel': B}, ['destination']),
     'plate_press': obj({'plate': I, 'run_in_parallel': B}, ['plate']),
@@ -64,7 +80,18 @@ CONTRACTS = {
     'plate_prepare': obj({'plate_ids': {'type': 'array', 'items': enum('PL_POOL', 'PL_OUTPUT', 'PL_REAGENT')}}),
     'thermal_door': obj({'door_command': enum('DO', 'DC')}),
 }
-ALIASES = {'incubate': 'thermal_hold', 'illumination': 'camera_illumination', 'barcode': 'barcode_read',
+CONTRACTS['pipette_pierce']['allOf'] = [
+    {'if': {'properties': {'pattern': {'const': pattern}}},
+     'then': {'properties': {'plate': {'enum': plates}}}}
+    for pattern, plates in {'d': [0,1,2,7,8,9,10], 'r': [0,1,2,7,8,9,10], 'h': [2], 't': [0]}.items()]
+for _thermal in (HOLD, CONTRACTS['thermal_setpoint']):
+    _thermal['properties'].update(fan_speed={'type': 'integer', 'minimum': 0, 'maximum': 255},
+        cool_rate_c_s={'type': 'number', 'minimum': -2, 'maximum': 0},
+        heat_rate_c_s={'type': 'number', 'minimum': 0, 'maximum': 2})
+    _thermal['dependentRequired'] = {'cool_rate_c_s': ['heat_rate_c_s'], 'heat_rate_c_s': ['cool_rate_c_s']}
+    _thermal.setdefault('allOf', []).append({'if': {'properties': {'bank': {'const': 'pedestal'}}},
+        'then': {'not': {'anyOf': [{'required': ['cool_rate_c_s']}, {'required': ['heat_rate_c_s']}]}}})
+ALIASES = {'status_light': 'led', 'pierce_seal': 'pipette_pierce', 'incubate': 'thermal_hold', 'illumination': 'camera_illumination', 'barcode': 'barcode_read',
            'gripper_catch': 'plate_catch', 'gripper_release': 'plate_release', 'gripper_press': 'plate_press'}
 
 
@@ -76,7 +103,7 @@ def coerce(value, schema, root=None):
     for option in schema.get('anyOf', schema.get('oneOf', [])):
         try:
             result = coerce(value, option, root)
-            Draft202012Validator({**option, '$defs': root.get('$defs', {})}).validate(result)
+            NativeValidator({**option, '$defs': root.get('$defs', {})}).validate(result)
             return result
         except (ValueError, TypeError, ValidationError):
             pass
@@ -101,7 +128,7 @@ def coerce(value, schema, root=None):
 def validate(value: Any, schema: dict) -> Any:
     result = coerce(value, schema)
     try:
-        Draft202012Validator(schema).validate(result)
+        NativeValidator(schema).validate(result)
     except ValidationError as exc:
         raise ValueError('/' + '/'.join(map(str, exc.path)) + ': ' + exc.message) from exc
     return result

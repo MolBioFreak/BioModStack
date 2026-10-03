@@ -1,5 +1,5 @@
 {
-  "source_commit": "0fa58432ddc9e973c6a1e0c8597dfe82b303d9e2",
+  "source_commit": "e58d3e5a91d02c278a8f62ef6c59d1c91c0f2de5",
   "application": {
     "$defs": {
       "Delay": {
@@ -1855,8 +1855,27 @@
       "phase": "explicit ordered settings instruction"
     },
     "start_cutoff_speed": {
-      "status": "wire_mapping_unestablished",
-      "source": "399156 p9 values only"
+      "status": "implemented",
+      "source": "30053815-C pp35\u201337,45",
+      "source_url": "https://www.docin.com/p-4632231525.html",
+      "unit": "uL/s",
+      "decimal_places": 3,
+      "automatically_applied": false,
+      "start_speed_ul_s": {
+        "wire": "vn,1R",
+        "minimum": 2.5,
+        "maximum": 100
+      },
+      "cutoff_speed_ul_s": {
+        "wire": "cn,1R",
+        "minimum": 2.5,
+        "maximum": 200
+      },
+      "phase": "explicit ordered settings; applies to subsequent plunger moves until changed",
+      "controller_conversion": "configured maximum volume; increments/s rounded to nearest integer",
+      "controller_interaction": "actual start/cutoff temporarily limited by top speed; readback reports programmed value",
+      "persistence": "working memory only; no NVRAM save emitted",
+      "advisory": "30053815-C p36 discourages cutoff >100 uL/s (lost steps/overload), especially adjacent moves without >10 ms delay; 399156 p9 uses 200 uL/s. No cap or delay is inserted."
     },
     "existing_native_families": {
       "diagnostic_pipette": [

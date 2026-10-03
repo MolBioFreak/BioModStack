@@ -130,17 +130,29 @@ def method_catalog():
     actions = [a for a in actions if a['action'] not in {'distribute', 'consolidate', 'eject_tip', 'tip_eject'}]
     transfer_schema = deepcopy(native['transfer'])
     transfer_defs = transfer_schema.pop('$defs', {})
+    transfer_defs['TransferEndpoint']['properties']['labware_id'] = {'type': 'string', 'description': 'Stable logical vessel identity; not a native positioning field'}
     transfer_schema.get('properties', {}).pop('operation', None)
     transfer_schema['required'] = [k for k in transfer_schema.get('required', []) if k != 'operation']
+    class_transfer = deepcopy(transfer_schema)
+    class_transfer['required'] = [k for k in class_transfer['required'] if k not in {'aspirate_speed', 'dispense_speed'}] + ['liquid', 'recipe']
+    class_transfer['properties'].pop('dispense_speed', None)
+    recipe_editor = deepcopy(next(a['inputs'] for a in actions if a['action'] == 'liquid_recipe'))
+    class_transfer['properties'].update(liquid=liquid_selection_schema(), recipe=recipe_editor['properties']['recipe'])
+    class_transfer['properties']['recipe']['required'] = [k for k in class_transfer['properties']['recipe']['required']
+        if k not in {'mode', 'channels', 'before_leading_air', 'before_liquid', 'after_liquid', 'before_dispense', 'after_dispense'}]
+    for entry in actions:
+        if entry['action'] == 'transfer':
+            entry['inputs'] = {'oneOf': [deepcopy(transfer_schema), class_transfer],
+                '$defs': {**transfer_defs, **recipe_editor['$defs']}}
     for name in ('distribute', 'consolidate'):
         alternatives = [{'type': 'object', 'required': ['mode', 'transfers'], 'additionalProperties': False,
-            'properties': {'mode': {'const': 'repeated_single'}, 'transfers': {'type': 'array', 'minItems': 1, 'items': transfer_schema}}}]
+            'properties': {'mode': {'const': 'repeated_single'}, 'transfers': {'type': 'array', 'minItems': 1, 'items': {'oneOf': [transfer_schema, class_transfer]}}}}]
         recipe_schema = deepcopy(EXPORT['recipe'])
         recipe_defs = recipe_schema.pop('$defs', {})
         if name == 'distribute':
             alternatives.append({'type': 'object', 'required': ['mode', 'recipe'], 'properties': {
                 'mode': {'const': 'multi'}, 'recipe': recipe_schema}})
-        actions.append({'action': name, 'inputs': {'oneOf': alternatives, '$defs': {**transfer_defs, **recipe_defs}},
+        actions.append({'action': name, 'inputs': {'oneOf': alternatives, '$defs': {**transfer_defs, **recipe_defs, **recipe_editor['$defs']}},
             'status': {'authorable': True, 'emitted': True, 'registered': True, 'connected_tested': False, 'physically_qualified': False},
             'effects': 'Explicit repeated-single transfers are not true multi aliquots; true multi uses complete native recipe'})
     actions.append({'action': 'tip_eject', 'inputs': {'type': 'object', 'required': ['channels'],
@@ -162,6 +174,16 @@ def method_catalog():
             entry['inputs'] = deepcopy(schema['$defs']['DiagnosticPlunger'])
             entry['status'].update(emitted=True, registered=True)
             entry['integration'] = 'Existing diagnostic_pipette physical owner; native all-pipette plunger operation'
+        if entry['action'] in {'park', 'led', 'status_light', 'seal_separate'}:
+            entry['source_revision'] = None
+            entry['source_contract'] = 'Native close published interface: Park optional rehome; RGB led; SS source no-op. Final integrated native commit must be pinned separately.'
+            entry['status']['registered'] = None
+        if entry['action'] == 'seal_separate':
+            entry['effects'] = 'Source SS lower-interpreter no-op; not a physical seal actuator or operator completion claim'
+        if entry['action'] == 'park':
+            entry['effects'] = 'Source Park; not a well move. Omitted rehome retains native false default'
+        if entry['action'] in {'led', 'status_light'}:
+            entry['effects'] = 'Source status RGB; separate from camera illumination'
         if entry['action'] == 'inspect':
             entry['effects'] = 'Source cover inspection can relocate covers; not photo-only'
         if entry['action'] == 'thermal_door':

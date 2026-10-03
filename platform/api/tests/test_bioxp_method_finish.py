@@ -22,7 +22,7 @@ def compile_nodes(*nodes, **kw):
 _DOCUMENTS = {}
 
 
-@pytest.fixture(scope='module', autouse=True)
+@pytest.fixture(scope='session', autouse=True)
 def export_all_compiled_documents():
     yield
     if os.environ.get('BIOXP_METHOD_FINISH_EXPORT'):

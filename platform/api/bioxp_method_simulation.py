@@ -187,10 +187,14 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                     issue("partial_effects_unknown", occurrence, "Only explicitly reported effects accounted; remaining effects unknown.")
             if action in {"aspirate", "dispense", "transfer", "distribute", "consolidate", "liquid_recipe", "cavro_application"} and not rows:
                 issue("liquid_effects_unbound", occurrence, "No explicit channel liquid effects; volume/geometry remain unknown.")
+                unknown_totals.update({'liquid', 'commanded_displacement', 'air'})
+            if occurrence.get('status') in {'failed', 'partial', 'unknown'}:
+                unknown_totals.update({'liquid', 'commanded_displacement', 'air'})
             for row in rows:
                 channel = row.get("channel")
                 if channel is None:
                     issue("channel_unknown", occurrence, "Liquid effect lacks channel association.")
+                    unknown_totals.update({'liquid', 'commanded_displacement', 'air'})
                     continue
                 tip = channels.setdefault(str(channel), {"tip_loaded": None, "volume_ul": None,
                                                          "air_ul": None, "contacts": [], "materials": None})
@@ -209,10 +213,31 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                 if kind not in totals:
                     issue("accounting_kind_unknown", occurrence, str(kind))
                     kind = "liquid"
+                if kind in {'air', 'commanded_displacement'}:
+                    volume = _number(row.get('air_ul' if kind == 'air' else 'commanded_displacement_ul', row.get('volume_ul')))
                 if volume is None:
                     unknown_totals.add(kind)
                 else:
                     totals[kind] += volume
+                if kind in {'air', 'commanded_displacement'}:
+                    # Displacement-only phases never create liquid lineage or
+                    # contact/mixing effects in a vessel.
+                    field = 'air_ul' if kind == 'air' else 'commanded_displacement_ul'
+                    amount = _number(row.get(field, row.get('volume_ul')))
+                    totals[kind] -= volume if volume is not None else Decimal(0)
+                    if amount is None:
+                        unknown_totals.add(kind)
+                    else:
+                        totals[kind] += amount
+                    if kind == 'air' and 'commanded_displacement_ul' in row:
+                        displacement = _number(row['commanded_displacement_ul'])
+                        if displacement is None:
+                            unknown_totals.add('commanded_displacement')
+                        else:
+                            totals['commanded_displacement'] += displacement
+                    strokes.append({'occurrence_id': oid, 'channel': channel,
+                                    'kind': kind, field: _text(amount)})
+                    continue
                 materials = deepcopy(source.get("materials")) if source is not None else None
                 if source is not None:
                     change(source, -volume if volume is not None else None)

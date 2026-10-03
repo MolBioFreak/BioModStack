@@ -28,7 +28,7 @@ def liquid_selection_schema():
     from bioxp_method_native import SETTINGS
     number = {'anyOf': [{'type': 'number'}, {'type': 'string'}, {'type': 'null'}]}
     settings = {key: deepcopy(number) for key in RECIPE_FIELDS if key != 'dispense_segments'}
-    settings.update(deepcopy(SETTINGS['properties']))
+    settings.update({key: {'anyOf': [deepcopy(value), {'type': 'null'}]} for key, value in SETTINGS['properties'].items()})
     settings['dispense_segments'] = {'type': 'array', 'items': {'type': 'object', 'properties': {
         'volume_ul': deepcopy(number), 'speed_ul_s': deepcopy(number),
         'source_heading': {'type': 'string'}, 'evidence': {'type': 'string'}}, 'required': ['volume_ul', 'speed_ul_s']}}
@@ -144,6 +144,63 @@ def liquid_resolution(inputs, dependencies):
     return resolution
 
 
+def prepare_class_transfer(inputs):
+    """Bind authored transfer quantities; no inferred recipe science or defaults."""
+    recipe = inputs.get('recipe')
+    if not isinstance(recipe, dict):
+        raise ValueError('Class-selected Transfer requires explicit recipe phase options')
+    for key, value in {'mode': 'single', 'channels': inputs['channels'],
+                       'target_liquid_ul': inputs['volume_ul']}.items():
+        if key in recipe and not same_setting(recipe[key], value):
+            raise ValueError(f'Transfer conflicts with recipe {key}')
+        recipe[key] = deepcopy(value)
+    if 'aspirate_speed' in inputs:
+        if 'aspiration_speed_ul_s' in recipe and not same_setting(recipe['aspiration_speed_ul_s'], inputs['aspirate_speed']):
+            raise ValueError('Transfer aspiration speed conflicts with recipe')
+        recipe['aspiration_speed_ul_s'] = inputs['aspirate_speed']
+    if 'dispense_speed' in inputs:
+        raise ValueError('Class Transfer uses ordered recipe segment speeds; remove legacy dispense_speed explicitly')
+
+
+def positioned_transfer_recipes(inputs):
+    """Position around a resolved recipe; the native owner alone expands strokes."""
+    from bioxp_workflow_authoring import native_intent
+    allowed = {'source', 'destination', 'channels', 'volume_ul', 'aspirate_speed', 'recipe',
+               'source_position_flag', 'destination_position_flag',
+               'source_lift_height_steps', 'destination_lift_height_steps'}
+    if set(inputs) - allowed:
+        raise ValueError(f'Unsupported class Transfer fields: {sorted(set(inputs) - allowed)}')
+    source, destination = inputs['source'], inputs['destination']
+    for endpoint in (source, destination):
+        if set(endpoint) - {'station', 'location_id', 'wells'}:
+            raise ValueError('Unsupported Transfer endpoint fields')
+    if not source['wells'] or len(source['wells']) != len(destination['wells']):
+        raise ValueError('Transfer requires equal nonempty reference-well pairs')
+    recipes = []
+    for sw, dw in zip(source['wells'], destination['wells']):
+        recipe = deepcopy(inputs['recipe'])
+        def position(operation, side, well):
+            endpoint = inputs[side]
+            params = {'operation': operation, 'location_id': endpoint['location_id']}
+            if operation == 'move':
+                params.update(well=well, position_flag=inputs[side + '_position_flag'])
+            elif operation == 'lift':
+                params['height_steps'] = inputs[side + '_lift_height_steps']
+            return {'operation': 'position', 'positioning': native_intent(params)}
+        phases = {
+            'before_leading_air': [position('move', 'source', sw)],
+            'before_liquid': [position('lower', 'source', sw)],
+            'after_liquid': [position('lift', 'source', sw)],
+            'before_dispense': [position('move', 'destination', dw), position('lower', 'destination', dw)],
+            'after_dispense': [position('lift', 'destination', dw)],
+        }
+        for key, moves in phases.items():
+            # Additional authored search/contact motions retain their order.
+            recipe[key] = moves + recipe.get(key, [])
+        recipes.append(recipe)
+    return recipes
+
+
 def prepare_occurrences(occurrences, method, dependencies):
     """Attach logical accounting without changing native addressing or admission."""
     result, notices, resolutions, issues = [], [], [], []
@@ -187,6 +244,8 @@ def prepare_occurrences(occurrences, method, dependencies):
             inputs.setdefault('channels', [0, 1, 2, 3])  # native pickup is always four-channel
         if not isinstance(inputs, dict):
             raise ValueError('Action inputs must be an object')
+        if row['action'] == 'transfer' and 'liquid' in inputs:
+            prepare_class_transfer(inputs)
         resolution = liquid_resolution(inputs, dependencies)
         if resolution:
             resolutions.append({'occurrence_id': row['occurrence_id'], **resolution})
@@ -219,6 +278,25 @@ def prepare_occurrences(occurrences, method, dependencies):
             except (KeyError, ValueError, TypeError) as exc:
                 issues.append({'code': 'liquid_geometry_unknown', 'category': 'advisory',
                     'occurrence_id': row['occurrence_id'], 'message': str(exc)})
+        if row['action'] in {'aspirate', 'dispense', 'mix'} and 'channel_transfers' not in inputs:
+            inputs['channel_transfers'] = [{'channel': channel, 'volume_ul': None,
+                'commanded_displacement_ul': inputs.get('volume_ul'), 'air_ul': None}
+                for channel in inputs.get('channels', [])]
+        if row['action'] == 'transfer':
+            recipe = inputs.get('recipe')
+            for effect in inputs.get('channel_transfers', []):
+                if recipe is None:
+                    effect.setdefault('commanded_displacement_ul', inputs.get('volume_ul'))
+                    effect.setdefault('air_ul', None)
+                else:
+                    effect.setdefault('commanded_displacement_ul', recipe.get('commanded_aspiration_ul'))
+                    airs = [recipe.get(key) for key in ('leading_air', 'trailing_air')]
+                    try:
+                        effect.setdefault('air_ul', format(sum((Decimal(str(a['volume_ul'])) if a is not None else Decimal(0) for a in airs)), 'f'))
+                    except (KeyError, ArithmeticError):
+                        effect.setdefault('air_ul', None)
+                    effect['dispense_segments'] = deepcopy(recipe.get('dispense_segments'))
+                    effect['final_empty_tip'] = recipe.get('final_empty_speed_ul_s') is not None
         result.append(row)
         if row['action'] == 'plate_move' and 'labware_id' in inputs:
             for vessel in labware:
