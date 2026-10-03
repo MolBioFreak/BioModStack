@@ -37,7 +37,12 @@ beforeEach(() => {
         if (url === '/api/bioxp/status') data = { connection: { active: true, configured: true, generation: 1, reachable: true }, mutation_access: { enabled: true } };
         else if (url.includes('/operator-controls/catalog')) data = catalogWireFixture({ ...catalog, canonical: { ...catalog.canonical, dashboard: { ...catalog.canonical.dashboard, latest_receipts: recoveryVisible ? [recoveryReceipt] : [] } } }, config.params?.view);
         else if (url.includes('/receipts/')) data = recoveryReceipt;
-        else if (url.includes('/protocols/jobs/')) data = liveJob;
+        else if (url.includes('/protocols/jobs/')) data = config.params?.observation && liveJob ? {
+            schema_version: 'bioxp.protocol_job_observation.v1', job_id: liveJob.job_id, status: liveJob.status,
+            command: liveJob.command, execution: { dry_run: liveJob.execution?.dry_run,
+                runtime_state: { workflow: liveJob.execution?.runtime_state?.workflow } },
+            operator: { pending_review: liveJob.operator?.pending_review },
+        } : liveJob;
         else if (url.endsWith('/protocols/jobs')) data = { rows };
         else if (url.includes('/history')) data = { items: [], next_cursor: null };
         else if (url.endsWith('/camera/stream/state')) data = { active: cameraActive, connection_generation: 1, state: cameraActive ? 'live' : 'off', stream_id: 'other-client' };

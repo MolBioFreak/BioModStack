@@ -121,7 +121,7 @@ it('bounds and cancels catalog reads without changing the authority freshness bu
     vi.mocked(api.get).mockImplementation(() => new Promise(() => {}));
     await act(async () => root.render(<QueryClientProvider client={client}><CatalogHarness /></QueryClientProvider>));
     expect(api.get).toHaveBeenCalledWith('/api/bioxp/operator-controls/catalog', {
-        timeout: 12_000, signal: expect.any(AbortSignal), params: { view: 'assessment' },
+        timeout: 12_000, signal: expect.any(AbortSignal), params: { view: 'assessment', assessment_base: '', canonical_assessment_base: '' },
     });
     const options = vi.mocked(api.get).mock.calls[0][1]!;
     const query = client.getQueryCache().getAll()[0];

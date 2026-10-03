@@ -2030,11 +2030,11 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         vi.useFakeTimers();
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         vi.mocked(api.get).mockReset(); vi.mocked(api.post).mockReset();
-        vi.mocked(api.get).mockImplementation(async (url) => {
+        vi.mocked(api.get).mockImplementation(async (url, config) => {
             if (url === "/api/bioxp/calibration-settings") return { data: emptyCalibration };
             expect(url).toBe('/api/bioxp/operator-controls/catalog');
             if (fail) throw new Error('temporary catalog failure');
-            return { data: { ...state.catalog.data, canonical: structuredClone(response) } };
+            return { data: catalogWireFixture({ ...state.catalog.data, canonical: structuredClone(response) }, config?.params?.view) };
         });
         const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit initialTab="live-deck" /></QueryClientProvider>));
         const advance = async (ms = 5001) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
