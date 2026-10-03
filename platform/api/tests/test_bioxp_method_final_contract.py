@@ -12,7 +12,10 @@ from bioxp_method_model import method_catalog
 def test_committed_native_pin_and_registration():
     assert EXPORT['source_commit'] == '759ee635e851fc447269c59ac69b3e705ab79b34'
     for name, schema in EXPORT['method_contract']['action_params'].items():
-        assert CONTRACTS[name] == schema
+        assert all(CONTRACTS[name][key] == value for key, value in schema.items())
+    from bioxp_method_native import native_action
+    with pytest.raises(ValueError):
+        native_action('pipette_pierce', {'pattern': 'h', 'plate': 99, 'well': 'A1'})
     entries = {a['action']: a for a in method_catalog()['actions']}
     for name in ('park', 'led', 'status_light', 'seal_separate', 'cavro_application', 'liquid_recipe', 'fluid_search', 'pipette_settings', 'pressure_stream'):
         assert entries[name]['status']['registered'] is True
@@ -55,6 +58,10 @@ async def test_export_final_immutable_snapshots(store):
     request = {'method': {'schema': 'bms.bioxp-method.v1', 'name': 'Offline control clock', 'steps': [
         {'step_id': 'clock', 'type': 'action', 'action': 'wait', 'inputs': {'seconds': 60}},
         {'step_id': 'after', 'type': 'action', 'action': 'note', 'inputs': {'message': 'after clock'}}]}}
+    reply = await client.post(BASE + '/quick-runs', json=submit_body(**request))
+    assert reply.status_code == 202, reply.text
+    recovery.append(transport.calls[-1][1]['json_data']['document'])
+    request['method']['steps'][0]['inputs']['seconds'] = 0.3
     reply = await client.post(BASE + '/quick-runs', json=submit_body(**request))
     assert reply.status_code == 202, reply.text
     recovery.append(transport.calls[-1][1]['json_data']['document'])

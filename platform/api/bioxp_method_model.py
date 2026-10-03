@@ -176,7 +176,8 @@ def method_catalog():
             entry['integration'] = 'Existing diagnostic_pipette physical owner; native all-pipette plunger operation'
         if entry['action'] in {'park', 'led', 'status_light', 'seal_separate'}:
             entry['source_revision'] = EXPORT['source_commit']
-            entry['source_contract'] = deepcopy(EXPORT['method_contract']['bindings'][ALIASES.get(entry['action'], entry['action'])])
+            entry['source_contract'] = 'Committed native binding contract; source revision is pinned above.'
+            entry['native_binding'] = deepcopy(EXPORT['method_contract']['bindings'][ALIASES.get(entry['action'], entry['action'])])
             entry['status']['registered'] = True
         if entry['action'] == 'seal_separate':
             entry['effects'] = 'Source SS lower-interpreter no-op; not a physical seal actuator or operator completion claim'

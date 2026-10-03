@@ -49,28 +49,12 @@ def obj(properties, required=None):
 def enum(*values):
     return {'enum': list(values)}
 
-HOLD = obj({'bank': enum('nest', 'lid', 'pedestal'), 'target_temp_c': N,
-    'duration_s': NN, 'start': enum('dispatch', 'attainment'), 'tolerance_c': NN, 'timeout_s': NN},
-    ['bank', 'target_temp_c', 'duration_s', 'start'])
-HOLD['allOf'] = [{'if': {'properties': {'start': {'const': 'attainment'}}},
-                  'then': {'required': ['tolerance_c', 'timeout_s']}}]
+# Ordinary additions are native-produced; these pre-existing envelope mappings
+# remain BMS adapters for the canonical protocol owner.
 CONTRACTS = {
+    **deepcopy(EXPORT['method_contract']['action_params']),
     'tip_eject': obj({}),
-    'park': obj({'rehome': B}, []),
-    'led': obj({name: {'type': 'integer', 'minimum': 0, 'maximum': 255} for name in ('red', 'green', 'blue')}),
-    'seal_separate': obj({}),
-    'wait': obj({'seconds': NN}),
-    'timer_start': obj({'timer_id': {'type': 'string', 'minLength': 1}, 'seconds': NN}),
-    'timer_wait': obj({'timer_id': {'type': 'string', 'minLength': 1}}),
-    'thermal_setpoint': obj({'bank': enum('nest', 'lid', 'pedestal'), 'target_temp_c': N}),
-    'thermal_hold': HOLD,
-    'thermal_profile': obj({'segments': {'type': 'array', 'minItems': 1, 'items': HOLD}, 'repeat': {'type': 'integer', 'minimum': 0}}),
-    'chiller_setpoint': obj({'bank': enum('rc', 'oc'), 'target_temp_c': N}),
-    'snapshot': obj({}),
     'inspect': obj({}),
-    'camera_illumination': obj({'channel': enum(1, 2, 3), 'on': B}),
-    'barcode_read': obj({'mode': enum('stationary', 'job_id', 'reagent_id')}),
-    'pipette_pierce': obj({'plate': I, 'well': S, 'pattern': enum('d', 'r', 'h', 't')}),
     'plate_catch': obj({'plate': I, 'run_in_parallel': B}, ['plate']),
     'plate_release': obj({'destination': I, 'press_plate': B, 'run_in_parallel': B}, ['destination']),
     'plate_press': obj({'plate': I, 'run_in_parallel': B}, ['plate']),
@@ -80,19 +64,11 @@ CONTRACTS = {
     'plate_prepare': obj({'plate_ids': {'type': 'array', 'items': enum('PL_POOL', 'PL_OUTPUT', 'PL_REAGENT')}}),
     'thermal_door': obj({'door_command': enum('DO', 'DC')}),
 }
+# Native semantic plate domains are documentary bindings, not JSON Schema.
 CONTRACTS['pipette_pierce']['allOf'] = [
     {'if': {'properties': {'pattern': {'const': pattern}}},
      'then': {'properties': {'plate': {'enum': plates}}}}
-    for pattern, plates in {'d': [0,1,2,7,8,9,10], 'r': [0,1,2,7,8,9,10], 'h': [2], 't': [0]}.items()]
-for _thermal in (HOLD, CONTRACTS['thermal_setpoint']):
-    _thermal['properties'].update(fan_speed={'type': 'integer', 'minimum': 0, 'maximum': 255},
-        cool_rate_c_s={'type': 'number', 'minimum': -2, 'maximum': 0},
-        heat_rate_c_s={'type': 'number', 'minimum': 0, 'maximum': 2})
-    _thermal['dependentRequired'] = {'cool_rate_c_s': ['heat_rate_c_s'], 'heat_rate_c_s': ['cool_rate_c_s']}
-    _thermal.setdefault('allOf', []).append({'if': {'properties': {'bank': {'const': 'pedestal'}}},
-        'then': {'not': {'anyOf': [{'required': ['cool_rate_c_s']}, {'required': ['heat_rate_c_s']}]}}})
-# Prefer committed native producer schemas over parallel handwritten copies.
-CONTRACTS.update(deepcopy(EXPORT['method_contract']['action_params']))
+    for pattern, plates in EXPORT['method_contract']['bindings']['pipette_pierce']['pattern_plate_ordinals'].items()]
 ALIASES = {'status_light': 'led', 'pierce_seal': 'pipette_pierce', 'incubate': 'thermal_hold', 'illumination': 'camera_illumination', 'barcode': 'barcode_read',
            'gripper_catch': 'plate_catch', 'gripper_release': 'plate_release', 'gripper_press': 'plate_press'}
 
