@@ -100,6 +100,38 @@ def _robot_request_body(request: Any) -> dict[str, Any]:
     return request.model_dump(exclude={"expected_connection_generation"}, mode="json")
 
 
+@router.get("/operator-controls/updates", response_model=None)
+async def operator_updates(
+    request: Request,
+    response: Response,
+    expected_connection_generation: int = Query(gt=0),
+    after_sequence: int | None = Query(default=None, ge=0),
+    after_pose_sequence: int | None = Query(default=None, ge=0),
+    wait_s: float = Query(default=25.0, ge=0, le=25, allow_inf_nan=False),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> Any:
+    response.headers["Cache-Control"] = "no-store"
+    call = asyncio.create_task(_relay(runtime.connection.operator_updates(
+        expected_generation=expected_connection_generation,
+        after_sequence=after_sequence, after_pose_sequence=after_pose_sequence, wait_s=wait_s,
+    )))
+
+    async def disconnected() -> None:
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+
+    disconnect = asyncio.create_task(disconnected())
+    try:
+        done, _ = await asyncio.wait((call, disconnect), return_when=asyncio.FIRST_COMPLETED)
+        if call in done:
+            return call.result()
+        raise asyncio.CancelledError()
+    finally:
+        call.cancel()
+        disconnect.cancel()
+        await asyncio.gather(call, disconnect, return_exceptions=True)
+
+
 # --- V2 canonical operator plane -------------------------------------------------
 
 _V2_NORMAL_INPUT_TYPES = {

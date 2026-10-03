@@ -166,6 +166,117 @@ class BioXpConnectionService:
         self._drain_tasks: set[asyncio.Task[None]] = set()
         self._remote_request_tasks: set[asyncio.Task[dict[str, Any]]] = set()
         self._profile_revision = 0
+        # Pending HTTP observations only: no receipt cache or durable relay log.
+        self._update_waiters: dict[asyncio.Future, tuple[int | None, int | None, float]] = {}
+        self._update_task: asyncio.Task[None] | None = None
+        self._update_wake = asyncio.Event()
+        self._update_source: tuple[str, int] | None = None
+
+    async def operator_updates(
+        self, *, expected_generation: int, after_sequence: int | None = None,
+        after_pose_sequence: int | None = None, wait_s: float = 25.0,
+    ) -> dict[str, Any]:
+        if self._update_task is not None and self._update_task.cancelling():
+            await asyncio.gather(self._update_task, return_exceptions=True)
+        async with self._transition_lock:
+            lease = self._acquire_lease_locked(expected_generation, require_fresh=False)
+        await self._release_lease(lease)
+        if expected_generation != self._generation or lease.client is not self._client:
+            raise ConnectionStateError("BioXP connection generation changed during update subscription")
+        future = asyncio.get_running_loop().create_future()
+        self._update_waiters[future] = (after_sequence, after_pose_sequence, wait_s)
+        self._update_wake.set()
+        if self._update_task is None:
+            self._update_task = asyncio.create_task(
+                self._operator_updates_loop(expected_generation), name="bioxp-operator-updates",
+            )
+        try:
+            return await future
+        finally:
+            self._update_waiters.pop(future, None)
+            self._update_wake.set()
+            if not self._update_waiters and self._update_task is not None:
+                # Await cancellation before another subscriber can replace this
+                # owner; the old transport must not survive an unused feed.
+                task = self._update_task
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def _operator_updates_loop(self, generation: int) -> None:
+        try:
+            while self._update_waiters:
+                # One bounded native page, shared by all identical cursors.
+                # Different/slow cursors take turns using the same transport;
+                # native SQLite remains the only catch-up history owner.
+                first = next(iter(self._update_waiters.values()))
+                cursor = first[:2]
+                wait_s = min(v[2] for v in self._update_waiters.values() if v[:2] == cursor)
+                # A queued different cursor must not sit behind a long wait.
+                if any(v[:2] != cursor for v in self._update_waiters.values()):
+                    wait_s = 0.0
+                self._update_wake.clear()
+                params = {"wait_s": wait_s}
+                for key, value in zip(("after_sequence", "after_pose_sequence"), cursor):
+                    if value is not None:
+                        params[key] = value
+                async with self.active_query_lease(expected_generation=generation, require_fresh=False) as client:
+                    async def read() -> dict[str, Any]:
+                        try:
+                            async with asyncio.timeout(wait_s + 5.0):
+                                return await client.request("operator_updates", params=params, timeout_override=wait_s + 5.0)
+                        except TimeoutError as exc:
+                            raise RobotTimeoutError("BioXP operator update wait timed out", dispatched=True) from exc
+                    request = asyncio.create_task(read())
+                    wake = asyncio.create_task(self._update_wake.wait())
+                    try:
+                        while not request.done():
+                            done, _ = await asyncio.wait((request, wake), return_when=asyncio.FIRST_COMPLETED)
+                            if request in done:
+                                break
+                            # Shorten an in-flight wait only when new demand
+                            # cannot share it. Cancellation is GET-only.
+                            if not self._update_waiters or any(
+                                v[:2] != cursor or v[2] < wait_s for v in self._update_waiters.values()
+                            ):
+                                break
+                            self._update_wake.clear()
+                            wake = asyncio.create_task(self._update_wake.wait())
+                        if not request.done():
+                            continue
+                        payload = request.result()
+                    finally:
+                        request.cancel()
+                        wake.cancel()
+                        await asyncio.gather(request, wake, return_exceptions=True)
+                if generation != self._generation:
+                    raise ConnectionStateError("BioXP connection generation changed during update wait")
+                source = (payload["source_instance_id"], payload["ownership_generation"])
+                replaced = self._update_source is not None and self._update_source[0] != source[0]
+                self._update_source = source
+                for future, values in tuple(self._update_waiters.items()):
+                    if values[:2] == cursor or replaced:
+                        self._update_waiters.pop(future, None)
+                        if not future.done():
+                            future.set_result(payload)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            for future in tuple(self._update_waiters):
+                if not future.done():
+                    future.set_exception(exc)
+            self._update_waiters.clear()
+        finally:
+            if self._update_task is asyncio.current_task():
+                self._update_task = None
+
+    def _stop_operator_updates_locked(self) -> None:
+        if self._update_task is not None:
+            self._update_task.cancel()
+        for future in tuple(self._update_waiters):
+            if not future.done():
+                future.set_exception(ConnectionStateError("BioXP connection generation changed during update wait"))
+        self._update_waiters.clear()
+        self._update_source = None
 
     async def save_profile(self, profile: BioXpProfile) -> BioXpSnapshot:
         canonical = self.target_policy.validate(profile.api_url)
@@ -846,6 +957,7 @@ class BioXpConnectionService:
         await self._wait_for_drains()
 
     def _mark_current_draining_locked(self, *, increment: bool) -> None:
+        self._stop_operator_updates_locked()
         client = self._client
         if client is not None:
             lease = self._generation_leases.get(self._generation)

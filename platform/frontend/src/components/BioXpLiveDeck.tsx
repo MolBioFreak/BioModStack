@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { BioXpDeckDestinationV1, BioXpOperatorDashboardV2 } from '../lib/bioxpClient';
+import { useBioXpOperatorUpdates, type BioXpDeckDestinationV1, type BioXpOperatorDashboardV2 } from '../lib/bioxpClient';
 import { readCalibrationSettings } from '../lib/bioxpCalibration';
 import { deckResources, deckSize, deckStations, projectDeckPoint, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
-import { activeDeckResources, alignmentReference, gunCenters, poseIsLastKnown, readReportedPose, retainReportedPose } from '../lib/bioxpLiveDeck';
+import { activeDeckResources, alignmentReference, gunCenters, poseFromAxisObservations, retainAxisObservations } from '../lib/bioxpLiveDeck';
 import { BioXpWorkflowDeck } from './BioXpWorkflowDeck';
 import './BioXpLiveDeck.css';
 
@@ -23,11 +23,13 @@ export type BioXpLiveDeckProps = {
     doorControls: React.ReactNode;
     movementControls: React.ReactNode;
     commandDetails: React.ReactNode;
+    onCommandDetailsToggle?: (open: boolean) => void;
     transferControls: React.ReactNode | ((visible: boolean) => React.ReactNode);
 };
 
 export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
-    const { generation, connected, visible, dashboard, stale, selection } = props;
+    const { generation, connected, visible, dashboard, selection } = props;
+    const updates = useBioXpOperatorUpdates(generation, connected && visible);
     const [transferOpen, setTransferOpen] = useState(false);
     const revision = dashboard?.deck?.position_table_revision ?? null;
     const geometry = useQuery({
@@ -47,20 +49,20 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
         ? settings?.active_motion_positions?.find(row => row.location_id === destination.target)?.base_coordinates : undefined;
     const selectedPoint = selectedCoordinates && Number.isFinite(selectedCoordinates.x) && Number.isFinite(selectedCoordinates.y)
         ? projectDeckPoint(selectedCoordinates.x, selectedCoordinates.y) : null;
-    // Render-time derived state retains the last complete same-connection observation.
-    // No effect can invoke movement, collect authority or schedule a pose refresh.
-    const [observation, setObservation] = useState(() => ({ generation, dashboard,
-        pose: readReportedPose(dashboard, generation) }));
-    let pose = observation.pose;
-    if (observation.generation !== generation || observation.dashboard !== dashboard) {
-        const incoming = observation.generation !== generation && observation.dashboard === dashboard ? null : readReportedPose(dashboard, generation);
-        pose = retainReportedPose(observation.pose, incoming, generation, dashboard?.ownership_generation);
-        setObservation({ generation, dashboard, pose });
+    const [observation, setObservation] = useState(() => ({ generation, update: updates.data,
+        axes: retainAxisObservations(null, updates.data, generation) }));
+    let axes = observation.axes;
+    if (observation.generation !== generation || observation.update !== updates.data) {
+        axes = retainAxisObservations(axes, updates.data, generation);
+        setObservation({ generation, update: updates.data, axes });
     }
-    const lastKnown = pose ? poseIsLastKnown(pose, dashboard, stale, connected, Date.now() / 1000) : false;
+    const pose = poseFromAxisObservations(axes);
+    // Readbacks are intermittent, not a continuous physical-position guarantee.
+    const lastKnown = true;
     const alignment = dashboard?.deck?.head_alignment;
     const frame = settings?.active_motion_positions?.find(row => row.location_id === dashboard?.deck?.current_location);
-    const reference = pose ? alignmentReference(pose.x, pose.y, alignment?.tip_location, frame) : null;
+    const reference = pose && dashboard?.ownership_generation === pose.ownershipGeneration
+        ? alignmentReference(pose.x, pose.y, alignment?.tip_location, frame) : null;
     const point = pose ? projectDeckPoint(pose.x, pose.y) : null;
     const guns = pose ? gunCenters(pose.x, pose.y) : [];
     const outside = point && (point[0] < 0 || point[0] > deckSize.width || point[1] < 0 || point[1] > deckSize.height);
@@ -102,8 +104,11 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
                 {props.movementControls}
                 {props.cameraControls}
                 <section className="bld-pose-card" aria-label="Reported pose"><h3>{pose ? lastKnown ? 'Last known position' : 'Reported gantry position' : 'Position unavailable'}</h3>
-                    <dl className="bld-coordinates"><div><dt>X steps</dt><dd>{pose?.x ?? 'Unavailable'}</dd></div><div><dt>Y steps</dt><dd>{pose?.y ?? 'Unavailable'}</dd></div><div><dt>Z steps</dt><dd>{pose?.z ?? 'Unavailable'}</dd></div></dl>
-                    <p>{time}</p>{dashboard?.telemetry?.snapshot?.clock_skew_detected && <p>Source clock skew reported.</p>}{pose && <p>{pose.reference}</p>}{outside && <p>Reported gantry is outside the reference deck view.</p>}
+                    <dl className="bld-coordinates"><div><dt>X steps</dt><dd>{axes?.axes.find(axis => axis.axis === 'x')?.position_steps ?? 'Unavailable'}</dd></div><div><dt>Y steps</dt><dd>{axes?.axes.find(axis => axis.axis === 'y')?.position_steps ?? 'Unavailable'}</dd></div><div><dt>Z steps</dt><dd>{axes?.axes.find(axis => axis.axis === 'z')?.position_steps ?? 'Unavailable'}</dd></div></dl>
+                    {updates.isError && <p role="status">Position updates unavailable. Retaining last observed values.</p>}
+                    <p>{time}</p><dl aria-label="Axis observation times">{axes?.axes.map(axis => <div key={axis.axis}>
+                        <dt>{axis.axis.toUpperCase()} observed</dt><dd data-axis-observed={axis.axis} data-observed-at={axis.observed_at}>{new Date(axis.observed_at * 1000).toLocaleString()}</dd>
+                    </div>)}</dl>{axes && <p>Ownership generation {axes.ownershipGeneration}</p>}{dashboard?.telemetry?.snapshot?.clock_skew_detected && <p>Source clock skew reported.</p>}{pose && <p>{pose.reference}</p>}{outside && <p>Reported gantry is outside the reference deck view.</p>}
                     <dl><dt>Published alignment</dt><dd>{tipLabel}</dd><dt>Alignment projection</dt><dd>{reference ? 'Source-addressing reference; not a physical measurement' : 'Unavailable'}</dd>
                         <dt>Recorded location</dt><dd>{dashboard?.deck?.current_location ?? 'Unavailable'}{dashboard?.deck?.current_well != null ? ` · well ID ${dashboard.deck.current_well}` : ''}</dd>
                         <dt>Selected destination</dt><dd>{destination?.label ?? 'None'}</dd>
@@ -112,7 +117,7 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
                 </section>
             </aside>
         </div>
-        <details className="bld-details"><summary>Command details</summary>{props.commandDetails}</details>
+        <details className="bld-details" onToggle={event => props.onCommandDetailsToggle?.(event.currentTarget.open)}><summary>Command details</summary>{props.commandDetails}</details>
         <details className="bld-details" onToggle={event => setTransferOpen(event.currentTarget.open)}><summary>Plate and cover handling</summary>
             {typeof props.transferControls === 'function' ? props.transferControls(visible && transferOpen) : props.transferControls}
         </details>

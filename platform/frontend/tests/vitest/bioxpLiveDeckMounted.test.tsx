@@ -11,7 +11,7 @@ import { deckResources, deckStations, projectDeckPoint } from '../../src/lib/bio
 
 let host: HTMLDivElement, root: Root, query: QueryClient;
 let props: BioXpLiveDeckProps;
-const station = vi.fn(), well = vi.fn();
+const station = vi.fn(), well = vi.fn(), geometryRead = vi.fn();
 const settings = { active_motion_positions: [{ location_id: 'LOC_MS', base_coordinates: { x: 51000, y: 16000 }, inc_factor: 1 }],
     saved_motion_positions: [{ location_id: 'LOC_MS', base_coordinates: { x: 1, y: 2 }, inc_factor: 1 }] };
 function dashboard(x: number | null = 50000, y: number | null = 10000, at = Date.now() / 1000): BioXpOperatorDashboardV2 {
@@ -22,7 +22,23 @@ function dashboard(x: number | null = 50000, y: number | null = 10000, at = Date
             snapshot: { snapshot_id: 'inert', observed_at: at, domain_observed_at: { axes: at }, freshness: { state: 'fresh', fresh_for_s: 30 } } }
     } as unknown as BioXpOperatorDashboardV2;
 }
-async function render(next: Partial<BioXpLiveDeckProps> = {}) { props = { ...props, ...next }; await act(async () => { root.render(<QueryClientProvider client={query}><BioXpLiveDeck {...props} /></QueryClientProvider>); }); }
+async function render(next: Partial<BioXpLiveDeckProps> = {}) {
+    const old = props;
+    props = { ...props, ...next };
+    // Migrate the retained presentation fixture to the feed. Transport/cursor
+    // behavior is exercised separately through the real Axios adapter suite.
+    const dashboard = old.generation !== props.generation && old.dashboard === props.dashboard ? null : props.dashboard;
+    const at = dashboard?.telemetry?.snapshot?.domain_observed_at?.axes;
+    await act(async () => {
+        query.setQueryData(['bioxp', 'operator-controls', 'updates', props.generation], {
+            schema_version: 'bioxp.operator_updates.v1', source_instance_id: 'fixture', ownership_generation: dashboard?.ownership_generation ?? 4,
+            next_after_sequence: 0, pose_sequence: 0, changed_command_ids: [], active_command_ids: [], has_more: false, reset: false,
+            pose: dashboard ? { ownership_generation: dashboard.ownership_generation,
+                axes: dashboard.telemetry?.axes.filter(a => Number.isFinite(a.position_steps)).map(a => ({ axis: a.axis, position_steps: a.position_steps, observed_at: at ?? 0 })) ?? [] } : null,
+        });
+        root.render(<QueryClientProvider client={query}><BioXpLiveDeck {...props} /></QueryClientProvider>);
+    });
+}
 function el(label: string) { const e = host.querySelector(`[aria-label="${label}"]`); expect(e, label).not.toBeNull(); return e!; }
 async function click(label: string, init: MouseEventInit = {}) { await act(async () => el(label).dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, ...init }))); }
 async function key(label: string, key: string, init: KeyboardEventInit = {}) { await act(async () => el(label).dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key, ...init }))); }
@@ -30,7 +46,8 @@ async function button(text: string) { await act(async () => [...host.querySelect
 beforeEach(() => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }); station.mockClear(); well.mockClear();
-    vi.spyOn(api, 'get').mockResolvedValue({ data: settings });
+    geometryRead.mockReset().mockResolvedValue({ data: settings });
+    vi.spyOn(api, 'get').mockImplementation((url, config) => url.endsWith('/updates') ? new Promise(() => {}) : geometryRead(url, config));
     vi.spyOn(api, 'post').mockRejectedValue(new Error('No leaf mutation allowed'));
     props = { generation: 1, connected: true, visible: true, stale: false, dashboard: dashboard(), selection: { station: '', wells: [] },
         onMoveToStation: station, onMoveToWell: well, stationDisabledReason: () => null, wellDisabledReason: null,
@@ -72,7 +89,7 @@ it.each([
 });
 it('marks an unmapped named destination only at its exact active calibration anchor, never saved or invented geometry', async () => {
     const active = { location_id: 'LOC_P_MS', base_coordinates: { x: 45000, y: 22000 }, inc_factor: 1 };
-    vi.mocked(api.get).mockResolvedValue({ data: { ...settings, active_motion_positions: [active], saved_motion_positions: [{ ...active, base_coordinates: { x: 1, y: 2 } }] } });
+    geometryRead.mockResolvedValue({ data: { ...settings, active_motion_positions: [active], saved_motion_positions: [{ ...active, base_coordinates: { x: 1, y: 2 } }] } });
     await render({ selectedDestination: destination('LOC_P_MS') });
     await vi.waitFor(() => expect(host.querySelector('g[data-selected-destination="LOC_P_MS"]')).not.toBeNull());
     const marker = host.querySelector('g[data-selected-destination="LOC_P_MS"]')!;
@@ -84,9 +101,9 @@ it('marks an unmapped named destination only at its exact active calibration anc
     expect(host.querySelector('[data-selected-station]')).toBeNull();
     await render({ selectedDestination: destination('LOC_P_OC') });
     expect(host.querySelector('[data-selected-destination]')).toBeNull();
-    vi.mocked(api.get).mockResolvedValue({ data: { ...settings, active_motion_positions: [], saved_motion_positions: [active] } });
+    geometryRead.mockResolvedValue({ data: { ...settings, active_motion_positions: [], saved_motion_positions: [active] } });
     await render({ generation: 2, selectedDestination: destination('LOC_P_MS') });
-    await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(geometryRead).toHaveBeenCalledTimes(2));
     expect(host.querySelector('[data-selected-destination]')).toBeNull();
     expect(api.post).not.toHaveBeenCalled(); expect(station).not.toHaveBeenCalled();
 });
@@ -140,8 +157,8 @@ it('shares the full deck with exact station/well callbacks for every rendered ad
     expect(well).toHaveBeenCalledTimes(800); expect(station).not.toHaveBeenCalled();
     await click('Select Waste bin'); await click('Select Park target'); await click('Select Output cover storage');
     expect(station.mock.calls).toEqual([['WASTE_BIN'], ['LOC_PARK'], ['LOC_OC_COVER_STORAGE']]);
-    expect(api.get).toHaveBeenCalledTimes(1);
-    expect(api.get).toHaveBeenCalledWith('/api/bioxp/calibration-settings', { params: { expected_connection_generation: 1 } });
+    expect(geometryRead).toHaveBeenCalledTimes(1);
+    expect(geometryRead).toHaveBeenCalledWith('/api/bioxp/calibration-settings', { params: { expected_connection_generation: 1 } });
     expect(api.post).not.toHaveBeenCalled();
     expect(host.querySelector('[data-testid="oem-deck-movement"]')!.textContent).toContain('Door slot');
     expect([...host.querySelectorAll('details')].every(d => !d.open)).toBe(true);
@@ -173,7 +190,7 @@ it('focus/arrows/shift exploration, pan/zoom/focus/fit and hidden-return never s
     await key('Magnetic station B1', 'Enter'); await key('Magnetic station B1', 'Enter', { repeat: true });
     await key('Magnetic station C1', ' '); await key('Magnetic station C1', ' ', { repeat: true });
     expect(well.mock.calls).toEqual([[0, 'A1'], [0, 'B1'], [0, 'C1']]);
-    expect(api.get).toHaveBeenCalledTimes(1); expect(api.post).not.toHaveBeenCalled();
+    expect(geometryRead).toHaveBeenCalledTimes(1); expect(api.post).not.toHaveBeenCalled();
 });
 it('suppresses target drags and pans without suppressing the next deliberate tap', async () => {
     await render();
@@ -195,13 +212,13 @@ it('keeps missing/stale pose as display state, retains same-connection position,
     await render({ dashboard: dashboard(0, 0), stale: false }); expect(host.querySelector('[data-testid="reported-gantry"]')).not.toBeNull();
 });
 it('read failure/reference layout does not gate intent; revision invalidates geometry and hidden demand does not read', async () => {
-    vi.mocked(api.get).mockRejectedValue(new Error('offline fixture'));
-    await render({ visible: false, dashboard: null }); expect(api.get).not.toHaveBeenCalled();
+    geometryRead.mockRejectedValue(new Error('offline fixture'));
+    await render({ visible: false, dashboard: null }); expect(geometryRead).not.toHaveBeenCalled();
     await render({ visible: true }); await vi.waitFor(() => expect(host.textContent).toContain('Geometry read unavailable'));
     expect(host.textContent).toContain('Reference layout'); await click('Strip 1 H1'); expect(well).toHaveBeenLastCalledWith(11, 'H1');
-    vi.mocked(api.get).mockResolvedValue({ data: settings });
-    await render({ dashboard: dashboard() }); await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
-    const d = dashboard(); d.deck!.position_table_revision = 'rev-b'; await render({ dashboard: d }); await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(3));
+    geometryRead.mockResolvedValue({ data: settings });
+    await render({ dashboard: dashboard() }); await vi.waitFor(() => expect(geometryRead).toHaveBeenCalledTimes(2));
+    const d = dashboard(); d.deck!.position_table_revision = 'rev-b'; await render({ dashboard: d }); await vi.waitFor(() => expect(geometryRead).toHaveBeenCalledTimes(3));
 });
 it('preserves epoch-zero observation time and uses friendly requested station labels', async () => {
     await render({ dashboard: dashboard(0, 0, 0), selection: { station: 'LOC_TC', wells: ['H12'] } });
@@ -221,10 +238,10 @@ it('can inspect another station without requesting travel and keeps view through
 });
 it('rejects late old-generation geometry and cannot resurrect a prior connection pose', async () => {
     let oldReply!: (response: { data: typeof settings }) => void;
-    vi.mocked(api.get).mockImplementationOnce(() => new Promise(resolve => { oldReply = resolve; }));
+    geometryRead.mockImplementationOnce(() => new Promise(resolve => { oldReply = resolve; }));
     await render();
     await render({ generation: 2, dashboard: null });
-    await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(geometryRead).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(host.textContent).toContain('Active geometry'));
     const before = el('Magnetic station A1').querySelector('.bwd-ring')!.getAttribute('cx');
     await act(async () => oldReply({ data: { ...settings, active_motion_positions: [{ ...settings.active_motion_positions[0], base_coordinates: { x: 1, y: 2 } }] } }));

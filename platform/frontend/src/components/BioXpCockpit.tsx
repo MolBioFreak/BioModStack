@@ -57,7 +57,7 @@ function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
     const documentVisible = useBioXpDocumentVisible();
     const current = active && item.request.expected_connection_generation === generation;
     const commandId = item.receipt?.command_id ?? item.commandId;
-    const query = useBioXpOperatorReceiptV2(commandId ?? null, item.request.expected_connection_generation, current && documentVisible);
+    const query = useBioXpOperatorReceiptV2(commandId ?? null, item.request.expected_connection_generation, current && documentVisible && item.receipt?.terminal !== true);
     const receipt = query.data?.action_id === item.request.action_id ? query.data : item.receipt;
     useEffect(() => {
         if (current && !query.error && query.data?.terminal && query.data.action_id === item.request.action_id)
@@ -65,7 +65,7 @@ function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
     }, [current, query.data, query.error, item, onTerminal]);
     const label = query.data != null && query.data.action_id !== item.request.action_id ? 'receipt unavailable / outcome uncertain'
         : item.state === 'submitting' ? 'submitting / not yet accepted'
-        : item.state === 'uncertain' ? 'admission uncertain / checking request; do not resubmit'
+        : item.state === 'uncertain' ? 'admission uncertain / waiting for robot update; do not resubmit'
         : item.state === 'not_sent' ? 'not sent / connection changed'
         : item.state === 'rejected' ? 'not accepted' : `robot ${receipt?.status ?? 'accepted'}`;
     const captured = item.request;
@@ -79,7 +79,7 @@ function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
             {' · '}{commandId}
         </button>}
         {!current && ' · earlier connection'}
-        {query.error != null && ' · receipt unavailable; checking again'}
+        {query.error != null && ' · receipt unavailable; waiting for a robot update'}
         {item.error != null && ` · ${bioXpErrorText(item.error)}`}
         {bioXpReceiptFailureText(receipt)}
     </p>;
@@ -402,8 +402,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const effectiveDeckCommandId = active
         ? (deckMutationGeneration === generation ? deckCommandId : null) ?? dashboardDeckReceipt?.command_id ?? null
         : null;
+    const [deckDetailsOpen, setDeckDetailsOpen] = useState(false);
     const [settledDeck, setSettledDeck] = useState<string | null>(null);
-    const deckReceiptQuery = useBioXpOperatorReceiptDetailV2(effectiveDeckCommandId, generation, active && documentVisible && (liveDeckVisible || (settledDeck !== effectiveDeckCommandId && (deckCommandId !== null || dashboardDeckReceipt?.terminal === false))));
+    const deckReceiptQuery = useBioXpOperatorReceiptDetailV2(effectiveDeckCommandId, generation, active && documentVisible && (liveDeckVisible || (settledDeck !== effectiveDeckCommandId && (deckCommandId !== null || dashboardDeckReceipt?.terminal === false))), true, liveDeckVisible && deckDetailsOpen);
     useEffect(() => { if (deckReceiptQuery.data?.terminal) setSettledDeck(effectiveDeckCommandId); }, [deckReceiptQuery.data, effectiveDeckCommandId]);
     const invokeLifecycleActionMutation = useInvokeBioXpOperatorActionV2();
     const invokeYAction = useInvokeBioXpOperatorActionV2();
@@ -998,7 +999,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     // Robot action/destination denials and input validation remain authoritative.
     // Host age, reference and semantic projections are not admission. Retained ambiguous or
     // recovery-required receipts are history: they stay observable (receipt
-    // polling, recovery panel) but never disable a new movement. The robot's
+    // notifications, recovery panel) but never disable a new movement. The robot's
     // admission re-evaluates current state on every submission, so a stale
     // record cannot wedge the deck lane.
     const deckDestinationFor = (target: string) => deckAction?.destination_options?.find(destination => destination.target === target)
@@ -1251,6 +1252,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                     </p>
                     <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Travel only. No pickup, liquid handling or tip loading.</p>
                 </div>}
+                        onCommandDetailsToggle={setDeckDetailsOpen}
                         commandDetails={<div className="space-y-2 break-words">
                 <button
                     type="button"

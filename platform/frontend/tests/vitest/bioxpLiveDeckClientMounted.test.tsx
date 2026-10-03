@@ -9,6 +9,17 @@ type Request = BioXpDeckSubmission['request'];
 let hook: ReturnType<typeof useInvokeBioXpDeckActionV2>;
 let root: Root; let container: HTMLDivElement; let client: QueryClient;
 let generation: number;
+let lookup: () => Promise<any>;
+let sequence: number;
+let waits: Array<(value: any) => void>;
+const envelope = (changed: string[] = []) => ({ schema_version: 'bioxp.operator_updates.v1', source_instance_id: 'fixture',
+    ownership_generation: 4, next_after_sequence: sequence, pose_sequence: 0, changed_command_ids: changed,
+    active_command_ids: [], has_more: false, reset: false, pose: null });
+const notify = async () => {
+    await act(async () => { sequence++; const current = waits; waits = []; current.forEach(send => send({ data: envelope(['native-0']) })); });
+    await advance();
+};
+const lookups = () => vi.mocked(api.get).mock.calls.filter(([url]) => url.includes('/requests/'));
 let posts: Array<{ url: string; body: any; resolve: (value: any) => void; reject: (value: any) => void }>;
 const request = (key: string, named = false): Request => ({
     expected_connection_generation: generation, schema_version: 'bioxp.operator_action_request.v2',
@@ -26,7 +37,18 @@ const accept = async (i: number) => { await act(async () => posts[i].resolve({ d
 beforeEach(() => {
     vi.useFakeTimers(); vi.resetAllMocks(); generation = 7; posts = [];
     vi.mocked(api.post).mockImplementation((url, body) => new Promise((resolve, reject) => posts.push({ url, body, resolve, reject })));
-    vi.mocked(api.get).mockRejectedValue({ response: { status: 404 } });
+    sequence = 0; waits = []; lookup = async () => { throw { response: { status: 404 } }; };
+    vi.mocked(api.get).mockImplementation((url, config) => {
+        if (url.endsWith('/updates')) {
+            if (config?.params?.after_sequence === undefined) return Promise.resolve({ data: envelope() });
+            return new Promise((resolve, reject) => {
+                const send = (value: any) => { config?.signal?.removeEventListener?.('abort', abort); resolve(value); };
+                const abort = () => { waits = waits.filter(w => w !== send); reject(new Error('aborted')); };
+                waits.push(send); config?.signal?.addEventListener?.('abort', abort);
+            });
+        }
+        return lookup();
+    });
     client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     container = document.createElement('div'); document.body.append(container); root = createRoot(container);
 });
@@ -62,12 +84,12 @@ it.each(['timeout', 'malformed', 'mismatch'])('reconciles %s by original identit
     await act(async () => mode === 'timeout' ? posts[0].reject(new Error('timeout'))
         : posts[0].resolve({ data: mode === 'malformed' ? null : { ...receipt(0), action_id: 'wrong' } }));
     await advance(2001); expect(hook.submissions[0].state).toBe('uncertain');
-    vi.mocked(api.get).mockResolvedValue({ data: { ...receipt(0), action_id: 'wrong' } });
-    await advance(2001); expect(hook.submissions[0].state).toBe('uncertain');
+    lookup = async () => ({ data: { ...receipt(0), action_id: 'wrong' } });
+    await notify(); expect(hook.submissions[0].state).toBe('uncertain');
     await act(async () => hook.submit(request('later', true))); await advance(); await accept(1);
     expect(posts).toHaveLength(2); expect(hook.submissions[1].state).toBe('accepted');
-    vi.mocked(api.get).mockResolvedValue({ data: receipt(0) });
-    await advance(2001); await advance();
+    lookup = async () => ({ data: receipt(0) });
+    await notify(); await advance();
     expect(hook.submissions[0].state).toBe('accepted'); expect(hook.submissions[0].receipt).toEqual(receipt(0));
     expect(api.get).toHaveBeenCalledWith(expect.stringContaining('/requests/original'), expect.objectContaining({ params: { expected_connection_generation: 7 } }));
     expect(posts).toHaveLength(2);
@@ -76,17 +98,17 @@ it('fences late old-generation admission and never resumes a dropped intent', as
     await render(); await act(async () => { hook.submit(request('old')); hook.submit(request('dropped')); }); await advance();
     generation = 8; await render(); await accept(0); await advance(4001);
     expect(hook.submissions[0].state).toBe('uncertain'); expect(hook.submissions[0].receipt).toBeUndefined();
-    expect(api.get).not.toHaveBeenCalled(); expect(posts).toHaveLength(1);
+    expect(lookups()).toHaveLength(0); expect(posts).toHaveLength(1);
     await act(async () => hook.submit(request('current'))); await advance(); await accept(1);
     expect(hook.submissions[1].state).toBe('accepted');
     expect(posts[1].body.expected_connection_generation).toBe(8);
 });
 it('does not attach a late old-generation lookup to the new connection', async () => {
     let resolveLookup!: (value: any) => void;
-    vi.mocked(api.get).mockImplementation(() => new Promise(resolve => { resolveLookup = resolve; }));
+    lookup = () => new Promise(resolve => { resolveLookup = resolve; });
     await render(); await act(async () => hook.submit(request('old-lookup'))); await advance();
     await act(async () => posts[0].reject(new Error('timeout'))); await advance();
-    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(lookups()).toHaveLength(1);
     generation = 8; await render();
     await act(async () => resolveLookup({ data: receipt(0) })); await advance();
     expect(hook.submissions[0].state).toBe('uncertain'); expect(hook.submissions[0].receipt).toBeUndefined();

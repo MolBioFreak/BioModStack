@@ -61,6 +61,7 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "camera_stream_state": ("GET", "/camera/stream/state", 5.0),
     "camera_mjpeg": ("GET", "/camera/mjpeg", 10.0),
     "camera_stream_stop": ("POST", "/camera/stream/stop", 15.0),
+    "operator_updates": ("GET", "/operator/updates", 30.0),
     "operator_control_catalog": ("GET", "/operator/control-catalog", 10.0),
     "reference_status": ("GET", "/motion/reference/status", 5.0),
     "operator_control_catalog_v2": ("GET", "/operator/v2/control-catalog", 5.0),

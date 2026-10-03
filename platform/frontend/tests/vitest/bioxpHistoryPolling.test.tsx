@@ -14,6 +14,10 @@ import { BioXpQuickDashboard } from '../../src/components/BioXpQuickDashboard';
 
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 let client: QueryClient;
+const readGet = vi.fn();
+let updateReply: ((value: any) => void) | undefined, sequence = 0;
+const wire = (ids: string[] = []) => ({ schema_version: 'bioxp.operator_updates.v1', source_instance_id: 'history-fixture', ownership_generation: 1, next_after_sequence: sequence, pose_sequence: 0, changed_command_ids: ids, active_command_ids: [], has_more: false, reset: false, pose: null });
+const notify = async (ids = ['xy-retained']) => { sequence++; await act(async () => updateReply?.({ data: wire(ids) })); };
 let root: Root;
 let container: HTMLDivElement;
 const flush = async () => act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
@@ -33,11 +37,20 @@ const render = async (enabled = true) => act(async () => {
     root.render(<QueryClientProvider client={client}><Harness enabled={enabled} /></QueryClientProvider>);
 });
 beforeEach(() => {
-    vi.resetAllMocks();
+    vi.resetAllMocks(); updateReply = undefined; sequence = 0;
+    vi.mocked(api.get).mockImplementation((url, options) => {
+        if (!url.endsWith('/updates')) return readGet(url, options);
+        if (options?.params?.after_sequence === undefined) return Promise.resolve({ data: wire() });
+        return new Promise((resolve, reject) => {
+            const abort = () => reject(new Error('cancelled'));
+            updateReply = value => { options?.signal?.removeEventListener?.('abort', abort); resolve(value); };
+            options?.signal?.addEventListener?.('abort', abort);
+        });
+    });
     client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     container = document.createElement('div');
     root = createRoot(container);
-    vi.mocked(api.get).mockImplementation(async (url) => ({ data: String(url).includes('/methods/') ? { method_id: 'xy-one', status: 'active' } : history('completed') }) as never);
+    readGet.mockImplementation(async (url) => ({ data: String(url).includes('/methods/') ? { method_id: 'xy-one', status: 'active' } : history('completed') }) as never);
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); });
 
@@ -48,7 +61,7 @@ it.each(['completed', 'failed'])('reconciles XY receipt after transient GET fail
         const query = useBioXpOperatorReceiptV2('xy-retained', 7, true);
         return <output>{query.isError ? 'read failed' : query.data?.status}</output>;
     }
-    vi.mocked(api.get).mockImplementation(async () => {
+    readGet.mockImplementation(async () => {
         reads++;
         if (reads === 1) return { data: { command_id: 'xy-retained', status: 'dispatched', terminal: false } } as never;
         if (reads === 2) throw new Error('transient status prerequisite failure');
@@ -58,15 +71,17 @@ it.each(['completed', 'failed'])('reconciles XY receipt after transient GET fail
         await act(async () => root.render(<QueryClientProvider client={client}><ReceiptHarness /></QueryClientProvider>));
         await act(async () => vi.advanceTimersByTimeAsync(50));
         expect(container.textContent).toBe('dispatched');
+        await notify();
         await act(async () => vi.advanceTimersByTimeAsync(550));
         expect(container.textContent).toBe('read failed');
+        await notify();
         await act(async () => vi.advanceTimersByTimeAsync(2100));
         expect(container.textContent).toBe(outcome);
         expect(reads).toBe(3);
         await act(async () => vi.advanceTimersByTimeAsync(5000));
         expect(reads).toBe(3);
         expect(api.post).not.toHaveBeenCalled();
-        for (const [url] of vi.mocked(api.get).mock.calls) expect(url).toBe('/api/bioxp/operator-controls/v2/receipts/xy-retained');
+        for (const [url] of readGet.mock.calls) expect(url).toBe('/api/bioxp/operator-controls/v2/receipts/xy-retained');
     } finally { vi.useRealTimers(); }
 });
 
@@ -118,12 +133,12 @@ it('refreshes current-generation history after v2 submission', async () => {
 
 it('bounds and cancels catalog reads without changing the authority freshness budget', async () => {
     function CatalogHarness() { useBioXpOperatorControlCatalog(7); return null; }
-    vi.mocked(api.get).mockImplementation(() => new Promise(() => {}));
+    readGet.mockImplementation(() => new Promise(() => {}));
     await act(async () => root.render(<QueryClientProvider client={client}><CatalogHarness /></QueryClientProvider>));
-    expect(api.get).toHaveBeenCalledWith('/api/bioxp/operator-controls/catalog', {
+    expect(readGet).toHaveBeenCalledWith('/api/bioxp/operator-controls/catalog', {
         timeout: 12_000, signal: expect.any(AbortSignal), params: { view: 'assessment', assessment_base: '', canonical_assessment_base: '' },
     });
-    const options = vi.mocked(api.get).mock.calls[0][1]!;
+    const options = readGet.mock.calls[0][1]!;
     const query = client.getQueryCache().getAll()[0];
     expect(query.options).toMatchObject({ refetchInterval: expect.any(Function), retry: false, refetchIntervalInBackground: false });
     expect(options.signal?.aborted).toBe(false);
@@ -140,7 +155,7 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
             isLoading={query.isLoading} error={query.error} motionControlsAvailable={undefined}
             unavailableReason={query.isSuccess ? 'Catalog recovered; telemetry not reported.' : undefined} /></>;
     }
-    vi.mocked(api.get).mockImplementation((_url, options) => {
+    readGet.mockImplementation((_url, options) => {
         calls++;
         if (calls > 1) return Promise.resolve({ data: catalogWireFixture({ actions: [], dashboard: {} }, options?.params?.view) }) as never;
         // Model the transport timeout rejection, not a never-settling GET.
@@ -154,7 +169,7 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
         expect(container.textContent).toContain('Loading live state');
         await act(async () => { await vi.advanceTimersByTimeAsync(11_999); });
         expect(container.textContent).toContain('Loading live state');
-        expect(api.get).toHaveBeenCalledTimes(1); // interval cannot duplicate an in-flight GET
+        expect(readGet).toHaveBeenCalledTimes(1); // interval cannot duplicate an in-flight GET
         await act(async () => { await vi.advanceTimersByTimeAsync(1); });
         await act(async () => { await vi.advanceTimersByTimeAsync(1); }); // query observer notification
         expect(container.textContent).toContain('Dashboard unavailable: timeout of 12000ms exceeded');
@@ -163,7 +178,7 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
         // The consolidated catalog retains its existing five-second cadence.
         await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
         await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-        expect(api.get).toHaveBeenCalledTimes(3); // two assessments plus one cold definition read
+        expect(readGet).toHaveBeenCalledTimes(3); // two assessments plus one cold definition read
         expect(container.querySelector('output')?.textContent).toBe('success');
         expect(container.textContent).toContain('Catalog recovered');
         expect(container.textContent).not.toContain('Dashboard unavailable');
@@ -178,7 +193,7 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
 it('fetches history at the requested depth and keeps enablement out of cache identity', async () => {
     await render();
     await vi.waitFor(() => expect(client.getQueryData(historyKey(7, 8))).toEqual(history('completed')));
-    expect(api.get).toHaveBeenCalledWith('/api/bioxp/operator-controls/history?limit=8', { signal: expect.any(AbortSignal), params: undefined });
+    expect(readGet).toHaveBeenCalledWith('/api/bioxp/operator-controls/history?limit=8', { signal: expect.any(AbortSignal), params: undefined });
     await render(false);
     expect(client.getQueryData(historyKey(7, 8))).toEqual(history('completed'));
 });
@@ -198,16 +213,13 @@ it.each(['invoke', 'assess'])('%s invalidates matching pages without synthesizin
         expect(client.getQueryData(historyKey(8, limit))).toEqual(history('completed', limit));
     }
 });
-it('polls only nonterminal history', async () => {
-    await render(false);
+it('refreshes observed history from notifications without a per-page polling interval', async () => {
+    await render(); await flush();
     const query = client.getQueryCache().find({ queryKey: historyKey(7, 8), exact: true });
-    expect(query).toBeDefined();
-    const interval = query!.options.refetchInterval as (query: unknown) => number | false;
-    expect(typeof interval).toBe('function');
-    for (const status of ['queued', 'active', 'dispatched']) expect(interval({ state: { data: history(status) } })).toBe(1000);
-    for (const status of ['completed', 'failed', 'rejected', 'cleared']) expect(interval({ state: { data: history(status) } })).toBe(false);
-    expect(interval({ state: {} })).toBe(false);
-
+    expect(query).toBeDefined(); expect(query!.options.refetchInterval).toBeUndefined();
+    expect(readGet).toHaveBeenCalledTimes(1);
+    await notify(['old-0']); await flush(); expect(readGet).toHaveBeenCalledTimes(2);
+    await render(false); await notify(['old-0']); await flush(); expect(readGet).toHaveBeenCalledTimes(2);
 });
 
 
@@ -232,10 +244,10 @@ it('mounted software Abort issues exactly one HTTP cancellation without addresse
 it('fetches full retained evidence only on expansion and hides it on disconnect', async () => {
     const row = historyItem({ command_id: 'retained-proof', action_id: 'oem.z.manual_home', status: 'failed', source: 'legacy_operator_plane' });
     const source = { command_id: row.command_id, terminal_evidence: { retained_original: 'native-proof-value' } };
-    api.get.mockResolvedValue({ data: { ...row, source_receipt: source } });
+    readGet.mockResolvedValue({ data: { ...row, source_receipt: source } });
     const render = (connected: boolean) => root.render(<QueryClientProvider client={client}><BioXpHistoryReceiptCard receipt={row} generation={7} connected={connected} /></QueryClientProvider>);
     await act(async () => { render(true); });
-    expect(api.get).not.toHaveBeenCalled();
+    expect(readGet).not.toHaveBeenCalled();
     expect(container.textContent).not.toContain('native-proof-value');
     await act(async () => {
         const disclosure = container.querySelector('details')!;
@@ -243,8 +255,8 @@ it('fetches full retained evidence only on expansion and hides it on disconnect'
         disclosure.dispatchEvent(new Event('toggle'));
     });
     await flush();
-    expect(api.get).toHaveBeenCalledTimes(1);
-    expect(api.get.mock.calls[0]).toEqual(['/api/bioxp/operator-controls/v2/receipts/retained-proof', { params: { detail: true }, signal: expect.any(AbortSignal), timeout: 12000 }]);
+    expect(readGet).toHaveBeenCalledTimes(1);
+    expect(readGet.mock.calls[0]).toEqual(['/api/bioxp/operator-controls/v2/receipts/retained-proof', { params: { detail: true, expected_connection_generation: 7 }, signal: expect.any(AbortSignal), timeout: 12000 }]);
     expect(container.textContent).toContain('retained-proof');
     expect(container.textContent).not.toContain('native-proof-value');
     await act(async () => { render(false); });
@@ -261,7 +273,7 @@ it.each(['detail', 'unavailable'] as const)('actual sparse Y5 history opens its 
         const row = query.data?.items.find(row => row.command_id === actualY5Detail.command_id);
         return row ? <BioXpHistoryReceiptCard key={`${generation}:${row.command_id}`} receipt={row} generation={generation} connected /> : null;
     }
-    api.get.mockImplementation(async (url) => {
+    readGet.mockImplementation(async (url) => {
         if (String(url).startsWith('/api/bioxp/operator-controls/history?')) return { data: structuredClone(actualY5History) };
         expect(url).toBe(`/api/bioxp/operator-controls/v2/receipts/${actualY5Detail.command_id}`);
         if (outcome === 'unavailable') throw new Error('retained detail unavailable');
@@ -273,7 +285,7 @@ it.each(['detail', 'unavailable'] as const)('actual sparse Y5 history opens its 
     };
     const plain = () => [...container.querySelectorAll('article > p')].map(node => node.textContent).join(' ');
     await renderHistory(7);
-    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(readGet).toHaveBeenCalledTimes(1);
     expect(plain()).toContain('route_http_conflict: Robot route reported an HTTP conflict.');
     expect(plain()).not.toContain('Recorded stopped position');
     await act(async () => {
@@ -281,8 +293,8 @@ it.each(['detail', 'unavailable'] as const)('actual sparse Y5 history opens its 
         disclosure.open = true; disclosure.dispatchEvent(new Event('toggle'));
     });
     await flush();
-    expect(api.get).toHaveBeenCalledTimes(2);
-    expect(api.get.mock.calls[1]).toEqual([`/api/bioxp/operator-controls/v2/receipts/${actualY5Detail.command_id}`, { params: { detail: true }, signal: expect.any(AbortSignal), timeout: 12000 }]);
+    expect(readGet).toHaveBeenCalledTimes(2);
+    expect(readGet.mock.calls[1]).toEqual([`/api/bioxp/operator-controls/v2/receipts/${actualY5Detail.command_id}`, { params: { detail: true, expected_connection_generation: 7 }, signal: expect.any(AbortSignal), timeout: 12000 }]);
     if (outcome === 'detail') expect(plain()).toContain(explanation);
     else { expect(plain()).not.toContain(explanation); expect(container.textContent).toContain('Receipt evidence unavailable'); }
     await act(async () => {
@@ -291,11 +303,11 @@ it.each(['detail', 'unavailable'] as const)('actual sparse Y5 history opens its 
     });
     await flush();
     if (outcome === 'detail') expect(plain()).toContain(explanation);
-    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(readGet).toHaveBeenCalledTimes(2);
     await renderHistory(8);
     expect(plain()).not.toContain(explanation); // new generation has no inherited detail query
     expect(container.querySelector('details')!.open).toBe(false);
-    expect(api.get).toHaveBeenCalledTimes(3); // only the new history GET
+    expect(readGet).toHaveBeenCalledTimes(3); // only the new history GET
     expect(api.post).not.toHaveBeenCalled();
     expect(saved.xy_failure).toBeNull();
     expect(actualY5Detail.status).toBe('failed');
@@ -308,14 +320,14 @@ it('owns history cursors by connection and page size, using the single route for
         useBioXpOperatorActionHistory(generation, true, limit, pagination.cursor);
         return null;
     }
-    api.get.mockResolvedValue({ data: history('completed', 8) });
+    readGet.mockResolvedValue({ data: history('completed', 8) });
     const render = (generation: number, limit: number) => root.render(<QueryClientProvider client={client}><Paged generation={generation} limit={limit} /></QueryClientProvider>);
     await act(async () => { render(7, 8); });
     await flush();
     await act(async () => { pagination.older('older-one'); });
     await flush();
     expect(pagination.cursor).toBe('older-one');
-    expect(api.get.mock.calls.at(-1)).toEqual(['/api/bioxp/operator-controls/history?limit=8', { signal: expect.any(AbortSignal), params: { cursor: 'older-one' } }]);
+    expect(readGet.mock.calls.at(-1)).toEqual(['/api/bioxp/operator-controls/history?limit=8', { signal: expect.any(AbortSignal), params: { cursor: 'older-one' } }]);
     await act(async () => { render(7, 25); });
     await flush();
     expect(pagination.cursor).toBeNull();
@@ -326,5 +338,5 @@ it('owns history cursors by connection and page size, using the single route for
     await flush();
     expect(pagination.cursor).toBeNull();
     expect(pagination.hasNewer).toBe(false);
-    expect(api.get.mock.calls.every(([url]) => !String(url).includes('/v2/history'))).toBe(true);
+    expect(readGet.mock.calls.every(([url]) => !String(url).includes('/v2/history'))).toBe(true);
 });

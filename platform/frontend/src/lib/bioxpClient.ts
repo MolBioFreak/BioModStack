@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query';
 
 import { api } from './api.js';
 import { bioXpProviderFailure } from './bioxpEvidencePresentation';
@@ -1833,6 +1833,7 @@ export interface BioXpDeckSubmission {
 // persists across reload, retries a POST, or claims unsent work is robot queued.
 export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
     const mutation = useInvokeBioXpOperatorActionV2Mutation();
+    useBioXpOperatorUpdates(generation, active);
     const [submissions, setSubmissions] = useState<BioXpDeckSubmission[]>([]);
     const scope = useRef({ generation, active });
     scope.current = { generation, active };
@@ -1854,8 +1855,8 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
                 throw new Error('Command request identity mismatch; admission remains uncertain');
             return receipt;
         },
-        // Including 404: the original admission may still be in flight.
-        refetchInterval: 2000,
+        // A committed update wakes identity lookup; never repeat a POST.
+        staleTime: Infinity,
         gcTime: 0,
     });
     const update = (key: string, changes: Partial<BioXpDeckSubmission>) =>
@@ -1906,12 +1907,16 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
         ...mutation,
         submissions,
         retire: (key: string, receipt: BioXpOperatorReceiptV2) => {
-            if (!receipt.terminal || receipt.status === 'ambiguous' || receipt.completion_class === 'recovery_required') return;
+            if (!receipt.terminal) return;
             setSubmissions(items => {
                 const settled = items.find(item => item.request.idempotency_key === key
                     && item.state === 'accepted' && item.receipt?.command_id === receipt.command_id);
-                // Exact terminal GET transfers presentation custody to canonical history.
-                return settled ? items.filter(item => item !== settled) : items;
+                if (!settled || settled.receipt === receipt) return items;
+                // Success transfers to canonical history. Keep failure/ambiguity visible,
+                // but retire its submission observer; selecting it still observes recovery.
+                return receipt.status === 'completed'
+                    ? items.filter(item => item !== settled)
+                    : items.map(item => item === settled ? { ...item, receipt } : item);
             });
         },
         submit: (request: BioXpOperatorActionV2Request) => {
@@ -2003,49 +2008,142 @@ export const decodeBioXpReceiptDetailV2 = (receipt: BioXpOperatorReceiptDetailV2
     return receipt;
 };
 
-// Deduplicate across mounted consumers; bounded per QueryClient.
-const terminalObservations = new WeakMap<QueryClient, Set<string>>();
+export interface BioXpOperatorUpdates {
+    schema_version: 'bioxp.operator_updates.v1';
+    source_instance_id: string;
+    ownership_generation: number;
+    next_after_sequence: number;
+    pose_sequence: number;
+    changed_command_ids: string[];
+    active_command_ids: string[];
+    has_more: boolean;
+    reset: boolean;
+    pose: null | { ownership_generation: number; axes: Array<{
+        axis: 'x' | 'y' | 'z'; position_steps: number; observed_at: number;
+    }> };
+}
+export const bioXpOperatorUpdatesKey = (generation: number) => ['bioxp', 'operator-controls', 'updates', generation] as const;
+
+// One cancellable long wait per QueryClient/connection, not one timer per observer.
+// The cache owns the cursor; absence of demand stops transport, not retained history.
+type OperatorFeed = { users: number; stop: () => void };
+const operatorFeeds = new WeakMap<QueryClient, Map<number, OperatorFeed>>();
+function subscribeOperatorUpdates(client: QueryClient, generation: number) {
+    let feeds = operatorFeeds.get(client);
+    if (!feeds) { feeds = new Map(); operatorFeeds.set(client, feeds); }
+    let feed = feeds.get(generation);
+    if (!feed) {
+        const key = bioXpOperatorUpdatesKey(generation);
+        let controller: AbortController | null = null;
+        let retryTimer: ReturnType<typeof setTimeout> | undefined;
+        let stopped = false;
+        const finishingReads = new Set<object>();
+        const run = async () => {
+            if (stopped || document.visibilityState === 'hidden' || controller) return;
+            const current = new AbortController();
+            controller = current;
+            let reconcile = client.getQueryData(key) !== undefined;
+            try {
+                while (!current.signal.aborted) {
+                    const previous = client.getQueryData<BioXpOperatorUpdates>(key);
+                    const next = (await api.get<BioXpOperatorUpdates>('/api/bioxp/operator-controls/updates', {
+                        signal: current.signal, timeout: 30_000, params: {
+                            expected_connection_generation: generation, wait_s: previous?.has_more ? 0 : 25,
+                            ...(previous ? { after_sequence: previous.next_after_sequence, after_pose_sequence: previous.pose_sequence } : {}),
+                        },
+                    })).data;
+                    if (current.signal.aborted) break;
+                    if (next.schema_version !== 'bioxp.operator_updates.v1') throw new Error('Robot updates release required');
+                    const replaced = !!previous && (previous.source_instance_id !== next.source_instance_id
+                        || previous.ownership_generation !== next.ownership_generation);
+                    const changed = !previous || replaced || next.reset || previous.next_after_sequence !== next.next_after_sequence;
+                    client.setQueryData(key, next);
+                    const ids = new Set(changed ? next.changed_command_ids : []);
+                    // Reconnect/reset reconcile original identities by GET; never replay submissions.
+                    const resync = reconcile || replaced || next.reset;
+                    reconcile = false;
+                    const affected = client.getQueryCache().findAll({ predicate: query => {
+                        const q = query.queryKey;
+                        if (q[0] !== 'bioxp' || q[1] !== 'operator-controls') return false;
+                        if (q[2] === 'history') return q[3] === generation && (resync || ids.size > 0);
+                        if (q[2] !== 'v2') return false;
+                        if (q[3] === 'request') return q[4] === generation && (resync || ids.size > 0);
+                        return (q[3] === 'receipt' || q[3] === 'receipt-detail') && q[5] === generation
+                            && (ids.has(String(q[4])) || (resync && (query.state.data !== undefined || query.state.error !== null || query.state.fetchStatus === 'fetching')));
+                    } });
+                    for (const query of affected) {
+                        const filter = { queryKey: query.queryKey, exact: true };
+                        // React Query coalesces an initial (no data) GET even with
+                        // cancelRefetch. Don't lose a commit arriving during that read.
+                        if (query.state.data === undefined && query.state.fetchStatus === 'fetching' && query.promise && !finishingReads.has(query)) {
+                            finishingReads.add(query);
+                            void query.promise.catch(() => undefined).then(() => {
+                                finishingReads.delete(query);
+                                if (!current.signal.aborted) void client.invalidateQueries(filter);
+                            });
+                        }
+                        void client.invalidateQueries(filter);
+                    }
+                }
+            } catch (error) {
+                if (!current.signal.aborted) {
+                    client.getQueryCache().find({ queryKey: key })?.setState({ error: error as Error, status: 'error' });
+                    retryTimer = setTimeout(() => { retryTimer = undefined; void run(); }, 2000);
+                }
+            } finally { if (controller === current) controller = null; }
+        };
+        const visibility = () => {
+            if (document.visibilityState === 'hidden') {
+                controller?.abort(); controller = null; finishingReads.clear();
+                clearTimeout(retryTimer); retryTimer = undefined;
+            } else void run();
+        };
+        feed = { users: 0, stop: () => {
+            stopped = true; controller?.abort(); clearTimeout(retryTimer);
+            document.removeEventListener('visibilitychange', visibility);
+        } };
+        feeds.set(generation, feed);
+        document.addEventListener('visibilitychange', visibility);
+        void run();
+    }
+    feed.users++;
+    return () => { if (--feed.users === 0) { feed.stop(); feeds.delete(generation); } };
+}
+export function useBioXpOperatorUpdates(generation: number, enabled = true) {
+    const client = useQueryClient();
+    const observation = useQuery<BioXpOperatorUpdates>({
+        queryKey: bioXpOperatorUpdatesKey(generation), queryFn: skipToken, enabled: false, staleTime: Infinity,
+    });
+    useEffect(() => {
+        if (enabled && generation > 0) return subscribeOperatorUpdates(client, generation);
+    }, [client, generation, enabled]);
+    return observation;
+}
 
 export const useBioXpOperatorReceiptV2 = (
     commandId: string | null,
     connectionGeneration: number,
     enabled = true,
 ) => {
-    const queryClient = useQueryClient();
+    useBioXpOperatorUpdates(connectionGeneration, enabled && Boolean(commandId));
     return useQuery({
         queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
         queryFn: async ({ signal }) => {
             const receipt = (
             await api.get<BioXpOperatorReceiptV2>(
                 `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
-                { signal, timeout: 12000, params: { detail: false } },
+                { signal, timeout: 12000, params: { detail: false, expected_connection_generation: connectionGeneration } },
             )
             ).data;
             if (receipt.command_id !== commandId) throw new Error('Receipt command identity mismatch');
-            const identity = `${connectionGeneration}:${commandId}`;
-            const observed = terminalObservations.get(queryClient) ?? new Set<string>();
-            terminalObservations.set(queryClient, observed);
-            if (receipt.terminal === true && !observed.has(identity)) {
-                observed.add(identity);
-                if (observed.size > 128) observed.delete(observed.values().next().value!);
-                for (const key of [statusKey, operatorCatalogKey]) {
-                    void queryClient.invalidateQueries({ queryKey: key });
-                }
-            }
             return receipt;
         },
         enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
         gcTime: 0,
         retry: false,
-        refetchInterval: (query) => {
-            // A failed read is not a terminal command outcome. Keep reconciling
-            // this identity at a slower cadence; never resubmit the action.
-            if (query.state.error) return 2_000;
-            if (!query.state.data) return 500;
-            if (query.state.data.status === 'ambiguous' || query.state.data.completion_class === 'recovery_required') return 2_000;
-            return bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false;
-        },
-        refetchIntervalInBackground: false,
+        staleTime: Infinity,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
     });
 };
 
@@ -2054,20 +2152,17 @@ export const useBioXpOperatorReceiptV2 = (
  * Compact status owns the cadence; unchanged observations never reread bulk evidence.
  */
 export const useBioXpOperatorReceiptDetailV2 = (
-    commandId: string | null, connectionGeneration: number, enabled = true, observe = true,
+    commandId: string | null, connectionGeneration: number, enabled = true, observe = true, detailOpen = true,
 ) => {
     const status = useBioXpOperatorReceiptV2(commandId, connectionGeneration, enabled && observe);
     const receipt = status.data;
     const detail = useQuery({
-        queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt-detail', commandId, connectionGeneration,
-            receipt?.state_version, receipt?.status, receipt?.terminal_receipt_id,
-            // Recovery decisions can be appended without changing historical outcome.
-            receipt?.status === 'ambiguous' || receipt?.completion_class === 'recovery_required' ? status.dataUpdatedAt : null],
+        queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt-detail', commandId, connectionGeneration],
         queryFn: async ({ signal }) => decodeBioXpReceiptDetailV2((await api.get<BioXpOperatorReceiptDetailV2>(
             `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
-            { signal, timeout: 12000, params: { detail: true } },
+            { signal, timeout: 12000, params: { detail: true, expected_connection_generation: connectionGeneration } },
         )).data, commandId ?? ''),
-        enabled: enabled && Boolean(commandId) && connectionGeneration > 0 && (!observe || receipt != null),
+        enabled: enabled && detailOpen && Boolean(commandId) && connectionGeneration > 0 && (!observe || receipt != null),
         gcTime: 0,
         staleTime: observe ? Infinity : 0,
         retry: false,
@@ -2075,7 +2170,7 @@ export const useBioXpOperatorReceiptDetailV2 = (
     // Never hide current lifecycle/denials while retained evidence is loading.
     // No invented empty evidence or proof defaults stand in for an absent detail.
     const data: (BioXpOperatorReceiptV2 & Partial<BioXpOperatorReceiptDetailV2>) | undefined =
-        detail.data ?? receipt;
+        detailOpen && detail.data ? { ...detail.data, ...receipt } : receipt;
     return { ...detail, data, error: (observe && status.error) || detail.error,
         isError: (observe && status.isError) || detail.isError };
 };
@@ -2406,7 +2501,9 @@ export const useBioXpOperatorActionHistory = (
     enabled = true,
     limit = 100,
     cursor: string | null = null,
-) => useQuery({
+) => {
+    useBioXpOperatorUpdates(connectionGeneration, enabled);
+    return useQuery({
     queryKey: [...operatorHistoryKey, connectionGeneration, limit, cursor],
     queryFn: async ({ signal }) => (
         await api.get<BioXpOperatorActionHistory>(`/api/bioxp/operator-controls/history?limit=${limit}`, {
@@ -2416,9 +2513,11 @@ export const useBioXpOperatorActionHistory = (
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
-    refetchInterval: (query) => query.state.data?.items.some(bioXpReceiptV2IsNonTerminal) ? 1000 : false,
-    refetchIntervalInBackground: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
 });
+};
 
 export const useBioXpOperatorReportSummary = (
     connectionGeneration: number,
