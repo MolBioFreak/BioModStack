@@ -98,13 +98,16 @@ class ProtocolReviewRequest(ControlBinding):
     action_id: Identity | None = None
 
 
-class ProtocolCommand(ProtocolWireModel):
+class ProtocolObservedCommand(ProtocolWireModel):
     command_id: Identity
-    idempotency_key: Identity
     ownership_generation: Generation
     state_version: Generation
     status: CommandStatus
     terminal: StrictBool
+
+
+class ProtocolCommand(ProtocolObservedCommand):
+    idempotency_key: Identity
     status_path: Identity
 
 
@@ -276,6 +279,36 @@ class ProtocolJob(ProtocolWireModel):
                     or state.workflow is None or state.workflow.command_id != self.job_id
                     or self.status != self.command.status):
                 raise ValueError("workflow identity does not match canonical job")
+        return self
+
+
+class ProtocolObservationRuntime(ProtocolWireModel):
+    workflow: ProtocolWorkflowState | None = None
+
+
+class ProtocolObservationExecution(ProtocolWireModel):
+    dry_run: StrictBool
+    runtime_state: ProtocolObservationRuntime
+
+
+class ProtocolObservationOperator(ProtocolWireModel):
+    pending_review: ProtocolPendingReview | None = None
+
+
+class ProtocolJobObservation(ProtocolWireModel):
+    schema_version: Literal["bioxp.protocol_job_observation.v1"]
+    job_id: Identity
+    status: CommandStatus
+    command: ProtocolObservedCommand
+    execution: ProtocolObservationExecution
+    operator: ProtocolObservationOperator
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> ProtocolJobObservation:
+        workflow = self.execution.runtime_state.workflow
+        if (self.command.command_id != self.job_id or self.command.status != self.status
+                or (workflow is not None and workflow.command_id != self.job_id)):
+            raise ValueError("workflow observation identity does not match canonical job")
         return self
 
 

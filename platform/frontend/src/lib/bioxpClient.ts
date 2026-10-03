@@ -1148,6 +1148,14 @@ export interface BioXpWorkflowJob {
         };
     };
 }
+export interface BioXpWorkflowJobObservation {
+    schema_version: 'bioxp.protocol_job_observation.v1';
+    job_id: string;
+    status: string;
+    command: Omit<BioXpWorkflowCommand, 'idempotency_key' | 'status_path'>;
+    execution: { dry_run: boolean; runtime_state: { workflow?: BioXpWorkflowState | null } };
+    operator: { pending_review?: { stage_id: string | null; action_id: string | null; reason: string | null } | null };
+}
 // Discovery is intentionally not selected-job detail. Older robots may still
 // return full rows; consumers select by identity and fetch detail separately.
 export interface BioXpWorkflowJobSummary {
@@ -2654,6 +2662,29 @@ export const useBioXpWorkflowJob = (jobId: string | null, generation: number, en
     refetchInterval: (query) => {
         if (!enabled) return false;
         const job = query.state.data;
+        const command = job?.command;
+        const workflow = job?.execution?.runtime_state.workflow;
+        const settled = command?.command_id === jobId && command.terminal
+            && command.status !== 'ambiguous' && workflow?.command_id === jobId && workflow.phase === 'terminal';
+        return settled ? false : 2_000;
+    },
+    refetchIntervalInBackground: false,
+});
+// The monitor consumes control/review truth, never source trays or retained
+// action evidence. Explicit detail/clone and their query keys remain full.
+export const useBioXpWorkflowJobObservation = (jobId: string | null, generation: number, enabled: boolean) => useQuery({
+    queryKey: [...workflowJobsKey, generation, jobId, 'observation'],
+    queryFn: async () => (await api.get<BioXpWorkflowJobObservation | BioXpWorkflowJob>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId!)}`, {
+        params: { expected_connection_generation: generation, observation: true },
+    })).data,
+    enabled: enabled && generation > 0 && jobId !== null,
+    retry: false,
+    refetchInterval: (query) => {
+        if (!enabled) return false;
+        const job = query.state.data;
+        // Historical file jobs / peers without this projection get one full
+        // read, not a recurring bulk fallback. This is observation only.
+        if (job && !('schema_version' in job && job.schema_version === 'bioxp.protocol_job_observation.v1')) return false;
         const command = job?.command;
         const workflow = job?.execution?.runtime_state.workflow;
         const settled = command?.command_id === jobId && command.terminal
