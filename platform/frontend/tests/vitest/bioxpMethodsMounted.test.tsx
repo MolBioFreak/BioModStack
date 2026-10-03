@@ -213,7 +213,7 @@ it('compiles separately, presents Water without new acknowledgement and derives 
     expect(host.querySelector('[aria-label="Compiled occurrence preview"]')).toBeTruthy(); expect(submits()).toHaveLength(0);
     expect([...host.querySelectorAll('label')].filter(n => /Acknowledge live robot execution/.test(n.textContent ?? ''))).toHaveLength(1);
 });
-it('stops hidden-subtab demand, keeps active reconciliation and settles ambiguous terminal observation without disabling warm-error controls', async () => {
+it('retains active reconciliation across subtabs and settles ambiguous terminal observation without disabling warm-error controls', async () => {
     await mount(); await openOriginal(); await acknowledge(); await click('Run saved revision');
     readFailure = true; await act(async () => { await client.refetchQueries({ predicate: q => q.queryKey.includes('observation') }); }); await settle();
     expect(button('Pause workflow').disabled).toBe(false);
@@ -222,8 +222,9 @@ it('stops hidden-subtab demand, keeps active reconciliation and settles ambiguou
     expect(host.textContent).toContain('Phase: reconciling');
     visible = false; await render(); const before = reads().length;
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 2200)); });
-    expect(reads()).toHaveLength(before);
+    expect(reads().length).toBeGreaterThan(before);
     visible = true; terminal = true; phase = 'terminal'; await render();
+    await act(async () => { await client.refetchQueries({ predicate: q => q.queryKey.includes('observation') }); }); await settle();
     const settled = reads().length;
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 2200)); });
     expect(reads()).toHaveLength(settled); expect(button('Pause workflow').disabled).toBe(true);

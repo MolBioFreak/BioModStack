@@ -92,8 +92,8 @@ describe('BioXP interrupt identity and reachability', () => {
         expect(source).not.toContain("operatorActionById('oem.abort_all')");
         expect(source).not.toContain("axis === 'y' ? '/motion/diagnostics/stop'");
         // Catalog owns the embedded authority snapshot; unrelated dashboard aging
-        // cannot change its query identity. Both 15s mounted authority gates remain.
-        expect(source).toMatch(/useBioXpOperatorControlCatalog\(\s*generation,\s*linkConnected,/);
+        // cannot change its query identity. Hidden authoring has no catalog demand.
+        expect(source).toMatch(/useBioXpOperatorControlCatalog\(\s*generation,\s*linkConnected && operationalVisible,/);
         // Software cancellation uses published availability; addressed motor Stops do not.
         expect(source).not.toMatch(/disabled=\{[^}\n]*v2InterruptActionById\('oem\.[xyz]\.stop'/);
         expect(source).toContain("v2InterruptActionById('oem.abort_all')?.enabled !== true");

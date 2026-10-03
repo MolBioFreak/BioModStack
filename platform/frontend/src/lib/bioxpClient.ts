@@ -1783,7 +1783,6 @@ export interface BioXpDeckSubmission {
 // persists across reload, retries a POST, or claims unsent work is robot queued.
 export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
     const mutation = useInvokeBioXpOperatorActionV2Mutation();
-    useBioXpOperatorUpdates(generation, active);
     const [submissions, setSubmissions] = useState<BioXpDeckSubmission[]>([]);
     const scope = useRef({ generation, active });
     scope.current = { generation, active };
@@ -1792,6 +1791,7 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
     const pending = submissions.find(item => item.request.expected_connection_generation === generation
         && item.state === 'submitting') ?? submissions.find(item => item.request.expected_connection_generation === generation
         && item.state === 'uncertain');
+    useBioXpOperatorUpdates(generation, active && pending?.state === 'uncertain');
     const lookup = useQuery({
         queryKey: ['bioxp', 'operator-controls', 'v2', 'request', generation, pending?.request.idempotency_key],
         enabled: active && pending?.state === 'uncertain',

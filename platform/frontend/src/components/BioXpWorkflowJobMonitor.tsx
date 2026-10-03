@@ -25,13 +25,18 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     const review = useReviewBioXpWorkflow(methodsFacade);
     const documentVisible = useBioXpDocumentVisible();
     const [settledJob, setSettledJob] = useState<string | null>(null);
+    const [activeObservation, setActiveObservation] = useState<{ jobId: string; generation: number } | null>(null);
     const observationId = jobId;
-    const observeJob = documentVisible && visible && settledJob !== observationId;
+    const retainedActive = activeObservation?.jobId === jobId && activeObservation?.generation === generation;
+    const observeJob = documentVisible && (visible || retainedActive) && settledJob !== observationId;
     const query = useBioXpWorkflowJobObservation(observationId, generation, connected && observeJob, methodsFacade);
     useEffect(() => {
         if (query.data?.command?.terminal && query.data.execution?.runtime_state.workflow?.phase === 'terminal' && query.data.job_id === observationId) setSettledJob(observationId);
     }, [query.data, observationId]);
     const job = query.data?.job_id === jobId ? query.data : acceptedJob?.job_id === jobId ? acceptedJob : null;
+    useEffect(() => {
+        if (job?.command && job.job_id === jobId) setActiveObservation(job.command.terminal ? null : { jobId: job.job_id, generation });
+    }, [job, jobId, generation]);
     useEffect(() => { if (job) onObserved?.(job); }, [job, onObserved]);
     const command = job?.command;
     const runtime = job?.execution?.runtime_state;

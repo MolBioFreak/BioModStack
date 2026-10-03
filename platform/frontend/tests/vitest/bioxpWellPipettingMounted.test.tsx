@@ -34,7 +34,7 @@ async function change(label: string, value: string) {
 async function check(channel: number) { await act(async () => (host.querySelector(`[aria-label="Plunger ${channel}"]`) as HTMLInputElement).click()); }
 async function well(value: string) { await act(async () => (host.querySelector(`[aria-label="Reference well ${value}"]`) as HTMLButtonElement).click()); }
 async function fields() {
-    await change('Block', '4'); await well('C3'); await change('Move Z position', '1');
+    await change('Station', '4'); await well('C3'); await change('Move Z position', '1');
     await change('Lift target', 'high'); await change('Volume (µL)', '12.5');
     await change('Aspirate speed', '80'); await change('Dispense speed', '65'); await change('Mix cycles', '2'); await check(2);
 }
@@ -301,7 +301,7 @@ it.each(['completed', 'failed'] as const)('renders compact %s calibration replie
 it('authors an ordered source/destination transfer with immutable per-step wells and no hidden lifecycle', async () => {
     await mount(); await fields();
     for (const op of ['move', 'lower', 'aspirate', 'lift']) await append(op);
-    await change('Block', '2'); await well('H12'); await change('Move Z position', '2');
+    await change('Station', '2'); await well('H12'); await change('Move Z position', '2');
     await change('Lift target', 'height'); await change('Lift height (steps)', '0');
     for (const op of ['move', 'lower', 'dispense', 'lift']) await append(op);
     expect(requests).toHaveLength(0); expect(host.querySelectorAll('[data-manual-step]')).toHaveLength(8);
@@ -375,7 +375,7 @@ it.each(['completed', 'failed', 'denied'])('mounted submission traverses real BM
         return { data: bridged.data, status: bridged.status, statusText: 'fixture', headers: {}, config };
     };
     await mount(); await fields(); await append('move'); await append('lower'); await append('aspirate'); await append('lift');
-    await change('Block', '2'); await well('B7');
+    await change('Station', '2'); await well('B7');
     await append('move'); await append('lower'); await append('dispense'); await append('lift');
     await change('Tip tray', '5'); await change('Tip well', 'B12');
     await advanced();
@@ -403,7 +403,7 @@ it.each([-1, 0, 1, 2, 3])('source-selected pipette %s authors explicit ordered t
     if (pipette === -1) for (const c of [1,2,3,4]) await check(c); else await check(pipette + 1);
     await change('Pipettes to load', String(pipette)); await change('Tip size', '200'); await toggle('Force new tip');
     await append('source_load_tips'); await append('move'); await append('lower'); await append('aspirate'); await append('lift');
-    await change('Block', '2'); await well('G8'); await append('move'); await append('lower'); await append('dispense'); await append('lift');
+    await change('Station', '2'); await well('G8'); await append('move'); await append('lower'); await append('dispense'); await append('lift');
     await act(async () => (host.querySelector('[aria-label="Copy step 1 to editor"]') as HTMLButtonElement).click());
     expect((host.querySelector('[aria-label="Pipettes to load"]') as HTMLSelectElement).value).toBe(String(pipette));
     await click('Run ordered steps');

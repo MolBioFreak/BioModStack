@@ -98,6 +98,8 @@ it('reserves a single click only while its HTTP submission is in flight', async 
     });
     await render();
     await act(async () => { button().click(); button().click(); await Promise.resolve(); });
+    // WebCrypto runs off-thread; a microtask alone does not settle identity preparation.
+    await act(async () => { await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(1)); });
     expect(api.post).toHaveBeenCalledTimes(1);
     expect(button().disabled).toBe(true);
     await act(async () => { release(); await Promise.resolve(); }); await tick();
@@ -159,7 +161,7 @@ it('shows a failed child error outside collapsed details', async () => {
     await render(); await act(async () => button().click()); await tick();
     job.execution.runtime_state.workflow.child_command_ids = ['child-1'];
     await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs'] }); }); await tick();
-    expect([...host.querySelectorAll('[role=alert]')].some(el => !el.closest('details') && el.textContent?.includes('Gripper pickup refused'))).toBe(true);
+    await vi.waitFor(() => expect([...host.querySelectorAll('[role=alert]')].some(el => !el.closest('details') && el.textContent?.includes('Gripper pickup refused'))).toBe(true));
 });
 it.each([undefined, 409, 502])('keeps the original identity after a failed response (%s) without disabling new actions', async status => {
     vi.mocked(api.post).mockRejectedValue(Object.assign(new Error('lost response'), { response: status ? { status } : undefined }));

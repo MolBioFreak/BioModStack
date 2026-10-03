@@ -421,6 +421,7 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
     const real = await importOriginal<typeof import('../../src/lib/bioxpClient')>();
     return ({
     bioXpDeckRecoveryResolution: real.bioXpDeckRecoveryResolution,
+    useBioXpOperatorUpdates: () => ({ data: undefined, isLoading: false, isError: false }),
     useBioXpWorkflowJobs: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
     useBioXpWorkflowJob: () => ({ data: undefined, isError: false }),
     useSubmitBioXpProtocol: () => nativeMetadataMode.protocols ? real.useSubmitBioXpProtocol() : ({ isPending: false, mutateAsync: vi.fn() }),
@@ -2092,9 +2093,15 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         let calls = 0;
         let terminal = false;
+        let sequence = 0;
         vi.mocked(api.get).mockReset(); vi.mocked(api.post).mockReset();
         vi.mocked(api.get).mockImplementation(async (url) => {
             if (url === "/api/bioxp/calibration-settings") return { data: emptyCalibration };
+            if (url === '/api/bioxp/operator-controls/updates') {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                return { data: { schema_version: 'bioxp.operator_updates.v1', source_instance_id: 'mounted-feed', ownership_generation: 1,
+                    next_after_sequence: ++sequence, pose_sequence: 0, changed_command_ids: ['deck-command-mounted-1'], active_command_ids: terminal ? [] : ['deck-command-mounted-1'], has_more: false, reset: false, pose: null } };
+            }
             expect(url).toContain('/api/bioxp/operator-controls/v2/receipts/deck-command-mounted-1');
             calls++;
             if (calls === 2) throw new Error('temporary receipt failure');
@@ -2443,9 +2450,15 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         let payload = unresolved;
         let fail = false;
         let calls = 0;
+        let sequence = 0;
         vi.mocked(api.get).mockReset(); vi.mocked(api.post).mockReset();
         vi.mocked(api.get).mockImplementation(async url => {
             if (url === "/api/bioxp/calibration-settings") return { data: emptyCalibration };
+            if (url === '/api/bioxp/operator-controls/updates') {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                return { data: { schema_version: 'bioxp.operator_updates.v1', source_instance_id: 'mounted-feed', ownership_generation: 1,
+                    next_after_sequence: ++sequence, pose_sequence: 0, changed_command_ids: [resolved.command_id], active_command_ids: [], has_more: false, reset: false, pose: null } };
+            }
             expect(url).toContain(encodeURIComponent(resolved.command_id)); calls++;
             if (fail) throw new Error('receipt unavailable');
             return { data: structuredClone(payload) };
@@ -3756,7 +3769,7 @@ describe('Well pipetting cockpit integration', () => {
             await act(async () => (container.querySelector('#control-tab-pipettes') as HTMLButtonElement).click());
             const panel = container.querySelector('[aria-label="Well pipetting"]')!;
             expect(panel).not.toBeNull();
-            for (const [name, value] of [['Block', '4'], ['Move Z position', '1']]) {
+            for (const [name, value] of [['Station', '4'], ['Move Z position', '1']]) {
                 await act(async () => {
                     const select = panel.querySelector(`[aria-label="${name}"]`) as HTMLSelectElement;
                     select.value = value; select.dispatchEvent(new Event('change', { bubbles: true }));
