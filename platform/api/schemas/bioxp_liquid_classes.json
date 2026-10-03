@@ -1,0 +1,4456 @@
+{
+  "schema": "bms.bioxp-liquid-class-source-catalog.v1-draft",
+  "status": "documentary starter entries; not the deployed BMS import schema or executable pump commands",
+  "scope": "original ADP, not ADP Detect; source variants are exact points, not universal ranges",
+  "defaulting_policy": "Only unspecified applicable fields inherit defined Water values for the exact matching context; record before Run and in method log without an extra gate. An absent source value remains absent. No unsupported operation becomes applied by substitution.",
+  "selection_policy": "explicit tip/filter/mode/volume/context variant; no interpolation or scaling implied",
+  "sources": [
+    {
+      "id": "P",
+      "local_path": "/home/dalab/.hermes/profiles/fresh/cache/scratch/adp-pipetting.pdf",
+      "title": "Pipetting with the ADP",
+      "document_number": "399156",
+      "revision": "V1.0",
+      "publication_date": "04-2016",
+      "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+      "sha256": "b388baedcb9adae4322e1efcf2e13cbfdfdf55d494bc1ce6104b9b13f8a61626",
+      "reviewed_physical_pdf_pages": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        9
+      ],
+      "generation": "original ADP"
+    },
+    {
+      "id": "S",
+      "local_path": "/home/dalab/.hermes/profiles/fresh/cache/scratch/adp-pressure-streaming.pdf",
+      "title": "ADP and Pressure Streaming",
+      "document_number": "399155",
+      "revision": "V1.0",
+      "publication_date": "04-2016",
+      "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_ADP_and_Pressure_Streaming_399155_V1-0.pdf",
+      "sha256": "d8a11e662277f2a8dbd927d6637d43c2903a88a7aec0b86bbfdc7fedc0b60c5c",
+      "reviewed_physical_pdf_pages": [
+        2,
+        3
+      ],
+      "generation": "original ADP"
+    },
+    {
+      "id": "L",
+      "local_path": "/home/dalab/.hermes/profiles/fresh/cache/scratch/adp-liquid-level.pdf",
+      "title": "ADP and Liquid-Level Detection",
+      "document_number": "399094",
+      "revision": "V1.0",
+      "publication_date": "03-2016",
+      "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_ADP_and_Liquid-Level_Detection_399094_V1-0.pdf",
+      "sha256": "508a53036e1d86afd5933d13ae35682c39ed75983aeaf78296c0aa508e58def4",
+      "reviewed_physical_pdf_pages": [
+        2,
+        3
+      ],
+      "generation": "original ADP"
+    },
+    {
+      "id": "D",
+      "local_path": "/home/dalab/.hermes/profiles/fresh/cache/scratch/adp-detect-brochure.pdf",
+      "title": "Cavro ADP Detect",
+      "document_number": "402753",
+      "revision": "V1.0",
+      "publication_date": "12-2023",
+      "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/BR_Cavro_Air_Displacement_Pipettor_Detect_402753.pdf",
+      "sha256": "ec0bbf57197f32caaf181c64d0375920890bf01638b498f5c4fb99149f3fbc62",
+      "reviewed_physical_pdf_pages": [
+        3,
+        4,
+        5
+      ],
+      "generation": "ADP Detect"
+    }
+  ],
+  "publisher_pipetting_download": {
+    "url": "https://api-prod.shop.tecan.com/medias/QG-Pipetting-with-the-ADP-399156-V1-0.pdf?context=bWFzdGVyfGRvY3VtZW50c3wxMzE2MzM4fGFwcGxpY2F0aW9uL3BkZnxhR1JoTDJnNE9DODRPREUzT0RFME5UWTRPVGt3TDFGSFgxQnBjR1YwZEdsdVoxOTNhWFJvWDNSb1pWOUJSRkJmTXprNU1UVTJYMVl4TFRBdWNHUm18NDFjNDY4ZmUxYTU4Zjc1MjM0YjY5NDc2NDNkNmI0ZDdkM2ExZTY1NjI5MjE1NmZlZGQwODdmNTA4ODM5NzFiNQ&attachment=true",
+    "bytes": 1316338,
+    "sha256": "b388baedcb9adae4322e1efcf2e13cbfdfdf55d494bc1ce6104b9b13f8a61626"
+  },
+  "source_notes": {
+    "p8-segmented": {
+      "text": "Some dispenses have been split into “First Dispense” and “Final Dispense” to maximize pipetting performance.",
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 8,
+        "table": "TEST CONDITIONS"
+      }
+    },
+    "p7-method": {
+      "text": "Aspirate blowout volume of air; aspirate corrected volume of sample; aspirate carry volume of air; zero balance; dispense carry, sample and blowout volumes and record mass. Clean DiTi with each dispense, 12 data points per value; two successive runs with the same ADP. ADP on Cavro Omni Robot; LiHa unfiltered tips; Mettler-Toledo balance 0.01 mg resolution with evaporation trap; temperature 21–25°C (uncontrolled).",
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 7,
+        "table": "Test setup; Test method; RESULTS"
+      }
+    },
+    "p8-limitations": {
+      "text": "These data were collected under controlled conditions as a guideline for pump module performance. Pump performance is only one element of system level liquid handling results. Always handle sample liquids with appropriate care. DMSO is extremely hygroscopic, limit exposure to atmosphere.",
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 8,
+        "table": "Note below TEST CONDITIONS"
+      }
+    },
+    "p8-accuracy": {
+      "text": "Point Accuracy (A) is deviation of each data point from the average of the group; maximum value for each data set is presented. A = |xavg − xi| / xavg * 100%; CV = standard deviation / average. This is not mean delivery bias relative to the requested target.",
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 8,
+        "table": "Point Accuracy and Precision definitions"
+      }
+    },
+    "p6-method": {
+      "text": "Aspirate 10 μl blowout air, corrected sample volume, then 2 μl carry air. Dispense carry, sample and blowout. Gravimetric samples ≥20 μl; colorimetric samples <20 μl. All dispenses non-contact except 1 μl. 1 μl contact dispense includes 4.575 μl conditioning volume. Artel MVS colorimetric system is additional to the balance setup.",
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "Test setup; Test method"
+      }
+    },
+    "p6-replication": {
+      "text": "Each data point is the average value for 5 pumps, with 12 data points per pump per dispense volume. The separate 100 multi row and its multi-dispense footnote are excluded from these single-dispense records.",
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "Text above RESULTS; multi-dispense footnote"
+      }
+    }
+  },
+  "null_convention": "null means not reported or printed dash as explicitly tagged; a printed dash is preserved and never converted to numeric zero. No numeric zero occurs in page 8 recipe cells.",
+  "classes": [
+    {
+      "id": "tecan-original-adp-water",
+      "revision": 1,
+      "label": "DI water",
+      "status": "source-backed starter, not BioXP-qualified",
+      "single_dispense_variants": [
+        {
+          "id": "water-t1000-1000ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Water",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "DI Water"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 1000,
+          "commanded_corrected_aspiration_ul": 1031.25,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 125,
+          "blowout_leading_air_gap_ul": 40,
+          "carry_trailing_air_gap_ul": 5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 881.25,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 150,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Water",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 1000,
+            "Blowout Volume (μl)": 40,
+            "Aspirate Speed (μl/sec)": 125,
+            "Corrected Volume (μl)": 1031.25,
+            "Carry Volume (μl)": 5,
+            "First Dispense Volume (μl)": 881.25,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 150,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "DI Water",
+            "Run 1 Accuracy (A) percent": 0.1,
+            "Run 1 Precision (CV) percent": 0.08,
+            "Run 2 Accuracy (A) percent": 0.06,
+            "Run 2 Precision (CV) percent": 0.04,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-1000ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "water-t1000-100ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Water",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "DI Water"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 100,
+          "commanded_corrected_aspiration_ul": 107.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 100,
+          "blowout_leading_air_gap_ul": 20,
+          "carry_trailing_air_gap_ul": 5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 107.5,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Water",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 100,
+            "Blowout Volume (μl)": 20,
+            "Aspirate Speed (μl/sec)": 100,
+            "Corrected Volume (μl)": 107.5,
+            "Carry Volume (μl)": 5,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 107.5,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "DI Water",
+            "Run 1 Accuracy (A) percent": 0.29,
+            "Run 1 Precision (CV) percent": 0.14,
+            "Run 2 Accuracy (A) percent": 0.23,
+            "Run 2 Precision (CV) percent": 0.11,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-100ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "water-t1000-10ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Water",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "DI Water"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 10,
+          "commanded_corrected_aspiration_ul": 13,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 100,
+          "blowout_leading_air_gap_ul": 25,
+          "carry_trailing_air_gap_ul": 2.5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 13,
+              "speed_ul_s": 500,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Water",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 10,
+            "Blowout Volume (μl)": 25,
+            "Aspirate Speed (μl/sec)": 100,
+            "Corrected Volume (μl)": 13,
+            "Carry Volume (μl)": 2.5,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 13,
+            "Final Dispense Speed (μl/sec)": 500
+          },
+          "source_dash_columns": [
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "DI Water",
+            "Run 1 Accuracy (A) percent": 1.75,
+            "Run 1 Precision (CV) percent": 0.66,
+            "Run 2 Accuracy (A) percent": 1.3,
+            "Run 2 Precision (CV) percent": 0.87,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-10ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "water-t200-200ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Water",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "DI Water"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 200,
+          "commanded_corrected_aspiration_ul": 207.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 40,
+          "carry_trailing_air_gap_ul": 5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 182.5,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Water",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 200,
+            "Blowout Volume (μl)": 40,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 207.5,
+            "Carry Volume (μl)": 5,
+            "First Dispense Volume (μl)": 182.5,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "DI Water",
+            "Run 1 Accuracy (A) percent": 0.05,
+            "Run 1 Precision (CV) percent": 0.03,
+            "Run 2 Accuracy (A) percent": 0.06,
+            "Run 2 Precision (CV) percent": 0.03,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-200ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "water-t200-20ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Water",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "DI Water"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 20,
+          "commanded_corrected_aspiration_ul": 22.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 20,
+          "carry_trailing_air_gap_ul": 1.25,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 22.5,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Water",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 20,
+            "Blowout Volume (μl)": 20,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 22.5,
+            "Carry Volume (μl)": 1.25,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 22.5,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "DI Water",
+            "Run 1 Accuracy (A) percent": 0.52,
+            "Run 1 Precision (CV) percent": 0.26,
+            "Run 2 Accuracy (A) percent": 0.2,
+            "Run 2 Precision (CV) percent": 0.12,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-20ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "water-t200-5ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Water",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "DI Water"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 5,
+          "commanded_corrected_aspiration_ul": 6.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 25,
+          "carry_trailing_air_gap_ul": 2,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 6.5,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Water",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 5,
+            "Blowout Volume (μl)": 25,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 6.5,
+            "Carry Volume (μl)": 2,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 6.5,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "DI Water",
+            "Run 1 Accuracy (A) percent": 0.54,
+            "Run 1 Precision (CV) percent": 0.4,
+            "Run 2 Accuracy (A) percent": 0.8,
+            "Run 2 Precision (CV) percent": 0.39,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-5ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        }
+      ],
+      "multi_dispense_variants": [
+        {
+          "source": "P",
+          "page": 9,
+          "source_column_index": 1,
+          "source_column_heading": "6x20ul",
+          "tip_size_without_filter_ul": 200,
+          "excess_volume_ul": 30,
+          "dispense_volume_ul": 20,
+          "number_of_dispenses": 6,
+          "number_back_to_source": 1,
+          "conditioning_volume_ul": 20,
+          "retract_distance_mm": 5,
+          "aspiration_top_speed_ul_s": 50,
+          "dispense_top_speed_ul_s": 450,
+          "start_speed_ul_s": 25,
+          "cutoff_speed_ul_s": 200,
+          "reaspiration_volume_ul": 3,
+          "aspiration_delay_ms": 400,
+          "slope_n1": 20,
+          "slope_n2": 10,
+          "cv_percent": 1.22,
+          "target_cv_percent": 3,
+          "accuracy_percent": -1.55,
+          "id": "water-multi-p9-column-1",
+          "mode": "multi-dispense",
+          "liquid": "DI water",
+          "tip_filter_type": "unfiltered",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "source": "P",
+          "page": 9,
+          "source_column_index": 2,
+          "source_column_heading": "8x20ul",
+          "tip_size_without_filter_ul": 1000,
+          "excess_volume_ul": 70,
+          "dispense_volume_ul": 20,
+          "number_of_dispenses": 8,
+          "number_back_to_source": 1,
+          "conditioning_volume_ul": 20,
+          "retract_distance_mm": 20,
+          "aspiration_top_speed_ul_s": 50,
+          "dispense_top_speed_ul_s": 600,
+          "start_speed_ul_s": 25,
+          "cutoff_speed_ul_s": 200,
+          "reaspiration_volume_ul": 0.5,
+          "aspiration_delay_ms": 400,
+          "slope_n1": 20,
+          "slope_n2": 40,
+          "cv_percent": 2.96,
+          "target_cv_percent": 3,
+          "accuracy_percent": 0.66,
+          "id": "water-multi-p9-column-2",
+          "mode": "multi-dispense",
+          "liquid": "DI water",
+          "tip_filter_type": "unfiltered",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "source": "P",
+          "page": 9,
+          "source_column_index": 3,
+          "source_column_heading": "8x20ul",
+          "tip_size_without_filter_ul": 200,
+          "excess_volume_ul": 20,
+          "dispense_volume_ul": 20,
+          "number_of_dispenses": 8,
+          "number_back_to_source": 1,
+          "conditioning_volume_ul": 20,
+          "retract_distance_mm": 20,
+          "aspiration_top_speed_ul_s": 50,
+          "dispense_top_speed_ul_s": 450,
+          "start_speed_ul_s": 25,
+          "cutoff_speed_ul_s": 200,
+          "reaspiration_volume_ul": 3,
+          "aspiration_delay_ms": 400,
+          "slope_n1": 20,
+          "slope_n2": 10,
+          "cv_percent": 1.49,
+          "target_cv_percent": 3,
+          "accuracy_percent": -0.93,
+          "id": "water-multi-p9-column-3",
+          "mode": "multi-dispense",
+          "liquid": "DI water",
+          "tip_filter_type": "unfiltered",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "source": "P",
+          "page": 9,
+          "source_column_index": 4,
+          "source_column_heading": "6x15ul",
+          "tip_size_without_filter_ul": 200,
+          "excess_volume_ul": 60,
+          "dispense_volume_ul": 15,
+          "number_of_dispenses": 6,
+          "number_back_to_source": 2,
+          "conditioning_volume_ul": 15,
+          "retract_distance_mm": 20,
+          "aspiration_top_speed_ul_s": 50,
+          "dispense_top_speed_ul_s": 450,
+          "start_speed_ul_s": 25,
+          "cutoff_speed_ul_s": 200,
+          "reaspiration_volume_ul": 2.75,
+          "aspiration_delay_ms": 400,
+          "slope_n1": 20,
+          "slope_n2": 10,
+          "cv_percent": 1.23,
+          "target_cv_percent": 1.5,
+          "accuracy_percent": -0.87,
+          "id": "water-multi-p9-column-4",
+          "mode": "multi-dispense",
+          "liquid": "DI water",
+          "tip_filter_type": "unfiltered",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "source": "P",
+          "page": 9,
+          "source_column_index": 5,
+          "source_column_heading": "2x15ul",
+          "tip_size_without_filter_ul": 200,
+          "excess_volume_ul": 60,
+          "dispense_volume_ul": 15,
+          "number_of_dispenses": 2,
+          "number_back_to_source": 2,
+          "conditioning_volume_ul": 15,
+          "retract_distance_mm": 20,
+          "aspiration_top_speed_ul_s": 50,
+          "dispense_top_speed_ul_s": 450,
+          "start_speed_ul_s": 25,
+          "cutoff_speed_ul_s": 200,
+          "reaspiration_volume_ul": 2.75,
+          "aspiration_delay_ms": 400,
+          "slope_n1": 20,
+          "slope_n2": 10,
+          "cv_percent": 1.41,
+          "target_cv_percent": 1.5,
+          "accuracy_percent": -0.56,
+          "id": "water-multi-p9-column-5",
+          "mode": "multi-dispense",
+          "liquid": "DI water",
+          "tip_filter_type": "unfiltered",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "source": "P",
+          "page": 9,
+          "source_column_index": 6,
+          "source_column_heading": "5x10ul",
+          "tip_size_without_filter_ul": 200,
+          "excess_volume_ul": 60,
+          "dispense_volume_ul": 10,
+          "number_of_dispenses": 5,
+          "number_back_to_source": 2,
+          "conditioning_volume_ul": 10,
+          "retract_distance_mm": 20,
+          "aspiration_top_speed_ul_s": 50,
+          "dispense_top_speed_ul_s": 450,
+          "start_speed_ul_s": 25,
+          "cutoff_speed_ul_s": 200,
+          "reaspiration_volume_ul": 2.6,
+          "aspiration_delay_ms": 400,
+          "slope_n1": 20,
+          "slope_n2": 10,
+          "cv_percent": 4.43,
+          "target_cv_percent": 5,
+          "accuracy_percent": 0.04,
+          "id": "water-multi-p9-column-6",
+          "mode": "multi-dispense",
+          "liquid": "DI water",
+          "tip_filter_type": "unfiltered",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "source": "P",
+          "page": 9,
+          "source_column_index": 7,
+          "source_column_heading": "8x10ul",
+          "tip_size_without_filter_ul": 200,
+          "excess_volume_ul": 60,
+          "dispense_volume_ul": 10,
+          "number_of_dispenses": 8,
+          "number_back_to_source": 2,
+          "conditioning_volume_ul": 10,
+          "retract_distance_mm": 20,
+          "aspiration_top_speed_ul_s": 50,
+          "dispense_top_speed_ul_s": 450,
+          "start_speed_ul_s": 25,
+          "cutoff_speed_ul_s": 200,
+          "reaspiration_volume_ul": 2.75,
+          "aspiration_delay_ms": 400,
+          "slope_n1": 20,
+          "slope_n2": 10,
+          "cv_percent": 4.8,
+          "target_cv_percent": 5,
+          "accuracy_percent": 0.97,
+          "id": "water-multi-p9-column-7",
+          "mode": "multi-dispense",
+          "liquid": "DI water",
+          "tip_filter_type": "unfiltered",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "source": "P",
+          "page": 9,
+          "source_column_index": 8,
+          "source_column_heading": "8x25ul",
+          "tip_size_without_filter_ul": 1000,
+          "excess_volume_ul": 60,
+          "dispense_volume_ul": 25,
+          "number_of_dispenses": 8,
+          "number_back_to_source": 1,
+          "conditioning_volume_ul": 25,
+          "retract_distance_mm": 20,
+          "aspiration_top_speed_ul_s": 50,
+          "dispense_top_speed_ul_s": 600,
+          "start_speed_ul_s": 25,
+          "cutoff_speed_ul_s": 200,
+          "reaspiration_volume_ul": 0.5,
+          "aspiration_delay_ms": 400,
+          "slope_n1": 20,
+          "slope_n2": 40,
+          "cv_percent": 2.27,
+          "target_cv_percent": 4,
+          "accuracy_percent": 1.84,
+          "id": "water-multi-p9-column-8",
+          "mode": "multi-dispense",
+          "liquid": "DI water",
+          "tip_filter_type": "unfiltered",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "source": "P",
+          "page": 9,
+          "source_column_index": 9,
+          "source_column_heading": "8*50ul",
+          "tip_size_without_filter_ul": 1000,
+          "excess_volume_ul": 60,
+          "dispense_volume_ul": 50,
+          "number_of_dispenses": 8,
+          "number_back_to_source": 1,
+          "conditioning_volume_ul": 50,
+          "retract_distance_mm": 20,
+          "aspiration_top_speed_ul_s": 50,
+          "dispense_top_speed_ul_s": 600,
+          "start_speed_ul_s": 25,
+          "cutoff_speed_ul_s": 200,
+          "reaspiration_volume_ul": 0.5,
+          "aspiration_delay_ms": 400,
+          "slope_n1": 20,
+          "slope_n2": 40,
+          "cv_percent": 0.87,
+          "target_cv_percent": 3,
+          "accuracy_percent": -1.59,
+          "id": "water-multi-p9-column-9",
+          "mode": "multi-dispense",
+          "liquid": "DI water",
+          "tip_filter_type": "unfiltered",
+          "application_status": "source-only; not mapped or executed by this review"
+        }
+      ]
+    },
+    {
+      "id": "tecan-original-adp-glycerol",
+      "revision": 1,
+      "label": "50% glycerol",
+      "status": "source-backed starter, not BioXP-qualified",
+      "single_dispense_variants": [
+        {
+          "id": "glycerol-t1000-1000ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Glycerol",
+            "concentration_percent": 50,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "50% Glycerol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 1000,
+          "commanded_corrected_aspiration_ul": 1028.75,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 100,
+          "blowout_leading_air_gap_ul": 45,
+          "carry_trailing_air_gap_ul": 25,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 1003.75,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Glycerol",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 1000,
+            "Blowout Volume (μl)": 45,
+            "Aspirate Speed (μl/sec)": 100,
+            "Corrected Volume (μl)": 1028.75,
+            "Carry Volume (μl)": 25,
+            "First Dispense Volume (μl)": 1003.75,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "50% Glycerol",
+            "Run 1 Accuracy (A) percent": 0.14,
+            "Run 1 Precision (CV) percent": 0.09,
+            "Run 2 Accuracy (A) percent": 0.26,
+            "Run 2 Precision (CV) percent": 0.09,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-1000ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "glycerol-t1000-100ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Glycerol",
+            "concentration_percent": 50,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "50% Glycerol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 100,
+          "commanded_corrected_aspiration_ul": 107.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 100,
+          "blowout_leading_air_gap_ul": 25,
+          "carry_trailing_air_gap_ul": 25,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 82.5,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Glycerol",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 100,
+            "Blowout Volume (μl)": 25,
+            "Aspirate Speed (μl/sec)": 100,
+            "Corrected Volume (μl)": 107.5,
+            "Carry Volume (μl)": 25,
+            "First Dispense Volume (μl)": 82.5,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "50% Glycerol",
+            "Run 1 Accuracy (A) percent": 0.38,
+            "Run 1 Precision (CV) percent": 0.17,
+            "Run 2 Accuracy (A) percent": 0.5,
+            "Run 2 Precision (CV) percent": 0.25,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-100ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "glycerol-t1000-10ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Glycerol",
+            "concentration_percent": 50,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "50% Glycerol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 10,
+          "commanded_corrected_aspiration_ul": 12.75,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 100,
+          "blowout_leading_air_gap_ul": 10,
+          "carry_trailing_air_gap_ul": null,
+          "carry_evidence": "source_dash_not_numeric_zero",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 12.75,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Glycerol",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 10,
+            "Blowout Volume (μl)": 10,
+            "Aspirate Speed (μl/sec)": 100,
+            "Corrected Volume (μl)": 12.75,
+            "Carry Volume (μl)": null,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 12.75,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [
+            "Carry Volume (μl)",
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "50% Glycerol",
+            "Run 1 Accuracy (A) percent": 1.34,
+            "Run 1 Precision (CV) percent": 0.73,
+            "Run 2 Accuracy (A) percent": 1.81,
+            "Run 2 Precision (CV) percent": 1.06,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-10ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "glycerol-t200-200ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Glycerol",
+            "concentration_percent": 50,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "50% Glycerol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 200,
+          "commanded_corrected_aspiration_ul": 203.75,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 40,
+          "carry_trailing_air_gap_ul": 5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 178.75,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Glycerol",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 200,
+            "Blowout Volume (μl)": 40,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 203.75,
+            "Carry Volume (μl)": 5,
+            "First Dispense Volume (μl)": 178.75,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "50% Glycerol",
+            "Run 1 Accuracy (A) percent": 0.15,
+            "Run 1 Precision (CV) percent": 0.08,
+            "Run 2 Accuracy (A) percent": 0.09,
+            "Run 2 Precision (CV) percent": 0.06,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-200ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "glycerol-t200-20ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Glycerol",
+            "concentration_percent": 50,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "50% Glycerol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 20,
+          "commanded_corrected_aspiration_ul": 22.75,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 20,
+          "carry_trailing_air_gap_ul": 1.25,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 12.75,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 10,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Glycerol",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 20,
+            "Blowout Volume (μl)": 20,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 22.75,
+            "Carry Volume (μl)": 1.25,
+            "First Dispense Volume (μl)": 12.75,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 10,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "50% Glycerol",
+            "Run 1 Accuracy (A) percent": 0.82,
+            "Run 1 Precision (CV) percent": 0.34,
+            "Run 2 Accuracy (A) percent": 1.25,
+            "Run 2 Precision (CV) percent": 0.71,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-20ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "glycerol-t200-5ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Glycerol",
+            "concentration_percent": 50,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "50% Glycerol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 5,
+          "commanded_corrected_aspiration_ul": 6.25,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 12.5,
+          "carry_trailing_air_gap_ul": null,
+          "carry_evidence": "source_dash_not_numeric_zero",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 6.25,
+              "speed_ul_s": 500,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Glycerol",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 5,
+            "Blowout Volume (μl)": 12.5,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 6.25,
+            "Carry Volume (μl)": null,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 6.25,
+            "Final Dispense Speed (μl/sec)": 500
+          },
+          "source_dash_columns": [
+            "Carry Volume (μl)",
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "50% Glycerol",
+            "Run 1 Accuracy (A) percent": 5.77,
+            "Run 1 Precision (CV) percent": 3.04,
+            "Run 2 Accuracy (A) percent": 5.3,
+            "Run 2 Precision (CV) percent": 2.49,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-5ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        }
+      ],
+      "multi_dispense_variants": []
+    },
+    {
+      "id": "tecan-original-adp-dmso",
+      "revision": 1,
+      "label": "100% DMSO",
+      "status": "source-backed starter, not BioXP-qualified",
+      "single_dispense_variants": [
+        {
+          "id": "dmso-t1000-1000ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "DMSO",
+            "concentration_percent": 100,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "100% DMSO"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 1000,
+          "commanded_corrected_aspiration_ul": 1017.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 100,
+          "blowout_leading_air_gap_ul": 45,
+          "carry_trailing_air_gap_ul": 25,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 992.5,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "DMSO",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 1000,
+            "Blowout Volume (μl)": 45,
+            "Aspirate Speed (μl/sec)": 100,
+            "Corrected Volume (μl)": 1017.5,
+            "Carry Volume (μl)": 25,
+            "First Dispense Volume (μl)": 992.5,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "100% DMSO",
+            "Run 1 Accuracy (A) percent": 0.26,
+            "Run 1 Precision (CV) percent": 0.15,
+            "Run 2 Accuracy (A) percent": 0.19,
+            "Run 2 Precision (CV) percent": 0.11,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-1000ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "dmso-t1000-100ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "DMSO",
+            "concentration_percent": 100,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "100% DMSO"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 100,
+          "commanded_corrected_aspiration_ul": 102.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 100,
+          "blowout_leading_air_gap_ul": 25,
+          "carry_trailing_air_gap_ul": 25,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 77.5,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "DMSO",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 100,
+            "Blowout Volume (μl)": 25,
+            "Aspirate Speed (μl/sec)": 100,
+            "Corrected Volume (μl)": 102.5,
+            "Carry Volume (μl)": 25,
+            "First Dispense Volume (μl)": 77.5,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "100% DMSO",
+            "Run 1 Accuracy (A) percent": 0.35,
+            "Run 1 Precision (CV) percent": 0.18,
+            "Run 2 Accuracy (A) percent": 0.69,
+            "Run 2 Precision (CV) percent": 0.36,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-100ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "dmso-t1000-10ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "DMSO",
+            "concentration_percent": 100,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "100% DMSO"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 10,
+          "commanded_corrected_aspiration_ul": 10.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 100,
+          "blowout_leading_air_gap_ul": 10,
+          "carry_trailing_air_gap_ul": null,
+          "carry_evidence": "source_dash_not_numeric_zero",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 10.5,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "DMSO",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 10,
+            "Blowout Volume (μl)": 10,
+            "Aspirate Speed (μl/sec)": 100,
+            "Corrected Volume (μl)": 10.5,
+            "Carry Volume (μl)": null,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 10.5,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [
+            "Carry Volume (μl)",
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "100% DMSO",
+            "Run 1 Accuracy (A) percent": 1.79,
+            "Run 1 Precision (CV) percent": 1.09,
+            "Run 2 Accuracy (A) percent": 1.99,
+            "Run 2 Precision (CV) percent": 1.17,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-10ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "dmso-t200-200ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "DMSO",
+            "concentration_percent": 100,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "100% DMSO"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 200,
+          "commanded_corrected_aspiration_ul": 203.75,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 40,
+          "carry_trailing_air_gap_ul": 5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 178.75,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "DMSO",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 200,
+            "Blowout Volume (μl)": 40,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 203.75,
+            "Carry Volume (μl)": 5,
+            "First Dispense Volume (μl)": 178.75,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "100% DMSO",
+            "Run 1 Accuracy (A) percent": 0.15,
+            "Run 1 Precision (CV) percent": 0.1,
+            "Run 2 Accuracy (A) percent": 0.09,
+            "Run 2 Precision (CV) percent": 0.05,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-200ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "dmso-t200-20ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "DMSO",
+            "concentration_percent": 100,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "100% DMSO"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 20,
+          "commanded_corrected_aspiration_ul": 20.75,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 20,
+          "carry_trailing_air_gap_ul": 1.25,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 10.75,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 10,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "DMSO",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 20,
+            "Blowout Volume (μl)": 20,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 20.75,
+            "Carry Volume (μl)": 1.25,
+            "First Dispense Volume (μl)": 10.75,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 10,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "100% DMSO",
+            "Run 1 Accuracy (A) percent": 0.7,
+            "Run 1 Precision (CV) percent": 0.34,
+            "Run 2 Accuracy (A) percent": 0.71,
+            "Run 2 Precision (CV) percent": 0.43,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-20ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "dmso-t200-5ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "DMSO",
+            "concentration_percent": 100,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "reported_on_page_7",
+            "source_page_7_label": "100% DMSO"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 5,
+          "commanded_corrected_aspiration_ul": 5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 12.5,
+          "carry_trailing_air_gap_ul": null,
+          "carry_evidence": "source_dash_not_numeric_zero",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 5,
+              "speed_ul_s": 500,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "DMSO",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 5,
+            "Blowout Volume (μl)": 12.5,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 5,
+            "Carry Volume (μl)": null,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 5,
+            "Final Dispense Speed (μl/sec)": 500
+          },
+          "source_dash_columns": [
+            "Carry Volume (μl)",
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "100% DMSO",
+            "Run 1 Accuracy (A) percent": 1.92,
+            "Run 1 Precision (CV) percent": 0.96,
+            "Run 2 Accuracy (A) percent": 1.68,
+            "Run 2 Precision (CV) percent": 1.15,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-5ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        }
+      ],
+      "multi_dispense_variants": []
+    },
+    {
+      "id": "tecan-original-adp-ethanol",
+      "revision": 1,
+      "label": "Ethanol — concentration unspecified",
+      "status": "source-backed starter, not BioXP-qualified",
+      "single_dispense_variants": [
+        {
+          "id": "ethanol-t1000-1000ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Ethanol",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "Ethanol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 1000,
+          "commanded_corrected_aspiration_ul": 1045,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 100,
+          "blowout_leading_air_gap_ul": 40,
+          "carry_trailing_air_gap_ul": 5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 1020,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Ethanol",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 1000,
+            "Blowout Volume (μl)": 40,
+            "Aspirate Speed (μl/sec)": 100,
+            "Corrected Volume (μl)": 1045,
+            "Carry Volume (μl)": 5,
+            "First Dispense Volume (μl)": 1020,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "Ethanol",
+            "Run 1 Accuracy (A) percent": 0.27,
+            "Run 1 Precision (CV) percent": 0.14,
+            "Run 2 Accuracy (A) percent": 0.1,
+            "Run 2 Precision (CV) percent": 0.05,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-1000ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "ethanol-t1000-100ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Ethanol",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "Ethanol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 100,
+          "commanded_corrected_aspiration_ul": 112.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 100,
+          "blowout_leading_air_gap_ul": 20,
+          "carry_trailing_air_gap_ul": 5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 87.5,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Ethanol",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 100,
+            "Blowout Volume (μl)": 20,
+            "Aspirate Speed (μl/sec)": 100,
+            "Corrected Volume (μl)": 112.5,
+            "Carry Volume (μl)": 5,
+            "First Dispense Volume (μl)": 87.5,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "Ethanol",
+            "Run 1 Accuracy (A) percent": 0.34,
+            "Run 1 Precision (CV) percent": 0.16,
+            "Run 2 Accuracy (A) percent": 0.42,
+            "Run 2 Precision (CV) percent": 0.24,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-100ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "ethanol-t1000-10ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Ethanol",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "Ethanol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 10,
+          "commanded_corrected_aspiration_ul": 13,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 100,
+          "blowout_leading_air_gap_ul": 25,
+          "carry_trailing_air_gap_ul": 2.5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 13,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Ethanol",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 10,
+            "Blowout Volume (μl)": 25,
+            "Aspirate Speed (μl/sec)": 100,
+            "Corrected Volume (μl)": 13,
+            "Carry Volume (μl)": 2.5,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 13,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "Ethanol",
+            "Run 1 Accuracy (A) percent": 1.71,
+            "Run 1 Precision (CV) percent": 0.81,
+            "Run 2 Accuracy (A) percent": 1.78,
+            "Run 2 Precision (CV) percent": 1.28,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-10ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "ethanol-t200-200ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Ethanol",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "Ethanol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 200,
+          "commanded_corrected_aspiration_ul": 221.25,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 40,
+          "carry_trailing_air_gap_ul": 5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 196.25,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Ethanol",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 200,
+            "Blowout Volume (μl)": 40,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 221.25,
+            "Carry Volume (μl)": 5,
+            "First Dispense Volume (μl)": 196.25,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "Ethanol",
+            "Run 1 Accuracy (A) percent": 0.16,
+            "Run 1 Precision (CV) percent": 0.12,
+            "Run 2 Accuracy (A) percent": 0.26,
+            "Run 2 Precision (CV) percent": 0.12,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-200ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "ethanol-t200-20ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Ethanol",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "Ethanol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 20,
+          "commanded_corrected_aspiration_ul": 24.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 35,
+          "carry_trailing_air_gap_ul": 1.25,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 24.5,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Ethanol",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 20,
+            "Blowout Volume (μl)": 35,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 24.5,
+            "Carry Volume (μl)": 1.25,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 24.5,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "Ethanol",
+            "Run 1 Accuracy (A) percent": 0.33,
+            "Run 1 Precision (CV) percent": 0.19,
+            "Run 2 Accuracy (A) percent": 0.59,
+            "Run 2 Precision (CV) percent": 0.33,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-20ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "ethanol-t200-5ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "Ethanol",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "Ethanol"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 5,
+          "commanded_corrected_aspiration_ul": 5.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 25,
+          "carry_trailing_air_gap_ul": 2,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 5.5,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "Ethanol",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 5,
+            "Blowout Volume (μl)": 25,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 5.5,
+            "Carry Volume (μl)": 2,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 5.5,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "Ethanol",
+            "Run 1 Accuracy (A) percent": 0.41,
+            "Run 1 Precision (CV) percent": 0.4,
+            "Run 2 Accuracy (A) percent": 0.66,
+            "Run 2 Precision (CV) percent": 0.34,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-5ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        }
+      ],
+      "multi_dispense_variants": []
+    },
+    {
+      "id": "tecan-original-adp-bsa",
+      "revision": 1,
+      "label": "Calf BSA — concentration unspecified",
+      "status": "source-backed starter, not BioXP-qualified",
+      "single_dispense_variants": [
+        {
+          "id": "bsa-t1000-1000ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "BSA",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "BSA (calf)"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 1000,
+          "commanded_corrected_aspiration_ul": 1038.75,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 125,
+          "blowout_leading_air_gap_ul": 40,
+          "carry_trailing_air_gap_ul": 5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 938.75,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 100,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "BSA",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 1000,
+            "Blowout Volume (μl)": 40,
+            "Aspirate Speed (μl/sec)": 125,
+            "Corrected Volume (μl)": 1038.75,
+            "Carry Volume (μl)": 5,
+            "First Dispense Volume (μl)": 938.75,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 100,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "BSA (calf)",
+            "Run 1 Accuracy (A) percent": 0.28,
+            "Run 1 Precision (CV) percent": 0.15,
+            "Run 2 Accuracy (A) percent": 0.27,
+            "Run 2 Precision (CV) percent": 0.11,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-1000ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "bsa-t1000-100ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "BSA",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "BSA (calf)"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 100,
+          "commanded_corrected_aspiration_ul": 111.25,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 125,
+          "blowout_leading_air_gap_ul": 20,
+          "carry_trailing_air_gap_ul": 5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 86.25,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "BSA",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 100,
+            "Blowout Volume (μl)": 20,
+            "Aspirate Speed (μl/sec)": 125,
+            "Corrected Volume (μl)": 111.25,
+            "Carry Volume (μl)": 5,
+            "First Dispense Volume (μl)": 86.25,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "BSA (calf)",
+            "Run 1 Accuracy (A) percent": 0.54,
+            "Run 1 Precision (CV) percent": 0.25,
+            "Run 2 Accuracy (A) percent": 0.59,
+            "Run 2 Precision (CV) percent": 0.28,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-100ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "bsa-t1000-10ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "BSA",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "BSA (calf)"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 1000,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 10,
+          "commanded_corrected_aspiration_ul": 13,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 125,
+          "blowout_leading_air_gap_ul": 10,
+          "carry_trailing_air_gap_ul": null,
+          "carry_evidence": "source_dash_not_numeric_zero",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 13,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "BSA",
+            "DiTi Volume (μl)": 1000,
+            "Target Volume (μl)": 10,
+            "Blowout Volume (μl)": 10,
+            "Aspirate Speed (μl/sec)": 125,
+            "Corrected Volume (μl)": 13,
+            "Carry Volume (μl)": null,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 13,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [
+            "Carry Volume (μl)",
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "BSA (calf)",
+            "Run 1 Accuracy (A) percent": 1.77,
+            "Run 1 Precision (CV) percent": 1.06,
+            "Run 2 Accuracy (A) percent": 3.56,
+            "Run 2 Precision (CV) percent": 2.28,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t1000-10ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "bsa-t200-200ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "BSA",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "BSA (calf)"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 200,
+          "commanded_corrected_aspiration_ul": 212.5,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 40,
+          "carry_trailing_air_gap_ul": 5,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": 187.5,
+              "speed_ul_s": 375,
+              "evidence": "reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 25,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "BSA",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 200,
+            "Blowout Volume (μl)": 40,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 212.5,
+            "Carry Volume (μl)": 5,
+            "First Dispense Volume (μl)": 187.5,
+            "First Dispense Speed (μl/sec)": 375,
+            "Final Dispense Volume (μl)": 25,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [],
+          "performance": {
+            "source_liquid_label": "BSA (calf)",
+            "Run 1 Accuracy (A) percent": 0.25,
+            "Run 1 Precision (CV) percent": 0.15,
+            "Run 2 Accuracy (A) percent": 0.36,
+            "Run 2 Precision (CV) percent": 0.17,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-200ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "bsa-t200-20ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "BSA",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "BSA (calf)"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 20,
+          "commanded_corrected_aspiration_ul": 23.75,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 20,
+          "carry_trailing_air_gap_ul": 1.25,
+          "carry_evidence": "reported",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 23.75,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "BSA",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 20,
+            "Blowout Volume (μl)": 20,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 23.75,
+            "Carry Volume (μl)": 1.25,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 23.75,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "BSA (calf)",
+            "Run 1 Accuracy (A) percent": 0.69,
+            "Run 1 Precision (CV) percent": 0.45,
+            "Run 2 Accuracy (A) percent": 0.69,
+            "Run 2 Precision (CV) percent": 0.42,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-20ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        },
+        {
+          "id": "bsa-t200-5ul-single-p8",
+          "recipe_kind": "published_starting_point_not_BioXP_qualified",
+          "mode": "single-dispense",
+          "contact_mode": null,
+          "contact_mode_evidence": "not_reported_for_this_table",
+          "liquid": {
+            "name": "BSA",
+            "concentration_percent": null,
+            "concentration_basis": null,
+            "concentration_basis_evidence": "not_reported",
+            "concentration_evidence": "not_reported",
+            "source_page_7_label": "BSA (calf)"
+          },
+          "tip": {
+            "family": "Tecan LiHa disposable tips (DiTis)",
+            "nominal_capacity_ul": 200,
+            "filter_type": "unfiltered",
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "Test setup"
+            }
+          },
+          "target_volume_ul": 5,
+          "commanded_corrected_aspiration_ul": 6.75,
+          "corrected_volume_meaning": "Commanded air displacement for sample aspiration, not a measured aspirated liquid volume; air gaps are separate.",
+          "aspirate_speed_ul_s": 50,
+          "blowout_leading_air_gap_ul": 10,
+          "carry_trailing_air_gap_ul": null,
+          "carry_evidence": "source_dash_not_numeric_zero",
+          "dispense_segments": [
+            {
+              "source_heading": "First Dispense",
+              "volume_ul": null,
+              "speed_ul_s": null,
+              "evidence": "source_dash_no_first_segment_reported"
+            },
+            {
+              "source_heading": "Final Dispense",
+              "volume_ul": 6.75,
+              "speed_ul_s": 875,
+              "evidence": "reported"
+            }
+          ],
+          "unreported_parameters": {
+            "aspiration_delay_ms": null,
+            "dispense_delay_ms": null,
+            "air_gap_aspiration_speed_ul_s": null,
+            "separate_carry_dispense_speed_ul_s": null,
+            "separate_blowout_dispense_speed_ul_s": null,
+            "conditioning_volume_ul": null,
+            "immersion_depth_mm": null,
+            "retract_speed_mm_s": null,
+            "slope": null,
+            "cutoff_speed_ul_s": null
+          },
+          "unreported_parameters_evidence": "not_reported_for_this_recipe; generic guidance on other pages is not substituted",
+          "source_cells": {
+            "Sample Liquid": "BSA",
+            "DiTi Volume (μl)": 200,
+            "Target Volume (μl)": 5,
+            "Blowout Volume (μl)": 10,
+            "Aspirate Speed (μl/sec)": 50,
+            "Corrected Volume (μl)": 6.75,
+            "Carry Volume (μl)": null,
+            "First Dispense Volume (μl)": null,
+            "First Dispense Speed (μl/sec)": null,
+            "Final Dispense Volume (μl)": 6.75,
+            "Final Dispense Speed (μl/sec)": 875
+          },
+          "source_dash_columns": [
+            "Carry Volume (μl)",
+            "First Dispense Volume (μl)",
+            "First Dispense Speed (μl/sec)"
+          ],
+          "performance": {
+            "source_liquid_label": "BSA (calf)",
+            "Run 1 Accuracy (A) percent": 1.55,
+            "Run 1 Precision (CV) percent": 0.93,
+            "Run 2 Accuracy (A) percent": 1.87,
+            "Run 2 Precision (CV) percent": 0.92,
+            "citation": {
+              "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+              "pdf_page": 7,
+              "table": "RESULTS"
+            }
+          },
+          "citation": {
+            "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+            "pdf_page": 8,
+            "table": "TEST CONDITIONS"
+          },
+          "source_note_ids": [
+            "p8-segmented",
+            "p7-method",
+            "p8-limitations",
+            "p8-accuracy"
+          ],
+          "water_fallback_variant_id": "water-t200-5ul-single-p8",
+          "application_status": "source-only; not mapped or executed by this review"
+        }
+      ],
+      "multi_dispense_variants": []
+    }
+  ],
+  "supplementary_water_performance_points": [
+    {
+      "id": "water-t10-1ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 10,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 1,
+      "commanded_corrected_aspiration_ul": 1.175,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "contact",
+      "conditioning_volume_ul": 4.575,
+      "conditioning_evidence": "reported_1ul_contact_dispense",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 10,
+        "Target Volume (μl)": 1,
+        "Corrected Volume (μl)": 1.175,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 5
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 6
+        },
+        "Accuracy Result (A) percent": 3.45,
+        "Precision Result (CV) percent": 1.62
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    },
+    {
+      "id": "water-t10-5ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 10,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 5,
+      "commanded_corrected_aspiration_ul": 6,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "non-contact",
+      "conditioning_volume_ul": null,
+      "conditioning_evidence": "not_reported",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 10,
+        "Target Volume (μl)": 5,
+        "Corrected Volume (μl)": 6,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 2.5
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 1.5
+        },
+        "Accuracy Result (A) percent": 0.67,
+        "Precision Result (CV) percent": 0.38
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    },
+    {
+      "id": "water-t10-10ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 10,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 10,
+      "commanded_corrected_aspiration_ul": 11.25,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "non-contact",
+      "conditioning_volume_ul": null,
+      "conditioning_evidence": "not_reported",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 10,
+        "Target Volume (μl)": 10,
+        "Corrected Volume (μl)": 11.25,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 1.5
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 1
+        },
+        "Accuracy Result (A) percent": 1.02,
+        "Precision Result (CV) percent": 0.51
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    },
+    {
+      "id": "water-t50-5ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 50,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 5,
+      "commanded_corrected_aspiration_ul": 6.25,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "non-contact",
+      "conditioning_volume_ul": null,
+      "conditioning_evidence": "not_reported",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 50,
+        "Target Volume (μl)": 5,
+        "Corrected Volume (μl)": 6.25,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 5
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 2
+        },
+        "Accuracy Result (A) percent": 0.96,
+        "Precision Result (CV) percent": 0.48
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    },
+    {
+      "id": "water-t50-10ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 50,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 10,
+      "commanded_corrected_aspiration_ul": 11.375,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "non-contact",
+      "conditioning_volume_ul": null,
+      "conditioning_evidence": "not_reported",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 50,
+        "Target Volume (μl)": 10,
+        "Corrected Volume (μl)": 11.375,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 3
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 1
+        },
+        "Accuracy Result (A) percent": 1.3,
+        "Precision Result (CV) percent": 0.6
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    },
+    {
+      "id": "water-t50-50ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 50,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 50,
+      "commanded_corrected_aspiration_ul": 53,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "non-contact",
+      "conditioning_volume_ul": null,
+      "conditioning_evidence": "not_reported",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 50,
+        "Target Volume (μl)": 50,
+        "Corrected Volume (μl)": 53,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 2
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 0.75
+        },
+        "Accuracy Result (A) percent": 0.14,
+        "Precision Result (CV) percent": 0.07
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    },
+    {
+      "id": "water-t200-10ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 200,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 10,
+      "commanded_corrected_aspiration_ul": 11.375,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "non-contact",
+      "conditioning_volume_ul": null,
+      "conditioning_evidence": "not_reported",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 200,
+        "Target Volume (μl)": 10,
+        "Corrected Volume (μl)": 11.375,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 5
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 2
+        },
+        "Accuracy Result (A) percent": 1,
+        "Precision Result (CV) percent": 0.48
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    },
+    {
+      "id": "water-t200-50ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 200,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 50,
+      "commanded_corrected_aspiration_ul": 53,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "non-contact",
+      "conditioning_volume_ul": null,
+      "conditioning_evidence": "not_reported",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 200,
+        "Target Volume (μl)": 50,
+        "Corrected Volume (μl)": 53,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 2
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 0.75
+        },
+        "Accuracy Result (A) percent": 0.16,
+        "Precision Result (CV) percent": 0.09
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    },
+    {
+      "id": "water-t200-200ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 200,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 200,
+      "commanded_corrected_aspiration_ul": 205,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "non-contact",
+      "conditioning_volume_ul": null,
+      "conditioning_evidence": "not_reported",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 200,
+        "Target Volume (μl)": 200,
+        "Corrected Volume (μl)": 205,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 1
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 0.75
+        },
+        "Accuracy Result (A) percent": 0.06,
+        "Precision Result (CV) percent": 0.04
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    },
+    {
+      "id": "water-t1000-10ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 1000,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 10,
+      "commanded_corrected_aspiration_ul": 12.125,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "non-contact",
+      "conditioning_volume_ul": null,
+      "conditioning_evidence": "not_reported",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 1000,
+        "Target Volume (μl)": 10,
+        "Corrected Volume (μl)": 12.125,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 7.5
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 3.5
+        },
+        "Accuracy Result (A) percent": 1.37,
+        "Precision Result (CV) percent": 0.84
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    },
+    {
+      "id": "water-t1000-100ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 1000,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 100,
+      "commanded_corrected_aspiration_ul": 105.5,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "non-contact",
+      "conditioning_volume_ul": null,
+      "conditioning_evidence": "not_reported",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 1000,
+        "Target Volume (μl)": 100,
+        "Corrected Volume (μl)": 105.5,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 2
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 0.75
+        },
+        "Accuracy Result (A) percent": 0.12,
+        "Precision Result (CV) percent": 0.06
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    },
+    {
+      "id": "water-t1000-1000ul-single-p6",
+      "recipe_kind": "published_starting_point_incomplete_recipe_not_BioXP_qualified",
+      "mode": "single-dispense",
+      "liquid": "DI water",
+      "tip": {
+        "family": "Tecan LiHa disposable tips (DiTis)",
+        "nominal_capacity_ul": 1000,
+        "filter_type": "unfiltered"
+      },
+      "target_volume_ul": 1000,
+      "commanded_corrected_aspiration_ul": 1025,
+      "blowout_leading_air_gap_ul": 10,
+      "carry_trailing_air_gap_ul": 2,
+      "contact_mode": "non-contact",
+      "conditioning_volume_ul": null,
+      "conditioning_evidence": "not_reported",
+      "aspirate_speed_ul_s": null,
+      "dispense_speed_ul_s": null,
+      "aspiration_delay_ms": null,
+      "dispense_delay_ms": null,
+      "dispense_segments": null,
+      "missing_recipe_evidence": "not_reported; no T10 recipe in page 8 TEST CONDITIONS; do not borrow T200/T1000 speeds",
+      "source_cells": {
+        "DiTi Volume (μl)": 1000,
+        "Target Volume (μl)": 1000,
+        "Corrected Volume (μl)": 1025,
+        "Accuracy Requirement (A)": {
+          "operator": "≤",
+          "percent": 1
+        },
+        "Precision Requirement (CV)": {
+          "operator": "≤",
+          "percent": 0.75
+        },
+        "Accuracy Result (A) percent": 0.12,
+        "Precision Result (CV) percent": 0.06
+      },
+      "citation": {
+        "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf",
+        "pdf_page": 6,
+        "table": "RESULTS; Test method"
+      },
+      "source_note_ids": [
+        "p6-method",
+        "p6-replication",
+        "p8-accuracy"
+      ]
+    }
+  ],
+  "multi_semantics_and_omissions": {
+    "source": "P",
+    "page": 9,
+    "evidence_kind": "representative measured DI-water recipes, not universal defaults",
+    "source_row_mapping": {
+      "tip_size_without_filter_ul": "Tip size w/o filter",
+      "excess_volume_ul": "Excess Vol.",
+      "dispense_volume_ul": "Dispense Vol.",
+      "number_of_dispenses": "Number of Dispenses",
+      "number_back_to_source": "Number Back to Source",
+      "conditioning_volume_ul": "Conditioning Vol.",
+      "retract_distance_mm": "Retract Distance",
+      "aspiration_top_speed_ul_s": "Aspiration Top Speed",
+      "dispense_top_speed_ul_s": "Dispense Top Speed",
+      "start_speed_ul_s": "Start Speed",
+      "cutoff_speed_ul_s": "Cut off Speed",
+      "reaspiration_volume_ul": "Re-Aspiration Vol.",
+      "aspiration_delay_ms": "Aspiration Delay",
+      "slope_n1": "Slope n1-n2: first value",
+      "slope_n2": "Slope n1-n2: second value",
+      "cv_percent": "CV",
+      "target_cv_percent": "Target CV",
+      "accuracy_percent": "Accuracy"
+    },
+    "recipe_count": 9,
+    "not_provided_by_p9": [
+      "excess destination",
+      "total corrected aspiration volume",
+      "leading air gap",
+      "trailing air gap",
+      "air gap speed",
+      "dispense-to-reaspiration pause",
+      "LLD threshold/persistence",
+      "retract speed",
+      "search Z speed",
+      "submerge depth",
+      "start/cutoff phase-specific controller mapping",
+      "slope units or allowed firmware bounds",
+      "hard maximum aliquot count",
+      "T10 or T50 multi-dispense recipe",
+      "clot or air-classification thresholds"
+    ],
+    "semantics": {
+      "conditioning_volume": "Printed per recipe separately from number back to source; do not collapse the two source rows.",
+      "conditioning_destination": "source, as indicated by Number Back to Source and P p3",
+      "excess_volume": "Reserved liquid for final sample cutoff; not an extra destination sample.",
+      "aggregate_aspiration_formula": "Not supplied as a p9 row; no computed formula or aggregate has been represented as source text.",
+      "performance_scope": "Source measurements on ADP/Omni, not BioXP validation. Signed p9 Accuracy retained without importing the different p6 point-accuracy definition.",
+      "source_column_selection": "No automatic preferred recipe selected for either tip size."
+    }
+  },
+  "original_lld_and_stream_defaults": {
+    "source": "S",
+    "page": 3,
+    "command_form": "p[n1],[n2]",
+    "selector_n1_has_default": false,
+    "evidence_kind": "published parameter defaults and valid values, not live firmware query",
+    "parameter_count": 9,
+    "parameters": [
+      {
+        "source": "S",
+        "page": 3,
+        "selector_n1": 0,
+        "published_valid_n2": {
+          "min": 1,
+          "max": 1000
+        },
+        "published_default_n2": 15,
+        "unit": "ADC counts",
+        "unit_evidence": "explicit",
+        "meaning": "pLLD differential pressure threshold"
+      },
+      {
+        "source": "S",
+        "page": 3,
+        "selector_n1": 1,
+        "published_valid_n2": {
+          "min": 1,
+          "max": 100
+        },
+        "published_default_n2": 5,
+        "unit": "ms",
+        "unit_evidence": "explicit",
+        "meaning": "Time pressure must remain above p0 threshold to declare pLLD"
+      },
+      {
+        "source": "S",
+        "page": 3,
+        "selector_n1": 2,
+        "published_valid_n2": {
+          "min": 0,
+          "max": 44000
+        },
+        "published_default_n2": 0,
+        "unit": "plunger increments",
+        "unit_evidence": "contextual; unit not explicitly printed in this row",
+        "meaning": "Absolute plunger position before B liquid-level detection"
+      },
+      {
+        "source": "S",
+        "page": 3,
+        "selector_n1": 3,
+        "published_valid_n2": {
+          "min": 100,
+          "max": 1000
+        },
+        "published_default_n2": 150,
+        "unit": "increments/s",
+        "unit_evidence": "explicit",
+        "meaning": "Plunger speed during liquid-level detection"
+      },
+      {
+        "source": "S",
+        "page": 3,
+        "selector_n1": 4,
+        "published_valid_n2": {
+          "min": 500,
+          "max": 44000
+        },
+        "published_default_n2": 44000,
+        "unit": "plunger increments",
+        "unit_evidence": "explicit",
+        "meaning": "Maximum relative plunger movement during pLLD"
+      },
+      {
+        "source": "S",
+        "page": 3,
+        "selector_n1": 5,
+        "published_valid_n2": {
+          "min": 0,
+          "max": 1
+        },
+        "published_default_n2": 0,
+        "unit": "enum",
+        "unit_evidence": "explicit",
+        "meaning": "pLLD move direction: 0 aspirate; 1 dispense"
+      },
+      {
+        "source": "S",
+        "page": 3,
+        "selector_n1": 6,
+        "published_valid_n2": {
+          "min": 1,
+          "max": 20
+        },
+        "published_default_n2": 20,
+        "unit": "ms",
+        "unit_evidence": "explicit",
+        "meaning": "Pressure data sampling interval"
+      },
+      {
+        "source": "S",
+        "page": 3,
+        "selector_n1": 7,
+        "published_valid_n2": {
+          "min": 1,
+          "max": 3
+        },
+        "published_default_n2": 3,
+        "unit": "samples/message",
+        "unit_evidence": "explicit",
+        "meaning": "CAN samples per pressure message; RS-485 fixed at one"
+      },
+      {
+        "source": "S",
+        "page": 3,
+        "selector_n1": 8,
+        "published_valid_n2": {
+          "min": 1,
+          "max": 100
+        },
+        "published_default_n2": 50,
+        "unit": "ms",
+        "unit_evidence": "explicit",
+        "meaning": "Maximum interval allowed between cLLD and pLLD in hybrid mode"
+      }
+    ],
+    "transport_exception": {
+      "selector_n1": 7,
+      "transport": "RS-485",
+      "fixed_samples_per_message": 1,
+      "changeable": false
+    },
+    "threshold_persistence_semantics": {
+      "sources": [
+        {
+          "source": "L",
+          "page": 3
+        },
+        {
+          "source": "S",
+          "page": 3
+        }
+      ],
+      "threshold_selector": 0,
+      "persistence_selector": 1,
+      "meaning": "p0 pressure change starts the p1 timer; pressure must stay above threshold for at least p1 duration before pLLD declaration."
+    }
+  },
+  "separate_published_guidance": [
+    {
+      "source": "P",
+      "page": 5,
+      "name": "dispense_to_reaspiration_pause",
+      "unit": "ms",
+      "operator": ">=",
+      "value": 20,
+      "evidence_kind": "recommendation",
+      "meaning": "Between dispense and re-aspiration, for liquid equilibration and prevention of drive errors; not post-aspiration delay."
+    },
+    {
+      "source": "P",
+      "page": 5,
+      "name": "reaspiration_optimization_initial_volume",
+      "unit": "ul",
+      "value": 0,
+      "evidence_kind": "optimization starting point",
+      "meaning": "Increase incrementally if a droplet remains; does not override p9 recipes."
+    },
+    {
+      "source": "P",
+      "page": 5,
+      "name": "slope_generic_default",
+      "source_command": "L20,20",
+      "n1": 20,
+      "n2": 20,
+      "unit": "not established",
+      "bounds": "not established",
+      "evidence_kind": "published default"
+    },
+    {
+      "source": "P",
+      "page": 5,
+      "name": "slope_water_like_200ul",
+      "source_command": "L20,10",
+      "n1": 20,
+      "n2": 10,
+      "evidence_kind": "recommendation"
+    },
+    {
+      "source": "P",
+      "page": 5,
+      "name": "slope_water_like_1000ul",
+      "source_command": "L20,40",
+      "n1": 20,
+      "n2": 40,
+      "evidence_kind": "recommendation"
+    },
+    {
+      "source": "P",
+      "page": 3,
+      "name": "multi_dispense_count_for_best_results",
+      "operator": "<=",
+      "value": 8,
+      "unit": "dispenses",
+      "evidence_kind": "recommendation, not firmware maximum"
+    },
+    {
+      "source": "P",
+      "page": 3,
+      "name": "excess_volume_illustration",
+      "min": 30,
+      "max": 70,
+      "unit": "ul",
+      "evidence_kind": "illustration, not firmware range; p9 includes 20 ul"
+    },
+    {
+      "source": "P",
+      "page": 3,
+      "name": "conditioning_volume_illustration",
+      "value": "same as one sample volume",
+      "evidence_kind": "illustration; p9 separately specifies return count"
+    },
+    {
+      "source": "P",
+      "page": 2,
+      "name": "submerge_depth",
+      "operator": "<=",
+      "value": 2,
+      "unit": "mm",
+      "owner": "coordinated robot Z",
+      "evidence_kind": "recommendation, not exact scalar default"
+    },
+    {
+      "source": "P",
+      "page": 2,
+      "name": "retract_speed",
+      "value": 20,
+      "unit": "mm/s",
+      "owner": "robot Z",
+      "evidence_kind": "recommended sequence value"
+    },
+    {
+      "source": "L",
+      "page": 2,
+      "name": "lld_search_speed",
+      "value": 20,
+      "unit": "mm/s",
+      "owner": "robot Z",
+      "evidence_kind": "recommendation"
+    },
+    {
+      "source": "L",
+      "page": 3,
+      "name": "lld_completion_digital_output",
+      "pin": 6,
+      "connector": "10-pin flat flexible cable",
+      "level": "High",
+      "duration_ms": 10,
+      "evidence_kind": "published default output; not pLLD persistence"
+    },
+    {
+      "source": "P",
+      "page": 4,
+      "name": "multi_aspiration_speed_example",
+      "min": 100,
+      "max": 200,
+      "unit": "ul/s",
+      "evidence_kind": "example water scale, not firmware range; p9 uses 50 ul/s"
+    },
+    {
+      "source": "P",
+      "page": 4,
+      "name": "multi_dispense_speed_example",
+      "min": 400,
+      "max": 600,
+      "unit": "ul/s",
+      "evidence_kind": "example water scale, not firmware range"
+    },
+    {
+      "source": "P",
+      "page": 4,
+      "name": "aspiration_delay_example",
+      "min": 200,
+      "max": 1000,
+      "unit": "ms",
+      "evidence_kind": "example water scale"
+    },
+    {
+      "source": "P",
+      "page": 4,
+      "name": "air_gap_speed_example",
+      "min": 30,
+      "max": 70,
+      "unit": "ul/s",
+      "evidence_kind": "example water scale"
+    },
+    {
+      "source": "P",
+      "page": 4,
+      "name": "cutoff_speed_single_default",
+      "value": 50,
+      "unit": "ul/s",
+      "evidence_kind": "published table default"
+    },
+    {
+      "source": "P",
+      "page": 4,
+      "name": "cutoff_speed_multi_example",
+      "value": 200,
+      "unit": "ul/s",
+      "evidence_kind": "example water scale"
+    }
+  ],
+  "pressure_stream_transport": {
+    "source": "S",
+    "page": 3,
+    "rs485": {
+      "stream_enable_configuration": "U80",
+      "stream_disable_configuration_default": "U81",
+      "oem_protocol_configuration": "U82",
+      "dt_protocol_configuration_default": "U83",
+      "second_bus_condition": "DIP switch 7 Down",
+      "reset_semantics": "not established here"
+    },
+    "can": {
+      "disabled_at_power_up": true,
+      "enable_example": "o0,1R",
+      "disable_example": "o0,0R",
+      "event_frame_type": 5,
+      "sample_event_descriptors": {
+        "0x31": 1,
+        "0x32": 2,
+        "0x33": 3
+      }
+    },
+    "interpretation": "Configuration source strings only, not commands executed by this review; raw pressure does not itself constitute a clot/air verdict."
+  },
+  "unsupported_or_unestablished_source_semantics": {
+    "T10_multi_defaults": "not supplied by P p9; do not extrapolate",
+    "T50_multi_defaults": "not supplied by P p9; do not extrapolate",
+    "T10_T50_single_evidence": {
+      "source": "P",
+      "page": 6,
+      "evidence_kind": "DI-water single-dispense performance and corrected-volume points, not full multi defaults",
+      "tip_10ul_target_points_ul": [
+        1,
+        5,
+        10
+      ],
+      "tip_50ul_target_points_ul": [
+        5,
+        10,
+        50
+      ]
+    },
+    "T10_T50_firmware_min_max_ranges": "not established by tested points",
+    "slope_firmware_ranges": "not established",
+    "original_adp_water_clot_air_classifier_thresholds": "not established",
+    "water_selection_implements_unsupported_operation": false
+  },
+  "generation_boundary": {
+    "original_pressure_source": {
+      "source": "S",
+      "page": 2,
+      "description": "Customer monitoring and processing of raw pressure; host classifier needed for derived verdicts."
+    },
+    "newer_detect_source": {
+      "source": "D",
+      "pages": [
+        3,
+        5
+      ],
+      "material_number": "30183817",
+      "description": "Self-contained aspiration classifier in pump firmware; software changes needed to use new features; not attributed to original ADP.",
+      "algorithm_speed_qualification_ul_s": {
+        "operator": ">",
+        "value": 60
+      },
+      "qualification_is_original_pump_minimum_speed": false
+    }
+  },
+  "counts": {
+    "basic_class_families": 5,
+    "single_dispense_recipes": 30,
+    "multi_dispense_recipes": 9,
+    "supplementary_water_performance_points": 12,
+    "lld_and_stream_parameters": 9
+  }
+}
