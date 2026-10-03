@@ -26,6 +26,8 @@ SETTINGS = {'type': 'object', 'additionalProperties': False, 'properties': {
        for name, spec in EXPORT['capabilities']['pressure_parameters'].items()},
     'slope': {'type': 'array', 'items': {'type': 'integer'}, 'minItems': 2, 'maxItems': 2},
     'pressure_streaming': {'type': 'boolean'},
+    'backlash_increments': {'type': 'integer', 'minimum': EXPORT['capabilities']['backlash_increments']['minimum'],
+        'maximum': EXPORT['capabilities']['backlash_increments']['maximum']},
     'start_speed_ul_s': {'type': 'number', 'minimum': 2.5, 'maximum': 100, 'multipleOf': 0.001},
     'cutoff_speed_ul_s': {'type': 'number', 'minimum': 2.5, 'maximum': 200, 'multipleOf': 0.001},
 }}

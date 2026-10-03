@@ -1,6 +1,6 @@
 # Final native contract pin
 
-`schemas/bioxp_method_native.json` is the actual `bioxp.protocols.method_contract.method_contract()` export from committed native source `960caec98518fb84e96dcd339bb514128f52d188`, plus the ApplicationRequest/Recipe/capability envelopes used by the compiler. Regenerate with `tests/export_bioxp_method_native_schema.py` in the pinned native environment, under its offline guard.
+`schemas/bioxp_method_native.json` is the actual `bioxp.protocols.method_contract.method_contract()` export from committed native source `610e396dcbdedd6ba31ccd8fd3d697096dcedec2`, plus the ApplicationRequest/Recipe/capability envelopes used by the compiler. Regenerate with `tests/export_bioxp_method_native_schema.py` in the pinned native environment, under its offline guard.
 
 Ordinary action parameter schemas now come from that producer. Conditional numeric fields are coerced from raw draft spellings using the selected native `if/then` schema, including attainment tolerance/timeout. Raw persisted drafts remain unchanged.
 

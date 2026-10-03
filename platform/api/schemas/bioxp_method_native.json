@@ -1,5 +1,5 @@
 {
-  "source_commit": "960caec98518fb84e96dcd339bb514128f52d188",
+  "source_commit": "610e396dcbdedd6ba31ccd8fd3d697096dcedec2",
   "application": {
     "$defs": {
       "Delay": {
@@ -1876,6 +1876,15 @@
       "controller_interaction": "actual start/cutoff temporarily limited by top speed; readback reports programmed value",
       "persistence": "working memory only; no NVRAM save emitted",
       "advisory": "30053815-C p36 discourages cutoff >100 uL/s (lost steps/overload), especially adjacent moves without >10 ms delay; 399156 p9 uses 200 uL/s. No cap or delay is inserted."
+    },
+    "backlash_increments": {
+      "wire": "KnR",
+      "minimum": 0,
+      "maximum": 500,
+      "published_default": 0,
+      "unit": "plunger increments",
+      "source": "30053815-C p38",
+      "automatically_applied": false
     },
     "existing_native_families": {
       "diagnostic_pipette": [
@@ -5078,6 +5087,15 @@
         "controller_interaction": "actual start/cutoff temporarily limited by top speed; readback reports programmed value",
         "persistence": "working memory only; no NVRAM save emitted",
         "advisory": "30053815-C p36 discourages cutoff >100 uL/s (lost steps/overload), especially adjacent moves without >10 ms delay; 399156 p9 uses 200 uL/s. No cap or delay is inserted."
+      },
+      "backlash_increments": {
+        "wire": "KnR",
+        "minimum": 0,
+        "maximum": 500,
+        "published_default": 0,
+        "unit": "plunger increments",
+        "source": "30053815-C p38",
+        "automatically_applied": false
       },
       "existing_native_families": {
         "diagnostic_pipette": [

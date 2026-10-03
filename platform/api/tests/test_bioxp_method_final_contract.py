@@ -10,7 +10,7 @@ from bioxp_method_model import method_catalog
 
 
 def test_committed_native_pin_and_registration():
-    assert EXPORT['source_commit'] == '960caec98518fb84e96dcd339bb514128f52d188'
+    assert EXPORT['source_commit'] == '610e396dcbdedd6ba31ccd8fd3d697096dcedec2'
     assert not any('classifier' in k for k in EXPORT['capabilities'])
     for name, schema in EXPORT['method_contract']['action_params'].items():
         assert all(CONTRACTS[name][key] == value for key, value in schema.items())
@@ -76,3 +76,15 @@ async def test_export_final_immutable_snapshots(store, tmp_path):
     assert reply.status_code == 202, reply.text
     recovery.append(transport.calls[-1][1]['json_data']['document'])
     source.with_name('recovery-documents.json').write_text(json.dumps(recovery, indent=2) + '\n')
+
+
+def test_backlash_setting_reaches_native_application():
+    from bioxp_method_compiler import compile_method
+    step = {'step_id': 'k', 'type': 'action', 'action': 'pipette_settings',
+            'inputs': {'channels': [0], 'timeout_ms': 1000, 'values': {'backlash_increments': 12}}}
+    result = compile_method({'method': {'schema': 'bms.bioxp-method.v1', 'steps': [step]}})
+    assert result['issues'] == [] or all(i['category'] == 'advisory' for i in result['issues'])
+    action = result['document']['stages'][0]['actions'][0]
+    assert action['params']['application']['operations'][0]['values'] == {'backlash_increments': 12}
+    step['inputs']['values']['backlash_increments'] = 501
+    assert compile_method({'method': {'schema': 'bms.bioxp-method.v1', 'steps': [step]}})['document'] is None

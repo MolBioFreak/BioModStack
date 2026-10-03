@@ -26,6 +26,7 @@ export const liquidClassEditorSchema: Schema = object({
         dispense_segments: array(object({ source_heading: text, volume_ul: rawNumber('Commanded displacement µL'), speed_ul_s: rawNumber('µL/s'), evidence: text })),
         dispense_top_speed_ul_s: rawNumber('Multi dispense top speed µL/s'), start_speed_ul_s: rawNumber('Start speed µL/s; application requires actual controller mapping'), cutoff_speed_ul_s: rawNumber('Cutoff speed µL/s; application requires actual controller mapping'),
         slope_n1: { type: ['integer', 'null'] }, slope_n2: { type: ['integer', 'null'] },
+        backlash_increments: { type: ['integer', 'null'], minimum: 0, maximum: 500, description: 'Plunger backlash increments added after each aspiration (Cavro K, 0–500)' },
         number_of_dispenses: { type: ['integer', 'null'] }, dispense_volume_ul: rawNumber('Per-aliquot µL'),
         conditioning_volume_ul: rawNumber('Conditioning liquid µL, separate from air'), number_back_to_source: { type: ['integer', 'null'] },
         excess_volume_ul: rawNumber('Reserved excess liquid µL'), excess_destination: text,
