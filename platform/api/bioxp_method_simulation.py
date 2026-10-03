@@ -52,7 +52,7 @@ def plan_tip_policy(occurrences: list[dict], policy: str | dict) -> dict:
         return {"occurrences": deepcopy(occurrences), "issues": [
             {"code": "unknown_tip_policy", "category": "advisory", "message": str(mode)}]}
     result, active, prior = [], False, None
-    liquid_actions = {"transfer", "distribute", "consolidate", "aspirate", "dispense", "mix"}
+    liquid_actions = {"transfer", "distribute", "consolidate", "aspirate", "dispense", "mix", "liquid_recipe", "cavro_application"}
 
     def generated(action, occurrence):
         return {"occurrence_id": str(occurrence.get("occurrence_id", "")) + "/policy/" + action,
@@ -68,7 +68,8 @@ def plan_tip_policy(occurrences: list[dict], policy: str | dict) -> dict:
             inputs = occurrence.get("inputs", {})
             transfers = inputs.get("channel_transfers", [])
             if mode == "per_source":
-                key = repr([(t.get("channel"), t.get("source")) for t in transfers])
+                key = (repr([(t.get("channel"), t.get("source")) for t in transfers]) if transfers else
+                       repr([inputs.get('channels'), inputs['source']]) if 'source' in inputs else occurrence.get('occurrence_id'))
             elif mode == "per_step":
                 key = repr([occurrence.get(k) for k in ("step_id", "call_path", "loop_path")])
             else:
@@ -134,7 +135,7 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                 snapshots.append({"occurrence_id": oid, "state_delta": {}})
                 continue
             if occurrence.get("status") in {"failed", "partial", "unknown"} and action not in {
-                    "aspirate", "dispense", "transfer", "distribute", "consolidate"}:
+                    "aspirate", "dispense", "transfer", "distribute", "consolidate", "liquid_recipe", "cavro_application"}:
                 issue("partial_effects_unknown", occurrence, "Non-liquid partial state is unknown; requested pose/custody is not completion evidence.")
                 snapshots.append({"occurrence_id": oid, "state_delta": {}, "unknown_effects": True})
                 unknown_time.append(oid)
@@ -143,22 +144,31 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
             contact_offsets = {key: len(value.get("contacts", [])) for key, value in channels.items()}
             changed_other = {}
             duration = _number(inputs.get("duration_ms"))
-            if duration is not None and inputs.get("duration_semantics") == "dispatch":
+            duration_semantics = inputs.get('duration_semantics')
+            if action == 'wait' and _number(inputs.get('seconds')) is not None:
+                duration, duration_semantics = _number(inputs['seconds']) * 1000, 'dispatch'
+            elif action in {'thermal_hold', 'incubate'} and inputs.get('start') == 'dispatch' and _number(inputs.get('duration_s')) is not None:
+                duration, duration_semantics = _number(inputs['duration_s']) * 1000, 'dispatch'
+            if duration is not None and duration_semantics == "dispatch":
                 known_time += duration
             else:
                 unknown_time.append(oid)
             if action == "plate_move":
                 identity = inputs.get("labware_id")
                 if identity is not None:
-                    labware.setdefault(identity, {})["station"] = deepcopy(inputs.get("destination_station"))
+                    labware.setdefault(identity, {})["station"] = deepcopy(inputs.get("destination_station", inputs.get('target_location')))
                     changed_other["labware"] = {identity: deepcopy(labware[identity])}
             if action in {"move", "park", "pipette_position"}:
                 state["head_reference"] = deepcopy(inputs)
                 changed_other["head_reference"] = deepcopy(inputs)
-            if action in {"cover_move", "move_cover", "catch", "release"}:
-                state.setdefault("custody", {})[str(inputs.get("object_id", "unknown"))] = deepcopy(inputs)
-                changed_other["custody"] = {str(inputs.get("object_id", "unknown")): deepcopy(inputs)}
-            if action in {"thermal_start", "thermal_wait", "thermal_profile"}:
+            if '_native_head_reference' in occurrence and occurrence.get('status') not in {'failed', 'partial', 'unknown'}:
+                state['head_reference'] = deepcopy(occurrence['_native_head_reference'])
+                changed_other['head_reference'] = deepcopy(state['head_reference'])
+            if action in {"cover_move", "move_cover", "catch", "release", 'plate_catch', 'plate_release', 'plate_press', 'gripper_catch', 'gripper_release', 'gripper_press'}:
+                identity = str(inputs.get('labware_id', inputs.get('object_id', 'unknown')))
+                state.setdefault("custody", {})[identity] = {'action': action, **deepcopy(inputs)}
+                changed_other["custody"] = {identity: deepcopy(state['custody'][identity])}
+            if action in {"thermal_start", "thermal_wait", "thermal_profile", "thermal_hold", "thermal_setpoint", "chiller_setpoint", "incubate"}:
                 state.setdefault("thermal_tasks", {})[str(inputs.get("task_id", oid))] = {
                     "action": action, "inputs": deepcopy(inputs), "attainment": "unknown"}
                 changed_other["thermal_tasks"] = {str(inputs.get("task_id", oid)): deepcopy(state["thermal_tasks"][str(inputs.get("task_id", oid))])}
@@ -175,7 +185,7 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                 rows = occurrence.get("effects", [])
                 if occurrence.get("status") not in {"not_run", "skipped"}:
                     issue("partial_effects_unknown", occurrence, "Only explicitly reported effects accounted; remaining effects unknown.")
-            if action in {"aspirate", "dispense", "transfer", "distribute", "consolidate"} and not rows:
+            if action in {"aspirate", "dispense", "transfer", "distribute", "consolidate", "liquid_recipe", "cavro_application"} and not rows:
                 issue("liquid_effects_unbound", occurrence, "No explicit channel liquid effects; volume/geometry remain unknown.")
             for row in rows:
                 channel = row.get("channel")

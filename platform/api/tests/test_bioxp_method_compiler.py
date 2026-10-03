@@ -30,7 +30,7 @@ def compile(*steps, **kw):
 
 def actions(result):
     assert result['document'], result['issues']
-    return result['document']['stages'][0]['actions']
+    return [action for stage in result['document']['stages'] for action in stage['actions']]
 
 
 def test_native_emitter_equivalence_and_snapshot():
@@ -158,9 +158,9 @@ def test_native_mix_resource_limit_and_policy_not_review_alias():
     m = {'step_id': 'mix', 'type': 'action', 'action': 'mix', 'inputs': {'cycles': 1000000000}}
     assert compile(m)['issues'][0]['code'] == 'resource_limit'
     r = compile({**move(), 'on_error': 'pause_for_operator'})
-    assert r['document'] is None
-    assert 'native' in r['issues'][0]['message']
-    assert compile(move(), tip_policy='per_transfer')['document'] is None
+    assert actions(r)[0]['on_error'] == 'pause_for_operator'
+    assert actions(r)[0]['review_required'] is False
+    assert compile(move(), tip_policy='per_transfer')['document'] is not None  # no liquid needs no tips
 
 
 def test_discovery_examples_are_unbound_and_raw_roundtrip():
@@ -203,13 +203,10 @@ def test_stable_occurrence_identity_after_reorder_and_group_uniqueness():
 
 
 def test_simulation_findings_and_invalid_assumptions_are_not_gates(monkeypatch):
-    import sys
-    import types
-    module = types.ModuleType('bioxp_method_simulation')
+    import bioxp_method_simulation
     def simulate(*args):
         raise ValueError('Unknown initial fill')
-    module.simulate_method = simulate
-    monkeypatch.setitem(sys.modules, 'bioxp_method_simulation', module)
+    monkeypatch.setattr(bioxp_method_simulation, 'simulate_method', simulate)
     r = compile(move())
     assert r['document']
     assert not r['issues']

@@ -120,8 +120,19 @@ def _matches(entry: dict | None, context: dict) -> bool:
     required |= ({"aliquot_volume_ul", "sample_count"} if context.get("mode") == "multi-dispense"
                  else {"target_volume_ul"})
     declared = entry["context"]
-    return required <= declared.keys() and all(k in context and context[k] == v
-                                               for k, v in declared.items() if k != "composition")
+    def same(key, value):
+        if key not in context:
+            return False
+        if key in {'target_volume_ul', 'aliquot_volume_ul', 'sample_count'}:
+            if isinstance(value, bool) or isinstance(context[key], bool):
+                return False
+            try:
+                left, right = Decimal(str(value)), Decimal(str(context[key]))
+                return left.is_finite() and right.is_finite() and left == right
+            except (InvalidOperation, ValueError):
+                return False
+        return context[key] == value
+    return required <= declared.keys() and all(same(k, v) for k, v in declared.items() if k != "composition")
 
 
 def resolve_liquid_settings(requested: dict, *, liquid_class: dict | None = None,

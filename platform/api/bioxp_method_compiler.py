@@ -268,7 +268,7 @@ def _lower(method, dependencies, params):
                                     [{k: c[k] for k in ('step_id', 'procedure_id')} for c in calls], loops]
                         occurrence_id = 'occ-' + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
                         output.append({'occurrence_id': occurrence_id, 'step_id': node['step_id'], 'path': loc,
-                            'call_path': deepcopy(calls), 'loop_path': deepcopy(loops), 'on_error': on_error,
+                            'call_path': deepcopy(calls), 'loop_path': deepcopy(loops), 'group_path': deepcopy(scope.get('_groups', [])), 'on_error': on_error,
                             'action': node.get('action'), 'inputs': evaluate(node.get('inputs', {}), scope),
                             **({'required_capability': node['required_capability']} if 'required_capability' in node else {})})
                 elif typ == 'group':
@@ -329,7 +329,7 @@ def _lower(method, dependencies, params):
 def native_values(value, field=''):
     if isinstance(value, Quantity):
         # Native manual fields use uL, uL/s, ms and controller steps, not arbitrary units.
-        expected = 'uL' if field.endswith('_ul') else 'uL/s' if 'speed' in field else 's' if field.endswith('_ms') else 'steps' if field.endswith('_steps') else None
+        expected = 'uL' if field.endswith('_ul') else 'uL/s' if field.endswith('_ul_s') or field in ('speed', 'aspirate_speed', 'dispense_speed') else 's' if field.endswith(('_ms', '_s')) or field == 'seconds' else 'degC' if field.endswith('_c') else 'steps' if field.endswith('_steps') else None
         if expected is None or value.unit != expected:
             fail(f'No compatible native unit mapping for {field}')
         n = value.value * (1000 if field.endswith('_ms') else 1)
@@ -351,7 +351,17 @@ def emit_rows(rows):
     visible, issues = [], []
     for row in rows:
         intent = row['intent']
-        if intent.get('operation') in ('checkpoint', 'note'):
+        from bioxp_method_native import native_action
+        try:
+            direct = native_action(intent.get('operation'), {k: v for k, v in intent.items() if k != 'operation'})
+        except (ValueError, TypeError) as exc:
+            issues.append({'step_id': row['step_id'], 'message': str(exc)})
+            continue
+        if direct is not None:
+            action = deepcopy(_NATIVE['document_template']['stages'][0]['actions'][0])
+            action.update(kind=direct[0], params=direct[1], metadata={}, required_capability=row.get('required_capability'))
+            generated = [action]
+        elif intent.get('operation') in ('checkpoint', 'note'):
             if set(intent) != {'operation', 'message'} or not isinstance(intent['message'], str):
                 issues.append({'step_id': row['step_id'], 'message': 'checkpoint/note requires exactly one string message'})
                 continue
@@ -379,6 +389,35 @@ def emit_rows(rows):
     return (None if issues else document), visible, issues
 
 
+def native_cost(intent):
+    operation = intent.get('operation')
+    for field in ({'transfer': ['source', 'destination'], 'cavro_application': ['application'], 'liquid_recipe': ['recipe']}.get(operation, [])):
+        if field in intent and not isinstance(intent[field], dict):
+            fail(f'{field} must be an object')
+    if operation == 'mix':
+        return 2 * int(number(intent.get('cycles', 1)))
+    if operation == 'transfer':
+        return 8 * len(intent.get('source', {}).get('wells', []))
+    if operation == 'thermal_profile':
+        return max(1, int(number(intent.get('repeat', 1))) * len(intent.get('segments', [])))
+    if operation == 'cavro_application':
+        return max(1, len(intent.get('application', {}).get('operations', [])))
+    if operation == 'liquid_recipe':
+        recipe = intent.get('recipe', {})
+        multi = recipe.get('multi') or {}
+        count = int(number(multi.get('conditioning_back_to_source_count', 0)))
+        # Lists are already authored, but their aggregate lowering and repeated
+        # conditioning must be bounded before native allocates any operations.
+        def width(value):
+            if isinstance(value, list):
+                return len(value) + sum(width(x) for x in value)
+            if isinstance(value, dict):
+                return sum(width(v) for k, v in value.items() if k != 'liquid_settings')
+            return 0
+        return 8 + count + width(recipe) + 2 * len(multi.get('aliquots', []))
+    return 1
+
+
 def compile_method(request):
     """Return an all-or-nothing native document with addressable findings."""
     result = {'document': None, 'issues': [], 'digest': None, 'resolved': {}, 'dependencies': {},
@@ -397,22 +436,34 @@ def compile_method(request):
             params = bind(method.get('parameters', []), request.get('bindings', {}), {'param': {}, 'arg': {}}, '/method/parameters')
             result['resolved']['parameters'] = json_value(params)
             occurrences = _lower(method, dependencies, params)
+            from bioxp_method_planning import prepare_occurrences, emission_inputs, initial_state
+            # Normalize typed quantities before policy and class-field resolution.
+            for occurrence in occurrences:
+                occurrence['inputs'] = native_values(occurrence['inputs'])
+            occurrences, liquid_records, substitutions, planning_issues = prepare_occurrences(occurrences, method, dependencies)
             result['resolved']['occurrences'] = json_value(occurrences)
-            tip = method.get('tip_policy', 'manual')
-            if tip not in ('manual', None) and tip != {'mode': 'manual'}:
-                fail('Automatic tip policy needs explicit native pickup/ejection integration', '/method/tip_policy', 'native_integration_required')
+            result['resolved']['liquids'] = liquid_records
+            result['water_substitutions'] = substitutions
+            result['issues'].extend(planning_issues)
             rows = []
             for occurrence in occurrences:
-                if occurrence['on_error'] != 'stop':
-                    fail('pause_for_operator failure semantics require native binding', occurrence['path'], 'native_integration_required')
-                inputs = native_values(occurrence['inputs'])
+                inputs = emission_inputs(occurrence)
                 if not isinstance(inputs, dict):
                     fail('Action inputs must be an object', occurrence['path'])
                 intent = inputs if occurrence['action'] == 'native_intent' else {'operation': occurrence['action'], **inputs}
+                if occurrence['action'] == 'tip_pickup':
+                    if 'channels' in inputs and (inputs['channels'] != [0, 1, 2, 3] or any(type(c) is not int for c in inputs['channels'])):
+                        fail('Source pickup is a group of four, not selected independent channels', occurrence['path'])
+                    intent['operation'] = 'load_tip'
+                    intent.pop('channels', None)  # source pickup is a group of four
+                elif occurrence['action'] in ('tip_eject', 'eject_tip'):
+                    if set(inputs) != {'channels'} or inputs.get('channels') != [0, 1, 2, 3] or any(type(c) is not int for c in inputs['channels']):
+                        fail('Source eject requires exactly explicit channels [0,1,2,3]; other settings are not discarded', occurrence['path'])
+                    intent = {'operation': 'tip_eject'}
                 if occurrence['action'] != 'native_intent' and inputs.get('operation', occurrence['action']) != occurrence['action']:
                     fail('Action/operation mismatch', occurrence['path'])
                 # Bound compound expansion before the existing emitter allocates its children.
-                cost = 2 * int(number(intent.get('cycles', 1))) if intent.get('operation') == 'mix' else 8 * len(intent.get('source', {}).get('wells', [])) if intent.get('operation') == 'transfer' else 1
+                cost = native_cost(intent)
                 if cost < 0 or cost > MAX_ACTIONS:
                     fail('Native expansion exceeds resource limit', occurrence['path'], 'resource_limit')
                 row = {'step_id': occurrence['occurrence_id'], 'intent': intent}
@@ -430,7 +481,24 @@ def compile_method(request):
                 result['issues'].append({'code': 'native_representation_error', 'category': 'representation',
                     'message': issue['message'], 'path': o.get('path', '/method'), 'step_id': o.get('step_id'), 'occurrence_id': issue['step_id']})
             if document is None:
+                for record in result['resolved'].get('liquids', []):
+                    for field in record['fields'].values():
+                        field['emitted'] = {'status': 'not_emitted'}
                 return result
+            liquid_actions_by_occurrence = {}
+            for visible, action in zip(visible_rows, document['stages'][0]['actions']):
+                if action['params'].get('operation') == 'cavro_liquid_recipe':
+                    liquid_actions_by_occurrence[visible] = action
+            for record in result['resolved'].get('liquids', []):
+                action = liquid_actions_by_occurrence[record['occurrence_id']]
+                for field in record['fields'].values():
+                    emission = field['emitted']
+                    if emission.get('status') == 'emitted':
+                        actual = action['params']
+                        for key in emission['native_path'].strip('/').split('/'):
+                            actual = actual[key]
+                        emission.update(value=deepcopy(actual), native_action_id=action['action_id'])
+                action['params']['recipe'].setdefault('liquid_settings', {})['bms_resolution'] = deepcopy(record)
             for o in occurrences:
                 result['provenance'].append({k: deepcopy(o[k]) for k in ('occurrence_id', 'step_id', 'path', 'call_path', 'loop_path')})
                 result['provenance'][-1]['native_action_ids'] = []
@@ -439,15 +507,52 @@ def compile_method(request):
             for visible, action in zip(visible_rows, actions):
                 o = by_id[visible]
                 action['source_occurrence_id'] = o['occurrence_id']
-                action['metadata']['bms_method'] = {k: deepcopy(o[k]) for k in ('occurrence_id', 'step_id', 'path', 'call_path', 'loop_path')}
+                action['on_error'] = o['on_error']
+                action['metadata']['bms_method'] = {k: deepcopy(o[k]) for k in ('occurrence_id', 'step_id', 'path', 'call_path', 'loop_path', 'group_path')}
+                if 'labware_id' in o['inputs']:
+                    action['metadata']['bms_method']['labware_id'] = deepcopy(o['inputs']['labware_id'])
+                if 'generated_by' in o:
+                    action['metadata']['bms_method']['generated_by'] = deepcopy(o['generated_by'])
+                    provenance[o['occurrence_id']]['generated_by'] = deepcopy(o['generated_by'])
+                for key in ('compound_parent', 'compound_index'):
+                    if key in o:
+                        action['metadata']['bms_method'][key] = deepcopy(o[key])
+                        provenance[o['occurrence_id']][key] = deepcopy(o[key])
+                if o['action'] == 'transfer' and action['kind'] in ('pipette_aspirate', 'pipette_dispense'):
+                    effects = []
+                    for effect in o['inputs'].get('channel_transfers', []):
+                        if effect.get('pair_index', 0) == action['metadata'].get('pair_index', 0):
+                            effect = deepcopy(effect)
+                            effect.pop('destination' if action['kind'] == 'pipette_aspirate' else 'source', None)
+                            effects.append(effect)
+                    action['metadata']['bms_method']['planned_liquid_effects'] = effects
+                    action['metadata']['bms_method']['effect_phase'] = 'aspirate' if action['kind'] == 'pipette_aspirate' else 'dispense'
                 provenance[o['occurrence_id']]['native_action_ids'].append(action['action_id'])
-            content = {'compiler': VERSION, 'native_source_commit': _NATIVE['source_commit'],
+            # Consecutive structural groups retain native stage boundaries. A
+            # repeated group gets a distinct stage; no grouping reorders actions.
+            stages, previous = [], None
+            for visible, action in zip(visible_rows, actions):
+                o = by_id[visible]
+                key = [o['group_path'], o['call_path'], o['loop_path']]
+                if not stages or key != previous:
+                    stage = deepcopy(_NATIVE['document_template']['stages'][0])
+                    stage.update(stage_id=stage['stage_id'] if not stages else f'method-stage-{len(stages)}',
+                        actions=[], metadata={'bms_method': {'group_path': o['group_path'], 'call_path': o['call_path'], 'loop_path': o['loop_path']}})
+                    stages.append(stage)
+                    previous = key
+                action['stage_id'] = stages[-1]['stage_id']
+                stages[-1]['actions'].append(action)
+            document['stages'] = stages
+            from bioxp_method_native import EXPORT
+            content = {'compiler': VERSION, 'native_source_commit': EXPORT['source_commit'],
                        'method': semantic(method), 'bindings': request.get('bindings', {}),
                        'dependencies': dependencies, 'initial_state': request.get('initial_state'), 'document': document}
             result['digest'] = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
             document['protocol_id'] = 'method-' + result['digest']
             document['metadata']['bms_method'] = {'compiler': VERSION, 'digest': result['digest'],
-                'method': deepcopy(method), 'bindings': deepcopy(request.get('bindings', {})), 'dependencies': dependencies}
+                'method': deepcopy(method), 'bindings': deepcopy(request.get('bindings', {})), 'dependencies': dependencies,
+                'native_source_commit': EXPORT['source_commit'], 'resolved_liquids': deepcopy(result['resolved'].get('liquids', [])),
+                'water_substitutions': deepcopy(result['water_substitutions']), 'initial_state': deepcopy(request.get('initial_state'))}
             result['document'] = document
             try:
                 from bioxp_method_simulation import simulate_method
@@ -457,7 +562,20 @@ def compile_method(request):
                 result['simulation'] = {'status': 'unknown', 'issues': [{'code': 'simulation_integration_pending', 'category': 'advisory', 'message': 'Simulation module is not installed; no physical-state inference'}]}
             else:
                 try:
-                    result['simulation'] = simulate_method(json_value(occurrences), request.get('initial_state'))
+                    simulation_rows = deepcopy(json_value(occurrences))
+                    head, positions = {}, {}
+                    for stage in document['stages']:
+                        for action in stage['actions']:
+                            if action['kind'] == 'pipette_position':
+                                if action['params']['operation'] == 'move':
+                                    head = deepcopy(action['params'])
+                                else:
+                                    head.update(deepcopy(action['params']))
+                                positions[action['source_occurrence_id']] = deepcopy(head)
+                    for occurrence in simulation_rows:
+                        if occurrence['occurrence_id'] in positions:
+                            occurrence['_native_head_reference'] = positions[occurrence['occurrence_id']]
+                    result['simulation'] = simulate_method(simulation_rows, initial_state(method, request.get('initial_state')))
                 except (ValueError, TypeError, KeyError, ArithmeticError) as exc:
                     result['simulation'] = {'status': 'unknown', 'issues': [{'code': 'simulation_unknown',
                         'category': 'advisory', 'message': str(exc)}]}
