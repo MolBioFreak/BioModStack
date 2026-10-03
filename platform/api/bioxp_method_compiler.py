@@ -95,12 +95,16 @@ def evaluate(value, scope, depth=0):
     if e.get('version') != 1 or type(e.get('version')) is not int:
         fail('Unsupported expression version')
     op = e.get('op')
-    allowed = {'version', 'op'} | ({'value', 'unit'} if op == 'literal' else {'id'} if op in ('param', 'arg') else set() if op in ('loop_index', 'loop_item') else {'args'})
+    allowed = {'version', 'op'} | ({'value', 'unit', 'type'} if op == 'literal' else {'id'} if op in ('param', 'arg') else set() if op in ('loop_index', 'loop_item') else {'args'})
     if set(e) - allowed:
         fail(f'Unknown expression fields: {sorted(set(e) - allowed)}')
     if op == 'literal':
         if 'value' not in e:
             fail('Literal value is missing')
+        if 'type' in e:
+            if e['type'] != 'number':
+                fail('Unsupported literal type')
+            return quantity(e['value'], e['unit']) if 'unit' in e else number(e['value'])
         return quantity(e['value'], e['unit']) if 'unit' in e else deepcopy(e['value'])
     if op in ('param', 'arg'):
         if e.get('id') not in scope[op]:

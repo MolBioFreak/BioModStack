@@ -75,4 +75,3 @@ it('edits numeric expression literals without nesting raw envelopes, and replace
     await change('Formula operator', 'literal');
     expect(current).toEqual({ expr: { version: 1, op: 'literal', future: null } });
 });
-

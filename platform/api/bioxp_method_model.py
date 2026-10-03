@@ -37,7 +37,7 @@ def migrate_legacy(draft):
 def method_schema():
     expression = {'type': 'object', 'required': ['version', 'op'], 'properties': {
         'version': {'const': 1}, 'op': {'enum': list(EXPRESSION_OPS)}, 'id': {'type': 'string'},
-        'value': {}, 'unit': {'type': 'string'}, 'args': {'type': 'array', 'items': {'$ref': '#/$defs/value'}}}}
+        'value': {}, 'type': {'enum': ['number'], 'description': 'Explicit numeric literal kind; raw spelling persists until compilation'}, 'unit': {'type': 'string'}, 'args': {'type': 'array', 'items': {'$ref': '#/$defs/value'}}}}
     return {'$schema': 'https://json-schema.org/draft/2020-12/schema', '$id': SCHEMA,
         'type': 'object', 'required': ['schema', 'steps'], 'properties': {
             'schema': {'const': SCHEMA}, 'name': {'type': 'string'}, 'description': {'type': 'string'},
