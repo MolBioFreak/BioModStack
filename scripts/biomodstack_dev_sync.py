@@ -71,6 +71,7 @@ def plan_sync(
     deployed_revision: str | None,
     remote_descends_from_local: bool,
     active_work: bool,
+    allow_active_work: bool = False,
 ) -> SyncDecision:
     if dirty:
         return "blocked-dirty"
@@ -79,7 +80,7 @@ def plan_sync(
     if deployed_revision is None:
         return "blocked-health-unavailable"
     deployment_needed = local_revision != remote_revision or deployed_revision != remote_revision
-    if deployment_needed and active_work:
+    if deployment_needed and active_work and not allow_active_work:
         return "deferred-active-work"
     if local_revision != remote_revision:
         return "fast-forward-deploy"
@@ -681,7 +682,9 @@ def _deploy_candidate(
     }
 
 
-def _sync_once_transaction(root: Path, state_dir: Path) -> SyncDecision:
+def _sync_once_transaction(
+    root: Path, state_dir: Path, *, deploy_now: bool = False, allow_active_work: bool = False,
+) -> SyncDecision:
     root = root.resolve()
     if not (root / ".git").exists() and not (root / ".git").is_file():
         raise RuntimeError(f"canonical Development is not a Git worktree: {root}")
@@ -763,6 +766,7 @@ def _sync_once_transaction(root: Path, state_dir: Path) -> SyncDecision:
             deployed_revision=deployed,
             remote_descends_from_local=ancestry,
             active_work=active_work,
+            allow_active_work=allow_active_work,
         )
         refresh_revision = (
             refresh_marker.get("target_revision") if refresh_marker is not None else None
@@ -783,6 +787,8 @@ def _sync_once_transaction(root: Path, state_dir: Path) -> SyncDecision:
             "remote_revision": remote,
             "deployed_revision_before": deployed,
             "active_work_count": active_work_count,
+            "manual_deploy": deploy_now,
+            "allow_active_work": allow_active_work,
             "deployment_paused": deployment_paused,
             "poll_interval_seconds": SYNC_INTERVAL_SECONDS,
             "queue_state": "pending" if queued_revision is not None else "empty",
@@ -791,7 +797,7 @@ def _sync_once_transaction(root: Path, state_dir: Path) -> SyncDecision:
         if decision.startswith("blocked-"):
             _write_receipt(state_dir, receipt)
             raise RuntimeError(f"Development sync {decision}: canonical={local} origin/test={remote}")
-        if deployment_paused:
+        if deployment_paused and not deploy_now:
             receipt["decision"] = "paused"
             _write_receipt(state_dir, receipt)
             return "paused"
@@ -824,7 +830,8 @@ def _sync_once_transaction(root: Path, state_dir: Path) -> SyncDecision:
 
         with _deployment_fence(state_dir):
             active_work, active_work_count = _active_development_work(root)
-            if active_work:
+            receipt["active_work_count"] = active_work_count
+            if active_work and not allow_active_work:
                 decision = "deferred-active-work"
                 receipt["decision"] = decision
                 receipt["active_work_count"] = active_work_count
@@ -866,9 +873,14 @@ def _specific_failure_receipt_matches(state_dir: Path, error: BaseException) -> 
     )
 
 
-def sync_once(root: Path, state_dir: Path) -> SyncDecision:
+def sync_once(
+    root: Path, state_dir: Path, *, deploy_now: bool = False, allow_active_work: bool = False,
+) -> SyncDecision:
+    # Invocation-only overrides: never persist them in the pause control or units.
     try:
-        return _sync_once_transaction(root, state_dir)
+        return _sync_once_transaction(
+            root, state_dir, deploy_now=deploy_now, allow_active_work=allow_active_work,
+        )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         state_dir.mkdir(parents=True, exist_ok=True)
         if _specific_failure_receipt_matches(state_dir, exc):
@@ -931,6 +943,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Sync canonical BioModStack Development from origin/test every 60 seconds")
     control_group = parser.add_mutually_exclusive_group(required=True)
     control_group.add_argument("--once", action="store_true", help="run one synchronization transaction")
+    control_group.add_argument(
+        "--deploy-now", action="store_true",
+        help="deploy once even while automatic deployment is paused; leave the pause unchanged",
+    )
+    parser.add_argument(
+        "--allow-active-work", action="store_true",
+        help="with --deploy-now, override active-job deferral for this invocation only; does not cancel jobs",
+    )
     control_group.add_argument("--install", action="store_true", help="install and enable the 60-second user timer")
     control_group.add_argument(
         "--bootstrap-successor",
@@ -947,6 +967,8 @@ def main() -> int:
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument("--systemd-dir", type=Path, default=Path.home() / ".config" / "systemd" / "user")
     args = parser.parse_args()
+    if args.allow_active_work and not args.deploy_now:
+        parser.error("--allow-active-work requires --deploy-now")
     try:
         if args.recover_failed_rollback:
             receipt = recover_failed_rollback(args.root, args.state_dir)
@@ -969,12 +991,15 @@ def main() -> int:
             _run(args.root, "systemctl", "--user", "start", SYNC_SERVICE)
             print("Resumed automatic Development deployment and started one poll")
             return 0
-        if args.once:
-            decision = sync_once(args.root, args.state_dir)
+        if args.once or args.deploy_now:
+            decision = sync_once(
+                args.root, args.state_dir,
+                deploy_now=args.deploy_now, allow_active_work=args.allow_active_work,
+            )
             print(json.dumps({"decision": decision, "poll_interval_seconds": SYNC_INTERVAL_SECONDS}, sort_keys=True))
             return 0
         parser.error(
-            "one of --once, --install, --bootstrap-successor, --recover-failed-rollback, "
+            "one of --once, --deploy-now, --install, --bootstrap-successor, --recover-failed-rollback, "
             "--pause-deploy, or --resume-deploy is required"
         )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
