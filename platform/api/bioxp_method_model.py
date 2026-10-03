@@ -158,6 +158,10 @@ def method_catalog():
             entry['inputs']['properties']['labware_id'] = {'type': 'string', 'description': 'Stable logical identity; retained as metadata, not a controller setting'}
         if entry['action'] in {'cavro_application', 'liquid_recipe', 'fluid_search', 'pipette_settings', 'pressure_stream'}:
             entry['status']['registered'] = None  # separate native finite-owner qualification
+        if entry['action'] == 'plunger':
+            entry['inputs'] = deepcopy(schema['$defs']['DiagnosticPlunger'])
+            entry['status'].update(emitted=True, registered=True)
+            entry['integration'] = 'Existing diagnostic_pipette physical owner; native all-pipette plunger operation'
         if entry['action'] == 'inspect':
             entry['effects'] = 'Source cover inspection can relocate covers; not photo-only'
         if entry['action'] == 'thermal_door':

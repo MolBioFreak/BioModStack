@@ -451,7 +451,11 @@ def compile_method(request):
                 if not isinstance(inputs, dict):
                     fail('Action inputs must be an object', occurrence['path'])
                 intent = inputs if occurrence['action'] == 'native_intent' else {'operation': occurrence['action'], **inputs}
-                if occurrence['action'] == 'tip_pickup':
+                if occurrence['action'] == 'plunger':
+                    from bioxp_method_native import validate
+                    diagnostic = validate(inputs, _NATIVE['request']['$defs']['DiagnosticPlunger'])
+                    intent = {'operation': 'diagnostic_pipette', 'diagnostic': diagnostic}
+                elif occurrence['action'] == 'tip_pickup':
                     if 'channels' in inputs and (inputs['channels'] != [0, 1, 2, 3] or any(type(c) is not int for c in inputs['channels'])):
                         fail('Source pickup is a group of four, not selected independent channels', occurrence['path'])
                     intent['operation'] = 'load_tip'

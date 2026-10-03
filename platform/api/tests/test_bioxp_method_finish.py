@@ -297,3 +297,10 @@ def test_explicit_recipe_value_is_requested_not_water_omission():
     inherited = compile_nodes(node('liquid_recipe', inputs))
     assert actions(inherited)[0]['params']['recipe']['aspiration_speed_ul_s'] == 50
     assert inherited['water_substitutions'][0]['field'] == 'aspirate_speed_ul_s'
+
+
+@pytest.mark.parametrize('direction', ['plunger_up', 'plunger_down'])
+def test_plunger_alias_uses_actual_diagnostic_contract(direction):
+    result = compile_nodes(node('plunger', {'action': direction, 'steps': '10'}))
+    assert actions(result)[0]['params'] == {'operation': 'diagnostic_pipette', 'diagnostic': {'action': direction, 'steps': 10}}
+    assert compile_nodes(node('plunger', {'action': 'aspirate', 'steps': 10}))['document'] is None
