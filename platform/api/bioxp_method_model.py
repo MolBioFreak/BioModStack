@@ -70,7 +70,7 @@ def method_catalog():
         actions.append({'action': name, 'inputs': deepcopy(schema['$defs'][ref.rsplit('/', 1)[-1]]),
             'status': {'authorable': True, 'emitted': True, 'registered': True, 'connected_tested': False, 'physically_qualified': False},
             'native_owner': 'manual_pipetting', 'source_revision': native['native_source_commit']})
-    actions.append({'action': 'transfer', 'inputs': native['transfer'], 'status': {'authorable': True, 'emitted': True},
+    actions.append({'action': 'transfer', 'inputs': native['transfer'], 'status': {'authorable': True, 'emitted': True, 'registered': True, 'connected_tested': False, 'physically_qualified': False},
         'effects': 'Ordered move/lower/aspirate/lift/move/lower/dispense/lift per head-reference pair; non-atomic'})
     pending = {
         'park': ['location_id'], 'eject_tip': ['channels'], 'distribute': ['source', 'destinations', 'recipe'],

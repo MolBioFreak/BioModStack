@@ -90,7 +90,7 @@ def examples():
                 steps.append({'step_id': sid + '_compound', 'type': 'group', 'label': description, 'steps': children})
             else:
                 steps.append({'step_id': sid, 'type': 'action', 'label': description, 'action': action, 'inputs': inputs})
-            coverage.append({'step_id': sid, 'stage_owner': owner, 'physical_qualification': 'not demonstrated'})
+            coverage.append({'step_id': sid, 'stage_owner': 'robot' if owner == 'integration_needed' else owner, 'physical_qualification': 'not demonstrated'})
         output.append({'id': identifier, 'method': {'schema': 'bms.bioxp-method.v1', 'name': name,
             'description': 'Unbound full-process skeleton. Supply chosen chemistry, consumables, locations and all numeric inputs. No scientific defaults or yield claims.',
             'parameters': parameters, 'steps': steps, 'procedures': [], 'tip_policy': 'manual',
