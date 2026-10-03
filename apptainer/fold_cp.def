@@ -1,13 +1,21 @@
 Bootstrap: localimage
 From: /mnt/BioModStack/apptainer/boltzgen.sif
 
+%files
+    apptainer/patches/fold-cp/prediction-cli-cp-topology.patch /opt/fold-cp-cli-cp-topology.patch
+
 %post
     set -eu
     rm -rf /opt/fold-cp
     git clone https://github.com/NVIDIA-BioNeMo/boltz-cp.git /opt/fold-cp
     cd /opt/fold-cp
-    git checkout --detach f76f37a77c854b56b6250b426af8c2d63b501f7f
-    test "$(git rev-parse HEAD)" = "f76f37a77c854b56b6250b426af8c2d63b501f7f"
+    git checkout --detach dedfdba3f33fd650aeb8f2da1005b44ebd03f95e
+    test "$(git rev-parse HEAD)" = "dedfdba3f33fd650aeb8f2da1005b44ebd03f95e"
+    printf '%s  %s\n' "68ca9baec4554f0f6e0bd3f935550b5106ca12a7c3368fd5ac56904ebaadb911" /opt/fold-cp-cli-cp-topology.patch | sha256sum -c -
+    git apply --check /opt/fold-cp-cli-cp-topology.patch
+    git apply /opt/fold-cp-cli-cp-topology.patch
+    git apply --reverse --check /opt/fold-cp-cli-cp-topology.patch
+    python3 -m py_compile src/boltz/distributed/main.py
     find /opt/fold-cp -type d -name __pycache__ -prune -exec rm -rf {} +
 
 %environment
@@ -23,16 +31,20 @@ From: /mnt/BioModStack/apptainer/boltzgen.sif
 %labels
     org.opencontainers.image.title "NVIDIA Fold-CP runtime"
     org.opencontainers.image.source "https://github.com/NVIDIA-BioNeMo/boltz-cp"
-    org.opencontainers.image.revision "f76f37a77c854b56b6250b426af8c2d63b501f7f"
-    org.biomodstack.runtime.id "fold-cp-f76f37a"
+    org.opencontainers.image.revision "dedfdba3f33fd650aeb8f2da1005b44ebd03f95e"
+    org.biomodstack.runtime.id "fold-cp-dedfdba-cli-topology"
     org.biomodstack.runtime.base.sha256 "a62b63635a53f18f3bbb66585817bdd0425f58799696b2a1c19124bd6023a672"
+
+    org.biomodstack.runtime.cli-patch.sha256 "68ca9baec4554f0f6e0bd3f935550b5106ca12a7c3368fd5ac56904ebaadb911"
 
 %test
     set -eu
     test "$(python3 -c 'import sys; print(sys.version_info >= (3, 11))')" = "True"
-    test "$(git -C /opt/fold-cp rev-parse HEAD)" = "f76f37a77c854b56b6250b426af8c2d63b501f7f"
-    python3 -c "import boltz.distributed.main as main; assert main.__file__.startswith('/opt/fold-cp/src/')"
+    test "$(git -C /opt/fold-cp rev-parse HEAD)" = "dedfdba3f33fd650aeb8f2da1005b44ebd03f95e"
+    git -C /opt/fold-cp apply --reverse --check /opt/fold-cp-cli-cp-topology.patch
+    python3 -c "import boltz.distributed.main as main; import boltz.distributed.predict as predict; assert main.__file__.startswith('/opt/fold-cp/src/'); assert predict.__file__.startswith('/opt/fold-cp/src/')"
     python3 -m boltz.distributed.main --help >/dev/null
+    python3 -m boltz.distributed.main predict --help | grep -q -- '--cp_topology'
 
 %runscript
     exec python3 -m boltz.distributed.main "$@"
