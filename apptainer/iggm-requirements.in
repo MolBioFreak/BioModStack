@@ -1,0 +1,34 @@
+# Native IgGM 6b1bd91abdf6785d9bbf59c51d6e0c8880aceb8a; Python 3.10 Linux x86_64.
+# PyG publishes the compatible 2.7.x wheels under torch-2.7.0+cu128.
+--index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cu128
+--find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+torchaudio==2.7.1+cu128
+pyg-lib==0.4.0+pt27cu128
+torch-scatter==2.1.2+pt27cu128
+torch-sparse==0.6.18+pt27cu128
+torch-cluster==1.6.3+pt27cu128
+torch-spline-conv==1.2.2+pt27cu128
+torch-geometric==2.5.2
+# Preserve installed non-accelerator versions where present.
+biopython==1.86
+# OpenMM 8.1.1's native XTC extension requires the NumPy 1.x ABI.
+numpy==1.26.4
+scipy==1.15.3
+pandas==2.3.3
+einops==0.8.2
+hydra-core==1.3.2
+omegaconf==2.3.0
+fair-esm==2.0.0
+# Native inference imports absent from the old, incomplete image.
+ml-collections==0.1.1
+dm-tree==0.1.8
+termcolor==2.4.0
+tqdm==4.66.4
+requests==2.32.3
+openmm==8.1.1
+# pdbfixer 1.9 imports pkg_resources, removed in newer setuptools.
+setuptools==71.0.4
+pdbfixer @ https://github.com/openmm/pdbfixer/archive/6bf10e138f6475f6f1850dae78d7bf1b420a1612.tar.gz

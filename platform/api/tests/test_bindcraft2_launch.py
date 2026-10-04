@@ -70,6 +70,30 @@ def test_preview_to_job_owned_native_handoff_and_readback(tmp_path, monkeypatch)
         launch.read_campaign_receipt(tmp_path / 'job')
 
 
+@pytest.mark.parametrize('placement', [
+    {'gpu_id': 0}, {'gpu_id': 3}, {'gpu_id': 3, 'bc2_gpu_ids': '3,5'}, {},
+])
+def test_compiler_preserves_scheduler_gpu_transport(tmp_path, monkeypatch, placement):
+    _, settings = setup_source(tmp_path, monkeypatch)
+    preview = launch.preview_campaign(settings, compiler=stub_compiler)
+    materialized = launch.materialize_campaign(settings, tmp_path / 'job',
+        preview_digest=preview['preview_digest'], compiler=stub_compiler)
+    receipt_before = launch.read_campaign_receipt(tmp_path / 'job')
+    from services.nextflow import compile_nextflow_invocation
+    invocation = compile_nextflow_invocation('bindcraft2', 'campaign', {
+        **materialized, 'bc2_preview_digest': preview['preview_digest'], **placement,
+    }, str(tmp_path / 'job'), job_id='gpu-transport')
+    for key in ('gpu_id', 'bc2_gpu_ids'):
+        if key in placement:
+            flag = invocation.command.index('--' + key)
+            assert invocation.command[flag + 1] == str(placement[key])
+            assert invocation.native_parameters[key] == placement[key]
+        else:
+            assert '--' + key not in invocation.command
+    assert launch.read_campaign_receipt(tmp_path / 'job') == receipt_before
+    assert '--bindcraft2_settings' not in invocation.command
+
+
 def test_preview_route_rejects_wrong_saved_shape(tmp_path, monkeypatch):
     setup_source(tmp_path, monkeypatch)
     monkeypatch.setattr(launch, 'preview_campaign', lambda settings: {'settings': settings})

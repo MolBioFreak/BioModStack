@@ -5870,6 +5870,12 @@ def compile_nextflow_invocation(
         for key, value in expected.items():
             cmd.extend([f'--{key}', value])
             native_parameters[key] = value
+        # Carry scheduler placement through this early return. Container visibility
+        # is explicit, so host CUDA_VISIBLE_DEVICES alone cannot select the card.
+        for key in ('gpu_id', 'bc2_gpu_ids'):
+            if params.get(key) is not None:
+                cmd.extend([f'--{key}', str(params[key])])
+                native_parameters[key] = params[key]
         return finish_command(cmd)
 
     if (model_id, mode) == ('ligandmpnn', 'interface_context'):
