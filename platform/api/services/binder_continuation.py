@@ -133,6 +133,7 @@ MODEL_OPERATIONS = {
     'caliby': ('caliby_binder', 'design'),
     'fampnn': ('fampnn', 'binder_design'),
     'proteinmpnn': ('proteinmpnn', 'design'),
+    'protonpottsmpnn': ('protonpottsmpnn', 'redesign'),
     'predict_boltz2': ('boltz2', 'complex'),
     'predict_protenix': ('protenix', 'complex'),
 }
@@ -192,7 +193,10 @@ def individual_model_requests(base: JobCreate, operation: str, selection_dir: Pa
                       source_stage_job_id=item['design_job_id'])
         params['native_sources'] = [item['native_source']] if item.get('native_source') else []
         params['selection_source_type'] = 'selected_native_artifacts' if item.get('native_source') else 'selected_designs'
-        if operation in {'fampnn', 'proteinmpnn'}:
+        if operation == 'protonpottsmpnn':
+            params['target_pdb'] = path
+            params['pdb_paths'] = path
+        elif operation in {'fampnn', 'proteinmpnn'}:
             params['input_pdb'] = path
             # The single-input child must not retain the batch CSV as a path;
             # shared portable discovery treats native file values literally.

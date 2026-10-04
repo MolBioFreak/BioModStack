@@ -507,6 +507,7 @@ from services.caliby_native import SUPPORTED_MODES as CALIBY_NATIVE_MODES
 from services.ligandmpnn_design import MODES as LIGANDMPNN_DESIGN_MODES
 
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
+    ('protonpottsmpnn', 'redesign'): 'workflows/protonpottsmpnn_design.nf',
     **{('bindcraft2', native_mode): 'workflows/bindcraft2.nf'
        for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
     ('binder_refinement', 'refine'): 'workflows/binder_refinement.nf',
@@ -5425,6 +5426,7 @@ def compile_nextflow_invocation(
 
     # Model + mode to profile mapping (for API-driven jobs)
     model_mode_to_profile = {
+        ('protonpottsmpnn', 'redesign'): 'protonpottsmpnn_design',
         **{pair: 'protein_sequence_design' for pair in PUBLIC_SEQUENCE_MODES},
         ('boltz2', 'predict'): 'boltz',
         ('boltz2', 'complex'): 'boltz',
@@ -5694,14 +5696,14 @@ def compile_nextflow_invocation(
         "boltz_models": explicit_boltz_models,
         "alphafold_params": explicit_alphafold_params,
     }
-    if (is_generic_sequence_command or model_id in {'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen'}
+    if (is_generic_sequence_command or model_id in {'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen', 'protonpottsmpnn'}
             or model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES):
         # No diffusion, prediction or hosted/local MSA stage is selected by the
         # sequence-only wrapper. Do not demand their unselected input stores.
         for key in ('rfd_models', 'af2_models', 'boltz_models', 'alphafold_params'):
             explicit_path_defaults.pop(key, None)
     if (not is_fastq_only_ont_command and not is_generic_sequence_command
-            and model_id not in {'bindcraft2', 'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen'}
+            and model_id not in {'bindcraft2', 'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen', 'protonpottsmpnn'}
             and not (model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES)
             and (model_id, mode) not in {('ligandmpnn', 'interface_context'),
                                          ('esmfold2', 'blind_pose')}):
@@ -5713,6 +5715,34 @@ def compile_nextflow_invocation(
         if params.get(key) in (None, ""):
             cmd.extend([f"--{key}", str(value)])
             native_parameters[key] = str(value)
+
+    if model_id == 'protonpottsmpnn' and mode == 'redesign':
+        from services.protonpottsmpnn_design import science_params, prepare_design_request, read_prepared_request
+        science = science_params(mode, params)
+        params.update(science)
+        native_parameters.update(science)
+        request_path = params.get('protonpottsmpnn_design_request')
+        source_path = params.get('protonpottsmpnn_design_input')
+        if request_path:
+            from paths import get_inputs_dir, get_results_dir
+            read_prepared_request(mode, params,
+                allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()))
+            native_parameters.update(protonpottsmpnn_design_request=str(request_path),
+                                     protonpottsmpnn_design_input=str(source_path))
+        elif _preview_only:
+            request_path = Path(output_dir) / '.protonpottsmpnn-design-request.json'
+            plan_input(request_path, json.dumps(prepare_design_request(mode, science),
+                       sort_keys=True, allow_nan=False).encode('utf-8'))
+            source_path = science['target_pdb']
+        else:
+            raise ValueError('ProtonPottsMPNN requires its materialized native request')
+        cmd.extend(['--protonpottsmpnn_design_request', str(request_path),
+                    '--protonpottsmpnn_design_input', str(source_path)])
+        for key in (*explicit_path_defaults, 'cpus',):
+            if key in params and params[key] is not None:
+                cmd.extend(['--' + key, str(params[key])])
+                native_parameters[key] = params[key]
+        return finish_command(cmd)
 
     if model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES:
         from services.ligandmpnn_design import science_params, prepare_design_request, read_prepared_request

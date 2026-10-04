@@ -47,6 +47,7 @@ PROCESS_CONTRACTS = {
     'modules/boltzgen.nf:AggregateBoltzGenResults': (('process_low',), ('val parent_job_id', 'path collected_pdbs', 'path collected_jsons', 'path manifest'), ('path "aggregation_report.json", emit: report',), (), ()),
     'modules/caliby.nf:RunCaliby': (('Caliby', 'gpu'), ('tuple val(meta), path(pdb_files)',), ('tuple path("results/*.pdb"), path("results/generator_*.json"), emit: pdbs_jsons', 'path("results/native_outputs/**/*"), emit: native_outputs, optional: true', 'path("caliby_metadata_${task.index}.jsonl"), emit: metadata', 'path "*.log"'), ('scripts/prep_caliby_antibody_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
     'modules/caliby.nf:RunCalibyBinder': (('Caliby', 'gpu'), ('tuple path(pdb_files), path(source_identity)',), ('path("results/*.pdb"), emit: pdbs', 'path("results/generator_*.json"), emit: jsons', 'path("results/native_outputs/**/*"), emit: native_outputs, optional: true', 'path("caliby_metadata.jsonl"), emit: metadata', 'path("caliby_constraints.csv"), emit: constraints', 'path("caliby_selection.json"), emit: selection, optional: true', 'path("caliby_binder.log"), emit: log', 'path("results/native_outputs/*"), emit: native_structures, optional: true'), ('scripts/prep_caliby_binder_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
+    'modules/protonpottsmpnn.nf:RunProtonPottsMPNNDesign': (('cpu',), ("path request, stageAs: 'prepared_request.json'", "path source, stageAs: 'source/*'"), ("path 'protonpottsmpnn_design', emit: native_outputs",), ('scripts/run_protonpottsmpnn_design.py', 'scripts/lib/protonpottsmpnn_contract.py'), ()),
     'modules/ligandmpnn_design.nf:RunLigandMPNNDesign': (('gpu',), ("path request, stageAs: 'prepared_request.json'", "path source, stageAs: 'source/*'"), ("path 'ligandmpnn_design', emit: native_outputs",), ('scripts/run_ligandmpnn_design.py',), ()),
     'modules/caliby_native.nf:RunCalibyNative': (('Caliby', 'gpu'), ('path request_dir',), ("path 'caliby_native', emit: native_results",), ('scripts/run_caliby_experimental.py',), ()),
     'modules/caliby.nf:FilterCaliby': (('Caliby',), ('tuple path(pdb_files), path(json_files)',), ('path("filtered_output/*.pdb"), emit: pdbs, optional: true', 'path("filtered_output/generator_*.json"), emit: jsons, optional: true', 'path("filter_caliby_${task.index}.log"), emit: logs'), ('scripts/filter_caliby.py',), ()),
@@ -906,6 +907,13 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
 
     if workflow == 'binder_blind_pose' and (model_id, mode) == ('esmfold2', 'blind_pose'):
         a.stage('BinderBlindPoseESMFold2')
+        return True
+
+    if workflow == 'protonpottsmpnn_design' and (model_id, mode) == ('protonpottsmpnn', 'redesign'):
+        from services.protonpottsmpnn_design import selected_assets
+        assets = tuple(a.asset(item['kind'], item['relative_path'],
+                       'services.protonpottsmpnn_design:selected_assets', 'protonpottsmpnn_container_path') for item in selected_assets())
+        a.stage('RunProtonPottsMPNNDesign', extra=assets)
         return True
 
     if workflow == 'ligandmpnn_design' and model_id == 'ligandmpnn':

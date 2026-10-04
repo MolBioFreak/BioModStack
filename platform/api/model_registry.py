@@ -112,7 +112,7 @@ class RuntimeDependencyRef(BaseModel):
 INDEPENDENT_RUNTIME_MODELS = frozenset({
     "protenix", "esmfold2", "esmfold2_experimental", "fampnn", "frustrampnn",
     "boltz2", "af2", "proteinmpnn", "unidock", "protein_modification_experimental",
-    "caliby_binder", "caliby_experimental", "ligandmpnn", "bindcraft2",
+    "caliby_binder", "caliby_experimental", "ligandmpnn", "bindcraft2", "protonpottsmpnn",
 })
 
 
@@ -826,6 +826,13 @@ class ModelRegistry:
             errors.append(f"Unknown mode '{mode_id}' for model '{model_id}'")
             return errors
         
+        if model_id == 'protonpottsmpnn':
+            from services.protonpottsmpnn_design import normalize_design_params
+            try:
+                normalize_design_params(mode_id, params)
+            except (TypeError, ValueError) as exc:
+                errors.append(str(exc))
+            return errors
         if model_id == 'ligandmpnn':
             from services.ligandmpnn_design import MODES, science_params
             if mode_id in MODES:
@@ -1331,6 +1338,10 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     if native_generation is not None:
         result_payload = native_generation
         retrieval_authority = native_generation['native_contract_authority']
+    elif reviewed and model_id == 'protonpottsmpnn' and workflow == 'protonpottsmpnn_design':
+        from services.protonpottsmpnn_design import result_contract
+        result_payload = result_contract(mode)
+        retrieval_authority = result_payload['native_contract_authority']
     elif reviewed and model_id == 'ligandmpnn' and workflow == 'ligandmpnn_design':
         from services.ligandmpnn_design import result_contract
         result_payload = result_contract(mode)

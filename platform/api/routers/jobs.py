@@ -5960,6 +5960,16 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return job_data
+    if normalized_model_id == 'protonpottsmpnn':
+        from services.protonpottsmpnn_design import normalize_design_params, REQUEST_FIELD
+        try:
+            values = dict(job_data.params)
+            if not values.get(REQUEST_FIELD) and values.get('target_pdb'):
+                values['target_pdb'] = _resolve_alias_path_for_runtime(values['target_pdb'])
+            job_data.params = normalize_design_params(normalized_mode, values)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        return job_data
     if normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES:
         from services.ligandmpnn_design import normalize_design_params
         transport_keys = {'ligandmpnn_design_request', 'ligandmpnn_design_input',
@@ -6534,6 +6544,20 @@ async def _create_job(
                     status_code=503,
                     detail="Committed BMS source identity is unavailable",
                 ) from exc
+    if (normalized_model_id == 'protonpottsmpnn' and normalized_mode == 'redesign'
+            and selected_execution_target is not None
+            and not job_data.params.get('protonpottsmpnn_design_request')):
+        from services.protonpottsmpnn_design import prepare_for_job
+        job_data = normalize_job_request(job_data)
+        prepared = get_inputs_dir() / 'protonpottsmpnn-design' / str(uuid.uuid4())
+        try:
+            job_data.params.update(await asyncio.to_thread(
+                prepare_for_job, normalized_mode, job_data.params, prepared,
+                allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+            ))
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+
     if (normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES
             and selected_execution_target is not None
             and not job_data.params.get('ligandmpnn_design_request')):
@@ -7255,6 +7279,18 @@ async def _create_job(
             job_name = job_data.name
             output_dir = base_output_dir
             job_params = dict(job_data.params)
+
+        if normalized_model_id == 'protonpottsmpnn' and normalized_mode == 'redesign':
+            from services.protonpottsmpnn_design import prepare_for_job
+            try:
+                job_params.update(await asyncio.to_thread(
+                    prepare_for_job, normalized_mode, job_params,
+                    Path(output_dir) / 'inputs' / 'protonpottsmpnn-design',
+                    allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+                    retain_prepared=execution_preview is not None,
+                ))
+            except (OSError, ValueError, KeyError) as exc:
+                raise HTTPException(422, detail=str(exc)) from exc
 
         if normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES:
             from services.ligandmpnn_design import prepare_for_job

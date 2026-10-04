@@ -103,6 +103,9 @@ def _sequence_native_publication_owner(job: Job):
         if job.mode in SUPPORTED_MODES:
             from services import caliby_native_publication
             return caliby_native_publication
+    if (job.model_id, job.mode) == ("protonpottsmpnn", "redesign"):
+        from services import protonpottsmpnn_publication
+        return protonpottsmpnn_publication
     if job.model_id == "ligandmpnn":
         from services.ligandmpnn_design import MODES
         if job.mode in MODES:

@@ -286,6 +286,9 @@ def _native_parameter_schema(model_id: str, mode_id: str) -> dict | None:
         from services.caliby_native import SUPPORTED_MODES, parameter_schema
         if mode_id in SUPPORTED_MODES:
             return parameter_schema(mode_id)
+    if model_id == 'protonpottsmpnn' and mode_id == 'redesign':
+        from services.protonpottsmpnn_design import parameter_schema
+        return parameter_schema()
     if model_id == 'ligandmpnn':
         from services.ligandmpnn_design import MODES, parameter_schema
         if mode_id in MODES:

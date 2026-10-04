@@ -38,7 +38,7 @@ class SelectedOperationRequest(BaseModel):
     source_job_id: str
     design_ids: list[str] = Field(default_factory=list)
     native_sources: list[NativeSource] = Field(default_factory=list)
-    operation: Literal['refine', 'caliby', 'frustrampnn', 'fampnn', 'proteinmpnn', 'predict_boltz2', 'predict_protenix']
+    operation: Literal['refine', 'caliby', 'frustrampnn', 'fampnn', 'proteinmpnn', 'protonpottsmpnn', 'predict_boltz2', 'predict_protenix']
     params: dict[str, Any] = Field(default_factory=dict)
     frustrampnn_settings: FrustraMPNNRequestedSettings | None = None
     execution_target_id: str | None = None
