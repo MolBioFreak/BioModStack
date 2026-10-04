@@ -31,13 +31,18 @@ const row = (axis: string) => {
     return result!;
 };
 const input = (axis: string, index: number) => row(axis).querySelectorAll<HTMLInputElement>('input[type="number"]')[index];
-const axisPicker = (axis: string) => {
-    const result = host.querySelector<HTMLButtonElement>(`button[data-axis="${axis}"], button[aria-label="Select ${axis.toUpperCase()} axis"]`)
-        ?? [...host.querySelectorAll<HTMLButtonElement>('button')].find(el => el.getAttribute('aria-pressed') !== null && name(el)?.startsWith(({ g: 'Grip', door: 'Door' } as Record<string, string>)[axis] ?? axis.toUpperCase()));
-    expect(result, `${axis} phone picker`).toBeDefined();
+const jogAxes = ['x', 'y', 'z', 'g'] as const;
+const publishedMaximum = { x: 90263, y: 102956, z: 160000, g: 160000 };
+const range = (axis: string, kind: 'relative steps' | 'absolute target') => {
+    const result = row(axis).querySelector<HTMLInputElement>(`input[type="range"][aria-label="${axis.toUpperCase()} ${kind}"]`);
+    expect(result, `${axis} ${kind} slider`).not.toBeNull();
     return result!;
 };
-const setInput = async (element: HTMLInputElement, value: number) => {
+const refreshTelemetry = async () => {
+    await act(async () => { await client.invalidateQueries(); });
+    await tick(); await tick();
+};
+const setInput = async (element: HTMLInputElement, value: number | '') => {
     expect(element).toBeDefined();
     await act(async () => {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, String(value));
@@ -94,6 +99,8 @@ beforeEach(() => {
     vi.spyOn(XMLHttpRequest.prototype, 'open').mockImplementation(() => { throw new Error('Live XHR forbidden in inert Robot test'); });
     connected = true; rows = new Map(); unexpectedReads = [];
     catalog = structuredClone(metadata.catalog);
+    // Explicit telemetry limits, independent of request-schema int32 ceilings.
+    catalog.dashboard.telemetry.axes = jogAxes.map(axis => ({ axis, min_steps: 0, max_steps: publishedMaximum[axis], position_steps: 0 }));
     catalog.dashboard.generated_at = Date.now() / 1000;
     catalog.dashboard.active_commands = []; catalog.dashboard.latest_receipts = [];
     catalog.actions = canonicalIds.map(action_id => ({ action_id, enabled: true, disabled_reason: null,
@@ -154,7 +161,7 @@ describe('Robot controls layout transport parity (inert)', () => {
         }
         expect(api.post).not.toHaveBeenCalled();
     });
-    it.each(['dispatched', 'ambiguous', 'failed'])('XY %s outcome stays outside closed details and survives axis selection without resubmitting', async status => {
+    it.each(['dispatched', 'ambiguous', 'failed'])('XY %s outcome stays outside closed details and survives draft changes without resubmitting', async status => {
         await mount();
         vi.mocked(api.post).mockImplementationOnce(async (url, body: any) => {
             const receipt = { ...park, command_id: 'inert-outcome', action_id: url.split('/').at(-1), status,
@@ -167,7 +174,7 @@ describe('Robot controls layout transport parity (inert)', () => {
         const notice = [...host.querySelectorAll('[role="status"], [role="alert"]')].find(el => el.textContent?.includes(expected));
         expect(notice, expected).toBeDefined();
         expect(notice!.closest('details:not([open])')).toBeNull();
-        await click(axisPicker('z'));
+        await setInput(input('z', 0), 4321);
         expect(host.textContent).toContain(expected);
         expect(api.post).toHaveBeenCalledTimes(1);
     });
@@ -238,16 +245,13 @@ describe('Robot controls layout transport parity (inert)', () => {
         await expectAction(button('Show axis settings'), v1Id(paths.settings), {}, 'v1');
         await expectAction(button('Show position table'), v1Id(paths.positions), {}, 'v1');
     });
-    it('phone picker, disclosures and all tabs retain drafts and never submit commands', async () => {
+    it('all five rows, disclosures and all tabs retain drafts without a picker or presets', async () => {
         await mount();
         for (const axis of ['x', 'y', 'z', 'g']) { await setInput(input(axis, 0), 1234); await setInput(input(axis, 1), 23456); }
-        // Required presentation picker, not optional: this must fail if omitted.
-        expect(axisPicker('x').getAttribute('aria-pressed')).toBe('true');
-        for (const axis of ['y', 'z', 'g', 'door', 'x']) {
-            await click(axisPicker(axis));
-            expect(axisPicker(axis).getAttribute('aria-pressed')).toBe('true');
-        }
+        expect(host.querySelector('button[data-axis], button[aria-label^="Select "][aria-label$=" axis"]')).toBeNull();
+        expect(host.querySelector('[aria-label$="step presets"]')).toBeNull();
         for (const axis of ['x', 'y', 'z', 'g', 'door']) {
+            expect(row(axis).closest('[hidden], [aria-hidden="true"]')).toBeNull();
             const disclosure = row(axis).querySelector<HTMLButtonElement>('button[aria-expanded][aria-controls]');
             expect(disclosure, `${axis} evidence disclosure`).not.toBeNull();
             expect(disclosure!.getAttribute('aria-expanded')).toBe('false');
@@ -255,7 +259,67 @@ describe('Robot controls layout transport parity (inert)', () => {
             await click(disclosure!); expect(disclosure!.getAttribute('aria-expanded')).toBe('false');
         }
         for (const tab of ['pipettes', 'workflows', 'live-deck', 'robot']) await click(host.querySelector(`#control-tab-${tab}`)!);
-        for (const axis of ['x', 'y', 'z', 'g']) { expect(input(axis, 0).value).toBe('1234'); expect(input(axis, 1).value).toBe('23456'); }
+        for (const axis of jogAxes) {
+            expect(input(axis, 0).value).toBe('1234'); expect(input(axis, 1).value).toBe('23456');
+            expect(range(axis, 'relative steps').value).toBe('1234'); expect(range(axis, 'absolute target').value).toBe('23456');
+        }
         expect(api.post).not.toHaveBeenCalled();
+    });
+    it.each(jogAxes)('%s sliders share exact numeric drafts and submit only through existing move actions', async axis => {
+        await mount();
+        const relative = range(axis, 'relative steps'), absolute = range(axis, 'absolute target');
+        expect(relative.max).toBe(String(publishedMaximum[axis]));
+        expect(absolute.max).toBe(String(publishedMaximum[axis]));
+        expect(relative.min).toBe(axis === 'y' ? '0' : '1');
+        expect(Number(absolute.min)).toBe(Math.max(0, Number(input(axis, 1).min)));
+        expect(input(axis, 1).labels?.[0].textContent).toContain('Absolute target (steps)');
+        await setInput(relative, 1234); await setInput(absolute, 23456);
+        expect(input(axis, 0).value).toBe('1234'); expect(input(axis, 1).value).toBe('23456');
+        expect(api.post).not.toHaveBeenCalled();
+        await expectAction(button('Move −', row(axis)), axis === 'g' ? v1Id(paths.relative) : `oem.${axis}.move_steps`,
+            axis === 'g' ? { axis, steps: -1234 } : { steps: -1234 }, axis === 'g' ? 'v1' : 'v2');
+        await expectAction(button('Move +', row(axis)), axis === 'g' ? v1Id(paths.relative) : `oem.${axis}.move_steps`,
+            axis === 'g' ? { axis, steps: 1234 } : { steps: 1234 }, axis === 'g' ? 'v1' : 'v2');
+        await expectAction(button('Go absolute', row(axis)), axis === 'g' ? v1Id(paths.absolute) : `oem.${axis}.move_absolute`,
+            axis === 'g' ? { axis, position_steps: 23456 } : axis === 'y' ? { target_steps: 23456 } : { position_steps: 23456 }, axis === 'g' ? 'v1' : 'v2');
+        await setInput(input(axis, 0), 4321); await setInput(input(axis, 1), 34567);
+        expect(range(axis, 'relative steps').value).toBe('4321'); expect(range(axis, 'absolute target').value).toBe('34567');
+        expect(api.post).toHaveBeenCalledTimes(3);
+    });
+    it.each(jogAxes)('%s changing telemetry bounds and clearing an absolute entry never rewrites the draft', async axis => {
+        await mount();
+        await setInput(input(axis, 0), 54321); await setInput(input(axis, 1), 65432);
+        const numericBounds = [input(axis, 0).min, input(axis, 0).max, input(axis, 1).min, input(axis, 1).max];
+        const telemetry = catalog.dashboard.telemetry.axes.find((item: any) => item.axis === axis);
+        telemetry.max_steps = 40000; telemetry.min_steps = 500;
+        await refreshTelemetry();
+        expect(range(axis, 'relative steps').max).toBe('40000');
+        expect(range(axis, 'absolute target').max).toBe('40000');
+        expect(Number(range(axis, 'absolute target').min)).toBe(Math.max(500, Number(input(axis, 1).min)));
+        expect(range(axis, 'relative steps').min).toBe(axis === 'y' ? '0' : '1');
+        expect(input(axis, 0).value).toBe('54321'); expect(input(axis, 1).value).toBe('65432');
+        expect([input(axis, 0).min, input(axis, 0).max, input(axis, 1).min, input(axis, 1).max]).toEqual(numericBounds);
+        await setInput(input(axis, 1), '');
+        telemetry.max_steps = publishedMaximum[axis]; await refreshTelemetry();
+        expect(input(axis, 1).value).toBe(''); expect(input(axis, 0).value).toBe('54321');
+        expect(api.post).not.toHaveBeenCalled();
+    });
+    it.each(jogAxes)('%s missing telemetry bounds leave exact entry and native moves available', async axis => {
+        catalog.dashboard.telemetry.axes = [];
+        // Remove specialized telemetry too: a numeric schema ceiling is not a travel limit.
+        if (catalog.dashboard.telemetry[`${axis}_axis`]?.status) {
+            delete catalog.dashboard.telemetry[`${axis}_axis`].status.max_steps;
+        }
+        await mount();
+        for (const slider of row(axis).querySelectorAll<HTMLInputElement>('input[type="range"]')) {
+            expect(slider.disabled).toBe(true);
+            expect(Number(slider.max || 100)).toBeLessThan(2147483647);
+        }
+        await setInput(input(axis, 0), 1234); await setInput(input(axis, 1), 23456);
+        expect(api.post).not.toHaveBeenCalled();
+        await expectAction(button('Move +', row(axis)), axis === 'g' ? v1Id(paths.relative) : `oem.${axis}.move_steps`,
+            axis === 'g' ? { axis, steps: 1234 } : { steps: 1234 }, axis === 'g' ? 'v1' : 'v2');
+        await expectAction(button('Go absolute', row(axis)), axis === 'g' ? v1Id(paths.absolute) : `oem.${axis}.move_absolute`,
+            axis === 'g' ? { axis, position_steps: 23456 } : axis === 'y' ? { target_steps: 23456 } : { position_steps: 23456 }, axis === 'g' ? 'v1' : 'v2');
     });
 });

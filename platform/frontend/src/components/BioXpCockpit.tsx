@@ -45,7 +45,7 @@ import { BioXpWellPipettingPanel } from './BioXpWellPipettingPanel';
 import { BioXpWorkflowEditor } from './BioXpWorkflowEditor';
 import { BioXpLiveDeck } from './BioXpLiveDeck';
 import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
-import { BioXpAxisRow, BioXpAxisTelemetry, BioXpReference } from './BioXpRobotPresentation';
+import { BioXpAxisRow, BioXpAxisTelemetry, BioXpStepSlider } from './BioXpRobotPresentation';
 import { BioXpStatusStrip } from './BioXpStatusStrip';
 import './BioXpRobotControls.css';
 import { BioXpWorkflowControls } from './BioXpWorkflowControls';
@@ -1143,8 +1143,11 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         : currentLifecycleInvokeError;
     const error = currentDeckInvokeError ?? lifecycleAggregateError ?? currentYInvokeError ?? currentXYInvokeError ?? interruptXStop.error ?? interruptYStop.error ?? interruptZStop.error ?? interruptAggregateAbort.error ?? invokeOperatorAction.error ?? connect.error ?? disconnect.error;
 
-    const [selectedAxis, setSelectedAxis] = useState<Axis | 'y'>('x');
     const [xyOpen, setXYOpen] = useState(false);
+    const axisSliderBounds = (axis: Axis | 'y') => {
+        const reported = displayTelemetry?.axes.find(item => item.axis === axis);
+        return { min: reported?.min_steps, max: reported?.max_steps };
+    };
     const axisPresentation = (axis: Axis | 'y') => {
         const telemetry = displayTelemetry?.axes.find(item => item.axis === axis);
         return { reference: axis === 'x' ? xReference : axis === 'y' ? yAxisV2?.reference_state : axis === 'z' ? dashboard?.z_axis?.status?.reference : telemetry?.reference,
@@ -1399,20 +1402,15 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             </div>
             <div hidden={controlTab === 'workflows' || controlTab === 'live-deck'}>
             <div role="tabpanel" id="control-panel-robot" aria-labelledby="control-tab-robot" hidden={controlTab !== 'robot'} className="bx-ui">
-                <div className="bx-picker" aria-label="Choose axis">{(['x', 'y', 'z', 'g', 'door'] as const).map(axis => <button type="button" key={axis} aria-pressed={selectedAxis === axis} onClick={() => setSelectedAxis(axis)}><span><BioXpReference reference={axisPresentation(axis).reference} dotOnly />{axis === 'g' ? 'Grip' : axis === 'door' ? 'Door' : axis.toUpperCase()}</span><small>{axisPresentation(axis).position === 'unknown' ? '—' : axisPresentation(axis).position ?? '—'}</small></button>)}</div>
                 <section className="bx-axes" aria-label="Axis controls">
                     <div className="bx-axis-heading"><span>Axis</span><span>Reference</span><span>Position</span><span>Move by</span><span>Home</span><span>Go to</span><span>Stop</span></div>
-                    <div className="bx-axis-list"><BioXpAxisRow axis="y" label="Y Axis" testId="serial206-y-authority-panel" selected={selectedAxis === 'y'} {...axisPresentation('y')}
+                    <div className="bx-axis-list"><BioXpAxisRow axis="y" label="Y Axis" testId="serial206-y-authority-panel" {...axisPresentation('y')}
  controls={<><button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(-Math.abs(yStepInput))} data-operation="move-negative" className="bx-button" aria-label="Move −">−</button>
 <button type="button" disabled={yMutationDisabled('oem.y.manual_panel_home')} title={yActionDisabledReason('oem.y.manual_panel_home', 'Y manual-panel home unavailable.')} onClick={() => invokeYHome('oem.y.manual_panel_home')} data-operation="home" className="bx-button" aria-label="Home">Home</button>
 <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(Math.abs(yStepInput))} data-operation="move-positive" className="bx-button" aria-label="Move +">+</button></>}
- relative={<>                            <label className="bx-relative"><span className="bx-sr-only">Relative move steps</span><input type="number" min={0} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm" /></label>
+ relative={<><BioXpStepSlider label="Y relative steps" min={0} max={axisSliderBounds('y').max} value={yStepInput} onChange={setYStepInput} /><label className="bx-relative"><span className="bx-sr-only">Relative move steps</span><input type="number" min={0} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm" /></label>
 </>}
- presets={<div className="bx-presets" aria-label="Y step presets">                                {[1000, 5000, 10000, 25000].map((steps) => (
-                                    <button key={steps} type="button" aria-pressed={yStepInput === steps} onClick={() => setYStepInput(steps)} className={`rounded px-2 py-1 text-xs ${yStepInput === steps ? 'bg-[var(--surface-control,var(--bg-tertiary))] text-[var(--text-primary)]' : 'bg-[var(--surface-control,var(--bg-tertiary))] text-[var(--text-secondary)] '}`} aria-label={steps.toLocaleString()}>{steps / 1000}k</button>
-                                ))}
-</div>}
- absolute={<div className="bx-absolute" title="Y absolute requests return before motion stops.">                            <label className="block text-xs text-[var(--text-secondary)]"><span className="bx-sr-only">Absolute target (steps)</span><input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={Number.isFinite(yTargetInput) ? yTargetInput : ''} onChange={(event) => setYTargetInput(event.target.valueAsNumber)} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm" /></label>
+ absolute={<div className="bx-absolute" title="Y absolute requests return before motion stops."><BioXpStepSlider label="Y absolute target" min={axisSliderBounds('y').min} max={axisSliderBounds('y').max} value={yTargetInput} onChange={setYTargetInput} />                            <label className="block text-xs text-[var(--text-secondary)]"><span className="bx-sr-only">Absolute target (steps)</span><input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={Number.isFinite(yTargetInput) ? yTargetInput : ''} onChange={(event) => setYTargetInput(event.target.valueAsNumber)} className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm" /></label>
 <button type="button" disabled={yMutationDisabled('oem.y.move_absolute')} title={yActionDisabledReason('oem.y.move_absolute', 'Y absolute move unavailable.')} onClick={() => invokeYMoveAbsolute(yTargetInput)} data-operation="absolute" className="bx-button" aria-label="Go absolute">Go</button></div>}
  stop={<button type="button" disabled={yStopDisabled} title="Stop the Y motor independently of normal command submission." onClick={interruptY} className="rounded bg-[var(--surface-control,var(--bg-tertiary))] px-3 py-1.5 text-sm font-semibold  ">Stop</button>}
  details={<>                            <p className="mt-2 text-[var(--text-secondary)]">Robot-owned Serial-206 Y authority. Controller completion and physical observation stay separate.</p>
@@ -1446,7 +1444,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         {yReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-[var(--text-secondary)]">Y receipt unavailable: {bioXpErrorText(yReceiptQuery.error)}</p>}
 </>} />
 {AXES.map(({ axis, label, controls }) => (
- <BioXpAxisRow key={axis} axis={axis} label={label} selected={selectedAxis === axis} {...axisPresentation(axis)}
+ <BioXpAxisRow key={axis} axis={axis} label={label} {...axisPresentation(axis)}
  controls={<>                                {controls.map(({ label: controlLabel, operation }) => {
                                     const path = operatorPathForControl(axis, operation);
                                     const xActionId = axis === 'x'
@@ -1515,7 +1513,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                                     );
                                 })}
 </>}
- relative={axis !== 'door' ? <>                                    <label className="bx-relative">
+ relative={axis !== 'door' ? <><BioXpStepSlider label={`${axis.toUpperCase()} relative steps`} min={1} max={axisSliderBounds(axis).max} value={manualSteps[axis]} onChange={value => setManualSteps(current => ({ ...current, [axis]: value }))} /><label className="bx-relative">
                                         <span className="bx-sr-only">Relative move steps</span>
                                         <input
                                             type="number"
@@ -1531,21 +1529,13 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                                         />
                                     </label>
 </> : null}
- presets={axis !== 'door' ? <>                                    <div className="bx-presets" aria-label={`${label} step presets`}>
-                                        {[1000, 5000, 10000, 25000].map((steps) => (
-                                            <button
-                                                key={steps}
-                                                type="button"
-                                                aria-pressed={manualSteps[axis] === steps}
-                                                onClick={() => setManualSteps((current) => ({ ...current, [axis]: steps }))}
-                                                className={`rounded px-2 py-1 text-xs ${manualSteps[axis] === steps ? 'bg-[var(--surface-control,var(--bg-tertiary))] text-[var(--text-primary)]' : 'bg-[var(--surface-control,var(--bg-tertiary))] text-[var(--text-secondary)] '}`}
-                                             aria-label={steps.toLocaleString()}>{steps / 1000}k</button>
-                                        ))}
-                                    </div>
-</> : null}
- absolute={axis !== 'door' ? <>                                    <label className="block text-xs text-[var(--text-secondary)]">
-                                        <span className="bx-sr-only">Absolute target (steps)</span>
+ absolute={axis !== 'door' ? <>                                    <div className="block text-xs text-[var(--text-secondary)]">
                                         <div className="bx-absolute">
+                                            <BioXpStepSlider label={`${axis.toUpperCase()} absolute target`}
+                                                min={axisSliderBounds(axis).min == null ? undefined : Math.max(axisSliderBounds(axis).min!, axis === 'x' ? xAbsoluteMinimum ?? -Infinity : axis === 'z' ? zAbsoluteMinimum ?? -Infinity : -Infinity)}
+                                                max={axisSliderBounds(axis).max == null ? undefined : Math.min(axisSliderBounds(axis).max!, axis === 'x' ? xAbsoluteMaximum ?? Infinity : axis === 'z' ? zAbsoluteMaximum ?? Infinity : Infinity)}
+                                                value={absoluteTargets[axis]} onChange={value => setAbsoluteTargets(current => ({ ...current, [axis]: value }))} />
+                                            <label><span className="bx-sr-only">Absolute target (steps)</span>
                                             <input
                                                 type="number"
                                                 min={axis === 'x' ? xAbsoluteMinimum : axis === 'z' ? zAbsoluteMinimum : undefined}
@@ -1558,6 +1548,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                                                 }}
                                                 className="min-w-0 flex-1 rounded border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-tertiary))] p-2 font-mono text-sm"
                                             />
+                                            </label>
                                             <button
                                                 type="button"
                                                 disabled={!linkConnected || (axis === 'x' ? !xAbsoluteEnabled : axis === 'z' ? !zAbsoluteEnabled : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true || integerInputError(absoluteTargets[axis], operatorActionForPath('/motion/oem/manual/absolute')?.inputs.find(input => input.name === 'position_steps'), 'Requested target') !== null)}
@@ -1566,7 +1557,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                                                 className="bx-button"
                                              aria-label="Go absolute">Go</button>
                                         </div>
-                                        </label>
+                                        </div>
 {axis === 'z' && <p data-testid="z-target-context" className="bx-target-hint">min {zTargetProvider?.current_minimum_steps ?? 'unavailable'}{zTargetPreview?.effective_position_steps != null && zTargetPreview.effective_position_steps !== absoluteTargets.z && ` → ${zTargetPreview.effective_position_steps}`}</p>}</> : null}
  stop={                                    <button
                                         type="button"

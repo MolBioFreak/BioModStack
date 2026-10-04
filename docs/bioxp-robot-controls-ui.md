@@ -1,6 +1,6 @@
 # BioXP Robot controls presentation
 
-Approved layout: compact desktop axis rows and a single-axis phone picker.
+Approved layout: all axes in rows on desktop and phone, with sliders and exact entry.
 This is a presentation-only change to the Robot controls landing page and shared
 header. Pipettes, Workflows and Live deck movement retain their existing editors.
 
@@ -12,15 +12,21 @@ header. Pipettes, Workflows and Live deck movement retain their existing editors
 - Keep connection, controller Enable/Recover and service restart accessible on all
   four tabs. The shared strip reports connection, controller state, references,
   enclosure state and observation time without repeating uncertainty banners.
-- Show X, Y, Z, gripper and thermal-door controls in aligned desktop rows. Keep
-  steps and the 1,000/5,000/10,000/25,000 presets, existing numeric bounds and defaults.
-  Z Clear and switch-search recovery home remain explicit distinct actions.
-- Below 768px, select one axis at a time without duplicating controls or resetting
-  its draft. Combined XY controls remain accessible in a compact disclosure.
-  The phone layout also covers narrow tablets so row Stops cannot be clipped.
+- Show X, Y, Z, gripper and thermal-door controls together in aligned rows at every
+  width. Narrow rows wrap their controls; there is no axis picker.
+- Replace step presets with relative-step and absolute-target sliders alongside
+  small exact numeric entries. Use published per-axis bounds, not the generic
+  signed-integer transport limit. If bounds are absent, retain exact entry and
+  existing action availability without inventing a range.
+- Sliders edit the existing drafts only. Relative −/+ and absolute Go remain the
+  explicit movement actions. Preserve numeric input bounds/defaults and native
+  payloads; a cleared or out-of-slider-range numeric draft is never rewritten by
+  rendering, polling or bounds changes.
+- Z Clear and switch-search recovery home remain explicit distinct actions.
+  Combined XY controls remain accessible in a compact phone disclosure.
 - Keep ordinary evidence in row details, history/reports and tools/catalog in
   collapsed drawers. Pending commands, uncertainty, errors and interrupt outcomes
-  must remain visible outside closed disclosures and nonselected mobile controls.
+  must remain visible outside closed disclosures.
 - Use inherited BMS theme tokens. Do not add a local theme palette or theme state.
   Use a darkened theme error color with white text for the shared motor Stops;
   selected tabs use a tinted theme accent, primary text and an accent border.
@@ -50,8 +56,8 @@ mobile draft retention, shared controls on all four tabs, error/pending visibili
 and lazy history/report/catalog demand.
 
 Build the actual frontend. Measure the normal served route at 1440×900 and
-400×900, including the BMS shell's inner scrolling container. The ordinary
-collapsed layout should fit within one viewport; errors or explicitly opened
-details may increase height. Check global theme changes, text contrast and
+400×900, including the BMS shell's inner scrolling container. Every axis row is
+visible without selection; vertical scrolling on narrow screens is acceptable.
+No control may be clipped or require page-wide horizontal scrolling. Check global theme changes, text contrast and
 horizontal overflow. Compare a matched passive request window with the baseline.
 No physical robot command is required for this UI qualification.
