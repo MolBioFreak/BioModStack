@@ -21,13 +21,33 @@ RECIPE_FIELDS = {
     'reaspiration_volume_ul': ('multi', 'reaspiration', 'volume_ul'),
     'dispense_to_reaspiration_delay_ms': ('multi', 'dispense_to_reaspiration_delay_ms'),
 }
+# One class value, the speed of aspirating air gaps, lands on each existing
+# native Air phase (Recipe.leading_air/trailing_air.speed_ul_s). No phase is
+# created for it; an explicitly null/absent phase receives nothing.
+AIR_GAP_SPEED_FIELD = 'air_gap_aspiration_speed_ul_s'
+AIR_GAP_SPEED_PATHS = (('leading_air', 'speed_ul_s'), ('trailing_air', 'speed_ul_s'))
+# Retained explicit representation errors:
+# retract_distance_mm: native Z motion is in steps only (z_move target_steps,
+#   lift height_steps relative to zLow); the native owner defines no Z mm->steps
+#   conversion, so no conversion is invented here.
+# calibration_function/correction_points: native Recipe has no calibration
+#   field and does not call cavro_liquid.correction_at_target; the corrected
+#   displacement is authored directly as commanded_corrected_aspiration_ul.
+UNMAPPED_REASONS = {
+    'retract_distance_mm': 'native Z motion is authored in steps (after_liquid lift height_steps / z_move target_steps); '
+                           'the native owner defines no Z mm-to-steps conversion',
+    'calibration_function': 'native Recipe has no calibration field and does not call correction_at_target; '
+                            'author commanded_corrected_aspiration_ul explicitly',
+    'correction_points': 'native Recipe has no correction field and does not call correction_at_target; '
+                         'author commanded_corrected_aspiration_ul explicitly',
+}
 
 
 def liquid_selection_schema():
     """Typed executable selection fields; persistence still preserves raw JSON."""
     from bioxp_method_native import SETTINGS
     number = {'anyOf': [{'type': 'number'}, {'type': 'string'}, {'type': 'null'}]}
-    settings = {key: deepcopy(number) for key in RECIPE_FIELDS if key != 'dispense_segments'}
+    settings = {key: deepcopy(number) for key in (*RECIPE_FIELDS, AIR_GAP_SPEED_FIELD) if key != 'dispense_segments'}
     settings.update({key: {'anyOf': [deepcopy(value), {'type': 'null'}]} for key, value in SETTINGS['properties'].items()})
     settings['dispense_segments'] = {'type': 'array', 'items': {'type': 'object', 'properties': {
         'volume_ul': deepcopy(number), 'speed_ul_s': deepcopy(number),
@@ -98,6 +118,15 @@ def liquid_resolution(inputs, dependencies):
             recipe_requested[field] = deepcopy(value)
             if field not in requested:
                 requested[field] = deepcopy(value)
+    # Authored air-phase speeds count as the request only when every authored
+    # phase agrees; differing phase speeds stay phase-specific authored values.
+    # A phase missing its speed is not filled from the other phase's speed.
+    phases = [recipe[p] for p, _ in AIR_GAP_SPEED_PATHS if isinstance(recipe.get(p), dict)]
+    authored_air = [phase['speed_ul_s'] for phase in phases if 'speed_ul_s' in phase]
+    if authored_air and len(authored_air) == len(phases) and all(same_setting(authored_air[0], v) for v in authored_air):
+        recipe_requested[AIR_GAP_SPEED_FIELD] = deepcopy(authored_air[0])
+        if AIR_GAP_SPEED_FIELD not in requested:
+            requested[AIR_GAP_SPEED_FIELD] = deepcopy(authored_air[0])
     resolution = resolve_liquid_settings(requested,
         liquid_class=entry('liquid_class'), water=entry('water'), context=selection['context'])
     resolution['selection_requested'] = deepcopy(selection.get('requested', {}))
@@ -111,11 +140,15 @@ def liquid_resolution(inputs, dependencies):
             if phase not in {'leading_air', 'aspirate', 'trailing_air', 'dispense'} or field not in SETTINGS['properties']:
                 raise ValueError(f'{field}: unsupported explicit setting phase {phase!r}')
             path = ('phase_settings', phase, field)
+        if path is None and field == AIR_GAP_SPEED_FIELD:
+            continue  # applied after every phase volume is placed, below
         if path is None:
             resolution['issues'].append({'code': 'liquid_field_not_mapped', 'category': 'advisory',
                 'path': '/' + field, 'message': 'No native recipe field mapping; retained, not reported applied.'})
             if resolution['fields'][field]['requested']['present']:
-                raise ValueError(f'{field}: explicit liquid setting has no native recipe mapping; no partial recipe emitted')
+                reason = UNMAPPED_REASONS.get(field)
+                raise ValueError(f'{field}: explicit liquid setting has no native recipe mapping; no partial recipe emitted'
+                                 + (f' ({reason})' if reason else ''))
             continue
         applied_value = deepcopy(value)
         if field == 'dispense_segments':
@@ -139,6 +172,29 @@ def liquid_resolution(inputs, dependencies):
             raise ValueError(f'{field}: liquid setting conflicts with explicitly authored recipe {"/".join(path)}')
         target[key] = deepcopy(applied_value)
         emitted[field] = {'status': 'emitted', 'value': deepcopy(applied_value), 'native_path': '/recipe/' + '/'.join(path)}
+    if AIR_GAP_SPEED_FIELD in resolution['resolved'] and AIR_GAP_SPEED_FIELD not in selection.get('setting_phases', {}):
+        value = resolution['resolved'][AIR_GAP_SPEED_FIELD]
+        explicit = resolution['fields'][AIR_GAP_SPEED_FIELD]['requested']['present']
+        paths, retained = [], []
+        for phase, key in AIR_GAP_SPEED_PATHS:
+            target = recipe.get(phase)
+            if not isinstance(target, dict):
+                continue  # absent/explicit-null air phase: no air stroke, nothing fabricated
+            if key in target and not same_setting(target[key], value):
+                if explicit:
+                    raise ValueError(f'{AIR_GAP_SPEED_FIELD}: liquid setting conflicts with explicitly authored recipe {phase}/{key}')
+                retained.append('/recipe/' + phase + '/' + key)  # authored phase speed is never overwritten
+                continue
+            target[key] = deepcopy(value)
+            paths.append('/recipe/' + phase + '/' + key)
+        if paths:
+            emitted[AIR_GAP_SPEED_FIELD] = {'status': 'emitted', 'value': deepcopy(value), 'native_paths': paths,
+                                            'native_path': paths[0], 'authored_phase_values_retained': retained}
+        elif explicit:
+            raise ValueError(f'{AIR_GAP_SPEED_FIELD}: recipe has no leading_air/trailing_air phase to receive the explicit speed; no air phase is fabricated')
+        else:
+            resolution['issues'].append({'code': 'liquid_field_not_emitted', 'category': 'advisory', 'path': '/' + AIR_GAP_SPEED_FIELD,
+                'message': 'No receiving native air phase (or authored phase speeds retained); not reported applied.'})
     resolution = record_liquid_application(resolution, emitted=emitted)
     recipe.setdefault('liquid_settings', {})['bms_resolution'] = deepcopy(resolution)
     return resolution

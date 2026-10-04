@@ -3,6 +3,19 @@ from copy import deepcopy
 import json
 
 
+def snapshot_evidence(document, snapshot):
+    """Describe what the original snapshot records; never a gate or a rewrite."""
+    if not isinstance(snapshot, dict):
+        return None
+    if "snapshot_evidence" in snapshot and snapshot.get("schema") == "bms.bioxp-compiler-snapshot.v1":
+        return deepcopy(snapshot["snapshot_evidence"])
+    # Complete facade envelope written before native submission. Presence of the
+    # key is the submitter's original omitted vs explicit null/object intent.
+    return {"source": "protocol.document.metadata.bms_method_run", "complete_run_envelope": True,
+            "initial_state_presence": "submitted" if "initial_state" in snapshot else "omitted",
+            "limitations": []}
+
+
 def method_snapshot(document):
     metadata = document.get("metadata")
     if not isinstance(metadata, dict):

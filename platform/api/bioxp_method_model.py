@@ -118,7 +118,7 @@ def method_catalog():
             from bioxp_method_planning import RECIPE_FIELDS
             inherited_top = {path[0] for path in RECIPE_FIELDS.values() if len(path) == 1}
             schema_input['required'] = [key for key in schema_input['required'] if key not in inherited_top]
-            definitions['Air']['required'] = ['speed_ul_s']
+            definitions['Air']['required'] = []  # volume and speed may resolve through pinned class/Water
             inherited_multi = {path[1] for path in RECIPE_FIELDS.values() if len(path) == 2 and path[0] == 'multi'}
             definitions['Multi']['required'] = [key for key in definitions['Multi']['required'] if key not in inherited_multi]
             schema_input['description'] = 'Editable recipe: omitted applicable mapped fields may resolve through pinned class/Water. Final native Recipe is validated after resolution.'

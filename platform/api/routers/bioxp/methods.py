@@ -284,6 +284,11 @@ def _snapshot(job):
     return method_snapshot(job.protocol.document)
 
 
+def _evidence(job, snapshot):
+    from services.bioxp.method_snapshot import snapshot_evidence
+    return snapshot_evidence(job.protocol.document, snapshot)
+
+
 @router.get("/runs/{job_id}/report")
 async def report(job_id: str, expected_connection_generation: int | None = Query(None, ge=0),
                  runtime=Depends(get_bioxp_runtime)):
@@ -292,6 +297,7 @@ async def report(job_id: str, expected_connection_generation: int | None = Query
     state = job.execution.runtime_state
     return {"job_id": job.job_id, "status": job.status, "command": job.command,
             "method_snapshot": snapshot, "snapshot_available": snapshot is not None,
+            "snapshot_evidence": _evidence(job, snapshot),
             "created_at": job.created_at, "updated_at": job.updated_at,
             "duration": duration_report(state),
             "workflow": state.workflow, "stage_states": state.stage_states,
@@ -313,7 +319,7 @@ async def clone_run(job_id: str, expected_connection_generation: int | None = Qu
                                   "message": "Original raw method snapshot is unavailable"})
     result = {key: deepcopy(snapshot[key]) for key in ("method", "bindings", "dependencies", "initial_state") if key in snapshot}
     return {**result, "original_job_id": job_id, "submitted": False,
-            **({"snapshot_evidence": deepcopy(snapshot["snapshot_evidence"])} if "snapshot_evidence" in snapshot else {})}
+            "snapshot_evidence": _evidence(job, snapshot)}
 
 
 @router.post("/runs/{job_id}/recovery-draft")
@@ -334,7 +340,7 @@ async def recovery(job_id: str, data: Recovery,
             "recovery": {"original_job_id": job_id, "occurrence": data.occurrence,
                          "occurrence_resolution": resolve_occurrence(snapshot, data.occurrence),
                          "original_assumptions": {"initial_state": deepcopy(snapshot["initial_state"])} if "initial_state" in snapshot else {},
-                         **({"snapshot_evidence": deepcopy(snapshot["snapshot_evidence"])} if "snapshot_evidence" in snapshot else {}),
+                         "snapshot_evidence": _evidence(job, snapshot),
                          "assumptions_overridden": "initial_state" in data.model_fields_set,
                          "included_occurrences": original_occurrences(snapshot),
                          "automatic_setup": [], "excluded_actions": [], "submitted": False,
