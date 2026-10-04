@@ -152,8 +152,7 @@ it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('authors a generic numeric p
     await input('Parameters[0].type presence', 'value'); await input('Parameters[0].type', '0');
     await input('Parameters[0].default presence', 'value'); await input('Parameters[0].default type', 'number');
     await input('Action palette', 'wait'); await click('Add step');
-    const label = [...host.querySelectorAll('select')].map(e => e.getAttribute('aria-label') ?? '').find(label => label.startsWith('Inputs ') && label.endsWith('.seconds presence'))!;
-    await input(label, 'value'); await input(label.replace(/ presence$/, ''), '001.2500');
+    await input('Wait time (seconds)', '001.2500');
     await click('Save'); await click('Compile');
     expect(results.at(-1).document).toBeNull(); expect(results.at(-1).issues.length).toBeGreaterThan(0);
     await click('New'); await input('Library entry', 'm2'); await click('Open');
