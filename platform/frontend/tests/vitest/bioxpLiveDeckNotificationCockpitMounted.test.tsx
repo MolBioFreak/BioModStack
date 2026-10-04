@@ -89,6 +89,16 @@ it('service restart remains a single-click action while the native API is unreac
     expect(api.post).toHaveBeenCalledTimes(1);
 });
 
+it('service restart reports an inactive unit honestly instead of claiming that the API recovered', async () => {
+    await mount();
+    vi.mocked(api.post).mockResolvedValueOnce({ data: { restarted: true, unit: 'bioxp-api.service', active_state: 'failed', sub_state: 'failed', invocation_id: '', pid: 0 } });
+    const panel = host.querySelector('[aria-label="Robot service restart"]')!;
+    await click(panel.querySelector('button')!);
+    expect(panel.querySelector('[role="status"]')?.textContent).toContain('robot service reports failed / failed');
+    expect(panel.textContent).not.toContain('Robot service restarted.');
+    expect(api.post).toHaveBeenCalledTimes(1);
+});
+
 it('service restart is visible on all four tabs and never submits on navigation', async () => {
     await mount();
     for (const tab of ['robot', 'pipettes', 'workflows', 'live-deck']) {

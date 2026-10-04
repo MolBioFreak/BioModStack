@@ -58,7 +58,9 @@ export function BioXpServiceRestart({ generation }: { generation: number }) {
                 {restart.isPending ? 'Restarting robot service…' : 'Restart robot service'}
             </button>
         </div>
-        {restart.isSuccess && <p role="status" className="mt-2 text-sm">Robot service restarted. Controls may take a moment to reconnect. If the BMS link is disconnected, reconnect it.</p>}
+        {restart.isSuccess && <p role="status" className="mt-2 text-sm">{restart.data.active_state === 'active' && restart.data.sub_state === 'running'
+            ? 'Robot service restarted. Controls may take a moment to reconnect. If the BMS link is disconnected, reconnect it.'
+            : `Restart request completed; robot service reports ${restart.data.active_state} / ${restart.data.sub_state}. This does not confirm that the robot API is ready.`}</p>}
         {restart.isError && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpErrorText(restart.error)} No automatic retry was made.</p>}
     </section>;
 }
