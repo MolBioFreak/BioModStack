@@ -10,7 +10,7 @@ import { BioXpMethodsWorkspace } from '../../src/components/BioXpMethodsWorkspac
 import { BioXpMethodDeckWorkbench } from '../../src/components/BioXpMethodDeckWorkbench';
 import type { MethodValue } from '../../src/lib/bioxpMethods';
 import publishedCatalog from '../fixtures/bioxp_method_deck_catalog.json';
-import { methodInputBinding } from '../../src/lib/bioxpMethodInputBinding';
+import { methodInputBinding, removeMethodInputParameters } from '../../src/lib/bioxpMethodInputBinding';
 import { api } from '../../src/lib/api';
 
 const contractPath = process.env.BIOXP_METHOD_MODEL_CONTRACT;
@@ -19,9 +19,15 @@ let host: HTMLDivElement, root: Root, client: QueryClient, oldAdapter: typeof ap
 let requests: any[], db: any, results: any[];
 async function settle() { await act(async () => { await new Promise(r => setTimeout(r, 12)); }); }
 async function mount() { client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } }); root = createRoot(host); await act(async () => root.render(<QueryClientProvider client={client}><BioXpMethodsWorkspace generation={7} connected={false} controlsEnabled={false} /></QueryClientProvider>)); await settle(); }
-async function click(name: string) { const el = [...host.querySelectorAll('button')].find(n => n.textContent === name || n.getAttribute('aria-label') === name)!; expect(el, name).toBeTruthy(); expect(el.disabled, name).toBe(false); await act(async () => el.click()); await settle(); }
+async function reveal(el: Element) {
+    const ancestors: HTMLDetailsElement[] = [];
+    for (let p = el.parentElement; p; p = p.parentElement) if (p instanceof HTMLDetailsElement && !p.open) ancestors.push(p);
+    await act(async () => { ancestors.reverse().forEach(p => (p.querySelector(':scope > summary') as HTMLElement)?.click()); });
+    await settle();
+}
+async function click(name: string) { const el = [...host.querySelectorAll('button')].find(n => n.textContent === name || n.getAttribute('aria-label') === name)!; expect(el, name).toBeTruthy(); expect(el.disabled, name).toBe(false); await reveal(el); await act(async () => el.click()); await settle(); }
 function control(name: string) { return host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${name}"]`) ?? [...host.querySelectorAll('label')].find(n => [...n.childNodes].filter(c => c.nodeType === Node.TEXT_NODE).map(c => c.textContent).join('') === name)?.querySelector<HTMLInputElement | HTMLSelectElement>('input,select'); }
-async function input(name: string, value: string) { const el = control(name)!; expect(el, name).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); await settle(); }
+async function input(name: string, value: string) { const el = control(name)!; expect(el, name).toBeTruthy(); await reveal(el); await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); await settle(); }
 async function check(name: string) { const el = control(name)!; expect(el, name).toBeTruthy(); await act(async () => el.click()); await settle(); }
 async function well(station: string, address: string) { const el = host.querySelector(`[aria-label="Method deck"] [data-station="${station}"][data-well="${address}"]`)!; expect(el).toBeTruthy(); await act(async () => el.dispatchEvent(new MouseEvent('click', { bubbles: true }))); await settle(); }
 async function selectStep(text: string) { const el = [...host.querySelectorAll<HTMLButtonElement>('.bioxp-method-sequence button')].find(e => e.textContent?.includes(text))!; expect(el, text).toBeTruthy(); await act(async () => el.click()); await settle(); }
@@ -65,6 +71,15 @@ it('projects only declared direct object parameters, preserving explicit null/no
     expect(methodInputBinding({}, { inputs: reference }, {})).toMatchObject({ editable: false });
 });
 
+it('removes only orphaned step inputs and retains references from other steps or parameter defaults', () => {
+    const expr = { expr: { version: 1, op: 'param', id: 'reagent' } };
+    const removed = { step_id: 'removed', action: 'transfer', inputs: expr };
+    const method = { parameters: [{ id: 'reagent', type: 'object', future: null }], steps: [] };
+    expect(removeMethodInputParameters(method, removed, { reagent: {} })).toMatchObject({ method: { parameters: [] }, bindings: {}, changed: true });
+    expect(removeMethodInputParameters({ ...method, steps: [{ inputs: expr }] }, removed, { reagent: {} }).changed).toBe(false);
+    expect(removeMethodInputParameters({ ...method, parameters: [...method.parameters, { id: 'other', type: 'object', default: expr }] }, removed, { reagent: {} }).changed).toBe(false);
+});
+
 it('mounted inherited defaults are visible without bindings; editing and duplicating preserve AST/default/null/unknown values independently', async () => {
     const reference = { expr: { version: 1, op: 'param', id: 'reaction', future: null } };
     const inherited = { source: { station: 'LOC_RC', location_id: 3, wells: ['A1'], future: null }, volume_ul: '001.2000', channels: [0], source_lift_height_steps: null, future: { raw: false } };
@@ -81,6 +96,9 @@ it('mounted inherited defaults are visible without bindings; editing and duplica
     const copy = (current.steps as MethodValue[])[1], copyId = (copy.inputs as any).expr.id;
     expect(copyId).not.toBe('reaction'); expect(bindings.reaction).toEqual({ ...inherited, volume_ul: '002.5000' }); expect(bindings[copyId]).toEqual({ ...inherited, volume_ul: '003.7500' });
     expect((current.parameters as MethodValue[])[1]).toMatchObject({ default: inherited, future: false });
+    await click('Remove step');
+    expect((current.parameters as MethodValue[]).map(p => p.id)).toEqual(['reaction']);
+    expect(bindings).toEqual({ reaction: { ...inherited, volume_ul: '002.5000' } });
 });
 
 it('mounted explicit null and arbitrary expressions stay advanced instead of being replaced by empty friendly controls', async () => {
