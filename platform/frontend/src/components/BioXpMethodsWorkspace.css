@@ -14,3 +14,17 @@
 .bioxp-methods th, .bioxp-methods td { text-align:left; vertical-align:top; padding:.4rem; border:1px solid var(--border-primary, #334155); }
 .bioxp-methods [role=alert] { color:var(--text-danger, #fca5a5); }
 .bioxp-methods [role=status] { padding:.35rem; border-left:3px solid #0891b2; }
+
+.bioxp-method-workbench { display:grid; grid-template-columns:minmax(0, 1.65fr) minmax(18rem, 1fr); gap:1rem; align-items:start; }
+.bioxp-method-workbench.is-sequence-only { grid-template-columns:minmax(0, 1fr); }
+.bioxp-method-map, .bioxp-method-inspector { min-width:0; }
+.bioxp-method-map .bwd-map { aspect-ratio:auto; height:clamp(340px, 56vh, 620px); }
+.bioxp-method-map > h3, .bioxp-method-inspector h3 { margin:.25rem 0 .5rem; font-weight:600; }
+.bioxp-method-adopt { padding:.6rem; border:1px solid var(--border-primary, #334155); border-radius:.4rem; }
+.bioxp-method-sequence { max-height:15rem; overflow:auto; list-style:none; padding:0; }
+.bioxp-method-sequence button { width:calc(100% - .4rem); text-align:left; overflow-wrap:anywhere; }
+.bioxp-method-sequence button[aria-pressed=true] { border-color:var(--accent-primary, #0891b2); background:var(--bg-tertiary, #164e63); }
+.bioxp-method-inspector > section > details[open] { max-height:38rem; overflow:auto; }
+.bioxp-method-inspector fieldset fieldset { margin:.2rem 0; }
+.bioxp-method-inspector small { display:block; }
+@media (max-width: 950px) { .bioxp-method-workbench { grid-template-columns:minmax(0, 1fr); } .bioxp-method-inspector > section > details[open] { max-height:none; } }

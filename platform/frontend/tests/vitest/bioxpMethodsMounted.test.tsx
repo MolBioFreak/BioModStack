@@ -42,7 +42,7 @@ function fail(config: any, status: number, detail: unknown): never { throw new A
 async function settle() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 15)); }); }
 async function render() { await act(async () => root.render(<QueryClientProvider client={client}><BioXpMethodsWorkspace generation={generation} connected controlsEnabled visible={visible} /></QueryClientProvider>)); await settle(); }
 async function mount() { root = createRoot(host); await render(); }
-function button(name: string) { const node = [...host.querySelectorAll('button')].find(n => n.textContent === name); expect(node, name).toBeTruthy(); return node!; }
+function button(name: string) { const node = [...host.querySelectorAll('button')].find(n => n.textContent === name || n.getAttribute('aria-label') === name); expect(node, name).toBeTruthy(); return node!; }
 async function click(name: string) { await act(async () => button(name).click()); await settle(); }
 async function input(label: string, value: string) { const el = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(el, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); await settle(); }
 async function openOriginal() { await input('Library entry', 'm1'); await click('Open'); }
@@ -151,7 +151,7 @@ it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('authors a generic numeric p
     await input('Parameters[0].id presence', 'value'); await input('Parameters[0].id', 'precise');
     await input('Parameters[0].type presence', 'value'); await input('Parameters[0].type', '0');
     await input('Parameters[0].default presence', 'value'); await input('Parameters[0].default type', 'number');
-    await input('Action palette', 'wait'); await click('Add node');
+    await input('Action palette', 'wait'); await click('Add step');
     const label = [...host.querySelectorAll('select')].map(e => e.getAttribute('aria-label') ?? '').find(label => label.startsWith('Inputs ') && label.endsWith('.seconds presence'))!;
     await input(label, 'value'); await input(label.replace(/ presence$/, ''), '001.2500');
     await click('Save'); await click('Compile');
@@ -465,4 +465,133 @@ it('shows live progress paths carried in native action metadata', async () => {
         metadata: { bms_method: { path: '/method/steps/0', call_path: [], loop_path: [1] } } }] }} />);
     expect(html).toContain('/method/steps/0');
     expect(html).toContain('&quot;loop_path&quot;:[1]');
+});
+
+
+const deckCatalog = JSON.parse(readFileSync('tests/fixtures/bioxp_method_deck_catalog.json', 'utf8'));
+function publishedDeckCatalog() {
+    const transport = api.defaults.adapter as AxiosAdapter;
+    api.defaults.adapter = async config => config.url?.endsWith('/catalog')
+        ? { config, status: 200, statusText: 'OK', headers: {}, data: structuredClone(deckCatalog) }
+        : transport(config);
+}
+async function mapWell(station: string, well: string, keyboard = false) {
+    const el = host.querySelector<SVGGElement>(`[data-station="${station}"][data-well="${well}"]`)!;
+    expect(el).toBeTruthy();
+    await act(async () => el.dispatchEvent(keyboard ? new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }) : new MouseEvent('click', { bubbles: true })));
+    await settle();
+}
+it.each(['manual', 'class'])('composes map-driven Move and %s Transfer, selected Properties, materials and cold Save/Open without robot mutations', async mode => {
+    publishedDeckCatalog(); await mount();
+    const map = host.querySelector('[aria-label="BioXP deck map"]')!;
+    expect(map.closest('details')).toBeNull();
+    await input('Method name', `Deck ${mode}`);
+    await mapWell('LOC_RC', 'A1');
+    expect(host.querySelectorAll('.bioxp-method-sequence li')).toHaveLength(0);
+    await click('Add Move');
+    const moveId = host.querySelector('[aria-label^="Label "]')!.getAttribute('aria-label')!.slice(6);
+    await input(`Inputs ${moveId}.position_flag presence`, 'value');
+    await input(`Inputs ${moveId}.position_flag`, '1');
+    await mapWell('LOC_TC', 'B2', true); await click('Use as Move target');
+    await input('New Transfer settings', mode); await click('Add Transfer');
+    const transferId = host.querySelector('[aria-label^="Label "]')!.getAttribute('aria-label')!.slice(6);
+    expect(host.querySelectorAll('.bioxp-method-inspector [aria-label^="Label "]')).toHaveLength(1);
+    expect(host.querySelector(`[aria-label="Inputs ${moveId}.position_flag"]`)).toBeNull();
+    await mapWell('LOC_RC', 'A3'); await click('Use as source');
+    await mapWell('LOC_OC', 'B4', true); await click('Use as destination');
+    await input(`Inputs ${transferId}.volume_ul presence`, 'value');
+    await input(`Inputs ${transferId}.volume_ul`, '020.000100');
+    await click('Add labware at selected station'); await click('Add reagent');
+    await click('Assign material to selected wells');
+    await click('Select step 1');
+    expect(host.querySelector(`[aria-label="Inputs ${moveId}.position_flag"]`)).toBeTruthy();
+    expect(host.querySelector(`[aria-label="Inputs ${transferId}.volume_ul"]`)).toBeNull();
+    await click('Select step 2'); await click('Save');
+    const saved = structuredClone(db.m2.method);
+    expect(saved.steps[0]).toEqual({ step_id: moveId, type: 'action', action: 'move', inputs: { location_id: 2, well: 'B2', position_flag: 1 } });
+    expect(saved.steps[1].inputs).toEqual({ source: { station: 'LOC_RC', location_id: 3, wells: ['A3'] }, destination: { station: 'LOC_OC', location_id: 1, wells: ['B4'] }, volume_ul: '020.000100', ...(mode === 'class' ? { liquid: {}, recipe: {} } : {}) });
+    expect(saved.deck_plan.labware[0].station).toBe('LOC_OC');
+    expect(saved.deck_plan.assignments[0]).toMatchObject({ well: 'B4', volume_ul: '' });
+    await act(async () => root.unmount()); client.clear(); await mount(); await input('Library entry', 'm2'); await click('Open');
+    await click('Select step 2');
+    expect((host.querySelector(`[aria-label="Inputs ${transferId} variant"]`) as HTMLSelectElement).value).toBe(mode === 'class' ? '1' : '0');
+    expect((host.querySelector(`[aria-label="Inputs ${transferId}.volume_ul"]`) as HTMLInputElement).value).toBe('020.000100');
+    await click('Preview');
+    expect(requests.filter(r => r.url.endsWith('/compile')).at(-1)!.body.method).toEqual(saved);
+    await click('Save'); expect(db.m2.method).toEqual(saved);
+    await click('Quick run'); await mapWell('LOC_MS', 'A2'); await click('Add Move');
+    await click('Methods'); await click('Save'); expect(db.m2.method).toEqual(saved);
+    expect(submits()).toHaveLength(0);
+    expect(requests.every(r => r.url.startsWith('/api/bioxp/methods/'))).toBe(true);
+    expect(requests.filter(r => r.method !== 'get').every(r => /\/(library|check|compile)(\/[^/]+)?$/.test(r.url))).toBe(true);
+});
+
+
+it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('emits deck-edited Move and Transfer endpoints through the actual pure compiler', async () => {
+    const contracts = JSON.parse(readFileSync(process.env.BIOXP_METHOD_MODEL_CONTRACT!, 'utf8'));
+    const fixture = contracts.examples[0].bound_fixture;
+    db.m1.method = { schema: 'bms.bioxp-method.v1', name: 'Software-only deck compiler fixture', steps: [{ step_id: 'fixture-transfer', type: 'action', action: 'transfer', inputs: structuredClone(fixture.bindings.assemble_inputs) }] };
+    const transport = api.defaults.adapter as AxiosAdapter;
+    let result: any;
+    api.defaults.adapter = async config => {
+        const part = config.url?.split('/').at(-1);
+        if (['catalog', 'schema', 'examples'].includes(part ?? '')) return { config, status: 200, statusText: 'OK', headers: {}, data: contracts[part!] };
+        if (part === 'compile') {
+            const body = JSON.parse(config.data);
+            const produced = spawnSync(process.env.BMS_TEST_PYTHON ?? 'python', ['-c', 'import json,sys; from bioxp_method_compiler import compile_method; print(json.dumps(compile_method(json.load(sys.stdin))))'], { cwd: process.env.BIOXP_METHOD_API_DIR ?? '../api', encoding: 'utf8', input: JSON.stringify(body) });
+            expect(produced.status, produced.stderr).toBe(0); result = JSON.parse(produced.stdout);
+            return { config, status: 200, statusText: 'OK', headers: {}, data: result };
+        }
+        return transport(config);
+    };
+    await mount(); await openOriginal();
+    await mapWell('LOC_RC', 'A3'); await click('Use as source');
+    await mapWell('LOC_OC', 'B4'); await click('Use as destination');
+    await input('Inputs fixture-transfer.volume_ul', '010.000');
+    await mapWell('LOC_TC', 'B2'); await click('Add Move');
+    const moveId = host.querySelector('[aria-label^="Label "]')!.getAttribute('aria-label')!.slice(6);
+    await input(`Inputs ${moveId}.position_flag presence`, 'value'); await input(`Inputs ${moveId}.position_flag`, '1');
+    await click('Save'); await click('Preview');
+    expect(result.document, JSON.stringify(result.issues)).toBeTruthy();
+    const actions = result.document.stages.flatMap((s: any) => s.actions);
+    const moves = actions.filter((a: any) => a.kind === 'pipette_position' && a.params.operation === 'move');
+    expect(moves.map((a: any) => [a.params.location_id, a.params.well])).toEqual([[3, 'A3'], [1, 'B4'], [2, 'B2']]);
+    expect(db.m1.method.steps[0].inputs.volume_ul).toBe('010.000');
+    expect(submits()).toHaveLength(0);
+});
+
+
+it('adopts a map target into a nested selected action without changing its raw extensions or siblings', async () => {
+    db.m1.method.steps = [{ step_id: 'group', type: 'group', future: null, steps: [structuredClone(sourceMethod.steps[0]), { step_id: 'sibling', type: 'action', action: 'move', inputs: { location_id: 1, well: 7 } }] }];
+    await mount(); await openOriginal();
+    const children = host.querySelectorAll<HTMLButtonElement>('[aria-label="Select step 1"]');
+    await act(async () => children[children.length - 1].click()); await settle();
+    await mapWell('LOC_RC', 'A3'); await click('Use as Move target'); await click('Save');
+    const group = db.m1.method.steps[0];
+    expect(group.future).toBeNull();
+    expect(group.steps[0]).toEqual({ ...sourceMethod.steps[0], inputs: { ...sourceMethod.steps[0].inputs, location_id: 3, well: 'A3' } });
+    expect(group.steps[1]).toEqual({ step_id: 'sibling', type: 'action', action: 'move', inputs: { location_id: 1, well: 7 } });
+    expect(host.querySelectorAll('.bioxp-method-inspector [aria-label^="Label "]')).toHaveLength(1);
+    expect(submits()).toHaveLength(0);
+});
+
+
+it('authors chiller, cycler and door steps from stations without wells or scientific defaults, preserving the same sequence-only draft', async () => {
+    publishedDeckCatalog(); await mount();
+    await input('Deck station', 'LOC_RC'); await click('Add temperature step');
+    await input('Deck station', 'LOC_OC'); await click('Add temperature step');
+    await input('Deck station', 'LOC_TC'); await click('Add temperature step'); await click('Add hold'); await click('Add PCR cycle'); await click('Add door Open'); await click('Add door Close');
+    await click('Save');
+    const saved = structuredClone(db.m2.method);
+    expect(saved.steps.map((n: any) => [n.action, n.inputs])).toEqual([
+        ['chiller_setpoint', { bank: 'rc' }], ['chiller_setpoint', { bank: 'oc' }],
+        ['thermal_setpoint', {}], ['thermal_hold', {}], ['thermal_profile', { segments: [] }],
+        ['thermal_door', { door_command: 'DO' }], ['thermal_door', { door_command: 'DC' }],
+    ]);
+    await click('Sequence only');
+    expect((host.querySelector('[aria-label="Method deck"]') as HTMLElement).hidden).toBe(true);
+    await click('Deck & sequence');
+    expect((host.querySelector('[aria-label="Method deck"]') as HTMLElement).hidden).toBe(false);
+    await click('Save'); expect(db.m2.method).toEqual(saved);
+    expect(submits()).toHaveLength(0);
 });

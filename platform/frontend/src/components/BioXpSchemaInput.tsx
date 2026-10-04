@@ -75,6 +75,7 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
     fallback: (label: string, value: unknown, onChange: (value: unknown) => void) => React.ReactNode;
 }) {
     const [newKey, setNewKey] = useState('');
+    const display = (name: string) => rawDraft ? name.replace(/^(Inputs|Node|Structure|Repeat|Condition|Arguments) [^.\[]+/, '$1').replaceAll('_', ' ') : name;
     // Object unions can share a type and start empty. Keep an explicit choice
     // while authoring; persisted unique field names identify it on reopen.
     const [chosenVariant, setChosenVariant] = useState<number | null>(null);
@@ -110,19 +111,19 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
     if (rawDraft && isMethodNumber(value)) return fallback(label, value, onChange);
     if (rawDraft && objectValue(value) && objectValue(value.expr)) return <BioXpMethodExpression label={label} value={value} onChange={onChange} literal={(v, change) => fallback(`${label} literal`, v, change)} />;
     return <fieldset className="min-w-0 space-y-2 rounded border border-slate-700 p-2">
-        <legend>{label}</legend>
-        {rawDraft && ['string', 'number', 'integer', 'boolean'].includes(String(kind)) && !enums && <button type="button" onClick={() => onChange({ expr: { version: 1, op: 'literal', value } })}>Use expression for {label}</button>}
+        <legend>{display(label)}</legend>
+        {rawDraft && ['string', 'number', 'integer', 'boolean'].includes(String(kind)) && !enums && <button type="button" aria-label={`Use expression for ${label}`} onClick={() => onChange({ expr: { version: 1, op: 'literal', value } })}>Use expression for {display(label)}</button>}
         {schema.description && <p className="text-xs text-slate-400">{schema.description}</p>}
         {choices.length > 1 && <label>Variant<select aria-label={`${label} variant`} className={classes} value={selected} onChange={event => { const index = Number(event.target.value); setChosenVariant(index); onChange(variantValue(index)); }}>
             {choices.map((choice, index) => <option key={index} value={index}>{choice.title ?? String(choice.type ?? `Variant ${index + 1}`)}</option>)}
         </select></label>}
-        {enums ? <label>{label}<select aria-label={label} className={classes} value={enums.findIndex(item => JSON.stringify(item) === JSON.stringify(value))} onChange={event => onChange(structuredClone(enums[Number(event.target.value)]))}>
+        {enums ? <label>{display(label)}<select aria-label={label} className={classes} value={enums.findIndex(item => JSON.stringify(item) === JSON.stringify(value))} onChange={event => onChange(structuredClone(enums[Number(event.target.value)]))}>
             <option value={-1}>Select…</option>{enums.map((item, index) => <option key={index} value={index}>{typeof item === 'string' ? item : JSON.stringify(item)}</option>)}
         </select></label> : kind === 'object' && objectValue(value) ? <>
             {[...new Set([...Object.keys(fields), ...Object.keys(value)])].map(name => {
                 const child = resolve(fields[name] ?? (objectValue(active.additionalProperties) ? active.additionalProperties as Schema : {}), rootSchema);
                 return <div key={name}>
-                    <label>{label}.{name}{active.required?.includes(name) ? ' *' : ''}<select aria-label={`${label}.${name} presence`} className={classes} value={value[name] === undefined ? 'omitted' : 'value'} onChange={event => update(name, event.target.value === 'omitted' ? undefined : initialValue(child))}>
+                    <label>{display(`${label}.${name}`)}{active.required?.includes(name) ? ' *' : ''}<select aria-label={`${label}.${name} presence`} className={classes} value={value[name] === undefined ? 'omitted' : 'value'} onChange={event => update(name, event.target.value === 'omitted' ? undefined : initialValue(child))}>
                         <option value="omitted">{rawDraft ? 'Unspecified (preserved)' : `Omit (service default${Object.hasOwn(child, 'default') ? `: ${JSON.stringify(child.default)}` : ''})`}</option><option value="value">Explicit value</option>
                     </select></label>
                     {value[name] !== undefined && <BioXpSchemaInput label={`${label}.${name}`} schema={child} rootSchema={rootSchema} rawDraft={rawDraft} value={value[name]} onChange={next => update(name, next)} fallback={fallback} />}
@@ -130,17 +131,17 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
             })}
             {active.additionalProperties !== false && <>
                 <label>Property name<input aria-label={`${label} property name`} className={classes} value={newKey} onChange={event => setNewKey(event.target.value)} /></label>
-                <button type="button" disabled={Object.hasOwn(value, newKey) || Object.hasOwn(fields, newKey)} onClick={() => { update(newKey, initialValue(objectValue(active.additionalProperties) ? active.additionalProperties as Schema : {})); setNewKey(''); }}>Add {label} property</button>
+                <button type="button" disabled={Object.hasOwn(value, newKey) || Object.hasOwn(fields, newKey)} onClick={() => { update(newKey, initialValue(objectValue(active.additionalProperties) ? active.additionalProperties as Schema : {})); setNewKey(''); }}>Add {display(label)} property</button>
             </>}
         </> : kind === 'array' && Array.isArray(value) ? <>
             <p className="text-xs text-slate-400">Items: {active.minItems ?? 'unbounded'} to {active.maxItems ?? 'unbounded'}</p>
             {value.map((item, index) => <div key={index}><BioXpSchemaInput label={`${label}[${index}]`} schema={active.items ?? {}} rootSchema={rootSchema} rawDraft={rawDraft} value={item} onChange={next => onChange(value.map((old, i) => i === index ? next : old))} fallback={fallback} />
-                <button type="button" onClick={() => onChange(value.filter((_, i) => i !== index))}>Remove {label}[{index}]</button></div>)}
-            <button type="button" onClick={() => onChange([...value, initialValue(active.items ?? {})])}>Add {label} item</button>
-        </> : kind === 'boolean' ? <label>{label}<input aria-label={label} type="checkbox" checked={value === true} onChange={event => onChange(event.target.checked)} /></label>
+                <button type="button" onClick={() => onChange(value.filter((_, i) => i !== index))}>Remove {display(label)}[{index}]</button></div>)}
+            <button type="button" aria-label={`Add ${label} item`} onClick={() => onChange([...value, initialValue(active.items ?? {})])}>Add {display(label)} item</button>
+        </> : kind === 'boolean' ? <label>{display(label)}<input aria-label={label} type="checkbox" checked={value === true} onChange={event => onChange(event.target.checked)} /></label>
             : kind === 'null' ? <p>Explicit null</p>
                 : kind === 'string' || kind === 'number' || kind === 'integer' ? <>
-                    <label>{label}{kind === 'string' || rawDraft ? <input aria-label={label} className={classes} type="text" minLength={active.minLength} maxLength={active.maxLength} value={String(value ?? '')} onChange={event => onChange(event.target.value)} />
+                    <label>{display(label)}{kind === 'string' || rawDraft ? <input aria-label={label} className={classes} type="text" minLength={active.minLength} maxLength={active.maxLength} value={String(value ?? '')} onChange={event => onChange(event.target.value)} />
                         : <BioXpNumericInput aria-label={label} className={classes} step={kind === 'integer' ? 1 : 'any'} min={active.minimum ?? active.exclusiveMinimum} max={active.maximum ?? active.exclusiveMaximum} value={value} onValueChange={onChange} />}</label>
                     {(active.minimum != null || active.maximum != null || active.exclusiveMinimum != null || active.exclusiveMaximum != null) && <p className="text-xs text-slate-400">Allowed: {active.minimum != null ? `≥ ${active.minimum}` : active.exclusiveMinimum != null ? `> ${active.exclusiveMinimum}` : 'unbounded'} to {active.maximum != null ? `≤ ${active.maximum}` : active.exclusiveMaximum != null ? `< ${active.exclusiveMaximum}` : 'unbounded'}</p>}
                 </> : fallback(label, value, onChange)}
