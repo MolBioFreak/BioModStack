@@ -501,7 +501,7 @@ it.each(['manual', 'class'])('composes map-driven Move and %s Transfer, selected
     await mapWell('LOC_OC', 'B4', true); await click('Use as destination');
     await input(`Inputs ${transferId}.volume_ul presence`, 'value');
     await input(`Inputs ${transferId}.volume_ul`, '020.000100');
-    await click('Add labware at selected station'); await click('Add reagent');
+    await click('Set up labware & reagents'); await click('Add labware at selected station'); await click('Add reagent');
     await click('Assign material to selected wells');
     await click('Select step 1');
     expect(host.querySelector(`[aria-label="Inputs ${moveId}.position_flag"]`)).toBeTruthy();

@@ -21,7 +21,7 @@ export function BioXpWorkflowTransferEditor({ value, onChange, selection, onSele
         endpoint(side, { wells });
     };
     return <section className="bioxp-plan-leaf" aria-label="Transfer editor">
-        <header><h3>Transfer</h3>{!compact && <p>Ordered head-reference pairs. Selected plunger channels do not reposition the head; native TipLocation owns actual alignment.</p>}</header>
+        <header><h3>Transfer</h3><p>Volume is per selected plunger for each ordered head-reference pair. Channel selection does not position four independent wells; native TipLocation owns alignment.</p></header>
         <p>Deck selection: {selectedStation?.label || selection.station || 'None'} · {selection.wells.join(', ') || 'No reference wells'}</p>
         <div className="bioxp-plan-columns">{(['source', 'destination'] as const).map(side => {
             const title = side === 'source' ? 'Source' : 'Destination';
