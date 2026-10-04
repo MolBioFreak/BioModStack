@@ -23,6 +23,7 @@ export type BioXpLiveDeckProps = {
     doorControls: React.ReactNode;
     movementControls: React.ReactNode;
     commandDetails: React.ReactNode;
+    commandDetailsOpen?: boolean;
     onCommandDetailsToggle?: (open: boolean) => void;
     transferControls: React.ReactNode | ((visible: boolean) => React.ReactNode);
 };
@@ -117,7 +118,7 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
                 </section>
             </aside>
         </div>
-        <details className="bld-details" onToggle={event => props.onCommandDetailsToggle?.(event.currentTarget.open)}><summary>Command details</summary>{props.commandDetails}</details>
+        <details className="bld-details" open={props.commandDetailsOpen} onToggle={event => props.onCommandDetailsToggle?.(event.currentTarget.open)}><summary>Command details</summary>{props.commandDetails}</details>
         <details className="bld-details" onToggle={event => setTransferOpen(event.currentTarget.open)}><summary>Plate and cover handling</summary>
             {typeof props.transferControls === 'function' ? props.transferControls(visible && transferOpen) : props.transferControls}
         </details>

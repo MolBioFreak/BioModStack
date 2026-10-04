@@ -1741,7 +1741,7 @@ export type BioXpOperatorActionV2Request =
     | (BioXpOperatorActionV2Envelope & { action_id: 'meta.activate_motion' | 'meta.recover_motion_non_homing'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_steps' | 'oem.z.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_absolute' | 'oem.z.move_absolute'; inputs: { position_steps: number } })
-    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.clear' | 'oem.xy.home' | 'oem.deck.collect_authority'; inputs: Record<string, never> })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.diagnostic_home_axis' | 'oem.z.clear' | 'oem.xy.home' | 'oem.deck.collect_authority'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.move_absolute'; inputs: { x: number; y: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_absolute'; inputs: { target_steps: number } })

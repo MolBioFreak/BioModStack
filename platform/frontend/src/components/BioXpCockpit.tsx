@@ -46,6 +46,7 @@ import { BioXpLiveDeck } from './BioXpLiveDeck';
 import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import { BioXpQuickDashboard } from './BioXpQuickDashboard';
 import { BioXpWorkflowControls } from './BioXpWorkflowControls';
+import { BioXpMovementFailureEvidence } from './BioXpMovementFailureEvidence';
 import { BioXpTransferControls } from './BioXpTransferControls';
 import { BioXpOperatorReports } from './BioXpOperatorReports';
 
@@ -1179,8 +1180,61 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         onClick={abortXAggregate} className="rounded bg-red-950 px-3 py-2 text-sm ring-1 ring-red-600 disabled:opacity-35">Software Abort (cancel waiters)</button>
                 </div>
             </div>
+            <section aria-label="Controller preparation and recovery" className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
+                <h2 className="text-lg font-semibold">Controller preparation and recovery</h2>
+                <p className="mt-1 text-sm text-slate-400">Enable or recover controllers without homing. This does not establish axis references or clear earlier command outcomes.</p>
+                <div className="mt-3 flex flex-wrap gap-3">
+                    <button
+                        type="button"
+                        disabled={!linkConnected || v2ActionDisabledReason('meta.activate_motion') !== null || busy}
+                        title={v2ActionDisabledReason('meta.activate_motion') ?? 'Enable or recover controllers without homing. This does not establish axis references or clear earlier command outcomes.'}
+                        onClick={claimTransport}
+                        className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
+                    >Enable controllers</button>
+                    <button
+                        type="button"
+                        disabled={!linkConnected || v2ActionDisabledReason('meta.recover_motion_non_homing') !== null || busy}
+                        title={v2ActionDisabledReason('meta.recover_motion_non_homing') ?? 'Robot-authoritative non-homing recovery'}
+                        onClick={recoverMotionNonHoming}
+                        className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
+                    >Recover controllers (no homing)</button>
+                </div>
+                {v2AuthorityCoherent && v2ActionDisabledReason('meta.activate_motion') !== null && (
+                    <p className="mt-2 text-sm text-amber-100">
+                        Activate: {v2ActionDisabledReason('meta.activate_motion')}
+                    </p>
+                )}
+                {(currentLifecycleActionId !== null || lifecycleReceipt !== undefined || currentLifecycleInvokeError !== null) && (
+                    <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                        <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Action</dt><dd className="font-mono">{currentLifecycleActionId ?? '—'}</dd></div>
+                        <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Command ID</dt><dd className="break-all font-mono">{currentLifecycleCommandId ?? lifecycleReceipt?.command_id ?? '—'}</dd></div>
+                        <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Lifecycle</dt><dd className="font-mono">{lifecycleReceipt?.status ?? (invokeLifecycleActionMutation.isPending ? 'submitting' : 'unavailable')}</dd></div>
+                    </dl>
+                )}
+                {lifecycleFailureDetail && (
+                    <div role="alert" className="mt-3 rounded border border-red-700/70 bg-red-950/30 p-3 text-sm text-red-100">
+                        <p className="font-semibold">{lifecycleFailureDetail.failure}</p>
+                        <p>Provider failure: <span className="font-mono">{lifecycleFailureDetail.provider_failure}</span></p>
+                        <p>{`Axis ${lifecycleFailureDetail.axis} · Board ${lifecycleFailureDetail.board} · Motor ${lifecycleFailureDetail.motor} · Source return ${lifecycleFailureDetail.source_return_code}`}</p>
+                        <p>{`Controller acknowledged: ${lifecycleFailureDetail.controller_acknowledged ? 'yes' : 'no'}`}</p>
+                        <p>{`Terminal state verified: ${lifecycleFailureDetail.controller_terminal_state_verified ? 'yes' : 'no'}`}</p>
+                        <p>{`Physical effect verified: ${lifecycleFailureDetail.physical_effect_verified ? 'yes' : 'no'}`}</p>
+                        <p>{`Lifecycle: ${lifecycleFailureDetail.lifecycle_state} · Reference: ${lifecycleFailureDetail.reference_state}`}</p>
+                    </div>
+                )}
+                <YOperatorError label="Activation / recovery" error={currentLifecycleInvokeError} reconcileAmbiguousOutcome />
+                <YOperatorError label="Activation / recovery receipt" error={lifecycleReceiptQuery.error} />
+            </section>
+
             <div role="tabpanel" id="control-panel-workflows" aria-labelledby="control-tab-workflows" hidden={controlTab !== 'workflows'}>
                 {workflowsOpened && <BioXpWorkflowEditor visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />}
+                {workflowsOpened && <>
+            <details onToggle={event => { setWorkflowVisible(event.currentTarget.open); if (event.currentTarget.open) setWorkflowOpen(true); }}>
+                <summary className="cursor-pointer text-lg font-semibold">Prepared request files</summary>
+                {workflowOpen && <BioXpWorkflowControls key={generation} generation={generation} connected={active}
+                    controlsEnabled={robotControlReady} visible={documentVisible && controlTab === 'workflows' && workflowVisible} />}
+            </details>
+                </>}
             </div>
             <div role="tabpanel" id="control-panel-live-deck" aria-labelledby="control-tab-live-deck" hidden={controlTab !== 'live-deck'}>
                 {liveDeckOpened && <>
@@ -1247,13 +1301,19 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                     </button>
                     {deckDisabledReason && <p role="status">{bioXpDeckReadinessText(deckDisabledReason)}</p>}
                     <p role="status" data-testid="deck-current-command" className="break-words text-xs">
-                        Current command: {invokeDeckAction.isPending ? 'submitting' : deckReceipt?.status ?? (deckReceiptUnavailable ? 'outcome uncertain' : 'none')}
+                        Selected command: {invokeDeckAction.isPending ? 'submitting' : deckReceipt?.status ?? (deckReceiptUnavailable ? 'outcome uncertain' : 'none')}
                         {bioXpReceiptFailureText(deckReceipt)}
                     </p>
+                    {deckReceipt?.terminal && deckReceipt.status !== 'completed' && <div>
+                        <p>The earlier move did not finish. Its recorded outcome does not block a new request.</p>
+                        <button type="button" className="mt-1 rounded border px-2 py-1" onClick={() => setDeckDetailsOpen(true)}>Explain this move</button>
+                    </div>}
                     <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Travel only. No pickup, liquid handling or tip loading.</p>
                 </div>}
+                        commandDetailsOpen={deckDetailsOpen}
                         onCommandDetailsToggle={setDeckDetailsOpen}
                         commandDetails={<div className="space-y-2 break-words">
+                <BioXpMovementFailureEvidence receipt={deckReceipt} />
                 <button
                     type="button"
                     disabled={v2ActionDisabledReason('oem.deck.collect_authority') !== null}
@@ -1354,12 +1414,6 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 </dl>
             </section>
 
-            <details onToggle={event => { setWorkflowVisible(event.currentTarget.open); if (event.currentTarget.open) setWorkflowOpen(true); }}>
-                <summary className="cursor-pointer text-lg font-semibold">Prepared workflows</summary>
-                {workflowOpen && <BioXpWorkflowControls key={generation} generation={generation} connected={active}
-                    controlsEnabled={robotControlReady} visible={controlsVisible && workflowVisible} />}
-            </details>
-
             <BioXpQuickDashboard
                 connected={displayConnected}
                 data={displayTelemetry}
@@ -1374,52 +1428,6 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 <summary className="cursor-pointer text-lg font-semibold">Operator reports</summary>
                 {reportsOpen && controlsVisible && <div className="mt-4"><BioXpOperatorReports generation={generation} connected={linkConnected} /></div>}
             </details>
-
-            <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
-                <h2 className="text-lg font-semibold">Controller Activation & Recovery</h2>
-                <p className="mt-1 text-sm text-slate-400">Prepares controllers without homing or moving the axes.</p>
-                <div className="mt-3 flex flex-wrap gap-3">
-                    <button
-                        type="button"
-                        disabled={!linkConnected || v2ActionDisabledReason('meta.activate_motion') !== null || busy}
-                        title={v2ActionDisabledReason('meta.activate_motion') ?? 'Prepares controllers without homing or moving the axes.'}
-                        onClick={claimTransport}
-                        className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
-                    >Enable controllers</button>
-                    <button
-                        type="button"
-                        disabled={!linkConnected || v2ActionDisabledReason('meta.recover_motion_non_homing') !== null || busy}
-                        title={v2ActionDisabledReason('meta.recover_motion_non_homing') ?? 'Robot-authoritative non-homing recovery'}
-                        onClick={recoverMotionNonHoming}
-                        className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
-                    >Non-homing Recovery</button>
-                </div>
-                {v2AuthorityCoherent && v2ActionDisabledReason('meta.activate_motion') !== null && (
-                    <p className="mt-2 text-sm text-amber-100">
-                        Activate: {v2ActionDisabledReason('meta.activate_motion')}
-                    </p>
-                )}
-                {(currentLifecycleActionId !== null || lifecycleReceipt !== undefined || currentLifecycleInvokeError !== null) && (
-                    <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
-                        <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Action</dt><dd className="font-mono">{currentLifecycleActionId ?? '—'}</dd></div>
-                        <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Command ID</dt><dd className="break-all font-mono">{currentLifecycleCommandId ?? lifecycleReceipt?.command_id ?? '—'}</dd></div>
-                        <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Lifecycle</dt><dd className="font-mono">{lifecycleReceipt?.status ?? (invokeLifecycleActionMutation.isPending ? 'submitting' : 'unavailable')}</dd></div>
-                    </dl>
-                )}
-                {lifecycleFailureDetail && (
-                    <div role="alert" className="mt-3 rounded border border-red-700/70 bg-red-950/30 p-3 text-sm text-red-100">
-                        <p className="font-semibold">{lifecycleFailureDetail.failure}</p>
-                        <p>Provider failure: <span className="font-mono">{lifecycleFailureDetail.provider_failure}</span></p>
-                        <p>{`Axis ${lifecycleFailureDetail.axis} · Board ${lifecycleFailureDetail.board} · Motor ${lifecycleFailureDetail.motor} · Source return ${lifecycleFailureDetail.source_return_code}`}</p>
-                        <p>{`Controller acknowledged: ${lifecycleFailureDetail.controller_acknowledged ? 'yes' : 'no'}`}</p>
-                        <p>{`Terminal state verified: ${lifecycleFailureDetail.controller_terminal_state_verified ? 'yes' : 'no'}`}</p>
-                        <p>{`Physical effect verified: ${lifecycleFailureDetail.physical_effect_verified ? 'yes' : 'no'}`}</p>
-                        <p>{`Lifecycle: ${lifecycleFailureDetail.lifecycle_state} · Reference: ${lifecycleFailureDetail.reference_state}`}</p>
-                    </div>
-                )}
-                <YOperatorError label="Activation / recovery" error={currentLifecycleInvokeError} reconcileAmbiguousOutcome />
-                <YOperatorError label="Activation / recovery receipt" error={lifecycleReceiptQuery.error} />
-            </section>
 
             <div className="grid gap-4">
             <div className="min-w-0">
@@ -1744,7 +1752,15 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                                         >{controlLabel}</button>
                                     );
                                 })}
+                                {axis === 'z' && <button type="button" className={actionClass}
+                                    disabled={!linkConnected || v2ActionDisabledReason('oem.z.diagnostic_home_axis') !== null}
+                                    title={v2ActionDisabledReason('oem.z.diagnostic_home_axis') ?? 'Physical Z switch-search home; establishes controller zero without the ordinary Home preposition.'}
+                                    onClick={() => {
+                                        const envelope = v2NormalEnvelope();
+                                        if (envelope) submitV2({ ...envelope, action_id: 'oem.z.diagnostic_home_axis', inputs: {} });
+                                    }}>Z switch-search recovery home</button>}
                             </div>
+                            {axis === 'z' && <p className="text-xs text-slate-300">Recovery home searches the Z home switch and establishes controller zero without the ordinary Home preposition. It physically moves Z; it does not reset the whole robot or change earlier command outcomes.</p>}
                             {axis === 'z' && zHomeFailureDetail && (
                                 <div role="alert" className="mt-3 rounded border border-red-700/70 bg-red-950/30 p-3 text-sm text-red-100">
                                     <p className="font-semibold">{zHomeFailureDetail.failure}</p>

@@ -144,6 +144,7 @@ _V2_NORMAL_INPUT_TYPES = {
     "oem.y.move_absolute": OperatorYMoveAbsoluteInputsV2,
     "oem.y.manual_panel_home": OperatorEmptyInputsV2,
     "oem.z.manual_home": OperatorEmptyInputsV2,
+    "oem.z.diagnostic_home_axis": OperatorEmptyInputsV2,
     "oem.z.clear": OperatorEmptyInputsV2,
     "oem.z.move_steps": OperatorMoveStepsInputsV2,
     "oem.z.move_absolute": OperatorMoveAbsoluteInputsV2,

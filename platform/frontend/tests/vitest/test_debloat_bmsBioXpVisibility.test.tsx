@@ -15,6 +15,7 @@ let requests: { url: string; method: string; bytes: number; detail?: boolean }[]
 let mutationAttempts = 0;
 let cameraActive = false;
 let recoveryVisible = false;
+let recoveryRevision = 0;
 let rows: any[] = [];
 let liveJob: any = null;
 const recoveryReceipt = { ...parkReceipt, status: 'ambiguous', completion_class: 'recovery_required' };
@@ -27,14 +28,23 @@ async function advance(ms = 60_000) {
 async function click(selector: string) { await act(async () => (host.querySelector(selector) as HTMLElement).click()); await advance(100); }
 function count(fragment: string) { return requests.filter(r => r.url.includes(fragment)).length; }
 beforeEach(() => {
-    vi.useFakeTimers(); mutationAttempts = 0; cameraActive = false; recoveryVisible = false; rows = []; liveJob = null; requests = [];
+    vi.useFakeTimers(); recoveryRevision = 0; mutationAttempts = 0; cameraActive = false; recoveryVisible = false; rows = []; liveJob = null; requests = [];
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
     api.defaults.adapter = async config => {
         const url = config.url ?? '';
         let data: unknown = { dependency_blockers: [], operations: [], channels: [] };
-        if (url === '/api/bioxp/status') data = { connection: { active: true, configured: true, generation: 1, reachable: true }, mutation_access: { enabled: true } };
+        if (url.endsWith('/updates')) {
+            const wire = { schema_version: 'bioxp.operator_updates.v1', source_instance_id: 'visibility-fixture', ownership_generation: 7,
+                next_after_sequence: 0, pose_sequence: 0, changed_command_ids: [], active_command_ids: [], has_more: false, reset: false, pose: null };
+            if (config.params?.after_sequence !== undefined) await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(resolve, 25000);
+                config.signal?.addEventListener?.('abort', () => { clearTimeout(timer); reject(new Error('cancelled')); }, { once: true });
+            });
+            data = { ...wire, next_after_sequence: recoveryRevision, changed_command_ids: recoveryRevision ? [recoveryReceipt.command_id] : [] };
+        }
+        else if (url === '/api/bioxp/status') data = { connection: { active: true, configured: true, generation: 1, reachable: true }, mutation_access: { enabled: true } };
         else if (url.includes('/operator-controls/catalog')) data = catalogWireFixture({ ...catalog, canonical: { ...catalog.canonical, dashboard: { ...catalog.canonical.dashboard, latest_receipts: recoveryVisible ? [recoveryReceipt] : [] } } }, config.params?.view);
         else if (url.includes('/receipts/')) data = recoveryReceipt;
         else if (url.includes('/protocols/jobs/')) data = config.params?.observation && liveJob ? {
@@ -75,7 +85,7 @@ it('deletes irrelevant observations for a full Build minute after visiting opera
     expect((host.querySelector('[aria-label="Workflow name"]') as HTMLInputElement).value).toBe('Unsubmitted retained draft');
     expect(host.querySelector('#control-panel-pipettes input')).toBe(manual);
     requests = []; await advance();
-    const irrelevant = requests.filter(r => r.url !== '/api/bioxp/status');
+    const irrelevant = requests.filter(r => r.url !== '/api/bioxp/status' && !r.url.endsWith('/updates'));
     expect(irrelevant).toEqual([]);
     expect(irrelevant.reduce((n, r) => n + r.bytes, 0)).toBe(0);
     expect(requests.every(r => r.method === 'get')).toBe(true);
@@ -135,16 +145,19 @@ it('uses idle camera discovery rather than 2s status polling and discovers anoth
     await advance(100); requests = []; await advance();
     expect(count('/camera/')).toBe(0);
 });
-it('refreshes unresolved recovery while Live deck is visible, with zero hidden receipt bytes for a full minute', async () => {
+it('refreshes selected recovery on committed updates, with no periodic or hidden receipt reads', async () => {
     recoveryVisible = true; await mount(); await click('#control-tab-live-deck'); requests = []; await advance();
-    expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === true).length).toBeGreaterThan(20);
-    expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === false).length).toBeGreaterThan(20);
+    expect(count('/receipts/')).toBe(0);
+    recoveryRevision = 1; await advance(26000);
+    expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === false)).toHaveLength(1);
+    expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === true)).toHaveLength(0);
+    const details = [...host.querySelectorAll('details')].find(d => d.querySelector(':scope > summary')?.textContent === 'Command details')!;
+    await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); }); await advance(100);
+    expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === true)).toHaveLength(1);
     await click('#control-tab-workflows'); requests = []; await advance();
     expect(requests.filter(r => r.url.includes('/receipts/'))).toEqual([]);
     await click('#control-tab-robot'); requests = []; await advance(3_000);
-    expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === true)).toEqual([]);
-    await click('#control-tab-live-deck'); requests = []; await advance(3_000);
-    expect(count('/receipts/')).toBeGreaterThan(0);
+    expect(count('/receipts/')).toBe(0);
 });
 
 it('observes relocated transfers only under the open Live deck disclosure, retaining the active owner and drafts', async () => {
@@ -192,16 +205,17 @@ it('observes relocated transfers only under the open Live deck disclosure, retai
     expect(requests.every(r => r.method === 'get')).toBe(true);
 });
 
-it('discovers cross-client jobs only with Runs visible and retains the original active outcome owner across Build navigation', async () => {
+it('discovers cross-client prepared jobs only in Workflows and retains the original active outcome owner across navigation', async () => {
     await mount();
-    const prepared = [...host.querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent === 'Prepared workflows')!;
+    await click('#control-tab-workflows');
+    const prepared = [...host.querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent === 'Prepared request files')!;
     await act(async () => { prepared.open = true; prepared.dispatchEvent(new Event('toggle')); });
     await advance(100);
     liveJob = { job_id: 'job-original', status: 'dispatched', command: { command_id: 'job-original', idempotency_key: 'original-key', ownership_generation: 7, state_version: 1, status: 'dispatched', terminal: false },
         execution: { dry_run: false, runtime_state: { workflow: { command_id: 'job-original', phase: 'executing', child_command_ids: [] } } } };
     rows = [liveJob]; await advance(11_000);
     expect(host.textContent).toContain('job-original');
-    await click('#control-tab-workflows'); requests = []; await advance();
+    await click('#control-tab-robot'); requests = []; await advance();
     expect(requests.filter(r => r.url.endsWith('/protocols/jobs'))).toEqual([]);
     expect(count('/protocols/jobs/job-original')).toBeGreaterThan(0);
     expect(requests.every(r => r.method === 'get')).toBe(true);

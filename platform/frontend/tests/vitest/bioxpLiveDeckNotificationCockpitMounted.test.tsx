@@ -7,6 +7,8 @@ import { catalogWireFixture } from '../fixtures/bioxpCatalogWire';
 import metadata from '../fixtures/bioxp_xy_bms_metadata.json';
 import deckCatalog from '../fixtures/bioxp_deck_admission_catalog.json';
 import park from '../fixtures/bioxp_park_completed_receipt.json';
+import retainedFailure from '../fixtures/bioxp_retained_deck_failure_followup.json';
+import retainedWasteFailure from '../fixtures/bioxp_retained_waste_failure_followup.json';
 import type { BioXpOperatorUpdates } from '../../src/lib/bioxpClient';
 const connection = vi.hoisted(() => ({ generation: 7 }));
 vi.mock('../../src/lib/bioxpClient', async original => ({
@@ -50,7 +52,7 @@ beforeEach(() => {
                 send = finish; options?.signal?.addEventListener?.('abort', abort);
             });
         }
-        if (url.endsWith('/catalog')) return { data: catalogWireFixture({ actions: [], dashboard: {}, canonical: structuredClone(catalog) }, options?.params?.view) };
+        if (url.endsWith('/catalog')) return { data: catalogWireFixture({ actions: [], dashboard: { pipettes: { channels: [] }, snapshot: { freshness: null } }, canonical: structuredClone(catalog) }, options?.params?.view) };
         if (url.includes('/requests/')) { const value = rows.get('lookup'); if (!value) throw { response: { status: 404 } }; return { data: value }; }
         if (url.includes('/receipts/')) return { data: rows.get(url.split('/').at(-1)!) };
         if (url.includes('/history')) return { data: { items: [...rows.values()], next_cursor: null } };
@@ -122,6 +124,54 @@ it('uncertain admission reads its original key once and wakes on commit without 
     expect(requestReads()).toHaveLength(2); expect(api.post).toHaveBeenCalledTimes(1);
     expect(host.textContent).not.toContain('admission uncertain /');
     expect(host.textContent).toContain('recovered-original');
+});
+
+it.each([retainedFailure, retainedWasteFailure])('retained physical failure $command_id is explained without blocking fresh movement or retrying history', async (retainedFailure) => {
+    catalog.dashboard.latest_receipts = [retainedFailure];
+    rows.set(retainedFailure.command_id, structuredClone(retainedFailure));
+    await mount();
+    expect(detail()).toHaveLength(0);
+    await click([...host.querySelectorAll('button')].find(b => b.textContent === 'Explain this move')!);
+    const evidence = host.querySelector('[aria-label="Movement failure evidence"]');
+    expect(evidence?.textContent).toContain('Z');
+    expect(evidence?.textContent).toContain('500');
+    expect(evidence?.textContent).toContain('14336');
+    expect(evidence?.textContent).toContain('No target-reached event');
+    expect(evidence?.textContent).toContain('100');
+    expect(evidence?.textContent).toContain('not establish arrival');
+    expect(detail()).toHaveLength(1);
+    expect(postBodies).toHaveLength(0);
+    expect([...host.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!.disabled).toBe(false);
+});
+
+it('explicit Z switch-search recovery home is separate from ordinary Home and sends only the native empty-input operation', async () => {
+    // Exact action descriptor captured in live-bms-initial.json; no invented native inputs.
+    catalog.actions.push({ action_id: 'oem.z.diagnostic_home_axis', request_schema_version: 'bioxp.operator_action_request.v2', response_schema_version: 'bioxp.operator_action_receipt.v2', interrupt: false, enabled: true, disabled_reason: null });
+    await mount();
+    await click(host.querySelector('#control-tab-robot')!);
+    const button = [...host.querySelectorAll('button')].find(b => b.textContent === 'Z switch-search recovery home')!;
+    expect(button).toBeDefined();
+    expect(button.disabled).toBe(false);
+    await click(button);
+    expect(postBodies).toHaveLength(1);
+    expect(vi.mocked(api.post).mock.calls[0][0]).toBe('/api/bioxp/operator-controls/v2/actions/oem.z.diagnostic_home_axis');
+    expect(postBodies[0].inputs).toEqual({});
+    expect(host.textContent).toContain('without the ordinary Home preposition');
+});
+
+it('recovery controls are one shared presentation across operational tabs and prepared files live only in Workflows', async () => {
+    await mount();
+    const recovery = host.querySelector('[aria-label="Controller preparation and recovery"]')!;
+    expect(recovery).not.toBeNull();
+    expect(recovery.closest('[hidden]')).toBeNull();
+    expect([...host.querySelectorAll('summary')].some(e => e.textContent === 'Prepared workflows')).toBe(false);
+    await click(host.querySelector('#control-tab-robot')!);
+    expect(host.querySelector('[aria-label="Controller preparation and recovery"]')).toBe(recovery);
+    await click(host.querySelector('#control-tab-pipettes')!);
+    expect(recovery.closest('[hidden]')).toBeNull();
+    await click(host.querySelector('#control-tab-workflows')!);
+    expect(host.querySelector('#control-panel-workflows')?.textContent).toContain('Prepared request files');
+    expect(postBodies).toHaveLength(0);
 });
 
 it('retains one real camera panel and its controls over subtab changes and hides the feed for a hidden document', async () => {

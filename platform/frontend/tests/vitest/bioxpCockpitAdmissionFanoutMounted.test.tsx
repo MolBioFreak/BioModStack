@@ -1638,13 +1638,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             await Promise.resolve();
         });
         const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller Activation & Recovery'),
+            (node) => node.textContent?.includes('Controller preparation and recovery'),
         ) as HTMLElement;
         const activate = [...panel.querySelectorAll('button')].find(
             (button) => button.textContent === 'Enable controllers',
         ) as HTMLButtonElement;
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Non-homing Recovery',
+            (button) => button.textContent === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         expect(activate.disabled).toBe(false);
         expect(recover.disabled).toBe(false);
@@ -1700,13 +1700,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             await Promise.resolve();
         });
         const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller Activation & Recovery'),
+            (node) => node.textContent?.includes('Controller preparation and recovery'),
         ) as HTMLElement;
         const activate = [...panel.querySelectorAll('button')].find(
             (button) => button.textContent === 'Enable controllers',
         ) as HTMLButtonElement;
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Non-homing Recovery',
+            (button) => button.textContent === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         await act(async () => {
             activate.click();
@@ -1867,10 +1867,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             await Promise.resolve();
         });
         const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller Activation & Recovery'),
+            (node) => node.textContent?.includes('Controller preparation and recovery'),
         ) as HTMLElement;
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Non-homing Recovery',
+            (button) => button.textContent === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         await act(async () => {
             recover.click();
@@ -1994,10 +1994,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             await Promise.resolve();
         });
         const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller Activation & Recovery'),
+            (node) => node.textContent?.includes('Controller preparation and recovery'),
         ) as HTMLElement;
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Non-homing Recovery',
+            (button) => button.textContent === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         await act(async () => {
             recover.click();
