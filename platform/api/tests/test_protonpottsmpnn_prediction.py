@@ -34,16 +34,18 @@ def source_job():
                lineage_root_job_id='root', params={'iteration_source_design_ids': ['original-design']})
 
 
-def request(**kwargs):
-    return PredictionSelection(design_ids=['criteria1-s0', 'criteria0-s0'], model_id='boltz2',
-                               params={'boltz_use_msa': False, 'msa_cache_only': True}, **kwargs)
+def request(*, model_id='boltz2', **kwargs):
+    params = ({'boltz_use_msa': False} if model_id == 'boltz2' else {'protenix_use_msa': False})
+    return PredictionSelection(design_ids=['criteria1-s0', 'criteria0-s0'], model_id=model_id,
+                               params={**params, 'msa_cache_only': True}, **kwargs)
 
 
-def test_prediction_uses_exact_redesigned_sequences_fixed_target_and_requested_placement():
+@pytest.mark.parametrize('model_id', ['boltz2', 'protenix'])
+def test_prediction_uses_exact_redesigned_sequences_fixed_target_and_requested_placement(model_id):
     source = source_job()
     root = Job(id='root', name='generator', model_id='bindcraft2', mode='design', params={})
     original = deepcopy(RESULT)
-    children = prediction_requests(source, root, RESULT, COMPONENTS, request(execution_target_id=None))
+    children = prediction_requests(source, root, RESULT, COMPONENTS, request(model_id=model_id, execution_target_id=None))
     assert [child.params['sequence_name'] for child in children] == ['criteria1-s0', 'criteria0-s0']
     assert [child.params['complex_components'][0]['sequence'] for child in children] == ['DE', 'HD']
     for child in children:
@@ -130,9 +132,10 @@ async def selected(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_http_persists_predictions_without_fabricated_designs_or_metric_cutoffs(selected):
+@pytest.mark.parametrize('model_id', ['boltz2', 'protenix'])
+async def test_http_persists_predictions_without_fabricated_designs_or_metric_cutoffs(selected, model_id):
     client, session, _, _ = selected
-    response = await client.post('/api/jobs/ph/protonpottsmpnn/predict', json=request().model_dump(mode='json'))
+    response = await client.post('/api/jobs/ph/protonpottsmpnn/predict', json=request(model_id=model_id).model_dump(mode='json'))
     assert response.status_code == 201, response.text
     body = response.json()
     assert body['design_ids'] == ['criteria1-s0', 'criteria0-s0']
@@ -140,7 +143,7 @@ async def test_http_persists_predictions_without_fabricated_designs_or_metric_cu
     session.expire_all()
     for child_response, identity in zip(body['launched_jobs'], body['design_ids']):
         child = await session.get(Job, child_response['id'])
-        assert child.model_id == 'boltz2'
+        assert child.model_id == model_id
         assert child.execution_target_id is None
         assert child.lineage_root_job_id == 'root'
         assert child.params['sequence_name'] == identity
@@ -149,10 +152,11 @@ async def test_http_persists_predictions_without_fabricated_designs_or_metric_cu
 
 
 @pytest.mark.asyncio
-async def test_http_remote_review_retains_native_sequence_identity_and_new_worker(selected):
+@pytest.mark.parametrize('model_id', ['boltz2', 'protenix'])
+async def test_http_remote_review_retains_native_sequence_identity_and_new_worker(selected, model_id):
     client, session, _, _ = selected
     response = await client.post('/api/jobs/ph/protonpottsmpnn/predict',
-                                 json=request(execution_target_id='new-worker').model_dump(mode='json'))
+                                 json=request(model_id=model_id, execution_target_id='new-worker').model_dump(mode='json'))
     assert response.status_code == 409, response.text
     detail = response.json()['detail']
     assert detail['code'] == 'remote_prepared_job_review_required'
