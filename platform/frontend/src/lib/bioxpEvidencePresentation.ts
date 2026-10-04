@@ -111,9 +111,15 @@ export function bioXpReceiptFailureText(receipt: unknown): string | null {
     const failure = bioXpProviderFailure(receipt);
     const error = row.error;
     const record = error != null && typeof error === 'object' ? error as Record<string, unknown> : null;
-    const generic = typeof error === 'string' ? error
-        : typeof record?.message === 'string' ? record.message
-            : typeof record?.code === 'string' ? record.code : null;
+    const legacyUnknownOutcome = record?.code === 'action_outcome_unknown'
+        && record.message === 'Action outcome unknown; reconciliation required and retry forbidden';
+    // Retained receipts keep the old producer's wording. Match only that obsolete
+    // policy sentence; raw evidence, status, retryable and admission stay unchanged.
+    const generic = legacyUnknownOutcome
+        ? 'Action outcome is uncertain; inspect the exact receipt and controller state. No automatic retry was performed.'
+        : typeof error === 'string' ? error
+            : typeof record?.message === 'string' ? record.message
+                : typeof record?.code === 'string' ? record.code : null;
     if (failure) return bounded(generic && generic !== failure ? `${failure} — ${bounded(generic)}` : failure);
     return generic ? bounded(generic) : null;
 }
