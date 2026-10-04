@@ -42,6 +42,7 @@ export default defineConfig({
             './tests/vitest/binderEvidencePollingMounted.test.tsx',
             './tests/vitest/nativeGenerationWorkbenchMounted.test.tsx',
             './tests/vitest/nativeGenerationCohortMounted.test.tsx',
+            './tests/vitest/protonPotts*.test.tsx',
             './tests/vitest/sequenceNativeResultsMounted.test.tsx',
             './tests/vitest/sequenceNativeAuthoringMounted.test.tsx',
             './tests/vitest/binderSourceCompletionMounted.test.tsx',

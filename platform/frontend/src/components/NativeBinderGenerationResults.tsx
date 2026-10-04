@@ -30,6 +30,8 @@ export interface Props {
     jobId: string; status?: string; launchContextId?: string | null;
     selectedDesignId?: string; selectedDesignIds?: string[];
     onSelectedDesignIdsChange?: (ids: string[]) => void;
+    selectedRecordIds?: string[];
+    onSelectedRecordIdsChange?: (ids: string[]) => void;
     selectedNativeSources?: NativeCandidateSource[];
     onSelectedNativeSourcesChange?: (sources: NativeCandidateSource[]) => void;
     onInspectDocument?: (row: NativeGenerationRecord, document?: NativeGenerationDocument) => void;
@@ -67,7 +69,7 @@ function Download({ name, content, mime, children }: { name: string; content: st
 export function NativeBinderGenerationResults(props: Props) {
     return <NativeGenerationWorkbench key={`${props.jobId}:${props.adapter?.key ?? "native"}`} {...props} />;
 }
-function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, selectedNativeSources, onSelectedNativeSourcesChange, onInspectDocument, artifactId, targetState }: Props) {
+function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, selectedRecordIds, onSelectedRecordIdsChange, selectedNativeSources, onSelectedNativeSourcesChange, onInspectDocument, artifactId, targetState }: Props) {
     const [view, setView] = useState<View>(selectedDesignId || artifactId ? 'structure' : 'dashboard');
     const [structureOpened, setStructureOpened] = useState(view === 'structure');
     const [analyticsOpened, setAnalyticsOpened] = useState(view === 'dashboard' || view === 'analytics');
@@ -115,7 +117,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         setSavedSources(unique); writeBinderNativeSources(jobId, unique); onSelectedNativeSourcesChange?.(unique);
     };
     const selectionId = (item: NativeGenerationRecord) => rowKey(item, rows.indexOf(item));
-    const selection = Array.from(new Set([...nativeSelected, ...rows.filter(item => item.design_id && selectedDesignIds.includes(item.design_id)).map(selectionId)]));
+    const selection = Array.from(new Set([...(selectedRecordIds ?? nativeSelected), ...rows.filter(item => item.design_id && selectedDesignIds.includes(item.design_id)).map(selectionId)]));
     const tableKeys = columns ?? (preferred.length ? preferred : keys.slice(0, 6));
     const byId = useMemo(() => new Map(cohort.map((entry, index) => [entry.id, rows[index]])), [cohort, rows]);
     const selectedSet = useMemo(() => new Set(selection), [selection]);
@@ -169,6 +171,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     };
     const changeSelection = (ids: string[], checked: boolean) => {
         const next = checked ? Array.from(new Set([...selection, ...ids])) : selection.filter(id => !ids.includes(id));
+        onSelectedRecordIdsChange?.(next);
         const recordSelection = next.filter(id => !rows.some(item => selectionId(item) === id && item.design_id));
         setNativeSelected(recordSelection); writeBinderSelection(selectionScope, recordSelection);
         const changedDesignIds = rows.filter(item => ids.includes(selectionId(item)) && item.design_id).map(item => item.design_id!);

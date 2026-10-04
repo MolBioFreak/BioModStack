@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchCalibyNativeResults, fetchLigandMPNNDesignResults } from '../lib/api';
 import type { Job } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
+const ProtonPottsResults = lazy(() => import('./ProtonPottsResults'));
 
 // These are separate native documents, not a common scientific score/Design model.
 export type NativeValue = string | number | boolean | null | NativeValue[] | { [key: string]: NativeValue };
@@ -50,7 +51,8 @@ export interface LigandMPNNDesignResults {
     artifacts?: NativeArtifact[];
 }
 
-export function nativeSequenceResultKind(job?: Pick<Job, 'model_id' | 'mode'> | null): 'caliby' | 'ligandmpnn' | null {
+export function nativeSequenceResultKind(job?: Pick<Job, 'model_id' | 'mode'> | null): 'caliby' | 'ligandmpnn' | 'protonpottsmpnn' | null {
+    if (job?.model_id === 'protonpottsmpnn' && job.mode === 'redesign') return 'protonpottsmpnn';
     if (job?.model_id === 'caliby_experimental' && ['ensemble_design', 'sidechain_pack'].includes(job.mode)) return 'caliby';
     if (job?.model_id === 'ligandmpnn' && ['ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'].includes(job.mode)) return 'ligandmpnn';
     return null;
@@ -74,7 +76,10 @@ function Files({ files, onView }: { files: NativeFile[]; onView: (file: NativeFi
     </li>)}</ul>;
 }
 
-export default function NativeSequenceResults({ job }: { job: Pick<Job, 'id' | 'model_id' | 'mode' | 'status'> }) {
+export default function NativeSequenceResults({ job, launchContextId }: { job: Pick<Job, 'id' | 'model_id' | 'mode' | 'status'> & Partial<Pick<Job, 'params'>>; launchContextId?: string | null }) {
+    return job.model_id === 'protonpottsmpnn' ? <Suspense fallback={<p>Loading native redesign workbench…</p>}><ProtonPottsResults job={job} launchContextId={launchContextId} /></Suspense> : <StructureSequenceResults job={job} />;
+}
+function StructureSequenceResults({ job }: { job: Pick<Job, 'id' | 'model_id' | 'mode' | 'status'> }) {
     const kind = nativeSequenceResultKind(job);
     const [viewed, setViewed] = useState<NativeFile | null>(null);
     const [page, setPage] = useState(0);
