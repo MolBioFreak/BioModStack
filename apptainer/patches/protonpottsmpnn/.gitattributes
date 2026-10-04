@@ -1,0 +1,2 @@
+# Unified-diff context encodes a blank source line as one space.
+criteria-attribution.patch whitespace=-blank-at-eol
