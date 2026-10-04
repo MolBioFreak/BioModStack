@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
+import { BioXpServiceRestart } from './BioXpServiceRestart';
 
 import {
     bioXpDeckRecoveryResolution,
@@ -1180,6 +1181,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         onClick={abortXAggregate} className="rounded bg-red-950 px-3 py-2 text-sm ring-1 ring-red-600 disabled:opacity-35">Software Abort (cancel waiters)</button>
                 </div>
             </div>
+            <BioXpServiceRestart generation={generation} />
             <section aria-label="Controller preparation and recovery" className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
                 <h2 className="text-lg font-semibold">Controller preparation and recovery</h2>
                 <p className="mt-1 text-sm text-slate-400">Enable or recover controllers without homing. This does not establish axis references or clear earlier command outcomes.</p>

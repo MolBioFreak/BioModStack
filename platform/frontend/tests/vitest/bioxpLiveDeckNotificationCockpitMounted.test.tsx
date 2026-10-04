@@ -10,10 +10,10 @@ import park from '../fixtures/bioxp_park_completed_receipt.json';
 import retainedFailure from '../fixtures/bioxp_retained_deck_failure_followup.json';
 import retainedWasteFailure from '../fixtures/bioxp_retained_waste_failure_followup.json';
 import type { BioXpOperatorUpdates } from '../../src/lib/bioxpClient';
-const connection = vi.hoisted(() => ({ generation: 7 }));
+const connection = vi.hoisted(() => ({ generation: 7, active: true, reachable: true }));
 vi.mock('../../src/lib/bioxpClient', async original => ({
     ...await original<typeof import('../../src/lib/bioxpClient')>(),
-    useBioXpStatus: () => ({ data: { connection: { active: true, configured: true, generation: connection.generation, reachable: true, runtime_ready: true }, mutation_access: { enabled: true } }, isError: false }),
+    useBioXpStatus: () => ({ data: { connection: { active: connection.active, configured: true, generation: connection.generation, reachable: connection.reachable, runtime_ready: true }, mutation_access: { enabled: true } }, isError: false }),
 }));
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
 let root: Root, host: HTMLDivElement, client: QueryClient;
@@ -34,7 +34,7 @@ const detail = () => vi.mocked(api.get).mock.calls.filter(([u, c]) => u.includes
 const catalogueReads = () => vi.mocked(api.get).mock.calls.filter(([u]) => u.endsWith('/catalog')).length;
 const click = async (el: Element) => { await act(async () => el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))); await tick(); };
 beforeEach(() => {
-    vi.useFakeTimers(); connection.generation = 7; postBodies = []; rows = new Map(); send = undefined;
+    vi.useFakeTimers(); connection.generation = 7; connection.active = true; connection.reachable = true; postBodies = []; rows = new Map(); send = undefined;
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     catalog = structuredClone(metadata.catalog); catalog.dashboard.generated_at = 0;
     catalog.dashboard.deck = structuredClone(deckCatalog.deck); catalog.dashboard.active_commands = []; catalog.dashboard.latest_receipts = [];
@@ -44,6 +44,7 @@ beforeEach(() => {
     wire = { schema_version: 'bioxp.operator_updates.v1', source_instance_id: 'fixture-source', ownership_generation: catalog.ownership_generation ?? catalog.dashboard.ownership_generation,
         next_after_sequence: 1, pose_sequence: 0, changed_command_ids: [], active_command_ids: [], has_more: false, reset: false, pose: null };
     vi.spyOn(api, 'get').mockImplementation(async (url, options) => {
+        if (url === '/api/bioxp/service') return { data: { available: true, detail: null, unit: 'bioxp-api.service', restart_in_progress: false } };
         if (url.endsWith('/updates')) {
             if (options?.params?.after_sequence === undefined) return { data: structuredClone(wire) };
             return new Promise((resolve, reject) => {
@@ -61,6 +62,7 @@ beforeEach(() => {
         throw new Error(`Unmatched offline read ${url}`);
     });
     vi.spyOn(api, 'post').mockImplementation(async (url, body: any) => {
+        if (url === '/api/bioxp/service/restart') { postBodies.push(body); return { data: { restarted: true, unit: 'bioxp-api.service', active_state: 'active', sub_state: 'running', invocation_id: 'fixture-restart', pid: 123 } }; }
         postBodies.push(body); const command_id = `intent-${postBodies.length}`;
         const row = { ...park, command_id, action_id: url.split('/').at(-1), status: 'dispatched', terminal: false, terminal_receipt_id: null, completion_class: null };
         rows.set(command_id, row); return { data: row };
@@ -69,6 +71,52 @@ beforeEach(() => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.restoreAllMocks(); vi.useRealTimers(); });
+
+it('service restart remains a single-click action while the native API is unreachable and the BMS link is disconnected', async () => {
+    connection.active = false; connection.reachable = false;
+    await mount();
+    const panel = host.querySelector('[aria-label="Robot service restart"]')!;
+    expect(panel.closest('[hidden]')).toBeNull();
+    const button = panel.querySelector('button')!;
+    expect(button.disabled).toBe(false);
+    expect(api.post).not.toHaveBeenCalled();
+    await click(button);
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(api.post).toHaveBeenCalledWith('/api/bioxp/service/restart', {}, { timeout: 75000 });
+    expect(panel.textContent).toContain('Robot service restarted');
+    expect(panel.textContent).toContain('does not home motors or reset coordinates');
+    await tick(60000);
+    expect(api.post).toHaveBeenCalledTimes(1);
+});
+
+it('service restart is visible on all four tabs and never submits on navigation', async () => {
+    await mount();
+    for (const tab of ['robot', 'pipettes', 'workflows', 'live-deck']) {
+        await click(host.querySelector(`#control-tab-${tab}`)!);
+        expect(host.querySelector('[aria-label="Robot service restart"]')!.closest('[hidden]')).toBeNull();
+    }
+    expect(api.post).not.toHaveBeenCalled();
+});
+
+it('service restart suppresses a rapid second click and never retries an uncertain result', async () => {
+    await mount();
+    let reject!: (reason: unknown) => void;
+    vi.mocked(api.post).mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const panel = host.querySelector('[aria-label="Robot service restart"]')!;
+    const button = panel.querySelector('button')!;
+    await act(async () => {
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await tick();
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(true);
+    await act(async () => reject(new Error('Restart outcome unknown')));
+    await tick(60000);
+    expect(panel.querySelector('[role="alert"]')?.textContent).toContain('No automatic retry was made');
+    expect(panel.textContent).not.toContain('Robot service restarted');
+    expect(api.post).toHaveBeenCalledTimes(1);
+});
 
 it('named and well gestures keep exact FIFO inputs; actual updates move the map independently of stale catalog and chosen destination', async () => {
     await mount();
