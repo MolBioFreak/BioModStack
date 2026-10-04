@@ -90,9 +90,17 @@ def pdb():
     return '\n'.join(lines) + '\nEND\n'
 
 
-def test_retained_structure_uses_existing_sequence_source_parser(tmp_path):
+@pytest.mark.parametrize('suffix', ['.pdb', '.cif'])
+def test_retained_structure_uses_existing_sequence_source_parser(tmp_path, suffix):
     path = tmp_path / 'retained.pdb'
     path.write_text(pdb())
+    if suffix == '.cif':
+        from Bio.PDB import MMCIFIO, PDBParser
+        structure = PDBParser(QUIET=True).get_structure('context', str(path))
+        path = tmp_path / 'retained.cif'
+        writer = MMCIFIO()
+        writer.set_structure(structure)
+        writer.save(str(path))
     assert source_components(path) == COMPONENTS
 
 
