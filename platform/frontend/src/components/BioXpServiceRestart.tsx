@@ -39,11 +39,12 @@ export function BioXpServiceRestart({ generation }: { generation: number }) {
         : control.data?.detail ?? 'Robot service restart is not configured.';
     // Service control is deliberately independent of robot reachability, controller
     // readiness and retained command outcomes. The API owns authorization.
-    return <section aria-label="Robot service restart" className="rounded-xl border border-slate-700 p-4">
+    return <section aria-label="Robot service restart" className="rounded-xl border border-slate-700 p-4"
+        style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>
         <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
                 <p className="font-semibold">Robot-control service</p>
-                <p className="text-sm text-slate-400">Restarts only the robot API. Interrupts robot work; does not home motors or reset coordinates. Not a motor Stop.</p>
+                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Restarts only the robot API. Interrupts robot work; does not home motors or reset coordinates. Not a motor Stop.</p>
             </div>
             <button type="button"
                 className="rounded bg-slate-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-35"
