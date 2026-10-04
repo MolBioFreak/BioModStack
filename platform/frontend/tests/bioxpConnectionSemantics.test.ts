@@ -33,8 +33,8 @@ test('saved connection is explicitly reconnectable and disconnectable', () => {
 test('operator errors stay visible without exposing configuration scaffolding', () => {
     assert.match(cockpit, /connection\?\.last_error/);
     assert.match(cockpit, /bioXpErrorText\(error\)/);
-    const start = cockpit.indexOf('>Connection & Robot State</h2>');
-    const end = cockpit.indexOf('</section>', start);
+    const start = cockpit.indexOf('<BioXpStatusStrip');
+    const end = cockpit.indexOf('<div className="bx-ui bx-outcomes">', start);
     assert.ok(start >= 0 && end > start, 'visible connection section must exist');
     const connectionPanel = cockpit.slice(start, end);
     assert.match(connectionPanel, /\{connectedLabel\}/);

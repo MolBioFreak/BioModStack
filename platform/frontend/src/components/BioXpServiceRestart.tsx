@@ -39,15 +39,11 @@ export function BioXpServiceRestart({ generation }: { generation: number }) {
         : control.data?.detail ?? 'Robot service restart is not configured.';
     // Service control is deliberately independent of robot reachability, controller
     // readiness and retained command outcomes. The API owns authorization.
-    return <section aria-label="Robot service restart" className="rounded-xl border border-slate-700 p-4"
-        style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-                <p className="font-semibold">Robot-control service</p>
-                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Restarts only the robot API. Interrupts robot work; does not home motors or reset coordinates. Not a motor Stop.</p>
-            </div>
+    return <div aria-label="Robot service restart" className="bx-service-restart"
+        style={{ color: 'var(--text-primary)' }}>
+        <div title="Restarts only the robot API. Interrupts robot work; does not home motors or reset coordinates. Not a motor Stop.">
             <button type="button"
-                className="rounded bg-slate-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-35"
+                className="bx-button"
                 disabled={control.data?.available !== true || restart.isPending}
                 title={control.data?.available === true ? 'Restart the robot-control service, even if its API is unresponsive.' : unavailable}
                 onClick={() => {
@@ -61,6 +57,6 @@ export function BioXpServiceRestart({ generation }: { generation: number }) {
         {restart.isSuccess && <p role="status" className="mt-2 text-sm">{restart.data.active_state === 'active' && restart.data.sub_state === 'running'
             ? 'Robot service restarted. Controls may take a moment to reconnect. If the BMS link is disconnected, reconnect it.'
             : `Restart request completed; robot service reports ${restart.data.active_state} / ${restart.data.sub_state}. This does not confirm that the robot API is ready.`}</p>}
-        {restart.isError && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpErrorText(restart.error)} No automatic retry was made.</p>}
-    </section>;
+        {restart.isError && <p role="alert" className="mt-2 text-sm" style={{ color: 'var(--text-primary)' }}>{bioXpErrorText(restart.error)} No automatic retry was made.</p>}
+    </div>;
 }

@@ -84,7 +84,7 @@ it('service restart remains a single-click action while the native API is unreac
     expect(api.post).toHaveBeenCalledTimes(1);
     expect(api.post).toHaveBeenCalledWith('/api/bioxp/service/restart', {}, { timeout: 75000 });
     expect(panel.textContent).toContain('Robot service restarted');
-    expect(panel.textContent).toContain('does not home motors or reset coordinates');
+    expect(panel.querySelector('[title]')?.getAttribute('title')).toContain('does not home motors or reset coordinates');
     await tick(60000);
     expect(api.post).toHaveBeenCalledTimes(1);
 });
@@ -207,14 +207,14 @@ it('explicit Z switch-search recovery home is separate from ordinary Home and se
     catalog.actions.push({ action_id: 'oem.z.diagnostic_home_axis', request_schema_version: 'bioxp.operator_action_request.v2', response_schema_version: 'bioxp.operator_action_receipt.v2', interrupt: false, enabled: true, disabled_reason: null });
     await mount();
     await click(host.querySelector('#control-tab-robot')!);
-    const button = [...host.querySelectorAll('button')].find(b => b.textContent === 'Z switch-search recovery home')!;
+    const button = [...host.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') ?? b.textContent) === 'Z switch-search recovery home')!;
     expect(button).toBeDefined();
     expect(button.disabled).toBe(false);
     await click(button);
     expect(postBodies).toHaveLength(1);
     expect(vi.mocked(api.post).mock.calls[0][0]).toBe('/api/bioxp/operator-controls/v2/actions/oem.z.diagnostic_home_axis');
     expect(postBodies[0].inputs).toEqual({});
-    expect(host.textContent).toContain('without the ordinary Home preposition');
+    expect(button.title).toContain('without the ordinary Home preposition');
 });
 
 it('recovery controls are one shared presentation across operational tabs and prepared files live only in Workflows', async () => {

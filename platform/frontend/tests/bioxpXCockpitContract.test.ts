@@ -41,10 +41,10 @@ test('X manual controls route only through stable provider-owned action IDs', ()
 });
 
 test('X authority panel is a normal read-only truth surface with governed movement actions', () => {
-    const panel = sourceBetween("{axis === 'x' && (", "{axis === 'z' && (");
+    const panel = sourceBetween("details={<>{axis === 'x'", "</>} />");
 
     for (const actionId of ['oem.x.stop', 'oem.abort_all']) {
-        assert.ok(panel.includes(actionId), `X authority panel must use ${actionId}`);
+        assert.ok(source.includes(actionId), `shared Stop controls must use ${actionId}`);
     }
     for (const hiddenActionId of ['oem.x.prepare', 'oem.x.reconcile_switch_masks', 'oem.x.set_max_speed', 'oem.x.set_max_acc', 'oem.x.restore_original_speed', 'oem.x.set_stall_guard', 'oem.x.diagnostic_home_axis', 'oem.x.set_home']) {
         assert.ok(!panel.includes(hiddenActionId), `normal X card must not expose ${hiddenActionId}`);
@@ -80,8 +80,8 @@ test('X authority panel is a normal read-only truth surface with governed moveme
     assert.match(panel, /SAP12\/13 observed/);
     assert.match(panel, /X initialization writes neither register/);
     assert.match(panel, /Software reference state \(not physical proof\)/);
-    assert.match(panel, /Software Abort \(cancel waiters\)/);
-    assert.match(panel, /motors may continue/);
+    assert.match(source, /Software Abort \(cancel waiters\)/);
+    assert.match(source, /motors may continue/);
     assert.doesNotMatch(panel, /Physical reference/);
     assert.doesNotMatch(panel, /<input type="number"/);
 });

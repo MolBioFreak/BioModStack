@@ -16,7 +16,6 @@ vi.mock('../../src/lib/bioxpClient', async importOriginal => ({
     useBioXpOperatorActionHistory: () => ({ data: { items: [], next_cursor: null }, error: null }),
 }));
 vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: () => null }));
-vi.mock('../../src/components/BioXpQuickDashboard', () => ({ BioXpQuickDashboard: () => null }));
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
 let root: Root; let container: HTMLDivElement; let client: QueryClient;
 let catalog: any;
@@ -148,7 +147,7 @@ it.each(['missing', 'aged'])('submits with %s telemetry/reference/epoch displays
     expect(admissions).toHaveLength(1);
     expect(admissions[0].body.expected_board_epoch_by_board).toEqual({});
     expect(admissions[0].body.inputs).toEqual({ target: 'LOC_OC', camera_offset: false });
-    if (evidence === 'aged') expect(container.textContent).toContain('Controllers enabled');
+    if (evidence === 'aged') expect(container.querySelector('[aria-label="Controller preparation and recovery"]')?.textContent).toContain('Enabled');
     else expect(container.textContent).toContain('Unknown');
     await act(async () => admissions[0].reject({ response: { status: 409, data: { detail: 'OEM door interlock denied' } } }));
     await advance();

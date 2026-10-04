@@ -10,7 +10,7 @@ import { api } from '../../src/lib/api';
 import { catalogWireFixture } from '../fixtures/bioxpCatalogWire';
 import { useBioXpOperatorReceiptV2, useInterruptBioXpOperatorActionV1, useBioXpOperatorActionHistory, useBioXpOperatorControlCatalog, useInvokeBioXpOperatorAction, useAssessBioXpOperatorAction, useInvokeBioXpOperatorActionV2 } from '../../src/lib/bioxpClient';
 
-import { BioXpQuickDashboard } from '../../src/components/BioXpQuickDashboard';
+import { BioXpStatusStrip } from '../../src/components/BioXpStatusStrip';
 
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 let client: QueryClient;
@@ -151,9 +151,8 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
     let calls = 0;
     function CatalogHarness() {
         const query = useBioXpOperatorControlCatalog(7);
-        return <><output>{query.status}</output><BioXpQuickDashboard connected data={undefined}
-            isLoading={query.isLoading} error={query.error} motionControlsAvailable={undefined}
-            unavailableReason={query.isSuccess ? 'Catalog recovered; telemetry not reported.' : undefined} /></>;
+        return <><output>{query.status}</output><BioXpStatusStrip connected data={query.data?.canonical?.dashboard?.telemetry ?? undefined}
+            connectionMessages={query.error ? <p role="alert">{query.error.message}</p> : null} /></>;
     }
     readGet.mockImplementation((_url, options) => {
         calls++;
@@ -166,22 +165,22 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
     });
     try {
         await act(async () => root.render(<QueryClientProvider client={client}><CatalogHarness /></QueryClientProvider>));
-        expect(container.textContent).toContain('Loading live state');
+        expect(container.textContent).toContain('pending');
         await act(async () => { await vi.advanceTimersByTimeAsync(11_999); });
-        expect(container.textContent).toContain('Loading live state');
+        expect(container.textContent).toContain('pending');
         expect(readGet).toHaveBeenCalledTimes(1); // interval cannot duplicate an in-flight GET
         await act(async () => { await vi.advanceTimersByTimeAsync(1); });
         await act(async () => { await vi.advanceTimersByTimeAsync(1); }); // query observer notification
-        expect(container.textContent).toContain('Dashboard unavailable: timeout of 12000ms exceeded');
-        expect(container.textContent).not.toContain('Loading live state');
+        expect(container.textContent).toContain('timeout of 12000ms exceeded');
+        expect(container.textContent).not.toContain('pending');
         expect(container.querySelector('output')?.textContent).toBe('error');
         // The consolidated catalog retains its existing five-second cadence.
         await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
         await act(async () => { await vi.advanceTimersByTimeAsync(1); });
         expect(readGet).toHaveBeenCalledTimes(3); // two assessments plus one cold definition read
         expect(container.querySelector('output')?.textContent).toBe('success');
-        expect(container.textContent).toContain('Catalog recovered');
-        expect(container.textContent).not.toContain('Dashboard unavailable');
+        expect(container.textContent).toContain('not reported');
+        expect(container.textContent).not.toContain('timeout of 12000ms exceeded');
         expect(api.post).not.toHaveBeenCalled(); // no STOP/abort/action as a side effect
     } finally {
         await act(async () => root.render(null));

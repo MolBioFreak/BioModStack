@@ -13,8 +13,8 @@ test('OEM operator surface retains connection, recovery, camera, stop, and mount
     assert.match(cockpit, /ownership\.transport/);
     assert.match(cockpit, /invokeInterrupt\('oem\.x\.stop'/);
     assert.match(cockpit, /invokeInterrupt\('oem\.z\.stop'/);
-    assert.match(cockpit, /physical stopping remains unverified/);
-    for (const label of ['Connection', 'Connect', 'Non-homing Recovery', 'Manual Controls', 'BioXpCameraPanel', 'Recent Robot Actions', 'BioXpOperatorControlTabs']) {
+    assert.match(cockpit, /This is not a physical emergency stop/);
+    for (const label of ['Connection', 'Connect', 'Recover controllers', 'Axis controls', 'BioXpCameraPanel', 'Recent Robot Actions', 'BioXpOperatorControlTabs']) {
         assert.match(cockpit, new RegExp(label));
     }
 });

@@ -6,7 +6,7 @@ import test from 'node:test';
 const source = readFileSync(resolve('src/components/BioXpOperatorControlTabs.tsx'), 'utf8');
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
-const dashboard = readFileSync(resolve('src/components/BioXpQuickDashboard.tsx'), 'utf8');
+const dashboard = readFileSync(resolve('src/components/BioXpRobotPresentation.tsx'), 'utf8');
 const pipettePanel = readFileSync(resolve('src/components/BioXpPipetteControlPanel.tsx'), 'utf8');
 
 test('catalog-driven control plane renders every action, critical groups, meta actions, and logs as separate panes', () => {
@@ -62,19 +62,16 @@ test('action forms and route provenance come only from the robot catalog and adm
     assert.doesNotMatch(client, /updateBioXpHistoryCaches/);
 });
 
-test('main tab has a compact live status dashboard for motion axes temperatures and pipettes', () => {
-    assert.match(cockpit, /BioXpQuickDashboard/);
+test('main tab projects embedded telemetry into status, axes and tools without another poll', () => {
+    assert.match(cockpit, /BioXpAxisTelemetry/);
     for (const label of [
-        'Live Robot Dashboard', 'Controllers enabled', 'Door / latch', 'Axis Analytics',
-        'Temperatures', 'Pipettes', 'Motor temperature not reported',
+        'Speed', 'Run / standby current', 'Limits L / R', 'Motor temperature',
     ]) assert.match(dashboard, new RegExp(label));
     assert.match(dashboard, /motor_temperature_available/);
-    assert.match(dashboard, /position_steps/);
+    assert.match(cockpit, /position_steps/);
     assert.match(dashboard, /run_current/);
-    assert.match(dashboard, /tip_loaded/);
-    assert.match(dashboard, /sensor\.label/);
-    assert.match(dashboard, /sensor\.unit/);
-    assert.match(dashboard, /error !== null && error !== undefined/);
+    assert.match(cockpit, /sensor\.label/);
+    assert.match(cockpit, /sensor\.unit/);
     assert.doesNotMatch(dashboard, /useBioXpOperatorDashboard\(/);
     // R5: current embedded telemetry, not an extra retired dashboard poll.
     // Same-generation read-only catalog polling recovers status observation loss;
@@ -82,7 +79,7 @@ test('main tab has a compact live status dashboard for motion axes temperatures 
     assert.match(cockpit, /useBioXpOperatorControlCatalog\(\s*generation,\s*linkConnected && operationalVisible,/);
     assert.match(cockpit, /const currentDashboardV2 = currentCatalogV2\?\.dashboard/);
     assert.match(cockpit, /const displayTelemetry = displayDashboardV2\?\.telemetry \?\? undefined/);
-    assert.match(cockpit, /data=\{displayTelemetry\}/);
+    assert.match(cockpit, /axis=\{displayTelemetry\?\.axes\.find/);
     assert.match(cockpit, /stale=\{showingLastKnown\}/);
     assert.doesNotMatch(cockpit, /useBioXpOperatorDashboard(?:V2)?\(/);
     assert.doesNotMatch(`${dashboard}\n${cockpit}`, /type="password"|Login required|Authentication required/i);

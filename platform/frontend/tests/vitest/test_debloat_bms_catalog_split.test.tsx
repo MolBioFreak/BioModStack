@@ -2,7 +2,8 @@ import React, { act } from 'react';
 import { readFileSync } from 'node:fs';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BioXpQuickDashboard } from '../../src/components/BioXpQuickDashboard';
+import { BioXpStatusStrip } from '../../src/components/BioXpStatusStrip';
+import { BioXpAxisTelemetry, BioXpReference } from '../../src/components/BioXpRobotPresentation';
 import { BioXpPipetteControlPanel } from '../../src/components/BioXpPipetteControlPanel';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -37,7 +38,8 @@ it.skipIf(!actual)('renders actual full and compact dashboard/pipette views iden
         const render = (data: typeof oldDashboard) => {
             const client = new QueryClient();
             const result = renderToStaticMarkup(<QueryClientProvider client={client}>
-                <BioXpQuickDashboard connected data={data} isLoading={false} error={null} motionControlsAvailable={true}/>
+                <BioXpStatusStrip connected data={data} motionControlsAvailable={true} />
+                <>{data.axes.map((axis: (typeof data.axes)[number]) => <div key={axis.axis}><BioXpReference reference={axis.reference} /><span>{axis.position_steps}</span><BioXpAxisTelemetry axis={axis} /></div>)}</>
                 <BioXpPipetteControlPanel generation={7} connected pipettes={data.pipettes} freshness={data.snapshot.freshness} actions={actual.full.actions}/>
             </QueryClientProvider>);
             client.clear(); return result;

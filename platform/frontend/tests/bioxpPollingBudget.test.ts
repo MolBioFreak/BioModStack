@@ -6,7 +6,6 @@ import test from 'node:test';
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
 const cameraPanel = readFileSync(resolve('src/components/BioXpCameraPanel.tsx'), 'utf8');
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
-const quickDashboard = readFileSync(resolve('src/components/BioXpQuickDashboard.tsx'), 'utf8');
 
 const hookSource = (start: string, end: string): string => {
     const from = client.indexOf(start);
@@ -38,7 +37,7 @@ test('cockpit keeps one bounded catalog loop and uses age only as presentation',
     assert.match(cockpit, /const displayTelemetry = displayDashboardV2\?\.telemetry/);
     assert.match(cockpit, /localAgeMs >= 15_000 \|\| upstreamAgeMs >= 15_000/);
     assert.doesNotMatch(cockpit, /setInterval/);
-    assert.match(quickDashboard, /Last-known observation/);
+    assert.match(cockpit, /stale=\{showingLastKnown\}/);
     assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected && controlsVisible && historyOpen, historyLimit, historyPagination.cursor\)/);
     assert.match(cockpit, /!displayConnected \? \[\]/);
 });

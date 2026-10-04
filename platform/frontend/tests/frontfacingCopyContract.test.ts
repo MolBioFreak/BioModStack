@@ -46,7 +46,7 @@ test('analytics, BioXP USB, and quality panels keep copy terse', () => {
         'Backbone screen: target contacts, hotspot coverage, RFA quality.',
         'Generator-native confidence, affinity priors, batch shape.',
         'PAE matrix; chain bands when available.',
-        'Direct OEM operator controls',
+        'Axis controls',
         'Stage presets tune start_t, samples, ranking, and anchor strictness.',
     ]) {
         requireSnippet(source, snippet);
@@ -155,11 +155,11 @@ test('BioXP handler cockpit uses terse operator copy, not explainer paragraphs',
 
     for (const snippet of [
         'Connection',
-        'Claim USB Transport',
-        'Non-homing Recovery',
+        'Enable controllers',
+        'Recover controllers',
         'X Axis',
         'Camera',
-        'Physical Emergency Abort Unavailable',
+        'This is not a physical emergency stop',
     ]) {
         requireSnippet(source, snippet);
     }

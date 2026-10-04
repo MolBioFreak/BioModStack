@@ -105,7 +105,6 @@ const completeDeckReceiptFixture = {
 
 const state = vi.hoisted(() => ({
     stableReset: vi.fn(),
-    quickDashboardProps: undefined as Record<string, unknown> | undefined,
     admissionCalls: 0,
     catalogArgs: [] as unknown[][],
     historyEnabled: false,
@@ -135,6 +134,8 @@ const state = vi.hoisted(() => ({
     },
     dashboard: {
         data: {
+            axes: [], enclosure: { door_closed: null, latch_closed: null },
+            snapshot: { freshness: null }, temperatures: [],
             motion: { enabled: true, reason: null },
             x_axis: {
                 axis: 'x',
@@ -631,7 +632,6 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
 vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: (props: Record<string, unknown>) => <output data-testid="camera-session">{JSON.stringify(props)}</output> }));
 vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({ BioXpOperatorControlTabs: () => null }));
 vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: (props: Record<string, unknown>) => { state.pipetteProps = props; return null; } }));
-vi.mock('../../src/components/BioXpQuickDashboard', () => ({ BioXpQuickDashboard: (props: Record<string, unknown>) => { state.quickDashboardProps = props; return null; } }));
 vi.mock('../../src/components/BioXpOperatorReports', () => ({ BioXpOperatorReports: () => null }));
 
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
@@ -652,7 +652,7 @@ describe('critical evidence presentation', () => {
         (state.v2Catalog.data!.dashboard as Record<string, unknown>).telemetry = state.dashboard.data;
         (state.v2Catalog.data!.dashboard as Record<string, unknown>).generated_at = Date.now() / 1000 - 16;
         await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
-        expect(container.textContent).toContain('showing last-known robot state');
+        expect(container.querySelector('.bx-report')?.classList.contains('bx-warning')).toBe(true);
         expect(container.textContent).not.toContain('Updating');
     });
     it.each(['local', 'upstream'])('ages the %s observation display without expiring admission', async (clock) => {
@@ -673,23 +673,21 @@ describe('critical evidence presentation', () => {
         dashboard.telemetry = state.dashboard.data;
         try {
             await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
-            expect(container.textContent).toContain('Hardware observation: unknown');
+            expect(container.querySelector('.bx-report')?.textContent).toContain('hardware not fresh');
             const move = [...container.querySelectorAll('button')].find(button => button.textContent === 'Move X + Y together')!;
             expect(move).toBeDefined();
             expect(move.disabled).toBe(false);
             await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
-            expect(container.textContent).toContain('Hardware observation: unknown');
+            expect(container.querySelector('.bx-report')?.textContent).toContain('hardware not fresh');
             expect(move.disabled).toBe(false);
             // Keep the opposite clock fresh; each budget must independently expire.
             if (clock === 'upstream') Object.assign(state.v2Catalog, { dataUpdatedAt: Date.now() });
             else dashboard.generated_at = Date.now() / 1000;
             await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-            expect(container.textContent).toContain('showing last-known robot state');
-            expect(container.textContent).toContain('Controllers enabled');
+            expect(container.querySelector('.bx-report')?.classList.contains('bx-warning')).toBe(true);
+            expect(container.querySelector('[aria-label="Controller preparation and recovery"]')?.textContent).toContain('Enabled');
             expect(move.isConnected).toBe(true);
             expect(move.disabled).toBe(false);
-            expect(state.quickDashboardProps?.data).toBe(state.dashboard.data);
-            expect(state.quickDashboardProps?.stale).toBe(true);
             expect(state.v2Catalog).toMatchObject({ isFetching: true, error: null, isStale: false });
             expect(Date.now() - (clock === 'local'
                 ? (state.v2Catalog as typeof state.v2Catalog & { dataUpdatedAt: number }).dataUpdatedAt
@@ -723,7 +721,7 @@ describe('critical evidence presentation', () => {
     it('explains null telemetry instead of indefinite Updating', async () => {
         (state.v2Catalog.data!.dashboard as Record<string, unknown>).telemetry = null;
         await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
-        expect(container.textContent).toContain('Robot did not report telemetry');
+        expect(container.querySelector('.bx-status')?.textContent).toContain('not reported');
         expect(container.textContent).not.toContain('Updating');
     });
     it('puts the bounded failure summary above on-demand evidence', async () => {
@@ -744,20 +742,20 @@ describe('primary cockpit query ownership', () => {
         await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(state.v1CatalogEnabled).toBe(true);
         expect(state.historyEnabled).toBe(false);
-        const history = [...container.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent === 'Recent Robot Actions')!;
+        const history = [...container.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent?.startsWith('History '))!;
         await act(async () => { history.open = true; history.dispatchEvent(new Event('toggle')); });
         expect(state.historyEnabled).toBe(true);
         await act(async () => { history.open = false; history.dispatchEvent(new Event('toggle')); });
         expect(state.historyEnabled).toBe(false);
         const x = [...container.querySelectorAll('article')].find(node => node.textContent?.includes('X Axis'))!;
-        expect([...x.querySelectorAll('button')].find(node => node.textContent === 'Move +')?.disabled).toBe(false);
+        expect([...x.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Move +')?.disabled).toBe(false);
     });
     it('preserves published emergency and pipette admission with Advanced closed', async () => {
         const emergency = { ...xHomeAction(), action_id: 'meta.emergency_stop', enabled: true };
         const pipette = { ...xHomeAction(), action_id: 'pipette.connect', enabled: false, disabled_reason: 'Robot refused' };
         state.catalog.data.actions.push(emergency, pipette);
         await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
-        const emergencyButton = () => [...container.querySelectorAll('button')].find(node => node.textContent === 'Software Abort (cancel waiters)')!;
+        const emergencyButton = () => [...container.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Software Abort (cancel waiters)')!;
         expect(emergencyButton().disabled).toBe(false);
         const disclosure = container.querySelector('#control-tab-pipettes') as HTMLButtonElement;
         await act(async () => disclosure.click());
@@ -782,7 +780,7 @@ describe('primary cockpit query ownership', () => {
         for (const axis of ['X', 'Y', 'Z']) {
             const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
             for (const label of ['Move +', 'Move −', 'Go absolute', 'Home']) {
-                const control = [...panel.querySelectorAll('button')].find(node => node.textContent === label)!;
+                const control = [...panel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === label)!;
                 expect(control, `${axis} ${label}`).toBeDefined();
                 expect(control.disabled, `${axis} ${label}`).toBe(true);
                 await act(async () => control.click());
@@ -797,7 +795,7 @@ describe('primary cockpit query ownership', () => {
         const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         await render();
         const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
-        const move = [...panel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!;
+        const move = [...panel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Go absolute')!;
         expect(move.disabled).toBe(false);
         await act(async () => move.click());
         expect(state.yInvokeCalls).toHaveLength(1);
@@ -819,7 +817,7 @@ describe('primary cockpit query ownership', () => {
         // a synthetic input here, not a physical Home acceptance claim.
         const control = (panelName: string, label: string) => {
             const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === panelName)!;
-            return [...panel.querySelectorAll('button')].find(button => button.textContent === label)!;
+            return [...panel.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === label)!;
         };
         for (const phase of ['unarmed', 'armed', 'referenced', 'armed', 'referenced'] as const) {
             state.catalog.data.actions = structuredClone(manualCatalogProducer[phase]);
@@ -856,7 +854,7 @@ describe('primary cockpit query ownership', () => {
         const render = async () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         await render();
         const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === 'Gripper')!;
-        const control = (label: string) => [...panel.querySelectorAll('button')].find(button => button.textContent === label)!;
+        const control = (label: string) => [...panel.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === label)!;
         await act(async () => control('Open').click());
         expect(state.invokeCalls).toHaveLength(1);
         state.invokePending = true;
@@ -886,13 +884,13 @@ describe('primary cockpit query ownership', () => {
         await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         for (const axis of ['X', 'Y', 'Z']) {
             const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
-            expect([...panel.querySelectorAll('button')].find(node => node.textContent === 'Move +')!.disabled).toBe(false);
+            expect([...panel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Move +')!.disabled).toBe(false);
         }
     });
 
     it('rejects a late XY submission callback after generation replacement', async () => {
         await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
-        await act(async () => { (container.querySelector('[data-testid="serial206-xy-oem-panel"] button') as HTMLButtonElement).click(); });
+        await act(async () => { (container.querySelector('[data-testid="serial206-xy-oem-panel"] .bx-xy-controls button') as HTMLButtonElement).click(); });
         const callback = state.xyCallbacks;
         expect(callback).not.toBeNull();
         state.connectionGeneration = 2;
@@ -907,12 +905,12 @@ describe('primary cockpit query ownership', () => {
         state.v2Catalog.data!.dashboard.generated_at = Date.now() / 1000 - 20;
         await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         expect(state.catalogArgs.at(-1)).toEqual(original);
-        expect((container.querySelector('[data-testid="serial206-xy-oem-panel"] button') as HTMLButtonElement).disabled).toBe(false);
+        expect((container.querySelector('[data-testid="serial206-xy-oem-panel"] .bx-xy-controls button') as HTMLButtonElement).disabled).toBe(false);
     });
     it.each(['status-error', 'unreachable'])('retains XY reconciliation identity during %s without an observation lock', async (fault) => {
         await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-        const button = () => panel().querySelector('button') as HTMLButtonElement;
+        const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
         await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({ command_id: 'xy-retained', status: 'dispatched', terminal: false }); });
         if (fault === 'status-error') state.statusError = true;
         else state.connectionReachable = false;
@@ -950,7 +948,7 @@ describe('primary cockpit query ownership', () => {
             await act(async () => { await vi.advanceTimersByTimeAsync(1); });
         };
         const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-        const button = () => panel().querySelector('button') as HTMLButtonElement;
+        const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
         try {
             await render(); await advance(1);
             expect(button().disabled).toBe(false);
@@ -991,7 +989,7 @@ describe('primary cockpit query ownership', () => {
         try {
             const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
             const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-            const button = () => panel().querySelector('button') as HTMLButtonElement;
+            const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
             await render();
             const commandId = coherentFailureProducer.compact.command_id;
             await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({ command_id: commandId, status: 'dispatched', terminal: false }); });
@@ -1061,7 +1059,7 @@ describe('primary cockpit query ownership', () => {
         try {
             const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
             const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-            const button = () => panel().querySelector('button') as HTMLButtonElement;
+            const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
             const visible = () => [...panel().querySelectorAll('p')].map(node => node.textContent).join(' ');
             const explanation = 'Move timeout reported. Recorded stopped position: X85000, Y5 (requested X85000, Y0). Past receipt only; not current position or readiness. Source result remains failed.';
             await render();
@@ -1109,7 +1107,7 @@ describe('primary cockpit query ownership', () => {
         try {
             const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
             const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-            const button = () => panel().querySelector('button') as HTMLButtonElement;
+            const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
             const visible = () => [...panel().querySelectorAll('p')].map(node => node.textContent).join(' ');
             await render();
             await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({command_id:manualReport.command_id,status:'dispatched',terminal:false}); });
@@ -1137,16 +1135,16 @@ describe('primary cockpit query ownership', () => {
     it.each(['completed', 'failed', 'interrupted', 'stopped', 'ambiguous'])('follows XY to %s and ignores other identities', async (status) => {
         await act(async () => { root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>); });
         const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
-        const button = () => panel().querySelector('button') as HTMLButtonElement;
+        const button = () => panel().querySelector('.bx-xy-controls button') as HTMLButtonElement;
         await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({ command_id: 'xy-one', status: 'queued', terminal: false }); });
         expect(state.xyCalls).toHaveLength(1);
         const assertAxesAvailable = () => {
             for (const axis of ['X', 'Y', 'Z']) {
                 const axisPanel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
-                expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!.disabled).toBe(false);
+                expect([...axisPanel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Go absolute')!.disabled).toBe(false);
                 expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Home')!.disabled).toBe(false);
                 expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Stop')!.disabled).toBe(false);
-                if (axis === 'Z') expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Z Clear (automatic position)')!.disabled).toBe(false);
+                if (axis === 'Z') expect([...axisPanel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Z Clear (automatic position)')!.disabled).toBe(false);
             }
         };
         assertAxesAvailable();
@@ -1487,7 +1485,7 @@ describe('L3 rapid submission and receipt reconciliation', () => {
     const moveFor = (axis: string) => [...container.querySelectorAll('article')]
         .find(node => node.querySelector('h3')?.textContent === `${axis.toUpperCase()} Axis`)!
         .querySelectorAll<HTMLButtonElement>('button');
-    const positive = (axis: string) => [...moveFor(axis)].find(button => button.textContent === 'Move +')!;
+    const positive = (axis: string) => [...moveFor(axis)].find(button => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +')!;
 
     it.each(['x', 'y', 'z'])('L3 reserves %s synchronously, drops rapid cross-axis clicks and preserves a real 409 without retry', async axis => {
         nativeMetadataMode.mutations = true;
@@ -1621,14 +1619,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller preparation and recovery'),
-        ) as HTMLElement;
+        const panel = container; // Shared strip controls and immediately adjacent lifecycle outcomes.
         const activate = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Enable controllers',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Enable controllers',
         ) as HTMLButtonElement;
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Recover controllers (no homing)',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         expect(activate.disabled).toBe(false);
         expect(recover.disabled).toBe(false);
@@ -1683,14 +1679,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller preparation and recovery'),
-        ) as HTMLElement;
+        const panel = container; // Shared strip controls and immediately adjacent lifecycle outcomes.
         const activate = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Enable controllers',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Enable controllers',
         ) as HTMLButtonElement;
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Recover controllers (no homing)',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         await act(async () => {
             activate.click();
@@ -1739,10 +1733,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             [...(container.firstElementChild?.children ?? [])]
                 .filter((element) => element.getAttribute('role') === 'alert'),
         ).toHaveLength(0);
-        expect(panel.textContent).not.toContain('stale-activation-receipt');
+        expect(container.querySelector('.bx-outcomes')?.textContent).not.toContain('stale-activation-receipt');
         for (const axis of ['X', 'Y', 'Z']) {
             const axisPanel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
-            expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!.disabled).toBe(false);
+            expect([...axisPanel.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') ?? node.textContent) === 'Go absolute')!.disabled).toBe(false);
             expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Home')!.disabled).toBe(false);
             expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Stop')!.disabled).toBe(false);
         }
@@ -1850,11 +1844,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller preparation and recovery'),
-        ) as HTMLElement;
+        const panel = container; // Shared strip controls and immediately adjacent lifecycle outcomes.
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Recover controllers (no homing)',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         await act(async () => {
             recover.click();
@@ -1977,11 +1969,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find(
-            (node) => node.textContent?.includes('Controller preparation and recovery'),
-        ) as HTMLElement;
+        const panel = container; // Shared strip controls and immediately adjacent lifecycle outcomes.
         const recover = [...panel.querySelectorAll('button')].find(
-            (button) => button.textContent === 'Recover controllers (no homing)',
+            (button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Recover controllers (no homing)',
         ) as HTMLButtonElement;
         await act(async () => {
             recover.click();
@@ -2710,7 +2700,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const deck = container.querySelector('[data-testid="oem-deck-movement"]') as HTMLElement;
         const y = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const deckMove = [...deck.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
-        const yMove = [...y.querySelectorAll('button')].find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const yMove = [...y.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         await act(async () => { deckMove.click(); await Promise.resolve(); });
         await act(async () => (container.querySelector('#control-tab-robot') as HTMLButtonElement).click());
         await act(async () => { yMove.click(); await Promise.resolve(); });
@@ -2735,9 +2725,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
-        const goAbsolute = buttons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const goAbsolute = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
 
         expect(movePositive.disabled).toBe(false);
         expect(home.disabled).toBe(false);
@@ -2788,9 +2778,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
-        const goAbsolute = buttons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const goAbsolute = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
 
         expect(movePositive.disabled).toBe(false);
         expect(goAbsolute.disabled).toBe(false);
@@ -2823,12 +2813,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const xArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const xButtons = [...xArticle.querySelectorAll('button')] as HTMLButtonElement[];
-        const xMovePositive = xButtons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
-        const xGoAbsolute = xButtons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const xMovePositive = xButtons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
+        const xGoAbsolute = xButtons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
         const zArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
         const zButtons = [...zArticle.querySelectorAll('button')] as HTMLButtonElement[];
-        const zMovePositive = zButtons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
-        const zGoAbsolute = zButtons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const zMovePositive = zButtons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
+        const zGoAbsolute = zButtons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
 
         expect(xMovePositive.disabled).toBe(false);
         expect(xGoAbsolute.disabled).toBe(false);
@@ -2854,8 +2844,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         await setZInput(1, value);
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
         const input = article.querySelectorAll('input[type="number"]')[1] as HTMLInputElement;
-        expect(article.textContent).toContain('Home reaches the upper limit (0)');
-        expect(article.textContent).toContain('Current minimum:');
+        expect(article.textContent).toContain('establishes controller coordinate 0');
+        expect(article.querySelector('[data-testid="z-target-context"]')?.textContent).toContain('min ');
         const expected = value === '' ? NaN : Number(value);
         for (let poll = 0; poll < 3; poll++) {
             state.catalog.data = { ...state.catalog.data, actions: [...state.catalog.data.actions] };
@@ -2863,7 +2853,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             expect(input.valueAsNumber).toBe(expected);
         }
         expect(state.yInvokeCalls).toHaveLength(0);
-        const go = [...article.querySelectorAll('button')].find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const go = [...article.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
         expect(go.disabled).toBe(!Number.isInteger(expected));
         await act(async () => go.click());
         expect(state.yInvokeCalls.map((call) => {
@@ -2888,7 +2878,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             expect(input.valueAsNumber).toBe(value === '' ? NaN : Number(value));
         }
         if (value === '' || value === '0.5') {
-            const action = [...article.querySelectorAll('button')].find(button => button.textContent === (index ? 'Go absolute' : 'Move +'))!;
+            const action = [...article.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === (index ? 'Go absolute' : 'Move +'))!;
             expect(action.disabled).toBe(true);
         }
         expect(state.yInvokeCalls).toHaveLength(0);
@@ -2911,22 +2901,23 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
                 state.catalog.data = { ...state.catalog.data };
                 await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
                 const text = container.querySelector('[data-testid="z-target-context"]')?.textContent ?? container.textContent;
-                expect(text).toContain(`Selected target: ${fixture.provider.target_preview.effective_position_steps} steps`);
-                expect(text).toContain(`Current minimum: ${fixture.minimum} steps`);
+                if (fixture.provider.target_preview.effective_position_steps !== fixture.requested) expect(text).toContain(`→ ${fixture.provider.target_preview.effective_position_steps}`);
+                else expect(text).not.toContain('→');
+                expect(text).toContain(`min ${fixture.minimum}`);
                 expect(container.textContent).toContain(`Z requested: ${fixture.requested} · Applied target: ${fixture.z_move.effective_position_steps}`);
                 expect(container.textContent).toContain(`Before: ${fixture.start} · After: unknown`);
             }
         }
-        const go = () => [...[...container.querySelectorAll('article')].find(n => n.querySelector('h3')?.textContent === 'Z Axis')!.querySelectorAll('button')].find(button => button.textContent === 'Go absolute')!;
+        const go = () => [...[...container.querySelectorAll('article')].find(n => n.querySelector('h3')?.textContent === 'Z Axis')!.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute')!;
         // A late preview for a different draft must not be called selected.
         await setZInput(1, '0');
-        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).toContain('Selected target: unavailable');
+        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).not.toContain('→');
         Object.assign(state.catalog.data.dashboard, { ownership_generation: 99 });
         await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
-        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).toContain('Current minimum: unavailable');
+        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).toContain('min unavailable');
         state.catalog.data.dashboard = original;
         await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
-        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).toContain('Selected target: unavailable');
+        expect(container.querySelector('[data-testid="z-target-context"]')!.textContent).not.toContain('→');
         expect(go().disabled).toBe(false); // missing preview never adds an admission gate
         expect(state.yInvokeCalls).toHaveLength(0);
         expect(state.invokeCalls).toHaveLength(0);
@@ -2964,7 +2955,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
 
         const zArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
-        const zClear = [...zArticle.querySelectorAll('button')].find((button) => button.textContent === 'Z Clear (automatic position)') as HTMLButtonElement;
+        const zClear = [...zArticle.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Z Clear (automatic position)') as HTMLButtonElement;
         // The original fixture had no action identity: R3 does not permit a
         // blanket pending exemption. Establish actual read-only authority
         // before calling this request unrelated to normal motion submission.
@@ -2986,7 +2977,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         await setXAbsolute(value);
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const input = article.querySelectorAll('input[type="number"]')[1] as HTMLInputElement;
-        const go = [...article.querySelectorAll('button')].find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const go = [...article.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
         expect(input.min).toBe('60');
         expect(input.max).toBe('90263');
         expect(input.value).toBe(value);
@@ -3005,7 +2996,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         await setXAbsolute('999999');
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
-        const goAbsolute = [...article.querySelectorAll('button')].find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const goAbsolute = [...article.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
         expect(goAbsolute.disabled).toBe(true);
         expect(goAbsolute.title).toContain('Requested X target must be an integer from 60 through 90263.');
         expect(state.admissionCalls).toBe(0);
@@ -3024,7 +3015,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
 
         expect(movePositive.disabled).toBe(false);
@@ -3052,7 +3043,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
 
         expect(movePositive.disabled).toBe(false);
         expect(state.admissionCalls).toBe(0);
@@ -3068,7 +3059,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const xArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const xButtons = [...xArticle.querySelectorAll('button')] as HTMLButtonElement[];
-        const xMovePositive = xButtons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const xMovePositive = xButtons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const xHome = xButtons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
         const zArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
         const zButtons = [...zArticle.querySelectorAll('button')] as HTMLButtonElement[];
@@ -3086,7 +3077,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             .find(row => row.action_id === `oem.${axis}.move_steps`)!;
         await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis.toUpperCase()} Axis`)!;
-        const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move +')!;
+        const move = [...panel.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +')!;
         // CCI::moveSteps waits inline for X/Y/Z (installed IL 37194–37499).
         // A pre-submit enabled snapshot cannot reserve another waiting HTTP request.
         expect(move.disabled).toBe(true);
@@ -3129,7 +3120,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
 
         await act(async () => {
             movePositive.click();
@@ -3161,7 +3152,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
 
         expect(movePositive.disabled).toBe(false);
@@ -3176,7 +3167,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             await Promise.resolve();
         });
         const section = [...container.querySelectorAll('details')]
-            .find((node) => node.querySelector('summary')?.textContent === 'Recent Robot Actions') as HTMLElement;
+            .find((node) => node.querySelector('summary')?.textContent?.startsWith('History ')) as HTMLElement;
         expect(section.querySelectorAll('article')).toHaveLength(retainedHistory.receipts.length);
         expect(section.textContent).toContain('Terminal proof unverified');
         expect(section.textContent).toContain('Retained legacy record — not current control authority.');
@@ -3211,7 +3202,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         expect(state.historyCalls.at(-1)).toBe(50);
         const historySection = [...container.querySelectorAll('details')]
-            .find((node) => node.querySelector('summary')?.textContent === 'Recent Robot Actions') as HTMLElement;
+            .find((node) => node.querySelector('summary')?.textContent?.startsWith('History ')) as HTMLElement;
         const receiptArticles = [...historySection.querySelectorAll('article')]
             .filter((node) => node.textContent?.includes('oem.x.move_steps'));
         expect(receiptArticles.length).toBe(30);
@@ -3229,7 +3220,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(false);
         expect(home.disabled).toBe(false);
@@ -3244,7 +3235,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         expect(section).toBeTruthy();
         const manualControls = section.closest('section') as HTMLElement;
-        expect(manualControls.querySelector('h2')?.textContent).toBe('Manual Controls');
+        expect(manualControls.getAttribute('aria-label')).toBe('Axis controls');
         expect(manualControls.textContent).toContain('X Axis');
         expect(manualControls.textContent).toContain('Z Axis');
         expect(manualControls.textContent).toContain('Gripper');
@@ -3254,7 +3245,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(inputs[1]?.min).toBe('-2147483648');
         expect(inputs[1]?.max).toBe('2147483647');
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const stop = buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(false);
         expect(stop.disabled).toBe(false);
@@ -3301,7 +3292,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const stop = buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(true);
         expect(movePositive.title).toBe('Robot denied Y movement.');
@@ -3322,7 +3313,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         await act(async () => { await Promise.resolve(); });
 
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(true);
         expect(movePositive.title).toContain('Step magnitude must be an integer from 0 through 2147483647.');
         expect(state.yInvokeCalls).toHaveLength(0);
@@ -3365,7 +3356,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(false);
+        expect((buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement).disabled).toBe(false);
         expect((buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement).disabled).toBe(false);
         expect(section.textContent).not.toContain('matching v2 catalog and dashboard authority is unavailable');
     });
@@ -3378,7 +3369,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             await Promise.resolve();
         });
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
-        const movePositive = [...section.querySelectorAll('button')].find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = [...section.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         await act(async () => { movePositive.click(); await Promise.resolve(); });
         expect(section.textContent).toContain('Y enqueue failed · HTTP 409 · board_epoch_conflict');
         expect(section.textContent).toContain('Y STOP failed · HTTP 504 · bioxp_robot_timeout');
@@ -3391,7 +3382,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it.each(['interruptPending', 'lifecycleInvokePending', 'deckInvokePending'] as const)('holds Z Clear visibly during %s and restores it after submission', async (pending) => {
         await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
-        const clear = () => [...container.querySelectorAll('button')].find((button) => button.textContent === 'Z Clear (automatic position)')!;
+        const clear = () => [...container.querySelectorAll('button')].find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Z Clear (automatic position)')!;
         expect(clear().disabled).toBe(false);
         state[pending] = true;
         await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
@@ -3411,7 +3402,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it('keeps robot-enabled Z controls and Stop available through catalog read failure', async () => {
         await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
         const panel = () => [...container.querySelectorAll('article')].find((element) => element.querySelector('h3')?.textContent === 'Z Axis')!;
-        const normal = () => [...panel().querySelectorAll('button')].filter((button) => ['Move −', 'Move +', 'Home', 'Go absolute'].includes(button.textContent ?? ''));
+        const normal = () => [...panel().querySelectorAll('button')].filter((button) => ['Move −', 'Move +', 'Home', 'Go absolute'].includes(button.getAttribute('aria-label') ?? button.textContent ?? ''));
         expect(normal()).toHaveLength(4);
         for (const button of normal()) expect(button.disabled).toBe(false);
         state.v2Catalog.error = new Error('catalog query failed');
@@ -3435,7 +3426,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(false);
+        expect((buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement).disabled).toBe(false);
         expect((buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement).disabled).toBe(false);
         expect(section.textContent).not.toContain('Fresh v2 catalog or dashboard authority is unavailable');
     });
@@ -3456,9 +3447,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
-        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const movePositive = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Move +') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
-        const absolute = buttons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const absolute = buttons.find((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Go absolute') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(false);
         expect(home.disabled).toBe(false);
         expect(absolute.disabled).toBe(false);
@@ -3566,10 +3557,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             .map(node => `${node.textContent} ${node.getAttribute('title') ?? ''}`).join(' ');
         expect(operatorLabels).not.toMatch(/\bOEM\b/);
         const stop = [...container.querySelectorAll('button')].find(button => button.textContent === 'Stop X')!;
-        const abort = [...container.querySelectorAll('button')].find(button => button.textContent === 'Software Abort (cancel waiters)')!;
+        const abort = [...container.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === 'Software Abort (cancel waiters)')!;
         expect(stop.title).toContain('Immediate X stop');
         expect(abort.title).toContain('cancels waiters only; motors may continue');
-        expect(container.textContent).toContain('This is not a physical emergency stop; physical stopping remains unverified.');
+        expect(container.querySelector('[aria-label="Stop controls"]')?.getAttribute('title')).toContain('This is not a physical emergency stop');
         const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move X + Y together')!;
         const home = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Home X + Y')!;
         const edit = async (input: HTMLInputElement, value: string) => act(async () => {
@@ -3628,8 +3619,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
         const panel = container.querySelector('[data-testid="serial206-xy-oem-panel"]') as HTMLElement;
         expect(panel).not.toBeNull();
-        expect(panel.textContent).toContain('Combined XY Capability');
-        expect(panel.textContent).toContain('one combined command, not two independent axis commands');
+        expect(panel.textContent).toContain('X + Y together');
         const buttons = [...panel.querySelectorAll('button')] as HTMLButtonElement[];
         const move = buttons.find((button) => button.textContent === 'Move X + Y together') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home X + Y') as HTMLButtonElement;
@@ -3675,7 +3665,7 @@ describe('Well pipetting cockpit integration', () => {
             Object.getOwnPropertyDescriptor(input.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(input, value);
             input.dispatchEvent(new Event(input.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
         });
-        const button = (text: string) => [...panel('pipettes').querySelectorAll('button')].find(b => b.textContent === text)!;
+        const button = (text: string) => [...panel('pipettes').querySelectorAll('button')].find(b => (b.getAttribute('aria-label') ?? b.textContent) === text)!;
         try {
             await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
             expect(panel('robot').hidden).toBe(false);
@@ -3715,7 +3705,7 @@ describe('Well pipetting cockpit integration', () => {
             const stops = container.querySelector('[aria-label="Stop controls"]')!;
             expect(stops.closest('[hidden]')).toBeNull();
             for (const text of ['Stop X', 'Stop Y', 'Stop Z', 'Software Abort (cancel waiters)']) {
-                const control = [...stops.querySelectorAll('button')].find(b => b.textContent === text)!;
+                const control = [...stops.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') ?? b.textContent) === text)!;
                 expect(control.disabled).toBe(false);
                 await act(async () => control.click());
             }
@@ -3794,7 +3784,7 @@ describe('Well pipetting cockpit integration', () => {
 
 describe('OEM software Abort distinct from addressed Stops', () => {
     const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
-    const abort = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Software Abort (cancel waiters)')!;
+    const abort = () => [...container.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') ?? b.textContent) === 'Software Abort (cancel waiters)')!;
     const stops = () => ['X Axis', 'Y Axis', 'Z Axis', 'Gripper'].map(label => {
         const panel = [...container.querySelectorAll('article')].find(p => p.querySelector('h3')?.textContent === label)!;
         return [...panel.querySelectorAll('button')].find(b => b.textContent === 'Stop')!;
@@ -3835,7 +3825,7 @@ describe('OEM software Abort distinct from addressed Stops', () => {
         state.catalog.data.actions.push({ ...xMoveAction(), action_id: 'component-stop', informational_path: '/motion/diagnostics/stop', safety_class: 'stop', enabled: true });
         await render();
         expect(container.textContent).not.toContain('Emergency Stop');
-        expect(container.textContent).toContain('Motors may continue');
+        expect(container.querySelector('[aria-label="Stop controls"]')?.getAttribute('title')).toContain('Motors may continue');
         await act(async () => abort().click());
         expect(state.yInterruptCalls).toEqual([expect.objectContaining({ actionId: 'oem.abort_all', request: expect.objectContaining({ expected_connection_generation: 1, reason: 'BMS operator requested OEM software Abort: cancel waiters only; motors may continue' }) })]);
         expect(state.invokeCalls).toHaveLength(0);
