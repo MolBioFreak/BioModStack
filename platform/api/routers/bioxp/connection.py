@@ -12,6 +12,10 @@ from services.bioxp.errors import (
 from services.bioxp.connection import mask_target_url
 from services.bioxp.models import BioXpFreshnessSettings, BioXpProfile
 from services.bioxp.runtime import BioXpRuntime, bioxp_connection_enabled
+from services.bioxp.service_control import (
+    ServiceAvailability, ServiceControlError, ServiceRestartRequest,
+    ServiceRestartResult, service_control,
+)
 
 from .dependencies import get_bioxp_runtime, mutations_enabled, require_bioxp_mutation_access
 
@@ -54,6 +58,22 @@ def _safe_profile(runtime: BioXpRuntime) -> dict[str, Any]:
         "target_url": mask_target_url(profile.api_url),
         "freshness_budget_seconds": profile.freshness_budget_seconds,
     }
+
+
+@router.get("/service", response_model=ServiceAvailability)
+async def get_service(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> ServiceAvailability:
+    return service_control.availability(runtime.connection)
+
+
+@router.post("/service/restart", response_model=ServiceRestartResult)
+async def restart_service(
+    body: ServiceRestartRequest,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> ServiceRestartResult:
+    try:
+        return await service_control.restart(runtime.connection)
+    except ServiceControlError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.get("/profile")
