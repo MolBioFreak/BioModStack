@@ -120,6 +120,8 @@ export default defineConfig({
             './tests/vitest/bioxpMethodsMounted.test.tsx',
             './tests/vitest/bioxpMethodSimulationMounted.test.tsx',
             './tests/vitest/bioxpMethodNumericMounted.test.tsx',
+            './tests/vitest/bioxpMethodPipettingMounted.test.tsx',
+            './tests/vitest/bioxpThermalAuthoringMounted.test.tsx',
             './tests/vitest/bioxpWorkflowControlsMounted.test.tsx',
             './tests/vitest/bioxpWorkflowObservationMounted.test.tsx',
             './tests/vitest/bioxpTransferControlsMounted.test.tsx',

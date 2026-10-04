@@ -14,12 +14,13 @@ export type BioXpDeckLiveIntent = {
 export type BioXpWorkflowDeckProps = {
     selection: BioXpDeckSelection; onChange: (selection: BioXpDeckSelection) => void; readOnly?: boolean;
     live?: BioXpDeckLiveIntent; resources?: DeckResource[]; overlay?: React.ReactNode;
+    compact?: boolean;
 };
 const fullView: DeckBounds = { x: 0, y: 0, ...deckSize };
 const modes: DeckSelectionMode[] = ['well', 'range', 'row', 'column'];
 
 /** Shared presentation. Authoring defaults remain selection-only; live intents are explicit callbacks. */
-export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay }: BioXpWorkflowDeckProps) {
+export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, compact = false }: BioXpWorkflowDeckProps) {
     const id = useId();
     const svg = useRef<SVGSVGElement>(null);
     const anchor = useRef<{ station: string; well: string } | null>(null);
@@ -118,9 +119,11 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
     } : chosenRegion ? { x: chosenRegion.bounds.x - 5, y: chosenRegion.bounds.y - 5,
         width: chosenRegion.bounds.width + 10, height: chosenRegion.bounds.height + 10 } : null;
     const strips = deckResources.filter(r => r.kind === 'strip');
+    const Inspector = compact ? 'details' : 'div';
+    const Help = compact ? 'details' : 'div';
     const stripBounds = deckBounds(strips.flatMap(r => r.points));
     return <section className="bioxp-workflow-deck" aria-label={live ? "BioXP live deck map" : "BioXP planned deck selection"}>
-        {!live && <div className="bwd-heading"><div><h3>{readOnly ? 'Native action location' : 'Deck selection'}</h3><p>{readOnly ? 'Highlighted from the compiled action. Use the action scrubber to follow the sequence.' : 'Choose a station, then the wells for your plan.'}</p></div><span className="bwd-badge">2D deck</span></div>}
+        {!live && !compact && <div className="bwd-heading"><div><h3>{readOnly ? 'Native action location' : 'Deck selection'}</h3><p>{readOnly ? 'Highlighted from the compiled action. Use the action scrubber to follow the sequence.' : 'Choose a station, then the wells for your plan.'}</p></div><span className="bwd-badge">2D deck</span></div>}
         <div className="bwd-station-control">{live ? <><label htmlFor={`${id}-view-station`}>Inspect</label><select id={`${id}-view-station`} aria-label="Deck view station" value={focusTarget || selection.station} onChange={e => setFocusTarget(e.target.value)}><option value="">Choose a station</option>{deckStations.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></> : readOnly ? <strong>{station?.label ?? 'No new XY destination'}</strong> : <><label htmlFor={`${id}-station`}>Station</label>
             <select id={`${id}-station`} aria-label="Deck station" value={station?.id ?? ''} onChange={e => chooseStation(e.target.value)}>
                 <option value="">Choose a station</option>
@@ -204,7 +207,8 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
             <button type="button" aria-label="Pan left" onClick={() => pan(-0.2, 0)}>←</button><button type="button" aria-label="Pan up" onClick={() => pan(0, -0.2)}>↑</button>
             <button type="button" aria-label="Pan down" onClick={() => pan(0, 0.2)}>↓</button><button type="button" aria-label="Pan right" onClick={() => pan(0.2, 0)}>→</button>
         </div>
-        {live ? <p className="bwd-live-context" aria-live="polite">{hover || 'Focus a station to inspect its wells.'}</p> : <div className="bwd-inspector">
+        {live ? <p className="bwd-live-context" aria-live="polite">{hover || 'Focus a station to inspect its wells.'}</p> : <Inspector className="bwd-inspector">
+            {compact && <summary>{station?.label ?? 'Station wells'} · {selection.wells.length} selected</summary>}
             <div className="bwd-selection-summary" aria-live="polite"><strong>{station?.label ?? 'No station selected'}</strong><span>{live ? `Requested${selection.wells.length ? ` · ${selection.wells.join(', ')}` : ' station'}` : `${selection.wells.length} wells selected`}</span></div>
             <p className="bwd-hover">{hover || 'Focus a station for a closer view of its wells.'}</p>
             {active && !readOnly && !live && <div className="bwd-address-grid" style={{ gridTemplateColumns: `28px repeat(${active.kind === 'strip' ? 1 : 12}, minmax(24px, 1fr))` }} aria-label={`${active.label} well selection`}>
@@ -216,9 +220,11 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
             </div>}
             {selection.wells.length > 0 && <p className="bwd-chips">{selection.wells.slice(0, 12).map(w => <span key={w}>{w}</span>)}{selection.wells.length > 12 && <span>+{selection.wells.length - 12} more</span>}</p>}
             {station && !active && !live && <p>{station.locationId === null ? 'Inspect-only region; no native workflow binding.' : 'Utility / cover region. Choose any native action in the step editor.'}</p>}
-        </div>}
+        </Inspector>}
+        <Help>{compact && <summary>Map help</summary>}
         <p id={`${id}-help`} className="bwd-help">{live ? 'Enter / Space moves once. Arrows explore wells. Drag the background, zoom or Focus station to inspect without moving.' : readOnly ? 'Preview only; zoom and pan change the view, not the plan or hardware.' : 'Click or press Enter / Space to select. Shift selects a rectangular range; Ctrl / ⌘ toggles wells. Arrow keys move between map wells. Range mode: choose the first and last well.'}</p>
         {!readOnly && !live && <p className="bwd-help">Selection only — no robot movement. Multiple wells do not change the fixed four-head alignment.</p>}
         {!live && <p className="bwd-caption">Native well positions · cover and utility outlines are artwork estimates, not measured dimensions.</p>}
+        </Help>
     </section>;
 }

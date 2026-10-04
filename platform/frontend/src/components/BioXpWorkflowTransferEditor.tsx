@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import type { TransferEndpoint, WorkflowTransferIntent } from '../lib/bioxpWorkflowPlan';
 import './BioXpWorkflowMaterials.css';
@@ -7,8 +8,10 @@ export interface BioXpWorkflowTransferEditorProps {
     onChange: (value: WorkflowTransferIntent) => void;
     selection: BioXpDeckSelection;
     onSelect?: (selection: BioXpDeckSelection) => void;
+    liquidSettings?: ReactNode;
+    compact?: boolean;
 }
-export function BioXpWorkflowTransferEditor({ value, onChange, selection, onSelect }: BioXpWorkflowTransferEditorProps) {
+export function BioXpWorkflowTransferEditor({ value, onChange, selection, onSelect, liquidSettings, compact = false }: BioXpWorkflowTransferEditorProps) {
     const patch = (change: Partial<WorkflowTransferIntent>) => onChange({ ...value, ...change });
     const selectedStation = deckStations.find(s => s.id === selection.station);
     const endpoint = (side: 'source' | 'destination', change: Partial<TransferEndpoint>) => patch({ [side]: { ...value[side], ...change } });
@@ -18,7 +21,7 @@ export function BioXpWorkflowTransferEditor({ value, onChange, selection, onSele
         endpoint(side, { wells });
     };
     return <section className="bioxp-plan-leaf" aria-label="Transfer editor">
-        <header><h3>Transfer</h3><p>Ordered head-reference pairs. Selected plunger channels do not reposition the head; native TipLocation owns actual alignment.</p></header>
+        <header><h3>Transfer</h3>{!compact && <p>Ordered head-reference pairs. Selected plunger channels do not reposition the head; native TipLocation owns actual alignment.</p>}</header>
         <p>Deck selection: {selectedStation?.label || selection.station || 'None'} · {selection.wells.join(', ') || 'No reference wells'}</p>
         <div className="bioxp-plan-columns">{(['source', 'destination'] as const).map(side => {
             const title = side === 'source' ? 'Source' : 'Destination';
@@ -66,8 +69,9 @@ export function BioXpWorkflowTransferEditor({ value, onChange, selection, onSele
             {value.channels.some(c => c < 0 || c > 3 || !Number.isInteger(c)) && <small>Saved channels also include: {value.channels.filter(c => c < 0 || c > 3 || !Number.isInteger(c)).join(', ')}</small>}
             <button type="button" onClick={() => patch({ channels: [] })}>Clear channels</button>
         </fieldset>
-        <div className="bioxp-plan-columns">{([['volume_ul', 'Volume per channel (µL)'], ['aspirate_speed', 'Aspirate speed'], ['dispense_speed', 'Dispense speed']] as const).map(([key, label]) => <label key={key}>{label}<input inputMode="decimal" value={value[key] ?? ''} onChange={e => patch({ [key]: e.target.value })} /></label>)}</div>
-        <small>Each pair: move → lower → aspirate → lift → move → lower → dispense → lift. No implicit tip loading, mixing or sensing.</small>
+        <div className="bioxp-plan-columns">{([['volume_ul', 'Volume per channel (µL)'], ['aspirate_speed', 'Aspirate speed'], ['dispense_speed', 'Dispense speed']] as const).filter(([key]) => !liquidSettings || key === 'volume_ul').map(([key, label]) => <label key={key}>{label}<input aria-label={label} inputMode="decimal" value={value[key] ?? ''} onChange={e => patch({ [key]: e.target.value })} /></label>)}</div>
+        {liquidSettings}
+        {!compact && <small>Each pair: move → lower → aspirate → lift → move → lower → dispense → lift. No implicit tip loading, mixing or sensing.</small>}
     </section>;
 }
 export default BioXpWorkflowTransferEditor;

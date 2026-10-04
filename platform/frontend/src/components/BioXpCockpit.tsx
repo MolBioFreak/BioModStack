@@ -1181,6 +1181,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         onClick={abortXAggregate} className="rounded bg-red-950 px-3 py-2 text-sm ring-1 ring-red-600 disabled:opacity-35">Software Abort (cancel waiters)</button>
                 </div>
             </div>
+            <div hidden={controlTab === 'workflows'}>
             <BioXpServiceRestart generation={generation} />
             <section aria-label="Controller preparation and recovery" className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
                 <h2 className="text-lg font-semibold">Controller preparation and recovery</h2>
@@ -1227,6 +1228,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 <YOperatorError label="Activation / recovery" error={currentLifecycleInvokeError} reconcileAmbiguousOutcome />
                 <YOperatorError label="Activation / recovery receipt" error={lifecycleReceiptQuery.error} />
             </section>
+            </div>
 
             <div role="tabpanel" id="control-panel-workflows" aria-labelledby="control-tab-workflows" hidden={controlTab !== 'workflows'}>
                 {workflowsOpened && <BioXpWorkflowEditor visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />}

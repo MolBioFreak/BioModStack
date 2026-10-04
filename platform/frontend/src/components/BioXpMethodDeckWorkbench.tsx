@@ -5,6 +5,8 @@ import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck'
 import type { WorkflowDeckPlan } from '../lib/bioxpWorkflowPlan';
 import { BioXpWorkflowDeck } from './BioXpWorkflowDeck';
 import { BioXpWorkflowMaterials } from './BioXpWorkflowMaterials';
+import { BioXpMethodPipettingEditor } from './BioXpMethodPipettingEditor';
+import { BioXpMethodThermalEditor, thermalMethodActions } from './BioXpMethodThermalEditor';
 import { MethodOutline, object, findMethodNode, editMethodNode } from './BioXpMethodFields';
 
 /** Selection is presentation-only. Only explicit adoption writes authored native inputs. */
@@ -57,13 +59,13 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
                 {boundInputs && <p>This step uses bound inputs. Edit its Bindings or add an unbound action to use the deck.</p>}
                 {action === 'move' && !boundInputs && <button type="button" disabled={!moveReady} onClick={() => updateInputs({ ...inputs, location_id: station!.locationId, well: selection.wells[0] })}>Use as Move target</button>}
                 {action === 'transfer' && !boundInputs && <><button type="button" disabled={!endpointReady} onClick={() => adoptEndpoint('source')}>Use as source</button><button type="button" disabled={!endpointReady} onClick={() => adoptEndpoint('destination')}>Use as destination</button><p>Source: {endpointText('source')}<br />Destination: {endpointText('destination')}</p></>}
-                <small>Selection does not move the robot. Wells are references for the fixed four-channel head; set heights, channels and liquid settings in Properties.</small>
+                <small>Add steps from the selection, then edit their Properties. Editing does not run them.</small>
             </div>
-            <BioXpWorkflowDeck selection={selection} onChange={setSelection} />
+            <BioXpWorkflowDeck compact selection={selection} onChange={setSelection} />
             <details><summary>Labware & materials</summary><BioXpWorkflowMaterials methodAuthoring plan={plan} selection={selection} onChange={deck_plan => onChange({ ...method, deck_plan })} /></details>
         </section>
         <aside aria-label="Method sequence and Properties" className="bioxp-method-inspector">
-            <MethodOutline actionProperties={actionProperties} nodes={nodes} onChange={steps => onChange({ ...method, steps })} catalog={catalog} rootSchema={rootSchema} nodeSchema={rootSchema.properties?.steps?.items} procedures={Array.isArray(method.procedures) ? method.procedures as MethodValue[] : []} findings={findings} flat={flat} selection={{ id: String(selected?.step_id ?? ''), onSelect: setSelectedId }} />
+            <MethodOutline actionProperties={(node, change) => actionProperties?.(node, change) ?? (thermalMethodActions.has(String(node.action)) ? <BioXpMethodThermalEditor node={node} onChange={change} catalog={catalog} /> : ['move', 'transfer'].includes(String(node.action === 'native_intent' ? object(node.inputs).operation : node.action)) && !object(node.inputs).expr ? <BioXpMethodPipettingEditor node={node} onChange={change} catalog={catalog} selection={selection} onSelect={setSelection} /> : undefined)} nodes={nodes} onChange={steps => onChange({ ...method, steps })} catalog={catalog} rootSchema={rootSchema} nodeSchema={rootSchema.properties?.steps?.items} procedures={Array.isArray(method.procedures) ? method.procedures as MethodValue[] : []} findings={findings} flat={flat} selection={{ id: String(selected?.step_id ?? ''), onSelect: setSelectedId }} />
         </aside>
     </div></>;
 }
