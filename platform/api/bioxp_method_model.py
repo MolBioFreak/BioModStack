@@ -189,7 +189,9 @@ def method_catalog():
             entry['effects'] = 'Source cover inspection can relocate covers; not photo-only'
         if entry['action'] == 'thermal_door':
             entry['effects'] = 'Source DO opens thermal door then initializes pipettes; DC closes door'
+    from bioxp_method_custody import custody_suggestions
     return {'schema': SCHEMA, 'actions': actions, 'native_definitions': schema['$defs'],
+        'authoring': {'custody': custody_suggestions()},
         'geometry': native['alignment'], 'locations': native['native_locations'],
         'limits': {'depth': 64, 'occurrences': 10000, 'native_actions': 100000},
         'precision': 'Decimal 28 significant digits, ROUND_HALF_EVEN; normalized base-unit decimal strings; native emitter converts at boundary',
@@ -197,9 +199,11 @@ def method_catalog():
 
 
 def method_examples():
-    from bioxp_method_examples import examples, bound_examples
+    from bioxp_method_examples import examples, bound_examples, magnetic_variant
     entries = deepcopy(examples())
     fixtures = {e['id']: e for e in bound_examples()}
     for entry in entries:
         entry['bound_fixture'] = fixtures[entry['id']]
+        if entry['id'] in {'purification', 'dna_purification', 'rna_purification', 'cfps_and_purification'}:
+            entry['authoring_variants'] = [magnetic_variant(entry)]
     return entries

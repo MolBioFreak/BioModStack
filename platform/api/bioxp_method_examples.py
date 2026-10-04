@@ -123,6 +123,88 @@ def examples():
     return output
 
 
+def magnetic_variant(entry):
+    """Explicit placement scaffold; all chemistry and native settings are authored.
+
+    LOC_MS is the chosen variant's structural target, not a magnet actuator.
+    Whole-input references retain the existing Bindings owner. Incomplete defaults
+    on magnetic placements contain only that target, never object/mode/science.
+    """
+    from copy import deepcopy
+    parameters, coverage = [], []
+
+    def action(sid, kind, label, magnetic=False):
+        parameter = {'id': sid + '_inputs', 'label': label, 'type': 'object'}
+        if kind == 'checkpoint':
+            inputs = {'message': label}
+        else:
+            if magnetic:
+                parameter['default'] = {'target_location': 'LOC_MS'}
+            parameters.append(parameter)
+            inputs = ref(parameter['id'])
+        coverage.append({'step_id': sid, 'stage_owner': 'operator' if kind == 'checkpoint' else 'robot',
+                         'physical_qualification': 'not demonstrated'})
+        return {'step_id': sid, 'type': 'action', 'action': kind, 'label': label, 'inputs': inputs}
+
+    def group(sid, label, children, node_type='group', **extra):
+        coverage.append({'step_id': sid, 'stage_owner': 'robot', 'physical_qualification': 'not demonstrated'})
+        return {'step_id': sid, 'type': node_type, 'label': label, 'steps': children, **extra}
+
+    def mix(sid, label):
+        return group(sid + '_compound', label, [
+            action(sid + '_' + suffix, kind, label + ': ' + suffix)
+            for suffix, kind in (('position', 'move'), ('lower', 'lower'), ('stroke', 'mix'), ('lift', 'lift'))])
+
+    steps = [action('magnetic_prepare', 'checkpoint',
+        'Prepare selected magnetic chemistry and compatible labware; select native plate identity and off-magnet destination; external lysis/preparation and tip handling remain operator-authored'),
+        group('magnetic_bind', 'Bind material', [
+            action('binding_add', 'transfer', 'Add authored binding reagent'),
+            mix('binding_mix', 'Mix binding suspension'),
+            action('binding_hold', 'wait', 'Authored binding interval')]),
+        group('magnetic_separate', 'Separate and remove supernatant', [
+            action('binding_on_magnet', 'plate_move', 'Place selected plate on magnetic station', True),
+            action('binding_settle', 'wait', 'Authored magnetic settling interval'),
+            action('supernatant_remove', 'transfer', 'Remove supernatant with authored aspiration heights/speeds; label alone does not establish pellet avoidance')])]
+    parameters.append({'id': 'wash_count', 'label': 'Authored number of wash repetitions', 'type': 'integer'})
+    steps.append(group('magnetic_washes', 'Wash repetitions', [
+        action('wash_off_magnet', 'plate_move', 'Move selected plate to authored off-magnet destination'),
+        action('wash_add', 'transfer', 'Add selected wash reagent and authored volume'),
+        mix('wash_mix', 'Resuspend wash off magnet'),
+        action('wash_on_magnet', 'plate_move', 'Return selected plate to magnetic station', True),
+        action('wash_settle', 'wait', 'Authored wash settling interval'),
+        action('wash_remove', 'transfer', 'Remove wash to authored waste destination with explicit native settings')],
+        node_type='repeat', count=ref('wash_count')))
+    steps.extend([
+        action('magnetic_dry', 'wait', 'Authored drying interval; disable/remove if not part of selected chemistry; no evaporation prediction'),
+        group('magnetic_elute', 'Elute off magnet', [
+            action('elution_off_magnet', 'plate_move', 'Move selected plate to authored off-magnet elution destination'),
+            action('elution_add', 'transfer', 'Add authored elution reagent'),
+            mix('elution_mix', 'Mix elution suspension off magnet'),
+            action('elution_hold', 'wait', 'Authored elution interval')]),
+        group('magnetic_collect', 'Final separation and collection', [
+            action('final_on_magnet', 'plate_move', 'Place selected plate on magnetic station for collection', True),
+            action('final_settle', 'wait', 'Authored final settling interval'),
+            action('eluate_collect', 'transfer', 'Collect eluate into authored final vessel')]),
+        action('magnetic_finish', 'checkpoint', 'External yield/purity/integrity QC and storage remain operator-performed')])
+    method = deepcopy(entry['method'])
+    method.update(name=entry['method']['name'] + ' — on-deck magnetic scaffold',
+        description='Explicit editable on-deck magnetic placement scaffold, not a validated recipe or ready-to-run preset. Author native object/labware mapping, off-magnet destinations, tip handling, wash count and every time/volume/settings input. No pellet avoidance or purification yield claim.',
+        parameters=parameters, steps=steps)
+    if entry['id'] == 'cfps_and_purification':
+        expression = deepcopy(entry['method']['steps'][0])
+        method['steps'] = [expression, group('magnetic_purification', 'On-deck magnetic protein purification', steps)]
+        method['parameters'] = deepcopy([p for p in entry['method']['parameters'] if p['id'].startswith('expression_')]) + parameters
+        coverage = [deepcopy(c) for c in entry['coverage'] if c.get('group') == 'expression'] + coverage
+        coverage.append({'step_id': 'expression', 'stage_owner': 'robot', 'physical_qualification': 'not demonstrated'})
+        # Include structural mix groups in the retained expression stage too.
+        for node in expression['steps']:
+            if node['type'] == 'group':
+                coverage.append({'step_id': node['step_id'], 'stage_owner': 'robot', 'physical_qualification': 'not demonstrated'})
+    return {'id': 'on_deck_magnetic', 'label': 'On-deck magnetic separation',
+        'description': method['description'], 'method': method, 'bindings': {},
+        'coverage': coverage, 'status': 'intentionally_unbound'}
+
+
 def bound_examples():
     """Complete software fixtures, never presets or manufacturer process defaults.
 
