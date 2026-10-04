@@ -164,7 +164,7 @@ def magnetic_variant(entry):
         group('magnetic_separate', 'Separate and remove supernatant', [
             action('binding_on_magnet', 'plate_move', 'Place selected plate on magnetic station', True),
             action('binding_settle', 'wait', 'Authored magnetic settling interval'),
-            action('supernatant_remove', 'transfer', 'Remove supernatant with authored aspiration heights/speeds; label alone does not establish pellet avoidance')])]
+            action('supernatant_remove', 'transfer', 'Remove authored supernatant volume at calibrated depth; ordinary Transfer has no pellet offset')])]
     parameters.append({'id': 'wash_count', 'label': 'Authored number of wash repetitions', 'type': 'integer'})
     steps.append(group('magnetic_washes', 'Wash repetitions', [
         action('wash_off_magnet', 'plate_move', 'Move selected plate to authored off-magnet destination'),

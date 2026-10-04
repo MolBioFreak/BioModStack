@@ -43,9 +43,16 @@ it.runIf(!!contract)('cover, pickup, release, press and preparation use source n
         const state = await mounted({ steps: [{ step_id: 'step', type: 'action', action, inputs: { future: null } }] });
         expect((state().current.steps as MethodValue[])[0].inputs).toEqual({ future: null });
         if (action === 'move_cover') { await choose('Cover to carry', 'Output cover'); await choose('Placement destination', 'Output cover storage'); expect((state().current.steps as MethodValue[])[0].inputs).toEqual({ future: null, cover_id: 'CV_OUTPUT', target_location: 'LOC_OCS' }); }
-        else if (action === 'plate_catch' || action === 'plate_press') { await choose('Plate to handle', 'Output plate'); expect((state().current.steps as MethodValue[])[0].inputs).toEqual({ future: null, plate: 1 }); }
+        else if (action === 'plate_catch' || action === 'plate_press') { await choose('Plate to handle', 'Output plate'); expect((state().current.steps as MethodValue[])[0].inputs).toEqual({ future: null, plate: 1 }); if (action === 'plate_press') expect(host.textContent).toContain('Standalone pool-plate Press uses the thermal-cycler press position'); }
         else if (action === 'plate_release') { await choose('Release destination', 'Thermal cycler'); expect((state().current.steps as MethodValue[])[0].inputs).toEqual({ future: null, destination: 23 }); }
         else { expect(host.querySelector('[aria-label="Prepare Synthesis plate"]')).toBeNull(); const box = host.querySelector<HTMLInputElement>('[aria-label="Prepare Reagent plate"]')!; await act(async () => box.click()); expect((state().current.steps as MethodValue[])[0].inputs).toEqual({ future: null, plate_ids: ['PL_REAGENT'] }); }
         await act(async () => root!.unmount()); root = undefined; host.remove();
     }
+});
+it.runIf(!!contract)('ordinary Transfer states its actual calibrated-depth and pellet-offset limitations without changing authored inputs', async () => {
+    const inputs = { source: { station: 'LOC_MS', location_id: 0, wells: ['A1'] }, destination: { station: 'LOC_OC', location_id: 1, wells: ['A1'] }, channels: [0], volume_ul: '001.20' };
+    const state = await mounted({ steps: [{ step_id: 'supernatant', type: 'action', action: 'transfer', inputs }] });
+    expect(host.textContent).toContain('Ordinary Transfer lowers to calibrated depth');
+    expect(host.textContent).toContain('pellet avoidance is not automatic');
+    expect((state().current.steps as MethodValue[])[0].inputs).toEqual(inputs);
 });
