@@ -1,4 +1,6 @@
-.bioxp-methods { display: grid; gap: 1rem; min-width: 0; }
+.bioxp-methods { display: grid; grid-template-columns:minmax(0,1fr); gap: 1rem; min-width: 0; }
+.bioxp-methods > *, .bioxp-methods [role=tabpanel] { min-width:0; }
+.bioxp-methods table { display:block; overflow-x:auto; }
 .bioxp-methods [role=tablist] { display:flex; flex-wrap:wrap; gap:.5rem; border-bottom:1px solid var(--border-primary, #334155); padding-bottom:.6rem; }
 .bioxp-methods button { border:1px solid var(--border-primary, #475569); border-radius:.35rem; padding:.35rem .65rem; margin:.2rem; }
 .bioxp-methods button[aria-selected=true] { background:var(--accent-primary, #0e7490); color:white; }
