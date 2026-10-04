@@ -9,13 +9,13 @@ Run from the repository root:
 ```bash
 mkdir -p "$TMPDIR/protonpottsmpnn-build"
 APPTAINER_TMPDIR="$TMPDIR/protonpottsmpnn-build" apptainer build \
-  /mnt/BioModStack/apptainer/protonpottsmpnn-09682ab-cpu-locked-20261003.sif \
-  apptainer/protonpottsmpnn.def
+  /mnt/BioModStack/apptainer/protonpottsmpnn-09682ab-cuda-locked-20261003.sif \
+  apptainer/protonpottsmpnn-cuda.def
 ```
 
-The definition fixes the Python 3.12.13/amd64 base by OCI digest, Debian packages by the `20260805T000000Z` snapshot, upstream and HBPLUS source by revisions **and archive hashes**, the shipped checkpoint by SHA256, the observational patch by SHA256, and all 138 resolved Python dependencies by versions and package hashes. It installs the native Foundry package editable with **no dependency resolution and no build isolation** so EV6's native model pickles and threshold/assets remain available. `editables`, Hatchling and hatch-vcs are explicitly locked build dependencies. There is no RF3 dependency extra or refolding installation.
+The definition fixes the Python 3.12.13/amd64 base by OCI digest, Debian packages by the `20260805T000000Z` snapshot, upstream and HBPLUS source by revisions **and archive hashes**, the shipped checkpoint by SHA256, the observational patch by SHA256, and all 157 resolved Python dependencies by versions and package hashes. It installs the native Foundry package editable with **no dependency resolution and no build isolation** so EV6's native model pickles and threshold/assets remain available. `editables`, Hatchling and hatch-vcs are explicitly locked build dependencies. There is no RF3 dependency extra or refolding installation.
 
-The lock is the native `foundry/pyproject.toml` dependency closure plus inference preparation needs: FLAML 2.6.0 (AutoML), XGBoost 2.1.4, LightGBM 4.7.0, scikit-learn 1.8.0, pandas 2.x, ipdb and propka. The broad notebook extras are deliberately not installed: no JupyterLab/server, nbconvert or SHAP. Native Foundry itself declares ipykernel; its declared dependencies are not rewritten. The standard XGBoost 2.1.4 wheel brings NCCL as a distribution dependency; that does not require GPU execution or a driver. Torch is `2.14.1+cpu`.
+The lock is the native `foundry/pyproject.toml` dependency closure plus inference preparation needs: FLAML 2.6.0 (AutoML), XGBoost 2.1.4, LightGBM 4.7.0, scikit-learn 1.8.0, pandas 2.x, ipdb and propka. The broad notebook extras are deliberately not installed: no JupyterLab/server, nbconvert or SHAP. Native Foundry itself declares ipykernel; its declared dependencies are not rewritten. The standard XGBoost 2.1.4 wheel brings NCCL as a distribution dependency; that does not require GPU execution or a driver. The selected dual-device image uses Torch `2.14.1+cu130` and CUDA 13.0 while retaining the validated versions of every non-CUDA package. The earlier CPU-only recipe and 138-package lock remain available as a reproducible CPU reference.
 
 FLAML 2.7 and XGBoost 3.4 resolved from upstream's broad README ranges, but XGBoost 3.4 exposed missing estimator attributes when loading the shipped older pickles. Selecting FLAML 2.6.0 and XGBoost 2.1.4 avoids that incompatible estimator API. Models and thresholds were **not** modified or reserialized. Full EV6 prediction on PD-L1, not merely import checks, is covered by the native tests.
 
@@ -33,13 +33,15 @@ The [EMBL-EBI author's software page](https://www.ebi.ac.uk/thornton-srv/softwar
 apptainer run --cleanenv \
   --env OMP_NUM_THREADS=1,OPENBLAS_NUM_THREADS=1 \
   --bind "$PWD:$PWD" \
-  /mnt/BioModStack/apptainer/protonpottsmpnn-09682ab-cpu-locked-20261003.sif \
+  /mnt/BioModStack/apptainer/protonpottsmpnn-09682ab-cuda-locked-20261003.sif \
   --request /absolute/path/request.json \
   --input /absolute/path/candidate-complex.pdb \
   --out /absolute/path/output --device cpu --n-jobs 1
 ```
 
-No `--nv` is needed for CPU qualification. `--n-jobs` consumes scheduler-owned CPU solve concurrency; it is not a scientific control or a hardcoded sweep expansion. Device selection and native root/checkpoint paths are runtime-owned CLI settings.
+The same image runs locally with `--device cpu` and on a remote NVIDIA worker with `--nv --device cuda:0`. BMS owns physical GPU visibility. Compiled architectures are `sm_75 sm_80 sm_86 sm_90 sm_100 sm_120`; actual GPU inference is not yet verified. CUDA 13 requires a compatible NVIDIA driver (R580 or newer on Linux; NVIDIA compatibility rules apply). This compatibility note does not add a new BMS admission check.
+
+No `--nv` is needed for CPU execution. `--n-jobs` passes scheduler-owned concurrency unchanged. Native CPU contexts can use the fork pool; native CUDA contexts retain the upstream serial solve path. No device handoff or scientific concurrency rewrite is introduced. Device selection and native root/checkpoint paths are runtime-owned CLI settings.
 
 The request has:
 
@@ -90,4 +92,4 @@ Real PD-L1 example acceptance used the upstream `inference/design_ph.py` criteri
 
 An independent unpatched upstream run was compared to the patched runtime outputs: **all original dataclass fields, sequences, energies and every trajectory step were exactly equal**. Native test execution passed four tests without skips. Evidence (requests, actual result manifests/FASTA, unpatched outputs, native test log and image build logs) lives outside Git in the task evidence directory. API/UI integration and commercial HBPLUS licensing remain separate acceptance items.
 
-The exercised release SIF is `protonpottsmpnn-09682ab-cpu-locked-20261003.sif`, SHA256 `9e1c6762b39c509983015f4f860a03cf414a8ec08982c12bf07db7ae7a7aeb5d` (1,442,050,048 bytes). `apptainer/protonpottsmpnn-runtime.lock.json` records its identity and source/checkpoint/recipe hashes. Its embedded definition was compared directly to this checkout. Both the native example and a two-criteria external-seed sweep executed inside this SIF. The latter retained two distinct criteria-attributed outputs and native seed energies (`potts_energy=-51627.765625`, `global_protonation_dH=29.265625`) with scheduler concurrency 2. The final SIF example matched all scratch-native dataclass outputs and trajectories exactly.
+The selected dual-device SIF is `protonpottsmpnn-09682ab-cuda-locked-20261003.sif`, SHA256 `58b2c612d20a5712dbc578c31b7a4883297f6297245fb14c3e1f51859c7c6efa` (4,030,926,848 bytes). `apptainer/protonpottsmpnn-runtime.lock.json` records its identity and source/checkpoint/recipe hashes. The real CPU example and external-seed sweep inside this image match the preceding CPU-only image (SHA256 `9e1c6762b39c509983015f4f860a03cf414a8ec08982c12bf07db7ae7a7aeb5d`) exactly, including complete native dataclasses and trajectories. Its embedded definition was compared directly to this checkout. Both the native example and a two-criteria external-seed sweep executed inside this SIF. The latter retained two distinct criteria-attributed outputs and native seed energies (`potts_energy=-51627.765625`, `global_protonation_dH=29.265625`) with scheduler concurrency 2. The final SIF example matched all scratch-native dataclass outputs and trajectories exactly.
