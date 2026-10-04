@@ -5964,6 +5964,10 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
         from services.protonpottsmpnn_design import normalize_design_params, REQUEST_FIELD
         try:
             values = dict(job_data.params)
+            # Placement is system-owned: remote workers use their allocated GPU;
+            # explicit Local must not inherit a parent's CUDA placement.
+            values['protonpottsmpnn_device'] = ('cuda' if job_data.execution_target_id
+                else os.environ.get('BMS_PROTONPOTTSMPNN_DEVICE', 'cpu'))
             if not values.get(REQUEST_FIELD) and values.get('target_pdb'):
                 values['target_pdb'] = _resolve_alias_path_for_runtime(values['target_pdb'])
             job_data.params = normalize_design_params(normalized_mode, values)

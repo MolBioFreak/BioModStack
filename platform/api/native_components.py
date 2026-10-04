@@ -528,6 +528,9 @@ class _NativeAnnotations:
         label = next((x for x in labels if x.startswith('MolecularDynamics')), None) or next(
             (x for x in labels if x in {'gpu', 'gpu_light', 'process_gpu', 'frustrampnn_gpu',
              'local_cpu', 'wf_clone', 'pooled_assignment_cpu', 'ShapeEvaluate'}), 'CPU')
+        if native_name == 'RunProtonPottsMPNNDesign':
+            from services.protonpottsmpnn_design import execution_device
+            label = 'gpu' if str(execution_device(self.p)).startswith('cuda') else 'CPU'
         import ast
         import json
         resources = json.loads(native_resource_policy(self.p, label))

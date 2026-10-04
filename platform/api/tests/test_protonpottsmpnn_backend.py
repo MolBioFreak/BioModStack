@@ -44,6 +44,29 @@ def assert_plan(invocation):
     assert json.loads(meta.result_contract_json) == bundle.resolve_job_result_contract(SimpleNamespace(model_id='protonpottsmpnn', mode='redesign'))
 
 
+def test_destination_owns_native_device_and_gpu_plan(tmp_path, monkeypatch):
+    from services.gpu_orchestrator import estimate_vram
+    monkeypatch.delenv('BMS_PROTONPOTTSMPNN_DEVICE', raising=False)
+    remote = jobs.normalize_job_request(request(tmp_path/'source.pdb', 'worker'))
+    assert remote.params['protonpottsmpnn_device'] == 'cuda'
+    assert estimate_vram('protonpottsmpnn', 114, remote.params) > 0
+    plan = compile_nextflow_invocation(remote.model_id, remote.mode, remote.params,
+        str(tmp_path/'remote-output'), _preview_only=True)
+    assert_plan(plan)
+    resources = json.loads(plan.execution_plan.metadata.static_components[0].resources_json)
+    assert resources['gpu']['count'] == 1
+    assert plan.native_parameters['protonpottsmpnn_device'] == 'cuda'
+    local_request = JobCreate.model_validate(remote.model_dump(mode='json'))
+    local_request.execution_target_id = None
+    local = jobs.normalize_job_request(local_request)
+    assert local.params['protonpottsmpnn_device'] == 'cpu'
+    assert estimate_vram('protonpottsmpnn', 114, local.params) == 0
+    local_plan = compile_nextflow_invocation(local.model_id, local.mode, local.params,
+        str(tmp_path/'local-output'), _preview_only=True)
+    assert json.loads(local_plan.execution_plan.metadata.static_components[0].resources_json)['gpu'] is None
+    assert native.prepare_design_request(remote.mode, remote.params) == native.prepare_design_request(local.mode, local.params)
+
+
 def test_closed_full_inventory_and_exact_editable_example_defaults():
     schema = contract.parameter_schema()
     assert schema == json.loads((Path(__file__).resolve().parents[3] / 'schemas/protonpottsmpnn_parameters.v1.json').read_text())
@@ -196,6 +219,52 @@ def test_pinned_native_full_inventory_and_inherited_constructor_coverage():
     original_validation = next(n for n in criteria.body if isinstance(n, ast.FunctionDef) and n.name == '__post_init__')
     mirror_validation = next(n for n in mirror.body if isinstance(n, ast.FunctionDef) and n.name == '__post_init__')
     assert ast.dump(original_validation) == ast.dump(mirror_validation)
+
+
+@pytest.mark.asyncio
+async def test_actual_pipeline_result_publication_and_readback(admission, target):
+    source = os.environ.get('BMS_PROTON_PIPELINE_MANIFEST')
+    if not source:
+        pytest.skip('Set BMS_PROTON_PIPELINE_MANIFEST for real native result publication')
+    manifest = Path(source)
+    document = json.loads(manifest.read_text())
+    params = {**document['request']['options'], 'target_pdb': document['request']['source']['requested_path']}
+    output = target.parent/'real-native-result'
+    shutil.copytree(manifest.parent, output/native.DIRECTORY)
+    job = Job(id='actual-native-publication', name='actual native publication', model_id='protonpottsmpnn',
+        mode='redesign', status='completed', params=params, output_dir=str(output), provenance={})
+    admission.add(job)
+    await admission.commit()
+    assert await publication.publish_native_results(job, output, admission) == 0
+    await admission.commit()
+    from routers.protonpottsmpnn import get_results
+    assert await get_results(job.id, admission) == document
+    assert list(await admission.scalars(select(Design).where(Design.job_id == job.id))) == []
+    artifacts = list(await admission.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id)))
+    assert {row.logical_path for row in artifacts} == {native.DIRECTORY+'/'+p for p in document['artifacts']}
+    for row in artifacts:
+        assert row.sha256 == hashlib.sha256(Path(row.storage_path).read_bytes()).hexdigest()
+
+
+def test_actual_pinned_stage_is_the_complete_remote_image_dependency(tmp_path, monkeypatch):
+    image = os.environ.get('BMS_PROTON_RUNTIME_IMAGE')
+    if not image:
+        pytest.skip('Set BMS_PROTON_RUNTIME_IMAGE to bind the real remote image dependency')
+    from services.remote_execution import images
+    containers = Path(image).parent
+    monkeypatch.setattr(bundle, 'get_container_dir', lambda: containers)
+    monkeypatch.delenv('BMS_PROTONPOTTSMPNN_CONTAINER_PATH', raising=False)
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(tmp_path/'isolated-image-store'))
+    params = jobs.normalize_job_request(request(tmp_path/'source.pdb', 'worker')).params
+    plan = compile_nextflow_invocation('protonpottsmpnn', 'redesign', params, str(tmp_path/'preview'), _preview_only=True)
+    assets = bundle._runtime_assets('protonpottsmpnn', 'redesign', params,
+        selected_plan=plan.execution_plan, only_kinds=frozenset({'image'}))
+    pinned, digest = native.default_runtime_image(containers)
+    assert assets == [(pinned, 'containers/protonpottsmpnn.sif')]
+    assert images.image_reference('protonpottsmpnn.sif', containers, {'protonpottsmpnn_container_path':str(pinned)}) == (pinned, digest)
+    with pinned.open('rb') as stream:
+        assert hashlib.file_digest(stream, 'sha256').hexdigest() == digest
+    assert not any(row.kind == 'weights' for row in plan.execution_plan.metadata.dependencies)
 
 
 @pytest.mark.asyncio

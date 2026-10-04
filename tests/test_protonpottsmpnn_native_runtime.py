@@ -95,7 +95,7 @@ def test_real_checkpoint_redesign_serial_parallel_and_seed_energies(native, tmp_
     assert set(readback["designs"][0]["native"]) == set(single[0].__dataclass_fields__)
     assert not readback["runtime"]["structure_output"]["refolded_or_validated"]
     for artifact in readback["artifacts"]:
-        assert (tmp_path / artifact).is_file()
+        assert (tmp_path / "protonpottsmpnn_design" / artifact).is_file()
 
 
 def test_cif_native_input(native):

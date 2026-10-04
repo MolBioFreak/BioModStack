@@ -5717,10 +5717,16 @@ def compile_nextflow_invocation(
             native_parameters[key] = str(value)
 
     if model_id == 'protonpottsmpnn' and mode == 'redesign':
-        from services.protonpottsmpnn_design import science_params, prepare_design_request, read_prepared_request
+        from services.protonpottsmpnn_design import science_params, prepare_design_request, read_prepared_request, execution_device
         science = science_params(mode, params)
         params.update(science)
         native_parameters.update(science)
+        native_parameters['protonpottsmpnn_device'] = execution_device(params)
+        cmd.extend(['--protonpottsmpnn_device', str(native_parameters['protonpottsmpnn_device'])])
+        from services.remote_execution.images import image_reference
+        image_path, _ = image_reference('protonpottsmpnn.sif', Path(explicit_container_dir), params)
+        native_parameters['protonpottsmpnn_container_path'] = str(image_path)
+        cmd.extend(['--protonpottsmpnn_container_path', str(image_path)])
         request_path = params.get('protonpottsmpnn_design_request')
         source_path = params.get('protonpottsmpnn_design_input')
         if request_path:

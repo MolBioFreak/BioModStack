@@ -78,7 +78,7 @@ under `engine_options`: `extended_vocab`, `field_source`, `etab_source`,
 settings remain explicit, with native compatibility/load errors unchanged.
 Inherited `write_fasta` and `write_structures` are public output controls;
 `out_directory` is owned by workflow publication, `checkpoint_path` by the
-shipped image, and `device` by CPU scheduling. PHDesignInferenceEngine adds
+shipped image, and `device` by destination scheduling. PHDesignInferenceEngine adds
 no constructor controls. The separate legacy ProteinMPNN engine is not an
 ancestor of `potts_mpnn.MPNNInferenceEngine`, so model_type/is_legacy_weights are not
 invented constructor arguments. `seed=0` and optional `initial_sequences`
@@ -108,6 +108,23 @@ the existing remote image owner. Existing remote return/result contract and
 JobArtifact publication own `protonpottsmpnn_design/manifest.json` and native
 artifacts; no new coordinator or result store is introduced.
 
+New remote requests use CUDA and the existing single-GPU allocator; local requests
+remain CPU by default. Explicit Local resets a copied remote device selection.
+`BMS_PROTONPOTTSMPNN_DEVICE=cuda` can enable local GPU placement later without
+changing scientific options. The runtime-only selection is retained separately
+from the native request. CUDA uses `--nv`, the scheduler's physical visibility,
+and native `--device cuda:0`; CPU clears GPU visibility and passes `--device cpu`.
+Native CUDA execution stays on its CUDA context; the upstream process-pool
+parallel solver is used only for CPU contexts. The scheduler-assigned CPU count
+is passed unchanged, without rewriting native GPU concurrency or science.
+The CUDA reservation is a scheduling estimate, not a measured VRAM claim.
+
+Absent a selected installation release, the image owner reads the immutable
+filename/SHA from `apptainer/protonpottsmpnn-runtime.lock.json`. Selected managed
+releases still take precedence. This one self-contained image is in the selected
+stage's dependency closure and uses the existing HF delivery/cache owner; no
+separate checkpoint or unrelated prediction/MSA download is needed.
+
 ## Results and optional follow-on prediction
 
 `GET /api/jobs/{id}/protonpottsmpnn/results` returns the native manifest.
@@ -130,7 +147,8 @@ Backend tests exercise owning normalization/routes, actual SQLite Job/Project
 child insertion, offline-original clone/compiler and remote portable-input
 roundtrip, native JobArtifact publication and exact endpoint payload shape.
 `tests/test_protonpottsmpnn_execution.py` runs real Nextflow/Java staging,
-CPU ownership and publishDir with an explicit Apptainer command fixture.
-That test does not claim scientific inference or image validation. Native
-runtime/image qualification belongs to the separate runtime owner. No remote
-scientific worker, rental, push or deployment is performed by this integration.
+CPU/CUDA binding with an explicit command fixture, and actual checkpoint inference
+when `BMS_PROTON_RUNTIME_IMAGE`, `BMS_PROTON_RUNTIME_INPUT`, and
+`BMS_PROTON_RUNTIME_REQUEST` are supplied. The real manifests also pass the BMS
+reader and JobArtifact publication/readback. Command-fixture GPU success is not
+GPU scientific execution. No rental, driver repair, push or deployment is performed.
