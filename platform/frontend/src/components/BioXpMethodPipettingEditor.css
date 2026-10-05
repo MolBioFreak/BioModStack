@@ -35,7 +35,14 @@
 .bioxp-transfer-scene .bioxp-transfer-unmapped { min-height: 8rem; padding: 1rem; background: var(--bg-secondary); overflow-wrap: anywhere; font-size: .8rem; }
 .bioxp-transfer-scene > details > summary { cursor: pointer; padding: .6rem 0; border-top: 1px solid var(--border-primary, #64748b); font-size: .85rem; }
 .bioxp-transfer-scene :focus-visible { outline: 2px solid var(--accent-primary, #38bdf8); outline-offset: 3px; }
+.bioxp-transfer-scene .bioxp-transfer-motion { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem 1.2rem; align-items: start; }
+.bioxp-transfer-scene .bioxp-transfer-motion > label, .bioxp-transfer-scene .bioxp-transfer-motion fieldset label { display: grid; gap: .25rem; font-size: .8rem; color: var(--text-secondary); }
+.bioxp-transfer-scene .bioxp-transfer-motion fieldset { display: grid; gap: .5rem; margin: 0; padding: .7rem .8rem; border: 1px solid var(--border-secondary, var(--border-primary)); border-radius: .6rem; }
+.bioxp-transfer-scene .bioxp-transfer-motion legend { padding: 0 .3rem; font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); }
+.bioxp-transfer-scene .bioxp-transfer-motion input, .bioxp-transfer-scene .bioxp-transfer-motion select { padding: .35rem .5rem; border: 1px solid var(--border-primary, #64748b); border-radius: .35rem; background: var(--surface-control, var(--bg-secondary)); color: var(--text-primary); font-size: .85rem; }
+.bioxp-transfer-scene .bioxp-transfer-motion > .bioxp-transfer-tools { grid-column: 1 / -1; }
 @container (max-width: 520px) {
+    .bioxp-transfer-scene .bioxp-transfer-motion { grid-template-columns: minmax(0, 1fr); }
     .bioxp-transfer-scene .bioxp-transfer-link, .bioxp-transfer-scene .bioxp-transfer-amount { grid-template-columns: minmax(0, 1fr); }
     .bioxp-transfer-scene .bioxp-transfer-arrow { top: -2rem; left: 50%; transform: rotate(90deg); }
 }
