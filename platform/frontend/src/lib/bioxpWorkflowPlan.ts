@@ -4,7 +4,7 @@ import type { DraftObject, WorkflowDraft, WorkflowDraftRow } from './bioxpWorkfl
 
 // Planned associations never assert measured material presence or robot readiness.
 export type WorkflowLabware = { id: string; station: string; name: string; profile_id: string };
-export type WorkflowMaterial = { id: string; name: string; kind: 'sample' | 'reagent' | 'product' | 'waste'; description: string };
+export type WorkflowMaterial = { id: string; name: string; kind: 'sample' | 'reagent' | 'product' | 'waste'; description: string; concentration?: string | number | null; concentration_unit?: string };
 export type WorkflowAssignment = { id: string; labware_id: string; well: string; material_id: string; volume_ul: string | number | null };
 export type WorkflowDeckPlan = { labware: WorkflowLabware[]; materials: WorkflowMaterial[]; assignments: WorkflowAssignment[] };
 export type WorkflowPlan = { schema: 'bms.bioxp-workflow-draft.v2'; steps: WorkflowDraftRow[]; editor_state: DraftObject; deck_plan: WorkflowDeckPlan };

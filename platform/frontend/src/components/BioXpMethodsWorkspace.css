@@ -23,10 +23,27 @@
 .bioxp-methods [role=alert] { color:var(--text-danger, #fca5a5); }
 .bioxp-methods [role=status] { padding:.35rem; border-left:3px solid #0891b2; }
 
-.bioxp-method-workbench { display:grid; grid-template-columns:minmax(0, 1.65fr) minmax(18rem, 1fr); gap:1rem; align-items:start; }
+.bioxp-method-workbench { display:grid; grid-template-columns:minmax(0, 1fr); gap:1rem; align-items:start; }
 .bioxp-method-workbench.is-sequence-only { grid-template-columns:minmax(0, 1fr); }
 .bioxp-method-map, .bioxp-method-inspector { min-width:0; }
-.bioxp-method-map .bwd-map { aspect-ratio:auto; height:clamp(340px, 56vh, 620px); }
+.bioxp-method-map .bwd-map { aspect-ratio:auto; height:clamp(420px, 65vh, 820px); }
+.bioxp-method-canvas { position:relative; isolation:isolate; }
+.bioxp-method-local-editor { position:absolute; z-index:2; right:1rem; top:5rem; width:min(38rem, calc(100% - 2rem)); max-height:calc(100% - 6rem); overflow:auto; background:var(--bg-primary); color:var(--text-primary); border:1px solid var(--border-primary); border-radius:.65rem; box-shadow:0 .5rem 1.5rem #0004; padding:.8rem; }
+.bioxp-method-local-editor[hidden] { display:none; }
+.bioxp-method-local-editor.is-expanded { inset:1rem; width:auto; max-height:calc(100% - 2rem); }
+.bioxp-method-local-editor > header { display:flex; flex-wrap:wrap; align-items:center; gap:.3rem; position:sticky; top:-.8rem; background:var(--bg-primary); z-index:1; padding:.4rem 0; }
+.bioxp-method-local-editor > header strong { flex:1; }
+.bioxp-method-local-editor fieldset { min-width:0; }
+.bioxp-method-local-editor .flex { flex-wrap:wrap; }
+.bioxp-method-plate { cursor:pointer; pointer-events:all; }
+.bioxp-method-plate:focus .bioxp-method-plate-label, .bioxp-method-plate:hover .bioxp-method-plate-label { text-decoration:underline; fill:var(--accent-primary); }
+.bioxp-method-plate-label { fill:var(--text-primary); font-size:22px; font-weight:600; pointer-events:all; }
+.bioxp-method-process-stages ol { max-height:18rem; overflow:auto; }
+.bioxp-method-link { cursor:pointer; fill:none; stroke:var(--accent-primary); stroke-width:7; pointer-events:stroke; }
+.bioxp-method-link:hover, .bioxp-method-link:focus, .bioxp-method-link.is-selected { stroke:var(--accent-secondary, var(--accent-primary)); stroke-width:12; outline:none; }
+.bioxp-method-inspector > section > .bioxp-method-sequence { display:flex; gap:.4rem; max-height:8rem; }
+.bioxp-method-inspector > section > .bioxp-method-sequence > li { min-width:12rem; max-width:20rem; flex-shrink:0; }
+@media (max-width:600px) { .bioxp-method-local-editor { top:8rem; right:.3rem; width:calc(100% - .6rem); max-height:calc(100% - 8.5rem); } }
 .bioxp-method-map > h3, .bioxp-method-inspector h3 { margin:.25rem 0 .5rem; font-weight:600; }
 .bioxp-method-adopt { padding:.6rem; border:1px solid var(--border-primary, #334155); border-radius:.4rem; }
 .bioxp-method-sequence { max-height:10rem; overflow:auto; list-style:none; padding:0; }

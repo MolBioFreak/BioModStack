@@ -31,11 +31,10 @@ async function input(name: string, value: string) { const el = control(name)!; e
 async function choose(name: string, label: string) { const el = control(name) as HTMLSelectElement; expect(el, name).toBeTruthy(); const option = [...el.options].find(o => o.textContent === label)!; expect(option, `${name}: ${label}`).toBeTruthy(); await input(name, option.value); }
 async function text(name: string, value: string) { const el = host.querySelector<HTMLTextAreaElement>(`textarea[aria-label="${name}"]`)!; expect(el).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event('input', { bubbles: true })); }); await settle(); }
 async function selectPath(path: number[]) {
-    for (const [depth, index] of path.entries()) {
-        let section = host.querySelector<HTMLElement>('.bioxp-method-inspector > [aria-label="Method outline"]')!;
-        for (let level = 0; level < depth; level++) section = section.querySelector<HTMLElement>(':scope > details > fieldset > [aria-label="Method outline"], :scope > fieldset > [aria-label="Method outline"]')!;
-        expect(section, `outline at depth ${depth}, path ${path}`).toBeTruthy();
-        const button = section.querySelector<HTMLButtonElement>(`:scope > .bioxp-method-sequence > li:nth-child(${index + 1}) > button`)!; expect(button, `step path ${path}`).toBeTruthy();
+    for (let depth = 0; depth < path.length; depth++) {
+        const pointer = path.slice(0, depth + 1).map(index => `/steps/${index}`).join('');
+        const button = host.querySelector<HTMLButtonElement>(`[data-method-path="${pointer}"]`)!;
+        expect(button, `step path ${pointer}`).toBeTruthy();
         await act(async () => button.click()); await settle();
     }
 }
@@ -122,18 +121,19 @@ it('mounted explicit null and arbitrary expressions stay advanced instead of bei
     }
 });
 
-it('inserts holds around a selected nested profile and puts named additions before its containing cycle group', async () => {
+it('inserts holds and named additions at the explicit selected position inside the containing group', async () => {
     const initial: MethodValue = { steps: [{ step_id: 'program', type: 'group', label: 'Program', steps: [{ step_id: 'cycle', type: 'action', action: 'thermal_profile', inputs: { segments: [] } }] }] };
     let current = initial;
     function Owner() { const [method, setMethod] = useState(initial); current = method; return <BioXpMethodDeckWorkbench method={method} onChange={setMethod} rootSchema={{}} catalog={publishedCatalog} />; }
     root = createRoot(host); await act(async () => root.render(<Owner />)); await settle();
     await selectStep('Program');
-    const cycle = host.querySelector<HTMLButtonElement>('.bioxp-method-inspector fieldset .bioxp-method-sequence button')!;
+    const cycle = host.querySelector<HTMLButtonElement>('.bioxp-method-workbench fieldset .bioxp-method-sequence button')!;
     await act(async () => cycle.click()); await settle();
     await input('Insert step', 'before'); await click('Insert initial / final hold');
     expect(((current.steps as MethodValue[])[0].steps as MethodValue[]).map(n => n.action)).toEqual(['thermal_hold', 'thermal_profile']);
-    await input('Addition name', 'Reagent before nested cycling'); await click('Add reagent / aliquot before cycling');
-    expect((current.steps as MethodValue[]).map(n => n.label)).toEqual(['Reagent before nested cycling', 'Program']);
+    await input('Addition name', 'Reagent before nested cycling'); await click('Add reagent / aliquot');
+    expect((current.steps as MethodValue[]).map(n => n.label)).toEqual(['Program']);
+    expect(((current.steps as MethodValue[])[0].steps as MethodValue[]).map(n => n.label ?? n.action)).toEqual(['Reagent before nested cycling', 'Initial / final hold', 'thermal_profile']);
     await click('Remove step'); expect((current.steps as MethodValue[])).toHaveLength(1);
 });
 
@@ -145,7 +145,7 @@ it.runIf(!!contracts)('ordinary New PCR → named deck setup → independent add
     expect(db.m1.method.steps.find((n: any) => n.step_id === 'assemble').inputs).toEqual(contracts.examples[4].method.steps[1].inputs);
     // Author the source-defined mixing compound through its ordinary selected-step controls.
     await selectStep('Mix PCR reaction');
-    const child = async (index: number) => { const el = host.querySelectorAll<HTMLButtonElement>('.bioxp-method-inspector fieldset [aria-label="Method outline"] .bioxp-method-sequence button')[index]!; expect(el).toBeTruthy(); await act(async () => el.click()); await settle(); };
+    const child = async (index: number) => { const el = host.querySelectorAll<HTMLButtonElement>('.bioxp-method-workbench fieldset [aria-label="Method outline"] .bioxp-method-sequence button')[index]!; expect(el).toBeTruthy(); await act(async () => el.click()); await settle(); };
     await child(0); await input('Move station', 'LOC_TC'); await input('Move reference well', 'A1'); await input('Move height', '0');
     await child(1); await input('Pipetting station', 'LOC_TC');
     await child(2); await check('Mix pipette 1'); await input('Mix volume per plunger (µL)', '002.00'); await input('Mix aspirate speed', '030.00'); await input('Mix dispense speed', '040.00'); await input('Mix cycles', '02');
@@ -160,7 +160,7 @@ it.runIf(!!contracts)('ordinary New PCR → named deck setup → independent add
     const label = [...host.querySelectorAll<HTMLInputElement>('input')].find(n => n.getAttribute('aria-label')?.startsWith('Label '))!;
     await input(label.getAttribute('aria-label')!, 'Polymerase addition');
     await click('Move step up'); await click('Move step down');
-    await input('New Transfer settings', 'manual'); await input('Addition name', 'Buffer aliquot'); await click('Add reagent / aliquot before cycling'); await transfer('A3', 'A1', '004.1250');
+    await input('New Transfer settings', 'manual'); await input('Addition name', 'Buffer aliquot'); await click('Add reagent / aliquot'); await transfer('A3', 'A1', '004.1250');
     await selectStep('Repeated PCR cycles'); await input('Cycle count', '03'); await click('Add stage');
     await input('Stage 1 Thermal bank', 'nest'); await input('Stage 1 Target temperature (°C)', '061.00'); await input('Stage 1 Hold time (seconds)', '01.00'); await input('Stage 1 Start hold timer', 'dispatch');
     await click('Add stage'); await input('Stage 2 Thermal bank', 'nest'); await input('Stage 2 Target temperature (°C)', '072.00'); await input('Stage 2 Hold time (seconds)', '02.00'); await input('Stage 2 Start hold timer', 'dispatch');

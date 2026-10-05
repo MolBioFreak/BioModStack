@@ -494,7 +494,7 @@ it.each(['manual', 'class'])('composes map-driven Move and %s Transfer, selected
     await mapWell('LOC_TC', 'B2', true); await click('Use as Move target');
     await input('New Transfer settings', mode); await click('Add Transfer');
     const transferId = host.querySelector('[aria-label^="Label "]')!.getAttribute('aria-label')!.slice(6);
-    expect(host.querySelectorAll('.bioxp-method-inspector [aria-label^="Label "]')).toHaveLength(1);
+    expect(host.querySelectorAll('.bioxp-method-local-editor [aria-label^="Label "]')).toHaveLength(1);
     expect(host.querySelector(`[aria-label="Inputs ${moveId}.position_flag"]`)).toBeNull();
     await mapWell('LOC_RC', 'A3'); await click('Use as source');
     await mapWell('LOC_OC', 'B4', true); await click('Use as destination');
@@ -563,14 +563,14 @@ it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('emits deck-edited Move and 
 it('adopts a map target into a nested selected action without changing its raw extensions or siblings', async () => {
     db.m1.method.steps = [{ step_id: 'group', type: 'group', future: null, steps: [structuredClone(sourceMethod.steps[0]), { step_id: 'sibling', type: 'action', action: 'move', inputs: { location_id: 1, well: 7 } }] }];
     await mount(); await openOriginal();
-    const children = host.querySelectorAll<HTMLButtonElement>('[aria-label="Select step 1"]');
-    await act(async () => children[children.length - 1].click()); await settle();
+    const child = host.querySelector<HTMLButtonElement>(`[data-method-step="${sourceMethod.steps[0].step_id}"]`)!;
+    await act(async () => child.click()); await settle();
     await mapWell('LOC_RC', 'A3'); await click('Use as Move target'); await click('Save');
     const group = db.m1.method.steps[0];
     expect(group.future).toBeNull();
     expect(group.steps[0]).toEqual({ ...sourceMethod.steps[0], inputs: { ...sourceMethod.steps[0].inputs, location_id: 3, well: 'A3' } });
     expect(group.steps[1]).toEqual({ step_id: 'sibling', type: 'action', action: 'move', inputs: { location_id: 1, well: 7 } });
-    expect(host.querySelectorAll('.bioxp-method-inspector [aria-label^="Label "]')).toHaveLength(1);
+    expect(host.querySelectorAll('.bioxp-method-local-editor [aria-label^="Label "]')).toHaveLength(1);
     expect(submits()).toHaveLength(0);
 });
 
@@ -579,7 +579,7 @@ it('authors chiller, cycler and door steps from stations without wells or scient
     publishedDeckCatalog(); await mount();
     await input('Deck station', 'LOC_RC'); await click('Add temperature step');
     await input('Deck station', 'LOC_OC'); await click('Add temperature step');
-    await input('Deck station', 'LOC_TC'); await click('Add temperature step'); await click('Add hold'); await click('Add PCR cycle'); await click('Add door Open'); await click('Add door Close');
+    await input('Deck station', 'LOC_TC'); await click('Add temperature step'); await click('Add hold'); await click('Add temperature program'); await click('Add door Open'); await click('Add door Close');
     await click('Save');
     const saved = structuredClone(db.m2.method);
     expect(saved.steps.map((n: any) => [n.action, n.inputs])).toEqual([

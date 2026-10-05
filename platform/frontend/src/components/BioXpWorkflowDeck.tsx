@@ -81,7 +81,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
     const drag = useRef<{ x: number; y: number; view: DeckBounds; pan: boolean; moved: boolean } | null>(null);
     const suppressClick = useRef(false);
     const pointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
-        if (!live || event.button !== 0) return;
+        if (event.button !== 0) return;
         suppressClick.current = false;
         const pan = !(event.target as Element).closest('[role="button"]');
         drag.current = { x: event.clientX, y: event.clientY, view, pan, moved: false };
@@ -89,7 +89,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
     };
     const pointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
         const start = drag.current;
-        if (!start || !live) return;
+        if (!start) return;
         const dx = event.clientX - start.x, dy = event.clientY - start.y;
         if (Math.hypot(dx, dy) > 5) start.moved = suppressClick.current = true;
         const rect = event.currentTarget.getBoundingClientRect();
@@ -98,7 +98,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
     };
     const activate = (event: React.MouseEvent, fn: () => void) => {
         event.stopPropagation();
-        if (live && (event.detail > 1 || suppressClick.current || event.button !== 0)) return;
+        if (suppressClick.current || event.button !== 0 || live && event.detail > 1) return;
         fn();
     };
     const moveButton = (target: string, label: string, x: number, y: number) => live && !readOnly &&
