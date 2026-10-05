@@ -108,3 +108,16 @@ receiving('inserts an explicitly selected cooler wait after other work and cold 
     expect(actions.filter((a: any) => a.kind === 'timer_wait').map((a: any) => a.params.timer_id)).toEqual(['rc-elapsed', 'oc-elapsed']);
     expect(actions.filter((a: any) => a.kind === 'timer_start').map((a: any) => a.params.seconds)).toEqual([0.125, 0.125]);
 });
+
+it('shares canvas and thermal expansion while preserving an unfinished repeat-selection draft', async () => {
+    await mount({ steps: [{ type: 'action', step_id: 'program', action: 'thermal_profile', inputs: { segments: [{ bank: 'nest', target_temp_c: '001.250', duration_s: '0.125', start: 'dispatch' }] } }] });
+    await click('Edit selected step'); await click('Edit full program');
+    expect(host.querySelector('[aria-label="On-deck editor"]')?.classList.contains('is-expanded')).toBe(true);
+    await input('Repeat first step', '0'); await input('Selected group total passes', '003');
+    await click('Compact editor');
+    expect(host.querySelector('[aria-label="Thermal workflow editor"]')?.classList.contains('compact')).toBe(true);
+    await click('Expand editor');
+    expect((host.querySelector('[aria-label="Selected group total passes"]') as HTMLInputElement).value).toBe('003');
+    expect((host.querySelector('[aria-label="Repeat first step"]') as HTMLSelectElement).value).toBe('0');
+    expect((current.steps as any[])[0].inputs.segments[0].target_temp_c).toBe('001.250');
+});

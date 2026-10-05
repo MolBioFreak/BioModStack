@@ -221,3 +221,11 @@ it.runIf(!!discovery && !!process.env.BMS_TEST_PYTHON)('compiles UI-created repe
     await click('Select step 2'); expect((host.querySelector('[aria-label="Repeat count"]') as HTMLInputElement).value).toBe('02');
     await input('Repeat count', '0'); expect(compile().provenance.map((p: any) => p.step_id)).toEqual(['before', 'after']);
 });
+
+it('copies only the explicitly authored native plate association into a newly requested carry', async () => {
+    const associated = { ...plan, labware: [{ ...plan.labware[0], native_plate_id: 'PL_POOL', retained: null }] };
+    await mount({ deck_plan: associated, steps: [] });
+    await click('Prepare Reaction plate'); await click('Move plate'); await click('Move to Thermal cycler');
+    expect((current.steps as any[])[0].inputs).toEqual({ labware_id: 'plate', plate_id: 'PL_POOL', target_location: 'LOC_TC' });
+    expect(current.deck_plan).toEqual(associated);
+});
