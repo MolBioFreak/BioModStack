@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
-import { insertMethodAction, methodCanvasEntries, editCanvasNode, plateBoundEndpoint, methodCarryLinks, duplicateCanvasNode } from '../lib/bioxpMethodCanvas';
+import { insertMethodAction, methodCanvasEntries, editCanvasNode, plateBoundEndpoint, methodCarryLinks, duplicateCanvasNode, isThermalProgram } from '../lib/bioxpMethodCanvas';
+import { thermalTimerWait } from '../lib/bioxpMethodThermal';
 import { methodStateAfter } from '../lib/bioxpMethodSimulation';
 import type { MethodCompile } from '../lib/bioxpMethods';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
@@ -37,6 +38,7 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
     const [editorHost, setEditorHost] = useState<HTMLDivElement | null>(null);
     const returnFocus = useRef<HTMLElement | SVGElement | null>(null);
     const [occurrence, setOccurrence] = useState('');
+    const [waitTimer, setWaitTimer] = useState('');
     const [connecting, setConnecting] = useState(false);
     const [connectionSource, setConnectionSource] = useState<BioXpDeckSelection | null>(null);
     const occurrenceState = occurrence ? methodStateAfter(preview?.simulation, initialState, occurrence) : undefined;
@@ -81,6 +83,7 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
     const rawPlan = object(method.deck_plan);
     const plan = { ...rawPlan, labware: Array.isArray(rawPlan.labware) ? rawPlan.labware : [], materials: Array.isArray(rawPlan.materials) ? rawPlan.materials : [], assignments: Array.isArray(rawPlan.assignments) ? rawPlan.assignments : [] } as WorkflowDeckPlan;
     const properties = (node: MethodValue, change: (next: MethodValue) => void) => {
+        if (node.type === 'group' && isThermalProgram(node)) return <BioXpMethodThermalEditor node={node} onChange={change} catalog={catalog} compact />;
         if (node.type === 'repeat' && !Object.hasOwn(node, 'items')) {
             const expr = object(object(node.count).expr);
             const parameter = expr.version === 1 && expr.op === 'param' ? (Array.isArray(method.parameters) ? method.parameters as MethodValue[] : []).find(p => p.id === expr.id && p.type === 'integer') : undefined;
@@ -98,7 +101,7 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
             if (bound.id && onBindingsChange) { if (next.inputs !== bound.inputs) onBindingsChange({ ...bindings, [bound.id]: next.inputs }); change({ ...next, inputs: node.inputs }); }
             else change(next);
         };
-        const editor = actionProperties?.(projected, edit) ?? (thermalMethodActions.has(String(node.action)) ? <BioXpMethodThermalEditor node={projected} onChange={edit} catalog={catalog} /> : ['move', 'transfer', 'lower', 'lift', 'mix'].includes(String(node.action === 'native_intent' ? object(bound.inputs).operation : node.action)) ? <BioXpMethodPipettingEditor node={projected} onChange={edit} catalog={catalog} selection={selection} onSelect={setSelection} /> : custodyMethodActions.has(String(node.action)) ? <BioXpMethodCustodyEditor node={projected} onChange={edit} catalog={catalog} plan={plan} selection={selection} /> : undefined);
+        const editor = actionProperties?.(projected, edit) ?? (thermalMethodActions.has(String(node.action)) ? <BioXpMethodThermalEditor node={projected} onChange={edit} catalog={catalog} compact /> : ['move', 'transfer', 'lower', 'lift', 'mix'].includes(String(node.action === 'native_intent' ? object(bound.inputs).operation : node.action)) ? <BioXpMethodPipettingEditor node={projected} onChange={edit} catalog={catalog} selection={selection} onSelect={setSelection} /> : custodyMethodActions.has(String(node.action)) ? <BioXpMethodCustodyEditor node={projected} onChange={edit} catalog={catalog} plan={plan} selection={selection} /> : undefined);
         const bindingSchema = bound.id ? methodBindingsSchema(method, catalog) : undefined;
         const content = editor ?? (bound.id ? <MethodFields label={bound.label || 'Step settings'} schema={bindingSchema?.properties?.[bound.id]} rootSchema={bindingSchema} value={bound.inputs} onChange={inputs => edit({ ...projected, inputs })} /> : undefined);
         return content ? <>{bound.id && <small>{bound.inherited ? 'Inherited parameter default; editing creates a binding.' : 'Edits are saved in this experiment’s bindings.'}</small>}{content}{node.action === 'transfer' && <details><summary>Planned labware associations</summary><fieldset><legend>Named source & destination</legend>{['source', 'destination'].map(key => {
@@ -127,12 +130,13 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
     const allNodes = entries.map(e => e.node);
     const nodePath = (node: MethodValue) => entries.find(e => e.node === node)?.path ?? String(node.step_id);
     const carryLinks = methodCarryLinks(method, bindings, plan, catalog);
+    const timers = entries.filter(e => e.node.action === 'timer_start').map(e => ({ ...e, inputs: object(methodInputBinding(method, e.node, bindings).inputs) })).filter(e => typeof e.inputs.timer_id === 'string' && e.inputs.timer_id !== '').filter((e, index, all) => all.findIndex(other => other.inputs.timer_id === e.inputs.timer_id) === index);
     const destinations = custodyMetadata(catalog).destinations.filter(d => d.plate_destination != null);
     const carry = (id: string, target: string) => {
         const destination = destinations.find(d => d.station === target);
         if (!destination) { setCarryNotice('No published plate placement for this station. Choose a listed destination or retain a native target in the placement editor.'); return; }
         const plate = object(plan.labware.find(l => l.id === id));
-        append('plate_move', { ...(id ? { labware_id: id } : {}), ...(Object.hasOwn(plate, 'native_plate_id') ? { plate_id: plate.native_plate_id } : {}), target_location: destination.token }, 'Move plate');
+        append('plate_move', { ...(id ? { labware_id: id } : {}), ...(typeof plate.native_plate_id === 'string' && plate.native_plate_id !== '' ? { plate_id: plate.native_plate_id } : {}), target_location: destination.token }, 'Move plate');
         setCarryPlate(null); setCarryNotice('');
     };
     const preparePlate = (id: string, station: string) => { setPlateId(id); setSelection({ station, wells: [] }); setSetupOpen(true); setCarryPlate(null); setCarryNotice(''); openEditor(); };
@@ -193,6 +197,7 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
             <div className="bioxp-method-adopt" aria-label="Use deck selection">
                 <p>{station?.label ?? 'Select a station or well'}{selection.wells.length ? ` · ${selection.wells.join(', ')}` : ''}</p>
                 <label>Insert step<select aria-label="Insert step" value={insertion} onChange={e => setInsertion(e.target.value)}><option value="before">Before selected step</option><option value="after">After selected step</option><option value="end">At end</option></select></label>
+                {timers.length > 0 && <fieldset className="bioxp-method-later-wait"><legend>Wait for an earlier timer</legend><label>Elapsed timer<select aria-label="Elapsed timer to wait for" value={waitTimer} onChange={e => setWaitTimer(e.target.value)}><option value="">Choose timer…</option>{timers.map(t => <option key={String(t.inputs.timer_id)} value={String(t.inputs.timer_id)}>{String(t.inputs.timer_id)} · {String(t.node.label || 'Elapsed conditioning')}</option>)}</select></label><button type="button" disabled={!timers.some(t => t.inputs.timer_id === waitTimer)} onClick={() => { const timer = timers.find(t => t.inputs.timer_id === waitTimer)!; const added = thermalTimerWait(String(timer.inputs.timer_id)); onChange({ ...method, steps: insertMethodAction(nodes, added, selectedPath, insertion) }); selectStep(String(added.step_id)); }}>Insert timer wait</button><small>Uses the selected insertion position and waits only for this timer’s remaining time. No automatic target reset.</small></fieldset>}
                 <details><summary>Add deck action</summary><button type="button" disabled={!moveReady || !hasAction('move')} onClick={() => append('move', { location_id: station!.locationId, well: selection.wells[0] })}>Add Move</button>
                 <label>Transfer settings<select aria-label="New Transfer settings" value={transferMode} onChange={e => setTransferMode(e.target.value)}><option value="class">Liquid class & recipe</option><option value="manual">Manual speeds</option></select></label>
                 <button type="button" disabled={!hasAction('transfer')} onClick={() => append('transfer', transferInputs())}>Add Transfer</button>

@@ -118,3 +118,9 @@ export function duplicateCanvasNode(method: MethodValue, node: MethodValue, bind
     };
     return { node: copy(node), parameters, bindings: nextBindings, changed: ids.size > 0 };
 }
+
+/** Presentation routing only; mixed process groups keep the general outline. */
+export function isThermalProgram(node: MethodValue): boolean {
+    if (node.type === 'action') return ['thermal_profile', 'thermal_hold', 'thermal_setpoint', 'incubate'].includes(String(node.action));
+    return ['group', 'repeat'].includes(String(node.type)) && Array.isArray(node.steps) && node.steps.length > 0 && (node.steps as MethodValue[]).every(isThermalProgram);
+}
