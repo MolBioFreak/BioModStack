@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BioXpMethodDeckWorkbench } from '../../src/components/BioXpMethodDeckWorkbench';
-import { insertMethodAction, plateBoundEndpoint } from '../../src/lib/bioxpMethodCanvas';
+import { insertMethodAction, plateBoundEndpoint, groupCanvasSteps, canUngroupCanvasNode, methodCarryLinks, duplicateCanvasNode } from '../../src/lib/bioxpMethodCanvas';
 import type { MethodValue, MethodCompile } from '../../src/lib/bioxpMethods';
 import catalog from '../fixtures/bioxp_method_deck_catalog.json';
 const discovery = process.env.BIOXP_METHOD_MODEL_CONTRACT ? JSON.parse(readFileSync(process.env.BIOXP_METHOD_MODEL_CONTRACT, 'utf8')) : null;
@@ -89,6 +89,8 @@ it('selects the named plate independently, prepares its destination and carries 
     expect((current.steps as any[])[0].inputs).toMatchObject({ destination: { station: 'LOC_MS', location_id: 0, labware_id: 'plate' } });
     expect((current.steps as any[])[0].inputs).not.toHaveProperty('source');
     await click('Prepare Reaction plate'); await click('Move plate');
+    expect(current.steps).toHaveLength(1);
+    await click('Move to Thermal cycler');
     expect((current.steps as any[])[1]).toMatchObject({ action: 'plate_move', inputs: { labware_id: 'plate' } });
     expect((current.steps as any[])[1].inputs).not.toHaveProperty('plate_id');
 });
@@ -118,4 +120,104 @@ it.runIf(!!discovery && !!process.env.BMS_TEST_PYTHON)('uses actual compiled occ
     const actions = (after.document!.stages as any[]).flatMap(s => s.actions);
     expect(actions.filter(a => a.kind === 'pipette_position' && a.params.operation === 'move').map(a => a.params.location_id)).toEqual([3, 2]);
     if (process.env.BIOXP_CANVAS_UI_EXPORT) writeFileSync(process.env.BIOXP_CANVAS_UI_EXPORT, JSON.stringify({ original, before, edited: current, after }, null, 2));
+});
+
+
+it('frames exactly adjacent selected children and preserves behavior-bearing wrappers', () => {
+    const nodes = ['a', 'b', 'c'].map(step_id => ({ step_id, type: 'action', action: 'note', inputs: { message: step_id }, extension: null }));
+    const grouped = groupCanvasSteps(nodes, ['a', 'b'], 'group', 'frame')!;
+    expect(grouped[0].steps).toEqual(nodes.slice(0, 2));
+    expect(grouped[1]).toBe(nodes[2]);
+    expect(groupCanvasSteps(nodes, ['a', 'c'], 'group', 'frame')).toBeNull();
+    expect(canUngroupCanvasNode(grouped[0])).toBe(true);
+    expect(canUngroupCanvasNode({ ...grouped[0], enabled: false })).toBe(false);
+    expect(canUngroupCanvasNode({ ...grouped[0], on_error: 'pause_for_operator' })).toBe(false);
+    expect(canUngroupCanvasNode({ ...grouped[0], future: null })).toBe(false);
+    expect(groupCanvasSteps(nodes, ['b'], 'repeat', 'repeat')![1]).toMatchObject({ count: '', steps: [nodes[1]] });
+});
+
+it('groups, ungroups and nests repeats through the actual ordered selection controls', async () => {
+    const nodes = ['before', 'first', 'second', 'after'].map(step_id => ({ step_id, type: 'action', action: 'note', inputs: { message: step_id, future: null } }));
+    await mount({ steps: nodes });
+    const mark = async (index: number) => { const box = host.querySelector<HTMLInputElement>(`[data-method-outline="/steps"] > ol [aria-label="Include step ${index} in group"]`)!; await act(async () => box.click()); };
+    await mark(2); await mark(3); await click('Group selected');
+    expect((current.steps as any[]).map(n => n.step_id)).toEqual(['before', expect.any(String), 'after']);
+    expect((current.steps as any[])[1].steps).toEqual(nodes.slice(1, 3));
+    await click('Ungroup steps'); expect(current.steps).toEqual(nodes);
+    await mark(2); await mark(3); await click('Repeat selected'); await input('Repeat count', '02');
+    const repeated = (current.steps as any[])[1];
+    expect(repeated).toMatchObject({ type: 'repeat', count: '02', steps: nodes.slice(1, 3) });
+    await mark(2);
+    const outerRepeat = [...host.querySelectorAll<HTMLButtonElement>('[data-method-outline="/steps"] > .bioxp-method-group-tools > button')].find(b => b.textContent === 'Repeat selected')!;
+    await act(async () => outerRepeat.click()); await input('Repeat count', '0');
+    expect((current.steps as any[])[1]).toMatchObject({ type: 'repeat', count: '0', steps: [repeated] });
+    const cold = JSON.parse(JSON.stringify(current)); await act(async () => root.unmount()); await mount(cold); expect(current).toEqual(cold);
+});
+
+it('projects distinct outgoing and return carry links without asserting conditional custody', async () => {
+    const make = (id: string, target: string) => ({ step_id: id, type: 'action', action: 'plate_move', inputs: { labware_id: 'plate', plate_id: 'PL_POOL', target_location: target, retained: null } });
+    const method = { deck_plan: plan, steps: [make('out', 'LOC_TC'), make('back', 'LOC_MS')] };
+    const actualCatalog = discovery?.catalog ?? catalog;
+    const links = methodCarryLinks(method, {}, plan, actualCatalog);
+    expect(links.map(l => [l.source, l.destination])).toEqual([['LOC_MS', 'LOC_TC'], ['LOC_TC', 'LOC_MS']]);
+    expect(methodCarryLinks({ steps: [{ step_id: 'scope', type: 'if', condition: {}, then: method.steps }, make('later', 'LOC_TC')] }, {}, plan, actualCatalog).every(l => l.source === undefined)).toBe(true);
+    await mount(method); await click('Edit plate carry Reaction plate');
+    expect(host.querySelector('[aria-label="On-deck editor"] [aria-label="Plate to carry"]')).toBeTruthy();
+    expect(current).toEqual(method);
+    expect(host.querySelectorAll('[data-carry-from="LOC_MS"][data-carry-to="LOC_TC"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-carry-from="LOC_TC"][data-carry-to="LOC_MS"]')).toHaveLength(1);
+});
+
+it('adds a carry through pointer drag without panning, retargeting or adding on cancellation', async () => {
+    await mount({ deck_plan: plan, steps: [] });
+    const plate = host.querySelector('[data-labware="plate"]')!;
+    const target = host.querySelector('[data-station="LOC_TC"][data-well="A1"]')!;
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: vi.fn(() => target) });
+    const pointer = async (type: string, x: number, y: number) => { await act(async () => plate.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y }))); };
+    await pointer('pointerdown', 10, 10); await pointer('pointermove', 90, 70); await pointer('pointercancel', 90, 70); await pointer('pointerup', 90, 70);
+    expect(current.steps).toEqual([]);
+    await pointer('pointerdown', 10, 10); await pointer('pointermove', 90, 70); await pointer('pointerup', 90, 70);
+    expect(current.steps).toHaveLength(1);
+    expect((current.steps as any[])[0]).toMatchObject({ action: 'plate_move', inputs: { labware_id: 'plate', target_location: 'LOC_TC' } });
+    expect((current.steps as any[])[0].inputs).not.toHaveProperty('plate_id');
+    expect(current.deck_plan).toEqual(plan);
+    delete (document as any).elementFromPoint;
+});
+
+it('cancels only the unfinished carry menu, and supports keyboard-equivalent creation', async () => {
+    await mount({ deck_plan: plan, steps: [] });
+    const plate = host.querySelector('[data-labware="plate"]')!;
+    await act(async () => plate.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true })));
+    await click('Move plate'); await click('Cancel plate move'); expect(current.steps).toEqual([]);
+    await click('Move plate'); await click('Move to Thermal cycler');
+    expect((current.steps as any[])[0].inputs).toEqual({ labware_id: 'plate', target_location: 'LOC_TC' });
+    expect(host.querySelector('[aria-label="Choose plate destination"]')).toBeNull();
+});
+
+
+it('duplicates repeat counts, condition references and dependent bindings independently while calls stay shared', () => {
+    const param = (id: string) => ({ expr: { version: 1, op: 'param', id, retained: null } });
+    const method = { parameters: [{ id: 'count', type: 'integer', default: param('base') }, { id: 'base', type: 'integer', default: '02' }], procedures: [{ id: 'procedure', steps: [] }] };
+    const node = { step_id: 'repeat', type: 'repeat', count: param('count'), steps: [{ step_id: 'call', type: 'call', procedure_id: 'procedure', arguments: { passes: param('count') } }] };
+    const copied = duplicateCanvasNode(method, node, { count: param('base'), base: '003' });
+    const count = (copied.node.count as any).expr.id;
+    const base = (copied.bindings[count] as any).expr.id;
+    expect(count).not.toBe('count'); expect(base).not.toBe('base');
+    expect(copied.parameters).toHaveLength(4);
+    expect(copied.bindings).toMatchObject({ count: param('base'), base: '003', [base]: '003' });
+    expect((copied.node.steps as any[])[0]).toMatchObject({ procedure_id: 'procedure', arguments: { passes: param(count) } });
+    expect((copied.node.steps as any[])[0].step_id).not.toBe('call');
+    expect(method.parameters).toHaveLength(2);
+});
+
+it.runIf(!!discovery && !!process.env.BMS_TEST_PYTHON)('compiles UI-created repeat scopes with exact total passes, zero omission and raw cold-reopened counts', async () => {
+    const original = { schema: 'bms.bioxp-method.v1', name: 'Repeat receiving', steps: ['before', 'one', 'two', 'after'].map(step_id => ({ step_id, type: 'action', action: 'note', inputs: { message: step_id } })) };
+    await mount(original);
+    for (const index of [2, 3]) await act(async () => host.querySelector<HTMLInputElement>(`[data-method-outline="/steps"] > ol [aria-label="Include step ${index} in group"]`)!.click());
+    await click('Repeat selected'); await input('Repeat count', '02');
+    const compile = () => { const result = spawnSync(process.env.BMS_TEST_PYTHON!, ['-c', 'import json,sys;from bioxp_method_compiler import compile_method;print(json.dumps(compile_method(json.load(sys.stdin))))'], { cwd: '../api', encoding: 'utf8', input: JSON.stringify({ method: current }) }); expect(result.status, result.stderr).toBe(0); const compiled = JSON.parse(result.stdout); expect(compiled.document, JSON.stringify(compiled.issues)).toBeTruthy(); return compiled; };
+    const first = compile(); expect(first.provenance.map((p: any) => p.step_id)).toEqual(['before', 'one', 'two', 'one', 'two', 'after']);
+    const cold = JSON.parse(JSON.stringify(current)); await act(async () => root.unmount()); await mount(cold);
+    await click('Select step 2'); expect((host.querySelector('[aria-label="Repeat count"]') as HTMLInputElement).value).toBe('02');
+    await input('Repeat count', '0'); expect(compile().provenance.map((p: any) => p.step_id)).toEqual(['before', 'after']);
 });

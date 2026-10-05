@@ -35,7 +35,18 @@
 .bioxp-method-local-editor > header strong { flex:1; }
 .bioxp-method-local-editor fieldset { min-width:0; }
 .bioxp-method-local-editor .flex { flex-wrap:wrap; }
-.bioxp-method-plate { cursor:pointer; pointer-events:all; }
+.bioxp-method-plate { cursor:grab; pointer-events:all; touch-action:none; }
+.bioxp-method-plate rect { fill:var(--bg-primary); stroke:var(--border-primary); stroke-width:2; }
+.bioxp-method-plate[aria-pressed=true] rect { stroke:var(--accent-primary); stroke-width:3; }
+.bioxp-method-carry { cursor:pointer; fill:none; color:var(--text-secondary); }
+.bioxp-method-carry-line { stroke:var(--text-secondary); stroke-width:5; stroke-dasharray:12 8; pointer-events:none; }
+.bioxp-method-link-hit { stroke:transparent; stroke-width:22; pointer-events:stroke; }
+.bioxp-method-carry:hover .bioxp-method-carry-line, .bioxp-method-carry:focus .bioxp-method-carry-line, .bioxp-method-carry.is-selected .bioxp-method-carry-line { stroke:var(--accent-primary); stroke-width:8; }
+.bioxp-method-mark { font-size:.85em; }
+.bioxp-method-group-tools { display:flex; flex-wrap:wrap; align-items:center; gap:.2rem; }
+.bioxp-method-canvas.is-connecting .bioxp-method-link, .bioxp-method-canvas.is-connecting .bioxp-method-carry { pointer-events:none; }
+.bioxp-method-canvas.is-connecting .bioxp-method-link-hit { pointer-events:none; }
+.bioxp-method-link-key { color:var(--text-secondary); font-size:.85em; }
 .bioxp-method-plate:focus .bioxp-method-plate-label, .bioxp-method-plate:hover .bioxp-method-plate-label { text-decoration:underline; fill:var(--accent-primary); }
 .bioxp-method-plate-label { fill:var(--text-primary); font-size:22px; font-weight:600; pointer-events:all; }
 .bioxp-method-process-stages ol { max-height:18rem; overflow:auto; }

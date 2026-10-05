@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { insertMethodAction, methodCanvasEntries, editCanvasNode, plateBoundEndpoint } from '../lib/bioxpMethodCanvas';
+import { insertMethodAction, methodCanvasEntries, editCanvasNode, plateBoundEndpoint, methodCarryLinks, duplicateCanvasNode } from '../lib/bioxpMethodCanvas';
 import { methodStateAfter } from '../lib/bioxpMethodSimulation';
 import type { MethodCompile } from '../lib/bioxpMethods';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
@@ -8,6 +8,7 @@ import { methodInputBinding, removeMethodInputParameters } from '../lib/bioxpMet
 import { deckResources, deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import type { WorkflowDeckPlan } from '../lib/bioxpWorkflowPlan';
 import { BioXpWorkflowDeck } from './BioXpWorkflowDeck';
+import { BioXpMethodPlateLayer } from './BioXpMethodPlateLayer';
 import { BioXpWorkflowMaterials } from './BioXpWorkflowMaterials';
 import { BioXpMethodPipettingEditor } from './BioXpMethodPipettingEditor';
 import { BioXpMethodCustodyEditor, custodyMethodActions, custodyMetadata } from './BioXpMethodCustodyEditor';
@@ -29,6 +30,8 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
     const [sequenceOnly, setSequenceOnly] = useState(false);
     const [setupOpen, setSetupOpen] = useState(false);
     const [plateId, setPlateId] = useState('');
+    const [carryPlate, setCarryPlate] = useState<string | null>(null);
+    const [carryNotice, setCarryNotice] = useState('');
     const [editorOpen, setEditorOpen] = useState(false);
     const [expanded, setExpanded] = useState(false);
     const [editorHost, setEditorHost] = useState<HTMLDivElement | null>(null);
@@ -84,7 +87,7 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
             const id = parameter ? String(parameter.id) : undefined;
             const value = id ? Object.hasOwn(bindings, id) ? bindings[id] : parameter?.default : node.count;
             const editable = value === undefined || typeof value === 'number' || typeof value === 'string' || isMethodNumber(value);
-            return <section aria-label="Repeated sequence settings"><label>Repeat count<input aria-label="Repeat count" inputMode="numeric" type="text" disabled={!editable || !!id && !onBindingsChange || !id && !!expr.op} value={isMethodNumber(value) ? value.expr.value : editable && value !== undefined ? String(value) : ''} placeholder={editable ? 'Not set' : 'Retained expression / null'} onChange={e => { const next = isMethodNumber(value) ? methodNumber(e.target.value) : e.target.value; if (id) onBindingsChange?.({ ...bindings, [id]: next }); else change({ ...node, count: next }); }} /></label><p>{id ? 'Count edits use this experiment’s binding; the parameter expression is retained.' : 'Only this ordered sequence is repeated.'} No wash count is prescribed.</p></section>;
+            return <section aria-label="Repeated sequence settings"><label>Repeat count<input aria-label="Repeat count" inputMode="numeric" type="text" disabled={!editable || !!id && !onBindingsChange || !id && !!expr.op} value={isMethodNumber(value) ? value.expr.value : editable && value !== undefined ? String(value) : ''} placeholder={editable ? 'Not set' : 'Retained expression / null'} onChange={e => { const next = isMethodNumber(value) ? methodNumber(e.target.value) : e.target.value; if (id) onBindingsChange?.({ ...bindings, [id]: next }); else change({ ...node, count: next }); }} /></label><p>{id ? 'Count edits use this experiment’s binding; the parameter expression is retained.' : 'Only this ordered sequence is repeated.'} Count is total passes; zero omits these steps.</p></section>;
         }
         const bound = methodInputBinding(method, node, bindings);
         if (!bound.editable || bound.id && !onBindingsChange) return actionProperties?.(node, change);
@@ -104,23 +107,11 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
         })}<small>Stable planned identities can follow a carried plate between stations; associations do not verify inventory or custody.</small></fieldset></details>}{node.action === 'transfer' && <small>Ordinary Transfer lowers to calibrated depth. Move-position flags and post-stroke lift heights do not set aspiration depth or a lateral pellet offset; pellet avoidance is not automatic.</small>}</> : undefined;
     };
     const duplicate = (original: MethodValue) => {
-        const parameters = [...(Array.isArray(method.parameters) ? method.parameters as MethodValue[] : [])];
-        const nextBindings = { ...bindings }, copiedParameters = new Map<string, string>();
-        const copy = (node: MethodValue): MethodValue => {
-            const next = structuredClone(node); next.step_id = crypto.randomUUID();
-            const bound = methodInputBinding(method, node, bindings);
-            if (bound.id && onBindingsChange) {
-                let id = copiedParameters.get(bound.id);
-                if (!id) { id = crypto.randomUUID(); copiedParameters.set(bound.id, id); parameters.push({ ...structuredClone(parameters.find(p => p.id === bound.id)!), id }); if (Object.hasOwn(bindings, bound.id)) nextBindings[id] = structuredClone(bindings[bound.id]); }
-                next.inputs = { ...object(next.inputs), expr: { ...object(object(next.inputs).expr), id } };
-            }
-            for (const key of ['steps', 'then', 'else']) if (Array.isArray(next[key])) next[key] = (next[key] as MethodValue[]).map(copy);
-            return next;
-        };
-        const copied = copy(original);
+        const duplicated = duplicateCanvasNode(method, original, bindings, !!onBindingsChange);
+        const copied = duplicated.node;
         const insert = (rows: MethodValue[], path = '/steps'): MethodValue[] => rows.flatMap((node, index) => `${path}/${index}` === selectedPath ? [node, copied] : [{ ...node, ...Object.fromEntries(['steps', 'then', 'else'].filter(k => Array.isArray(node[k])).map(k => [k, insert(node[k] as MethodValue[], `${path}/${index}/${k}`)])) }]);
-        onChange({ ...method, ...(copiedParameters.size ? { parameters } : {}), steps: insert(nodes) });
-        if (copiedParameters.size) onBindingsChange?.(nextBindings);
+        onChange({ ...method, ...(duplicated.changed ? { parameters: duplicated.parameters } : {}), steps: insert(nodes) });
+        if (duplicated.changed) onBindingsChange?.(duplicated.bindings);
         setSelectedId(String(copied.step_id));
     };
     const remove = (removed: MethodValue) => {
@@ -135,7 +126,18 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
     const transferInputs = () => ({ ...(endpointReady ? { source: { station: station!.id, location_id: station!.locationId, wells: [...selection.wells] } } : {}), ...(transferMode === 'class' ? { liquid: {}, recipe: {} } : {}) });
     const allNodes = entries.map(e => e.node);
     const nodePath = (node: MethodValue) => entries.find(e => e.node === node)?.path ?? String(node.step_id);
+    const carryLinks = methodCarryLinks(method, bindings, plan, catalog);
+    const destinations = custodyMetadata(catalog).destinations.filter(d => d.plate_destination != null);
+    const carry = (id: string, target: string) => {
+        const destination = destinations.find(d => d.station === target);
+        if (!destination) { setCarryNotice('No published plate placement for this station. Choose a listed destination or retain a native target in the placement editor.'); return; }
+        const plate = object(plan.labware.find(l => l.id === id));
+        append('plate_move', { ...(id ? { labware_id: id } : {}), ...(Object.hasOwn(plate, 'native_plate_id') ? { plate_id: plate.native_plate_id } : {}), target_location: destination.token }, 'Move plate');
+        setCarryPlate(null); setCarryNotice('');
+    };
+    const preparePlate = (id: string, station: string) => { setPlateId(id); setSelection({ station, wells: [] }); setSetupOpen(true); setCarryPlate(null); setCarryNotice(''); openEditor(); };
     const chooseObject = (next: BioXpDeckSelection) => {
+        if (carryPlate !== null) { carry(carryPlate, next.station); return; }
         setSelection(next);
         if (next.station !== selection.station) setPlateId('');
         if (connecting && next.wells.length) {
@@ -171,19 +173,23 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
     return <><div className="bioxp-method-view" role="group" aria-label="Authoring view"><button type="button" aria-pressed={!sequenceOnly} onClick={() => setSequenceOnly(false)}>Deck & sequence</button><button type="button" aria-pressed={sequenceOnly} onClick={() => setSequenceOnly(true)}>Sequence only</button></div><div className={`bioxp-method-workbench${sequenceOnly ? ' is-sequence-only' : ''}`}>
         <section aria-label="Method deck" className="bioxp-method-map" hidden={sequenceOnly}>
             <h3>Experiment deck</h3><button type="button" aria-pressed={connecting} onClick={() => { setConnecting(!connecting); setConnectionSource(null); setEditorOpen(false); }}>{connecting ? 'Cancel connection' : 'Connect wells'}</button>{connecting && <p role="status">{connectionSource ? 'Choose destination wells. The new connection is inserted at the selected position.' : 'Choose source wells, then destination wells. No action is run.'}</p>}<button type="button" aria-expanded={setupOpen} onClick={() => { setSetupOpen(true); openEditor(); }}>Set up labware & reagents</button>
-            <div className="bioxp-method-canvas" onContextMenu={e => { const target = (e.target as Element).closest('[data-station]'); if (target) { e.preventDefault(); chooseObject({ station: target.getAttribute('data-station')!, wells: target.getAttribute('data-well') ? [target.getAttribute('data-well')!] : [] }); } }}>
-            <BioXpWorkflowDeck compact selection={selection} onChange={chooseObject} overlay={<g aria-label="Ordered liquid connections">{plan.labware.map(l => { const target = plateBoundEndpoint({}, l.id, plan, occurrenceState); const r = deckResources.find(r => r.id === target?.station); return r ? <g key={l.id} role="button" tabIndex={0} aria-label={`Prepare ${l.name || 'unnamed labware'}`} className="bioxp-method-plate" onClick={() => { setPlateId(l.id); setSelection({ station: r.id, wells: [] }); setSetupOpen(true); openEditor(); }} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPlateId(l.id); setSelection({ station: r.id, wells: [] }); setSetupOpen(true); openEditor(); } }}><text className="bioxp-method-plate-label" x={r.bounds.x} y={r.bounds.y - 35}>{l.name || 'Unnamed labware'}</text></g> : null; })}{links.map(({ node, source, destination }, index) => source && destination && <g key={nodePath(node)} role="button" tabIndex={0} aria-label={`Edit connection ${String(node.label || node.step_id)}`} className={`bioxp-method-link${selected?.step_id === node.step_id ? ' is-selected' : ''}`} onClick={() => selectStep(nodePath(node))} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectStep(nodePath(node)); } }}>
+            <div className={`bioxp-method-canvas${connecting ? ' is-connecting' : ''}`} onContextMenu={e => { const target = (e.target as Element).closest('[data-station]'); if (target) { e.preventDefault(); chooseObject({ station: target.getAttribute('data-station')!, wells: target.getAttribute('data-well') ? [target.getAttribute('data-well')!] : [] }); } }}>
+            <BioXpWorkflowDeck compact selection={selection} onChange={chooseObject} overlay={<g aria-label="Ordered liquid connections">{links.map(({ node, source, destination }, index) => source && destination && <g key={nodePath(node)} role="button" tabIndex={0} aria-label={`Edit connection ${String(node.label || node.step_id)}`} className={`bioxp-method-link${selectedPath === nodePath(node) ? ' is-selected' : ''}`} onClick={() => selectStep(nodePath(node))} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectStep(nodePath(node)); } }}>
                 <path d={`M ${source.x} ${source.y} Q ${(source.x + destination.x) / 2} ${Math.min(source.y, destination.y) - 60 - index % 4 * 18} ${destination.x} ${destination.y}`} />
                 <title>{String(node.label || 'Add reagent')} — ordered action, not concurrent flow</title>
-            </g>)}</g>} />
+            </g>)}<BioXpMethodPlateLayer plan={plan} stations={Object.fromEntries(plan.labware.map(l => [l.id, String(plateBoundEndpoint({}, l.id, plan, occurrenceState)?.station ?? '')]))} selectedPlate={plateId} selectedPath={selectedPath} links={carryLinks} onPrepare={preparePlate} onCarry={carry} onSelect={selectStep} /></g>} />
             <section className={`bioxp-method-local-editor${expanded ? ' is-expanded' : ''}`} aria-label="On-deck editor" hidden={!editorOpen} onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); closeEditor(); } }}>
                 <header><strong>{setupOpen ? station?.label || 'Labware & reagents' : String(selected?.label || selected?.action || 'Selected step').replaceAll('_', ' ')}</strong><button type="button" aria-pressed={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? 'Compact editor' : 'Expand editor'}</button><button type="button" onClick={closeEditor}>Close editor</button></header>
                 <button type="button" aria-pressed={setupOpen} onClick={() => setSetupOpen(!setupOpen)}>{setupOpen ? 'Step settings' : 'Plate, tips & contents'}</button>
                 {setupOpen && <section aria-label="Prepare selected plate"><h4>Prepare this plate</h4><ol>{allNodes.filter(n => { const i = object(methodInputBinding(method, n, bindings).inputs); return n.action === 'transfer' && (localPlate && object(i.destination).labware_id ? object(i.destination).labware_id === localPlate.id : object(i.destination).station === selection.station); }).map(n => { const i = object(methodInputBinding(method, n, bindings).inputs); return <li key={nodePath(n)}><button type="button" onClick={() => selectStep(nodePath(n))}>{String(n.label || 'Add reagent')} · {String(object(i.source).station || 'Choose source')} → {Array.isArray(object(i.destination).wells) ? (object(i.destination).wells as string[]).join(', ') : 'Choose wells'} · {typeof i.volume_ul === 'string' || typeof i.volume_ul === 'number' ? String(i.volume_ul) : 'Unspecified'} µL / channel</button></li>; })}</ol></section>}
                 <div hidden={!setupOpen}><BioXpWorkflowMaterials displayStations={Object.fromEntries(plan.labware.map(l => [l.id, String(plateBoundEndpoint({}, l.id, plan, occurrenceState)?.station ?? '')]))} selectedLabwareId={plateId} contextual methodAuthoring plan={plan} selection={selection} profiles={Array.isArray(dependencies.labware_profiles) ? dependencies.labware_profiles as MethodValue[] : []} onChange={deck_plan => onChange({ ...method, deck_plan })} /></div>
                 <div ref={setEditorHost} hidden={setupOpen} />
-                {setupOpen && <div className="bioxp-method-object-actions"><button type="button" onClick={() => append('transfer', plateAddition(), 'Add reagent')}>Add reagent</button>{station?.id === 'LOC_TC' && <button type="button" onClick={() => append('thermal_profile', { segments: [] }, 'Temperature program')}>Temperature program</button>}{['LOC_RC', 'LOC_OC'].includes(station?.id ?? '') && <button type="button" onClick={() => append('chiller_setpoint', { bank: station?.id === 'LOC_RC' ? 'rc' : 'oc' })}>Temperature & timing</button>}<button type="button" onClick={() => append('plate_move', localPlate ? { labware_id: localPlate.id } : {}, 'Move plate')}>Move plate</button></div>}
+                {setupOpen && <div className="bioxp-method-object-actions"><button type="button" onClick={() => append('transfer', plateAddition(), 'Add reagent')}>Add reagent</button>{station?.id === 'LOC_TC' && <button type="button" onClick={() => append('thermal_profile', { segments: [] }, 'Temperature program')}>Temperature program</button>}{['LOC_RC', 'LOC_OC'].includes(station?.id ?? '') && <button type="button" onClick={() => append('chiller_setpoint', { bank: station?.id === 'LOC_RC' ? 'rc' : 'oc' })}>Temperature & timing</button>}<button type="button" aria-expanded={carryPlate !== null} onClick={() => { setCarryPlate(localPlate?.id ?? ''); setCarryNotice(''); }}>Move plate</button></div>}
+                {carryPlate !== null && <section aria-label="Choose plate destination"><h4>Move {plan.labware.find(l => l.id === carryPlate)?.name || 'plate'} to…</h4>{destinations.map(d => <button key={String(d.token)} type="button" onClick={() => carry(carryPlate, String(d.station))}>Move to {String(d.label)}</button>)}<button type="button" onClick={() => { setCarryPlate(null); setCarryNotice(''); }}>Cancel plate move</button><p>Or select a destination on the deck. Adds one ordered custody step only; choose native object and handling details in its editor.</p></section>}
             </section></div>
+            {carryNotice && <p role="status">{carryNotice}</p>}
+            <p className="bioxp-method-link-key"><span>Solid: liquid transfer</span> · <span>Dashed arrow: plate carry</span> · Sequence numbers give execution order. Drag a named plate to add a carry step, or open Move plate.</p>
+            {carryLinks.some(l => !l.source || !l.destination) && <details><summary>Carry steps with unresolved endpoints</summary>{carryLinks.filter(l => !l.source || !l.destination).map(l => <p key={l.path}><button type="button" onClick={() => selectStep(l.path)}>{String(l.node.label || l.node.step_id)}</button> {l.source || 'Unknown source'} → {l.destination || 'Unknown destination'}. Use compiled occurrence preview for conditional or repeated placement.</p>)}</details>}
             <div className="bioxp-method-adopt" aria-label="Use deck selection">
                 <p>{station?.label ?? 'Select a station or well'}{selection.wells.length ? ` · ${selection.wells.join(', ')}` : ''}</p>
                 <label>Insert step<select aria-label="Insert step" value={insertion} onChange={e => setInsertion(e.target.value)}><option value="before">Before selected step</option><option value="after">After selected step</option><option value="end">At end</option></select></label>

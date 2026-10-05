@@ -151,7 +151,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                     const strip = resource.kind === 'strip';
                     const tabWell = cursor[resource.id] ?? (selection.station === resource.id && resource.wells.includes(selection.wells[0]) ? selection.wells[0] : resource.wells[0]);
                     return <g key={resource.id} className={`bwd-resource bwd-${resource.kind}${selection.station === resource.id ? ' is-active' : ''}`} data-resource={resource.id}>
-                        <g role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : 0} aria-label={`Select ${resource.label}`} aria-pressed={selection.station === resource.id}
+                        <g role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : 0} data-station={resource.id} aria-label={`Select ${resource.label}`} aria-pressed={selection.station === resource.id}
                             aria-disabled={live ? !!live.stationDisabledReason(resource.id) : undefined}
                             onClick={e => activate(e, () => chooseStation(resource.id))} onKeyDown={e => keyboardStation(e, resource.id)} onDoubleClick={live ? undefined : () => setView({ x: x - 55, y: y - 65, width: width + 110, height: height + 110 })}>
                             <title>{live?.stationDisabledReason(resource.id) ?? resource.label}</title>
@@ -178,7 +178,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                     </g>;
                 })}
                 {deckRegions.map(region => <g key={region.id} className={`bwd-region${selection.station === region.id ? ' is-active' : ''}`} role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : 0}
-                    aria-label={`Select ${region.label}`} aria-pressed={selection.station === region.id} aria-disabled={live ? !!live.stationDisabledReason(region.id) : undefined} onClick={e => activate(e, () => chooseStation(region.id))} onKeyDown={e => keyboardStation(e, region.id)}>
+                    data-station={region.id} aria-label={`Select ${region.label}`} aria-pressed={selection.station === region.id} aria-disabled={live ? !!live.stationDisabledReason(region.id) : undefined} onClick={e => activate(e, () => chooseStation(region.id))} onKeyDown={e => keyboardStation(e, region.id)}>
                     <title>{region.label} · {live?.stationDisabledReason(region.id) ?? 'illustration-derived outline estimate'}</title>
                     {region.layers.map(layer => <polygon key={layer.name} className={`bwd-region-${layer.name}`} points={layer.points.map(p => `${p.x},${p.y}`).join(' ')} />)}
                     <text className="bwd-map-label" x={region.bounds.x} y={region.bounds.y - 15}>{region.label}</text>
