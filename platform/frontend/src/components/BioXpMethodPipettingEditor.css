@@ -1,0 +1,41 @@
+.bioxp-transfer-scene { container-type: inline-size; display: grid; gap: 1rem; min-width: 0; color: var(--text-primary); }
+.bioxp-transfer-scene .bioxp-transfer-link { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2.4rem; }
+.bioxp-transfer-scene .bioxp-transfer-endpoint { position: relative; min-width: 0; }
+.bioxp-transfer-scene .bioxp-transfer-endpoint header { display: grid; grid-template-columns: 1fr auto; gap: .2rem .5rem; margin-bottom: .7rem; }
+.bioxp-transfer-scene .bioxp-transfer-endpoint header > small { grid-column: 1 / -1; text-transform: uppercase; letter-spacing: .1em; }
+.bioxp-transfer-scene h3 { margin: 0; font-size: 1rem; }
+.bioxp-transfer-scene small, .bioxp-transfer-scene header > span { color: var(--text-secondary); font-size: .75rem; }
+.bioxp-transfer-scene .bioxp-transfer-arrow { position: absolute; left: -2rem; top: 45%; font-size: 1.6rem; color: var(--accent-primary); }
+.bioxp-transfer-scene .bioxp-transfer-plate { display: grid; align-items: center; gap: .3rem; padding: .75rem; border: 1px solid var(--border-primary, #64748b); border-radius: .75rem; background: var(--surface-plot, var(--bg-secondary)); }
+.bioxp-transfer-scene .bioxp-transfer-row { display: contents; }
+.bioxp-transfer-scene .bioxp-transfer-plate small { text-align: center; font-size: .65rem; }
+.bioxp-transfer-scene .bioxp-transfer-plate button { display: grid; place-items: center; min-width: 0; min-height: 0; width: 100%; aspect-ratio: 1; padding: 0; border: 1px solid var(--border-primary, #64748b); border-radius: 50%; background: var(--surface-control, var(--bg-primary)); color: var(--text-primary); font-size: .6rem; line-height: 1; }
+.bioxp-transfer-scene .bioxp-transfer-plate button[data-authored="true"] { background: var(--accent-primary, #087e8b); color: var(--text-on-accent, white); border-color: var(--accent-primary, #087e8b); }
+.bioxp-transfer-scene .bioxp-transfer-plate button[aria-pressed="true"] { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+.bioxp-transfer-scene .bioxp-transfer-reference-summary { margin: .6rem 0; font-size: .8rem; overflow-wrap: anywhere; }
+.bioxp-transfer-scene .bioxp-transfer-reference-summary small, .bioxp-transfer-scene .bioxp-transfer-selection small, .bioxp-transfer-scene .bioxp-transfer-amount small { display: block; margin-top: .25rem; }
+.bioxp-transfer-scene .bioxp-transfer-tools { display: flex; flex-wrap: wrap; gap: .35rem; }
+.bioxp-transfer-scene button { cursor: pointer; border: 1px solid var(--border-primary, #64748b); border-radius: .35rem; background: var(--surface-control, var(--bg-secondary)); padding: .35rem .5rem; font-size: .75rem; }
+.bioxp-transfer-scene button:disabled { opacity: .45; cursor: default; }
+.bioxp-transfer-scene .bioxp-transfer-selection { padding: .6rem .8rem; background: var(--bg-secondary); border-radius: .4rem; font-size: .8rem; }
+.bioxp-transfer-scene .bioxp-transfer-amount { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; border-block: 1px solid var(--border-primary, #64748b); padding: 1rem 0; }
+.bioxp-transfer-scene .bioxp-transfer-amount label { font-size: .8rem; }
+.bioxp-transfer-scene .bioxp-transfer-amount label > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; }
+.bioxp-transfer-scene .bioxp-transfer-amount input { width: 100%; max-width: 9rem; padding: .4rem; font-size: 2rem; font-weight: 600; font-variant-numeric: tabular-nums; border: 1px solid var(--border-primary, #64748b); border-radius: .4rem; color: var(--text-primary); background: var(--surface-control, var(--bg-secondary)); }
+.bioxp-transfer-scene .bioxp-transfer-amount span { color: var(--text-secondary); font-size: .8rem; }
+.bioxp-transfer-scene .bioxp-transfer-amount ol { max-height: 7rem; overflow: auto; margin: .3rem 0; padding-left: 1.5rem; font-size: .8rem; }
+.bioxp-transfer-scene .bioxp-transfer-channels { display: flex; flex-wrap: wrap; gap: .65rem; border: 0; padding: 0; }
+.bioxp-transfer-scene .bioxp-transfer-channels label { display: flex; align-items: center; gap: .3rem; font-size: .85rem; }
+.bioxp-transfer-scene .bioxp-transfer-channels input { width: auto; }
+.bioxp-transfer-scene .bioxp-transfer-channels small { flex-basis: 100%; overflow-wrap: anywhere; }
+.bioxp-transfer-scene .bioxp-transfer-recipe-mode { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; font-size: .85rem; }
+.bioxp-transfer-scene .bioxp-transfer-recipe-mode select { padding: .4rem .6rem; border: 1px solid var(--border-primary, #64748b); border-radius: .35rem; background: var(--surface-control, var(--bg-secondary)); color: var(--text-primary); }
+.bioxp-transfer-scene .bioxp-transfer-order li button { margin-left: .4rem; }
+.bioxp-transfer-scene .bioxp-transfer-recipe { display: grid; gap: .3rem; font-size: .8rem; margin: 0; overflow-wrap: anywhere; }
+.bioxp-transfer-scene .bioxp-transfer-unmapped { min-height: 8rem; padding: 1rem; background: var(--bg-secondary); overflow-wrap: anywhere; font-size: .8rem; }
+.bioxp-transfer-scene > details > summary { cursor: pointer; padding: .6rem 0; border-top: 1px solid var(--border-primary, #64748b); font-size: .85rem; }
+.bioxp-transfer-scene :focus-visible { outline: 2px solid var(--accent-primary, #38bdf8); outline-offset: 3px; }
+@container (max-width: 520px) {
+    .bioxp-transfer-scene .bioxp-transfer-link, .bioxp-transfer-scene .bioxp-transfer-amount { grid-template-columns: minmax(0, 1fr); }
+    .bioxp-transfer-scene .bioxp-transfer-arrow { top: -2rem; left: 50%; transform: rotate(90deg); }
+}
