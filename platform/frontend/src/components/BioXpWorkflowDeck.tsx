@@ -14,13 +14,13 @@ export type BioXpDeckLiveIntent = {
 export type BioXpWorkflowDeckProps = {
     selection: BioXpDeckSelection; onChange: (selection: BioXpDeckSelection) => void; readOnly?: boolean;
     live?: BioXpDeckLiveIntent; resources?: DeckResource[]; overlay?: React.ReactNode;
-    compact?: boolean;
+    compact?: boolean; canvas?: boolean;
 };
 const fullView: DeckBounds = { x: 0, y: 0, ...deckSize };
 const modes: DeckSelectionMode[] = ['well', 'range', 'row', 'column'];
 
 /** Shared presentation. Authoring defaults remain selection-only; live intents are explicit callbacks. */
-export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, compact = false }: BioXpWorkflowDeckProps) {
+export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, compact = false, canvas = false }: BioXpWorkflowDeckProps) {
     const id = useId();
     const svg = useRef<SVGSVGElement>(null);
     const anchor = useRef<{ station: string; well: string } | null>(null);
@@ -122,9 +122,9 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
     const Inspector = compact ? 'details' : 'div';
     const Help = compact ? 'details' : 'div';
     const stripBounds = deckBounds(strips.flatMap(r => r.points));
-    return <section className="bioxp-workflow-deck" aria-label={live ? "BioXP live deck map" : "BioXP planned deck selection"}>
+    return <section className={`bioxp-workflow-deck${canvas ? ' bwd-canvas-presentation' : ''}`} aria-label={live ? "BioXP live deck map" : "BioXP planned deck selection"}>
         {!live && !compact && <div className="bwd-heading"><div><h3>{readOnly ? 'Native action location' : 'Deck selection'}</h3><p>{readOnly ? 'Highlighted from the compiled action. Use the action scrubber to follow the sequence.' : 'Choose a station, then the wells for your plan.'}</p></div><span className="bwd-badge">2D deck</span></div>}
-        <div className="bwd-station-control">{live ? <><label htmlFor={`${id}-view-station`}>Inspect</label><select id={`${id}-view-station`} aria-label="Deck view station" value={focusTarget || selection.station} onChange={e => setFocusTarget(e.target.value)}><option value="">Choose a station</option>{deckStations.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></> : readOnly ? <strong>{station?.label ?? 'No new XY destination'}</strong> : <><label htmlFor={`${id}-station`}>Station</label>
+        {canvas ? <details className="bwd-selection-tools"><summary>{station?.label || 'Select a station'}{selection.wells.length ? ` · ${selection.wells.length} wells` : ''}</summary>        <div className="bwd-station-control">{live ? <><label htmlFor={`${id}-view-station`}>Inspect</label><select id={`${id}-view-station`} aria-label="Deck view station" value={focusTarget || selection.station} onChange={e => setFocusTarget(e.target.value)}><option value="">Choose a station</option>{deckStations.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></> : readOnly ? <strong>{station?.label ?? 'No new XY destination'}</strong> : <><label htmlFor={`${id}-station`}>Station</label>
             <select id={`${id}-station`} aria-label="Deck station" value={station?.id ?? ''} onChange={e => chooseStation(e.target.value)}>
                 <option value="">Choose a station</option>
                 <optgroup label="Processing">{deckStations.filter(s => s.id.startsWith('LOC_') && s.wells.length === 96).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>
@@ -136,6 +136,19 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
         {!readOnly && !live && <div className="bwd-toolbar" role="group" aria-label="Well selection mode"><span>Select</span>{modes.map(m => <button type="button" key={m} aria-pressed={mode === m} onClick={() => { setMode(m); anchor.current = null; }}>{m[0].toUpperCase() + m.slice(1)}</button>)}
             <button type="button" className="bwd-clear" onClick={() => { anchor.current = null; onChange({ station: selection.station, wells: [] }); }}>Clear selection</button>
         </div>}
+</details> : <>        <div className="bwd-station-control">{live ? <><label htmlFor={`${id}-view-station`}>Inspect</label><select id={`${id}-view-station`} aria-label="Deck view station" value={focusTarget || selection.station} onChange={e => setFocusTarget(e.target.value)}><option value="">Choose a station</option>{deckStations.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></> : readOnly ? <strong>{station?.label ?? 'No new XY destination'}</strong> : <><label htmlFor={`${id}-station`}>Station</label>
+            <select id={`${id}-station`} aria-label="Deck station" value={station?.id ?? ''} onChange={e => chooseStation(e.target.value)}>
+                <option value="">Choose a station</option>
+                <optgroup label="Processing">{deckStations.filter(s => s.id.startsWith('LOC_') && s.wells.length === 96).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>
+                <optgroup label="Tips and reagent strips">{deckStations.filter(s => s.tipTray !== null || s.wells.length === 8).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>
+                <optgroup label="Utility and cover regions">{deckStations.filter(s => !s.wells.length).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>
+            </select></>}
+            <button type="button" onClick={focusStation} disabled={live ? !(focusTarget || station) : !station}>Focus station</button>
+        </div>
+        {!readOnly && !live && <div className="bwd-toolbar" role="group" aria-label="Well selection mode"><span>Select</span>{modes.map(m => <button type="button" key={m} aria-pressed={mode === m} onClick={() => { setMode(m); anchor.current = null; }}>{m[0].toUpperCase() + m.slice(1)}</button>)}
+            <button type="button" className="bwd-clear" onClick={() => { anchor.current = null; onChange({ station: selection.station, wells: [] }); }}>Clear selection</button>
+        </div>}
+</>}
         <div className="bwd-map">
             <svg ref={svg} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="group" aria-label="BioXP deck map" aria-describedby={`${id}-help`}
                 onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={() => { drag.current = null; }}
