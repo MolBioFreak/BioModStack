@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useLayoutEffect, useRef, type CSSProperties } from 'react';
 import type { MethodValue, MethodCatalog } from '../lib/bioxpMethods';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
 import { isMethodNumber, methodNumber } from '../lib/bioxpMethodNumber';
@@ -19,7 +19,7 @@ function Disclosure({ title, render }: { title: string; render: () => React.Reac
 }
 function Controls({ value, schema, label, hold, chiller = false, profile = false, onChange }: { value: MethodValue; schema?: Schema; label: string; hold: boolean; chiller?: boolean; profile?: boolean; onChange: (next: MethodValue) => void }) {
     const set = (key: string, next: unknown) => { const result = { ...value }; if (next === undefined) delete result[key]; else result[key] = next; onChange(result); };
-    const numeric = (key: string, title: string) => <label>{title}<input aria-label={`${label} ${title}`} inputMode="decimal" type="text" value={numberText(value[key])} disabled={!editableNumber(value[key])} placeholder={value[key] === undefined ? 'Not set' : !editableNumber(value[key]) ? retained(value[key]) : undefined} onChange={e => set(key, methodNumber(e.target.value))} />{Object.hasOwn(value, key) && <button type="button" aria-label={`${label} Omit ${title}`} onClick={() => set(key, undefined)}>Omit</button>}</label>;
+    const numeric = (key: string, title: string) => <label className={`bioxp-thermal-value bioxp-thermal-value-${key}`}><span className="bioxp-thermal-value-title">{title}</span><input aria-label={`${label} ${title}`} inputMode="decimal" type="text" value={numberText(value[key])} disabled={!editableNumber(value[key])} placeholder={value[key] === undefined ? 'Not set' : !editableNumber(value[key]) ? retained(value[key]) : undefined} onChange={e => set(key, methodNumber(e.target.value))} />{profile && <span className="bioxp-thermal-value-unit">{key === 'target_temp_c' ? '°C' : key === 'duration_s' ? 's' : ''}</span>}{Object.hasOwn(value, key) && <button type="button" aria-label={`${label} Omit ${title}`} onClick={() => set(key, undefined)}>Omit</button>}</label>;
     const choice = (key: string, title: string, options: Array<[string, string]>) => {
         const known = options.some(([v]) => v === value[key]);
         const special = value[key] !== undefined && !known;
@@ -37,7 +37,117 @@ function Controls({ value, schema, label, hold, chiller = false, profile = false
         </>} />}
         <Disclosure title="Advanced controls / expressions and retained fields" render={() => <MethodFields label={`${label} inputs`} schema={schema} value={value} onChange={v => onChange(object(v))} />} />
     </>;
-    return profile ? <><div className="bioxp-thermal-exact">{numeric('target_temp_c', 'Target temperature (°C)')}{numeric('duration_s', 'Hold time (seconds)')}</div><details className="bioxp-thermal-step-options"><summary>{label} options</summary>{options}</details></> : options;
+    return profile ? <><div className="bioxp-thermal-exact">{numeric('target_temp_c', 'Target temperature (°C)')}{hold ? numeric('duration_s', 'Hold time (seconds)') : <span className="bioxp-thermal-continuation">Keep target · continue</span>}</div><details className="bioxp-thermal-step-options"><summary>{label} options</summary>{options}</details></> : options;
+}
+
+type ProgramLeaf = { key: string; value: unknown; label: string; hold: boolean; schema?: Schema; onChange: (value: unknown) => void; actions?: React.ReactNode; retainedNode?: MethodValue; updateNode?: (node: MethodValue) => void };
+type ProgramFrame = { key: string; from: number; size: number; depth: number; node: MethodValue; onChange: (value: MethodValue) => void };
+
+// This is a read-only projection of authored scope. Edits merge back through the
+// exact parent path; display geometry never becomes AST or native input data.
+function ProgramGraph({ node, catalog, onChange, expanded, onSelectRange }: { node: MethodValue; catalog: MethodCatalog; onChange: (node: MethodValue) => void; expanded: boolean; onSelectRange?: (first: number, last: number) => void }) {
+    const [selected, setSelected] = useState<number | null>(null);
+    const [range, setRange] = useState<[number, number] | null>(null);
+    const trackRef = useRef<HTMLDivElement>(null);
+    const [optionsSpace, setOptionsSpace] = useState<number>();
+    useLayoutEffect(() => {
+        const track = trackRef.current;
+        if (!track) return;
+        const measure = () => {
+            const row = track.querySelector('.bioxp-thermal-stages');
+            const bottom = row?.getBoundingClientRect().bottom ?? 0;
+            const panels = [...track.querySelectorAll<HTMLDetailsElement>('.bioxp-thermal-step-options[open]')];
+            setOptionsSpace(Math.max(0, ...panels.map(panel => panel.getBoundingClientRect().bottom - bottom + 12)));
+        };
+        const toggle = (event: Event) => {
+            const details = event.target as HTMLDetailsElement;
+            if (details.matches('.bioxp-thermal-step-options') && details.open) {
+                track.querySelectorAll<HTMLDetailsElement>('.bioxp-thermal-step-options[open]').forEach(other => { if (other !== details) other.open = false; });
+            }
+            measure();
+        };
+        track.addEventListener('toggle', toggle, true);
+        const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
+        track.querySelectorAll('.bioxp-thermal-step-options').forEach(panel => observer?.observe(panel));
+        measure();
+        return () => { observer?.disconnect(); track.removeEventListener('toggle', toggle, true); };
+    }, [node, expanded]);
+    const leaves: ProgramLeaf[] = [];
+    const frames: ProgramFrame[] = [];
+    const project = (current: MethodValue, update: (next: MethodValue) => void, path: string, depth: number) => {
+        const from = leaves.length;
+        const input = object(current.inputs);
+        const entry = catalog.actions?.find(a => (a.action ?? a.id) === current.action);
+        const source = entry?.input_schema ?? entry?.inputs;
+        const schema = source ? { ...source, $defs: { ...object(catalog.native_definitions) as Record<string, Schema>, ...source.$defs } } : undefined;
+        if ((current.type === 'group' || current.type === 'repeat') && Array.isArray(current.steps)) {
+            const steps = current.steps;
+            steps.forEach((child, i) => {
+                const change = (next: unknown) => update({ ...current, steps: steps.map((old, j) => i === j ? next : old) });
+                if (isObject(child)) project(child, change, `${path}/${i}`, depth + (current.type === 'repeat' ? 1 : 0));
+                else leaves.push({ key: `${path}/${i}`, value: child, label: 'Retained child', hold: false, onChange: change });
+            });
+            if (current.type === 'repeat') frames.push({ key: path, from, size: leaves.length - from, depth, node: current, onChange: update });
+        } else if (current.action === 'thermal_profile' && (input.segments === undefined || Array.isArray(input.segments)) && (current.inputs === undefined || (isObject(current.inputs) && !Object.hasOwn(input, 'expr')))) {
+            const segments = Array.isArray(input.segments) ? input.segments : [];
+            const changeSegments = (next: unknown[]) => update({ ...current, inputs: { ...input, segments: next } });
+            segments.forEach((segment, i) => {
+                const move = (to: number) => { const next = [...segments]; next.splice(to, 0, next.splice(i, 1)[0]); changeSegments(next); };
+                leaves.push({ key: `${path}/segments/${i}`, value: segment, label: `Stage ${i + 1}`, hold: true,
+                    schema: schema?.properties?.segments?.items ? { ...schema.properties.segments.items as Schema, $defs: schema.$defs } : undefined,
+                    onChange: next => changeSegments(segments.map((old, j) => i === j ? next : old)),
+                    actions: <><button type="button" aria-label={`Stage ${i + 1} Move up`} disabled={i === 0} onClick={() => move(i - 1)}>Move earlier</button><button type="button" aria-label={`Stage ${i + 1} Move down`} disabled={i === segments.length - 1} onClick={() => move(i + 1)}>Move later</button><button type="button" aria-label={`Stage ${i + 1} Duplicate`} onClick={() => changeSegments([...segments.slice(0, i + 1), structuredClone(segment), ...segments.slice(i + 1)])}>Duplicate</button><button type="button" aria-label={`Stage ${i + 1} Remove`} onClick={() => changeSegments(segments.filter((_, j) => i !== j))}>Remove</button><button type="button" aria-label={`Insert after stage ${i + 1}`} onClick={() => changeSegments([...segments.slice(0, i + 1), {}, ...segments.slice(i + 1)])}>Insert after</button></> });
+            });
+            frames.push({ key: path, from, size: leaves.length - from, depth, node: current, onChange: update });
+        } else {
+            leaves.push({ key: path, value: current.inputs === undefined ? {} : current.inputs, label: 'Step', hold: current.action === 'thermal_hold' || current.action === 'incubate', schema,
+                onChange: next => update({ ...current, inputs: next }), ...(!['thermal_hold', 'incubate', 'thermal_setpoint'].includes(String(current.action)) ? { retainedNode: current, updateNode: update } : {}) });
+        }
+    };
+    project(node, onChange, 'program', 0);
+    const targets = leaves.map(leaf => { const text = numberText(object(leaf.value).target_temp_c); return text.trim() !== '' && Number.isFinite(Number(text)) ? Number(text) : null; });
+    const known = targets.filter((v): v is number => v !== null);
+    // Bounded display arithmetic also handles very large retained literals.
+    const low = known.length ? Math.min(...known) : 0;
+    const high = known.length ? Math.max(...known) : 80;
+    const extent = Math.max(20, high / 2 - low / 2);
+    const y = (i: number) => targets[i] === null ? 145 : 75 + ((high / 2 - targets[i]! / 2) / extent) * 130;
+    const count = Math.max(1, leaves.length);
+    const depth = frames.reduce((a, frame) => Math.max(a, frame.depth), 0);
+    const heading = 40 + depth * 34;
+    const updateFrame = (frame: ProgramFrame, key: string, next: unknown) => {
+        if (frame.node.type === 'repeat') { const value = { ...frame.node }; if (next === undefined) delete value[key]; else value[key] = next; frame.onChange(value); }
+        else { const inputs = { ...object(frame.node.inputs) }; if (next === undefined) delete inputs[key]; else inputs[key] = next; frame.onChange({ ...frame.node, inputs }); }
+    };
+    return <div className="bioxp-thermal-program" data-program-view={expanded ? 'expanded' : 'compact'}>
+        {frames.filter(frame => frame.size === 0 && frame.node.type === 'repeat').map(frame => <label key={frame.key}>Method repeat total passes<input aria-label="Method repeat total passes" value={numberText(frame.node.count)} disabled={!editableNumber(frame.node.count)} onChange={e => updateFrame(frame, 'count', methodNumber(e.target.value))} /></label>)}
+        {!leaves.length && <div className="bioxp-thermal-empty"><strong>Build a temperature program</strong><p>Add a hold. Add more steps or repeat a group only when needed.</p></div>}
+        {leaves.length > 0 && <div className="bioxp-thermal-track"><div ref={trackRef} className="bioxp-thermal-track-inner" style={{ '--options-space': optionsSpace === undefined ? undefined : `${optionsSpace}px`, '--step-count': count, '--heading-height': `${heading}px`, minWidth: expanded ? Math.max(660, count * 165) : count * 104 } as CSSProperties}>
+            <svg className="bioxp-thermal-target-line" aria-hidden="true" viewBox={`0 0 ${count * 100} 270`} preserveAspectRatio="none">
+                {[75, 140, 205].map(tick => <line className="gridline" key={tick} x1="0" x2={count * 100} y1={tick} y2={tick} />)}
+                {targets.map((target, i) => target === null ? null : <path data-bank={String(object(leaves[i].value).bank ?? '')} key={i} d={`${i > 0 && targets[i - 1] !== null && object(leaves[i - 1].value).bank === object(leaves[i].value).bank ? `M${(i - 1) * 100 + 80} ${y(i - 1)} L` : 'M'}${i * 100 + 20} ${y(i)} L${i * 100 + 80} ${y(i)}`} />)}
+            </svg>
+            {frames.filter(frame => frame.size > 0).map(frame => {
+                const methodRepeat = frame.node.type === 'repeat';
+                const key = methodRepeat ? 'count' : 'repeat';
+                const value = methodRepeat ? frame.node.count : object(frame.node.inputs).repeat;
+                return <div key={frame.key} className={`bioxp-thermal-repeat-frame ${selected !== null && selected >= frame.from && selected < frame.from + frame.size ? 'selected' : ''}`} style={{ left: `${frame.from / count * 100}%`, width: `${frame.size / count * 100}%`, top: frame.depth * 34, '--frame-offset': `${frame.depth * 34}px` } as CSSProperties}>
+                    <div className="bioxp-thermal-repeat-heading"><span>↻ {methodRepeat ? 'Method repeat' : 'Repeat this group'}</span><label><input aria-label={methodRepeat ? 'Method repeat total passes' : 'Cycle count'} title="Native repeat count; 0 is supported" value={numberText(value)} disabled={!editableNumber(value)} placeholder={value === undefined ? '—' : retained(value)} onChange={e => updateFrame(frame, key, methodNumber(e.target.value))} /> total passes</label>
+                        <details className="bioxp-thermal-repeat-menu"><summary aria-label="Repeat group actions">⋯</summary><div>{value !== undefined && <button type="button" onClick={() => updateFrame(frame, key, undefined)}>{methodRepeat ? 'Omit repeat count' : 'Omit cycle count'}</button>}{!methodRepeat && <button type="button" onClick={() => updateFrame(frame, key, methodNumber('1'))}>Run sequence once</button>}</div></details>
+                    </div>
+                </div>;
+            })}
+            <ol className="bioxp-thermal-stages">{leaves.map((leaf, i) => <li key={leaf.key} className={`${selected === i ? 'selected' : ''} ${range && i >= range[0] && i <= range[1] ? 'range-selected' : ''}`} style={{ '--value-top': `${y(i) - 40}px`, '--time-top': `${y(i) + 7}px`, '--step-index': i } as CSSProperties} onClick={e => {
+                    if (e.shiftKey && selected !== null && onSelectRange) { const bounds: [number, number] = [Math.min(selected, i), Math.max(selected, i)]; setRange(bounds); onSelectRange(...bounds); }
+                    else { setSelected(i); setRange(null); }
+                }}>
+                <div className="bioxp-thermal-step-name"><span>Step {i + 1}</span>{object(leaf.value).bank !== undefined && object(leaf.value).bank !== 'nest' && <small>{String(object(leaf.value).bank)}</small>}{leaf.actions && <details className="bioxp-thermal-step-menu"><summary aria-label={`Actions for step ${i + 1}`}>⋯</summary><div>{leaf.actions}</div></details>}</div>
+                {leaf.retainedNode ? <Disclosure title="Retained thermal step" render={() => <BioXpMethodThermalEditor node={leaf.retainedNode!} catalog={catalog} onChange={leaf.updateNode!} />} /> : isObject(leaf.value) && !Object.hasOwn(leaf.value, 'expr') ? <Controls profile label={leaf.label} schema={leaf.schema} value={leaf.value} hold={leaf.hold} onChange={leaf.onChange} /> : <Disclosure title="Advanced stage / retained value" render={() => <MethodFields label={leaf.label} schema={leaf.schema} value={leaf.value} onChange={leaf.onChange} />} />}
+            </li>)}</ol>
+        </div></div>}
+        <div className="bioxp-thermal-axis-foot"><span>Step order → · duration in seconds</span><span>Programmed targets · equal step widths, not elapsed-time scale</span></div>
+        {frames.filter(frame => frame.key !== 'program').map(frame => <Disclosure key={frame.key} title={`${frame.node.type === 'repeat' ? 'Method repeat' : 'Temperature sequence'} ${frame.from + 1}–${frame.from + frame.size} / scope and extensions`} render={() => <BioXpMethodThermalEditor node={frame.node} catalog={catalog} expanded={expanded} onChange={frame.onChange} />} />)}
+    </div>;
 }
 
 /** Authoring only: no discovery requests, compilation, or hardware effects. */
@@ -48,6 +158,7 @@ export function BioXpMethodThermalEditor({ node, onChange, catalog, compact = fa
         if (controlledExpanded === undefined) setUncontrolledExpanded(next);
         onExpandedChange?.(next);
     };
+    const [repeatBuilder, setRepeatBuilder] = useState(false);
     const [first, setFirst] = useState('');
     const [last, setLast] = useState('');
     const [passes, setPasses] = useState('');
@@ -64,43 +175,31 @@ export function BioXpMethodThermalEditor({ node, onChange, catalog, compact = fa
     const plainInputs = node.inputs === undefined || (isObject(node.inputs) && !Object.hasOwn(inputs, 'expr'));
     const segments = Array.isArray(inputs.segments) ? inputs.segments : [];
     const plainSegments = inputs.segments === undefined || Array.isArray(inputs.segments);
-    const segmentSchema = schema?.properties?.segments?.items as Schema | undefined;
     const setSegments = (next: unknown[]) => setInputs({ ...inputs, segments: next });
-    const targets = segments.map(s => { const text = numberText(object(s).target_temp_c); return text.trim() !== '' && Number.isFinite(Number(text)) ? Number(text) : null; });
-    const known = targets.filter((n): n is number => n !== null);
-    const low = known.reduce((a, b) => Math.min(a, b), 0), high = known.reduce((a, b) => Math.max(a, b), 1);
-    const height = (index: number) => targets[index] === null ? 50 : 15 + ((high / 2 - targets[index]! / 2) / (high / 2 - low / 2)) * 85;
-    const move = (from: number, to: number) => { const next = [...segments]; next.splice(to, 0, next.splice(from, 1)[0]); setSegments(next); };
-    if ((node.type === 'group' || node.type === 'repeat') && Array.isArray(node.steps)) return <section className="bioxp-method-thermal bioxp-thermal-program-group" aria-label="Temperature program group">
-        <p>{node.type === 'repeat' ? 'Nested method repeat — scope retained' : 'Temperature program · ordered steps'}</p>
-        {node.type === 'repeat' && <label>Total passes<input aria-label="Method repeat total passes" value={numberText(node.count)} disabled={!editableNumber(node.count)} onChange={e => onChange({ ...node, count: methodNumber(e.target.value) })} /></label>}
-        <div className="bioxp-thermal-program-children">
-        {(node.steps as unknown[]).map((child, i) => isObject(child) ? <BioXpMethodThermalEditor key={String(child.step_id ?? i)} node={child} catalog={catalog} compact={compact} profileStep onChange={next => onChange({ ...node, steps: (node.steps as MethodValue[]).map((old, j) => i === j ? next : old) })} /> : <Disclosure key={i} title="Retained group child" render={() => <MethodFields label="Retained child" value={child} onChange={next => onChange({ ...node, steps: (node.steps as unknown[]).map((old, j) => i === j ? next : old) })} />} />)}
-        </div><div className="bioxp-thermal-stage-actions"><button type="button" onClick={() => onChange({ ...node, steps: [...node.steps as unknown[], { type: 'action', step_id: crypto.randomUUID(), action: 'thermal_hold', inputs: {} }] })}>Add hold</button><button type="button" onClick={() => onChange({ ...node, steps: [...node.steps as unknown[], { type: 'action', step_id: crypto.randomUUID(), action: 'thermal_profile', inputs: {} }] })}>Add temperature sequence</button><button type="button" onClick={() => onChange({ ...node, steps: [...node.steps as unknown[], { type: 'action', step_id: crypto.randomUUID(), action: 'thermal_setpoint', inputs: {} }] })}>Add keep-target continuation</button></div><Disclosure title="Advanced group / scope and extensions" render={() => <MethodFields label="Thermal group" value={node} onChange={v => onChange(object(v))} />} />
+    if ((node.type === 'group' || node.type === 'repeat') && Array.isArray(node.steps)) return <section className={`bioxp-method-thermal bioxp-thermal-program-group ${expanded ? 'expanded' : 'compact'}`} aria-label="Temperature program group">
+        <header><div><strong>Thermal cycler</strong><p>Temperature program · ordered steps</p></div><button type="button" onClick={() => setExpanded(!expanded)}>{expanded ? 'Compact program' : 'Edit full program'}</button></header>
+        <ProgramGraph node={node} catalog={catalog} onChange={onChange} expanded={expanded} />
+        <div className="bioxp-thermal-stage-actions"><button type="button" onClick={() => onChange({ ...node, steps: [...node.steps as unknown[], { type: 'action', step_id: crypto.randomUUID(), action: 'thermal_hold', inputs: {} }] })}>Add hold</button><button type="button" onClick={() => onChange({ ...node, steps: [...node.steps as unknown[], { type: 'action', step_id: crypto.randomUUID(), action: 'thermal_profile', inputs: {} }] })}>Add temperature sequence</button><button type="button" onClick={() => onChange({ ...node, steps: [...node.steps as unknown[], { type: 'action', step_id: crypto.randomUUID(), action: 'thermal_setpoint', inputs: {} }] })}>Add keep-target continuation</button></div><Disclosure title="Advanced group / scope and extensions" render={() => <MethodFields label="Thermal group" value={node} onChange={v => onChange(object(v))} />} />
     </section>;
-    return <section className={`bioxp-method-thermal ${expanded ? 'expanded' : 'compact'}`} aria-label="Thermal workflow editor">
-        {action === 'thermal_profile' && <header><strong>Thermal cycler · temperature program</strong><button type="button" onClick={() => setExpanded(!expanded)}>{expanded ? 'Compact program' : 'Edit full program'}</button></header>}
+    return <section className={`bioxp-method-thermal ${expanded ? 'expanded' : 'compact'}`} aria-label="Thermal workflow editor" data-profile-step={profileStep || undefined}>
+        {['thermal_profile', 'thermal_hold', 'incubate', 'thermal_setpoint'].includes(action) && <header><div><strong>Thermal cycler</strong><p>Temperature program</p></div><button type="button" onClick={() => setExpanded(!expanded)}>{expanded ? 'Compact program' : 'Edit full program'}</button></header>}
         <p className="bioxp-thermal-hint">Draft step. No live command is sent.</p>
         {!plainInputs || !thermalMethodActions.has(action) ? <><p>Retained input requires advanced editing.</p><Disclosure title="Advanced thermal inputs / expressions" render={() => <MethodFields label="Thermal inputs" schema={schema} value={node.inputs} onChange={setInputs} />} /></> : action === 'thermal_door' ? <>
             <div className="bioxp-thermal-fields"><label>Thermal door<select aria-label="Thermal door" value={(inputs.door_command === 'DO' || inputs.door_command === 'DC') ? String(inputs.door_command) : inputs.door_command === undefined ? '' : '__retained'} onChange={e => { const next = { ...inputs }; if (e.target.value === '__retained') return; if (e.target.value) next.door_command = e.target.value; else delete next.door_command; setInputs(next); }}><option value="">Not set</option>{inputs.door_command !== undefined && !(inputs.door_command === 'DO' || inputs.door_command === 'DC') && <option value="__retained">Retained nonstandard value</option>}<option value="DO">Open</option><option value="DC">Close</option></select></label></div>
             <p>Open uses the native door-open step, including pipette initialization when executed.</p>
             <Disclosure title="Advanced controls / expressions and retained fields" render={() => <MethodFields label="Door inputs" schema={schema} value={inputs} onChange={setInputs} />} />
         </> : action === 'thermal_profile' ? <>
-            <label>Total passes through this profile<input aria-label="Cycle count" title="Native repeat count; 0 is supported. Initial and final holds belong outside this repeated profile." type="text" inputMode="numeric" value={numberText(inputs.repeat)} disabled={!editableNumber(inputs.repeat)} placeholder={inputs.repeat === undefined ? 'Not set' : !editableNumber(inputs.repeat) ? retained(inputs.repeat) : undefined} onChange={e => setInputs({ ...inputs, repeat: methodNumber(e.target.value) })} /></label>
-            {Object.hasOwn(inputs, 'repeat') && <button type="button" onClick={() => { const next = { ...inputs }; delete next.repeat; setInputs(next); }}>Omit cycle count</button>}
-            <p>Programmed targets · step order → · seconds, not an elapsed-time scale. No measured temperature is shown.</p>
-            {expanded && plainSegments && segments.length > 0 && <div className="bioxp-thermal-fields">
+            {!segments.length && <><label>Total passes through this profile<input aria-label="Cycle count" title="Native repeat count; 0 is supported. Initial and final holds belong outside this repeated profile." type="text" inputMode="numeric" value={numberText(inputs.repeat)} disabled={!editableNumber(inputs.repeat)} placeholder={inputs.repeat === undefined ? 'Not set' : !editableNumber(inputs.repeat) ? retained(inputs.repeat) : undefined} onChange={e => setInputs({ ...inputs, repeat: methodNumber(e.target.value) })} /></label>
+            {Object.hasOwn(inputs, 'repeat') && <button type="button" onClick={() => { const next = { ...inputs }; delete next.repeat; setInputs(next); }}>Omit cycle count</button>}</>}
+            {expanded && plainSegments && segments.length > 0 && <details className="bioxp-thermal-repeat-builder" open={repeatBuilder} onToggle={e => setRepeatBuilder(e.currentTarget.open)}><summary>↻ Repeat steps</summary><div className="bioxp-thermal-fields">
                 <label>First step<select aria-label="Repeat first step" value={first} onChange={e => setFirst(e.target.value)}><option value="">Select</option>{segments.map((_, i) => <option key={i} value={i}>{i + 1}</option>)}</select></label>
                 <label>Last step<select aria-label="Repeat last step" value={last} onChange={e => setLast(e.target.value)}><option value="">Select</option>{segments.map((_, i) => <option key={i} value={i}>{i + 1}</option>)}</select></label>
                 <label>Total passes<input aria-label="Selected group total passes" value={passes} onChange={e => setPasses(e.target.value)} /></label>
                 <button type="button" disabled={first === '' || last === '' || Number(first) > Number(last)} onClick={() => compose(composeThermalRepeat(node, Number(first), Number(last), methodNumber(passes)))}>Repeat selected steps</button>
-            </div>}
-            {plainSegments ? <><button type="button" onClick={() => setInputs({ ...inputs, repeat: methodNumber('1') })}>Run sequence once</button><ol className="bioxp-thermal-stages"><svg className="bioxp-thermal-target-line" aria-hidden="true" viewBox={`0 0 ${Math.max(1, segments.length) * 100} 120`} style={{ width: `${segments.length * 15.6}rem` }} preserveAspectRatio="none">{targets.map((target, i) => target === null ? null : <path key={i} d={`${i > 0 && targets[i - 1] !== null && object(segments[i - 1]).bank === object(segments[i]).bank ? `M${(i - 1) * 100 + 95} ${height(i - 1)} L` : 'M'}${i * 100 + 5} ${height(i)} L${i * 100 + 95} ${height(i)}`} />)}</svg>{segments.map((segment, index) => <li key={index} style={{ paddingTop: `${height(index)}px` }}><fieldset><legend>Stage {index + 1}</legend>
-                <div className="bioxp-thermal-stage-actions"><button type="button" aria-label={`Stage ${index + 1} Move up`} disabled={index === 0} onClick={() => move(index, index - 1)}>↑ Up</button><button type="button" aria-label={`Stage ${index + 1} Move down`} disabled={index === segments.length - 1} onClick={() => move(index, index + 1)}>↓ Down</button><button type="button" aria-label={`Stage ${index + 1} Duplicate`} onClick={() => setSegments([...segments.slice(0, index + 1), structuredClone(segment), ...segments.slice(index + 1)])}>Duplicate</button><button type="button" aria-label={`Stage ${index + 1} Remove`} onClick={() => setSegments(segments.filter((_, i) => i !== index))}>Remove</button></div>
-                {isObject(segment) && !Object.hasOwn(segment, 'expr') ? <Controls profile label={`Stage ${index + 1}`} schema={segmentSchema ? { ...segmentSchema, $defs: schema?.$defs } : undefined} hold value={segment} onChange={next => setSegments(segments.map((old, i) => i === index ? next : old))} /> : <Disclosure title="Advanced stage / retained value" render={() => <MethodFields label={`Stage ${index + 1}`} schema={segmentSchema} rootSchema={schema} value={segment} onChange={next => setSegments(segments.map((old, i) => i === index ? next : old))} />} />}
-            </fieldset></li>)}</ol><button type="button" onClick={() => setSegments([...segments, {}])}>Add stage</button></> : <p>Nonstandard stages value retained; edit it in Advanced controls.</p>}
+            </div></details>}
+            {plainSegments ? <><ProgramGraph node={node} catalog={catalog} onChange={onChange} expanded={expanded} onSelectRange={(a, b) => { setFirst(String(a)); setLast(String(b)); setRepeatBuilder(true); }} /><div className="bioxp-thermal-stage-actions"><button type="button" onClick={() => setSegments([...segments, {}])}>Add stage</button>{!segments.length && <button type="button" onClick={() => setInputs({ ...inputs, repeat: methodNumber('1') })}>Run sequence once</button>}</div></> : <p>Nonstandard stages value retained; edit it in Advanced controls.</p>}
             <Disclosure title="Advanced profile controls / expressions and retained fields" render={() => <MethodFields label="Profile inputs" schema={schema} value={inputs} onChange={setInputs} />} />
-        </> : <Controls profile={profileStep && (action === 'thermal_hold' || action === 'incubate')} label="Step" schema={schema} value={inputs} chiller={action === 'chiller_setpoint'} hold={action === 'thermal_hold' || action === 'incubate'} onChange={setInputs} />}
+        </> : ['thermal_hold', 'incubate', 'thermal_setpoint'].includes(action) ? <ProgramGraph node={node} catalog={catalog} onChange={onChange} expanded={expanded} /> : <Controls label="Step" schema={schema} value={inputs} chiller={action === 'chiller_setpoint'} hold={action === 'thermal_hold' || action === 'incubate'} onChange={setInputs} />}
         {action === 'chiller_setpoint' && plainInputs && <Disclosure title="Elapsed conditioning timer" render={() => <>
             <div className="bioxp-thermal-fields"><label>Timer identity<input aria-label="Chiller timer identity" value={timerId} onChange={e => setTimerId(e.target.value)} /></label><label>Elapsed seconds<input aria-label="Chiller elapsed seconds" value={seconds} onChange={e => setSeconds(e.target.value)} /></label><label>Timing<select aria-label="Chiller timing" value={waitHere ? 'here' : 'later'} onChange={e => setWaitHere(e.target.value === 'here')}><option value="here">Wait here</option><option value="later">Continue other steps; wait later</option></select></label></div>
             <p>Elapsed from dispatch, not attainment. Target remains set; no automatic Off. For continue, insert timer_wait with this identity at the desired later position.</p>

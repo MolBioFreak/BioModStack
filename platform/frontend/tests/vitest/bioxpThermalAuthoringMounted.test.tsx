@@ -241,7 +241,7 @@ it('receives helper-produced fractional/zero/subgroup and independent cooler pro
         { type: 'action', step_id: 'keep', action: 'thermal_setpoint', inputs: { bank: 'nest', target_temp_c: methodNumber('20.000') } },
         thermalTimerWait('oc-timer', id),
     ] } }));
-    const results = JSON.parse(execFileSync('python', ['-c', 'import json,sys; from bioxp_method_compiler import compile_method; print(json.dumps([compile_method(x) for x in json.load(sys.stdin)]))'], { cwd: '../api', input: JSON.stringify(requests), encoding: 'utf8' }));
+    const results = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python', ['-c', 'import json,sys; from bioxp_method_compiler import compile_method; print(json.dumps([compile_method(x) for x in json.load(sys.stdin)]))'], { cwd: '../api', input: JSON.stringify(requests), encoding: 'utf8' }));
     if (process.env.BIOXP_THERMAL_EVIDENCE) writeFileSync(process.env.BIOXP_THERMAL_EVIDENCE, JSON.stringify({ requests, results }, null, 2));
     for (const [index, result] of results.entries()) {
         expect(result.issues).toEqual([]); expect(result.document).toBeTruthy();
@@ -252,4 +252,55 @@ it('receives helper-produced fractional/zero/subgroup and independent cooler pro
         expect(profiles[0].params.segments.map((s: MethodValue) => s.target_temp_c)).toEqual([20, 30]);
         expect(profiles[0].params.segments[0].duration_s).toBe(0.125);
     }
+});
+
+it('renders one connected in-place graph across before/repeat/after scopes without changing raw AST', async () => {
+    const node = composeThermalRepeat({ type: 'action', step_id: 'profile', action: 'thermal_profile', inputs: { segments: [hold('37'), hold('32'), hold('50'), hold('20')] }, extension: null }, 1, 2, methodNumber('003'));
+    await mount(node);
+    expect(host.querySelectorAll('.bioxp-thermal-target-line')).toHaveLength(1);
+    expect(host.querySelectorAll('.bioxp-thermal-stages > li')).toHaveLength(4);
+    expect(host.querySelector('fieldset')).toBeNull();
+    const frame = host.querySelector<HTMLElement>('.bioxp-thermal-repeat-frame')!;
+    expect(frame.style.left).toBe('25%'); expect(frame.style.width).toBe('50%');
+    expect(host.querySelectorAll('.bioxp-thermal-target-line path')).toHaveLength(4);
+    expect([...host.querySelectorAll('.bioxp-thermal-target-line path')][1].getAttribute('d')).toMatch(/^M80 /);
+    expect(current).toEqual(node); expect(changes).toBe(0);
+    await change('Stage 1 Target temperature (°C)', '0032.000');
+    const children = current.steps as MethodValue[];
+    expect(((children[1].inputs as MethodValue).segments as MethodValue[])[0].target_temp_c).toEqual(methodNumber('0032.000'));
+    expect(children[0]).toEqual((node.steps as MethodValue[])[0]); expect(children[2]).toEqual((node.steps as MethodValue[])[2]);
+    await click('Compact program'); expect(host.querySelector('[data-program-view="compact"]')).toBeTruthy();
+    expect(input('Stage 1 Target temperature (°C)').value).toBe('0032.000');
+});
+it('selects a repeat range on the graph without authoring a count or scientific value', async () => {
+    await mount({ type: 'action', step_id: 'p', action: 'thermal_profile', inputs: { segments: [hold('37'), hold('32'), hold('50')] } });
+    const leaves = host.querySelectorAll('.bioxp-thermal-stages > li');
+    await act(async () => leaves[1].dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await act(async () => leaves[2].dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true })));
+    expect(input('Repeat first step').value).toBe('1'); expect(input('Repeat last step').value).toBe('2');
+    expect(input('Selected group total passes').value).toBe(''); expect(changes).toBe(0);
+    expect(host.querySelectorAll('.range-selected')).toHaveLength(2);
+    expect(host.querySelector<HTMLDetailsElement>('.bioxp-thermal-repeat-builder')?.open).toBe(true);
+});
+it('has no phantom stage for an empty sequence and preserves empty method-repeat editing', async () => {
+    await mount({ type: 'action', action: 'thermal_profile' });
+    expect(host.querySelectorAll('.bioxp-thermal-stages > li')).toHaveLength(0);
+    expect(host.textContent).toContain('Build a temperature program'); expect(changes).toBe(0);
+    await act(async () => root.unmount()); host.remove();
+    await mount({ type: 'repeat', count: null, steps: [] });
+    expect(input('Method repeat total passes').disabled).toBe(true); expect(current.count).toBeNull();
+});
+it('breaks graph connections at unknown values and bank boundaries without normalizing them', async () => {
+    const values = [hold('20'), { ...hold('30'), bank: 'lid' }, { ...hold('40'), target_temp_c: null }, hold('50')];
+    await mount({ action: 'thermal_profile', inputs: { segments: values, repeat: null } });
+    const paths = [...host.querySelectorAll('.bioxp-thermal-target-line path')].map(path => path.getAttribute('d'));
+    expect(paths).toHaveLength(3); expect(paths[1]).toMatch(/^M120 /); expect(paths[2]).toMatch(/^M320 /);
+    expect(current.inputs).toEqual({ segments: values, repeat: null }); expect(changes).toBe(0);
+});
+it('allows only one local options panel at a time without losing retained edits', async () => {
+    await mount({ action: 'thermal_profile', inputs: { segments: [hold('20'), hold('30')] } });
+    await open('Stage 1 options'); await change('Stage 1 Thermal bank', 'lid');
+    await open('Stage 2 options');
+    expect(host.querySelectorAll('.bioxp-thermal-step-options[open]')).toHaveLength(1);
+    expect(((current.inputs as MethodValue).segments as MethodValue[])[0].bank).toBe('lid');
 });
