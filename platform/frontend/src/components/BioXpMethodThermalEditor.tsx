@@ -41,8 +41,13 @@ function Controls({ value, schema, label, hold, chiller = false, profile = false
 }
 
 /** Authoring only: no discovery requests, compilation, or hardware effects. */
-export function BioXpMethodThermalEditor({ node, onChange, catalog, compact = false, onCompose, profileStep = false }: { node: MethodValue; onChange: (next: MethodValue) => void; catalog: MethodCatalog; compact?: boolean; profileStep?: boolean; onCompose?: (next: MethodValue) => void }) {
-    const [expanded, setExpanded] = useState(!compact);
+export function BioXpMethodThermalEditor({ node, onChange, catalog, compact = false, expanded: controlledExpanded, onExpandedChange, onCompose, profileStep = false }: { node: MethodValue; onChange: (next: MethodValue) => void; catalog: MethodCatalog; compact?: boolean; expanded?: boolean; onExpandedChange?: (expanded: boolean) => void; profileStep?: boolean; onCompose?: (next: MethodValue) => void }) {
+    const [uncontrolledExpanded, setUncontrolledExpanded] = useState(!compact);
+    const expanded = controlledExpanded ?? uncontrolledExpanded;
+    const setExpanded = (next: boolean) => {
+        if (controlledExpanded === undefined) setUncontrolledExpanded(next);
+        onExpandedChange?.(next);
+    };
     const [first, setFirst] = useState('');
     const [last, setLast] = useState('');
     const [passes, setPasses] = useState('');

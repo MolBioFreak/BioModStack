@@ -175,6 +175,45 @@ it('compact/full edits share exact values and selected scope composes through th
     expect(children.map(c => c.action)).toEqual(['thermal_hold', 'thermal_profile', 'thermal_hold']);
     expect(((children[1].inputs as MethodValue).segments as MethodValue[])[0].duration_s).toEqual(methodNumber('0.1250'));
 });
+it('preserves partial subgroup drafts across parent-controlled expansion without editing retained inputs', async () => {
+    const node = { type: 'action', step_id: 'controlled', action: 'thermal_profile', inputs: { segments: [hold('10'), hold('20')], repeat: null, extension: { expr: { version: 1, op: 'param', id: 'retained' } } } };
+    const onChange = vi.fn();
+    const onExpandedChange = vi.fn();
+    function Controlled() {
+        const [expanded, setExpanded] = useState(false);
+        return <><button onClick={() => setExpanded(value => !value)}>Outer expansion</button><BioXpMethodThermalEditor compact expanded={expanded} onExpandedChange={next => { onExpandedChange(next); setExpanded(next); }} node={node} catalog={catalog} onChange={onChange} /></>;
+    }
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    await act(async () => root.render(<Controlled />));
+    expect(host.querySelector('.bioxp-method-thermal.compact')).toBeTruthy();
+    expect(input('Repeat first step')).toBeNull();
+    await click('Edit full program'); expect(onExpandedChange).toHaveBeenLastCalledWith(true);
+    const stage = input('Stage 1 Target temperature (°C)');
+    await change('Repeat first step', '1'); await change('Selected group total passes', '00.');
+    expect(input('Repeat last step').value).toBe('');
+    await click('Outer expansion'); expect(input('Repeat first step')).toBeNull();
+    await click('Outer expansion');
+    expect(input('Repeat first step').value).toBe('1');
+    expect(input('Repeat last step').value).toBe('');
+    expect(input('Selected group total passes').value).toBe('00.');
+    await click('Compact program'); expect(onExpandedChange).toHaveBeenLastCalledWith(false);
+    await click('Edit full program');
+    expect(input('Selected group total passes').value).toBe('00.');
+    expect(input('Stage 1 Target temperature (°C)')).toBe(stage);
+    expect(onChange).not.toHaveBeenCalled();
+});
+it('keeps compact uncontrolled defaults and treats controlled expansion as parent-owned', async () => {
+    const node = { action: 'thermal_profile', inputs: { segments: [hold('10')] } };
+    const onExpandedChange = vi.fn();
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    await act(async () => root.render(<BioXpMethodThermalEditor compact node={node} catalog={catalog} onChange={vi.fn()} />));
+    expect(input('Repeat first step')).toBeNull();
+    await click('Edit full program'); expect(input('Repeat first step')).toBeTruthy();
+    await act(async () => root.render(<BioXpMethodThermalEditor compact expanded={false} onExpandedChange={onExpandedChange} node={node} catalog={catalog} onChange={vi.fn()} />));
+    await click('Edit full program');
+    expect(onExpandedChange).toHaveBeenLastCalledWith(true);
+    expect(input('Repeat first step')).toBeNull();
+});
 it.each(['rc', 'oc'])('composes independent %s elapsed conditioning, with wait here or later', async bank => {
     await mount({ type: 'action', step_id: bank, action: 'chiller_setpoint', inputs: { bank, target_temp_c: methodNumber('004.00'), extension: null } });
     await open('Elapsed conditioning timer'); await change('Chiller timer identity', bank + '-timer'); await change('Chiller elapsed seconds', '000.2500');
