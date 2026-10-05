@@ -1,4 +1,7 @@
 import React, { act, useState } from 'react';
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { composeThermalRepeat, composeChillerTimer, thermalTimerWait } from '../../src/lib/bioxpMethodThermal';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { BioXpMethodThermalEditor, thermalMethodActions } from '../../src/components/BioXpMethodThermalEditor';
@@ -48,8 +51,8 @@ it('matches actual published thermal action coverage and never seeds science or 
 it.each(['rc', 'oc'])('authors %s chiller target while retaining full node and inputs', async bank => {
     await mount({ step_id: 'stable', type: 'action', action: 'chiller_setpoint', inputs: { unknown: null }, future: { untouched: true } });
     await change('Step Deck block', bank); await change('Step Target temperature (°C)', '0010.000');
-    expect(current).toEqual({ step_id: 'stable', type: 'action', action: 'chiller_setpoint', inputs: { bank, target_temp_c: '0010.000', unknown: null }, future: { untouched: true } });
-    await change('Step Target temperature (°C)', ''); expect((current.inputs as MethodValue).target_temp_c).toBe('');
+    expect(current).toEqual({ step_id: 'stable', type: 'action', action: 'chiller_setpoint', inputs: { bank, target_temp_c: methodNumber('0010.000'), unknown: null }, future: { untouched: true } });
+    await change('Step Target temperature (°C)', ''); expect((current.inputs as MethodValue).target_temp_c).toEqual(methodNumber(''));
     await click('Step Omit Target temperature (°C)'); expect(Object.hasOwn(current.inputs as object, 'target_temp_c')).toBe(false);
 });
 it('authors door Open/Close without immediate effects or normalization of retained fields', async () => {
@@ -83,13 +86,13 @@ it('edits ordered PCR stages, repeats, duplication, reordering, removal and cold
     await click('Stage 1 Duplicate'); await change('Stage 2 Target temperature (°C)', '55.00');
     await click('Stage 2 Duplicate'); await change('Stage 3 Target temperature (°C)', '72.00'); await change('Stage 3 Hold time (seconds)', '60.00');
     const stages = () => (current.inputs as MethodValue).segments as MethodValue[];
-    await click('Stage 3 Move up'); expect(stages().map(s => s.target_temp_c)).toEqual(['95.00', '72.00', '55.00']);
-    await click('Stage 2 Move down'); expect(stages().map(s => s.target_temp_c)).toEqual(['95.00', '55.00', '72.00']);
-    await click('Stage 2 Remove'); expect(stages().map(s => s.target_temp_c)).toEqual(['95.00', '72.00']);
+    await click('Stage 3 Move up'); expect(stages().map(s => s.target_temp_c)).toEqual(['95.00', '72.00', '55.00'].map(methodNumber));
+    await click('Stage 2 Move down'); expect(stages().map(s => s.target_temp_c)).toEqual(['95.00', '55.00', '72.00'].map(methodNumber));
+    await click('Stage 2 Remove'); expect(stages().map(s => s.target_temp_c)).toEqual(['95.00', '72.00'].map(methodNumber));
     const saved = JSON.parse(JSON.stringify(current)); await act(async () => root.unmount()); host.remove(); await mount(saved);
     expect(current).toEqual(saved); expect(changes).toBe(0); expect(input('Cycle count').value).toBe('003');
     expect(input('Stage 2 Hold time (seconds)').value).toBe('60.00');
-    await change('Cycle count', '0'); expect((current.inputs as MethodValue).repeat).toBe('0');
+    await change('Cycle count', '0'); expect((current.inputs as MethodValue).repeat).toEqual(methodNumber('0'));
 });
 it('retains null, expressions, unknown scalar stages and raw numeric AST until an explicit edit', async () => {
     const expr = { expr: { version: 1, op: 'param', id: 'temp', future: true } };
@@ -120,7 +123,7 @@ it('reproduces exact raw requests accepted by the real served compile-only recei
                 await change(`${prefix} Target temperature (°C)`, String(raw.target_temp_c));
                 await change(`${prefix} Hold time (seconds)`, String(raw.duration_s));
                 await change(`${prefix} Start hold timer`, String(raw.start));
-                const summary = [...host.querySelectorAll('li')][i].querySelector('details')!;
+                const summary = [...[...host.querySelectorAll('li')][i].querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent === 'Ramp, fan and attainment settings')!;
                 await act(async () => { summary.open = true; summary.dispatchEvent(new Event('toggle')); });
                 for (const [key, title] of [['tolerance_c', 'Target tolerance (°C)'], ['timeout_s', 'Target timeout (seconds)'], ['fan_speed', 'Fan speed (0–255)'], ['heat_rate_c_s', 'Heating rate (°C/s)'], ['cool_rate_c_s', 'Cooling rate (°C/s)']]) {
                     if (Object.hasOwn(raw, key)) await change(`${prefix} ${title}`, String(raw[key]));
@@ -130,7 +133,9 @@ it('reproduces exact raw requests accepted by the real served compile-only recei
             await change(`Step ${expected.action === 'chiller_setpoint' ? 'Deck block' : 'Thermal bank'}`, String(values.bank));
             await change('Step Target temperature (°C)', String(values.target_temp_c));
         }
-        expect(current).toEqual(expected);
+        const numericKeys = new Set(['repeat', 'target_temp_c', 'duration_s', 'tolerance_c', 'timeout_s', 'fan_speed', 'heat_rate_c_s', 'cool_rate_c_s']);
+        const expectedAuthored = JSON.parse(JSON.stringify(expected), (key, value) => numericKeys.has(key) ? methodNumber(String(value)) : value);
+        expect(current).toEqual(expectedAuthored);
         await act(async () => root.unmount()); host.remove();
     }
 });
@@ -138,4 +143,74 @@ it.each([null, { expr: { version: 1, op: 'param', id: 'whole-input' } }])('keeps
     await mount({ action: 'thermal_hold', inputs }); expect(current.inputs).toEqual(inputs); expect(changes).toBe(0);
     expect(input('Step Thermal bank')).toBeNull();
     await open('Advanced thermal inputs / expressions'); expect(current.inputs).toEqual(inputs);
+});
+
+const hold = (target: string) => ({ bank: 'nest', target_temp_c: methodNumber(target), duration_s: methodNumber('000.1250'), start: 'dispatch', fan_speed: null, extension: { retained: true } });
+it('composes only selected repeat children and retains literal/binding declarations through cold Open', async () => {
+    const node = { type: 'action', step_id: 'program', action: 'thermal_profile', required_capability: null, inputs: { segments: [hold('10'), hold('20'), hold('30'), hold('40')], future: null }, extension: ['raw'] };
+    const original = structuredClone(node);
+    let n = 0;
+    const group = composeThermalRepeat(node, 1, 2, methodNumber('0'), () => `child-${++n}`);
+    const children = group.steps as MethodValue[];
+    expect(children.map(c => c.action)).toEqual(['thermal_hold', 'thermal_profile', 'thermal_hold']);
+    expect((children[1].inputs as MethodValue).segments).toEqual(node.inputs.segments.slice(1, 3));
+    expect((children[1].inputs as MethodValue).repeat).toEqual(methodNumber('0'));
+    expect(children[0].inputs).toEqual(hold('10')); expect(children[2].inputs).toEqual(hold('40'));
+    expect(node).toEqual(original);
+    const nested = { type: 'repeat', step_id: 'outer', count: methodNumber('2'), steps: [group], future: null };
+    await mount(JSON.parse(JSON.stringify(nested))); expect(current).toEqual(nested); expect(changes).toBe(0);
+    const bound = { ...node, inputs: { expr: { version: 1, op: 'param', id: 'profile' } } };
+    expect(() => composeThermalRepeat(bound, 0, 0, methodNumber('2'))).toThrow('binding owner');
+    expect(bound.inputs.expr.id).toBe('profile');
+});
+it('compact/full edits share exact values and selected scope composes through the ordinary AST', async () => {
+    await mount({ type: 'action', step_id: 'p', action: 'thermal_profile', inputs: {} });
+    await click('Add stage'); await click('Add stage'); await click('Add stage');
+    await change('Stage 2 Target temperature (°C)', '0023.400');
+    await click('Compact program'); expect(input('Stage 2 Target temperature (°C)').value).toBe('0023.400');
+    await change('Stage 2 Hold time (seconds)', '0.1250'); await click('Edit full program');
+    await change('Repeat first step', '1'); await change('Repeat last step', '1'); await change('Selected group total passes', '0');
+    await click('Repeat selected steps'); expect(current.type).toBe('group');
+    const children = current.steps as MethodValue[];
+    expect(children.map(c => c.action)).toEqual(['thermal_hold', 'thermal_profile', 'thermal_hold']);
+    expect(((children[1].inputs as MethodValue).segments as MethodValue[])[0].duration_s).toEqual(methodNumber('0.1250'));
+});
+it.each(['rc', 'oc'])('composes independent %s elapsed conditioning, with wait here or later', async bank => {
+    await mount({ type: 'action', step_id: bank, action: 'chiller_setpoint', inputs: { bank, target_temp_c: methodNumber('004.00'), extension: null } });
+    await open('Elapsed conditioning timer'); await change('Chiller timer identity', bank + '-timer'); await change('Chiller elapsed seconds', '000.2500');
+    await change('Chiller timing', 'later'); await click('Add elapsed timer');
+    const children = current.steps as MethodValue[];
+    expect(children.map(c => c.action)).toEqual(['chiller_setpoint', 'timer_start']);
+    expect(children[0].inputs).toEqual({ bank, target_temp_c: methodNumber('004.00'), extension: null });
+    expect(children[1].inputs).toEqual({ timer_id: bank + '-timer', seconds: methodNumber('000.2500') });
+    const waited = composeChillerTimer(children[0], methodNumber('0'), bank + '-next', true);
+    expect((waited.steps as MethodValue[]).map(c => c.action)).toEqual(['chiller_setpoint', 'timer_start', 'timer_wait']);
+});
+it('authors a blank group, one hold and keep-target continuation without science defaults', async () => {
+    await mount({ type: 'group', step_id: 'blank', steps: [], extension: null });
+    expect(changes).toBe(0); await click('Add hold'); await click('Add keep-target continuation');
+    expect((current.steps as MethodValue[]).map(n => [n.action, n.inputs])).toEqual([['thermal_hold', {}], ['thermal_setpoint', {}]]);
+    const saved = structuredClone(current); await act(async () => root.unmount()); host.remove(); await mount(saved);
+    expect(current).toEqual(saved); expect(changes).toBe(0);
+});
+it('receives helper-produced fractional/zero/subgroup and independent cooler programs in the real offline compiler', () => {
+    let serial = 0; const id = () => `thermal-${++serial}`;
+    const profile = { type: 'action', step_id: 'program', action: 'thermal_profile', inputs: { segments: ['10', '20', '30', '40'].map(t => ({ bank: 'nest', target_temp_c: methodNumber(t), duration_s: methodNumber('0.1250'), start: 'dispatch' })) } };
+    const requests = ['0', '2'].map(count => ({ method: { schema: 'bms.bioxp-method.v1', name: 'Offline thermal receiving', parameters: [], procedures: [], steps: [
+        { type: 'repeat', step_id: 'outer', count: methodNumber('2'), steps: [composeThermalRepeat(profile, 1, 2, methodNumber(count), id)] },
+        ...['rc', 'oc'].map(bank => composeChillerTimer({ type: 'action', step_id: bank, action: 'chiller_setpoint', inputs: { bank, target_temp_c: methodNumber(bank === 'rc' ? '4.00' : '8.00') } }, methodNumber('0.2500'), bank + '-timer', bank === 'rc', id)),
+        { type: 'action', step_id: 'keep', action: 'thermal_setpoint', inputs: { bank: 'nest', target_temp_c: methodNumber('20.000') } },
+        thermalTimerWait('oc-timer', id),
+    ] } }));
+    const results = JSON.parse(execFileSync('python', ['-c', 'import json,sys; from bioxp_method_compiler import compile_method; print(json.dumps([compile_method(x) for x in json.load(sys.stdin)]))'], { cwd: '../api', input: JSON.stringify(requests), encoding: 'utf8' }));
+    if (process.env.BIOXP_THERMAL_EVIDENCE) writeFileSync(process.env.BIOXP_THERMAL_EVIDENCE, JSON.stringify({ requests, results }, null, 2));
+    for (const [index, result] of results.entries()) {
+        expect(result.issues).toEqual([]); expect(result.document).toBeTruthy();
+        const actions = result.document.stages.flatMap((s: { actions: MethodValue[] }) => s.actions);
+        expect(actions.map((a: MethodValue) => a.kind)).toEqual(['thermal_hold', 'thermal_profile', 'thermal_hold', 'thermal_hold', 'thermal_profile', 'thermal_hold', 'chiller_setpoint', 'timer_start', 'timer_wait', 'chiller_setpoint', 'timer_start', 'thermal_setpoint', 'timer_wait']);
+        const profiles = actions.filter((a: MethodValue) => a.kind === 'thermal_profile');
+        expect(profiles[0].params.repeat).toBe(index === 0 ? 0 : 2);
+        expect(profiles[0].params.segments.map((s: MethodValue) => s.target_temp_c)).toEqual([20, 30]);
+        expect(profiles[0].params.segments[0].duration_s).toBe(0.125);
+    }
 });
