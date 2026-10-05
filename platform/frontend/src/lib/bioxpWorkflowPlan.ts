@@ -3,7 +3,7 @@ import { deckStations } from './bioxpWorkflowDeck';
 import type { DraftObject, WorkflowDraft, WorkflowDraftRow } from './bioxpWorkflowDraft';
 
 // Planned associations never assert measured material presence or robot readiness.
-export type WorkflowLabware = { id: string; station: string; name: string; profile_id: string };
+export type WorkflowLabware = { id: string; station: string; name: string; profile_id: string; native_plate_id?: unknown };
 export type WorkflowMaterial = { id: string; name: string; kind: 'sample' | 'reagent' | 'product' | 'waste'; description: string; concentration?: string | number | null; concentration_unit?: string };
 export type WorkflowAssignment = { id: string; labware_id: string; well: string; material_id: string; volume_ul: string | number | null };
 export type WorkflowDeckPlan = { labware: WorkflowLabware[]; materials: WorkflowMaterial[]; assignments: WorkflowAssignment[] };

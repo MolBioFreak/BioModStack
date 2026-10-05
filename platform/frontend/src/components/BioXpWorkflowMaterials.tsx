@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
+import { BioXpWorkflowProfilesContext } from './BioXpWorkflowProfiles';
 import type { MethodValue } from '../lib/bioxpMethods';
 import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import type { WorkflowDeckPlan, WorkflowMaterial } from '../lib/bioxpWorkflowPlan';
@@ -10,6 +11,7 @@ export interface BioXpWorkflowMaterialsProps {
     selection: BioXpDeckSelection;
     methodAuthoring?: boolean;
     profiles?: MethodValue[];
+    custodyObjects?: MethodValue[];
     contextual?: boolean;
     selectedLabwareId?: string;
     displayStations?: Record<string, string>;
@@ -17,7 +19,10 @@ export interface BioXpWorkflowMaterialsProps {
 const id = () => crypto.randomUUID();
 const stationLabel = (station: string) => deckStations.find(s => s.id === station)?.label || station || 'No station';
 
-export function BioXpWorkflowMaterials({ plan, onChange, selection, methodAuthoring = false, profiles = [], contextual = false, selectedLabwareId = '', displayStations }: BioXpWorkflowMaterialsProps) {
+export function BioXpWorkflowMaterials({ plan, onChange, selection, methodAuthoring = false, profiles = [], contextual = false, selectedLabwareId = '', displayStations, custodyObjects }: BioXpWorkflowMaterialsProps) {
+    const library = useContext(BioXpWorkflowProfilesContext);
+    const choices = [...profiles, ...(library?.profiles ?? []).filter(p => !profiles.some(retained => retained?.id === p.id))].filter(p => p && typeof p.id === 'string');
+    const nativeObjects = (custodyObjects ?? library?.custodyObjects ?? []).filter(p => p.kind === 'plate' && typeof p.token === 'string');
     const [materialId, setMaterialId] = useState('');
     const [labwareId, setLabwareId] = useState('');
     const [assignmentContext, setAssignmentContext] = useState('');
@@ -49,8 +54,18 @@ export function BioXpWorkflowMaterials({ plan, onChange, selection, methodAuthor
             {plan.labware.map((item, index) => contextual && (selectedLabwareId ? item.id !== selectedLabwareId : (displayStations?.[item.id] ?? item.station) !== selection.station) ? null : <div className="bioxp-plan-row" key={item.id}>
                 <label>Labware {index + 1} name<input value={item.name ?? ''} onChange={e => onChange({ ...plan, labware: plan.labware.map(l => l.id === item.id ? { ...l, name: e.target.value } : l) })} /></label>
                 <small>{stationLabel(item.station)} · starting assignment</small>
-                {methodAuthoring && <label>Labware {index + 1} published profile<select aria-label={`Labware ${index + 1} published profile`} value={item.profile_id ?? ''} onChange={e => onChange({ ...plan, labware: plan.labware.map(l => l.id === item.id ? { ...l, profile_id: e.target.value } : l) })}><option value="">Not assigned</option>{item.profile_id && !profiles.some(p => p.id === item.profile_id) && <option value={item.profile_id}>{item.profile_id} (retained)</option>}{profiles.map(p => <option key={String(p.id)} value={String(p.id)}>{String(p.name || p.label || p.id)} · r{String(p.revision ?? '?')}</option>)}</select><small>Published pinned profiles only. Rack assignment is not pickup or observed loaded tips.</small></label>}
-                {methodAuthoring && <><label>Labware {index + 1} station<select value={item.station} onChange={e => onChange({ ...plan, labware: plan.labware.map(l => l.id === item.id ? { ...l, station: e.target.value } : l) })}>{!deckStations.some(s => s.id === item.station) && <option value={item.station}>{item.station || 'Unspecified'}</option>}{deckStations.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label><details><summary>Labware technical details</summary><small>Stable ID: {item.id}. Layout references are addressing metadata, not proof of tube, plate or cap compatibility.</small><label>Labware {index + 1} profile<input value={item.profile_id ?? ''} onChange={e => onChange({ ...plan, labware: plan.labware.map(l => l.id === item.id ? { ...l, profile_id: e.target.value } : l) })} /></label></details></>}
+                {methodAuthoring && <label>Labware {index + 1} published profile<select aria-label={`Labware ${index + 1} published profile`} value={typeof item.profile_id === 'string' ? item.profile_id : ''} onChange={e => { const profile = choices.find(p => p.id === e.target.value); if (profile) library?.pin(profile); onChange({ ...plan, labware: plan.labware.map(l => l.id === item.id ? { ...l, profile_id: e.target.value } : l) }); }}><option value="">{item.profile_id === null ? 'Unspecified (saved null)' : item.profile_id && typeof item.profile_id !== 'string' ? 'Retained expression / object' : 'Not assigned'}</option>{typeof item.profile_id === 'string' && item.profile_id && !choices.some(p => p.id === item.profile_id) && <option value={item.profile_id}>{item.profile_id} (retained)</option>}{choices.map(p => <option key={String(p.id)} value={String(p.id)}>{String(p.name || p.label || p.id)} · r{String(p.revision ?? '?')}</option>)}</select><small>Source profile identity is design intent, not BioXP fit/calibration. Rack assignment, software tip type, observed loaded tips and explicit A/B group-of-four pickup are separate. No pickup is added.</small></label>}
+                {methodAuthoring && <>
+                    {choices.filter(p => p.id === item.profile_id).map(p => <small key={String(p.id)}>Adapter support: {String(p.adapter_support ?? 'unknown')} · consumable fit: {String(p.consumable_fit ?? 'unknown')} · qualification: {String(p.qualification ?? 'unknown')}. Tool offsets: {p.tool_offsets == null ? 'unknown' : 'retained in pinned profile'}. Native addressing: {p.native_addressing == null ? 'unknown' : 'retained in pinned profile'}.</small>)}
+                    {library?.loading && <small>Loading published profile identities…</small>}
+                    {library?.error && <small>Published profile discovery unavailable; retained assignments remain editable.</small>}
+                    <label>Labware {index + 1} native movable object<select aria-label={`Labware ${index + 1} native movable object`} value={typeof item.native_plate_id === 'string' ? item.native_plate_id : ''} onChange={e => onChange({ ...plan, labware: plan.labware.map(l => l.id === item.id ? { ...l, native_plate_id: e.target.value } : l) })}>
+                        <option value="">{item.native_plate_id === null ? 'Unspecified (saved null)' : item.native_plate_id && typeof item.native_plate_id !== 'string' ? 'Retained expression / object' : 'Not associated'}</option>
+                        {typeof item.native_plate_id === 'string' && item.native_plate_id && !nativeObjects.some(p => p.token === item.native_plate_id) && <option value={item.native_plate_id}>{item.native_plate_id} (retained)</option>}
+                        {nativeObjects.map(p => <option key={String(p.token)} value={String(p.token)}>{String(p.label ?? p.token)} · {String(p.token)}</option>)}
+                    </select></label><small>Explicit OEM object association; separate from the planning ID, profile and observed custody. Does not move a plate.</small>
+                </>}
+                {methodAuthoring && <><label>Labware {index + 1} station<select value={item.station} onChange={e => onChange({ ...plan, labware: plan.labware.map(l => l.id === item.id ? { ...l, station: e.target.value } : l) })}>{!deckStations.some(s => s.id === item.station) && <option value={item.station}>{item.station || 'Unspecified'}</option>}{deckStations.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label><details><summary>Labware technical details</summary><small>Stable ID: {item.id}. Layout references are addressing metadata, not proof of tube, plate or cap compatibility.</small><label>Labware {index + 1} profile<input value={typeof item.profile_id === 'string' ? item.profile_id : ''} onChange={e => onChange({ ...plan, labware: plan.labware.map(l => l.id === item.id ? { ...l, profile_id: e.target.value } : l) })} /></label></details></>}
                 <button type="button" onClick={() => onChange({ ...plan, labware: plan.labware.filter(l => l.id !== item.id), assignments: plan.assignments.filter(a => a.labware_id !== item.id) })}>Remove labware {index + 1} and its assignments</button>
             </div>)}
         </fieldset>
