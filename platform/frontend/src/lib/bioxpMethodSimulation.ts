@@ -2,6 +2,8 @@ import type { MethodValue } from './bioxpMethods';
 
 const record = (value: unknown): MethodValue => value && typeof value === 'object' && !Array.isArray(value) ? value as MethodValue : {};
 
+export const methodInitialState = (simulation: unknown, submitted: unknown): unknown => Object.hasOwn(record(simulation), 'initial_state') ? record(simulation).initial_state : submitted;
+
 /** Replay producer deltas from the immutable compile input, never from final state.
  * A missing occurrence is unknown, not permission to display a later snapshot.
  */
@@ -10,7 +12,7 @@ export function methodStateAfter(simulation: unknown, initialState: unknown, occ
     if (!Array.isArray(snapshots)) return null;
     const index = snapshots.findIndex(row => record(row).occurrence_id === occurrenceId);
     if (index < 0) return null;
-    const state = structuredClone(record(initialState));
+    const state = structuredClone(record(methodInitialState(simulation, initialState)));
     for (const snapshot of snapshots.slice(0, index + 1)) {
         const delta = record(record(snapshot).state_delta);
         for (const [key, value] of Object.entries(delta)) {

@@ -33,5 +33,6 @@ export const liquidClassEditorSchema: Schema = object({
         reaspiration_volume_ul: rawNumber('Reaspiration µL'), dispense_to_reaspiration_delay_ms: rawNumber('Delay ms'), retract_distance_mm: rawNumber('Retract mm'),
         contact_mode: { type: ['string', 'null'] }, immersion_depth_mm: rawNumber('Immersion mm'), retract_speed_mm_s: rawNumber('Native motion-supported retract mm/s'),
     }),
+    authored_settings: object({}),
     source: object({}), water: object({ id: text, revision: { type: 'integer' } }),
 });

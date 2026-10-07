@@ -10,6 +10,7 @@
 .bioxp-transfer-scene .bioxp-transfer-row { display: contents; }
 .bioxp-transfer-scene .bioxp-transfer-plate small { text-align: center; font-size: .65rem; }
 .bioxp-transfer-scene .bioxp-transfer-plate button { display: grid; place-items: center; min-width: 0; min-height: 0; width: 100%; aspect-ratio: 1; padding: 0; border: 1px solid var(--border-primary, #64748b); border-radius: 50%; background: var(--surface-control, var(--bg-primary)); color: var(--text-primary); font-size: .6rem; line-height: 1; }
+.bioxp-transfer-scene .bioxp-transfer-plate button[data-footprint="true"] { box-shadow: inset 0 0 0 2px var(--accent-primary, #087e8b); }
 .bioxp-transfer-scene .bioxp-transfer-plate button[data-authored="true"] { background: var(--accent-primary, #087e8b); color: var(--text-on-accent, white); border-color: var(--accent-primary, #087e8b); }
 .bioxp-transfer-scene .bioxp-transfer-plate button[aria-pressed="true"] { outline: 2px solid var(--text-primary); outline-offset: 2px; }
 .bioxp-transfer-scene .bioxp-transfer-reference-summary { margin: .6rem 0; font-size: .8rem; overflow-wrap: anywhere; }
