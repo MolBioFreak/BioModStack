@@ -256,6 +256,9 @@ it.each(['refused', 'conflict', 'timeout'] as const)('distinguishes %s from unce
 });
 it('edits complete source-class field groups without defaults, saving raw explicit/null/omitted values as a new class', async () => {
     await mount(); await click('Liquid classes'); await input('Method name', 'Authored test class');
+    const advanced = [...host.querySelectorAll('summary')].find(el => el.textContent === 'Advanced class fields');
+    expect(advanced).toBeTruthy();
+    await act(async () => { advanced!.click(); }); await settle();
     await input('Liquid class.settings presence', 'value');
     await input('Liquid class.settings.aspirate_speed_ul_s presence', 'value');
     await input('Liquid class.settings.aspirate_speed_ul_s', '050.000');
