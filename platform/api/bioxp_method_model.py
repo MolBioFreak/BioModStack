@@ -190,11 +190,12 @@ def method_catalog():
         if entry['action'] == 'thermal_door':
             entry['effects'] = 'Source DO opens thermal door then initializes pipettes; DC closes door'
     from bioxp_method_custody import custody_suggestions
+    from bioxp_method_planning import liquid_field_matrix
     return {'schema': SCHEMA, 'actions': actions, 'native_definitions': schema['$defs'],
-        'authoring': {'custody': custody_suggestions()},
+        'authoring': {'custody': custody_suggestions(), 'liquid_fields': liquid_field_matrix()},
         'geometry': native['alignment'], 'locations': native['native_locations'],
         'limits': {'depth': 64, 'occurrences': 10000, 'native_actions': 100000},
-        'precision': 'Decimal 28 significant digits, ROUND_HALF_EVEN; normalized base-unit decimal strings; native emitter converts at boundary',
+        'precision': 'Exact literals and integer boundaries; arithmetic Decimal 28 significant digits, ROUND_HALF_EVEN; normalized base-unit decimal strings; native emitter converts at boundary',
         'qualification': 'Software representation is not physical qualification'}
 
 

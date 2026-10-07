@@ -6,7 +6,7 @@ from hashlib import sha256
 import json
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, StrictInt, TypeAdapter, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -131,6 +131,12 @@ def catalog():
     return method_catalog()
 
 
+@router.get("/openapi.json", include_in_schema=False)
+def methods_openapi(request: Request):
+    """The application schema at a route already forwarded by the API proxy."""
+    return request.app.openapi()
+
+
 @router.get("/schema")
 def schema():
     from bioxp_method_model import method_schema
@@ -140,7 +146,7 @@ def schema():
         "ProtocolControlRequest": TypeAdapter(ProtocolControlRequest).json_schema(),
     }, "results": {cls.__name__: cls.model_json_schema() for cls in (
         DraftRecord, Compilation, MethodRunResponse, ProtocolJobObservation, ProtocolControlResponse)},
-        "openapi": "/openapi.json"}
+        "openapi": "/api/bioxp/methods/openapi.json"}
 
 
 @router.get("/examples")
