@@ -582,7 +582,13 @@ it('authors chiller, cycler and door steps from stations without wells or scient
     publishedDeckCatalog(); await mount();
     await input('Deck station', 'LOC_RC'); await click('Add temperature step');
     await input('Deck station', 'LOC_OC'); await click('Add temperature step');
-    await input('Deck station', 'LOC_TC'); await click('Add temperature step'); await click('Add hold'); await click('Add temperature program'); await click('Add door Open'); await click('Add door Close');
+    await input('Deck station', 'LOC_TC'); await click('Add temperature step');
+    // The selected thermal editor also offers Add hold, which composes a thermal group.
+    // This station-authoring case must append a standalone action from Deck actions.
+    const addHold = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Deck actions"] button')].find(b => b.textContent === 'Add hold');
+    expect(addHold).toBeTruthy();
+    await act(async () => addHold!.click()); await settle();
+    await click('Add temperature program'); await click('Add door Open'); await click('Add door Close');
     await click('Save');
     const saved = structuredClone(db.m2.method);
     expect(saved.steps.map((n: any) => [n.action, n.inputs])).toEqual([

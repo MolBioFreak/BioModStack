@@ -1,5 +1,7 @@
 import React, { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { api } from '../../src/lib/api';
 import { webcrypto } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -10,17 +12,31 @@ import type { MethodValue, MethodCompile } from '../../src/lib/bioxpMethods';
 import catalog from '../fixtures/bioxp_method_deck_catalog.json';
 const discovery = process.env.BIOXP_METHOD_MODEL_CONTRACT ? JSON.parse(readFileSync(process.env.BIOXP_METHOD_MODEL_CONTRACT, 'utf8')) : null;
 let host: HTMLDivElement, root: Root, current: MethodValue, values: MethodValue;
+let client: QueryClient, oldAdapter: typeof api.defaults.adapter;
 async function mount(initial: MethodValue, preview?: MethodCompile, initialBindings: MethodValue = {}, actionProperties?: (node: MethodValue, change: (node: MethodValue) => void) => React.ReactNode) {
     function Owner() { const [method, setMethod] = useState(initial), [bindings, setBindings] = useState(initialBindings); current = method; values = bindings; return <BioXpMethodDeckWorkbench method={method} onChange={setMethod} bindings={bindings} onBindingsChange={setBindings} catalog={discovery?.catalog ?? catalog} rootSchema={discovery?.schema.method ?? {}} preview={preview} actionProperties={actionProperties} />; }
-    root = createRoot(host); await act(async () => root.render(<Owner />));
+    root = createRoot(host); await act(async () => root.render(<QueryClientProvider client={client}><Owner /></QueryClientProvider>));
 }
 async function click(label: string) { const button = [...host.querySelectorAll<HTMLButtonElement>('button,[role=button]')].find(b => b.textContent === label || b.getAttribute('aria-label') === label)!; expect(button, label).toBeTruthy(); await act(async () => button.dispatchEvent(new MouseEvent('click', { bubbles: true }))); }
 async function input(label: string, value: string) { const el = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(el, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
 async function well(station: string, well: string) { const el = host.querySelector(`[data-station="${station}"][data-well="${well}"]`)!; await act(async () => el.dispatchEvent(new MouseEvent('click', { bubbles: true }))); }
 const plan = { labware: [{ id: 'plate', name: 'Reaction plate', station: 'LOC_MS', profile_id: '' }], materials: [], assignments: [] };
 const transfer = { source: { station: 'LOC_RC', location_id: 3, wells: ['A1'] }, destination: { station: 'LOC_MS', location_id: 0, wells: ['A1'], labware_id: 'plate', retained: null }, volume_ul: '002.5000', channels: [0], aspirate_speed: '030.00', dispense_speed: '040.00', source_position_flag: '0', destination_position_flag: '0', source_lift_height_steps: null, destination_lift_height_steps: null };
-beforeEach(() => { vi.stubGlobal('crypto', webcrypto); host = document.createElement('div'); document.body.append(host); });
-afterEach(async () => { if (root) await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
+beforeEach(() => {
+    vi.stubGlobal('crypto', webcrypto);
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } });
+    oldAdapter = api.defaults.adapter;
+    // The integrated class selector reads the workspace library even before a class is chosen.
+    // Keep the real query/Axios owners; this canvas fixture has an empty saved-class library.
+    api.defaults.adapter = async config => {
+        expect(config.method).toBe('get');
+        expect(config.url).toBe('/api/bioxp/methods/liquid-classes');
+        expect(config.params).toEqual({ search: '', offset: 0, limit: 25 });
+        return { config, status: 200, statusText: 'OK', headers: {}, data: [] };
+    };
+    host = document.createElement('div'); document.body.append(host);
+});
+afterEach(async () => { if (root) await act(async () => root.unmount()); client.clear(); api.defaults.adapter = oldAdapter; host.remove(); vi.unstubAllGlobals(); });
 
 it('inserts after processing and inside nested repeats without changing retained structure', () => {
     const nodes = [{ step_id: 'repeat', type: 'repeat', count: 0, future: null, steps: [{ step_id: 'hold', action: 'thermal_hold', inputs: { duration_s: '00.500' } }] }];
