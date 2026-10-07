@@ -13,6 +13,11 @@
 .bioxp-method-thermal button:disabled { opacity: .45; cursor: default; }
 .bioxp-method-thermal :focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 3px; }
 .bioxp-method-thermal details { min-width: 0; }
+/* Keep shell label/disclosure spacing out of the plotted coordinate system. */
+.bioxp-method-thermal .bioxp-thermal-exact > label { flex-wrap: nowrap; }
+.bioxp-method-thermal :is(.bioxp-thermal-step-options, .bioxp-thermal-step-menu, .bioxp-thermal-repeat-menu) { padding: 0; margin: 0; border: 0; }
+.bioxp-method-thermal .bioxp-thermal-repeat-heading label { padding: 0; }
+.bioxp-method-thermal [data-program-view] .bioxp-thermal-repeat-heading input { padding: 3px 5px; }
 .bioxp-method-thermal summary { cursor: pointer; font-size: 12px; padding: 6px 0; color: var(--text-secondary); }
 .bioxp-method-thermal .bioxp-thermal-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 12px; align-items: start; }
 .bioxp-method-thermal .bioxp-thermal-fields input, .bioxp-method-thermal .bioxp-thermal-fields select { width: 100%; }
@@ -30,7 +35,7 @@
 .bioxp-method-thermal .bioxp-thermal-target-line .gridline { stroke: var(--border-primary); stroke-width: 1; stroke-dasharray: 3 5; }
 .bioxp-method-thermal .bioxp-thermal-target-line path:not([data-bank="nest"]) { stroke: var(--accent-secondary, var(--accent-primary)); stroke-dasharray: 5 3; }
 .bioxp-method-thermal .bioxp-thermal-stages { position: relative; display: flex; list-style: none; padding: var(--heading-height) 0 0; margin: 0; }
-.bioxp-method-thermal .bioxp-thermal-stages > li { position: relative; flex: 1 1 0; min-width: 0; min-height: 302px; border: 1px solid transparent; border-radius: 8px; }
+.bioxp-method-thermal .bioxp-thermal-stages > li { position: relative; flex: 1 1 0; min-width: 0; min-height: 342px; border: 1px solid transparent; border-radius: 8px; }
 .bioxp-method-thermal .bioxp-thermal-stages > li.range-selected { box-shadow: inset 0 0 0 2px var(--accent-primary); }
 .bioxp-method-thermal .bioxp-thermal-stages > li.scope-selected { border-color: var(--accent-primary); border-style: dashed; }
 .bioxp-method-thermal [aria-label="Plotted range repeat"] { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding: 12px; margin: 10px 0; }
@@ -52,27 +57,29 @@
 .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value-target_temp_c { top: var(--value-top); }
 .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value-duration_s { top: var(--time-top); }
 .bioxp-method-thermal .bioxp-thermal-exact input { width: 84px; border: 1px solid transparent; background: transparent; text-align: right; padding: 2px 0; font-size: 31px; font-weight: 600; letter-spacing: -.045em; font-variant-numeric: tabular-nums; }
-/* Outrank the Methods shell's input:not(...) padding in the compact plot.
-   Its 8px vertical inset enlarges the temperature hit box into the time row. */
-.bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-exact .bioxp-thermal-value-target_temp_c input { padding: 2px 0; }
+/* Raw spelling sizes the presentation only; the authored value is untouched.
+   Outrank shell input padding/font resets in both plotted views. */
+.bioxp-method-thermal [data-program-view] .bioxp-thermal-exact .bioxp-thermal-value input { padding: 2px 0; width: min(16ch, calc((var(--value-chars) + 1) * 1ch)); }
+.bioxp-method-thermal [data-program-view] .bioxp-thermal-exact .bioxp-thermal-value-target_temp_c input { font-size: clamp(14px, calc(240px / var(--value-chars)), 31px); font-weight: 600; line-height: 1.1; }
+.bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-exact .bioxp-thermal-value-target_temp_c input { font-size: clamp(12px, calc(160px / var(--value-chars)), 21px); }
 .bioxp-method-thermal .bioxp-thermal-exact input:hover, .bioxp-method-thermal .bioxp-thermal-exact input:focus { border-color: var(--border-primary); }
 .bioxp-method-thermal .bioxp-thermal-exact input:focus { background: var(--bg-primary); }
 .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value-unit { font-size: 15px; }
 .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value-duration_s input { font-size: 16px; font-weight: 500; letter-spacing: normal; width: 74px; padding: 4px 1px; }
 .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value-duration_s .bioxp-thermal-value-unit { font-size: 10px; }
-.bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value > button { position: absolute; top: 100%; font-size: 10px; padding: 2px 5px; opacity: 0; pointer-events: none; }
+.bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value > button { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); font-size: 10px; padding: 2px 5px; opacity: 0; pointer-events: none; }
 .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value:focus-within > button, .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value:hover > button { opacity: 1; pointer-events: auto; }
 .bioxp-method-thermal .bioxp-thermal-continuation { position: absolute; top: var(--time-top); left: 0; right: 0; text-align: center; font-size: 11px; color: var(--text-secondary); }
-.bioxp-method-thermal .bioxp-thermal-timer-cue { position: absolute; top: 244px; width: 100%; text-align: center; font-size: 11px; color: var(--text-secondary); }
+.bioxp-method-thermal .bioxp-thermal-timer-cue { position: absolute; top: 284px; width: 100%; text-align: center; font-size: 11px; color: var(--text-secondary); }
 .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-timer-cue { display: none; }
-.bioxp-method-thermal .bioxp-thermal-step-options { position: absolute; top: 270px; left: 0; width: 100%; z-index: 4; }
+.bioxp-method-thermal .bioxp-thermal-step-options { position: absolute; top: 310px; left: 0; width: 100%; z-index: 4; }
 .bioxp-method-thermal .bioxp-thermal-step-options > summary { text-align: center; font-size: 11px; }
 .bioxp-method-thermal .bioxp-thermal-step-options[open] { z-index: 5; }
-.bioxp-method-thermal .bioxp-thermal-step-options[open] > :not(summary) { position: relative; width: calc(var(--step-count) * 100%); left: calc(var(--step-index) * -100%); padding: 12px 18px; background: var(--bg-primary); border-left: 1px solid var(--border-primary); border-right: 1px solid var(--border-primary); }
+.bioxp-method-thermal .bioxp-thermal-step-options[open] > :not(summary) { position: relative; width: calc(var(--step-count) * 100%); left: calc(var(--step-index) * -100%); padding: 6px 18px; background: var(--bg-primary); border-left: 1px solid var(--border-primary); border-right: 1px solid var(--border-primary); }
 .bioxp-method-thermal .bioxp-thermal-step-options[open] > :last-child { border-bottom: 1px solid var(--border-primary); border-radius: 0 0 10px 10px; }
 .bioxp-method-thermal [data-program-view="expanded"] .bioxp-thermal-track-inner:has(.bioxp-thermal-step-options[open]) { padding-bottom: var(--options-space, 350px); }
 .bioxp-method-thermal [data-program-view="expanded"] .bioxp-thermal-track-inner:has(.bioxp-thermal-step-options details[open]) { padding-bottom: var(--options-space, 650px); }
-.bioxp-method-thermal .bioxp-thermal-repeat-frame, .bioxp-method-thermal .bioxp-thermal-scope-frame { position: absolute; height: calc(var(--heading-height) + 302px - var(--frame-offset)); border: 1.5px solid color-mix(in srgb, var(--accent-primary) 55%, var(--border-primary)); border-radius: 10px; background: color-mix(in srgb, var(--accent-primary) 5%, transparent); pointer-events: none; }
+.bioxp-method-thermal .bioxp-thermal-repeat-frame, .bioxp-method-thermal .bioxp-thermal-scope-frame { position: absolute; height: calc(var(--heading-height) + 342px - var(--frame-offset)); border: 1.5px solid color-mix(in srgb, var(--accent-primary) 55%, var(--border-primary)); border-radius: 10px; background: color-mix(in srgb, var(--accent-primary) 5%, transparent); pointer-events: none; }
 .bioxp-method-thermal .bioxp-thermal-scope-frame { border-style: dashed; background: transparent; }
 .bioxp-method-thermal .bioxp-thermal-repeat-frame.selected, .bioxp-method-thermal .bioxp-thermal-scope-frame.selected { border-color: var(--accent-primary); }
 .bioxp-method-thermal .bioxp-thermal-repeat-heading { position: absolute; z-index: 6; top: 5px; left: 10px; right: 10px; display: flex; align-items: center; justify-content: space-between; gap: 5px; min-height: 26px; font-size: 11px; pointer-events: auto; color: var(--accent-primary); }
@@ -83,11 +90,11 @@
 .bioxp-method-thermal .bioxp-thermal-empty { padding: 40px 20px; text-align: center; border: 1px dashed var(--border-primary); border-radius: 12px; }
 .bioxp-method-thermal .bioxp-thermal-empty strong { font-size: 20px; font-weight: 550; }
 .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-target-line, .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-step-options, .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-step-menu { display: none; }
-.bioxp-method-thermal [data-program-view="compact"] :is(.bioxp-thermal-repeat-frame, .bioxp-thermal-scope-frame) { height: calc(var(--heading-height) + 105px - var(--frame-offset)); }
-.bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-stages > li { min-height: 105px; }
+.bioxp-method-thermal [data-program-view="compact"] :is(.bioxp-thermal-repeat-frame, .bioxp-thermal-scope-frame) { height: calc(var(--heading-height) + 132px - var(--frame-offset)); }
+.bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-stages > li { min-height: 132px; }
 .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-step-name { top: 4px; left: 4px; right: 4px; justify-content: center; font-size: 9px; }
 .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-exact .bioxp-thermal-value-target_temp_c { top: 24px; background: transparent; }
-.bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-exact .bioxp-thermal-value-duration_s, .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-continuation { top: 60px; background: transparent; }
+.bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-exact .bioxp-thermal-value-duration_s, .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-continuation { top: 78px; background: transparent; }
 .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-exact input { width: 65px; font-size: 21px; }
 .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-exact .bioxp-thermal-value-duration_s input { font-size: 12px; }
 .bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-value-unit { font-size: 11px; }

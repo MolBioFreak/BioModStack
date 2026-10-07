@@ -70,6 +70,17 @@
 .bioxp-method-map .bwd-canvas-presentation > .bwd-inspector > summary,.bioxp-method-map .bwd-canvas-presentation > details:last-child > summary { font-size:11px; }
 .bioxp-method-map .bwd-canvas-presentation > .bwd-inspector[open] { display:block; padding:12px; }
 .bioxp-method-local-editor { position:absolute; z-index:5; top:64px; left:36%; width:520px; max-width:calc(100% - 40px); max-height:590px; overflow:auto; border:1px solid var(--border-secondary); border-top:3px solid var(--accent-primary); border-radius:16px; background:var(--card-bg,var(--bg-primary)); box-shadow:0 20px 70px #0003; }
+/* Let the expanded thermal sheet own real canvas height; the sequence must
+   not paint over controls or clip the sheet at the old compact deck boundary. */
+.bioxp-method-canvas:has(.bioxp-method-local-editor.is-expanded:not([hidden]) .bioxp-thermal-program) { min-height:calc(min(900px, 100dvh - 96px) + 88px); }
+/* Thermal sheets keep chrome outside the scrollport: focus cannot slide under
+   a sticky header/footer. Expanded height is distinct from the compact sheet. */
+.bioxp-method-local-editor:has(.bioxp-thermal-program) { display:flex; flex-direction:column; overflow:hidden; width:640px; left:28%; }
+.bioxp-method-local-editor:has(.bioxp-thermal-program) > header,
+.bioxp-method-local-editor:has(.bioxp-thermal-program) > .bioxp-editor-footer { position:static; flex:none; }
+.bioxp-method-local-editor:has(.bioxp-thermal-program) > .bioxp-editor-body { overflow:auto; min-height:0; scroll-padding:20px; padding-top:12px; padding-bottom:12px; }
+.bioxp-method-local-editor.is-expanded:has(.bioxp-thermal-program) { left:8%; width:84%; max-height:min(900px, calc(100dvh - 96px)); }
+@media(max-width:1100px) { .bioxp-method-local-editor:has(.bioxp-thermal-program) { left:20px; width:calc(100% - 40px); } }
 .bioxp-method-local-editor[hidden] { display:none; }
 .bioxp-method-local-editor.is-expanded,.bioxp-method-local-editor.is-transfer,.bioxp-method-local-editor.is-setup { left:8%; width:84%; max-width:960px; }
 .bioxp-method-local-editor > header { position:sticky; top:0; z-index:3; display:flex; gap:12px; align-items:center; padding:18px 24px; background:var(--card-bg,var(--bg-primary)); border-bottom:1px solid var(--border-primary); }
