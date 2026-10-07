@@ -17,6 +17,15 @@ export function workspaceSnapshot(method: MethodValue, inputs: WorkspaceInputs):
     }
     return value;
 }
+/** Native recovery inputs are authoritative, including explicit empty/null and omitted keys. */
+export function workspaceRecoverySnapshot(result: MethodValue): MethodValue {
+    const method = copy(obj(result.method ?? result.draft));
+    const runInputs: MethodValue = {};
+    for (const key of ['bindings', 'dependencies', 'initial_state']) {
+        if (Object.hasOwn(result, key) && result[key] !== undefined) runInputs[key] = copy(result[key]);
+    }
+    return { ...method, editor_state: { ...obj(method.editor_state), run_inputs: runInputs, recovery_linkage: copy(result.recovery) } };
+}
 /** Legacy imports start empty, never inherit the previously selected draft. */
 export function workspaceHydrate(raw: MethodValue): { method: MethodValue; inputs: WorkspaceInputs } {
     const method = copy(obj(raw.method ?? raw)), editor = obj(method.editor_state);

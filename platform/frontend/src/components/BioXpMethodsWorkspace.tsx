@@ -15,7 +15,7 @@ import { BioXpMethodDeckWorkbench } from './BioXpMethodDeckWorkbench';
 import { BioXpWorkflowProfilesContext, publishedTipProfiles, pinLabwareProfile } from './BioXpWorkflowProfiles';
 import { RepairWorkspaceContext, RepairWorkspaceClassEditor } from './repairWorkspaceClasses';
 import { methodInitialState } from '../lib/bioxpMethodSimulation';
-import { workspaceSnapshot, workspaceHydrate } from '../lib/repairWorkspaceSnapshot';
+import { workspaceSnapshot, workspaceHydrate, workspaceRecoverySnapshot } from '../lib/repairWorkspaceSnapshot';
 const enc = encodeURIComponent;
 const clone = <T,>(v: T): T => v === undefined ? v : JSON.parse(JSON.stringify(v));
 const recordEqual = (a: unknown, b: unknown): boolean => {
@@ -158,7 +158,10 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
             const result = await methodsPost<MethodValue>(`runs/${enc(run.jobId)}/recovery-draft`, { occurrence: occurrence ? { ...object(reportProvenance(report).find((p: unknown) => String(object(p).occurrence_id) === occurrence)), ...(nativeAction ? { native_action_id: nativeAction } : {}) } : undefined, ...(recoveryInitialState !== undefined ? { initial_state: clone(recoveryInitialState) } : {}) }, { expected_connection_generation: generation });
             setRecoveryEvidence(result);
             if (!result.method && !result.draft) { setNotice(String(result.message ?? 'Lossless recovery draft unavailable; original run unchanged.')); return; }
-            delete saveTargets.current.library; const recovered = clone(object(result.method ?? result.draft)); setDraft({ ...recovered, editor_state: { ...object(recovered.editor_state), recovery_linkage: clone(result.recovery) } }); setMethodValues({ bindings: clone(object(result.bindings)), dependencies: clone(object(result.dependencies)), initialState: clone(result.initial_state) }); setSavedMethod(null); setTab('Methods'); editVersion.current++;
+            delete saveTargets.current.library;
+            const recovered = workspaceRecoverySnapshot(result);
+            setDraft(recovered); setMethodValues(workspaceHydrate(recovered).inputs);
+            setSavedMethod(null); setTab('Methods'); editVersion.current++;
             setNotice('Recovery is an unsaved editable draft. Review intended actions and explicit initial assumptions; no setup or execution was submitted.', 'Methods');
         });
     }
