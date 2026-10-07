@@ -97,11 +97,21 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
     };
     const rawPlan = object(method.deck_plan);
     const plan = { ...rawPlan, labware: Array.isArray(rawPlan.labware) ? rawPlan.labware : [], materials: Array.isArray(rawPlan.materials) ? rawPlan.materials : [], assignments: Array.isArray(rawPlan.assignments) ? rawPlan.assignments : [] } as WorkflowDeckPlan;
+    const retainThermalBinding = (original: MethodValue, next: MethodValue, id: string, previousInputs: unknown) => {
+        if (!thermalMethodActions.has(String(original.action)) || !['group', 'repeat'].includes(String(next.type)) || !Array.isArray(next.steps)) return next;
+        const children = next.steps as MethodValue[];
+        const candidates = children.filter(child => child.action === original.action);
+        const unchanged = candidates.filter(child => child.inputs === previousInputs);
+        const retained = unchanged.length === 1 ? unchanged[0] : candidates.length === 1 ? candidates[0] : undefined;
+        if (!retained) return next;
+        if (retained.inputs !== previousInputs) onBindingsChange?.({ ...bindings, [id]: retained.inputs });
+        return { ...next, steps: children.map(child => child === retained ? { ...child, inputs: original.inputs } : child) };
+    };
     const thermalBindingProjection = (node: MethodValue, change: (next: MethodValue) => void) => {
         const binding = methodInputBinding(method, node, bindings);
         if (node.type !== 'action' || !binding.id || !binding.editable || !onBindingsChange) return { node, onChange: change };
         return { node: { ...node, inputs: binding.inputs }, onChange: (next: MethodValue) => {
-            if (next.type !== node.type || next.action !== node.action) { change(next); return; }
+            if (next.type !== node.type || next.action !== node.action) { change(retainThermalBinding(node, next, binding.id!, binding.inputs)); return; }
             if (next.inputs !== binding.inputs) onBindingsChange({ ...bindings, [binding.id!]: next.inputs });
             // Bindings own input edits; keep the exact original expression on the AST.
             if (Object.keys(next).some(key => key !== 'inputs' && next[key] !== node[key])) change({ ...next, inputs: node.inputs });
@@ -133,12 +143,12 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
         if (!bound.editable || bound.id && !onBindingsChange) return actionProperties?.(node, change);
         const projected = { ...node, inputs: bound.inputs };
         const edit = (next: MethodValue) => {
-            // Structural lowering owns its children; retain the former parameter and binding.
-            if (next.type !== node.type || next.action !== node.action) { change(next); return; }
+            // Structural lowering keeps the original binding on its native-profile child.
+            if (next.type !== node.type || next.action !== node.action) { change(bound.id ? retainThermalBinding(node, next, bound.id, bound.inputs) : next); return; }
             if (bound.id && onBindingsChange) { if (next.inputs !== bound.inputs) onBindingsChange({ ...bindings, [bound.id]: next.inputs }); change({ ...next, inputs: node.inputs }); }
             else change(next);
         };
-        const editor = actionProperties?.(projected, edit) ?? (thermalMethodActions.has(String(node.action)) ? <BioXpMethodThermalEditor embedded existingTimer={!!start} node={projected} onChange={edit} catalog={catalog} compact expanded={expanded} onExpandedChange={setExpanded} /> : ['move', 'transfer', 'lower', 'lift', 'mix'].includes(String(node.action === 'native_intent' ? object(bound.inputs).operation : node.action)) ? <BioXpMethodPipettingEditor node={projected} onChange={edit} catalog={catalog} selection={selection} onSelect={setSelection} endpointLabels={Object.fromEntries((['source', 'destination'] as const).flatMap(key => { const name = plan.labware.find(l => l.id === object(object(bound.inputs)[key]).labware_id)?.name; return name ? [[key, name]] : []; }))} /> : custodyMethodActions.has(String(node.action)) ? <BioXpMethodCustodyEditor node={projected} onChange={edit} catalog={catalog} plan={plan} selection={selection} /> : undefined);
+        const editor = actionProperties?.(projected, edit) ?? (thermalMethodActions.has(String(node.action)) ? <BioXpMethodThermalEditor embedded onDuplicateScope={(source, replace) => { const result = duplicateCanvasNode(method, source === projected ? node : source, bindings, !!onBindingsChange); onChange({ ...method, ...(result.changed ? { parameters: result.parameters } : {}), steps: editCanvasNode(nodes, here!, () => { const next = replace(result.node); return Array.isArray(next.steps) ? { ...next, steps: next.steps.map(child => child === projected ? node : child) } : next; }) }); if (result.changed) onBindingsChange?.(result.bindings); }} existingTimer={!!start} node={projected} onChange={edit} catalog={catalog} compact expanded={expanded} onExpandedChange={setExpanded} /> : ['move', 'transfer', 'lower', 'lift', 'mix'].includes(String(node.action === 'native_intent' ? object(bound.inputs).operation : node.action)) ? <BioXpMethodPipettingEditor node={projected} onChange={edit} catalog={catalog} selection={selection} onSelect={setSelection} endpointLabels={Object.fromEntries((['source', 'destination'] as const).flatMap(key => { const name = plan.labware.find(l => l.id === object(object(bound.inputs)[key]).labware_id)?.name; return name ? [[key, name]] : []; }))} /> : custodyMethodActions.has(String(node.action)) ? <BioXpMethodCustodyEditor node={projected} onChange={edit} catalog={catalog} plan={plan} selection={selection} /> : undefined);
         const bindingSchema = bound.id ? methodBindingsSchema(method, catalog) : undefined;
         const content = editor ?? (bound.id ? <MethodFields label={bound.label || 'Step settings'} schema={bindingSchema?.properties?.[bound.id]} rootSchema={bindingSchema} value={bound.inputs} onChange={inputs => edit({ ...projected, inputs })} /> : undefined);
         return content ? <>{timing}{bound.id && <small className="bioxp-binding-note">{bound.inherited ? 'Inherited parameter default; editing creates a binding.' : 'Edits are saved in this experiment’s bindings.'}</small>}{content}{node.action === 'transfer' && <details><summary>Planned labware associations</summary><fieldset><legend>Named source & destination</legend>{['source', 'destination'].map(key => {

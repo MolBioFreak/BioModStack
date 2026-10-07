@@ -3,6 +3,7 @@ import type { MethodValue, MethodCatalog } from '../lib/bioxpMethods';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
 import { isMethodNumber, methodNumber } from '../lib/bioxpMethodNumber';
 import { MethodFields, object } from './BioXpMethodFields';
+import { canUngroupCanvasNode } from '../lib/bioxpMethodCanvas';
 import { composeThermalRepeat, composeChillerTimer } from '../lib/bioxpMethodThermal';
 import './BioXpMethodThermalEditor.css';
 
@@ -42,14 +43,28 @@ function Controls({ value, schema, label, hold, chiller = false, profile = false
 
 type DuplicateScope = (source: MethodValue, replace: (copy: MethodValue) => MethodValue) => void;
 type BindingProjection = (node: MethodValue, change: (node: MethodValue) => void) => { node: MethodValue; onChange: (node: MethodValue) => void };
-type ProgramLeaf = { key: string; value: unknown; label: string; hold: boolean; schema?: Schema; onChange: (value: unknown) => void; actions?: React.ReactNode; retainedNode?: MethodValue; updateNode?: (node: MethodValue) => void };
-type ProgramFrame = { key: string; from: number; size: number; depth: number; node: MethodValue; onChange: (value: MethodValue) => void };
+type DragSlot = { owner: string; index: number; move: (to: number) => void };
+type ProgramLeaf = { drag?: DragSlot; key: string; value: unknown; label: string; hold: boolean; schema?: Schema; onChange: (value: unknown) => void; actions?: React.ReactNode; retainedNode?: MethodValue; updateNode?: (node: MethodValue) => void };
+type ProgramFrame = { drag?: DragSlot; key: string; from: number; size: number; depth: number; node: MethodValue; onChange: (value: MethodValue) => void; actions?: React.ReactNode };
+type ProgramScope = { key: string; from: number; end: number; children: Array<{ from: number; end: number }>; apply: (first: number, last: number, passes: unknown) => void };
+
 
 // This is a read-only projection of authored scope. Edits merge back through the
 // exact parent path; display geometry never becomes AST or native input data.
 function ProgramGraph({ node, catalog, onChange, expanded, onSelectRange, bindingProjection, onDuplicateScope }: { onDuplicateScope?: DuplicateScope; bindingProjection?: BindingProjection; node: MethodValue; catalog: MethodCatalog; onChange: (node: MethodValue) => void; expanded: boolean; onSelectRange?: (first: number, last: number) => void }) {
     const [selected, setSelected] = useState<number | null>(null);
     const [range, setRange] = useState<[number, number] | null>(null);
+    const [scopeKey, setScopeKey] = useState('');
+    const [rangePasses, setRangePasses] = useState('');
+    const drag = useRef<DragSlot | null>(null);
+    const dragProps = (slot?: DragSlot) => ({
+        draggable: !!slot,
+        onDragStart: (event: React.DragEvent) => { if (!slot || (event.target as HTMLElement).closest('input,button,summary')) { event.preventDefault(); return; } event.stopPropagation(); drag.current = slot; event.dataTransfer?.setData('text/plain', `${slot.owner}/${slot.index}`); },
+        onDragOver: (event: React.DragEvent) => { if (slot && drag.current?.owner === slot.owner) event.preventDefault(); },
+        onDrop: (event: React.DragEvent) => { event.preventDefault(); event.stopPropagation(); if (slot && drag.current?.owner === slot.owner) drag.current.move(slot.index); drag.current = null; },
+        onDragEnd: () => { drag.current = null; },
+    });
+
     const trackRef = useRef<HTMLDivElement>(null);
     const [optionsSpace, setOptionsSpace] = useState<number>();
     useLayoutEffect(() => {
@@ -58,13 +73,16 @@ function ProgramGraph({ node, catalog, onChange, expanded, onSelectRange, bindin
         const measure = () => {
             const row = track.querySelector('.bioxp-thermal-stages');
             const bottom = row?.getBoundingClientRect().bottom ?? 0;
-            const panels = [...track.querySelectorAll<HTMLDetailsElement>('.bioxp-thermal-step-options[open]')];
+            const panels = [...track.querySelectorAll<HTMLDetailsElement>('.bioxp-thermal-step-options[open], .bioxp-thermal-step-menu[open] > div, .bioxp-thermal-repeat-menu[open] > div')];
             setOptionsSpace(Math.max(0, ...panels.map(panel => panel.getBoundingClientRect().bottom - bottom + 12)));
         };
         const toggle = (event: Event) => {
             const details = event.target as HTMLDetailsElement;
             if (details.matches('.bioxp-thermal-step-options') && details.open) {
                 track.querySelectorAll<HTMLDetailsElement>('.bioxp-thermal-step-options[open]').forEach(other => { if (other !== details) other.open = false; });
+            }
+            if (details.matches('.bioxp-thermal-step-menu, .bioxp-thermal-repeat-menu') && details.open) {
+                track.querySelectorAll<HTMLDetailsElement>('.bioxp-thermal-step-menu[open], .bioxp-thermal-repeat-menu[open]').forEach(other => { if (other !== details) other.open = false; });
             }
             measure();
         };
@@ -76,6 +94,7 @@ function ProgramGraph({ node, catalog, onChange, expanded, onSelectRange, bindin
     }, [node, expanded]);
     const leaves: ProgramLeaf[] = [];
     const frames: ProgramFrame[] = [];
+    const scopes: ProgramScope[] = [];
     const project = (current: MethodValue, update: (next: MethodValue) => void, path: string, depth: number, build: (next: MethodValue) => MethodValue = next => next) => {
         const bound = bindingProjection?.(current, update);
         if (bound) { current = bound.node; update = bound.onChange; }
@@ -84,31 +103,44 @@ function ProgramGraph({ node, catalog, onChange, expanded, onSelectRange, bindin
         const entry = catalog.actions?.find(a => (a.action ?? a.id) === current.action);
         const source = entry?.input_schema ?? entry?.inputs;
         const schema = source ? { ...source, $defs: { ...object(catalog.native_definitions) as Record<string, Schema>, ...source.$defs } } : undefined;
-        if ((current.type === 'group' || current.type === 'repeat') && Array.isArray(current.steps)) {
+        if ((current.type === 'group' || current.type === 'repeat' && !Object.hasOwn(current, 'items')) && Array.isArray(current.steps)) {
             const steps = current.steps;
+            const children: ProgramScope['children'] = [];
             steps.forEach((child, i) => {
+                const childFrom = leaves.length;
                 const change = (next: unknown) => update({ ...current, steps: steps.map((old, j) => i === j ? next : old) });
                 if (isObject(child)) {
                     const before = leaves.length;
-                    project(child, change, `${path}/${i}`, depth + (current.type === 'repeat' ? 1 : 0), next => build({ ...current, steps: steps.map((old, j) => i === j ? next : old) }));
+                    project(child, change, `${path}/${i}`, depth + (current.type === 'repeat' || path !== 'program' ? 1 : 0), next => build({ ...current, steps: steps.map((old, j) => i === j ? next : old) }));
+                    const frame = frames.find(f => f.key === `${path}/${i}`);
+                    const childEnd = leaves.length - 1;
+                    if (frame) {
+                        const move = (to: number) => { const next = [...steps]; next.splice(to, 0, next.splice(i, 1)[0]); update({ ...current, steps: next }); };
+                        frame.drag = { owner: path, index: i, move };
+                        frame.actions = <>{child.type === 'group' && (canUngroupCanvasNode(child) ? <button type="button" onClick={() => update({ ...current, steps: [...steps.slice(0, i), ...child.steps as MethodValue[], ...steps.slice(i + 1)] })}>Ungroup ordered children</button> : <small>Group behavior and extensions retained. Edit them explicitly in Advanced before removing this wrapper.</small>)}<button type="button" onClick={() => { setRange([before, childEnd]); setScopeKey(`${path}/${i}`); }}>Select group scope</button>{onDuplicateScope && <button type="button" onClick={() => onDuplicateScope(child, copy => build({ ...current, steps: [...steps.slice(0, i + 1), copy, ...steps.slice(i + 1)] }))}>Duplicate group</button>}<button type="button" disabled={i === 0} onClick={() => move(i - 1)}>Move group earlier</button><button type="button" disabled={i === steps.length - 1} onClick={() => move(i + 1)}>Move group later</button><button type="button" onClick={() => update({ ...current, steps: steps.filter((_, j) => j !== i) })}>Remove group</button></>;
+                    }
                     if (leaves.length === before + 1 && !leaves[before].actions) {
                         const move = (to: number) => { const next = [...steps]; next.splice(to, 0, next.splice(i, 1)[0]); update({ ...current, steps: next }); };
+                        leaves[before].drag = { owner: path, index: i, move };
                         leaves[before].actions = <>{onDuplicateScope && <button type="button" aria-label={`Step ${before + 1} Duplicate`} onClick={() => onDuplicateScope(child, copy => build({ ...current, steps: [...steps.slice(0, i + 1), copy, ...steps.slice(i + 1)] }))}>Duplicate</button>}<button type="button" aria-label={`Step ${before + 1} Move earlier`} disabled={i === 0} onClick={() => move(i - 1)}>Move earlier</button><button type="button" aria-label={`Step ${before + 1} Move later`} disabled={i === steps.length - 1} onClick={() => move(i + 1)}>Move later</button><button type="button" aria-label={`Step ${before + 1} Remove`} onClick={() => update({ ...current, steps: steps.filter((_, j) => j !== i) })}>Remove</button><button type="button" aria-label={`Insert after step ${before + 1}`} onClick={() => update({ ...current, steps: [...steps.slice(0, i + 1), { type: 'action', step_id: crypto.randomUUID(), action: 'thermal_hold', inputs: {} }, ...steps.slice(i + 1)] })}>Insert after</button></>;
                     }
                 }
                 else leaves.push({ key: `${path}/${i}`, value: child, label: 'Retained child', hold: false, onChange: change });
+                children.push({ from: childFrom, end: leaves.length - 1 });
             });
-            if (current.type === 'repeat') frames.push({ key: path, from, size: leaves.length - from, depth, node: current, onChange: update });
+            scopes.push({ key: path, from, end: leaves.length - 1, children, apply: (first, last, passes) => update({ ...current, steps: [...steps.slice(0, first), { type: 'repeat', step_id: crypto.randomUUID(), count: passes, steps: steps.slice(first, last + 1) }, ...steps.slice(last + 1)] }) });
+            if (current.type === 'repeat' || path !== 'program') frames.push({ key: path, from, size: leaves.length - from, depth, node: current, onChange: update });
         } else if (current.action === 'thermal_profile' && (input.segments === undefined || Array.isArray(input.segments)) && (current.inputs === undefined || (isObject(current.inputs) && !Object.hasOwn(input, 'expr')))) {
             const segments = Array.isArray(input.segments) ? input.segments : [];
             const changeSegments = (next: unknown[]) => update({ ...current, inputs: { ...input, segments: next } });
             segments.forEach((segment, i) => {
                 const move = (to: number) => { const next = [...segments]; next.splice(to, 0, next.splice(i, 1)[0]); changeSegments(next); };
-                leaves.push({ key: `${path}/segments/${i}`, value: segment, label: `Stage ${i + 1}`, hold: true,
+                leaves.push({ drag: { owner: `${path}/segments`, index: i, move }, key: `${path}/segments/${i}`, value: segment, label: `Stage ${i + 1}`, hold: true,
                     schema: schema?.properties?.segments?.items ? { ...schema.properties.segments.items as Schema, $defs: schema.$defs } : undefined,
                     onChange: next => changeSegments(segments.map((old, j) => i === j ? next : old)),
                     actions: <><button type="button" aria-label={`Stage ${i + 1} Move up`} disabled={i === 0} onClick={() => move(i - 1)}>Move earlier</button><button type="button" aria-label={`Stage ${i + 1} Move down`} disabled={i === segments.length - 1} onClick={() => move(i + 1)}>Move later</button><button type="button" aria-label={`Stage ${i + 1} Duplicate`} onClick={() => changeSegments([...segments.slice(0, i + 1), structuredClone(segment), ...segments.slice(i + 1)])}>Duplicate</button><button type="button" aria-label={`Stage ${i + 1} Remove`} onClick={() => changeSegments(segments.filter((_, j) => i !== j))}>Remove</button><button type="button" aria-label={`Insert after stage ${i + 1}`} onClick={() => changeSegments([...segments.slice(0, i + 1), {}, ...segments.slice(i + 1)])}>Insert after</button></> });
             });
+            scopes.push({ key: path, from, end: leaves.length - 1, children: segments.map((_, i) => ({ from: from + i, end: from + i })), apply: (first, last, passes) => update(composeThermalRepeat(current, first, last, passes)) });
             frames.push({ key: path, from, size: leaves.length - from, depth, node: current, onChange: update });
         } else {
             leaves.push({ key: path, value: current.inputs === undefined ? {} : current.inputs, label: 'Step', hold: current.action === 'thermal_hold' || current.action === 'incubate', schema,
@@ -116,6 +148,13 @@ function ProgramGraph({ node, catalog, onChange, expanded, onSelectRange, bindin
         }
     };
     project(node, onChange, 'program', 0);
+    if (['thermal_hold', 'incubate', 'thermal_setpoint'].includes(String(node.action))) scopes.push({ key: 'program', from: 0, end: 0, children: [{ from: 0, end: 0 }], apply: (_first, _last, passes) => onChange({ type: 'repeat', step_id: crypto.randomUUID(), count: passes, steps: [node] }) });
+    const rootFrame = frames.find(frame => frame.key === 'program');
+    if (rootFrame) rootFrame.actions = <><button type="button" onClick={() => { setRange([0, leaves.length - 1]); setScopeKey('program'); }}>Select group scope</button>{onDuplicateScope && <button type="button" onClick={() => onDuplicateScope(node, copy => ({ type: 'group', step_id: crypto.randomUUID(), steps: [node, copy] }))}>Duplicate group</button>}</>;
+    const candidates = range ? scopes.filter(scope => scope.from <= range[0] && scope.end >= range[1]) : [];
+    const chosen = candidates.find(scope => scope.key === scopeKey);
+    const firstChild = chosen && range ? chosen.children.findIndex(child => child.end >= range[0]) : -1;
+    const lastChild = chosen && range ? chosen.children.reduce((last, child, index) => child.from <= range[1] ? index : last, -1) : -1;
     const targets = leaves.map(leaf => { const text = numberText(object(leaf.value).target_temp_c); return text.trim() !== '' && Number.isFinite(Number(text)) ? Number(text) : null; });
     const known = targets.filter((v): v is number => v !== null);
     // Bounded display arithmetic also handles very large retained literals.
@@ -132,6 +171,17 @@ function ProgramGraph({ node, catalog, onChange, expanded, onSelectRange, bindin
         else { const inputs = { ...object(frame.node.inputs) }; if (next === undefined) delete inputs[key]; else inputs[key] = next; frame.onChange({ ...frame.node, inputs }); }
     };
     return <div className="bioxp-thermal-program" data-program-view={expanded ? 'expanded' : 'compact'}>
+        {expanded && leaves.length > 0 && <button type="button" onClick={() => { setRange([selected ?? 0, selected ?? 0]); setScopeKey(''); }}>Repeat plotted steps</button>}
+        {range && <div className="bioxp-thermal-repeat-builder" aria-label="Plotted range repeat">
+            <strong>Selected plotted steps {range[0] + 1}–{range[1] + 1}</strong>
+            <label>First plotted step<select aria-label="First plotted step" value={range[0]} onChange={e => { const first = Number(e.target.value); setRange([first, Math.max(first, range[1])]); setScopeKey(''); }}>{leaves.map((leaf, index) => <option key={leaf.key} value={index}>{index + 1}</option>)}</select></label>
+            <label>Last plotted step<select aria-label="Last plotted step" value={range[1]} onChange={e => { const last = Number(e.target.value); setRange([Math.min(range[0], last), last]); setScopeKey(''); }}>{leaves.map((leaf, index) => <option key={leaf.key} value={index}>{index + 1}</option>)}</select></label>
+            <label>Selected scope<select aria-label="Plotted repeat scope" value={scopeKey} onChange={e => setScopeKey(e.target.value)}><option value="">Choose scope explicitly</option>{candidates.map(scope => <option key={scope.key} value={scope.key}>{scope.key} · steps {scope.from + 1}–{scope.end + 1}</option>)}</select></label>
+            {chosen && firstChild >= 0 && lastChild >= firstChild && <p>Repeat whole authored children covering plotted steps {chosen.children[firstChild].from + 1}–{chosen.children[lastChild].end + 1}. Existing nested scopes and their total passes stay intact; no flattening. Within a native profile, this replaces its repeat with a selected subgroup and outside holds.</p>}
+            <label>Total passes<input aria-label="Plotted range total passes" value={rangePasses} onChange={e => setRangePasses(e.target.value)} /></label>
+            <button type="button" disabled={!chosen || firstChild < 0 || lastChild < firstChild} onClick={() => { chosen!.apply(firstChild, lastChild, methodNumber(rangePasses)); setRange(null); setScopeKey(''); }}>Group plotted selection</button>
+            <button type="button" onClick={() => { setRange(null); setScopeKey(''); }}>Cancel plotted selection</button>
+        </div>}
         {frames.filter(frame => frame.size === 0 && frame.node.type === 'repeat').map(frame => <label key={frame.key}>Method repeat total passes<input aria-label="Method repeat total passes" value={numberText(frame.node.count)} disabled={!editableNumber(frame.node.count)} onChange={e => updateFrame(frame, 'count', methodNumber(e.target.value))} /></label>)}
         {!leaves.length && <div className="bioxp-thermal-empty"><strong>Build a temperature program</strong><p>Add a hold. Add more steps or repeat a group only when needed.</p></div>}
         {leaves.length > 0 && <div className="bioxp-thermal-track"><div ref={trackRef} className="bioxp-thermal-track-inner" style={{ '--options-space': optionsSpace === undefined ? undefined : `${optionsSpace}px`, '--step-count': count, '--heading-height': `${heading}px`, minWidth: expanded ? Math.max(660, count * 165) : count * 104 } as CSSProperties}>
@@ -142,19 +192,21 @@ function ProgramGraph({ node, catalog, onChange, expanded, onSelectRange, bindin
             </svg>
             {frames.filter(frame => frame.size > 0).map(frame => {
                 const methodRepeat = frame.node.type === 'repeat';
+                const plainGroup = frame.node.type === 'group';
                 const key = methodRepeat ? 'count' : 'repeat';
                 const value = methodRepeat ? frame.node.count : object(frame.node.inputs).repeat;
-                return <div key={frame.key} className={`bioxp-thermal-repeat-frame ${selected !== null && selected >= frame.from && selected < frame.from + frame.size ? 'selected' : ''}`} style={{ left: `${frame.from / count * 100}%`, width: `${frame.size / count * 100}%`, top: frame.depth * 34, '--frame-offset': `${frame.depth * 34}px` } as CSSProperties}>
-                    <div className="bioxp-thermal-repeat-heading"><span>↻ {methodRepeat ? 'Method repeat' : 'Repeat this group'}</span><label><input aria-label={methodRepeat ? 'Method repeat total passes' : 'Cycle count'} title="Native repeat count; 0 is supported" value={numberText(value)} disabled={!editableNumber(value)} placeholder={value === undefined ? '—' : retained(value)} onChange={e => updateFrame(frame, key, methodNumber(e.target.value))} /> total passes</label>
-                        <details className="bioxp-thermal-repeat-menu"><summary aria-label="Repeat group actions">⋯</summary><div>{value !== undefined && <button type="button" onClick={() => updateFrame(frame, key, undefined)}>{methodRepeat ? 'Omit repeat count' : 'Omit cycle count'}</button>}{methodRepeat && !Object.hasOwn(frame.node, 'items') && <button type="button" onClick={() => { const next: MethodValue = { ...frame.node, type: 'group' }; delete next.count; frame.onChange(next); }}>Ungroup repeat; keep steps</button>}{!methodRepeat && <button type="button" onClick={() => updateFrame(frame, key, methodNumber('1'))}>Run sequence once</button>}</div></details>
+                return <div key={frame.key} data-frame-path={frame.key} className={`${plainGroup ? 'bioxp-thermal-scope-frame' : 'bioxp-thermal-repeat-frame'} ${selected !== null && selected >= frame.from && selected < frame.from + frame.size ? 'selected' : ''}`} style={{ left: `${frame.from / count * 100}%`, width: `${frame.size / count * 100}%`, top: frame.depth * 34, '--frame-offset': `${frame.depth * 34}px` } as CSSProperties}>
+                    <div className="bioxp-thermal-repeat-heading" {...dragProps(frame.drag)} title="Drag to reorder within the authored parent scope"><span>{plainGroup ? 'Ordered group' : methodRepeat ? '↻ Method repeat' : '↻ Repeat this group'}</span>{!plainGroup && <label><input aria-label={methodRepeat ? 'Method repeat total passes' : 'Cycle count'} title="Native repeat count; 0 is supported" value={numberText(value)} disabled={!editableNumber(value)} placeholder={value === undefined ? '—' : retained(value)} onChange={e => updateFrame(frame, key, methodNumber(e.target.value))} /> total passes</label>}
+                        <details className="bioxp-thermal-repeat-menu"><summary aria-label="Repeat group actions">⋯</summary><div onClick={e => { if ((e.target as HTMLElement).closest('button')) e.currentTarget.parentElement?.removeAttribute('open'); }}>{frame.actions}{!plainGroup && value !== undefined && <button type="button" onClick={() => updateFrame(frame, key, undefined)}>{methodRepeat ? 'Omit repeat count' : 'Omit cycle count'}</button>}{methodRepeat && !Object.hasOwn(frame.node, 'items') && <button type="button" onClick={() => { const next: MethodValue = { ...frame.node, type: 'group' }; delete next.count; frame.onChange(next); }}>Ungroup repeat; keep steps</button>}{!methodRepeat && !plainGroup && <><button type="button" title="Keep native profile fields and bindings; one pass through these steps" onClick={() => updateFrame(frame, key, methodNumber('1'))}>Ungroup repeat; keep native steps</button><button type="button" onClick={() => updateFrame(frame, key, methodNumber('1'))}>Run sequence once</button></>}</div></details>
                     </div>
                 </div>;
             })}
-            <ol className="bioxp-thermal-stages">{leaves.map((leaf, i) => <li key={leaf.key} className={`${selected === i ? 'selected' : ''} ${range && i >= range[0] && i <= range[1] ? 'range-selected' : ''}`} style={{ '--value-top': `${y(i) - 40}px`, '--time-top': `${y(i) + 7}px`, '--step-index': i } as CSSProperties} onClick={e => {
-                    if (e.shiftKey && selected !== null && onSelectRange) { const bounds: [number, number] = [Math.min(selected, i), Math.max(selected, i)]; setRange(bounds); onSelectRange(...bounds); }
+            <ol className="bioxp-thermal-stages">{leaves.map((leaf, i) => <li key={leaf.key} className={`${selected === i ? 'selected' : ''} ${range && i >= range[0] && i <= range[1] ? 'range-selected' : ''} ${chosen && firstChild >= 0 && lastChild >= firstChild && i >= chosen.children[firstChild].from && i <= chosen.children[lastChild].end ? 'scope-selected' : ''}`} style={{ '--value-top': `${y(i) - 40}px`, '--time-top': `${y(i) + 7}px`, '--step-index': i } as CSSProperties} onClick={e => {
+                    if ((e.target as HTMLElement).closest('input,select,button,summary,details')) return;
+                    if (e.shiftKey && selected !== null) { const bounds: [number, number] = [Math.min(selected, i), Math.max(selected, i)]; setRange(bounds); setScopeKey(''); onSelectRange?.(...bounds); }
                     else { setSelected(i); setRange(null); }
                 }}>
-                <div className="bioxp-thermal-step-name"><span>Step {i + 1}</span>{object(leaf.value).bank !== undefined && object(leaf.value).bank !== 'nest' && <small>{String(object(leaf.value).bank)}</small>}{leaf.actions && <details className="bioxp-thermal-step-menu"><summary aria-label={`Actions for step ${i + 1}`}>⋯</summary><div>{leaf.actions}</div></details>}</div>
+                <div className="bioxp-thermal-step-name" {...dragProps(leaf.drag)} title="Drag to reorder within the authored parent scope"><span>Step {i + 1}</span>{object(leaf.value).bank !== undefined && object(leaf.value).bank !== 'nest' && <small>{String(object(leaf.value).bank)}</small>}{leaf.actions && <details className="bioxp-thermal-step-menu"><summary aria-label={`Actions for step ${i + 1}`}>⋯</summary><div>{leaf.actions}</div></details>}</div>
                 {leaf.retainedNode ? <Disclosure title="Retained thermal step" render={() => <BioXpMethodThermalEditor node={leaf.retainedNode!} catalog={catalog} onChange={leaf.updateNode!} />} /> : isObject(leaf.value) && !Object.hasOwn(leaf.value, 'expr') ? <Controls profile label={leaf.label} schema={leaf.schema} value={leaf.value} hold={leaf.hold} onChange={leaf.onChange} /> : <Disclosure title="Advanced stage / retained value" render={() => <MethodFields label={leaf.label} schema={leaf.schema} value={leaf.value} onChange={leaf.onChange} />} />}
             </li>)}</ol>
         </div></div>}
@@ -189,6 +241,7 @@ export function BioXpMethodThermalEditor({ node, onChange, catalog, compact = fa
     const segments = Array.isArray(inputs.segments) ? inputs.segments : [];
     const plainSegments = inputs.segments === undefined || Array.isArray(inputs.segments);
     const setSegments = (next: unknown[]) => setInputs({ ...inputs, segments: next });
+    if (node.type === 'repeat' && Object.hasOwn(node, 'items')) return <section className="bioxp-method-thermal" aria-label="Retained ordered-item thermal scope"><p>Ordered-item iteration is retained in its original scope, not converted to total-pass repetition. Edit its complete structure below.</p><MethodFields label="Ordered-item thermal scope" value={node} onChange={value => onChange(object(value))} /></section>;
     if ((node.type === 'group' || node.type === 'repeat') && Array.isArray(node.steps)) return <section className={`bioxp-method-thermal bioxp-thermal-program-group ${expanded ? 'expanded' : 'compact'}`} aria-label="Temperature program group">
         {!embedded && <header><div><strong>Thermal cycler</strong><p>Temperature program · ordered steps</p></div><button type="button" onClick={() => setExpanded(!expanded)}>{expanded ? 'Compact program' : 'Edit full program'}</button></header>}
         {expanded && <details className="bioxp-thermal-repeat-builder" open={repeatBuilder} onToggle={e => setRepeatBuilder(e.currentTarget.open)}><summary>↻ Repeat ordered children</summary><div className="bioxp-thermal-fields"><label>First child<select aria-label="Repeat first child" value={first} onChange={e => setFirst(e.target.value)}><option value="">Select</option>{node.steps.map((_, i) => <option key={i} value={i}>{i + 1}</option>)}</select></label><label>Last child<select aria-label="Repeat last child" value={last} onChange={e => setLast(e.target.value)}><option value="">Select</option>{node.steps.map((_, i) => <option key={i} value={i}>{i + 1}</option>)}</select></label><label>Total passes<input aria-label="Selected children total passes" value={passes} onChange={e => setPasses(e.target.value)} /></label><button type="button" disabled={first === '' || last === '' || Number(first) > Number(last)} onClick={() => { const steps = node.steps as MethodValue[]; onChange({ ...node, steps: [...steps.slice(0, Number(first)), { type: 'repeat', step_id: crypto.randomUUID(), count: methodNumber(passes), steps: steps.slice(Number(first), Number(last) + 1) }, ...steps.slice(Number(last) + 1)] }); }}>Repeat selected children</button></div></details>}
