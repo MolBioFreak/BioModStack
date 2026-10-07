@@ -145,6 +145,36 @@ it.each([null, { expr: { version: 1, op: 'param', id: 'whole-input' } }])('keeps
     await open('Advanced thermal inputs / expressions'); expect(current.inputs).toEqual(inputs);
 });
 
+it('shows single-pass native profiles without a loop while retaining the exact repeat field', async () => {
+    for (const repeat of [undefined, methodNumber('001.00')]) {
+        const node = { action: 'thermal_profile', inputs: { ...(repeat === undefined ? {} : { repeat }), segments: [{ bank: 'nest', target_temp_c: methodNumber('0037.00'), duration_s: methodNumber('900.000'), start: 'dispatch' }] } };
+        await mount(node);
+        expect(host.querySelector('.bioxp-thermal-repeat-frame')).toBeNull();
+        expect(host.querySelector('.bioxp-thermal-profile-frame')).not.toBeNull();
+        expect(input('Cycle count')).not.toBeNull();
+        expect(current).toEqual(node); expect(changes).toBe(0);
+        await change('Cycle count', '0');
+        expect(host.querySelector('.bioxp-thermal-repeat-frame')).not.toBeNull();
+        expect((current.inputs as MethodValue).repeat).toEqual(methodNumber('0'));
+        await act(async () => root.unmount()); host.remove();
+    }
+});
+it('names plotted options by global step order and exposes attainment and paired rates without a second disclosure', async () => {
+    const raw = { bank: 'nest', target_temp_c: methodNumber('0050.000'), duration_s: methodNumber('120.000'), start: 'attainment', tolerance_c: methodNumber('1.00'), timeout_s: methodNumber('300.00'), heat_rate_c_s: methodNumber('1.0'), cool_rate_c_s: methodNumber('-0.5'), extension: null };
+    const node = { type: 'group', steps: [{ type: 'action', action: 'thermal_hold', inputs: { bank: 'nest' } }, { type: 'action', action: 'thermal_profile', inputs: { repeat: methodNumber('003'), segments: [raw, raw] } }, { type: 'action', action: 'thermal_hold', inputs: {} }] };
+    await mount(node); await open('Step 3 options');
+    const panel = host.querySelector<HTMLDetailsElement>('.bioxp-thermal-step-options[open]')!;
+    expect(panel.querySelector('strong')?.textContent).toBe('Step 3 options');
+    for (const label of ['Target tolerance (°C)', 'Target timeout (seconds)', 'Heating rate (°C/s)', 'Cooling rate (°C/s)']) {
+        const field = input(`Stage 2 ${label}`);
+        expect(field.closest('details')).toBe(panel);
+    }
+    expect(current).toEqual(node); expect(changes).toBe(0);
+    await change('Stage 2 Cooling rate (°C/s)', '-0.7500');
+    expect((((current.steps as MethodValue[])[1].inputs as MethodValue).segments as MethodValue[])[1]).toEqual({ ...raw, cool_rate_c_s: methodNumber('-0.7500') });
+    await click('Close Step 3 options'); expect(panel.open).toBe(false);
+});
+
 const hold = (target: string) => ({ bank: 'nest', target_temp_c: methodNumber(target), duration_s: methodNumber('000.1250'), start: 'dispatch', fan_speed: null, extension: { retained: true } });
 it('composes only selected repeat children and retains literal/binding declarations through cold Open', async () => {
     const node = { type: 'action', step_id: 'program', action: 'thermal_profile', required_capability: null, inputs: { segments: [hold('10'), hold('20'), hold('30'), hold('40')], future: null }, extension: ['raw'] };
@@ -299,8 +329,8 @@ it('breaks graph connections at unknown values and bank boundaries without norma
 });
 it('allows only one local options panel at a time without losing retained edits', async () => {
     await mount({ action: 'thermal_profile', inputs: { segments: [hold('20'), hold('30')] } });
-    await open('Stage 1 options'); await change('Stage 1 Thermal bank', 'lid');
-    await open('Stage 2 options');
+    await open('Step 1 options'); await change('Stage 1 Thermal bank', 'lid');
+    await open('Step 2 options');
     expect(host.querySelectorAll('.bioxp-thermal-step-options[open]')).toHaveLength(1);
     expect(((current.inputs as MethodValue).segments as MethodValue[])[0].bank).toBe('lid');
 });

@@ -70,17 +70,63 @@
 .bioxp-method-map .bwd-canvas-presentation > .bwd-inspector > summary,.bioxp-method-map .bwd-canvas-presentation > details:last-child > summary { font-size:11px; }
 .bioxp-method-map .bwd-canvas-presentation > .bwd-inspector[open] { display:block; padding:12px; }
 .bioxp-method-local-editor { position:absolute; z-index:5; top:64px; left:36%; width:520px; max-width:calc(100% - 40px); max-height:590px; overflow:auto; border:1px solid var(--border-secondary); border-top:3px solid var(--accent-primary); border-radius:16px; background:var(--card-bg,var(--bg-primary)); box-shadow:0 20px 70px #0003; }
-/* Let the expanded thermal sheet own real canvas height; the sequence must
-   not paint over controls or clip the sheet at the old compact deck boundary. */
-.bioxp-method-canvas:has(.bioxp-method-local-editor.is-expanded:not([hidden]) .bioxp-thermal-program) { min-height:calc(min(900px, 100dvh - 96px) + 88px); }
-/* Thermal sheets keep chrome outside the scrollport: focus cannot slide under
-   a sticky header/footer. Expanded height is distinct from the compact sheet. */
-.bioxp-method-local-editor:has(.bioxp-thermal-program) { display:flex; flex-direction:column; overflow:hidden; width:640px; left:28%; }
+/* The thermal spec keeps deck and ordered method visible together. These
+   projections change no selection, authoring, or execution ownership. */
+.bioxp-method-workbench.has-thermal-editor:not(.is-sequence-only) { display:grid; grid-template-columns:minmax(0, 1fr) 290px; align-items:start; }
+.has-thermal-editor .bioxp-method-canvas { position:static; isolation:auto; }
+.has-thermal-editor > .bioxp-method-inspector { margin:24px 18px 18px 0; padding-top:40px; }
+.has-thermal-editor .bioxp-sequence-heading { padding-right:0; flex-wrap:wrap; }
+.has-thermal-editor .bioxp-method-sequence { flex-direction:column; align-items:stretch; }
+.has-thermal-editor .bioxp-method-sequence > li { flex-basis:auto; }
+.has-thermal-editor .bioxp-sequence-connector { min-height:28px; }
+.has-thermal-editor .bioxp-sequence-connector::before { left:50%; right:auto; top:0; bottom:0; border-top:0; border-left:1px solid var(--border-secondary); }
+.has-thermal-editor .bioxp-tools-popover { bottom:auto; top:36px; }
+.has-thermal-editor:has(.bioxp-method-local-editor.is-expanded:not([hidden])) { min-height:calc(min(900px, 100dvh - 96px) + 100px); }
+/* Chrome is outside the scrollport, so focused controls never slide beneath it. */
+.bioxp-method-local-editor:has(.bioxp-thermal-program) { display:flex; flex-direction:column; overflow:hidden; width:640px; left:26%; top:136px; }
 .bioxp-method-local-editor:has(.bioxp-thermal-program) > header,
 .bioxp-method-local-editor:has(.bioxp-thermal-program) > .bioxp-editor-footer { position:static; flex:none; }
-.bioxp-method-local-editor:has(.bioxp-thermal-program) > .bioxp-editor-body { overflow:auto; min-height:0; scroll-padding:20px; padding-top:12px; padding-bottom:12px; }
-.bioxp-method-local-editor.is-expanded:has(.bioxp-thermal-program) { left:8%; width:84%; max-height:min(900px, calc(100dvh - 96px)); }
-@media(max-width:1100px) { .bioxp-method-local-editor:has(.bioxp-thermal-program) { left:20px; width:calc(100% - 40px); } }
+.bioxp-method-local-editor:has(.bioxp-thermal-program) > .bioxp-editor-body { overflow:auto; overscroll-behavior:contain; min-height:0; scroll-padding:20px; padding-top:12px; padding-bottom:12px; }
+.bioxp-method-local-editor.is-expanded:has(.bioxp-thermal-program) { left:50%; transform:translateX(-50%); top:76px; width:88%; max-width:1180px; max-height:min(900px, calc(100dvh - 96px)); }
+.bioxp-methods .bioxp-thermal-program-identity { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+.bioxp-methods .bioxp-thermal-program-identity > input { flex:1; width:100%; font-size:17px; font-weight:550; background:transparent; border-color:transparent; padding:4px 0; }
+.bioxp-methods .bioxp-thermal-program-identity > input::placeholder { opacity:1; color:var(--text-primary); }
+.bioxp-methods .bioxp-thermal-program-identity > input:focus { border-color:var(--border-primary); }
+.bioxp-methods .bioxp-thermal-program-identity > label { font-size:11px; }
+.bioxp-methods .bioxp-thermal-program-identity > button { order:1; font-size:11px; }
+.bioxp-thermal-method-context { display:flex; flex:1; align-items:center; flex-wrap:wrap; gap:8px; font-size:11px; }
+.bioxp-thermal-method-context strong { padding:6px 9px; border-radius:6px; font-weight:550; color:var(--text-primary); background:color-mix(in srgb,var(--accent-primary) 10%,transparent); }
+.bioxp-method-local-editor .bioxp-thermal-hint { display:none; }
+.bioxp-method-local-editor .bioxp-method-thermal { gap:10px; }
+.bioxp-method-local-editor .bioxp-method-thermal > button { justify-self:start; }
+.bioxp-method-local-editor .bioxp-method-thermal > details:not([open]),
+.bioxp-method-local-editor .bioxp-thermal-program > details:not([open]),
+.bioxp-method-local-editor:has(.bioxp-thermal-program) > .bioxp-editor-body > details:not([open]) { margin:0; padding:3px 8px; }
+.bioxp-method-local-editor .bioxp-thermal-step-options[open] > .bioxp-thermal-options-heading { margin-top:20px; }
+.bioxp-method-local-editor .bioxp-thermal-step-options[open] > details:not([open]) { margin-top:0; margin-bottom:0; }
+.bioxp-method-local-editor .bioxp-thermal-step-options[open] > .bioxp-thermal-fields { align-items:start; }
+.bioxp-method-local-editor .bioxp-thermal-step-options .bioxp-thermal-value > button { padding:1px 4px; font-size:9px; }
+/* Compact is the primary summary; Expand exposes every retained advanced owner. */
+.bioxp-method-local-editor:has(.bioxp-method-thermal.compact) .bioxp-method-thermal > details,
+.bioxp-method-local-editor:has(.bioxp-method-thermal.compact) .bioxp-thermal-program > details,
+.bioxp-method-local-editor:has(.bioxp-method-thermal.compact) > .bioxp-editor-body > details { display:none; }
+.bioxp-method-local-editor .bioxp-method-thermal > .bioxp-thermal-repeat-builder:not([open]) { display:none; }
+@media(max-width:1100px) {
+ .bioxp-method-workbench.has-thermal-editor:not(.is-sequence-only) { grid-template-columns:minmax(0, 1fr) 240px; }
+ .bioxp-method-local-editor:has(.bioxp-thermal-program) { left:20px; max-width:calc(100% - 40px); }
+ .bioxp-method-local-editor.is-expanded:has(.bioxp-thermal-program) { left:50%; width:calc(100% - 32px); }
+}
+@media(max-width:760px) {
+ .bioxp-method-workbench.has-thermal-editor:not(.is-sequence-only) { display:block; }
+ .has-thermal-editor > .bioxp-method-inspector { margin:12px; }
+ .bioxp-method-local-editor:has(.bioxp-thermal-program) { left:12px; width:calc(100% - 24px); top:100px; }
+ .bioxp-method-local-editor.is-expanded:has(.bioxp-thermal-program) { left:50%; top:76px; }
+ .bioxp-thermal-program-identity { flex-wrap:wrap; }
+ .bioxp-method-local-editor:has(.bioxp-thermal-program) > header { display:grid; grid-template-columns:minmax(0, 1fr) auto auto; }
+ .bioxp-method-local-editor:has(.bioxp-thermal-program) .bioxp-editor-heading { grid-column:1 / 3; }
+ .bioxp-method-local-editor:has(.bioxp-thermal-program) > header > button:not(.bioxp-editor-close) { grid-row:2; }
+ .bioxp-method-local-editor:has(.bioxp-thermal-program) .bioxp-editor-close { grid-column:3; grid-row:1; }
+}
 .bioxp-method-local-editor[hidden] { display:none; }
 .bioxp-method-local-editor.is-expanded,.bioxp-method-local-editor.is-transfer,.bioxp-method-local-editor.is-setup { left:8%; width:84%; max-width:960px; }
 .bioxp-method-local-editor > header { position:sticky; top:0; z-index:3; display:flex; gap:12px; align-items:center; padding:18px 24px; background:var(--card-bg,var(--bg-primary)); border-bottom:1px solid var(--border-primary); }

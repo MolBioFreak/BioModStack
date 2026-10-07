@@ -25,6 +25,19 @@ const profile=(id='program')=>({type:'action',step_id:id,action:'thermal_profile
 const draft=(steps:unknown[])=>({schema:'bms.bioxp-method.v1',name:'Synthetic repair instrument probe',steps});
 beforeEach(()=>{ vi.stubGlobal('crypto',webcrypto); host=document.createElement('div'); document.body.append(host); });
 afterEach(async()=>{await act(async()=>root?.unmount());host.remove();vi.unstubAllGlobals();});
+it('shows a friendly editable thermal name and real neighbouring method context without seeding labels',async()=>{
+ const hold={type:'action',step_id:'opaque-id',action:'thermal_hold',inputs:segment('0037.000')};
+ const before={type:'action',step_id:'before',label:'Prepare reaction plate',action:'note',inputs:{message:'Synthetic fixture'}};
+ const after={type:'action',step_id:'after',label:'Continue liquid handling',action:'note',inputs:{message:'Synthetic fixture'}};
+ await mount(draft([before,hold,after])); const original=structuredClone(current); await station('LOC_TC');
+ const name=sheet().querySelector<HTMLInputElement>('[aria-label="Temperature program name"]')!;
+ expect(name.placeholder).toBe('Single temperature hold'); expect(name.value).toBe(''); expect(current).toEqual(original);
+ expect(sheet().querySelector('[aria-label="Thermal program method context"]')?.textContent).toBe('Prepare reaction plate→Single temperature hold→Continue liquid handling');
+ expect(sheet().querySelector('[aria-label="Temperature program"]')).toBeNull();
+ await input('Temperature program name','Gentle hold'); expect((current.steps as any[])[1]).toEqual({...hold,label:'Gentle hold'});
+ await click('Expand editor'); await click('Close editor'); await station('LOC_TC'); expect((sheet().querySelector('[aria-label="Temperature program name"]') as HTMLInputElement).value).toBe('Gentle hold');
+ const cold=structuredClone(current); await act(async()=>root.unmount()); await mount(cold); await station('LOC_TC'); expect(current).toEqual(cold);
+});
 it('blank TC opens a non-mutating compact shell; first authored stage alone creates the AST',async()=>{
  await mount(draft([])); const original=structuredClone(current); await station('LOC_TC'); expect(current).toEqual(original); expect(sheet().hidden).toBe(false); expect(sheet().querySelector('h2')?.textContent).toBe('Thermal cycler'); expect(sheet().querySelector('[data-program-view="compact"]')).not.toBeNull();
  await click('Add stage'); expect((current.steps as any[])).toHaveLength(1); expect((current.steps as any[])[0].inputs).toEqual({segments:[{}]});
