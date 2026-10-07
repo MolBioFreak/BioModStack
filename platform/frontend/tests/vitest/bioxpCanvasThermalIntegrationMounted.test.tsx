@@ -24,7 +24,7 @@ it('R07: opens the canvas thermal profile compactly rather than defaulting to fu
 });
 it('R07: keeps the composed thermal group in the profile editor instead of falling back to generic structure', async () => {
     await mount({ steps: [{ type: 'action', step_id: 'program', action: 'thermal_profile', inputs: { segments: [{ bank: 'nest', target_temp_c: methodNumber('10'), duration_s: methodNumber('0.125'), start: 'dispatch' }] } }] });
-    await click('Edit selected step'); await click('Edit full program'); await input('Repeat first step', '0'); await input('Repeat last step', '0'); await input('Selected group total passes', '2'); await click('Repeat selected steps');
+    await click('Edit selected step'); await click('Expand editor'); await input('Repeat first step', '0'); await input('Repeat last step', '0'); await input('Selected group total passes', '2'); await click('Repeat selected steps');
     expect((current.steps as any[])[0].type).toBe('group');
     expect(host.querySelector('[aria-label="Temperature program group"]')).not.toBeNull();
 });
@@ -50,15 +50,20 @@ receiving.each(['0', '2'])('lowers a real bound canvas profile subgroup (%s pass
     await mount({ schema: 'bms.bioxp-method.v1', name: 'Canvas thermal integration', parameters: [{ id: 'program', type: 'object' }], steps: [{ type: 'action', step_id: 'program-step', label: 'Bound program', action: 'thermal_profile', inputs: reference, on_error: 'pause_for_operator', required_capability: null }] }, undefined, { program: bound });
     await click('Edit selected step');
     await input('Stage 2 Target temperature (°C)', '0021.2500');
-    const retained = structuredClone(values);
+    const retained = structuredClone(values) as { program: typeof bound };
     expect((current.steps as any[])[0].inputs).toEqual(reference);
-    await click('Edit full program');
+    await click('Expand editor');
     await input('Repeat first step', '1'); await input('Repeat last step', '2'); await input('Selected group total passes', passes);
     await click('Repeat selected steps');
     const group = (current.steps as any[])[0];
     expect(group.type).toBe('group'); expect(group).not.toHaveProperty('inputs');
     expect(group.steps.map((s: any) => s.action)).toEqual(['thermal_hold', 'thermal_profile', 'thermal_hold']);
-    expect(values).toEqual(retained);
+    // Subgroup lowering keeps the original parameter reference on the repeated child.
+    // Its bound inputs now describe only that subgroup; outer segments remain exact holds.
+    expect(group.steps[1].inputs).toEqual(reference);
+    expect(values).toEqual({ ...retained, program: { ...retained.program, segments: retained.program.segments.slice(1, 3), repeat: methodNumber(passes) } });
+    expect(group.steps[0].inputs).toEqual(retained.program.segments[0]);
+    expect(group.steps[2].inputs).toEqual(retained.program.segments[3]);
     expect(group.steps.every((s: any) => s.on_error === 'pause_for_operator' && s.required_capability === null)).toBe(true);
     const cold = JSON.parse(JSON.stringify({ method: current, bindings: values }));
     await act(async () => root.unmount()); await mount(cold.method, undefined, cold.bindings);
@@ -111,7 +116,7 @@ receiving('inserts an explicitly selected cooler wait after other work and cold 
 
 it('shares canvas and thermal expansion while preserving an unfinished repeat-selection draft', async () => {
     await mount({ steps: [{ type: 'action', step_id: 'program', action: 'thermal_profile', inputs: { segments: [{ bank: 'nest', target_temp_c: '001.250', duration_s: '0.125', start: 'dispatch' }] } }] });
-    await click('Edit selected step'); await click('Edit full program');
+    await click('Edit selected step'); await click('Expand editor');
     expect(host.querySelector('[aria-label="On-deck editor"]')?.classList.contains('is-expanded')).toBe(true);
     await input('Repeat first step', '0'); await input('Selected group total passes', '003');
     await click('Compact editor');
