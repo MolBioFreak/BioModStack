@@ -52,6 +52,9 @@
 .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value-target_temp_c { top: var(--value-top); }
 .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value-duration_s { top: var(--time-top); }
 .bioxp-method-thermal .bioxp-thermal-exact input { width: 84px; border: 1px solid transparent; background: transparent; text-align: right; padding: 2px 0; font-size: 31px; font-weight: 600; letter-spacing: -.045em; font-variant-numeric: tabular-nums; }
+/* Outrank the Methods shell's input:not(...) padding in the compact plot.
+   Its 8px vertical inset enlarges the temperature hit box into the time row. */
+.bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-exact .bioxp-thermal-value-target_temp_c input { padding: 2px 0; }
 .bioxp-method-thermal .bioxp-thermal-exact input:hover, .bioxp-method-thermal .bioxp-thermal-exact input:focus { border-color: var(--border-primary); }
 .bioxp-method-thermal .bioxp-thermal-exact input:focus { background: var(--bg-primary); }
 .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value-unit { font-size: 15px; }
