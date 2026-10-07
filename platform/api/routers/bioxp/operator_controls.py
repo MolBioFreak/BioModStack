@@ -99,6 +99,29 @@ def _robot_request_body(request: Any) -> dict[str, Any]:
     return request.model_dump(exclude={"expected_connection_generation"}, mode="json")
 
 
+# Full passive readers use the existing generation lease, not action admission.
+@router.get("/operator-controls/readers/settings", response_model=None)
+async def operator_reader_settings(
+    expected_connection_generation: int = Query(gt=0),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> Any:
+    return await _relay(runtime.connection.request_active_query(
+        "oem_machine_config", expected_generation=expected_connection_generation,
+        require_fresh=False,
+    ))
+
+
+@router.get("/operator-controls/readers/position-table", response_model=None)
+async def operator_reader_position_table(
+    expected_connection_generation: int = Query(gt=0),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> Any:
+    return await _relay(runtime.connection.request_active_query(
+        "oem_position_table", expected_generation=expected_connection_generation,
+        require_fresh=False,
+    ))
+
+
 @router.get("/operator-controls/updates", response_model=None)
 async def operator_updates(
     request: Request,

@@ -34,6 +34,8 @@ from .target_policy import ValidatedBioXpTarget
 
 DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "status": ("GET", "/status", 5.0),
+    "oem_machine_config": ("GET", "/motion/oem/machine_config", 10.0),
+    "oem_position_table": ("GET", "/motion/oem/position_table", 10.0),
     "calibration_settings": ("GET", "/motion/oem/calibration_settings", 10.0),
     "save_calibration_settings": ("PATCH", "/motion/oem/calibration_settings", 10.0),
     "calibration_run": ("GET", "/motion/oem/calibration_settings/runs/{run_id}", 10.0),
