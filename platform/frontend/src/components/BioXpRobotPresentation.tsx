@@ -27,10 +27,31 @@ export function BioXpStepSlider({ label, value, min, max, onChange }: {
         onChange={event => onChange(event.target.valueAsNumber)} />;
 }
 
+/** Relative ranges are hints from OEM inner margins, never request validation. */
+export function repairManualJogDistances(position: unknown, min: unknown, max: unknown) {
+    if (![position, min, max].every(v => typeof v === 'number' && Number.isFinite(v))) return null;
+    return { negative: Math.max(0, (position as number) - ((min as number) + 20)),
+        positive: Math.max(0, (max as number) - 20 - (position as number)) };
+}
+
+export function BioXpStepPresets({ axis, onChange, distances }: {
+    axis: string; onChange: (value: number) => void;
+    distances: ReturnType<typeof repairManualJogDistances>;
+}) {
+    return <div className="bx-step-presets"><span>Jog by · steps</span>
+        {[1000, 5000, 10000, 25000].map(value => <button key={value} type="button"
+            aria-label={`${axis} jog ${value} steps`} onClick={() => onChange(value)}>{value / 1000}k</button>)}
+        <small>Useful − / +: {distances ? `${distances.negative} / ${distances.positive} steps` : 'Not reported'} (display hint)</small>
+    </div>;
+}
+
 export function BioXpAxisTelemetry({ axis }: { axis: AxisTelemetry | undefined }) {
     if (!axis) return <p>Axis telemetry not reported.</p>;
     const switchLabel = (value: boolean | null | undefined) => value === true ? 'Yes' : value === false ? 'No' : 'Not reported';
     return <dl className="bx-telemetry">
+        <div><dt>Position reply</dt><dd>{axis.position_reply_valid === true ? 'Valid' : axis.position_reply_valid === false ? 'Invalid' : 'Unknown'}</dd></div>
+        <div><dt>Position source / sample time</dt><dd>{axis.position_source ?? 'Not reported'} / {axis.position_observed_at == null ? 'Not reported' : new Date(axis.position_observed_at * 1000).toISOString()}</dd></div>
+        <div><dt>Published limits (steps)</dt><dd>{axis.min_steps ?? 'Not reported'} … {axis.max_steps ?? 'Not reported'}</dd></div>
         <div><dt>Speed</dt><dd>{axis.speed_steps_s ?? '—'} steps/s</dd></div>
         <div><dt>Run / standby current</dt><dd>{axis.run_current ?? '—'} / {axis.standby_current ?? '—'}</dd></div>
         <div><dt>Limits L / R</dt><dd>{switchLabel(axis.left_switch_active)} / {switchLabel(axis.right_switch_active)}</dd></div>
