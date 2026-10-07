@@ -111,8 +111,24 @@ export function duplicateCanvasNode(method: MethodValue, node: MethodValue, bind
         }
         return Object.fromEntries(Object.entries(source).map(([key, field]) => [key, values(field)]));
     };
+    // Allocate identities only for timer starts inside this copied scope. External
+    // references are retained; never rewrite another task's timer by bank or label.
+    const timers = new Map<string, string>();
+    for (const entry of methodCanvasEntries([node])) {
+        const input = object(methodInputBinding(method, entry.node, bindings).inputs);
+        if (entry.node.action === 'timer_start' && typeof input.timer_id === 'string') timers.set(input.timer_id, crypto.randomUUID());
+    }
     const copy = (original: MethodValue): MethodValue => {
         const result = object(values(original)); result.step_id = crypto.randomUUID();
+        if (['timer_start', 'timer_wait'].includes(String(original.action))) {
+            const input = object(methodInputBinding(method, original, bindings).inputs);
+            const timer = typeof input.timer_id === 'string' ? timers.get(input.timer_id) : undefined;
+            if (timer) {
+                const copiedBinding = methodInputBinding({ ...method, parameters }, result, nextBindings);
+                if (copiedBinding.id && ids.has(String(object(object(original.inputs).expr).id))) nextBindings[copiedBinding.id] = { ...object(copiedBinding.inputs), timer_id: timer };
+                else if (!Object.hasOwn(object(result.inputs), 'expr')) result.inputs = { ...object(result.inputs), timer_id: timer };
+            }
+        }
         for (const key of ['steps', 'then', 'else']) if (Array.isArray(original[key])) result[key] = (original[key] as MethodValue[]).map(copy);
         return result;
     };

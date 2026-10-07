@@ -3,7 +3,7 @@ import { deckStations } from '../lib/bioxpWorkflowDeck';
 import { isMethodNumber } from '../lib/bioxpMethodNumber';
 
 export type PlateAddition = {
-    path: string; name: string; source: string; wells: string[]; amount: unknown; editable: boolean; wellsEditable: boolean;
+    path: string; name: string; source: string; wells: string[]; amount: unknown; settings?: string; editable: boolean; wellsEditable: boolean;
 };
 
 /** A presentation of the existing plate/Transfer owners, never a second preparation model. */
@@ -49,7 +49,7 @@ export function BioXpMethodPreparation({ name, station, additions, selected, onS
                 const amountEditable = addition.amount === undefined || typeof addition.amount === 'string' || typeof addition.amount === 'number' || isMethodNumber(addition.amount);
                 return <div key={addition.path} className={`bioxp-prepare-addition${current?.path === addition.path ? ' is-selected' : ''}`}>
                     <span className="bioxp-addition-letter">{String.fromCharCode(65 + i % 26)}</span>
-                    <button className="bioxp-addition-name" type="button" aria-label={`Select addition ${addition.name}`} onClick={() => onSelect(addition.path)}>{addition.name}<small>{addition.source}</small></button>
+                    <button className="bioxp-addition-name" type="button" aria-label={`Select addition ${addition.name}`} onClick={() => onSelect(addition.path)}>{addition.name}<small>{addition.source} → {addition.wells.join(', ') || 'No destination wells'}</small><small>{addition.settings}</small></button>
                     <label className="bioxp-addition-amount"><input aria-label={`${addition.name} preparation volume (µL)`} value={amount} inputMode="decimal" placeholder="—" disabled={!addition.editable || !amountEditable} onChange={e => onAmount(addition.path, e.target.value)} /><span>µL</span></label>
                     <button className="bioxp-addition-open" type="button" aria-label={`Edit ${addition.name} transfer`} onClick={() => onEdit(addition.path)}>↗</button>
                 </div>;

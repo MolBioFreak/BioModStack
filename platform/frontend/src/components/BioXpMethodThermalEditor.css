@@ -23,6 +23,9 @@
 .bioxp-method-thermal .bioxp-thermal-program { min-width: 0; }
 .bioxp-method-thermal .bioxp-thermal-track { overflow-x: auto; scrollbar-width: thin; padding-bottom: 8px; }
 .bioxp-method-thermal .bioxp-thermal-track-inner { position: relative; isolation: isolate; }
+.bioxp-method-thermal [data-program-view="expanded"] .bioxp-thermal-track { padding-left: 42px; }
+.bioxp-thermal-temperature-scale { position: absolute; left: -40px; top: 0; bottom: 0; width: 32px; color: var(--text-secondary); font-size: 10px; }
+.bioxp-thermal-temperature-scale span { position: absolute; right: 0; transform: translateY(-50%); }
 .bioxp-method-thermal .bioxp-thermal-target-line { position: absolute; z-index: 1; top: var(--heading-height); left: 0; width: 100%; height: 270px; pointer-events: none; fill: none; stroke: var(--accent-primary); stroke-width: 2.8; }
 .bioxp-method-thermal .bioxp-thermal-target-line .gridline { stroke: var(--border-primary); stroke-width: 1; stroke-dasharray: 3 5; }
 .bioxp-method-thermal .bioxp-thermal-target-line path:not([data-bank="nest"]) { stroke: var(--accent-secondary, var(--accent-primary)); stroke-dasharray: 5 3; }
@@ -49,6 +52,8 @@
 .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value > button { position: absolute; top: 100%; font-size: 10px; padding: 2px 5px; opacity: 0; pointer-events: none; }
 .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value:focus-within > button, .bioxp-method-thermal .bioxp-thermal-exact .bioxp-thermal-value:hover > button { opacity: 1; pointer-events: auto; }
 .bioxp-method-thermal .bioxp-thermal-continuation { position: absolute; top: var(--time-top); left: 0; right: 0; text-align: center; font-size: 11px; color: var(--text-secondary); }
+.bioxp-method-thermal .bioxp-thermal-timer-cue { position: absolute; top: 244px; width: 100%; text-align: center; font-size: 11px; color: var(--text-secondary); }
+.bioxp-method-thermal [data-program-view="compact"] .bioxp-thermal-timer-cue { display: none; }
 .bioxp-method-thermal .bioxp-thermal-step-options { position: absolute; top: 270px; left: 0; width: 100%; z-index: 4; }
 .bioxp-method-thermal .bioxp-thermal-step-options > summary { text-align: center; font-size: 11px; }
 .bioxp-method-thermal .bioxp-thermal-step-options[open] { z-index: 5; }

@@ -76,7 +76,7 @@ export function BioXpWorkflowMaterials({ plan, onChange, selection, methodAuthor
         </fieldset>
         <fieldset><legend>Samples & reagents</legend>
             <div className="bioxp-plan-actions"><button type="button" onClick={() => addMaterial('sample')}>Add sample</button><button type="button" onClick={() => addMaterial('reagent')}>Add reagent</button></div>
-            {plan.materials.map((material, index) => contextual && material.id !== materialId && !plan.assignments.some(a => a.material_id === material.id && available.some(l => l.id === a.labware_id) && (!selection.wells.length || selection.wells.includes(a.well))) ? null : <div className="bioxp-plan-row" key={material.id}>
+            {plan.materials.map((material, index) => contextual && material.id !== materialId && !plan.assignments.some(a => a.material_id === material.id && (!selectedLabwareId || a.labware_id === selectedLabwareId) && available.some(l => l.id === a.labware_id) && (!selection.wells.length || selection.wells.includes(a.well))) ? null : <div className="bioxp-plan-row" key={material.id}>
                 <label>Material {index + 1} name<input value={material.name ?? ''} onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, name: e.target.value } : m) })} /></label>
                 <label>Material {index + 1} kind<select value={material.kind} onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, kind: e.target.value as WorkflowMaterial['kind'] } : m) })}><option value="sample">Sample</option><option value="reagent">Reagent</option>{methodAuthoring && <><option value="product">Product</option><option value="waste">Waste</option></>}</select></label>
                 <label>Material {index + 1} description<input value={material.description ?? ''} onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, description: e.target.value } : m) })} /></label>
@@ -94,7 +94,7 @@ export function BioXpWorkflowMaterials({ plan, onChange, selection, methodAuthor
         <fieldset><legend>Well associations ({plan.assignments.length})</legend>
             {plan.assignments.length === 0 && <p>No material assignments.</p>}
             {plan.assignments.map((assignment, index) => {
-                if (contextual && (!available.some(l => l.id === assignment.labware_id) || selection.wells.length > 0 && !selection.wells.includes(assignment.well))) return null;
+                if (contextual && (!available.some(l => l.id === assignment.labware_id) || !!selectedLabwareId && assignment.labware_id !== selectedLabwareId || selection.wells.length > 0 && !selection.wells.includes(assignment.well))) return null;
                 const labware = plan.labware.find(l => l.id === assignment.labware_id);
                 const material = plan.materials.find(m => m.id === assignment.material_id);
                 return <div className="bioxp-plan-row" key={assignment.id}>
