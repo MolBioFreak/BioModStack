@@ -532,7 +532,7 @@ function MolBioSequenceImportPanel() {
             <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
                     <h3 className="text-sm font-semibold text-[var(--text-primary)]">Import saved MolBio sequence</h3>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Server-authoritative preview creates immutable revisions. Raw sequence content stays in memory until the preview and commit requests.</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Preview checks your sequences without saving them. Commit saves the imported sequences and revisions.</p>
                 </div>
                 <div className="flex gap-2">
                     <select value={format} onChange={(event) => setFormat(event.target.value as typeof format)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-xs text-[var(--text-primary)]">
@@ -1795,7 +1795,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     <>
                     <div className="mb-3">
                         <h3 className="text-sm font-semibold text-[var(--text-primary)]">Shared Experiment reference</h3>
-                        <p className="mt-1 text-xs text-[var(--text-secondary)]">Choose one exact revision from the references attached to this Experiment. MolBio and NGS use the same molecular sequence library; NGS receives runtime FASTA only through a server receipt.</p>
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">Choose a saved reference revision attached to this Experiment.</p>
                         {exactDomainExperimentId && molbioSequences.length === 0 && !molbioSequencesQuery.isLoading && !exactStateRevisionQuery.isLoading && (
                             <p role="alert" className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">No shared reference is attached to this scientific-state revision. Return to the Experiment’s Molecular Inputs section to add one or more references.</p>
                         )}
@@ -1816,7 +1816,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 {molbioSequences.map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}</option>)}
                             </select>
                         </label>
-                        <label className="text-xs text-[var(--text-secondary)]">Exact immutable revision
+                        <label className="text-xs text-[var(--text-secondary)]">Saved revision
                             <select
                                 value={selectedMolbioRevisionId}
                                 onChange={(event) => setSelectedMolbioRevisionId(event.target.value)}
@@ -1829,7 +1829,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             </select>
                         </label>
                     </div>
-                    {molbioRevisionsQuery.isError && <p className="mt-2 text-xs text-rose-400">Unable to load immutable revisions for this saved sequence.</p>}
+                    {molbioRevisionsQuery.isError && <p className="mt-2 text-xs text-rose-400">Unable to load revisions for this sequence.</p>}
                     {selectedMolbioSequence && selectedMolbioRevision && (
                         <div className="mt-3 grid grid-cols-2 gap-2 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/50 p-3 text-xs md:grid-cols-5" data-testid="molbio-revision-summary">
                             <div><div className="text-[var(--text-secondary)]">Sequence</div><div className="mt-1 text-[var(--text-primary)]">{selectedMolbioSequence.name}</div></div>
@@ -1847,7 +1847,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 {approvedComparisonPanels.map((panel) => <option key={panel.id} value={panel.id}>{panel.label}</option>)}
                             </select>
                             {approvedComparisonPanels.length === 0 && <p className="mt-1 text-xs text-[var(--text-secondary)]">{approvedPanelResponse?.absence_label || 'No approved comparison panels are available.'}</p>}
-                            <p className="mt-1 text-xs text-[var(--text-secondary)]">Server-approved comparison panels are separate from the expected MolBio receipt reference.</p>
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">Comparison panels do not replace the selected expected reference.</p>
                         </div>
                     )}
                     <div className="mt-3">
@@ -1899,10 +1899,9 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     <button type="button" onClick={() => createManagedReferenceMutation.mutate(`>${newFastaName.trim()}\n${newFastaSeq}`)} disabled={!availability.canMutateDomain || usesMolBioReceiptLane || createManagedReferenceMutation.isPending || !newFastaName.trim() || !newFastaSeq.trim()} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{createManagedReferenceMutation.isPending ? 'Saving shared MolBio records…' : 'Save to shared MolBio'}</button>
                 </div>}
                 {referenceTab === 'legacy' && <div className="space-y-2 rounded border border-amber-500/40 p-3">
-                    <p className="text-xs text-amber-100">Legacy browser entries are untrusted import hints only. They are read only on explicit action and never become scientific authority directly.</p><button type="button" onClick={() => { const hints = readLegacyReferenceImportHints(); setLegacyReferenceHints(hints); setLegacyHintsLoaded(true); setSelectedLegacyReferenceId(hints[0]?.id ?? ''); setReferenceLibraryNotice(hints.length ? `Loaded ${hints.length} untrusted browser hint(s).` : 'No legacy browser reference hints were found.'); }} className="px-3 py-2 rounded border text-sm">Read legacy browser hints</button>
+                    <p className="text-xs text-amber-100">Import an older browser-saved reference into MolBio before using it.</p><button type="button" onClick={() => { const hints = readLegacyReferenceImportHints(); setLegacyReferenceHints(hints); setLegacyHintsLoaded(true); setSelectedLegacyReferenceId(hints[0]?.id ?? ''); setReferenceLibraryNotice(hints.length ? `Loaded ${hints.length} untrusted browser hint(s).` : 'No legacy browser reference hints were found.'); }} className="px-3 py-2 rounded border text-sm">Read legacy browser hints</button>
                     {legacyHintsLoaded && legacyReferenceHints.length > 0 && <><select value={selectedLegacyReferenceId} onChange={(event) => setSelectedLegacyReferenceId(event.target.value)} className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm">{legacyReferenceHints.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · untrusted {entry.source} hint</option>)}</select>{selectedLegacyReference && <div className="text-xs"><div>Hint ID: <span className="font-mono">{selectedLegacyReference.id}</span></div>{selectedLegacyReference.source === 'path' && <div className="text-amber-200">Path-only hint: paste the original FASTA; a path is not sequence content.</div>}</div>}<button type="button" onClick={() => selectedLegacyReference && importLegacyReferenceMutation.mutate(selectedLegacyReference)} disabled={!selectedLegacyReference || !availability.canMutateDomain || usesMolBioReceiptLane || importLegacyReferenceMutation.isPending} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{importLegacyReferenceMutation.isPending ? 'Importing…' : 'Save browser hint to shared MolBio'}</button></>}
                 </div>}
-                {selectedMolbioSequenceId && ['plasmidQc', 'constructScreening', 'fastqQc', 'bamQc'].includes(selectedWorkflow) && <div className="p-3 rounded border"><label className="block text-xs mb-1">Approved comparison panel (MolBio receipt lane only)</label><select value={approvedComparisonPanelId} onChange={(event) => setApprovedComparisonPanelId(event.target.value)} className="w-full bg-[var(--bg-secondary)] border rounded px-3 py-2 text-sm"><option value="">No comparison panel</option>{approvedComparisonPanels.map((panel) => <option key={panel.id} value={panel.id}>{panel.label}</option>)}</select></div>}
                 <ImportedMolBioRecords records={referenceImportContext === `${exactDomainExperimentId}:${exactStateRevisionId}` ? importedReferenceRecords : []} />
                 {referenceMoleculeType === 'rna' && referenceTab !== 'managed' && <p className="text-xs">RNA records use the shared RNA writer and preserve topology. The declared RNA alphabet canonicalizes T to U. Records are saved independently; any partial completion is listed. Open the shared MolBio viewer to choose and attach the saved revision explicitly.</p>}
                 {referenceLibraryNotice && <p role="status" className="text-xs text-[var(--text-secondary)]">{referenceLibraryNotice}</p>}

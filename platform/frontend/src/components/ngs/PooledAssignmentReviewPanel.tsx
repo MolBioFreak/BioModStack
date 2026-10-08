@@ -337,7 +337,7 @@ export function PooledAssignmentReviewPanel({
                     <div className="space-y-2">
                         <div className="flex flex-wrap items-baseline justify-between gap-2">
                             <div>
-                                <h5 className="text-sm font-semibold text-[var(--text-primary)]">Immutable target authority</h5>
+                                <h5 className="text-sm font-semibold text-[var(--text-primary)]">Targets</h5>
                                 <p className="mt-1 text-xs text-[var(--text-secondary)]">Check targets explicitly. The initial selection is empty.</p>
                             </div>
                             <span className="text-xs text-[var(--text-secondary)]" data-testid="pooled-assignment-selection-count">

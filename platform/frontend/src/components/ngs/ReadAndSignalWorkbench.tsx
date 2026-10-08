@@ -43,7 +43,7 @@ import {
     type AlignmentReadFilterPreset,
     type AlignmentSession,
 } from '../../lib/ngsAlignmentSession';
-import type { AlignmentReadLocus } from '../../lib/ngsAlignmentViewer';
+import { secureNgsHtml, type AlignmentReadLocus } from '../../lib/ngsAlignmentViewer';
 import { GovernedRawSignalWaveform } from './RawReadInspector';
 import { OntSignalIdealComparison } from './OntSignalIdealComparison';
 
@@ -103,18 +103,6 @@ const GOVERNED_HTML_CSP = [
     "worker-src 'none'",
     "navigate-to 'none'",
 ].join('; ');
-
-function secureGovernedHtml(source: string): Blob {
-    const documentNode = new DOMParser().parseFromString(source, 'text/html');
-    const policy = documentNode.createElement('meta');
-    policy.httpEquiv = 'Content-Security-Policy';
-    policy.content = GOVERNED_HTML_CSP;
-    documentNode.head.insertBefore(policy, documentNode.head.firstChild);
-    return new Blob([
-        '<!doctype html>\n',
-        documentNode.documentElement.outerHTML,
-    ], { type: 'text/html;charset=utf-8' });
-}
 
 function readHtmlBlob(blob: Blob): Promise<string> {
     if (typeof blob.text === 'function') return blob.text();
@@ -614,7 +602,7 @@ export function ReadAndSignalWorkbench({
                 identityGeneration !== identityRef.current
                 || requestGeneration !== artifactRequestGenerationRef.current
             ) return;
-            const next = URL.createObjectURL(secureGovernedHtml(source));
+            const next = URL.createObjectURL(secureNgsHtml(source, GOVERNED_HTML_CSP));
             replaceArtifactUrl(next);
         }).catch((reason) => {
             if (
@@ -649,7 +637,7 @@ export function ReadAndSignalWorkbench({
 
     const registerExternalMoveBam = async () => {
         if (!activeRawRepresentationId || !externalMoveBamCandidateId) {
-            setError('Select one path-opaque external move BAM and an exact ready indexed BLOW5 authority.');
+            setError('Select an external move-tagged BAM and a ready, indexed BLOW5 dataset.');
             return;
         }
         const generation = identityRef.current;
@@ -700,7 +688,7 @@ export function ReadAndSignalWorkbench({
     const prepareMapping = async (mappingMode: OntSignalMappingMode) => {
         const rawRepresentationId = activeRawRepresentationId;
         if (!rawRepresentationId || !compatibleSource) {
-            setError('No exact ready indexed BLOW5 and move-source authority is available.');
+            setError('No compatible indexed BLOW5 and move source are ready.');
             return;
         }
         if (mappingMode === 'signal_to_reference' && (!referenceRevisionId || !alignmentSession?.ready || readMapping?.state !== 'ready')) {
@@ -733,7 +721,7 @@ export function ReadAndSignalWorkbench({
                 if (evidence.raw_representation_id !== rawRepresentationId
                     || evidence.move_source_id !== compatibleSource.move_source_id
                     || evidence.basecall_model_id !== compatibleSource.basecall_model_id) {
-                    throw new Error('Ready calibration evidence is not exact for the selected governed parents.');
+                    throw new Error('Calibration does not match the selected raw signal, move source, or basecaller.');
                 }
                 profile = await createOntSignalMappingProfile({
                     name: `Calibrated ${evidence.basecall_model_id}`.slice(0, 255),
@@ -1135,7 +1123,7 @@ export function ReadAndSignalWorkbench({
 
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
                     <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-xs font-semibold">Governed mappings</h3>
+                        <h3 className="text-xs font-semibold">Signal mappings</h3>
                         <span className="text-[10px] text-[var(--text-secondary)]">Reusable across bounded views</span>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10px]">

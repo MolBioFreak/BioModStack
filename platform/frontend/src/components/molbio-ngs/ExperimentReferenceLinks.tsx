@@ -31,7 +31,7 @@ export default function ExperimentReferenceLinks({ domainExperimentId, stateRevi
     return (
         <div className="rounded-md border border-border-primary bg-surface p-3" data-testid="experiment-reference-result-links">
             <h4 className="text-xs font-semibold uppercase tracking-wide text-content-muted">{title}</h4>
-            <p className="mt-1 text-xs text-content-muted">These exact immutable molecular revisions supplied the selected Experiment state. Open them in the shared molecular viewer without following a mutable current head.</p>
+            <p className="mt-1 text-xs text-content-muted">Open the reference revisions used by this Experiment state, not their latest versions.</p>
             {revisionQuery.isError ? <p role="alert" className="mt-2 text-xs text-error">Exact Experiment references could not be loaded.</p> : references.length === 0 ? <p className="mt-2 text-xs text-content-muted">No exact molecular reference is attached to this state revision.</p> : <div className="mt-2 flex flex-wrap gap-2">
                 {references.map((reference) => <a
                     key={reference.receiptId}

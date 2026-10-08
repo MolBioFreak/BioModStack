@@ -89,6 +89,18 @@ function formatMetric(value: unknown, field: SortableReadField): string {
     return Math.abs(value) >= 100 ? value.toFixed(1) : value.toFixed(3);
 }
 
+export function rawSignalWaveformPoints(waveform: OntRawSignalWaveform | null): string {
+    const samples = waveform?.state === 'ready' ? waveform.samples : null;
+    if (!samples?.length) return '';
+    const min = Math.min(...samples);
+    const max = Math.max(...samples);
+    return samples.map((value, index) => {
+        const x = samples.length > 1 ? (index * 600) / (samples.length - 1) : 0;
+        const y = max > min ? 118 - ((value - min) * 116) / (max - min) : 60;
+        return `${x},${y}`;
+    }).join(' ');
+}
+
 export function GovernedRawSignalWaveform({ runId, observedGeneration, representationId, readId }: GovernedRawSignalWaveformProps) {
     const requestGenerationRef = useRef(0);
     const [waveform, setWaveform] = useState<OntRawSignalWaveform | null>(null);
@@ -104,17 +116,7 @@ export function GovernedRawSignalWaveform({ runId, observedGeneration, represent
     }, [identityKey]);
     useEffect(() => () => { requestGenerationRef.current += 1; }, []);
 
-    const waveformPoints = useMemo(() => {
-        const samples = waveform?.state === 'ready' ? waveform.samples : null;
-        if (!samples?.length) return '';
-        const min = Math.min(...samples);
-        const max = Math.max(...samples);
-        return samples.map((value, index) => {
-            const x = samples.length > 1 ? (index * 600) / (samples.length - 1) : 0;
-            const y = max > min ? 118 - ((value - min) * 116) / (max - min) : 60;
-            return `${x},${y}`;
-        }).join(' ');
-    }, [waveform]);
+    const waveformPoints = useMemo(() => rawSignalWaveformPoints(waveform), [waveform]);
 
     const inspectWaveform = async () => {
         const exactReadId = readId.trim();

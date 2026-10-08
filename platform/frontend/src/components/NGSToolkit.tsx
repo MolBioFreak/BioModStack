@@ -213,6 +213,20 @@ interface MultimerArtifacts {
     missingReason: string | null;
 }
 
+function summaryTableLookup(table: SummaryTable | null | undefined): Map<string, string> {
+    if (!table || table.header.length === 0) return new Map<string, string>();
+    const metricIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'metric');
+    const valueIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'value');
+    if (metricIdx < 0 || valueIdx < 0) return new Map<string, string>();
+    const lookup = new Map<string, string>();
+    for (const row of table.rows) {
+        const key = String(row[metricIdx] ?? '').trim().toLowerCase();
+        if (!key) continue;
+        lookup.set(key, String(row[valueIdx] ?? '').trim());
+    }
+    return lookup;
+}
+
 interface SummaryTable {
     header: string[];
     rows: string[][];
@@ -2255,7 +2269,6 @@ export function NGSToolkit() {
     const [igvRangeError, setIgvRangeError] = useState<string | null>(null);
     const [igvInspectorOpen, setIgvInspectorOpen] = useState(false);
     const [igvAuxTrackFailures, setIgvAuxTrackFailures] = useState<string[]>([]);
-    const [, setIgvVersion] = useState<string | null>(null);
     const [igvAutoLoadAttempted, setIgvAutoLoadAttempted] = useState(false);
     const [igvAlignmentDisplayMode, setIgvAlignmentDisplayMode] = useState<OntSignalViewerAlignmentDisplayMode>('EXPANDED');
     const [igvAlignmentColorBy, setIgvAlignmentColorBy] = useState<OntSignalViewerAlignmentColorBy>('strand');
@@ -3315,20 +3328,7 @@ export function NGSToolkit() {
     const expectedPlasmidSize = Number.isFinite(multimerMetrics.expected_plasmid_size)
         ? multimerMetrics.expected_plasmid_size
         : Number.parseFloat(String(selectedJobParams.expected_plasmid_size ?? ''));
-    const multimerSummaryLookup = useMemo(() => {
-        const table = multimerReport?.summary;
-        if (!table || table.header.length === 0) return new Map<string, string>();
-        const metricIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'metric');
-        const valueIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'value');
-        if (metricIdx < 0 || valueIdx < 0) return new Map<string, string>();
-        const lookup = new Map<string, string>();
-        for (const row of table.rows) {
-            const key = String(row[metricIdx] ?? '').trim().toLowerCase();
-            if (!key) continue;
-            lookup.set(key, String(row[valueIdx] ?? '').trim());
-        }
-        return lookup;
-    }, [multimerReport?.summary]);
+    const multimerSummaryLookup = useMemo(() => summaryTableLookup(multimerReport?.summary), [multimerReport?.summary]);
     const readMultimerMetric = useCallback((keys: string[]): number => {
         for (const key of keys) {
             const fromMetrics = multimerMetrics[key];
@@ -3350,20 +3350,7 @@ export function NGSToolkit() {
         () => multimerClassCounts.monomer + multimerClassCounts.dimer + multimerClassCounts.trimer + multimerClassCounts.highOrder,
         [multimerClassCounts]
     );
-    const alignmentSummaryLookup = useMemo(() => {
-        const table = multimerReport?.dimerSummary;
-        if (!table || table.header.length === 0) return new Map<string, string>();
-        const metricIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'metric');
-        const valueIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'value');
-        if (metricIdx < 0 || valueIdx < 0) return new Map<string, string>();
-        const lookup = new Map<string, string>();
-        for (const row of table.rows) {
-            const key = String(row[metricIdx] ?? '').trim().toLowerCase();
-            if (!key) continue;
-            lookup.set(key, String(row[valueIdx] ?? '').trim());
-        }
-        return lookup;
-    }, [multimerReport?.dimerSummary]);
+    const alignmentSummaryLookup = useMemo(() => summaryTableLookup(multimerReport?.dimerSummary), [multimerReport?.dimerSummary]);
     const readAlignmentMetric = useCallback((keys: string[]): number | null => {
         for (const key of keys) {
             const raw = alignmentSummaryLookup.get(key.toLowerCase());
@@ -3420,9 +3407,7 @@ export function NGSToolkit() {
             themeColors.accentPrimary,
         ]
     );
-    const multimerHistogramPlotData = useMemo<Data[]>(() => {
-        const lengths = multimerReport?.readLengths || [];
-        if (lengths.length === 0) return [];
+    const multimerHistogramCutoffs = useMemo(() => {
         const readMetric = (keys: string[]): number | null => {
             for (const key of keys) {
                 const value = multimerMetrics[key];
@@ -3434,6 +3419,12 @@ export function NGSToolkit() {
         const dimerCutoff = readMetric(['dimer_cutoff']) ?? (expected ? expected * 1.5 : null);
         const trimerCutoff = readMetric(['trimer_cutoff', 'multimer_cutoff']) ?? (expected ? expected * 2.5 : null);
         const tetramerCutoff = readMetric(['tetramer_cutoff']) ?? (expected ? expected * 3.5 : null);
+        return { dimerCutoff, trimerCutoff, tetramerCutoff };
+    }, [multimerMetrics, expectedPlasmidSize]);
+    const multimerHistogramPlotData = useMemo<Data[]>(() => {
+        const lengths = multimerReport?.readLengths || [];
+        if (lengths.length === 0) return [];
+        const { dimerCutoff, trimerCutoff, tetramerCutoff } = multimerHistogramCutoffs;
         const minLen = Math.min(...lengths);
         const maxLen = Math.max(...lengths);
         const span = Math.max(1, maxLen - minLen);
@@ -3475,8 +3466,7 @@ export function NGSToolkit() {
         }];
     }, [
         multimerReport?.readLengths,
-        multimerMetrics,
-        expectedPlasmidSize,
+        multimerHistogramCutoffs,
         themeColors.success,
         themeColors.warning,
         themeColors.error,
@@ -3486,17 +3476,7 @@ export function NGSToolkit() {
     ]);
     const multimerHistogramLayout = useMemo<Partial<Layout>>(() => {
         const shapes: NonNullable<Layout['shapes']> = [];
-        const readMetric = (keys: string[]): number | null => {
-            for (const key of keys) {
-                const value = multimerMetrics[key];
-                if (Number.isFinite(value)) return Number(value);
-            }
-            return null;
-        };
-        const expected = Number.isFinite(expectedPlasmidSize) && expectedPlasmidSize > 0 ? expectedPlasmidSize : null;
-        const dimerCutoff = readMetric(['dimer_cutoff']) ?? (expected ? expected * 1.5 : null);
-        const trimerCutoff = readMetric(['trimer_cutoff', 'multimer_cutoff']) ?? (expected ? expected * 2.5 : null);
-        const tetramerCutoff = readMetric(['tetramer_cutoff']) ?? (expected ? expected * 3.5 : null);
+        const { dimerCutoff, trimerCutoff, tetramerCutoff } = multimerHistogramCutoffs;
 
         const addCutoff = (x: number | null, color: string, dash: 'dot' | 'dash' | 'solid', label: string) => {
             if (!Number.isFinite(x as number)) return;
@@ -3532,7 +3512,7 @@ export function NGSToolkit() {
                 rangemode: 'tozero',
             },
         };
-    }, [basePlotlyLayout, multimerMetrics, expectedPlasmidSize, themeColors]);
+    }, [basePlotlyLayout, multimerHistogramCutoffs, themeColors]);
     const multimerPlotConfig = useMemo(
         () => ({ responsive: true, displaylogo: false, scrollZoom: true }),
         []
@@ -3924,22 +3904,18 @@ export function NGSToolkit() {
             setIgvLoading(true);
             igvPresentationRequestedRef.current = false;
             setIgvError(null);
-            setIgvVersion(null);
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
             setIgvAutoLoadAttempted(false);
             igvLoadedSourceKeyRef.current = '';
 
             try {
-                const { igv, version } = await withTimeout(
+                const { igv } = await withTimeout(
                     loadIgvLibrary(),
                     IGV_INIT_TIMEOUT_MS,
                     `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s while loading IGV library`
                 );
                 if (cancelled || !igvMount.isConnected) return;
-                if (isCurrentLoad() && !cancelled) {
-                    setIgvVersion(version);
-                }
                 const igvAny = igv as UntypedApiValue;
                 if (typeof igvAny.setDefaults === 'function') {
                     igvAny.setDefaults({
@@ -4092,7 +4068,6 @@ export function NGSToolkit() {
                         ? ` Ensure \`igv@${IGV_REQUIRED_VERSION}\` is installed and the frontend bundle is rebuilt.`
                         : '';
                     setIgvError(`Failed to initialize IGV viewer: ${msg}.${suffix}`);
-                    setIgvVersion(null);
                 }
                 try {
                     if (igvBrowser) removeIgvBrowser(igvLibraryRef.current, igvBrowser);
@@ -4861,9 +4836,6 @@ export function NGSToolkit() {
                                                         {check.ok ? 'ready' : 'missing'}
                                                     </div>
                                                 </div>
-                                                <div className="mt-1 text-xs text-[var(--text-secondary)]">
-                                                    {check.ok ? 'Resolved by the governed job artifact contract.' : 'No governed artifact is available.'}
-                                                </div>
                                             </div>
                                         ))}
                                     </div>
@@ -4883,9 +4855,6 @@ export function NGSToolkit() {
                                                             }`}>
                                                             {check.ok ? 'found' : 'missing'}
                                                         </div>
-                                                    </div>
-                                                    <div className="mt-1 text-[10px] text-[var(--text-secondary)]">
-                                                        {check.ok ? 'Resolved by the governed optional-artifact contract.' : 'No governed optional artifact is available.'}
                                                     </div>
                                                 </div>
                                             ))}

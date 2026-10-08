@@ -138,7 +138,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                 },
             }));
             if (drafts.length === 0 || drafts.some(({ draft }) => !draft.sequenceId || !draft.revisionId)) {
-                throw new Error('Every canonical barcode unit requires a saved sequence and exact revision before batch submission.');
+                throw new Error('Choose a saved sequence and revision for every barcode before submitting.');
             }
             const selected = drafts;
             const parsedPinnedGpu = pinnedGpu.trim() ? Number.parseInt(pinnedGpu, 10) : null;
@@ -178,7 +178,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
         <section className="w-full space-y-3 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4" data-testid="ont-barcode-units-panel">
             <div>
                 <h4 className="text-sm font-semibold text-[var(--text-primary)]">Demultiplexed barcode units</h4>
-                <p className="text-xs text-[var(--text-secondary)]">Map every canonical barcodeNN unit to an immutable MolBio revision. The batch submits all mappings together or creates no children.</p>
+                <p className="text-xs text-[var(--text-secondary)]">Choose a saved sequence revision for each barcode. All barcode jobs are submitted together, or none are created.</p>
             </div>
             <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
                 <select value={targetWorkflow} onChange={(event) => setTargetWorkflow(event.target.value as TargetWorkflow)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]">
@@ -191,14 +191,14 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                     {submitMutation.isPending ? 'Submitting batch…' : 'Submit mapped batch'}
                 </button>
             </div>
-            {unitsQuery.isLoading && <div className="text-xs text-[var(--text-secondary)]">Loading canonical units…</div>}
+            {unitsQuery.isLoading && <div className="text-xs text-[var(--text-secondary)]">Loading barcodes…</div>}
             {unitsQuery.isError && <div className="text-xs text-rose-400">No verified barcode manifest is available.</div>}
             {sequencesQuery.isError && <div className="text-xs text-rose-400">Saved MolBio sequences could not be loaded.</div>}
             <div className="overflow-x-auto rounded border border-[var(--border-primary)]">
                 <table className="w-full min-w-[1080px] text-left text-sm">
                     <thead className="bg-[var(--bg-tertiary)] text-xs uppercase tracking-wide text-[var(--text-secondary)]">
                         <tr>
-                            <th className="px-3 py-2">Canonical unit</th>
+                            <th className="px-3 py-2">Barcode</th>
                             <th className="px-3 py-2">Sample alias</th>
                             <th className="px-3 py-2">Exact sequence / revision</th>
                             <th className="px-3 py-2">Digest</th>

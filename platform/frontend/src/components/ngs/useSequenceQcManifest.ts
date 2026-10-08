@@ -66,10 +66,7 @@ export function useSequenceQcManifest(
     }
 
     if (query.error) {
-        const classified = classifySequenceQcManifestError(query.error);
-        const status = classified === 'unavailable-old-run' && jobStatus && !['completed', 'failed', 'cancelled'].includes(jobStatus)
-            ? 'unavailable-pending'
-            : classified;
+        const status = classifySequenceQcManifestError(query.error);
         return {
             status,
             manifest: null,
