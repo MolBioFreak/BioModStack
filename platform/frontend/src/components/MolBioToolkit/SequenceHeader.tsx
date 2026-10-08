@@ -5,7 +5,7 @@
 import { ExportDropdown } from './ExportDropdown';
 import type { HistoryEntry } from './hooks/useSequenceHistory';
 import type { SequenceData } from './types';
-import { sequenceUnitLabel } from './utils/nucleotides';
+import { sequenceUnitLabel, displayStrandSymbol, type NucleotideDisplayStrand } from './utils/nucleotides';
 
 type ViewMode = 'linear' | 'circular' | 'both';
 
@@ -22,6 +22,9 @@ interface SequenceHeaderProps {
     isAnnotating?: boolean;
     viewMode?: ViewMode;
     onViewModeChange?: (mode: ViewMode) => void;
+    activeDisplayStrand?: NucleotideDisplayStrand;
+    sourceDisplayStrand?: NucleotideDisplayStrand;
+    onDisplayStrandChange?: (strand: NucleotideDisplayStrand) => void;
     showGCTrack?: boolean;
     onGCTrackToggle?: () => void;
     onOpenLibrary?: () => void;
@@ -53,6 +56,9 @@ export function SequenceHeader({
     isAnnotating = false,
     viewMode = 'both',
     onViewModeChange,
+    activeDisplayStrand = 'plus',
+    sourceDisplayStrand = 'plus',
+    onDisplayStrandChange,
     showGCTrack = true,
     onGCTrackToggle,
     onOpenLibrary,
@@ -66,6 +72,7 @@ export function SequenceHeader({
 }: SequenceHeaderProps) {
     const gcContent = calculateGC(sequenceData.sequence);
     const unitLabel = sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna');
+    const moleculeLabel = sequenceData.moleculeLabel || sequenceData.sequenceType.toUpperCase();
 
     return (
         <div className="sequence-header bg-slate-800 border-b border-slate-700">
@@ -81,13 +88,11 @@ export function SequenceHeader({
                                 {sequenceData.name}
                                 {isDirty && <span className="text-blue-400 ml-1">*</span>}
                             </h2>
-                            {sequenceData.circular && (
-                                <span className="px-2 py-0.5 text-xs bg-emerald-900/50 text-emerald-400 rounded">
-                                    Circular
-                                </span>
-                            )}
-                            <span className="px-2 py-0.5 text-xs bg-slate-700 text-slate-300 rounded uppercase">
-                                {sequenceData.sequenceType}
+                            <span className={`px-2 py-0.5 text-xs rounded ${sequenceData.circular ? 'bg-emerald-900/50 text-emerald-400' : 'bg-sky-900/50 text-sky-300'}`}>
+                                {sequenceData.circular ? 'Circular' : 'Linear'}
+                            </span>
+                            <span className="px-2 py-0.5 text-xs bg-slate-700 text-slate-300 rounded">
+                                {moleculeLabel}
                             </span>
                         </div>
 
@@ -191,6 +196,36 @@ export function SequenceHeader({
                             >
                                 Circular
                             </button>
+                        </div>
+                    </div>
+                )}
+
+                {onDisplayStrandChange && sequenceData.sequence && sequenceData.sequenceType !== 'protein' && (
+                    <div className="flex items-center border-r border-slate-600 pr-2 mr-2 gap-1 text-xs text-slate-400">
+                        <span className="px-1" title="Choose which strand is rendered in the sequence viewer">
+                            Strand
+                        </span>
+                        <div className="flex overflow-hidden rounded border border-slate-600">
+                            {(['plus', 'minus'] as NucleotideDisplayStrand[]).map((strand) => {
+                                const active = activeDisplayStrand === strand;
+                                const isSource = sourceDisplayStrand === strand;
+                                return (
+                                    <button
+                                        key={strand}
+                                        type="button"
+                                        onClick={() => onDisplayStrandChange(strand)}
+                                        aria-pressed={active}
+                                        className={`px-2 py-1 transition-colors ${active
+                                            ? 'bg-accent text-white'
+                                            : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                            }`}
+                                        title={`View ${displayStrandSymbol(strand)} strand${isSource ? ' (source/import strand)' : ''}`}
+                                    >
+                                        {displayStrandSymbol(strand)}
+                                        {isSource && <span className="ml-1 text-[10px] opacity-75">src</span>}
+                                    </button>
+                                );
+                            })}
                         </div>
                     </div>
                 )}

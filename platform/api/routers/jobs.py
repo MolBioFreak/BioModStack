@@ -4222,6 +4222,23 @@ def _has_protenix_template_db(mmcif_dir: Path) -> bool:
     return False
 
 
+def _resolve_protenix_weights_dir(params: dict) -> Path:
+    protenix_weights_raw = (
+        params.get("protenix_weights")
+        or os.getenv("BMS_PROTENIX_WEIGHTS")
+        or (
+            Path(os.getenv("BMS_WEIGHTS", "")).expanduser() / "protenix"
+            if os.getenv("BMS_WEIGHTS")
+            else None
+        )
+    )
+    return (
+        Path(protenix_weights_raw).expanduser()
+        if protenix_weights_raw
+        else get_data_root() / "weights" / "protenix"
+    )
+
+
 def _validate_protenix_template_requirements(model_id: str, params: dict) -> None:
     if model_id != "protenix":
         return
@@ -4235,9 +4252,7 @@ def _validate_protenix_template_requirements(model_id: str, params: dict) -> Non
         # supplied target structure, so they do not require the shared global mmCIF cache.
         return
 
-    code_root_raw = params.get("code_root") or os.getenv("BMS_HOME")
-    code_root = Path(code_root_raw).expanduser() if code_root_raw else get_code_root()
-    mmcif_dir = code_root / ".protenix_cache" / "mmcif"
+    mmcif_dir = _resolve_protenix_weights_dir(params) / "mmcif"
 
     if _has_protenix_template_db(mmcif_dir):
         return
@@ -4274,9 +4289,7 @@ def _validate_protenix_checkpoint_requirements(model_id: str, params: dict) -> N
     if selected_model != "protenix-v2":
         return
 
-    code_root_raw = params.get("code_root") or os.getenv("BMS_HOME")
-    code_root = Path(code_root_raw).expanduser() if code_root_raw else get_code_root()
-    checkpoint_path = code_root / ".protenix_cache" / "checkpoint" / "protenix-v2.pt"
+    checkpoint_path = _resolve_protenix_weights_dir(params) / "checkpoint" / "protenix-v2.pt"
     if checkpoint_path.exists():
         return
 
@@ -4285,8 +4298,8 @@ def _validate_protenix_checkpoint_requirements(model_id: str, params: dict) -> N
         detail={
             "validation_errors": [
                 (
-                    "Protenix v2 was selected, but the local checkpoint was not found at "
-                    f"{checkpoint_path}. Stage protenix-v2.pt locally before using v2, "
+                    "Protenix v2 was selected, but the shared checkpoint was not found at "
+                    f"{checkpoint_path}. Stage protenix-v2.pt in the shared Protenix weights directory before using v2, "
                     "or switch back to protenix_base_20250630_v1.0.0."
                 )
             ]

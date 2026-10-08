@@ -44,6 +44,7 @@ import {
 } from './structurePredictionUiState.js';
 import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
+import { ModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
 import { resolveInitialGpuPinningState } from './gpuToggleState.js';
 
 interface StructurePredictionTemplateProps {
@@ -1185,6 +1186,14 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const showBoltzParams = usesBoltz;
     const showRf3Params = usesRf3;
     const showProtenixParams = usesProtenix;
+    const structureDocumentationTopics = useMemo<ModelDocumentationTopic[]>(() => {
+        if (isBoltzCpLaunch) return ['fold_cp', 'boltz2'];
+        const topics: ModelDocumentationTopic[] = [];
+        if (usesBoltz) topics.push('boltz2');
+        if (usesRf3) topics.push('rf3');
+        if (usesProtenix) topics.push('protenix');
+        return topics.length > 0 ? topics : ['boltz2'];
+    }, [isBoltzCpLaunch, usesBoltz, usesRf3, usesProtenix]);
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1340,7 +1349,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         <div className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
                             <div className="font-medium">{isBoltzCpLaunch ? 'Fold-CP Experimental' : 'Fixed predictor'}</div>
                             <div className="mt-1 text-xs text-orange-100/80">
-                                This workflow stays on single-fold Boltz mode and reuses the standard structure input flow.
+                                Single-fold Boltz launcher with Fold-CP runtime controls below.
                             </div>
                         </div>
                     )}
@@ -1429,7 +1438,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         <div>
                             <h3 className="text-sm font-semibold text-slate-200">Sequence Matrix Batch</h3>
                             <p className="text-xs text-slate-500">
-                                Paste FASTA or one sequence per line to run a named batch. Runtime outputs are auto-numbered with the chosen prefix so the result set stays traceable. If you have imported a target source, pasted sequences are treated as binder candidates against that shared target assembly.
+                                Paste FASTA or one sequence per line; target imports become shared binder screens.
                             </p>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1477,7 +1486,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         {batchEntriesPreview.length > 0 && (
                             <div className="text-xs text-slate-400 bg-slate-900/50 border border-slate-800 rounded-lg px-3 py-2">
                                 {autoBatchBinderMode
-                                    ? `Shared-target screen active: ${batchEntriesPreview.length} binder candidates will be simulated against imported target chain ${targetSourceChainId || primaryChainId}.`
+                                    ? `Shared target: ${batchEntriesPreview.length} candidates vs chain ${targetSourceChainId || primaryChainId}.`
                                     : 'Batch mode will use deterministic per-sequence names and ignore the single-sequence parallel fanout.'}
                             </div>
                         )}
@@ -1490,7 +1499,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             <div>
                                 <h3 className="text-sm font-semibold text-slate-200">Target Geometry Source</h3>
                                 <p className="text-xs text-slate-500">
-                                    Imported target structure is available for conditioned or frozen complex prediction. Primary sequence must stay identical to the selected source chain.
+                                    Imported target is staged for conditioned/frozen complex prediction; keep the primary chain sequence unchanged.
                                 </p>
                             </div>
                             <button
@@ -1609,7 +1618,17 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 {/* Boltz-2 Parameters */}
                 {showBoltzParams && (
                     <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
-                        <h3 className="text-sm font-semibold text-blue-400">{isBoltzCpLaunch ? 'Fold-CP Experimental Settings' : 'Boltz-2 Settings'}</h3>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <h3 className="text-sm font-semibold text-blue-400">{isBoltzCpLaunch ? 'Fold-CP Experimental Settings' : 'Boltz-2 Settings'}</h3>
+                            <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-[11px] font-medium text-blue-200">
+                                {isBoltzCpLaunch ? 'Alpha CP path' : 'Model controls'}
+                            </span>
+                        </div>
+                        <ModelDocumentationLinks
+                            topics={structureDocumentationTopics}
+                            summary={isBoltzCpLaunch ? 'Logical topology and DTensor details are linked out; launch controls stay action-first here.' : 'Method background is linked out; this panel only exposes runtime knobs.'}
+                            compact
+                        />
 
                         {/* Physics Potentials Toggle */}
                         <div className="flex items-center gap-3 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
@@ -1622,7 +1641,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             />
                             <label htmlFor="boltz-potentials" className="cursor-pointer">
                                 <span className="text-slate-200 font-medium">Use Potentials (Boltz-2x)</span>
-                                <p className="text-xs text-slate-500">Enable physics/FK steering potentials. Can improve geometry, but high sample counts multiply internal particles and should use memory-safe batching.</p>
+                                <p className="text-xs text-slate-500">Physics/FK steering; use batching for high sample counts.</p>
                             </label>
                         </div>
 
@@ -1915,7 +1934,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 >
                                     <option value="protenix_base_20250630_v1.0.0">Base 2025-06-30 v1.0.0 (Default)</option>
-                                    <option value="protenix-v2">Protenix v2 (Local weights required)</option>
+                                    <option value="protenix-v2">Protenix v2 (Shared weights required)</option>
                                     <option value="protenix_base_default_v1.0.0">Base Default v1.0.0</option>
                                     <option value="protenix_mini_esm_v0.5.0">Mini ESM v0.5.0 (Light)</option>
                                     <option value="protenix_mini_default_v0.5.0">Mini Default v0.5.0</option>

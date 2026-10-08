@@ -63,22 +63,22 @@ interface NanoporeTemplateProps {
 // Constants
 // ============================================================================
 const DORADO_MODELS: Record<DoradoModel, { label: string; description: string }> = {
-    sup: { label: 'Super Accurate (SUP)', description: 'Highest accuracy, ~6 GB model. Recommended for methylation analysis.' },
-    hac: { label: 'High Accuracy (HAC)', description: 'Good balance of speed and accuracy for general use.' },
-    fast: { label: 'Fast', description: 'Maximum throughput, lower per-read accuracy.' },
+    sup: { label: 'Super Accurate (SUP)', description: 'Highest accuracy; best for methylation.' },
+    hac: { label: 'High Accuracy (HAC)', description: 'Balanced speed/accuracy.' },
+    fast: { label: 'Fast', description: 'Fastest; lower accuracy.' },
 };
 
 const MODIFIED_BASES_OPTIONS: Record<ModifiedBases, { label: string; description: string }> = {
-    '6mA 4mC_5mC': { label: '6mA + 4mC/5mC (DAM/DCM)', description: 'Recommended for bacterial/plasmid methylation with Dorado SUP chemistry compatibility.' },
-    '6mA 5mC': { label: '6mA + 5mC (legacy alias)', description: 'Legacy alias, automatically normalized to 6mA + 4mC/5mC for Dorado compatibility.' },
-    '6mA': { label: '6mA only', description: 'Targets adenine methylation (DAM-like signatures).' },
-    '5mC': { label: '5mC only', description: 'Targets cytosine methylation (DCM-like signatures).' },
-    '5mC_5hmC': { label: '5mC + 5hmC', description: 'All-context cytosine methylation panel including hydroxymethyl-cytosine.' },
-    '4mC_5mC': { label: '4mC + 5mC', description: 'Expanded bacterial cytosine panel (includes 4mC where present).' },
-    '5mCG_5hmCG': { label: '5mCG + 5hmCG', description: '5-methylcytosine and 5-hydroxymethylcytosine at CpG sites' },
-    '5mCG': { label: '5mCG only', description: '5-methylcytosine at CpG sites' },
-    '5hmCG': { label: '5hmCG only (legacy)', description: '5-hydroxymethylcytosine at CpG sites.' },
-    none: { label: 'No modification detection', description: 'Standard basecalling without modification tags' },
+    '6mA 4mC_5mC': { label: '6mA + 4mC/5mC (DAM/DCM)', description: 'Bacterial/plasmid methylation.' },
+    '6mA 5mC': { label: '6mA + 5mC (legacy alias)', description: 'Normalized to 6mA + 4mC/5mC.' },
+    '6mA': { label: '6mA only', description: 'Adenine methylation.' },
+    '5mC': { label: '5mC only', description: 'Cytosine methylation.' },
+    '5mC_5hmC': { label: '5mC + 5hmC', description: 'Cytosine + hydroxymethyl-cytosine.' },
+    '4mC_5mC': { label: '4mC + 5mC', description: 'Bacterial cytosine panel.' },
+    '5mCG_5hmCG': { label: '5mCG + 5hmCG', description: 'CpG 5mC + 5hmC.' },
+    '5mCG': { label: '5mCG only', description: 'CpG 5mC.' },
+    '5hmCG': { label: '5hmCG only (legacy)', description: 'CpG 5hmC.' },
+    none: { label: 'No modification detection', description: 'No modification tags.' },
 };
 
 const QSCORE_LABELS: Record<number, string> = {
@@ -112,7 +112,7 @@ const FASTQ_DEFAULT_IGV_REPORT_FLANKING_BP = 200;
 const FASTQ_MAX_IGV_REPORT_FLANKING_BP = 100_000;
 
 const FASTQ_MINIMAP_PRESETS: Record<MinimapPreset, string> = {
-    'map-ont': 'map-ont (ONT reads; bundled minimap2 2.24 compatible default)',
+    'map-ont': 'map-ont (ONT reads)',
     'map-hifi': 'map-hifi (PacBio HiFi)',
     'map-pb': 'map-pb (PacBio CLR)',
     'sr': 'sr (short reads)',
@@ -597,36 +597,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
     const methylationEnabled = modifiedBases !== 'none';
     const canRunModkit = inputSource !== 'fastq' && (inputSource === 'bam' || methylationEnabled);
-    const pipelineOverviewSteps = useMemo(() => {
-        if (inputSource === 'fastq') {
-            const steps = [
-                'FASTQ import',
-                `minimap2 (${fastqMinimap2Preset})`,
-            ];
-            if (runFastqQc) {
-                steps.push('plasmid QC + consensus', 'IGV/report tracks');
-            }
-            return steps;
-        }
-
-        if (inputSource === 'bam') {
-            const steps = [bamForceRealign ? 'BAM input' : 'BAM pass-through'];
-            if (referencePath.trim()) {
-                steps.push(bamForceRealign ? 'dorado realignment' : 'reference-context analysis');
-            } else {
-                steps.push('mapped-BAM validation');
-            }
-            if (bamMinMapq > 0) steps.push(`MAPQ>=${bamMinMapq} filter`);
-            if (runModkit) steps.push('modkit methylation');
-            if (runAssembly) steps.push('wf-clone assembly');
-            return steps;
-        }
-
-        const steps = ['Dorado basecalling', 'alignment'];
-        if (runModkit) steps.push('modkit methylation');
-        if (runAssembly) steps.push('wf-clone assembly');
-        return steps;
-    }, [bamForceRealign, bamMinMapq, fastqMinimap2Preset, inputSource, referencePath, runAssembly, runFastqQc, runModkit]);
     const fastqCliPreview = useMemo(() => {
         if (inputSource !== 'fastq' || !runFastqQc) return '';
         const referenceHint = referencePath.trim() || '<uploaded/pasted FASTA>';
@@ -1004,31 +974,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </div>
                     <div>
                         <h1 className="text-2xl font-bold text-[var(--text-primary)]">Nanopore Sequencing</h1>
-                        <p className="text-sm text-[var(--text-secondary)]">Mode-aware ONT pipeline for POD5, BAM, and FASTQ QC workflows</p>
                     </div>
-                </div>
-            </div>
-
-            {/* Info Banner */}
-            <div
-                className="rounded-lg p-3 text-sm border"
-                style={{
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary) 35%, transparent)',
-                    backgroundColor: 'color-mix(in srgb, var(--accent-secondary) 10%, transparent)',
-                }}
-            >
-                <div className="font-medium text-[var(--accent-secondary)] mb-1">Pipeline Overview</div>
-                <div className="text-[var(--text-secondary)] text-xs flex flex-wrap gap-x-4 gap-y-1">
-                    {pipelineOverviewSteps.map((step, idx) => (
-                        <span key={`${step}-${idx}`} className="inline-flex items-center gap-2">
-                            {idx > 0 && (
-                                <svg className="w-3 h-3 inline opacity-40" viewBox="0 0 20 20" fill="currentColor">
-                                    <path d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z" />
-                                </svg>
-                            )}
-                            <span>{step}</span>
-                        </span>
-                    ))}
                 </div>
             </div>
 
@@ -1096,7 +1042,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                     onChange={(e) => setLockGpus(e.target.checked)}
                                     className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
                                 />
-                                <span className="text-xs text-[var(--text-secondary)]">Lock selected GPU(s) exclusively during workflow</span>
+                                <span className="text-xs text-[var(--text-secondary)]">Lock selected GPU(s)</span>
                             </label>
                         )}
                     </div>
@@ -1162,7 +1108,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 </button>
                             )}
                         </div>
-                        <p className="text-xs text-[var(--text-secondary)] mt-1">Directory containing .pod5 raw signal files from the sequencer</p>
                     </>
                 )}
 
@@ -1192,11 +1137,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             )}
                         </div>
                         <p className="text-xs text-[var(--text-secondary)] mt-1">
-                            Use BAMs with MM/ML tags. BAM mode defaults to pass-through processing (sort/index only) for direct vendor-vs-recall comparison.
-                        </p>
-                        <p className="text-xs text-amber-300 mt-1">
-                            BAM mode reuses existing modification tags; enable force realignment only when you explicitly want to re-map reads before modkit/assembly.
-                            MAPQ filtering is configurable below in Analysis Options.
+                            BAM pass-through by default; realign only when needed.
                         </p>
                     </>
                 )}
@@ -1226,14 +1167,13 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 </button>
                             )}
                         </div>
-                        <p className="text-xs text-[var(--text-secondary)] mt-1">FASTQ plasmid QC: alignment-backed read-length stats, coverage, and consensus output</p>
                     </>
                 )}
             </div>
 
             {/* Reference FASTA — tabbed input */}
             <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
-                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Reference FASTA (required for FASTQ, optional otherwise)</label>
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Reference FASTA</label>
                 <div className="flex gap-1 mb-3">
                     {(['browse', 'paste', 'create'] as ReferenceTab[]).map((tab) => (
                         <button
@@ -1288,7 +1228,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             type="text"
                             value={saveReferenceName}
                             onChange={(e) => setSaveReferenceName(e.target.value)}
-                            placeholder="Optional saved name (auto-detects if blank)"
+                            placeholder="Saved name (optional)"
                             className="min-w-[16rem] flex-1 bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded px-3 py-2 text-[var(--text-primary)] text-sm"
                         />
                         <button
@@ -1332,9 +1272,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 </button>
                             )}
                         </div>
-                        <p className="text-xs text-[var(--text-secondary)] mt-1">
-                            Reference sequences for alignment/modkit pileup and optional wf-clone full-reference validation.
-                        </p>
                     </>
                 )}
 
@@ -1351,7 +1288,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-[var(--text-primary)] text-sm font-mono resize-y"
                         />
                         <p className="text-xs text-[var(--text-secondary)] mt-1">
-                            Pasted FASTA is uploaded to <span className="font-mono">inputs/nanopore/references</span> at submit time and used as <span className="font-mono">reference_fasta</span>.
+                            Uploaded at submit.
                         </p>
                         {pastedFasta && (
                             <div className="mt-1 text-xs text-[var(--text-secondary)]">
@@ -1455,20 +1392,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             </button>
                         ))}
                     </div>
-                    {methylationEnabled && (
-                        <div
-                            className="mt-3 p-2 rounded text-xs text-[var(--text-secondary)] border"
-                            style={{
-                                borderColor: 'color-mix(in srgb, var(--accent-secondary) 25%, transparent)',
-                                backgroundColor: 'color-mix(in srgb, var(--accent-secondary) 8%, transparent)',
-                            }}
-                        >
-                            <svg className="w-3.5 h-3.5 inline mr-1 text-[var(--accent-secondary)]" viewBox="0 0 20 20" fill="currentColor">
-                                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z" clipRule="evenodd" />
-                            </svg>
-                            MM/ML tags will be embedded in BAM output for downstream methylation analysis.
-                        </div>
-                    )}
                 </div>
             )}
 
@@ -1520,9 +1443,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         <span>30</span>
                         <span>60</span>
                     </div>
-                    <p className="mt-2 text-xs text-[var(--text-secondary)]">
-                        Applied with <code>samtools view -q</code> while preparing BAM for downstream modkit/assembly.
-                    </p>
                 </div>
             )}
 
@@ -1541,7 +1461,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Trim adapters</span>
-                            <p className="text-xs text-[var(--text-secondary)]">Remove ONT adapters during Dorado basecalling</p>
                         </div>
                     </label>
                 )}
@@ -1558,9 +1477,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Run modkit analysis</span>
                             <p className="text-xs text-[var(--text-secondary)]">
-                                {inputSource === 'bam'
-                                    ? 'Summarize existing MM/ML tags into per-read tables and optional per-site BED (no re-calling).'
-                                    : 'Generate per-site BED (with reference) and per-read summary methylation tables.'}
+                                {inputSource === 'bam' ? 'Summarize MM/ML tags.' : 'Generate methylation tables.'}
                             </p>
                         </div>
                     </label>
@@ -1577,9 +1494,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Force BAM realignment (Dorado aligner)</span>
-                            <p className="text-xs text-[var(--text-secondary)]">
-                                Default is pass-through BAM processing for apples-to-apples vendor comparison. Enable only when you intentionally want realignment.
-                            </p>
+                            <p className="text-xs text-[var(--text-secondary)]">Default: pass-through.</p>
                         </div>
                     </label>
                 )}
@@ -1595,9 +1510,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Consensus assembly (wf-clone-validation)</span>
-                            <p className="text-xs text-[var(--text-secondary)]">
-                                Assemble reads and generate construct QC via EPI2ME Labs wf-clone-validation
-                            </p>
                         </div>
                     </label>
                 )}
@@ -1613,7 +1525,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">FASTQ plasmid QC</span>
-                            <p className="text-xs text-[var(--text-secondary)]">Align to reference, calculate core QC stats, and build consensus sequence</p>
                         </div>
                     </label>
                 )}
@@ -1677,12 +1588,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 onChange={(e) => setFastqMinimap2AllowSecondary(e.target.checked)}
                                 className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
                             />
-                            <span className="text-xs text-[var(--text-secondary)]">Keep secondary alignments (docs/default minimap2 behavior)</span>
+                            <span className="text-xs text-[var(--text-secondary)]">Keep secondary alignments</span>
                         </label>
 
-                        <div className="text-xs text-[var(--text-secondary)]">
-                            Outputs include `fastq_qc_summary.tsv`, `fastq_alignment_stats.tsv`, `fastq_coverage.tsv`, `fastq_consensus.fasta`, and IGV report tracks.
-                        </div>
                     </div>
                 )}
             </div>
@@ -1696,11 +1604,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     <svg className={`w-4 h-4 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
                     </svg>
-                    <span className="font-medium">Expert Controls &amp; Pipeline Flags</span>
+                    <span className="font-medium">Advanced Controls</span>
                 </button>
-                <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                    Optional low-level parameters. Defaults are safe; only change these when tuning behavior intentionally.
-                </p>
                 {showAdvanced && (
                     <div className="mt-4 space-y-4 pl-6 border-l-2 border-[var(--border-primary)]">
                         {inputSource === 'pod5' && (
@@ -1778,7 +1683,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                     />
                                 </div>
                                 <div className="text-[10px] text-[var(--text-secondary)]">
-                                    Auto lets modkit infer a dataset-specific threshold; strict modes reduce false positives in negative controls.
+                                    Auto threshold; strict lowers false positives.
                                 </div>
                             </div>
                         )}
@@ -1834,9 +1739,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                             className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         />
                                     </label>
-                                </div>
-                                <div className="text-[10px] text-[var(--text-secondary)]">
-                                    Controls the derived IGV analysis tracks and hotspot report context for FASTQ plasmid QC outputs.
                                 </div>
                             </div>
                         )}
@@ -1911,7 +1813,7 @@ nextflow run ngs.nf -profile nanopore_methylation \\
                                                 {wfCloneWorkflowDir ? (
                                                     <span className="text-[var(--text-primary)] text-sm font-mono break-all">{formatPathDisplay(wfCloneWorkflowDir)}</span>
                                                 ) : (
-                                                    <span className="text-[var(--text-secondary)] text-sm">Use auto-pull source unless local override is needed</span>
+                                                    <span className="text-[var(--text-secondary)] text-sm">Auto-pull unless overridden</span>
                                                 )}
                                             </div>
                                             <button
@@ -2030,7 +1932,7 @@ nextflow run ngs.nf -profile nanopore_methylation \\
                             <div>
                                 <h2 className="text-base font-semibold text-[var(--text-primary)]">{pathPicker.title}</h2>
                                 <p className="text-xs text-[var(--text-secondary)]">
-                                    {pathPicker.mode === 'directory' ? 'Select a directory path' : 'Select a file path'}
+                                    {pathPicker.mode === 'directory' ? 'Choose directory' : 'Choose file'}
                                 </p>
                             </div>
                             <button

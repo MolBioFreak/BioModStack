@@ -82,8 +82,9 @@ process ProtenixPredict {
     #!/bin/bash
     set -euo pipefail
 
-    # Persist Protenix caches/checkpoints on host disk.
-    export PROTENIX_ROOT_DIR="${params.code_root}/.protenix_cache"
+    # Persist Protenix caches/checkpoints in the shared model-weights store.
+    # nextflow.config binds params.protenix_weights into this container at /protenix_weights.
+    export PROTENIX_ROOT_DIR="/protenix_weights"
     export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
     export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
     export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
@@ -185,7 +186,7 @@ for entry in payload:
 output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 PY
         PROTENIX_INPUT_JSON="protenix_input_with_templates.json"
-        echo "[PROTENIX] Injected templatesPath=${params.code_root}/.protenix_cache/mmcif into \$PROTENIX_INPUT_JSON"
+        echo "[PROTENIX] Injected templatesPath=\$PROTENIX_ROOT_DIR/mmcif into \$PROTENIX_INPUT_JSON"
     fi
     if [ "${use_msa}" = "true" ]; then
         PROTENIX_MSA_CACHE_DIR="${params.msa_cache_dir}"
@@ -437,7 +438,7 @@ process ProtenixFromComplex {
     #!/bin/bash
     set -euo pipefail
 
-    SHARED_PROTENIX_ROOT="${params.code_root}/.protenix_cache"
+    SHARED_PROTENIX_ROOT="/protenix_weights"
     if [ "${anchor_target}" = "true" ]; then
         if [ -z "${params.fixed_target_source_path ?: ''}" ] || [ -z "${params.fixed_target_source_chains ?: ''}" ]; then
             echo "[PROTENIX-COMPLEX] ERROR: protenix_anchor_target requires fixed_target_source_path and fixed_target_source_chains" | tee -a protenix_complex.log

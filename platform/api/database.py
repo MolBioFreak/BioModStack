@@ -420,6 +420,8 @@ class NucleotideSequence(Base):
     # Sequence data
     sequence = Column(Text, nullable=False)  # Raw nucleotide sequence (ATCG/AUCG)
     sequence_type = Column(String(10), nullable=False, default="dna")  # dna, rna
+    molecule_strandedness = Column(String(16), nullable=False, default="unknown")  # single, double, unknown
+    molecule_orientation = Column(String(24), nullable=False, default="unknown")  # positive, negative, ambisense, not_applicable, unknown
     is_circular = Column(Boolean, default=False)  # Circular (plasmid) or linear
     length = Column(Integer, nullable=False)
     

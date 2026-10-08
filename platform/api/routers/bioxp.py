@@ -774,6 +774,23 @@ async def get_status():
         payload = await proxy_request("GET", "/status", timeout=18.0)
         if not isinstance(payload, dict):
             payload = {"status": "error", "raw_payload": payload}
+        if not bool(payload.get("hardware_connected")) and bool(payload.get("runtime_available", True)):
+            # Keep the main cockpit status aligned with runtime/status and interlink
+            # semantics: the aggregate robot /status can stay conservative/degraded
+            # while a service-owned targeted controller readback proves the API still
+            # has board-level contact. This is connectivity only, not physical motion proof.
+            try:
+                power_payload = await proxy_request("GET", "/motion/power/status", timeout=45.0)
+                if isinstance(power_payload, dict) and bool(power_payload.get("hardware_connected")):
+                    payload = {
+                        **payload,
+                        "status": "ok" if not payload.get("startup_error") and not payload.get("status_error") else payload.get("status", "degraded"),
+                        "hardware_connected": True,
+                        "targeted_power_readback": power_payload,
+                        "hardware_connected_inferred_via": "/motion/power/status",
+                    }
+            except HTTPException:
+                pass
         payload["linkage_configured"] = True
         payload["linkage_url"] = _GLOBAL_LINKAGE_URL
         payload["recommended_url"] = _recommended_linkage_url()

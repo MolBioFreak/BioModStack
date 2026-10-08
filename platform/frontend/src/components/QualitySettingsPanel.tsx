@@ -1176,13 +1176,13 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                             className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
                                         >
                                             <option value="protenix_base_20250630_v1.0.0">Base 2025-06-30 v1.0.0 (Default)</option>
-                                            <option value="protenix-v2">Protenix v2 (Local weights required)</option>
+                                            <option value="protenix-v2">Protenix v2 (Shared weights required)</option>
                                             <option value="protenix_base_default_v1.0.0">Base Default v1.0.0</option>
                                             <option value="protenix_mini_esm_v0.5.0">Mini ESM v0.5.0</option>
                                             <option value="protenix_mini_default_v0.5.0">Mini Default v0.5.0</option>
                                         </select>
                                         <p className="mt-1 text-[10px] text-slate-600">
-                                            The stable default remains the 2025-06-30 v1 checkpoint. Protenix v2 stays selectable when its local checkpoint has been staged.
+                                            The stable default remains the 2025-06-30 v1 checkpoint. Protenix v2 stays selectable when its shared checkpoint has been staged.
                                         </p>
                                     </div>
 
@@ -1288,7 +1288,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                             className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
                                         />
                                         <span className="text-sm text-slate-300">
-                                            Use Template DB <span className="text-xs text-slate-500">(requires local mmCIF cache)</span>
+                                            Use Template DB <span className="text-xs text-slate-500">(requires shared mmCIF cache)</span>
                                         </span>
                                     </label>
 
@@ -1361,7 +1361,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
 
                                 {settings.protenix_use_template && (
                                     <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                                        Template mode requires local mmCIF data under <code>.protenix_cache/mmcif</code>. Submission is rejected if that cache is missing.
+                                        Template mode requires shared mmCIF data under <code>weights/protenix/mmcif</code>. Submission is rejected if that cache is missing.
                                     </div>
                                 )}
                                 {settings.protenix_anchor_target && (

@@ -16,7 +16,9 @@ import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
+import { ModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
 import { getDedicatedTemplateInitialValues, isDedicatedLauncherTemplate } from './jobSubmissionTemplateState.js';
+import { getWorkflowModelTopics } from './workflowModelInventory.js';
 import { isAntibodyPipelineMode } from '../lib/antibodyModes';
 
 interface FileBrowserProps {
@@ -135,6 +137,15 @@ function FileBrowser({ onSelect, onCancel }: FileBrowserProps) {
     );
 }
 
+const compactUiCopy = (value: unknown, maxLength = 118): string => {
+    if (typeof value !== 'string') return '';
+    const text = value.trim().replace(/\s+/g, ' ');
+    if (!text || text.length <= maxLength) return text;
+    const firstSentence = text.match(/^.{1,118}?[.!?](?:\s|$)/)?.[0]?.trim();
+    if (firstSentence && firstSentence.length <= maxLength) return firstSentence;
+    return `${text.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+};
+
 // Reusable param field component for grouped rendering
 function ParamField({
     param,
@@ -163,7 +174,7 @@ function ParamField({
     const isSliderField = param.ui_control === 'slider' && isNumericField && param.minimum !== undefined && param.maximum !== undefined;
     const isWide = isSequenceField || isPathField || param.preset_type === 'ligand' || isSliderField;
     const label = param.label || param.name;
-    const description = param.description || '';
+    const description = compactUiCopy(param.description, 112);
     const value = params[param.name] ?? param.default ?? (param.type === 'boolean' ? false : '');
     const numericValue = (() => {
         const parsed = Number(value);
@@ -360,6 +371,81 @@ function ParamField({
     );
 }
 
+const getTemplateDocumentationTopics = (template: UntypedApiValue | null | undefined): ModelDocumentationTopic[] => {
+    const workflowTopics = getWorkflowModelTopics(template?.id || template?.model_id);
+    if (workflowTopics.length > 0) return workflowTopics;
+
+    const identity = `${template?.id || ''} ${template?.model_id || ''} ${template?.name || ''}`.toLowerCase();
+    if (identity.includes('boltz_cp_experimental') || identity.includes('fold-cp')) return ['fold_cp', 'boltz2'];
+    if (identity.includes('confornets')) return ['confornets'];
+    if (identity.includes('protein_local_redesign') || identity.includes('local redesign')) return ['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'];
+    if (identity.includes('antibody_denovo') || identity.includes('nanobody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2'];
+    if (identity.includes('structure_prediction') || identity.includes('structure prediction')) return ['boltz2', 'rf3', 'protenix'];
+    if (identity.includes('boltz')) return ['boltz2'];
+    if (identity.includes('rfdiffusion') || identity.includes('diffusion')) return ['rfdiffusion'];
+    return [];
+};
+
+const getModelDocumentationTopics = (model: UntypedApiValue | null | undefined): ModelDocumentationTopic[] => {
+    const workflowTopics = getWorkflowModelTopics(model?.id);
+    if (workflowTopics.length > 0) return workflowTopics;
+
+    const identity = `${model?.id || ''} ${model?.name || ''} ${model?.category || ''}`.toLowerCase();
+    if (identity.includes('boltz_cp_experimental') || identity.includes('fold-cp')) return ['fold_cp', 'boltz2'];
+    if (identity.includes('confornets')) return ['confornets'];
+    if (identity.includes('protenix')) return ['protenix'];
+    if (identity.includes('rf3') || identity.includes('rosettafold')) return ['rf3'];
+    if (identity.includes('antibody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2'];
+    if (identity.includes('rfdiffusion')) return ['rfdiffusion'];
+    if (identity.includes('boltzgen')) return ['boltzgen'];
+    if (identity.includes('boltz2') || identity.includes('boltz-2')) return ['boltz2'];
+    return [];
+};
+
+const getCompactTemplateDescription = (template: UntypedApiValue): string => {
+    switch (template.id) {
+        case 'structure_prediction':
+            return 'Predict proteins, nucleic acids, and complexes.';
+        case 'antibody_denovo':
+            return 'Generate, refine, validate, and review nanobody candidates.';
+        case 'protein_local_redesign':
+            return 'Remodel a selected structure region, then redesign and validate.';
+        case 'boltz_cp_experimental':
+            return 'Experimental Fold-CP path for large Boltz-2 folds.';
+        case 'confornets_experimental':
+            return 'Experimental single-chain conformer landscape workflow.';
+        case 'mutagenesis':
+            return 'Build variant libraries and predict structures.';
+        case 'oligo_design':
+            return 'Design nucleoprotein assemblies with validation.';
+        default:
+            return template.short_description || template.summary || template.description || '';
+    }
+};
+
+const getCompactModelDescription = (model: UntypedApiValue): string => {
+    switch (model.id) {
+        case 'boltz2':
+            return 'Structure and complex prediction validator.';
+        case 'boltz_cp_experimental':
+            return 'Experimental Fold-CP large-protein path.';
+        case 'confornets_experimental':
+            return 'Experimental monomer conformer sampling.';
+        case 'antibody_denovo':
+            return 'Nanobody generation and refinement toolkit.';
+        case 'rfdiffusion':
+            return 'Backbone generation and local redesign.';
+        default:
+            return model.short_description || model.summary || model.description || '';
+    }
+};
+
+const getExperimentalStatusSummary = (template: UntypedApiValue): string => {
+    if (template.id === 'confornets_experimental') return 'Monomer-only alpha; real upstream wrapper, compact controls.';
+    if (template.id === 'boltz_cp_experimental') return 'Alpha data-plane; logical shard plan plus current GPU bridge.';
+    return template.status_short || 'Active alpha; backend wired, review carefully.';
+};
+
 export function JobSubmission() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
@@ -496,7 +582,7 @@ export function JobSubmission() {
         {
             id: 'mutagenesis',
             name: 'Mutagenesis Library',
-            description: 'Generate amino acid variants and predict their structures using Boltz-2 or RoseTTAFold3.',
+            description: 'Build variant libraries and predict structures.',
             icon: 'dna',
             color: '#8B5CF6',
             stages: [{ tool: 'Library Gen' }, { tool: 'Structure Prediction' }],
@@ -504,7 +590,7 @@ export function JobSubmission() {
         {
             id: 'structure_prediction',
             name: 'Structure Prediction',
-            description: 'Predict 3D protein, RNA, DNA, or complex structures from sequences using Boltz-2, RoseTTAFold3, or Protenix.',
+            description: 'Predict proteins, nucleic acids, and complexes.',
             icon: 'microscope',
             color: '#F59E0B',
             stages: [{ tool: 'Boltz-2 / RF3 / Protenix' }],
@@ -512,7 +598,7 @@ export function JobSubmission() {
         {
             id: 'antibody_denovo',
             name: 'De Novo Nanobody Toolkit',
-            description: 'Launch RFantibody, BoltzGen nanobody, or seeded PPIFlow generation from one toolkit, then reopen selected outputs in Antibody Refinement for modular redesign, validation, and downstream review.',
+            description: 'Generate, refine, validate, and review nanobody candidates.',
             icon: 'flask',
             color: '#14B8A6',
             stages: [
@@ -526,7 +612,7 @@ export function JobSubmission() {
         {
             id: 'boltzgen_design',
             name: 'BoltzGEN',
-            description: 'Design proteins that bind small molecules, NTPs, or other ligands. Uses BoltzGen for all-atom structure generation with optional docking validation.',
+            description: 'Generate ligand-aware binder candidates.',
             icon: 'pill',
             color: '#EC4899',
             stages: [{ tool: 'BoltzGen' }, { tool: 'Filtering' }, { tool: 'Docking' }],
@@ -542,7 +628,7 @@ export function JobSubmission() {
         {
             id: 'oligo_design',
             name: 'Oligo Designer',
-            description: 'Design DNA, RNA, proteins, and mixed nucleoprotein assemblies using RFDpoly diffusion with Boltz-2 validation.',
+            description: 'Design nucleoprotein assemblies with validation.',
             icon: 'dna',
             color: '#6366F1',
             stages: [{ tool: 'RFDpoly' }, { tool: 'Boltz-2' }, { tool: 'Filtering' }],
@@ -552,7 +638,7 @@ export function JobSubmission() {
         {
             id: 'protein_local_redesign',
             name: 'Protein Local Redesign',
-            description: 'Use RFdiffusion3 to locally remodel a selected region of an existing structure, redesign sequence with FA-MPNN or ProteinMPNN, and optionally validate with Boltz-2.',
+            description: 'Remodel a selected region, redesign sequence, and validate.',
             icon: 'cube',
             color: '#22C55E',
             experimental: true,
@@ -706,6 +792,7 @@ export function JobSubmission() {
 
     const renderTemplateCard = (template: UntypedApiValue) => {
         const isSelected = selectedTemplateId === template.id;
+        const docTopics = getTemplateDocumentationTopics(template);
         return (
             <div
                 key={template.id}
@@ -743,7 +830,12 @@ export function JobSubmission() {
                         </span>
                     )}
                 </div>
-                <p className="mb-2 text-xs opacity-70 line-clamp-2">{template.description}</p>
+                <p className="mb-2 text-xs opacity-70 line-clamp-2">{getCompactTemplateDescription(template)}</p>
+                {docTopics.length > 0 && (
+                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        Docs available
+                    </div>
+                )}
                 <div className="flex items-center gap-0.5 flex-wrap text-[10px]">
                     {template.stages.map((stage: UntypedApiValue, idx: number) => (
                         <div key={idx} className="flex items-center">
@@ -976,7 +1068,7 @@ export function JobSubmission() {
 
             <main className="max-w-[104rem] mx-auto space-y-8">
 
-                {/* 2. Mode Toggle: Templates vs Manual */}
+                {/* 2. Mode Toggle: workflow cards only; the raw model-picker tab stays hidden for now. */}
                 <section>
                     <div className="flex gap-2 mb-4">
                         <button
@@ -1008,19 +1100,6 @@ export function JobSubmission() {
                                 }`}
                         >
                             Experimental
-                        </button>
-                        <button
-                            onClick={() => {
-                                setWizardMode('manual');
-                                setSelectedTemplateId(null);
-                                setClonedValues(undefined);
-                            }}
-                            className={`min-w-[9.5rem] rounded-lg border px-4 py-2.5 text-sm font-medium transition-all ${wizardMode === 'manual'
-                                ? 'border-blue-500/40 bg-blue-500/15 text-blue-300'
-                                : 'border-slate-700 bg-slate-900/60 text-slate-300 hover:bg-slate-800'
-                                }`}
-                        >
-                            Advanced (Models)
                         </button>
                     </div>
 
@@ -1119,12 +1198,12 @@ export function JobSubmission() {
                                 <>
                                     <p className="text-slate-300 text-base font-medium mb-4">
                                         {wizardMode === 'experimental'
-                                            ? 'Experimental workflows are isolated here on purpose. These are real integrations, but they are still alpha-grade systems intended for iterative frontier work.'
+                                            ? 'Choose an active alpha workflow:'
                                             : 'Choose a preset workflow for your experiment goal:'}
                                     </p>
                                     {wizardMode === 'experimental' && (
                                         <div className="rounded-xl border border-orange-400/20 bg-orange-500/8 px-4 py-3 text-sm text-orange-100">
-                                            <span className="font-semibold text-orange-200">Frontier mode:</span> this tab is reserved for workflows that are wired into BMS end to end, but are still evolving in interface, validation, and downstream review semantics.
+                                            <span className="font-semibold text-orange-200">Alpha:</span> real launchers, concise cards, method detail in docs.
                                         </div>
                                     )}
                                     <div className="grid grid-cols-2 gap-3">
@@ -1173,7 +1252,12 @@ export function JobSubmission() {
                                             )}
                                         </div>
                                         <h3 className="font-semibold text-slate-200 mb-1">{model.name}</h3>
-                                        <p className="text-xs text-slate-500 line-clamp-2">{model.description}</p>
+                                        <p className="text-xs text-slate-500 line-clamp-2">{getCompactModelDescription(model)}</p>
+                                        {getModelDocumentationTopics(model).length > 0 && (
+                                            <div className="mt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                                Docs available
+                                            </div>
+                                        )}
                                     </div>
                                 ))}
                             </div>
@@ -1196,16 +1280,18 @@ export function JobSubmission() {
                             </h2>
 
                             {templateDetail.experimental && (
-                                <div className="mb-6 rounded-xl border border-orange-400/20 bg-orange-500/8 p-4">
-                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-300">Experimental Workflow</p>
-                                    <p className="mt-2 text-sm text-slate-200">
-                                        <span className="font-semibold text-orange-200">Goal:</span>{' '}
-                                        {templateDetail.goal || templateDetail.description}
-                                    </p>
-                                    <p className="mt-2 text-sm text-slate-300">
-                                        <span className="font-semibold text-orange-200">Current status:</span>{' '}
-                                        {templateDetail.status || 'Active alpha integration with backend wiring in place and downstream iteration still in progress.'}
-                                    </p>
+                                <div className="mb-6 space-y-3 rounded-xl border border-orange-400/20 bg-orange-500/8 p-4">
+                                    <div className="flex flex-wrap items-center gap-3 text-sm">
+                                        <span className="rounded-full border border-orange-400/25 bg-orange-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-orange-300">
+                                            Active alpha
+                                        </span>
+                                        <span className="text-slate-300">{getExperimentalStatusSummary(templateDetail)}</span>
+                                    </div>
+                                    <ModelDocumentationLinks
+                                        topics={getTemplateDocumentationTopics(templateDetail)}
+                                        summary="Method detail lives in maintained docs, not inline launcher prose."
+                                        compact
+                                    />
                                 </div>
                             )}
 
@@ -1283,6 +1369,13 @@ export function JobSubmission() {
                                 Configuration
                             </h2>
 
+                            <ModelDocumentationLinks
+                                topics={getModelDocumentationTopics(selectedModel)}
+                                summary="Method background is linked out; this panel stays focused on launch controls."
+                                compact
+                                className="mb-6"
+                            />
+
                             <div className="space-y-6">
                                 {/* Mode Selection */}
                                 <div>
@@ -1304,7 +1397,7 @@ export function JobSubmission() {
                                             ))}
                                     </select>
                                     {selectedMode && (
-                                        <p className="mt-2 text-sm text-slate-500">{selectedMode.description}</p>
+                                        <p className="mt-2 text-sm text-slate-500">{compactUiCopy(selectedMode.description, 120)}</p>
                                     )}
                                 </div>
 

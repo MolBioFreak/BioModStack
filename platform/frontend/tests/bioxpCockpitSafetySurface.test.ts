@@ -13,6 +13,13 @@ function sourceBetween(startNeedle: string, endNeedle: string): string {
     return cockpitSource.slice(start, end);
 }
 
+test('saved-but-inactive BioXP link is not mislabeled as hardware offline', () => {
+    assert.match(cockpitSource, /const linkInactive = linkageConfigured && !interlinkActive/);
+    assert.match(cockpitSource, /const hardwareBadgeLabel = linkInactive\s*\? 'LINK INACTIVE'/);
+    assert.match(cockpitSource, /BIOXP LINK INACTIVE/);
+    assert.match(cockpitSource, /Saved robot profile is present but inactive/);
+});
+
 test('default connection tab does not expose old motor interlock/lock-clear buttons', () => {
     const connectionTab = sourceBetween("{activeTab === 'connection'", "{activeTab === 'operator'");
 
@@ -61,10 +68,12 @@ test('commissioning motion keeps axis controls while default handler restores gr
     assert.doesNotMatch(cockpitSource, /Snapshot refs or image paths/);
     assert.doesNotMatch(cockpitSource, /These controls can physically move the robot/);
     assert.match(cockpitSource, />\s*Switch Home\s*</);
-    assert.doesNotMatch(cockpitSource, /Direct OEM homing modes for supervised testing/);
-    assert.doesNotMatch(cockpitSource, />\s*OEM HomeXY\s*</);
-    assert.doesNotMatch(cockpitSource, />\s*InitializeMotion ACK\s*</);
+    assert.match(cockpitSource, /Direct OEM homing modes for supervised testing/);
+    assert.match(cockpitSource, /OEM HomeXY/);
+    assert.match(cockpitSource, /InitializeMotion ACK/);
     assert.equal(cockpitSource.match(/Arm Motors No Homing/g)?.length ?? 0, 1);
+    assert.equal(cockpitSource.match(/OEM HomeXY/g)?.length ?? 0, 1);
+    assert.equal(cockpitSource.match(/InitializeMotion ACK/g)?.length ?? 0, 1);
     assert.doesNotMatch(cockpitSource, /Switch-home disabled/);
 });
 
@@ -102,7 +111,7 @@ test('default handler controls preserve readback and thermal surfaces while dire
     assert.match(liquidCommissioningPanel, />\s*Mix\s*</);
 });
 
-test('OEM readback panel does not duplicate live motion or homing controls', () => {
+test('OEM readback panel keeps new supervised OEM mode controls in one place', () => {
     const oemReadbackPanel = sourceBetween('const oemReadbackPanel = (', 'const visionPanel = (');
 
     assert.match(oemReadbackPanel, /No-motion startup\/readiness/);
@@ -110,10 +119,15 @@ test('OEM readback panel does not duplicate live motion or homing controls', () 
     assert.match(oemReadbackPanel, /PrepareToRunJob Readiness \/ No Motion/);
     assert.match(oemReadbackPanel, /EMERGENCY STOP/);
     assert.doesNotMatch(oemReadbackPanel, /Arm Motors No Homing/);
-    assert.doesNotMatch(oemReadbackPanel, /Direct OEM homing modes/);
-    assert.doesNotMatch(oemReadbackPanel, />\s*OEM HomeXY\s*</);
-    assert.doesNotMatch(oemReadbackPanel, />\s*OEM Rehome ACK\s*</);
-    assert.doesNotMatch(oemReadbackPanel, />\s*InitializeMotion ACK\s*</);
+    assert.match(oemReadbackPanel, /Direct OEM homing modes for supervised testing/);
+    assert.match(oemReadbackPanel, /route success is not physical proof/);
+    assert.match(oemReadbackPanel, /OEM HomeXY/);
+    assert.match(oemReadbackPanel, />\s*Rehome Diagnostic \/ No Homing\s*</);
+    assert.match(oemReadbackPanel, /OEM Rehome ACK/);
+    assert.match(oemReadbackPanel, />\s*InitializeMotion \/ No Homing\s*</);
+    assert.match(oemReadbackPanel, /InitializeMotion ACK/);
+    assert.match(oemReadbackPanel, /recordOemAction\('oem_home_xy'/);
+    assert.match(oemReadbackPanel, /recordOemAction\('oem_initialize_motion_ack'/);
 });
 
 test('service operations tab exposes named operation wrappers without acknowledgement form clutter', () => {

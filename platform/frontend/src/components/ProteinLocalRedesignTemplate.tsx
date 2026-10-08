@@ -7,6 +7,7 @@ import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { componentIdFromIndex } from './ligandSelectorData';
+import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 
 interface ProteinLocalRedesignTemplateProps {
@@ -817,16 +818,20 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
                 <div>
                     <h1 className="text-3xl font-semibold">Protein Local Redesign</h1>
                     <p className="mt-2 max-w-4xl text-sm leading-6 text-[var(--text-secondary)]">
-                        Choose an existing complex visually, assign the redesign and context chains, then define the editable region directly on the structure using the same Mol* and residue-selection interaction model used elsewhere in the platform.
+                        Visual region pick → local remodeling → sequence redesign → optional validator.
                     </p>
-                    <div className="mt-4 max-w-4xl rounded-xl border px-4 py-3" style={themedSelectedStyle('var(--warning)')}>
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--warning)]">Experimental Workflow</p>
-                        <p className="mt-2 text-sm leading-6 text-[var(--text-primary)]">
-                            <span className="font-semibold">Goal:</span> make constrained local protein editing a first-class BMS workflow by combining visual region selection, RFdiffusion3 remodeling, sequence redesign, and optional validation inside one reusable entrypoint.
-                        </p>
-                        <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
-                            <span className="font-semibold text-[var(--text-primary)]">Current status:</span> early alpha. The structure-driven redesign loop is usable, but broader refinement logic, validation semantics, and downstream review behavior are still being hardened.
-                        </p>
+                    <div className="mt-4 max-w-4xl space-y-3 rounded-xl border px-4 py-3" style={themedSelectedStyle('var(--warning)')}>
+                        <div className="flex flex-wrap items-center gap-3 text-sm">
+                            <span className="rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]" style={themedTagStyle('var(--warning)')}>
+                                Active alpha
+                            </span>
+                            <span className="text-[var(--text-secondary)]">Real structure-driven loop; inspect outputs before reuse.</span>
+                        </div>
+                        <ModelDocumentationLinks
+                            topics={['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']}
+                            summary="Method background and upstream references are linked out; the launcher stays focused on source, region, and validation controls."
+                            compact
+                        />
                     </div>
                 </div>
             </div>
@@ -849,7 +854,7 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
                     <div>
                         <h2 className="text-lg font-semibold">Initial Structure Simulation</h2>
                         <p className="mt-1 max-w-4xl text-sm text-[var(--text-secondary)]">
-                            Optional upstream step. If you want to simulate a protein with chosen DNA, RNA, ions, or ligands before local editing, launch that source job here and then promote one of its completed structures directly into the redesign selector below.
+                            Optional source-complex simulation; promote completed PDB-backed outputs into redesign.
                         </p>
                     </div>
                     <button
@@ -1030,7 +1035,7 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
                                     {sourceSimulationMutation.isPending ? 'Launching Source Simulation…' : 'Launch Source Simulation'}
                                 </button>
                                 <p className="mt-3 text-xs text-[var(--text-secondary)]">
-                                    This does not bypass visual redesign. It creates a source-structure job, waits for designs, and then lets you promote one of those predicted structures into the editable-source selector below.
+                                    Creates a source-structure job; promote completed PDB-backed designs below.
                                 </p>
                             </div>
                         </div>
@@ -1095,7 +1100,7 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
                             <div>
                                 <h2 className="text-lg font-semibold">Source Complex</h2>
                                 <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                    Use the existing structure-source system rather than typing file paths by hand. Upload a PDB, pull one from runs, choose a preset, or fetch from RCSB.
+                                    Upload, reuse a run, choose a preset, or fetch RCSB—no manual path typing.
                                 </p>
                             </div>
                             <div className="rounded-lg border px-3 py-2 text-xs" style={themedInsetStyle}>
@@ -1332,8 +1337,8 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
                                     <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Derived Region Plan</div>
                                     <div className="mt-1 text-sm">
                                         {contextChains.length > 0
-                                            ? `The workflow will derive editable residues on chain ${designChain || '—'} against ${contextChains.join(', ')} using a ${interfaceCutoff.toFixed(1)} A shell and ${regionPadding} residue padding.`
-                                            : 'Select at least one context chain to define the interface shell.'}
+                                            ? `Chain ${designChain || '—'} vs ${contextChains.join(', ')} · ${interfaceCutoff.toFixed(1)} Å shell · +${regionPadding} residues.`
+                                            : 'Select at least one context chain.'}
                                     </div>
                                 </div>
                             </div>
@@ -1406,7 +1411,7 @@ export function ProteinLocalRedesignTemplate({ onBack, initialValues }: ProteinL
                         <div>
                             <h2 className="text-lg font-semibold">Review Gates</h2>
                             <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                Match the RFA interaction pattern: pause at a chosen checkpoint, filter candidates in the results viewer, then continue from that subset.
+                                Pause at checkpoints, filter in Results, then continue that subset.
                             </p>
                         </div>
 

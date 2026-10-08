@@ -55,6 +55,9 @@ import {
     useMotionReferenceStatus,
     useMoveAbsolute,
     useMoveRelative,
+    useOemHomeXY,
+    useOemInitializeMotion,
+    useOemRehome,
     useOemRuntimeCommand,
     useOemRuntimeEmergencyStop,
     useEmergencyStopOperation,
@@ -391,15 +394,15 @@ const AXIS_MOTION_SLIDER_PROFILES: Record<AxisName, AxisMotionSliderProfile> = {
         stepIncrement: 10,
         speedMin: 20,
         speedMax: 600,
-        speedDefault: 200,
+        speedDefault: 600,
         speedIncrement: 10,
-        accMin: 20,
-        accMax: 20,
-        accDefault: 20,
+        accMin: 5,
+        accMax: 5,
+        accDefault: 5,
         accIncrement: 1,
         absoluteMin: 0,
         absoluteMax: 15000,
-        source: 'OEM axis limit: gripper 0..15000; startup/manual gripper speed envelope 20..600',
+        source: 'OEM axis limit: gripper 0..15000; startup/manual gripper profile speed 600 / acc 5 / run current 31',
     },
     door: {
         stepMin: 1,
@@ -815,7 +818,7 @@ const AxisControls = ({
 
             {switchConflictObserved && (
                 <div className="text-[10px] text-content-muted">
-                    Raw L/R switch readback both active; displayed as telemetry only. No frontend motion block is applied.
+                    Raw L/R switch readback both active; displayed as telemetry only. Root-cause fix belongs in robot profile/current/switch semantics, not UI blocking.
                 </div>
             )}
 
@@ -920,8 +923,8 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
             {(leftActive === true || rightActive === true) && (
                 <div className={`text-[10px] ${switchConflictObserved ? 'text-content-muted' : 'text-content-muted'} font-mono`}>
                     {switchConflictObserved
-                        ? 'L/R switch readback both active (telemetry only)'
-                        : `${leftActive === true ? (leftMasked ? 'L sw(masked) ' : 'L sw ') : ''}${rightActive === true ? (rightMasked ? 'R sw(masked)' : 'R sw') : ''}`.trim()}
+                        ? 'L/R switch readback both active (telemetry only; no frontend motion block)'
+                        : `${leftActive === true ? (leftMasked ? 'L sw(masked)' : 'L sw') : 'L ok'} · ${rightActive === true ? (rightMasked ? 'R sw(masked)' : 'R sw') : 'R ok'}`}
                 </div>
             )}
             {commandLabel && (
@@ -1049,8 +1052,8 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
         xPositive.blocked ? 'X+ blocked by active right limit.' : null,
         yNegative.blocked ? 'Y- blocked by active left limit.' : null,
         yPositive.blocked ? 'Y+ blocked by active right limit.' : null,
-        zNegative.blocked ? 'Z- blocked by active left limit.' : null,
-        zPositive.blocked ? 'Z+ blocked by active right limit.' : null,
+        zNegative.blocked ? 'Z up (-) blocked by active left limit.' : null,
+        zPositive.blocked ? 'Z down (+) blocked by active right limit.' : null,
     ].filter(Boolean);
 
     const conflicts = [
@@ -1154,11 +1157,11 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
 
                 <div className="space-y-2">
                     {renderButton(
-                        { axis: 'z', steps: CAMERA_HOLD_JOG_PROFILE.z_step, label: 'Z+' },
+                        { axis: 'z', steps: -CAMERA_HOLD_JOG_PROFILE.z_step, label: 'Z up (-)' },
                         '▲',
-                        'Z+',
-                        zPositive.blocked,
-                        holdCommand?.axis === 'z' && holdCommand?.steps > 0,
+                        'UP/-Z',
+                        zNegative.blocked,
+                        holdCommand?.axis === 'z' && holdCommand?.steps < 0,
                     )}
                     <div className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-center">
                         <div className="text-[9px] uppercase tracking-[0.12em] text-content-muted">Z</div>
@@ -1166,11 +1169,11 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
                         <div className="mt-1 text-[9px] text-content-muted">pipettor</div>
                     </div>
                     {renderButton(
-                        { axis: 'z', steps: -CAMERA_HOLD_JOG_PROFILE.z_step, label: 'Z-' },
+                        { axis: 'z', steps: CAMERA_HOLD_JOG_PROFILE.z_step, label: 'Z down (+)' },
                         '▼',
-                        'Z-',
-                        zNegative.blocked,
-                        holdCommand?.axis === 'z' && holdCommand?.steps < 0,
+                        'DN/+Z',
+                        zPositive.blocked,
+                        holdCommand?.axis === 'z' && holdCommand?.steps > 0,
                     )}
                 </div>
             </div>
@@ -1649,6 +1652,9 @@ export const BioXpCockpit = () => {
     const oemInitializeSystem = useOemRuntimeCommand('initializeSystem');
     const oemPrepareToRunJobReadiness = usePrepareToRunJobReadiness();
     const oemUnlockProcess = useOemRuntimeCommand('unlockProcess');
+    const oemHomeXY = useOemHomeXY();
+    const oemRehome = useOemRehome();
+    const oemInitializeMotion = useOemInitializeMotion();
     const motionRangeStatus = useMotionRangeStatus(controlsPollingEnabled, motionBusy ? false : 5000);
     const liquidStatus = useLiquidStatus(controlsPollingEnabled, motionBusy ? false : 5000);
     const liquidInit = useLiquidInit();
@@ -1732,6 +1738,23 @@ export const BioXpCockpit = () => {
     const isConnected = interlinkActive && (hardwareReachable || controlPlaneReachable || (!!status?.linkage_configured && hasRecentHardwareContact));
     const isRecovering = interlinkActive && !hardwareReachable && (controlPlaneReachable || (!!status?.linkage_configured && hasRecentHardwareContact));
     const isDegraded = !!status && !statusIsError && (status.status === 'degraded' || isRecovering);
+    const linkInactive = linkageConfigured && !interlinkActive;
+    const hardwareBadgeClassName = isConnected
+        ? (isDegraded ? 'bg-warning/10 text-warning border-warning/30' : 'bg-success/10 text-success border-success/30')
+        : linkInactive
+            ? 'bg-warning/10 text-warning border-warning/30'
+            : 'bg-error/10 text-error border-error/30';
+    const hardwareBadgeLabel = linkInactive
+        ? 'LINK INACTIVE'
+        : statusLoading
+            ? 'PINGING...'
+            : isConnected
+                ? (isRecovering ? 'RECOVERING' : isDegraded ? 'DEGRADED' : 'ONLINE')
+                : 'OFFLINE';
+    const unavailableTitle = linkInactive ? 'BIOXP LINK INACTIVE' : 'HARDWARE OFFLINE';
+    const unavailableDetail = linkInactive
+        ? 'Saved robot profile is present but inactive. Press BIOXP LINK → Connect to activate the BMS proxy; no robot motion is run by connecting.'
+        : 'Configure a working runtime linkage first. Handler readback, thermal, and chiller panels stay disabled until the runtime reports actual board reachability.';
     const linkageHelp =
         status?.status === 'not_configured'
             ? 'No linkage is configured yet. Use the recommended runtime URL below and press Connect.'
@@ -2336,6 +2359,67 @@ export const BioXpCockpit = () => {
                     </button>
                 </div>
             </div>
+            <div className="rounded-lg border border-warning/20 bg-warning/5 p-3 space-y-2">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">Direct OEM homing modes for supervised testing</div>
+                <div className="text-xs text-content-muted">These are the new BMS proxy controls for robot-local OEM mode routes. They are kept here as one supervised section, separate from normal Live X/Y/Z + Grabber controls; route success is not physical proof.</div>
+                <div className="flex flex-wrap gap-2">
+                    <button
+                        onClick={() => oemHomeXY.mutate(
+                            { operator: 'bms-cockpit', operator_ack: 'supervised_oem_home_xy', source: 'bms-oem-runtime-panel-home-xy' },
+                            { onSuccess: (data) => recordOemAction('oem_home_xy', data), onError: (error) => recordOemError('oem_home_xy', error) },
+                        )}
+                        disabled={!isConnected || oemHomeXY.isPending}
+                        className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                        title="Calls /api/bioxp/motion/oem/home_xy through BMS. Requires operator/camera proof; API success is not physical proof."
+                    >
+                        {oemHomeXY.isPending ? 'OEM HOMING...' : 'OEM HomeXY'}
+                    </button>
+                    <button
+                        onClick={() => oemRehome.mutate(
+                            { operator: 'bms-cockpit', operator_ack: 'diagnostic_rehome_no_homing', run_homing: false, dry_run: true, source: 'bms-oem-runtime-panel-rehome-diagnostic' },
+                            { onSuccess: (data) => recordOemAction('oem_rehome_diagnostic_no_homing', data), onError: (error) => recordOemError('oem_rehome_diagnostic_no_homing', error) },
+                        )}
+                        disabled={!isConnected || oemRehome.isPending}
+                        className="px-3 py-2 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10 disabled:opacity-40"
+                        title="Calls /api/bioxp/motion/oem/rehome with run_homing=false/dry_run=true for route diagnostics only."
+                    >
+                        Rehome Diagnostic / No Homing
+                    </button>
+                    <button
+                        onClick={() => oemRehome.mutate(
+                            { operator: 'bms-cockpit', operator_ack: 'supervised_oem_rehome_ack', run_homing: true, source: 'bms-oem-runtime-panel-rehome-ack' },
+                            { onSuccess: (data) => recordOemAction('oem_rehome_ack', data), onError: (error) => recordOemError('oem_rehome_ack', error) },
+                        )}
+                        disabled={!isConnected || oemRehome.isPending}
+                        className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                        title="Calls /api/bioxp/motion/oem/rehome through BMS. Requires operator/camera proof."
+                    >
+                        {oemRehome.isPending ? 'OEM REHOMING...' : 'OEM Rehome ACK'}
+                    </button>
+                    <button
+                        onClick={() => oemInitializeMotion.mutate(
+                            { operator: 'bms-cockpit', operator_ack: 'diagnostic_initialize_motion_no_homing', run_homing: false, dry_run: true, source: 'bms-oem-runtime-panel-initialize-motion-diagnostic' },
+                            { onSuccess: (data) => recordOemAction('oem_initialize_motion_diagnostic_no_homing', data), onError: (error) => recordOemError('oem_initialize_motion_diagnostic_no_homing', error) },
+                        )}
+                        disabled={!isConnected || oemInitializeMotion.isPending}
+                        className="px-3 py-2 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10 disabled:opacity-40"
+                        title="Calls /api/bioxp/motion/oem/initialize_motion with run_homing=false/dry_run=true for route diagnostics only."
+                    >
+                        InitializeMotion / No Homing
+                    </button>
+                    <button
+                        onClick={() => oemInitializeMotion.mutate(
+                            { operator: 'bms-cockpit', operator_ack: 'supervised_initialize_motion_ack', run_homing: true, source: 'bms-oem-runtime-panel-initialize-motion-ack' },
+                            { onSuccess: (data) => recordOemAction('oem_initialize_motion_ack', data), onError: (error) => recordOemError('oem_initialize_motion_ack', error) },
+                        )}
+                        disabled={!isConnected || oemInitializeMotion.isPending}
+                        className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                        title="Calls /api/bioxp/motion/oem/initialize_motion through BMS. Requires operator/camera proof."
+                    >
+                        {oemInitializeMotion.isPending ? 'INITIALIZING MOTION...' : 'InitializeMotion ACK'}
+                    </button>
+                </div>
+            </div>
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                 <JsonBlock title="Latest OEM Action" data={latestOemAction?.data} fallback="No OEM action executed yet." />
                 <JsonBlock title="Startup Latest" data={oemStartupLatest.data} fallback="Startup status pending." />
@@ -2727,8 +2811,8 @@ export const BioXpCockpit = () => {
                     <h2 className="text-lg font-semibold text-content">BioXP Handler Controls</h2>
                     <p className="text-sm text-content-muted">OEM/liquid-handler-first BMS proxy for the robot-local BioXP runtime: linkage, named no-motion readiness, startup, readback, protocol, thermal, chiller, camera, and commissioning controls.</p>
                 </div>
-                <div className={`px-4 py-1.5 rounded-sm text-xs font-mono font-semibold border ${isConnected ? (isDegraded ? 'bg-warning/10 text-warning border-warning/30' : 'bg-success/10 text-success border-success/30') : 'bg-error/10 text-error border-error/30'}`}>
-                    HARDWARE: {statusLoading ? 'PINGING...' : isConnected ? (isRecovering ? 'RECOVERING' : isDegraded ? 'DEGRADED' : 'ONLINE') : 'OFFLINE'}
+                <div className={`px-4 py-1.5 rounded-sm text-xs font-mono font-semibold border ${hardwareBadgeClassName}`}>
+                    HARDWARE: {hardwareBadgeLabel}
                 </div>
             </div>
 
@@ -2930,9 +3014,9 @@ export const BioXpCockpit = () => {
 
             {activeTab === 'service' && (
                 !isConnected ? (
-                    <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
-                        <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
-                        <p className="text-xs text-content-muted mt-2">Configure a working runtime linkage first. Service operation buttons stay disabled until BMS can reach the robot-local BioXP API.</p>
+                    <div className={`p-6 ${linkInactive ? 'bg-warning/5 border-warning/20' : 'bg-error/5 border-error/20'} border rounded-lg text-center max-w-lg`}>
+                        <p className={`text-sm ${linkInactive ? 'text-warning' : 'text-error'} font-semibold`}>{unavailableTitle}</p>
+                        <p className="text-xs text-content-muted mt-2">{linkInactive ? unavailableDetail : 'Configure a working runtime linkage first. Service operation buttons stay disabled until BMS can reach the robot-local BioXP API.'}</p>
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -2949,9 +3033,9 @@ export const BioXpCockpit = () => {
 
             {activeTab === 'manual' && (
                 !isConnected ? (
-                    <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
-                        <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
-                        <p className="text-xs text-content-muted mt-2">Configure a working runtime linkage first. Commissioning motion buttons stay disabled until BMS is linked to the robot-local BioXP API.</p>
+                    <div className={`p-6 ${linkInactive ? 'bg-warning/5 border-warning/20' : 'bg-error/5 border-error/20'} border rounded-lg text-center max-w-lg`}>
+                        <p className={`text-sm ${linkInactive ? 'text-warning' : 'text-error'} font-semibold`}>{unavailableTitle}</p>
+                        <p className="text-xs text-content-muted mt-2">{linkInactive ? unavailableDetail : 'Configure a working runtime linkage first. Commissioning motion buttons stay disabled until BMS is linked to the robot-local BioXP API.'}</p>
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -2993,9 +3077,9 @@ export const BioXpCockpit = () => {
 
             {activeTab === 'controls' && (
                 !isConnected ? (
-                    <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
-                        <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
-                        <p className="text-xs text-content-muted mt-2">Configure a working runtime linkage first. Handler readback, thermal, and chiller panels stay disabled until the runtime reports actual board reachability.</p>
+                    <div className={`p-6 ${linkInactive ? 'bg-warning/5 border-warning/20' : 'bg-error/5 border-error/20'} border rounded-lg text-center max-w-lg`}>
+                        <p className={`text-sm ${linkInactive ? 'text-warning' : 'text-error'} font-semibold`}>{unavailableTitle}</p>
+                        <p className="text-xs text-content-muted mt-2">{unavailableDetail}</p>
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -3111,9 +3195,9 @@ export const BioXpCockpit = () => {
 
             {activeTab === 'camera' && (
                 !isConnected ? (
-                    <div className="p-6 bg-error/5 border border-error/20 rounded-lg text-center max-w-lg">
-                        <p className="text-sm text-error font-semibold">HARDWARE OFFLINE</p>
-                        <p className="text-xs text-content-muted mt-2">The camera tab now depends on the real runtime responses. Bring the linkage online first, then capture or stream frames from the actual device.</p>
+                    <div className={`p-6 ${linkInactive ? 'bg-warning/5 border-warning/20' : 'bg-error/5 border-error/20'} border rounded-lg text-center max-w-lg`}>
+                        <p className={`text-sm ${linkInactive ? 'text-warning' : 'text-error'} font-semibold`}>{unavailableTitle}</p>
+                        <p className="text-xs text-content-muted mt-2">{linkInactive ? unavailableDetail : 'The camera tab now depends on the real runtime responses. Bring the linkage online first, then capture or stream frames from the actual device.'}</p>
                     </div>
                 ) : (
                     <div className="space-y-6">

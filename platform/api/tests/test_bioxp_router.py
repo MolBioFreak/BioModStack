@@ -118,6 +118,41 @@ async def test_get_status_without_linkage_returns_not_configured(monkeypatch: py
 
 
 @pytest.mark.asyncio
+async def test_get_status_uses_targeted_power_when_aggregate_status_is_conservative(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', 'http://robot:8123')
+    calls: list[tuple[str, str, float]] = []
+
+    async def fake_proxy_request(method: str, path: str, timeout: float = 65.0, **_: object) -> dict:
+        calls.append((method, path, timeout))
+        if path == '/status':
+            return {
+                'status': 'degraded',
+                'runtime_available': True,
+                'hardware_connected': False,
+                'startup_error': None,
+                'status_error': None,
+            }
+        if path == '/motion/power/status':
+            return {
+                'hardware_connected': True,
+                'motion_arm': {'armed': False, 'reason': 'startup'},
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    response = await bioxp.get_status()
+
+    assert calls == [('GET', '/status', 18.0), ('GET', '/motion/power/status', 45.0)]
+    assert response['status'] == 'ok'
+    assert response['hardware_connected'] is True
+    assert response['hardware_connected_inferred_via'] == '/motion/power/status'
+    assert response['targeted_power_readback']['hardware_connected'] is True
+    assert response['linkage_configured'] is True
+    assert response['linkage_url'] == 'http://robot:8123'
+
+
+@pytest.mark.asyncio
 async def test_daemon_status_without_linkage_reports_runtime_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', None)
 

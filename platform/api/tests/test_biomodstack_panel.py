@@ -198,3 +198,50 @@ def test_panel_api_log_falls_back_when_docker_is_unavailable(monkeypatch, tmp_pa
     content = module.read_container_log_tail("biomodstack-api", fallback, 7)
     assert "docker command not available" in content
     assert "dev api line" in content
+
+
+def test_panel_summarizes_bioxp_interlink_state(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+
+    summary = module.summarize_bioxp_interlink_state(
+        {
+            "active": True,
+            "configured": True,
+            "reachable": True,
+            "hardware_connected": True,
+            "robot_api_url": "http://100.124.140.56:8123",
+        }
+    )
+
+    assert "LINKED" in summary
+    assert "reachable=yes" in summary
+    assert "hardware=yes" in summary
+    assert "http://100.124.140.56:8123" in summary
+
+
+def test_panel_bioxp_runtime_reset_uses_governed_proxy_route(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    captured: list[tuple[str, str, dict, float]] = []
+    notifications: list[tuple[str, str]] = []
+    panel = SimpleNamespace(
+        _update_bioxp_row=lambda probe=False: None,
+        _show_bioxp_result=lambda title, result: notifications.append((title, result["action"])),
+    )
+
+    def fake_call(method, path, payload=None, timeout=8.0):
+        captured.append((method, path, payload, timeout))
+        return {"action": "runtime-reset", "ok": False, "supported": False, "reason": "unsupported"}
+
+    monkeypatch.setattr(module, "call_local_api_json", fake_call)
+
+    module.BioModStackPanel._on_bioxp_runtime_reset(panel, None)
+
+    assert captured == [
+        (
+            "POST",
+            "/api/bioxp/interlink/runtime-reset",
+            {"operator_ack": "RESET BIOXP RUNTIME", "tail": 120},
+            30.0,
+        )
+    ]
+    assert notifications == [("BioXP Runtime Restart", "runtime-reset")]
