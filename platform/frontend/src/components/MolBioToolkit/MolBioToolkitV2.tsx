@@ -269,10 +269,15 @@ export function MolBioToolkitV2() {
     const [highlightedRegions, setHighlightedRegions] = useState<HighlightedRegion[]>([]);
     const [isDirty, setIsDirty] = useState(false);
 
-    // Common restriction enzymes for SeqViz
-    const [selectedEnzymes] = useState<string[]>([
+    // Enzymes currently displayed on the viewer - controlled by DigestPanel
+    const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([
+        // Default: Common 6-cutters for cloning
         'EcoRI', 'BamHI', 'HindIII', 'XbaI', 'SalI', 'PstI', 'SmaI', 'KpnI', 'SacI', 'XhoI',
-        'NotI', 'NdeI', 'NcoI', 'BglII', 'SpeI', 'MluI', 'ApaI', 'ClaI', 'EcoRV', 'NheI'
+        'NotI', 'NdeI', 'NcoI', 'BglII', 'SpeI', 'MluI', 'ApaI', 'ClaI', 'EcoRV', 'NheI',
+        // Golden Gate / MoClo enzymes
+        'BsaI', 'BbsI', 'SapI',
+        // Other frequently used
+        'AgeI', 'AscI', 'PacI', 'SfiI', 'FseI', 'PmeI'
     ]);
 
     // History hook for undo/redo
@@ -657,6 +662,8 @@ export function MolBioToolkitV2() {
                                 sequenceData={sequenceData}
                                 sequenceId={selectedSequenceId}
                                 onHighlight={setHighlightedRegions}
+                                selectedEnzymes={selectedEnzymes}
+                                onEnzymesChange={setSelectedEnzymes}
                             />
                         )}
                         {activePanel === 'pcr' && (
