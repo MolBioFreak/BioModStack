@@ -11,6 +11,9 @@ from types import SimpleNamespace
 
 import pysam
 import pytest
+from ngs_resource_fixture import ngs_resources
+
+pytestmark = [pytest.mark.native_http, pytest.mark.usefixtures("ngs_resources", "native_http")]
 
 from services import ont_ngs_completion as completion
 from test_ont_ngs_native_completion import _sha, _nextflow_native_entry, isolated_result_root
@@ -23,13 +26,16 @@ def shell(process, cwd, values, bins):
     for key, value in values.items():
         script = script.replace('${' + key + '}', str(value))
     script = script.replace('\\$', '$').replace('\\\\\n', '\\\n')
-    return subprocess.run(['bash', '-c', script], cwd=cwd, capture_output=True, text=True,
+    script = script.replace('${params.code_root ?: projectDir}', str(ROOT))
+    command = cwd / '.command.sh'
+    command.write_text(script)
+    return subprocess.run(['bash', str(command.resolve())], cwd=cwd, capture_output=True, text=True,
                           env={**os.environ, 'PATH': str(bins) + ':' + os.environ['PATH']})
 
 
 def external_fixture(tmp_path, *, enabled=True, reference=True, threshold=0, code='m', m5=True,
-                     mapq=0, outcome='mapped', bed=None, summary=None, mixed_legacy=False, base='C'):
-    root = tmp_path / 'result'
+                     mapq=0, outcome='mapped', bed=None, summary=None, mixed_legacy=False, base='C', declared_source_sha256=None):
+    root = tmp_path / 'results' / 'result'
     align = root / 'align'
     align.mkdir(parents=True)
     bins = tmp_path / 'bins'
@@ -77,15 +83,17 @@ def external_fixture(tmp_path, *, enabled=True, reference=True, threshold=0, cod
         checked = tmp_path / 'mapped-check'
         checked.mkdir()
         if not m5:
-            params.update(bam_source_sha256=_sha(source),
+            params.update(bam_source_sha256=declared_source_sha256 or _sha(source),
                           bam_reference_sha256=params['reference_sequence_sha256'])
         result = shell('ValidateMappedBam', checked, {**values, 'bam': align / 'aligned.bam',
             'bai': align / 'aligned.bam.bai', 'reference': selected,
+            'preparation_receipt': align / 'bam_prepare.log',
             'declaredSourceSha256': params.get('bam_source_sha256', ''),
             'declaredReferenceSha256': params.get('bam_reference_sha256', '')}, bins)
         if not m5:
             return result, root
         assert result.returncode == 0, result.stderr
+        (align / 'bam_mapped_check.log').write_bytes((checked / 'bam_mapped_check.log').read_bytes())
         result = shell('PrepareReferenceForIGV', align, {'reference': selected}, bins)
         assert result.returncode == 0, result.stderr
     names = ['aligned.bam', 'aligned.bam.bai', 'bam_prepare.log']
@@ -149,7 +157,7 @@ def test_external_codes_and_threshold_not_dorado_models(tmp_path, code, threshol
 
 @pytest.mark.parametrize('enabled', [True, False])
 @pytest.mark.parametrize('filename', ['align/aligned.bam', 'align/aligned.bam.bai', 'align/bam_prepare.log',
-    'align/reference.fasta', 'align/reference.fasta.fai', 'align/reference_prepare.log'])
+    'align/reference.fasta', 'align/reference.fasta.fai', 'align/reference_prepare.log', 'align/bam_mapped_check.log'])
 @pytest.mark.parametrize('damage', ['missing', 'symlink'])
 def test_external_native_required_products(tmp_path, enabled, filename, damage):
     job, root = external_fixture(tmp_path, enabled=enabled)
@@ -250,9 +258,22 @@ def test_external_producer_zero_mapped_is_failure(tmp_path, outcome):
 
 
 def test_external_no_m5_source_sha_conflict_is_not_fabricated_success(tmp_path):
-    process, root = external_fixture(tmp_path, m5=False)
+    process, root = external_fixture(tmp_path, m5=False, declared_source_sha256='0' * 64)
     assert process.returncode != 0
-    assert 'exact BAM object being validated' in process.stderr
+    assert 'does not match the original BAM in the preparation receipt' in process.stderr
+
+
+def test_external_no_m5_binds_original_and_prepared_source_bytes(tmp_path):
+    process, root = external_fixture(tmp_path, m5=False)
+    assert process.returncode == 0, process.stderr
+    receipt = (tmp_path / 'mapped-check' / 'bam_mapped_check.log').read_text()
+    assert 'reference_identity=trusted_source_bam_and_reference_sha256' in receipt
+    original_sha = _sha(tmp_path / 'external.bam')
+    prepared_sha = _sha(root / 'align/aligned.bam')
+    assert original_sha != prepared_sha
+    assert f'original_bam_sha256={original_sha}' in receipt
+    assert f'validated_bam_sha256={prepared_sha}' in receipt
+    assert f'preparation_receipt_sha256={_sha(root / "align/bam_prepare.log")}' in receipt
 
 
 @pytest.mark.parametrize('summary', ['mod_bases\t\ntotal_reads_used\t0\n', SUMMARY])

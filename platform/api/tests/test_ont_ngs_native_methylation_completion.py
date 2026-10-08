@@ -14,6 +14,9 @@ import subprocess
 import sys
 
 import pytest
+from ngs_resource_fixture import ngs_resources
+
+pytestmark = [pytest.mark.native_http, pytest.mark.usefixtures("ngs_resources", "native_http")]
 
 from services import ont_ngs_completion as completion
 from test_ont_ngs_native_completion import _sha, _nextflow_native_entry, isolated_result_root
@@ -56,7 +59,12 @@ def emit_modkit(root, threshold=0, *, bed=BED, summary=SUMMARY, fail=False):
                 'filterThreshold': '' if threshold is None else f'--filter-threshold {threshold}'}.items():
             script = script.replace('${' + key + '}', value)
         script = script.replace('\\$', '$').replace('\\\\\n', '\\\n')
-        result = subprocess.run(['bash', '-c', script], cwd=out, capture_output=True, text=True,
+        script = script.replace('${params.code_root ?: projectDir}', str(ROOT))
+        # Use the fixture interpreter for the unchanged real tag validator.
+        script = script.replace('/opt/igv-reports/bin/python', shlex.quote(sys.executable))
+        command = out / '.command.sh'
+        command.write_text(script)
+        result = subprocess.run(['bash', str(command.resolve())], cwd=out, capture_output=True, text=True,
             env={**os.environ, 'PATH': str(bins) + ':' + os.environ['PATH'], 'FIXTURES': str(bins)})
         results.append(result)
         if result.returncode:
@@ -290,12 +298,19 @@ def test_methylation_rechecks_validated_predecessor_products(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize('outcome', ['unmapped', 'filtered'])
-def test_modkit_producer_rejects_zero_mapping_per_existing_stage(tmp_path, outcome):
+def test_modkit_fixture_failure_propagates_after_zero_mapping_admission(tmp_path, outcome):
+    # Real SAM admission permits valid empty/unmapped evidence. Inject a tool
+    # failure to test shell propagation, not scientific modkit site usability.
     job, root = modified_fixture(tmp_path)
     attach_modified_reference(job, root, tmp_path, outcome)
-    result = emit_modkit(root)
-    assert len(result) == 1 and result[0].returncode != 0
-    assert 'no mapped reads' in result[0].stderr
+    result = emit_modkit(root, fail=True)
+    assert len(result) == 2
+    assert result[0].returncode == 0, result[0].stderr
+    admission = (root / 'methylation/modified_base_tag_check.log').read_text()
+    assert 'mapped_records=0\n' in admission
+    assert result[1].returncode == 7
+    assert not (root / 'methylation/modkit_summary.tsv').exists()
+    assert 'bms_input_sha256=' not in (root / 'methylation/pileup.log').read_text()
 
 
 @pytest.mark.parametrize('damage', ['tag_count', 'copied_bam', 'copied_index', 'threshold'])
