@@ -5,11 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 import asyncio
-import json
 from datetime import datetime
 
 import pytest
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -815,68 +813,3 @@ def test_ingestion_finalizer_does_not_promote_arbitrary_import_metadata() -> Non
     assert design.review_profile_id == "unsupported_legacy"
     assert design.review_contract_source == "unsupported_legacy"
     assert design.review_artifact_manifest["artifacts"]["structure"]["state"] == "missing"
-
-
-@pytest.mark.asyncio
-async def test_schema_migration_adds_and_backfills_review_authority(tmp_path: Path) -> None:
-    import database
-
-    structure_path = tmp_path / "legacy-design.pdb"
-    structure_path.write_text("END\n", encoding="utf-8")
-    migration_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'legacy.db'}")
-    original_engine = database.engine
-    database.engine = migration_engine
-    try:
-        async with migration_engine.begin() as connection:
-            await connection.run_sync(database.Base.metadata.create_all)
-            await connection.execute(text("DROP INDEX IF EXISTS ix_designs_review_profile_id"))
-            for column_name in (
-                "review_profile_id",
-                "review_contract_version",
-                "review_contract_source",
-                "review_artifact_manifest",
-                "review_role_map",
-            ):
-                await connection.execute(text(f'ALTER TABLE designs DROP COLUMN "{column_name}"'))
-            await connection.execute(text(
-                "INSERT INTO jobs (id, name, model_id, mode, params, output_dir, status, queue_status, created_at) VALUES "
-                "('recover-job', 'Recoverable legacy job', 'boltz2', 'predict', '{}', '/tmp/recover', 'completed', 'completed', CURRENT_TIMESTAMP)"
-            ))
-            await connection.execute(text(
-                "INSERT INTO designs (id, job_id, name, stage_family, stage_mode, artifact_class, pdb_path, is_favorite, created_at) VALUES "
-                "('boltzgen-row', 'legacy-job', 'BoltzGen row', 'boltzgen', 'backbone_generation', 'generated_backbone', :pdb_path, 0, CURRENT_TIMESTAMP), "
-                "('recoverable-row', 'recover-job', 'Recoverable row', NULL, NULL, NULL, :pdb_path, 0, CURRENT_TIMESTAMP), "
-                "('ambiguous-row', 'legacy-job', 'Ambiguous row', NULL, NULL, NULL, '', 0, CURRENT_TIMESTAMP)"
-            ), {"pdb_path": str(structure_path)})
-            await database._ensure_schema(connection)
-            # Simulate a stale stamp produced by an earlier fail-closed migration.
-            # A second startup must recover it from unambiguous server-owned job identity.
-            await connection.execute(text(
-                "UPDATE designs SET review_profile_id = 'unsupported_legacy', "
-                "review_contract_source = 'unsupported_legacy' WHERE id = 'recoverable-row'"
-            ))
-            await database._ensure_schema(connection)
-
-            migrated = (await connection.execute(text(
-                "SELECT id, review_profile_id, review_contract_source, review_artifact_manifest "
-                "FROM designs ORDER BY id"
-            ))).mappings().all()
-
-        by_id = {row["id"]: row for row in migrated}
-        assert by_id["boltzgen-row"]["review_profile_id"] == "de_novo_generation_v1"
-        assert by_id["boltzgen-row"]["review_contract_source"] == "legacy_backfill"
-        boltzgen_manifest = json.loads(by_id["boltzgen-row"]["review_artifact_manifest"])
-        assert boltzgen_manifest["artifacts"]["structure"]["state"] == "ready"
-        assert boltzgen_manifest["roles"]["has_binder"] is False
-
-        assert by_id["recoverable-row"]["review_profile_id"] == "structure_prediction_v1"
-        assert by_id["recoverable-row"]["review_contract_source"] == "legacy_backfill"
-
-        assert by_id["ambiguous-row"]["review_profile_id"] == "unsupported_legacy"
-        assert by_id["ambiguous-row"]["review_contract_source"] == "unsupported_legacy"
-        ambiguous_manifest = json.loads(by_id["ambiguous-row"]["review_artifact_manifest"])
-        assert ambiguous_manifest["artifacts"]["structure"]["state"] == "missing"
-        assert ambiguous_manifest["roles"]["has_binder"] is False
-    finally:
-        database.engine = original_engine
-        await migration_engine.dispose()

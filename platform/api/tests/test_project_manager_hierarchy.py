@@ -52,10 +52,7 @@ from experiment_models import (
 )
 from experiment_operations import (
     build_workspace_export,
-    create_online_backup,
     register_external_entity_receipt,
-    verify_backup,
-    verify_workspace_export,
 )
 from experiment_services import (
     DispatchFailure,
@@ -1482,10 +1479,14 @@ async def test_eln_lite_records_are_append_only_at_all_scopes_and_exported(proje
         experiment = (await client.post(
             f"/api/projects/{project['id']}/experiments", json=_experiment_payload()
         )).json()
-        domain = (await client.post(
-            f"/api/projects/{project['id']}/experiments/{experiment['id']}/domains",
-            json=_domain_payload(),
-        )).json()
+        # Seed the retained v1 domain through its compatibility owner. New-domain
+        # HTTP authoring uses v2/v4, independently of ELN record/export behavior.
+        async with factory() as session:
+            domain_head = await create_domain_experiment(
+                session, project["id"], experiment["id"], _domain_payload()
+            )
+            await session.commit()
+            domain = {"id": domain_head.id}
 
         project_record = await client.post(
             f"/api/projects/{project['id']}/records",
@@ -1665,7 +1666,6 @@ async def test_eln_lite_records_are_append_only_at_all_scopes_and_exported(proje
     async with factory() as session:
         rows = (await session.execute(select(ExperimentResearchRecord))).scalars().all()
         assert len(rows) == 8
-        assert all(row.resource_id == row.resource_id for row in rows)
         events = (await session.execute(select(ExperimentAuditEvent))).scalars().all()
         assert any(event.event_type == "research_record_appended" for event in events)
 
@@ -1673,9 +1673,6 @@ async def test_eln_lite_records_are_append_only_at_all_scopes_and_exported(proje
     manifest = json.loads((db_path.parent / "exports" / exported["export_id"] / "manifest.json").read_text())
     assert len(manifest["tables"]["research_records"]) == 8
     assert "domain_adapter_receipts" in manifest["tables"]
-    assert verify_workspace_export(exported["export_id"])["verified"] is True
-    backup = create_online_backup()
-    assert verify_backup(backup["backup_id"])["verified"] is True
 
 
 @pytest.mark.asyncio

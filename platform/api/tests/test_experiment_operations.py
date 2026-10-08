@@ -17,6 +17,10 @@ from experiment_models import (
     ExperimentLogStream,
     ExperimentResource,
     ExperimentRunAttempt,
+    ExperimentRunGroup,
+    ExperimentWorkflowRun,
+    ExperimentWorkflowPreparation,
+    ExperimentIdempotencyClaim,
 )
 from experiment_operations import (
     ExperimentOperationError,
@@ -29,14 +33,10 @@ from experiment_operations import (
     workspace_analytics,
 )
 from experiment_services import (
-    create_dataset,
-    create_domain_experiment,
     create_experiment_workspace,
     create_global_experiment,
-    create_run_group,
+    create_domain_experiment,
     create_workflow,
-    prepare_workflow,
-    save_dataset_revision,
     save_workflow_draft,
     save_workflow_revision,
 )
@@ -172,41 +172,52 @@ async def test_workspace_export_never_includes_foreign_claims_or_log_chunks(oper
         first = await create_experiment_workspace(session, "first", "")
         second = await create_experiment_workspace(session, "second", "")
         global_experiment = await create_global_experiment(session, second.id, _global_payload())
-        domain = await create_domain_experiment(
-            session,
-            second.id,
-            global_experiment.id,
-            _domain_payload(),
-        )
+        domain = await create_domain_experiment(session, second.id, global_experiment.id, _domain_payload())
         workflow = await create_workflow(
-            session,
-            second.id,
-            "workflow",
-            "generic_test",
-            experiment_id=domain.id,
-        )
-        dataset = await create_dataset(
-            session,
-            second.id,
-            "dataset",
-            "generic_inputs",
-            experiment_id=domain.id,
+            session, second.id, "workflow", "generic_test", experiment_id=domain.id
         )
         await save_workflow_draft(session, workflow.id, _workflow_payload(), expected_generation=0)
         revision = await save_workflow_revision(session, workflow.id, expected_head_generation=0)
-        dataset_revision = await save_dataset_revision(
-            session, dataset.id, {"members": []}, expected_head_generation=0
-        )
-        preparation = await prepare_workflow(
-            session, revision.id, {"input_dataset_revision_ids": [dataset_revision.id]}
-        )
-        await create_run_group(session, second.id, [preparation.id], idempotency_key="foreign-launch")
+        # Export retained rows, not a new scientific launch. Seed the historical
+        # run graph directly so preparation's current input contract is irrelevant.
+        for identity, kind in (
+            ("foreign-preparation", "workflow_preparation"),
+            ("foreign-group", "run_group"),
+            ("foreign-run", "workflow_run"),
+            ("foreign-attempt", "run_attempt"),
+        ):
+            session.add(ExperimentResource(
+                id=identity, kind=kind, workspace_id=second.id,
+                lifecycle_owner_id=second.id,
+            ))
         await session.flush()
-        attempt = (
-            await session.execute(
-                select(ExperimentRunAttempt).where(ExperimentRunAttempt.workspace_id == second.id)
-            )
-        ).scalar_one()
+        session.add(ExperimentWorkflowPreparation(
+            resource_id="foreign-preparation", workspace_id=second.id,
+            workflow_revision_id=revision.id, normalized_request_json="{}",
+            normalized_request_sha256=hashlib.sha256(b"{}").hexdigest(),
+            validation_status="valid", validation_receipt_json="{}",
+        ))
+        session.add(ExperimentRunGroup(
+            resource_id="foreign-group", workspace_id=second.id,
+            launch_idempotency_key="foreign-launch", request_sha256="a" * 64,
+        ))
+        await session.flush()
+        session.add(ExperimentWorkflowRun(
+            resource_id="foreign-run", workspace_id=second.id,
+            run_group_id="foreign-group", preparation_id="foreign-preparation", node_id="main",
+        ))
+        await session.flush()
+        attempt = ExperimentRunAttempt(
+            resource_id="foreign-attempt", workspace_id=second.id,
+            workflow_run_id="foreign-run", preparation_id="foreign-preparation",
+            scheduler_job_id="foreign-job",
+        )
+        session.add(attempt)
+        session.add(ExperimentIdempotencyClaim(
+            scope="launch", idempotency_key="foreign-launch", request_sha256="a" * 64,
+            result_resource_id="foreign-group", response_json='{"run_group_id":"foreign-group"}',
+        ))
+        await session.flush()
         stream_id = "foreign-log-stream"
         session.add(
             ExperimentResource(

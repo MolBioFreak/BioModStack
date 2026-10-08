@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -15,7 +14,6 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-import database  # noqa: E402
 from database import Base, Design, Job  # noqa: E402
 from routers import designs as designs_router  # noqa: E402
 from routers import jobs as jobs_router  # noqa: E402
@@ -110,21 +108,6 @@ async def test_reusable_structure_list_is_bounded_to_existing_completed_designs(
         "limit": 2,
     }
     assert client.get("/api/designs/reusable-structures", params={"limit": 51}).status_code == 422
-    await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_schema_helper_adds_design_job_id_index_idempotently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'legacy.db'}")
-    monkeypatch.setattr(database, "engine", engine)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await conn.execute(text("DROP INDEX ix_designs_job_id"))
-        await database._ensure_schema(conn)
-        await database._ensure_schema(conn)
-        indexes = (await conn.execute(text("PRAGMA index_list(designs)"))).fetchall()
-
-    assert "ix_designs_job_id" in {row[1] for row in indexes}
     await engine.dispose()
 
 

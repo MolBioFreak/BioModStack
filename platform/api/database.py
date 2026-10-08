@@ -13,7 +13,6 @@ from contextvars import ContextVar
 import asyncio
 import json
 import sqlite3
-from types import SimpleNamespace
 from paths import get_db_path, get_db_url
 from migrations.sqlite_sha256 import register_sqlite_sha256
 
@@ -1568,8 +1567,6 @@ class ScientificArtifactReceipt(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
-
-
 _DESIGN_ARTIFACT_FIELDS = (
     "confidence_metrics", "residue_plddt", "rfa_loop_metrics", "rfa_hotspot_metrics",
     "provenance", "review_artifact_manifest", "review_role_map", "chain_metrics",
@@ -1816,7 +1813,6 @@ class FrustraMPNNReview(Base):
     viewer_state_json = Column(JSON, nullable=False, default=dict)
     tags_json = Column(JSON, nullable=False, default=list)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
 
 
 class FrustraMPNNExport(Base):
@@ -2880,147 +2876,8 @@ async def init_db():
         await asyncio.to_thread(_attest_sqlite_migration_40, str(db_path))
 
 
-async def _ensure_schema(conn):
-    """Add missing columns for legacy SQLite databases."""
-    if engine.dialect.name != "sqlite":
-        return
-    
-    await _ensure_table_columns(conn, "jobs", Job.__table__.columns)
-    await _ensure_table_columns(conn, "designs", Design.__table__.columns)
-    await _ensure_table_columns(conn, "analysis_runs", AnalysisRun.__table__.columns)
-    await _ensure_table_columns(conn, "conformational_mapping_requests", ConformationalMappingRequest.__table__.columns)
-    await _ensure_table_columns(conn, "conformational_mapping_sources", ConformationalMappingSource.__table__.columns)
-    await _ensure_table_columns(conn, "conformational_mapping_records", ConformationalMappingRecord.__table__.columns)
-    await _ensure_table_columns(conn, "conformational_mapping_artifacts", ConformationalMappingArtifact.__table__.columns)
-    await _ensure_table_columns(conn, "conformational_mapping_landscape_rows", ConformationalMappingLandscapeRow.__table__.columns)
-    await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_headers", ConformationalMappingStateLandscapeAnalysisHeader.__table__.columns)
-    await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_pairs", ConformationalMappingStateLandscapeAnalysisPair.__table__.columns)
-    await _ensure_table_columns(conn, "conformational_mapping_state_landscape_analysis_rows", ConformationalMappingStateLandscapeAnalysisRow.__table__.columns)
-    await _ensure_table_columns(conn, "rfd3_local_redesign_requests", RFD3LocalRedesignRequest.__table__.columns)
-    await _ensure_table_columns(conn, "rfd3_local_redesign_candidates", RFD3LocalRedesignCandidate.__table__.columns)
-    await _ensure_table_columns(conn, "rfd3_local_redesign_artifacts", RFD3LocalRedesignArtifact.__table__.columns)
-    await _ensure_table_columns(conn, "nucleotide_sequences", NucleotideSequence.__table__.columns)
-    await _ensure_table_columns(conn, "primers", Primer.__table__.columns)
-    await _backfill_frustrampnn_summary_projections(conn)
-    await _backfill_design_review_contracts(conn)
-    await _ensure_sqlite_indexes(conn)
-    await _ensure_ngs_reference_set_immutability(conn)
-
-
-async def _backfill_frustrampnn_summary_projections(conn):
-    """Repair shared Design analytics from validated immutable summaries."""
-    from services.frustrampnn.contracts import project_summary_artifact
-
-    result = await conn.execute(text(
-        "SELECT d.id AS design_id, r.invocation_id, r.summary_json "
-        "FROM designs d JOIN frustrampnn_results r ON r.design_id = d.id "
-        "WHERE d.frustrampnn_status = 'succeeded' AND ("
-        "d.frustration_high_count IS NULL OR d.frustration_min_count IS NULL "
-        "OR d.frustration_pct_high IS NULL) "
-        "ORDER BY d.id, r.created_at DESC, r.invocation_id DESC"
-    ))
-    projected: set[str] = set()
-    for row in result.mappings().all():
-        design_id = str(row["design_id"])
-        if design_id in projected:
-            continue
-        summary = row["summary_json"]
-        if isinstance(summary, str):
-            summary = json.loads(summary)
-        summary = project_summary_artifact(summary)
-        await conn.execute(
-            text(
-                "UPDATE designs SET frustration_high_count = :high_count, "
-                "frustration_min_count = :minimal_count, "
-                "frustration_pct_high = :high_percent WHERE id = :design_id"
-            ),
-            {
-                "design_id": design_id,
-                "high_count": int(summary["native_slot_counts"]["high"]),
-                "minimal_count": int(summary["native_slot_counts"]["minimal"]),
-                "high_percent": float(summary["native_slot_fractions"]["high"]) * 100.0,
-            },
-        )
-        projected.add(design_id)
-
-
-async def _backfill_design_review_contracts(conn):
-    """Persist deterministic compatibility profiles; ambiguous rows fail closed."""
-    from services.result_contracts import (
-        REVIEW_CONTRACT_VERSION,
-        build_review_artifact_manifest,
-        resolve_result_contract,
-    )
-
-    result = await conn.execute(text(
-        "SELECT d.id, d.stage_family, d.stage_mode, d.artifact_class, d.pdb_path, "
-        "d.aligned_error_path, d.aligned_error_format, "
-        "d.review_profile_id, d.review_contract_version, d.review_contract_source, "
-        "d.review_artifact_manifest, d.review_role_map, "
-        "j.model_id AS job_model_id, j.mode AS job_mode, "
-        "j.stage_family AS job_stage_family, j.stage_mode AS job_stage_mode "
-        "FROM designs d LEFT JOIN jobs j ON j.id = d.job_id "
-        "WHERE d.review_profile_id IS NULL "
-        "OR d.review_profile_id = 'unsupported_legacy' "
-        "OR d.review_artifact_manifest IS NULL"
-    ))
-    for row in result.mappings().all():
-        values = dict(row)
-        stage_family = values.get("stage_family") or values.get("job_stage_family")
-        stage_mode = values.get("stage_mode") or values.get("job_stage_mode") or values.get("job_mode")
-        persisted_profile = values.get("review_profile_id")
-        stale_unsupported = persisted_profile in (None, "", "unsupported_legacy")
-        contract = resolve_result_contract(
-            review_profile_id=None if stale_unsupported else persisted_profile,
-            model_type=values.get("job_model_id") or stage_family,
-            stage_family=stage_family,
-            stage_mode=stage_mode,
-            artifact_class=values.get("artifact_class"),
-            provenance={"model_id": values.get("job_model_id")},
-        )
-        profile_id = (
-            contract.analysis_contract_id or "unsupported_legacy"
-            if stale_unsupported
-            else persisted_profile
-        )
-        role_map = values.get("review_role_map")
-        if isinstance(role_map, str):
-            try:
-                role_map = json.loads(role_map)
-            except json.JSONDecodeError:
-                role_map = None
-        design_values = {
-            **values,
-            "review_profile_id": profile_id,
-            "review_role_map": role_map if isinstance(role_map, dict) else {},
-            "pae_matrix": None,
-        }
-        design = SimpleNamespace(**design_values)
-        manifest = build_review_artifact_manifest(design)
-        await conn.execute(
-            text(
-                "UPDATE designs SET review_profile_id = :profile_id, "
-                "review_contract_version = :contract_version, "
-                "review_contract_source = CASE "
-                "WHEN review_contract_source IS NULL OR review_contract_source = 'unsupported_legacy' "
-                "THEN :contract_source ELSE review_contract_source END, "
-                "review_artifact_manifest = :artifact_manifest, "
-                "review_role_map = COALESCE(review_role_map, :role_map) WHERE id = :design_id"
-            ),
-            {
-                "profile_id": profile_id,
-                "contract_version": values.get("review_contract_version") or REVIEW_CONTRACT_VERSION,
-                "contract_source": "legacy_backfill" if contract.analysis_contract_id else "unsupported_legacy",
-                "artifact_manifest": json.dumps(manifest, sort_keys=True),
-                "role_map": json.dumps(design.review_role_map, sort_keys=True),
-                "design_id": values["id"],
-            },
-        )
-
-
 async def _ensure_sqlite_indexes(conn):
     """Install indexes required by high-volume list/count paths on legacy DBs."""
-    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_designs_job_id ON designs (job_id)"))
     await conn.execute(
         text(
             "CREATE INDEX IF NOT EXISTS ix_ngs_reference_set_manifests_source_job_id "
@@ -3113,44 +2970,6 @@ async def _ensure_ngs_reference_set_immutability(conn):
                 END
                 """
             )
-        )
-
-
-async def _ensure_table_columns(conn, table_name: str, columns):
-    """Ensure all nullable columns exist in a SQLite table."""
-    pragma = await conn.execute(text(f"PRAGMA table_info({table_name})"))
-    existing_cols = {row[1] for row in pragma.fetchall()}
-    
-    dialect = engine.dialect
-    
-    for col in columns:
-        if col.name in existing_cols:
-            continue
-        if col.primary_key:
-            continue
-        
-        # Only auto-add nullable columns or ones with explicit defaults
-        has_default = col.default is not None or col.server_default is not None
-        if not col.nullable and not has_default:
-            continue
-        
-        col_type = col.type.compile(dialect=dialect)
-        default_clause = ""
-        if col.server_default is not None:
-            default_clause = f" DEFAULT {col.server_default.arg}"
-        elif col.default is not None:
-            default_arg = getattr(col.default, "arg", None)
-            if default_arg is not None and not callable(default_arg):
-                if isinstance(default_arg, str):
-                    default_clause = f" DEFAULT '{default_arg}'"
-                elif isinstance(default_arg, bool):
-                    default_clause = f" DEFAULT {1 if default_arg else 0}"
-                else:
-                    default_clause = f" DEFAULT {default_arg}"
-        
-        null_clause = "" if col.nullable else " NOT NULL"
-        await conn.execute(
-            text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col.name}" {col_type}{null_clause}{default_clause}')
         )
 
 
