@@ -71,7 +71,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Manage BioModStack desktop services")
     parser.add_argument(
         "action",
-        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status", "discover", "plan"],
+        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status", "discover", "plan", "configure-preview"],
     )
     parser.add_argument(
         "--runtime",
@@ -82,7 +82,18 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", dest="json_output", help="emit structured JSON for supported actions")
     parser.add_argument("--target", choices=["dev", "prod", "both"], help="runtime target for start-target")
     parser.add_argument("--model", action="append", default=[], help="reviewed model dependency selection for discover/plan; repeatable")
+    parser.add_argument("--document", type=Path, help="versioned install JSON for configure-preview")
     args = parser.parse_args()
+
+    if args.action == "configure-preview":
+        if not args.document or args.notify or args.target or args.runtime or args.model:
+            parser.error("configure-preview requires --document; runtime/model/target/notify are unsupported")
+        from biomodstack_install_document import preview_report, render_preview
+        report = preview_report(args.document, project_root=REPO_ROOT)
+        print(json.dumps(report, indent=2, sort_keys=True) if args.json_output else render_preview(report))
+        return 0 if report["valid"] else 2
+    if args.document:
+        parser.error("--document is only supported with configure-preview")
 
     if args.action in {"discover", "plan"}:
         if args.notify or args.target:

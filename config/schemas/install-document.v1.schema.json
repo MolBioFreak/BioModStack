@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:biomodstack:install:v1",
+  "title": "BioModStack clean-install candidate v1",
+  "description": "Structural schema only. Python validation additionally enforces port, host capacity and path safety contracts. Not the legacy persisted profile format.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile",
+    "ingress"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "bms.install.v1"
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "data_root": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "results_dir": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "inputs_dir": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "db_path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "container_dir": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "dev_data_root": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "dev_results_dir": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "weights_root": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "colabfold_db": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "msa_cache_dir": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "sabdab_cache_dir": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "work_dir": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "analysis_cache_dir": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "api_host_port": {
+          "const": 18000,
+          "type": "integer"
+        },
+        "dev_api_host_port": {
+          "type": "integer",
+          "minimum": 18000,
+          "maximum": 18999
+        },
+        "dev_web_host_port": {
+          "type": "integer",
+          "minimum": 18000,
+          "maximum": 18999
+        },
+        "web_host_port": {
+          "type": "integer",
+          "minimum": 18000,
+          "maximum": 18999
+        },
+        "features": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bioxp": {
+              "type": "boolean"
+            },
+            "molecular_dynamics": {
+              "type": "boolean"
+            }
+          }
+        },
+        "core_runtime_mode": {
+          "type": "boolean"
+        },
+        "local_cpu_threads": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "local_memory_gib": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "ingress": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "const": "local-only"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "target"
+          ],
+          "properties": {
+            "mode": {
+              "const": "tailnet"
+            },
+            "target": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
