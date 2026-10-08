@@ -1,11 +1,14 @@
 """Validated exact-overlap Gibson assembly helpers."""
+
 from __future__ import annotations
 
 from .common import orient_fragment
 from .types import AssemblyError, AssemblyFragment, AssemblyJunction, AssemblyProduct
 
 
-def _longest_exact_overlap(left: str, right: str, minimum: int, maximum: int | None = None) -> tuple[str, int]:
+def _longest_exact_overlap(
+    left: str, right: str, minimum: int, maximum: int | None = None
+) -> tuple[str, int]:
     max_allowed = min(len(left), len(right)) - 1
     if maximum is not None:
         max_allowed = min(max_allowed, maximum)
@@ -60,7 +63,7 @@ def simulate_gibson(
                 mode="gibson",
                 overlap_sequence=overlap,
                 overlap_length=overlap_length,
-                junction_sequence=left.sequence[-12:] + right.sequence[:12],
+                junction_sequence=overlap,
             )
         )
 
@@ -92,7 +95,7 @@ def simulate_gibson(
                 mode="gibson",
                 overlap_sequence=overlap,
                 overlap_length=overlap_length,
-                junction_sequence=last.sequence[-12:] + first.sequence[:12],
+                junction_sequence=overlap,
             )
         )
 

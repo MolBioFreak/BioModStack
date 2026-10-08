@@ -21,7 +21,11 @@ from molbio_database import (  # noqa: E402
     init_molbio_db,
     make_molbio_session_factory,
 )
-from molbio_models import NucleotideSequence  # noqa: E402
+from molbio_models import (  # noqa: E402
+    MolecularDocument,
+    MolecularRevision,
+    NucleotideSequence,
+)
 from routers.molbio_ops import router as molbio_router  # noqa: E402
 from services.assembly.pydna_gibson import design_gibson  # noqa: E402
 from services.assembly.types import AssemblyError, AssemblyFragment  # noqa: E402
@@ -132,9 +136,76 @@ def test_two_fragments_design_exact_linear_candidate_with_ready_linear_input() -
     selected = next(item for item in result.candidates if item.exact_match)
     expected = fragments[0].sequence + fragments[1].sequence
     assert selected.sequence == expected
-    assert selected.checksum == hashlib.sha256(expected.encode("ascii")).hexdigest()
+    assert len(selected.checksum) == 64
     assert selected.circular is False
     assert len(selected.junctions) == 1
+
+
+def test_circular_origin_and_candidate_provenance_are_preserved() -> None:
+    fragments = [_fragment(1), _fragment(2), _fragment(3)]
+    circular = design_gibson(
+        fragments,
+        preparations=["pcr", "pcr", "pcr"],
+        circular=True,
+        overlap=24,
+        target_tm=55.0,
+        min_anneal=15,
+    )
+    linear = design_gibson(
+        fragments,
+        preparations=["pcr", "pcr", "pcr"],
+        circular=False,
+        overlap=24,
+        target_tm=55.0,
+        min_anneal=15,
+    )
+
+    selected = next(item for item in circular.candidates if item.exact_match)
+    assert selected.sequence == "".join(fragment.sequence for fragment in fragments)
+    assert selected.checksum != linear.selected_candidate_checksum
+    assert all(
+        junction.junction_sequence in selected.sequence + selected.sequence[:80]
+        for junction in selected.junctions
+    )
+    for alternate in (item for item in circular.candidates if not item.exact_match):
+        assert alternate.product.fragments == []
+        assert alternate.product.junctions == []
+        assert "not independently characterized" in alternate.product.warnings[0]
+
+
+def test_candidate_checksum_changes_with_design_settings_and_duplicate_ids_fail() -> (
+    None
+):
+    fragments = [_fragment(1), _fragment(2)]
+    design_24 = design_gibson(
+        fragments,
+        preparations=["pcr", "pcr"],
+        circular=False,
+        overlap=24,
+        target_tm=55.0,
+        min_anneal=15,
+    )
+    design_56 = design_gibson(
+        fragments,
+        preparations=["pcr", "pcr"],
+        circular=False,
+        overlap=24,
+        target_tm=56.0,
+        min_anneal=15,
+    )
+    assert (
+        design_24.selected_candidate_checksum != design_56.selected_candidate_checksum
+    )
+
+    duplicate = _fragment(2)
+    duplicate.id = fragments[0].id
+    with pytest.raises(AssemblyError, match="IDs must be unique"):
+        design_gibson(
+            [fragments[0], duplicate],
+            preparations=["pcr", "pcr"],
+            circular=False,
+            overlap=24,
+        )
 
 
 def test_unusable_and_invalid_design_requests_are_actionable() -> None:
@@ -209,6 +280,84 @@ def test_design_route_serializes_engine_primers_fragments_and_checksum() -> None
     }
 
 
+def test_design_save_rejects_stale_source_revision(tmp_path: Path) -> None:
+    engine = create_molbio_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'source-revision.db'}"
+    )
+    asyncio.run(init_molbio_db(engine=engine))
+    sessions = make_molbio_session_factory(engine)
+
+    async def seed_sources() -> None:
+        async with sessions() as session:
+            for index in (1, 2):
+                source_id = f"source-{index}"
+                sequence = _dna(index)
+                document = MolecularDocument(
+                    id=source_id,
+                    document_kind="dna",
+                    name=f"Source {index}",
+                )
+                source = NucleotideSequence(
+                    id=source_id,
+                    name=f"Source {index}",
+                    sequence=sequence,
+                    sequence_type="dna",
+                    is_circular=False,
+                    length=len(sequence),
+                    features=[],
+                    primers=[],
+                )
+                session.add_all([document, source])
+                await session.flush()
+                revision = MolecularRevision(
+                    id=f"revision-{index}",
+                    document_id=source_id,
+                    revision_number=1,
+                    change_kind="create",
+                    content_sha256=hashlib.sha256(sequence.encode("ascii")).hexdigest(),
+                    content_length=len(sequence),
+                    snapshot={"sequence": sequence},
+                    provenance={},
+                )
+                session.add(revision)
+                await session.flush()
+                document.current_revision_id = revision.id
+            await session.commit()
+
+    async def override_session():
+        async with sessions() as session:
+            yield session
+
+    app = FastAPI()
+    app.include_router(molbio_router)
+    app.dependency_overrides[get_molbio_session] = override_session
+    asyncio.run(seed_sources())
+    payload = _design_payload()
+    payload["fragments"][0]["source_revision"] = 999  # type: ignore[index]
+
+    try:
+        with TestClient(app) as client:
+            design_response = client.post(
+                "/api/molbio/assembly/gibson/design",
+                json=payload,
+            )
+            assert design_response.status_code == 200
+            stale_response = client.post(
+                "/api/molbio/assembly/gibson/design/save",
+                json={
+                    **payload,
+                    "selected_candidate_checksum": design_response.json()[
+                        "selected_candidate_checksum"
+                    ],
+                    "new_name": "Stale source revision",
+                },
+            )
+        assert stale_response.status_code == 409
+        assert "source revision 999" in stale_response.json()["detail"]
+    finally:
+        asyncio.run(engine.dispose())
+
+
 def test_design_save_rejects_forged_checksum_and_persists_server_candidate(
     tmp_path: Path,
 ) -> None:
@@ -255,10 +404,24 @@ def test_design_save_rejects_forged_checksum_and_persists_server_candidate(
         assert valid_response.status_code == 200
         response_payload = valid_response.json()
         saved_payload = response_payload["saved_sequence"]
-        assert saved_payload["sequence"] == response_payload["selected_product"]["sequence"]
+        assert (
+            saved_payload["sequence"]
+            == response_payload["selected_product"]["sequence"]
+        )
         assert saved_payload["operation_params"]["engine"] == "pydna"
         assert saved_payload["operation_params"]["candidate_checksum"] == checksum
         assert len(saved_payload["operation_params"]["primers"]) == 4
+        assert len(saved_payload["operation_params"]["designed_fragments"]) == 2
+        assert all(
+            len(fragment["checksum"]) == 64 and fragment["sequence"]
+            for fragment in saved_payload["operation_params"]["designed_fragments"]
+        )
+        assert (
+            saved_payload["operation_params"]["validator"]["validation"]
+            == "exact_sequence_and_topology"
+        )
+        assert len(saved_payload["primers"]) == 4
+        assert all(primer["sequence"] for primer in saved_payload["primers"])
 
         async def load_saved() -> NucleotideSequence | None:
             async with sessions() as session:
