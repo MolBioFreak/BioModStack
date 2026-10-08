@@ -4,8 +4,21 @@
 
 import { Link, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ThemeSelector } from './ThemeSelector';
-import { InfraTelemetryCollector } from './InfraLiveTelemetry';
+import {
+    InfraControlStateCollector,
+    InfraTelemetryCollector,
+    SHARED_FAN_CONTROL_QUERY_KEY,
+    SHARED_POWER_CONTROL_QUERY_KEY,
+} from './InfraLiveTelemetry';
+import {
+    fetchFanControl,
+    fetchPowerControl,
+    setFanControl,
+    setPowerControlManual,
+    setPowerControlPreset,
+} from '../lib/api';
 
 interface LayoutProps {
     children: React.ReactNode;
@@ -45,6 +58,7 @@ export function Layout({ children }: LayoutProps) {
             }}
         >
             <InfraTelemetryCollector />
+            <InfraControlStateCollector />
             {/* Top Navigation Bar */}
             <nav
                 className="backdrop-blur-sm border-b flex-shrink-0 z-50 transition-colors duration-300"
@@ -417,6 +431,7 @@ const normalizeFanState = (raw: any): FanControlState => {
 };
 
 function PowerControlMenu() {
+    const queryClient = useQueryClient();
     const [isOpen, setIsOpen] = useState(false);
     const [loading, setLoading] = useState<string | null>(null);
     const [state, setState] = useState<PowerControlState | null>(null);
@@ -425,6 +440,22 @@ function PowerControlMenu() {
     const [draftFanTargets, setDraftFanTargets] = useState<Record<string, number>>({});
     const [draftFanModes, setDraftFanModes] = useState<Record<string, 'auto' | 'manual'>>({});
     const [message, setMessage] = useState<string | null>(null);
+
+    const { data: powerControlData } = useQuery({
+        queryKey: SHARED_POWER_CONTROL_QUERY_KEY,
+        queryFn: fetchPowerControl,
+        enabled: false,
+        staleTime: Infinity,
+        refetchOnWindowFocus: false,
+    });
+
+    const { data: fanControlData } = useQuery({
+        queryKey: SHARED_FAN_CONTROL_QUERY_KEY,
+        queryFn: fetchFanControl,
+        enabled: false,
+        staleTime: Infinity,
+        refetchOnWindowFocus: false,
+    });
 
     const syncFanDrafts = (nextFanState: FanControlState) => {
         const nextTargets: Record<string, number> = {};
@@ -441,65 +472,78 @@ function PowerControlMenu() {
         setDraftFanModes(nextModes);
     };
 
-    const fetchState = async (syncDraft: boolean = true) => {
+    const syncPowerFromCache = (syncDrafts: boolean) => {
+        const cached = queryClient.getQueryData<any>(SHARED_POWER_CONTROL_QUERY_KEY);
+        if (!cached?.data) return;
+        const normalized = normalizePowerState(cached.data);
+        setState(normalized);
+        if (syncDrafts) {
+            setDraftLimits(normalized.limits);
+        }
+    };
+
+    const syncFanFromCache = (syncDrafts: boolean) => {
+        const cached = queryClient.getQueryData<any>(SHARED_FAN_CONTROL_QUERY_KEY);
+        if (!cached?.data) return;
+        const normalized = normalizeFanState(cached.data);
+        setFanState(normalized);
+        if (syncDrafts) {
+            syncFanDrafts(normalized);
+        }
+    };
+
+    const refreshHardwareState = async (syncDrafts: boolean) => {
         try {
-            const [powerRes, fanRes] = await Promise.all([
-                fetch('/api/gpu/power-control'),
-                fetch('/api/gpu/fan-control'),
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: SHARED_POWER_CONTROL_QUERY_KEY }),
+                queryClient.invalidateQueries({ queryKey: SHARED_FAN_CONTROL_QUERY_KEY }),
             ]);
-
-            if (powerRes.ok) {
-                const powerData = normalizePowerState(await powerRes.json());
-                setState(powerData);
-                if (syncDraft) {
-                    setDraftLimits(powerData.limits);
-                }
-            }
-
-            if (fanRes.ok) {
-                const fanData = normalizeFanState(await fanRes.json());
-                setFanState(fanData);
-                if (syncDraft) {
-                    syncFanDrafts(fanData);
-                }
-            }
+            syncPowerFromCache(syncDrafts);
+            syncFanFromCache(syncDrafts);
         } catch (error) {
-            console.error('Failed to fetch hardware control state:', error);
+            console.error('Failed to refresh hardware control state:', error);
         }
     };
 
     useEffect(() => {
-        if (!isOpen) {
-            return;
-        }
-        fetchState(true);
-        const interval = setInterval(() => {
-            fetchState(false);
-        }, 10000);
-        return () => clearInterval(interval);
+        if (!powerControlData?.data) return;
+        syncPowerFromCache(false);
+    }, [powerControlData, queryClient]);
+
+    useEffect(() => {
+        if (!fanControlData?.data) return;
+        syncFanFromCache(false);
+    }, [fanControlData, queryClient]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        setMessage(null);
+        syncPowerFromCache(true);
+        syncFanFromCache(true);
+        void refreshHardwareState(true);
     }, [isOpen]);
 
     const applyPowerControl = async (payload: Record<string, any>, loadingKey: string) => {
         setLoading(loadingKey);
         setMessage(null);
         try {
-            const res = await fetch('/api/gpu/power-control', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-            const data = await res.json();
-            if (!res.ok) {
-                const detail = data?.detail || data?.message || `HTTP ${res.status}`;
-                throw new Error(String(detail));
+            let response;
+            if (payload.preset === 'eco' || payload.preset === 'stock') {
+                response = await setPowerControlPreset(payload.preset);
+            } else {
+                response = await setPowerControlManual(Number(payload.gpu_index), Number(payload.limit_watts));
             }
-            const normalized = normalizePowerState(data);
-            setState(normalized);
-            setDraftLimits(normalized.limits);
-            const ok = data?.success !== false;
-            setMessage(`${ok ? '✓' : '✗'} ${data?.message || 'Updated power limits'}`);
+            await queryClient.invalidateQueries({ queryKey: SHARED_POWER_CONTROL_QUERY_KEY });
+            syncPowerFromCache(true);
+            const ok = response.data?.success !== false;
+            setMessage(`${ok ? '✓' : '✗'} ${response.data?.message || 'Updated power limits'}`);
         } catch (error) {
-            const msg = error instanceof Error ? error.message : String(error);
+            const msg =
+                typeof error === 'object' && error && 'response' in error
+                    ? String((error as any).response?.data?.detail || (error as any).response?.data?.message || (error as any).message || error)
+                    : error instanceof Error
+                        ? error.message
+                        : String(error);
             setMessage(`✗ ${msg}`);
         } finally {
             setLoading(null);
@@ -510,23 +554,22 @@ function PowerControlMenu() {
         setLoading(loadingKey);
         setMessage(null);
         try {
-            const res = await fetch('/api/gpu/fan-control', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-            const data = await res.json();
-            if (!res.ok) {
-                const detail = data?.detail || data?.message || `HTTP ${res.status}`;
-                throw new Error(String(detail));
-            }
-            const nextFan = normalizeFanState(data?.fan_control || {});
-            setFanState(nextFan);
-            syncFanDrafts(nextFan);
-            const ok = data?.success !== false;
-            setMessage(`${ok ? '✓' : '✗'} ${data?.message || 'Updated fan control'}`);
+            const response = await setFanControl(
+                Number(payload.gpu_index),
+                payload.mode,
+                payload.target_percent != null ? Number(payload.target_percent) : undefined,
+            );
+            await queryClient.invalidateQueries({ queryKey: SHARED_FAN_CONTROL_QUERY_KEY });
+            syncFanFromCache(true);
+            const ok = response.data?.success !== false;
+            setMessage(`${ok ? '✓' : '✗'} ${response.data?.message || 'Updated fan control'}`);
         } catch (error) {
-            const msg = error instanceof Error ? error.message : String(error);
+            const msg =
+                typeof error === 'object' && error && 'response' in error
+                    ? String((error as any).response?.data?.detail || (error as any).response?.data?.message || (error as any).message || error)
+                    : error instanceof Error
+                        ? error.message
+                        : String(error);
             setMessage(`✗ ${msg}`);
         } finally {
             setLoading(null);
@@ -648,7 +691,9 @@ function PowerControlMenu() {
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
-                                    onClick={() => fetchState(true)}
+                                    onClick={() => {
+                                        void refreshHardwareState(true);
+                                    }}
                                     disabled={loading !== null}
                                     className="px-2 py-1 text-xs rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
                                 >

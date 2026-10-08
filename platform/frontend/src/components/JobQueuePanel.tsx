@@ -291,11 +291,11 @@ export function JobQueuePanel() {
     const [expanded, setExpanded] = useState(true);
     const [showCancelled, setShowCancelled] = useState(false);
     const [showNgsJobs, setShowNgsJobs] = useState(true);
-    // Single timer for all elapsed time badges (fixes N-interval proliferation)
+    // Keep elapsed badges roughly fresh without repainting the whole panel every second.
     const [elapsedTick, setElapsedTick] = useState(0);
 
     useEffect(() => {
-        const timer = setInterval(() => setElapsedTick(t => t + 1), 1000);
+        const timer = setInterval(() => setElapsedTick(t => t + 1), 5000);
         return () => clearInterval(timer);
     }, []);
 

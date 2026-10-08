@@ -314,7 +314,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         });
 
         return [{
-            type: 'scattergl',
+            type: 'scatter',
             mode: 'markers',
             x: xVals,
             y: yVals,
