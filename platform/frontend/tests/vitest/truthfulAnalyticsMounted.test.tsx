@@ -71,25 +71,41 @@ test('canonical observations use real Plotly Lab, histogram and heatmap with zer
     expect((host.querySelector('[aria-label="2D Y metric"]') as HTMLSelectElement).value).toBe('rmsd_overall');
 });
 
-test('Protenix-shaped eight predictions plot canonical native pLDDT and pTM, never generic Design values', async () => {
-    // Explicit UI-only fixture matching the canonical adapter; not live scientific results.
+test('complete Protenix native scalar contract reaches charts without Design aliases or scale changes', async () => {
+    // Inert UI fixture: all five keys/scopes from the native summary adapter,
+    // including gPDE (not PAE) and the potentially negative native ranking.
+    const native = {
+        plddt: ['percent', 'model_atom_mean', 'higher'],
+        ptm: ['dimensionless', 'model_tokens', 'higher'],
+        iptm: ['dimensionless', 'inter_chain_tokens', 'higher'],
+        gpde: ['angstrom', 'contact_weighted_token_pairs', 'lower'],
+        ranking_score: ['dimensionless', 'native_complex_ranking', 'higher'],
+    };
     const points = Array.from({ length: 8 }, (_, i) => {
         const point = row(`sample-${i}`, null);
-        const metrics = { plddt_overall: 72.123456 + i, ptm: i / 10 };
+        const metrics = { plddt: 72.123456 + i, ptm: i / 10, iptm: i / 10, gpde: i / 2, ranking_score: i - 5 };
         return parseScientificPoint({ ...point, metrics,
             metric_states: Object.fromEntries(Object.entries(metrics).map(([key, value]) => [key, { state: 'ok', value, reason_code: null }])),
-            metric_descriptors: Object.fromEntries(Object.keys(metrics).map(key => [key, descriptor(key)])),
+            metric_descriptors: Object.fromEntries(Object.entries(native).map(([key, [unit, scope, direction]]) => [key, {
+                ...descriptor(key), unit, scope, direction,
+            }])),
             metric_sources: Object.fromEntries(Object.keys(metrics).map(key => [key, point.metric_sources.plddt_overall])),
         });
     });
     const { host, requests } = await mount(points, points.map(point => ({ ...point, plddt_overall: 999, ptm: 999 })));
     expect(requests).toEqual(['/api/designs/by-job/j/plotly-metrics']);
-    expect(scatter(host).data[0].x).toEqual(points.map(point => point.metrics.plddt_overall));
+    expect(scatter(host).data[0].x).toEqual(points.map(point => point.metrics.plddt));
     expect(scatter(host).data[0].y).toEqual(points.map(point => point.metrics.ptm));
-    expect(scatter(host).layout.xaxis.title.text).toContain('(pLDDT)');
+    expect(scatter(host).layout.xaxis.title.text).toContain('(percent)');
     expect(scatter(host).layout.yaxis.title.text).toContain('(dimensionless)');
     expect(scatter(host).config.toImageButtonOptions.format).toBe('svg');
     expect(host.textContent).not.toContain('999');
+    await change(host, '2D X metric', 'gpde');
+    await change(host, '2D Y metric', 'ranking_score');
+    expect(scatter(host).data[0].x).toEqual(points.map(point => point.metrics.gpde));
+    expect(scatter(host).data[0].y).toEqual(points.map(point => point.metrics.ranking_score));
+    expect(scatter(host).layout.xaxis.title.text).toContain('gPDE');
+    expect(scatter(host).layout.xaxis.title.text).toContain('(angstrom)');
 });
 
 test('canonical fractions and incompatible cohorts remain separate and unscaled', async () => {

@@ -122,7 +122,7 @@ export function correlateMetrics(rows: CohortRow[], xKey: string, yKey: string):
 
 const LABELS: Record<string, string> = {
     seq_length: 'Sequence length', dsasa: 'dSASA', num_ca_ca_clashes: 'CA–CA clashes',
-    plddt: 'pLDDT', iptm: 'iPTM', ptm: 'pTM', pae: 'PAE',
+    plddt: 'pLDDT', iptm: 'iPTM', ptm: 'pTM', pae: 'PAE', gpde: 'gPDE', ranking_score: 'Native ranking score',
     plddt_overall: 'Overall pLDDT', plddt_binder: 'Binder pLDDT', plddt_mean: 'Mean pLDDT',
     complex_plddt: 'Complex pLDDT', design_ptm: 'Design pTM', filter_rmsd: 'Filter RMSD',
     pae_overall: 'Overall PAE', pae_interaction: 'Interaction PAE',
