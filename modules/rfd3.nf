@@ -22,7 +22,7 @@ process RunRFD3 {
 
     publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_results/*.cif.gz", saveAs: { fn -> fn.replace('rfd3_results/', '') }
     publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_results/*.json", saveAs: { fn -> fn.replace('rfd3_results/', '') }
-    publishDir "${params.out_dir}/run/rfd3/trajectories", mode: 'copy', pattern: "rfd3_trajectories/*.cif.gz", saveAs: { fn -> fn.replace('rfd3_trajectories/', '') }
+    publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_trajectories", saveAs: { ignored -> 'trajectories' }
     publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_*.log"
     publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_metadata_*.jsonl"
 
@@ -62,13 +62,10 @@ process RunRFD3 {
         ${executionConfig} \\
         2>&1 | tee rfd3_${batch_id}.log
 
-    trajectory_count=0
     for trajectory in rfd3_results/*_denoised_model_*.cif.gz rfd3_results/*_noisy_model_*.cif.gz; do
         [ -f "\$trajectory" ] || continue
         mv "\$trajectory" rfd3_trajectories/
-        trajectory_count=\$((trajectory_count + 1))
     done
-    printf '{"requested":%s,"count":%s}\n' '${dumpTrajectories}' "\$trajectory_count" > rfd3_trajectories/trajectory_inventory.json
     
     # Convert RFD3 output JSONs to pipeline metadata format
     python3 /scripts/metadata_converter.py \\
