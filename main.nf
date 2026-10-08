@@ -3,6 +3,8 @@ nextflow.enable.dsl = 2
 
 include { RFDiffusionWorkflow } from './workflows/rfdiffusion.nf'
 include { FilterRFD ; RunRFDiffusion } from './modules/rfdiffusion.nf'
+include { PrepRFD3Input ; RunRFD3 ; FilterRFD3 } from './modules/rfd3.nf'
+include { RunRF3 ; FilterRF3 } from './modules/rf3.nf'
 include { PrepFAMPNN ; FilterFAMPNN; RunFAMPNN } from './modules/fampnn.nf'
 include { FilterMPNN; PrepMPNN ; RunMPNN } from './modules/proteinmpnn.nf'
 include { AlignAF2; FilterAF2; RunAF2 } from './modules/af2.nf'
@@ -381,8 +383,32 @@ workflow {
                 .collect()
                 .set { analysis_input_pdbs }
         }
+        else if (params.pred_method == "rf3") {
+            // RosettaFold3 prediction via Foundry container
+            println("Using RosettaFold3 (Foundry) for structure prediction")
+            
+            // reallocate batching for GPU
+            Utils
+                .rebatchGPU(pred_input_pdbs, params.gpus)
+                .set { pred_input_tuple }
+            
+            // Run RF3 prediction
+            RunRF3(pred_input_tuple)
+
+            // Batch files for CPUs
+            Utils
+                .rebatchTuples(RunRF3.out.structures_metadata, 200)
+                .set { rf3_tuple }
+
+            // Filter RF3 predictions
+            FilterRF3(rf3_tuple)
+            FilterRF3.out.structures
+                .flatten()
+                .collect()
+                .set { analysis_input_pdbs }
+        }
         else {
-            error("Not a valid structure prediction method")
+            error("Not a valid structure prediction method. Choose from: af2, boltz, rf3")
         }
     }
     else if (!params.run_rfd_only) {
