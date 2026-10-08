@@ -16,7 +16,7 @@ import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
-import { ModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
+import { ModelDocumentationLinks, getModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
 import { getDedicatedTemplateInitialValues, isDedicatedLauncherTemplate } from './jobSubmissionTemplateState.js';
 import { getWorkflowModelTopics } from './workflowModelInventory.js';
 import { isAntibodyPipelineMode } from '../lib/antibodyModes';
@@ -401,7 +401,26 @@ function ParamField({
     );
 }
 
-const getTemplateDocumentationTopics = (template: UntypedApiValue | null | undefined): ModelDocumentationTopic[] => {
+const MODEL_DOCUMENTATION_TOPIC_KEYS = new Set<ModelDocumentationTopic>([
+    'alphafold2', 'bindcraft', 'boltz2', 'boltzgen', 'caliby', 'chai1', 'confornets', 'diffdock', 'disco', 'esmfold2',
+    'fampnn', 'fold_cp', 'laproteina', 'ligandmpnn', 'ppiflow', 'protein_hunter', 'proteinmpnn', 'protenix', 'rf3',
+    'rfantibody', 'rfdiffusion', 'rfdpoly', 'unidock',
+]);
+
+const getTemplateDocumentationTopics = (
+    template: UntypedApiValue | null | undefined,
+    launchParams?: UntypedApiValue | null,
+): ModelDocumentationTopic[] => {
+    const selectedTopic = String(
+        launchParams?.workflow_model_topic
+        || launchParams?.model_documentation_topic
+        || launchParams?.mapping_model
+        || template?.preset_params?.workflow_model_topic
+        || template?.preset_params?.model_documentation_topic
+        || ''
+    ).trim() as ModelDocumentationTopic;
+    if (selectedTopic && MODEL_DOCUMENTATION_TOPIC_KEYS.has(selectedTopic)) return [selectedTopic];
+
     const workflowTopics = getWorkflowModelTopics(template?.id || template?.model_id);
     if (workflowTopics.length > 0) return workflowTopics;
 
@@ -445,7 +464,7 @@ const getCompactTemplateDescription = (template: UntypedApiValue): string => {
         case 'boltz_cp_experimental':
             return 'Experimental Fold-CP path for large Boltz-2 folds.';
         case 'confornets_experimental':
-            return 'Experimental single-chain conformer landscape workflow.';
+            return 'Experimental conformational mapping; ConforNets backend first.';
         case 'esmfold2_experimental':
             return 'Standalone ESMFold2 protein/complex fold.';
         case 'mutagenesis':
@@ -464,7 +483,7 @@ const getCompactModelDescription = (model: UntypedApiValue): string => {
         case 'boltz_cp_experimental':
             return 'Experimental Fold-CP large-protein path.';
         case 'confornets_experimental':
-            return 'Experimental monomer conformer sampling.';
+            return 'Experimental monomer conformational mapping.';
         case 'esmfold2_experimental':
             return 'Standalone ESMFold2 folding alpha.';
         case 'antibody_denovo':
@@ -477,7 +496,7 @@ const getCompactModelDescription = (model: UntypedApiValue): string => {
 };
 
 const getExperimentalStatusSummary = (template: UntypedApiValue): string => {
-    if (template.id === 'confornets_experimental') return 'Monomer-only alpha; compact controls.';
+    if (template.id === 'confornets_experimental') return 'Monomer-only alpha; ConforNets is first backend.';
     if (template.id === 'esmfold2_experimental') return 'Local-only protein/complex alpha; PDB sequence-source, MSA, DNA/RNA, ligand controls.';
     if (template.id === 'boltz_cp_experimental') return 'Alpha data-plane; logical shard plan plus current GPU bridge.';
     return template.status_short || 'Active alpha; backend wired, review carefully.';
@@ -866,6 +885,7 @@ export function JobSubmission() {
     const renderTemplateCard = (template: UntypedApiValue) => {
         const isSelected = selectedTemplateId === template.id;
         const docTopics = getTemplateDocumentationTopics(template);
+        const docLinks = getModelDocumentationLinks(docTopics);
         return (
             <div
                 key={template.id}
@@ -904,9 +924,31 @@ export function JobSubmission() {
                     )}
                 </div>
                 <p className="mb-2 text-xs opacity-70 line-clamp-2">{getCompactTemplateDescription(template)}</p>
-                {docTopics.length > 0 && (
-                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                        Docs available
+                {docLinks.length > 0 && (
+                    <div className="group/docs relative mb-2 inline-block" onClick={(event) => event.stopPropagation()}>
+                        <span
+                            className="inline-flex rounded-md border border-slate-600/80 bg-slate-900/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300 transition-colors group-hover/docs:border-blue-400/60 group-hover/docs:text-blue-200"
+                            aria-haspopup="true"
+                        >
+                            Docs ({docLinks.length})
+                        </span>
+                        <div
+                            data-bms-workflow-doc-hover="true"
+                            className="pointer-events-none absolute left-0 top-full z-30 mt-1 hidden min-w-56 max-w-[min(28rem,80vw)] flex-wrap gap-1 rounded-lg border border-slate-700/80 bg-slate-950/95 p-2 shadow-2xl group-hover/docs:flex group-hover/docs:pointer-events-auto"
+                        >
+                            {docLinks.map((link) => (
+                                <a
+                                    key={link.href}
+                                    href={link.href}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(event) => event.stopPropagation()}
+                                    className="inline-flex rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-[10px] font-medium text-slate-200 transition-colors hover:border-blue-400/60 hover:text-blue-200"
+                                >
+                                    {link.label}
+                                </a>
+                            ))}
+                        </div>
                     </div>
                 )}
                 <div className="flex items-center gap-0.5 flex-wrap text-[10px]">
@@ -1360,9 +1402,9 @@ export function JobSubmission() {
                                         </div>
                                         <h3 className="font-semibold text-slate-200 mb-1">{model.name}</h3>
                                         <p className="text-xs text-slate-500 line-clamp-2">{getCompactModelDescription(model)}</p>
-                                        {getModelDocumentationTopics(model).length > 0 && (
+                                        {getModelDocumentationLinks(getModelDocumentationTopics(model)).length > 0 && (
                                             <div className="mt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                                                Docs available
+                                                Docs ({getModelDocumentationLinks(getModelDocumentationTopics(model)).length})
                                             </div>
                                         )}
                                     </div>
@@ -1387,20 +1429,22 @@ export function JobSubmission() {
                             </h2>
 
                             {templateDetail.experimental && (
-                                <div className="mb-6 space-y-3 rounded-xl border border-orange-400/20 bg-orange-500/8 p-4">
+                                <div className="mb-4 space-y-3 rounded-xl border border-orange-400/20 bg-orange-500/8 p-4">
                                     <div className="flex flex-wrap items-center gap-3 text-sm">
                                         <span className="rounded-full border border-orange-400/25 bg-orange-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-orange-300">
                                             Active alpha
                                         </span>
                                         <span className="text-slate-300">{getExperimentalStatusSummary(templateDetail)}</span>
                                     </div>
-                                    <ModelDocumentationLinks
-                                        topics={getTemplateDocumentationTopics(templateDetail)}
-                                        summary="Docs carry method detail."
-                                        compact
-                                    />
                                 </div>
                             )}
+
+                            <ModelDocumentationLinks
+                                topics={getTemplateDocumentationTopics(templateDetail, params)}
+                                summary="Model docs update from the selected workflow model; launch controls stay here."
+                                compact
+                                className="mb-6"
+                            />
 
                             {/* Stage Explanation */}
                             <div className="mb-6 p-4 bg-slate-900/50 rounded-lg">

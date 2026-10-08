@@ -1,12 +1,14 @@
 id: confornets_experimental
-name: ConforNets Experimental
+name: Conformational Mapping Experimental
 version: "0.1.0"
 category: structure_prediction
 description: >
-  Experimental monomer-only ConforNets workflow for OpenFold3 latent conformer
-  diversity, reference-guided MSE steering, and transfer sampling. This wraps the
-  upstream scripts without broadening the scope to complexes, ligands, or nucleic
-  acids.
+  Experimental monomer-only conformational mapping workflow. ConforNets/OpenFold3
+  is the first implemented backend for latent conformer diversity,
+  reference-guided MSE steering, and transfer sampling. The current backend still
+  does not broaden scope to complexes, ligands, or nucleic acids. ConforNets
+  backpropagates through OpenFold3 Pairformer blocks, so memory is materially
+  higher than normal forward-only structure prediction.
 container: confornets.sif
 
 ui_icon: sparkles
@@ -25,8 +27,8 @@ outputs:
 
 modes:
   - id: design
-    name: Monomer Conformer Sampling
-    description: Run ConforNets diversity, MSE/reference-guided steering, or transfer mode for one protein chain
+    name: Monomer Conformational Mapping
+    description: Map a single-chain protein conformational landscape using the currently wired ConforNets backend.
     params:
       - task
       - sequence
@@ -59,7 +61,7 @@ modes:
 params:
   - name: task
     type: string
-    description: ConforNets upstream mode; diversity samples a monomer landscape, MSE steers toward references, transfer reuses a trained ConforNet.
+    description: Conformational mapping task for the current ConforNets backend; diversity samples a monomer landscape, MSE steers toward references, transfer reuses a trained ConforNet.
     required: true
     default: diversity
     enum:
@@ -82,13 +84,13 @@ params:
 
   - name: benchmark_name
     type: string
-    description: Internal ConforNets benchmark name created under the staged assets directory.
+    description: Internal backend benchmark name created under the staged assets directory.
     required: false
     default: bms_confornets
 
   - name: test_case_name
     type: string
-    description: Internal ConforNets test case name for this monomer.
+    description: Internal backend test case name for this monomer.
     required: false
     default: monomer_case
 
@@ -146,7 +148,7 @@ params:
 
   - name: k_confornets
     type: integer
-    description: Number of ConforNets trained per diversity run. Diversity is pairwise and requires at least two ConforNets.
+    description: Backend ensemble count per diversity run. The current ConforNets implementation uses pairwise diversity and requires at least two ConforNets.
     required: false
     default: 2
     minimum: 2
@@ -154,7 +156,7 @@ params:
 
   - name: num_samples
     type: integer
-    description: Samples per saved ConforNet/state. For diversity, total CIFs scale by num_runs × save_steps × k_confornets × num_samples.
+    description: Samples per saved backend state. For current ConforNets diversity, total CIFs scale by num_runs × save_steps × k_confornets × num_samples.
     required: false
     default: 5
     minimum: 1
@@ -162,7 +164,7 @@ params:
 
   - name: max_steps
     type: integer
-    description: Upstream ConforNets optimization steps. Diversity save_steps must be lower than this value.
+    description: Backend optimization steps. Diversity save_steps must be lower than this value for the current ConforNets backend.
     required: false
     default: 21
     minimum: 1

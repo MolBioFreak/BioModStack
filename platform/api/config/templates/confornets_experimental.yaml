@@ -1,47 +1,53 @@
-# ConforNets experimental workflow
+# Conformational mapping experimental workflow; currently backed by ConforNets.
 
 id: confornets_experimental
-name: ConforNets Experimental
+name: Conformational Mapping Experimental
 icon: sparkles
 color: "#F97316"
-experimental: true
+experimental: false
 description: >
-  Experimental monomer-only ConforNets workflow for OpenFold3 latent conformer
-  diversity, MSE/reference-guided steering, and transfer sampling on one
-  single-chain protein.
+  Experimental monomer-only conformational mapping workflow. The first backend is
+  ConforNets/OpenFold3 for latent conformer diversity, MSE/reference-guided
+  steering, and transfer sampling on one single-chain protein.
 goal: >
-  Stage a single-chain monomer query into the upstream ConforNets asset layout,
-  run the pinned upstream diversity/MSE/transfer scripts, and normalize real CIF
-  conformers plus provenance into BioModStack artifacts for landscape viewing.
+  Stage a single-chain monomer query for the selected mapping backend, run the
+  pinned backend scripts, and normalize real CIF conformers plus provenance into
+  BioModStack artifacts for landscape viewing.
 status: >
-  Experimental alpha. The wrapper preserves upstream ConforNets semantics,
-  requires an OF3p2/OpenFold3-preview compatible checkpoint, and enforces the
-  current upstream two reference state limit per test case. Complexes, ligands,
-  nucleic acids, docking, and calibrated ensemble probabilities are out of scope.
+  Experimental alpha. ConforNets is the first implemented backend; this wrapper
+  preserves its upstream semantics, requires an OF3p2/OpenFold3-preview compatible
+  checkpoint, and enforces the current upstream two reference state limit per test
+  case. Upstream notes that ConforNets backpropagates through Pairformer and uses
+  more GPU memory than standard inference; treat long chains and diversity mode as
+  VRAM-sensitive. Complexes, ligands, nucleic acids, docking, and calibrated
+  ensemble probabilities are out of scope.
 
 stages:
   - name: Asset Compile
-    tool: BMS ConforNets Wrapper
-    description: Validate monomer-only input, stage query JSON, references.csv, and up to two reference structures in upstream asset layout.
+    tool: BMS Mapping Wrapper
+    description: Validate monomer-only input, stage backend query JSON, references.csv, and up to two reference structures in the current backend asset layout.
   - name: Upstream ConforNets Run
     tool: ConforNets / OpenFold3
-    description: Run preprocess.py plus the selected upstream diversity, MSE, or transfer script against the staged OF3p2 assets.
+    description: >
+      Run the first implemented backend: preprocess.py plus the selected upstream
+      diversity, MSE, or transfer script against staged OF3p2 assets.
   - name: Artifact Normalize
     tool: BMS Output Normalizer
-    description: Collect real generated CIF conformers, ConforNet state files, confidence CSVs, checksums, and provenance into stable BMS artifacts.
+    description: Collect real generated CIF conformers, backend state files, confidence CSVs, checksums, and provenance into stable BMS artifacts.
 
 preset_params:
   template_model_id: confornets_experimental
   template_mode_id: design
   cn_task: diversity
+  workflow_model_topic: confornets
 
 user_params:
   - name: task
-    label: ConforNets Task
+    label: Mapping Task
     type: enum
     required: true
     default: diversity
-    description: Monomer-only upstream mode. Diversity samples a conformational landscape; MSE steers toward references; transfer reuses a trained ConforNet.
+    description: Monomer-only mapping mode for the current ConforNets backend. Diversity samples a conformational landscape; MSE steers toward references; transfer reuses a trained ConforNet.
     enum:
       - diversity
       - mse
@@ -203,7 +209,7 @@ user_params:
     description: Independent upstream runs/seeds for diversity or MSE training.
 
   - name: k_confornets
-    label: ConforNets per Run
+    label: Backend States per Run
     type: integer
     required: false
     default: 2
@@ -211,7 +217,7 @@ user_params:
     maximum: 16
     ui_control: slider
     step: 1
-    description: Diversity-mode number of ConforNets to train per run. Minimum 2 because upstream diversity maximizes pairwise separation.
+    description: Diversity-mode backend states to train per run. Minimum 2 because the current ConforNets backend maximizes pairwise separation.
     condition:
       param: task
       values:
@@ -226,7 +232,7 @@ user_params:
     maximum: 512
     ui_control: slider
     step: 1
-    description: Samples per saved ConforNet or transfer/MSE state.
+    description: Samples per saved backend state.
 
   - name: max_steps
     label: Optimization Steps
@@ -237,7 +243,7 @@ user_params:
     maximum: 2000
     ui_control: slider
     step: 1
-    description: Upstream ConforNets optimization steps.
+    description: Backend optimization steps for the current ConforNets implementation.
 
   - name: save_steps
     label: Diversity Save Steps

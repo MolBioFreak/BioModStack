@@ -17,21 +17,21 @@ function hardcodedWorkflowBlock(): string {
     return jobSubmissionSource.slice(start, end);
 }
 
-test('ConforNets experimental workflow is API-template driven and hidden from raw model picker', () => {
+test('Conformational mapping workflow is API-template driven, main-page exposed, and hidden from raw model picker', () => {
     assert.match(
         jobSubmissionSource,
         /confornets_experimental['"]\)\s*return\s*['"]CN['"]/,
-        'ConforNets should have a stable CN badge for the experimental card',
+        'Conformational mapping should have a stable CN badge for the workflow card',
     );
     assert.match(
         jobSubmissionSource,
         /confornets_experimental/,
-        'JobSubmission should explicitly know to hide/label ConforNets experimental workflow',
+        'JobSubmission should explicitly know to hide/label the ConforNets-backed workflow',
     );
     assert.match(
         jobSubmissionSource,
-        /visibleApiTemplates\.filter\(\(t(?:: [^)]+)?\) => t\.experimental\)/,
-        'experimental cards should still come from the API template registry',
+        /visibleApiTemplates\.filter\(\(t(?:: [^)]+)?\) => !t\.experimental\)/,
+        'main workflow cards should include non-experimental API templates',
     );
 
     const modelFilterStart = jobSubmissionSource.indexOf('const models = (modelsData?.data ?? []).filter');
@@ -44,17 +44,19 @@ test('ConforNets experimental workflow is API-template driven and hidden from ra
     assert.doesNotMatch(
         hardcodedWorkflowBlock(),
         /confornets_experimental/,
-        'ConforNets should not be duplicated as a frontend hardcoded workflow card',
+        'Conformational mapping should not be duplicated as a frontend hardcoded workflow card',
     );
 });
 
-test('ConforNets template exposes monomer-only experimental copy and no complex task values', () => {
+test('Conformational mapping template exposes monomer-only workflow copy, docs default, and no complex task values', () => {
     const templateYaml = readFileSync(confornetsTemplatePath, 'utf8');
 
     assert.match(templateYaml, /^id:\s*confornets_experimental/m);
-    assert.match(templateYaml, /^experimental:\s*true/m);
+    assert.match(templateYaml, /^experimental:\s*false/m);
     assert.match(templateYaml, /template_model_id:\s*confornets_experimental/);
     assert.match(templateYaml, /template_mode_id:\s*design/);
+    assert.match(templateYaml, /workflow_model_topic:\s*confornets/);
+    assert.match(templateYaml, /^name:\s*Conformational Mapping Experimental/m);
     assert.match(templateYaml.toLowerCase(), /monomer/);
     assert.match(templateYaml.toLowerCase(), /single-chain/);
     assert.match(templateYaml.toLowerCase(), /of3p2|openfold3/);
@@ -74,6 +76,10 @@ test('ConforNets template exposes monomer-only experimental copy and no complex 
     assert.match(jobSubmissionSource, /param\.type === ['"]boolean['"]/);
     assert.match(jobSubmissionSource, /param\.ui_control === ['"]slider['"]/);
     assert.match(jobSubmissionSource, /type=['"]range['"]/);
+    assert.match(jobSubmissionSource, /data-bms-workflow-doc-hover="true"/);
+    assert.doesNotMatch(jobSubmissionSource, /data-bms-workflow-doc-table="true"/);
+    assert.doesNotMatch(jobSubmissionSource, /Docs available/);
+    assert.doesNotMatch(jobSubmissionSource, /Hide docs/);
 
     const taskParamStart = templateYaml.indexOf('name: task');
     assert.notEqual(taskParamStart, -1, 'task user param should exist');

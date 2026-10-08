@@ -92,7 +92,7 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
         viewer_capabilities=["generic_metadata"],
         required_fields=["artifact_class"],
         required_artifacts=[],
-        notes="ConforNets monomer outputs remain raw/generic until a dedicated analyzer is implemented.",
+        notes="Experimental conformational mapping contract; ConforNets is the first implemented monomer backend and publishes normalized conformer artifacts plus backend-native metrics.",
     ),
 ]
 

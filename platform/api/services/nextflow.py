@@ -3155,6 +3155,12 @@ def build_nextflow_command(
                     params[dest_key] = params[src_key]
                 params.pop(src_key, None)
 
+        # Launcher-only documentation/model-selection metadata. ConforNets is the
+        # current backend, so do not forward doc topic fields into Nextflow.
+        params.pop('workflow_model_topic', None)
+        params.pop('model_documentation_topic', None)
+        params.pop('mapping_model', None)
+
         params.setdefault('cn_task', 'diversity')
         params.setdefault('cn_chain_id', 'A')
         params.setdefault('cn_benchmark_name', 'bms_confornets')
