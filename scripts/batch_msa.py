@@ -5,6 +5,10 @@ True Batch MSA Generation Script
 Generates MSAs for multiple sequences in a SINGLE mmseqs search operation.
 This keeps the GPU loaded and scans the database once for all queries.
 
+!!! DEPRECATION WARNING !!!
+This script will be consolidated into run_local_msa.py --batch-json in a future release.
+For now, it continues to work but users should plan to migrate.
+
 Workflow:
 1. Write all sequences to ONE query FASTA
 2. mmseqs createdb (one query database)
@@ -15,8 +19,16 @@ Workflow:
 Usage:
     python3 batch_msa.py --sequences '[{"name": "seq1", "sequence": "MKTAY..."}]' \
                          --output_dir ./msa_outputs \
-                         --db_path "$BMS_COLABFOLD_DB"
+                         --db_path "$BMS_COLABFOLD_DB" \
+                         --preset balanced
 """
+
+import warnings
+warnings.warn(
+    "batch_msa.py is deprecated. Future: use run_local_msa.py --batch-json",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import argparse
 import hashlib
@@ -43,14 +55,19 @@ def compute_sequence_hash(sequence: str) -> str:
     return hashlib.sha256(sequence.encode()).hexdigest()
 
 
-def check_cache(cache_dir: Path, seq_hash: str) -> Optional[Path]:
-    """Check if we have a cached MSA for this sequence hash."""
+def check_cache(cache_dir: Path, seq_hash: str, preset: str = "balanced") -> Optional[Path]:
+    """Check if we have a cached MSA for this sequence hash + preset."""
     if not cache_dir:
         return None
     cache_subdir = cache_dir / seq_hash[:2]
-    cache_file = cache_subdir / f"{seq_hash}.a3m.gz"
+    # Preset-aware cache key for consistency with run_local_msa.py
+    cache_file = cache_subdir / f"{seq_hash}_{preset}.a3m.gz"
     if cache_file.exists():
         return cache_file
+    # Fallback: check legacy format (no preset)
+    legacy_cache = cache_subdir / f"{seq_hash}.a3m.gz"
+    if legacy_cache.exists():
+        return legacy_cache
     return None
 
 
@@ -62,11 +79,12 @@ def load_from_cache(cache_path: Path, out_path: Path) -> None:
         f.write(content)
 
 
-def save_to_cache(msa_path: Path, cache_dir: Path, seq_hash: str) -> Path:
-    """Compress and save MSA to cache."""
+def save_to_cache(msa_path: Path, cache_dir: Path, seq_hash: str, preset: str = "balanced") -> Path:
+    """Compress and save MSA to cache with preset-aware naming."""
     cache_subdir = cache_dir / seq_hash[:2]
     cache_subdir.mkdir(parents=True, exist_ok=True)
-    cache_file = cache_subdir / f"{seq_hash}.a3m.gz"
+    # Preset-aware cache key for consistency with run_local_msa.py
+    cache_file = cache_subdir / f"{seq_hash}_{preset}.a3m.gz"
     with open(msa_path, 'rb') as f_in:
         with gzip.open(cache_file, 'wb') as f_out:
             f_out.write(f_in.read())
@@ -153,11 +171,23 @@ def run_batch_msa(
         for seq_info in sequences_to_process:
             f.write(f">{seq_info['name']}\n{seq_info['sequence']}\n")
     
-    # Find mmseqs binary
+    # Find mmseqs binary (prefer Blackwell GPU, then Ampere GPU, then CPU)
+    mmseqs_blackwell = db_path / "mmseqs-gpu-blackwell" / "bin" / "mmseqs"
     mmseqs_gpu = db_path / "mmseqs-gpu" / "bin" / "mmseqs"
     mmseqs_cpu = db_path / "mmseqs" / "bin" / "mmseqs"
-    mmseqs_bin = str(mmseqs_gpu if mmseqs_gpu.exists() else mmseqs_cpu)
-    use_gpu = mmseqs_gpu.exists()
+    
+    if mmseqs_blackwell.exists():
+        mmseqs_bin = str(mmseqs_blackwell)
+        use_gpu = True
+        print(f"  Using Blackwell GPU MMseqs2: {mmseqs_bin}")
+    elif mmseqs_gpu.exists():
+        mmseqs_bin = str(mmseqs_gpu)
+        use_gpu = True
+        print(f"  Using Ampere GPU MMseqs2: {mmseqs_bin}")
+    else:
+        mmseqs_bin = str(mmseqs_cpu)
+        use_gpu = False
+        print(f"  Using CPU MMseqs2: {mmseqs_bin}")
     
     uniref_db = db_path / "uniref30_2302_db"
     

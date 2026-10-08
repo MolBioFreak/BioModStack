@@ -59,7 +59,7 @@ MSA_PRESETS = {
     "maximum": {
         "num_iterations": 3,
         "use_env": True,
-        "use_expand": False,  # Disabled: database _aln files are corrupted/incomplete
+        "use_expand": True,   # Re-enabled: _aln files verified valid (8.7GB)
         "use_filter": True,
         "sensitivity": 8.0,
         "evalue": 0.1,       # ColabFold uses 0.1 for initial search
@@ -265,7 +265,34 @@ def check_gpu_availability(threshold: int = 80) -> int | None:
 
 
 def run_mmseqs(mmseqs_bin: str, params: list, env: dict, capture_output: bool = True):
-    """Run MMseqs2 command with logging."""
+    """
+    Run MMseqs2 command with robust output handling.
+    
+    Uses Popen with threaded output streaming to prevent pipe buffer deadlock
+    while preserving full logging capability. Allows unlimited runtime for
+    long MSA searches.
+    
+    Args:
+        mmseqs_bin: Path to mmseqs binary
+        params: Command parameters
+        env: Environment dict
+        capture_output: If True, capture and return stdout/stderr
+        
+    Returns:
+        subprocess.CompletedProcess with returncode and captured output
+        
+    Raises:
+        RuntimeError: If mmseqs command fails (non-zero exit)
+        
+    Note:
+        This implementation uses threading to read stdout/stderr concurrently,
+        preventing the deadlock that can occur with subprocess.run(capture_output=True)
+        when a child process produces more output than the OS pipe buffer can hold.
+        See: https://docs.python.org/3/library/subprocess.html#subprocess.Popen.communicate
+    """
+    import threading
+    from io import StringIO
+    
     cmd = [str(mmseqs_bin)] + [str(p) for p in params]
     module = params[0] if params else "unknown"
     
@@ -273,11 +300,68 @@ def run_mmseqs(mmseqs_bin: str, params: list, env: dict, capture_output: bool = 
     env_copy = env.copy()
     env_copy["MMSEQS_CALL_DEPTH"] = "1"
     
-    result = subprocess.run(cmd, env=env_copy, capture_output=capture_output, text=True)
-    if result.returncode != 0:
-        error_msg = result.stderr if result.stderr else "Unknown error"
+    if not capture_output:
+        # Simple case - no capture needed
+        result = subprocess.run(cmd, env=env_copy)
+        if result.returncode != 0:
+            raise RuntimeError(f"MMseqs2 {module} failed with exit code {result.returncode}")
+        return result
+    
+    # Use Popen with threaded output reading to prevent pipe buffer deadlock
+    stdout_buffer = StringIO()
+    stderr_buffer = StringIO()
+    
+    def stream_output(pipe, buffer, echo_to=None):
+        """Read from pipe and optionally echo to another stream."""
+        try:
+            for line in iter(pipe.readline, ''):
+                buffer.write(line)
+                if echo_to:
+                    echo_to.write(line)
+                    echo_to.flush()
+            pipe.close()
+        except Exception:
+            pass
+    
+    proc = subprocess.Popen(
+        cmd,
+        env=env_copy,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1  # Line buffered
+    )
+    
+    # Start threads to read output concurrently (prevents pipe buffer deadlock)
+    stdout_thread = threading.Thread(
+        target=stream_output, 
+        args=(proc.stdout, stdout_buffer, None)  # Don't echo stdout (too verbose)
+    )
+    stderr_thread = threading.Thread(
+        target=stream_output,
+        args=(proc.stderr, stderr_buffer, sys.stderr)  # Echo errors
+    )
+    
+    stdout_thread.daemon = True
+    stderr_thread.daemon = True
+    stdout_thread.start()
+    stderr_thread.start()
+    
+    # Wait for process to complete (no timeout - allow long searches)
+    proc.wait()
+    
+    # Wait for output threads to finish reading
+    stdout_thread.join(timeout=5.0)
+    stderr_thread.join(timeout=5.0)
+    
+    stdout_content = stdout_buffer.getvalue()
+    stderr_content = stderr_buffer.getvalue()
+    
+    if proc.returncode != 0:
+        error_msg = stderr_content.strip() if stderr_content else f"Exit code {proc.returncode}"
         raise RuntimeError(f"MMseqs2 {module} failed: {error_msg}")
-    return result
+    
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout_content, stderr_content)
 
 
 def run_colabfold_msa_workflow(
@@ -484,10 +568,11 @@ def run_colabfold_msa_workflow(
                 "-a",  # Report alignments
                 "-e", str(config["evalue"]),
                 "--max-seqs", str(config["max_seqs"]),
+                "--db-load-mode", "2",  # mmap databases into RAM for faster I/O
             ]
             
             if use_gpu_flag:
-                search_params += ["--gpu", "1", "--prefilter-mode", "1"]
+                search_params += ["--gpu", "1", "--prefilter-mode", "1", "--threads", str(num_threads)]
             else:
                 search_params += ["-s", str(config["sensitivity"]), "--threads", str(num_threads)]
             
@@ -605,6 +690,7 @@ def run_colabfold_msa_workflow(
                 result_db, uniref_a3m_db,
                 "--msa-format-mode", "5",
                 "--threads", str(num_threads),
+                "--db-load-mode", "2",  # Preload sequence DB into RAM
             ] + filter_params, env)
             
             # ═══════════════════════════════════════════════════════════════════
@@ -622,10 +708,11 @@ def run_colabfold_msa_workflow(
                     "--num-iterations", str(config["num_iterations"]),
                     "-a", "-e", str(config["evalue"]),
                     "--max-seqs", str(config["max_seqs"]),
+                    "--db-load-mode", "2",  # mmap databases into RAM
                 ]
                 
                 if use_gpu_flag:
-                    env_search_params += ["--gpu", "1", "--prefilter-mode", "1"]
+                    env_search_params += ["--gpu", "1", "--prefilter-mode", "1", "--threads", str(num_threads)]
                 else:
                     env_search_params += ["-s", str(config["sensitivity"]), "--threads", str(num_threads)]
                 
@@ -685,6 +772,7 @@ def run_colabfold_msa_workflow(
                     env_result_db, env_a3m_db,
                     "--msa-format-mode", "5",
                     "--threads", str(num_threads),
+                    "--db-load-mode", "2",  # Preload sequence DB into RAM
                 ] + filter_params, env)
             
             # ═══════════════════════════════════════════════════════════════════
@@ -711,15 +799,19 @@ def run_colabfold_msa_workflow(
             unpacked_a3m = os.path.join(tmp_dir, "0.a3m")
             if os.path.exists(unpacked_a3m):
                 with open(unpacked_a3m, 'rb') as f:
-                    a3m_bytes = f.read().replace(b'\x00', b'')
-                a3m_content = a3m_bytes.decode('utf-8')
+                    a3m_bytes = f.read()
+                # Remove ALL control characters except newline (\x0a) and tab (\x09)
+                a3m_bytes = bytes(b for b in a3m_bytes if b >= 0x20 or b in (0x0a, 0x09))
+                a3m_content = a3m_bytes.decode('utf-8', errors='ignore')
             else:
                 # Fallback: try to read directly
                 result = subprocess.run([
                     str(mmseqs_bin), "result2flat",
                     query_db, query_db, final_a3m_db, "/dev/stdout"
                 ], env=env, capture_output=True)
-                a3m_content = result.stdout.decode('utf-8').replace('\x00', '')
+                # Remove ALL control characters except newline and tab
+                a3m_bytes = bytes(b for b in result.stdout if b >= 0x20 or b in (0x0a, 0x09))
+                a3m_content = a3m_bytes.decode('utf-8', errors='ignore')
             
             # ═══════════════════════════════════════════════════════════════════
             # STEP 9: Post-processing (taxonomy filter, quality check)
