@@ -66,7 +66,7 @@ test('formatZoomPercentage renders the current shell zoom as a human-friendly pe
 test('zoom IPC handlers refresh the application menu after renderer-driven shell zoom changes', () => {
   const source = readFileSync(MAIN_SOURCE_PATH, 'utf8');
 
-  assert.match(source, /ipcMain\.handle\(SET_ZOOM_FACTOR_CHANNEL[\s\S]*refreshApplicationMenuState\(\)/);
-  assert.match(source, /ipcMain\.handle\(ADJUST_ZOOM_CHANNEL[\s\S]*refreshApplicationMenuState\(\)/);
-  assert.match(source, /ipcMain\.handle\(RESET_ZOOM_CHANNEL[\s\S]*refreshApplicationMenuState\(\)/);
+  assert.match(source, /trustedHandler\(SET_ZOOM_FACTOR_CHANNEL[\s\S]*refreshApplicationMenuState\(\)/);
+  assert.match(source, /trustedHandler\(ADJUST_ZOOM_CHANNEL[\s\S]*refreshApplicationMenuState\(\)/);
+  assert.match(source, /trustedHandler\(RESET_ZOOM_CHANNEL[\s\S]*refreshApplicationMenuState\(\)/);
 });
