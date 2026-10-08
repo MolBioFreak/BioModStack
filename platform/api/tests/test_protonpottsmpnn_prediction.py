@@ -108,6 +108,12 @@ def test_retained_structure_uses_existing_sequence_source_parser(tmp_path, suffi
 async def selected(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
+    # Submission-only fixture: satisfy the existing checkpoint-presence owner
+    # without reading live weights or pretending this is predictor inference.
+    weights = tmp_path / 'protenix-weights'
+    (weights / 'checkpoint').mkdir(parents=True)
+    (weights / 'checkpoint' / 'protenix-v2.pt').write_bytes(b'inert submission fixture')
+    monkeypatch.setattr(jobs, '_resolve_protenix_weights_dir', lambda params: weights)
     engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "prediction.db"}')
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
