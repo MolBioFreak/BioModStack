@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { submitJob, uploadFile } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
+import { parsePDBFile, type Chain } from '../utils/pdbUtils';
+import { EpitopeSelector } from './EpitopeSelector';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -10,13 +12,18 @@ interface AntibodyDenovoTemplateProps {
 export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack }) => {
     const [jobName, setJobName] = useState('antibody_design');
     const [targetPdb, setTargetPdb] = useState<File | null>(null);
-    const [epitopeResidues, setEpitopeResidues] = useState('');
     const [numDesigns, setNumDesigns] = useState(10);
     const [seqDesigner, setSeqDesigner] = useState<'fampnn' | 'antifold' | 'proteinmpnn'>('fampnn');
     const [useAntiberty, setUseAntiberty] = useState(true);
     const [useThermoMPNN, setUseThermoMPNN] = useState(true);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadedPath, setUploadedPath] = useState<string | null>(null);
+
+    // PDB parsing state
+    const [parsedChains, setParsedChains] = useState<Chain[]>([]);
+    const [selectedChain, setSelectedChain] = useState<string | null>(null);
+    const [selectedResidues, setSelectedResidues] = useState<Set<string>>(new Set());
+    const [isParsing, setIsParsing] = useState(false);
 
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -29,10 +36,40 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     });
 
+    // Auto-parse PDB when file is selected
+    useEffect(() => {
+        if (targetPdb) {
+            setIsParsing(true);
+            parsePDBFile(targetPdb)
+                .then(result => {
+                    setParsedChains(result.chains);
+                    // Auto-select first chain with most residues
+                    if (result.chains.length > 0) {
+                        const longestChain = result.chains.reduce((a, b) =>
+                            a.length > b.length ? a : b
+                        );
+                        setSelectedChain(longestChain.id);
+                    }
+                    // Clear previous selection
+                    setSelectedResidues(new Set());
+                    setUploadedPath(null);
+                    console.log('[ANTIBODY_DENOVO] Parsed PDB:', result.chains.map(c => `${c.id}:${c.length}aa`));
+                })
+                .catch(err => {
+                    console.error('[ANTIBODY_DENOVO] Failed to parse PDB:', err);
+                    setParsedChains([]);
+                })
+                .finally(() => setIsParsing(false));
+        } else {
+            setParsedChains([]);
+            setSelectedChain(null);
+            setSelectedResidues(new Set());
+        }
+    }, [targetPdb]);
+
     const handleFileUpload = async (file: File) => {
         setIsUploading(true);
         try {
-            // Upload to inputs/antibody directory
             const response = await uploadFile('inputs/antibody', file);
             const path = `inputs/antibody/${file.name}`;
             setUploadedPath(path);
@@ -52,8 +89,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             alert('Please upload a target PDB file');
             return;
         }
-        if (!epitopeResidues.trim()) {
-            alert('Please specify epitope residues (e.g., A45,A46,A52)');
+        if (selectedResidues.size === 0) {
+            alert('Please select at least one epitope residue');
             return;
         }
 
@@ -64,6 +101,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 pdbPath = await handleFileUpload(targetPdb);
             }
 
+            // Format selected residues for backend
+            const epitopeString = Array.from(selectedResidues).sort().join(',');
+
             // Step 2: Submit job with uploaded file path
             await submitMutation.mutateAsync({
                 name: jobName,
@@ -71,7 +111,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 mode: 'default',
                 params: {
                     target_pdb: pdbPath,
-                    epitope_residues: epitopeResidues,
+                    epitope_residues: epitopeString,
+                    antigen_chain: selectedChain || 'A',
                     rfantibody_num_designs: numDesigns,
                     seq_design_fampnn: seqDesigner === 'fampnn',
                     seq_design_antifold: seqDesigner === 'antifold',
@@ -162,31 +203,67 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             onChange={(e) => {
                                 const file = e.target.files?.[0] || null;
                                 setTargetPdb(file);
-                                setUploadedPath(null); // Reset uploaded path when file changes
                             }}
                             className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none file:mr-4 file:py-1 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:cursor-pointer"
                         />
                         {targetPdb && (
                             <span className="text-sm text-emerald-400">
-                                {uploadedPath ? '✓ Uploaded' : '📎'} {targetPdb.name}
+                                {isParsing ? '⏳ Parsing...' : uploadedPath ? '✓ Uploaded' : '📎'} {targetPdb.name}
                             </span>
                         )}
                     </div>
                     <p className="mt-1 text-xs text-slate-500">Upload the antigen structure you want to design antibodies against</p>
                 </div>
 
-                {/* Epitope Residues */}
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">Epitope Residues (Hotspots)</label>
-                    <input
-                        type="text"
-                        value={epitopeResidues}
-                        onChange={(e) => setEpitopeResidues(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                        placeholder="A45,A46,A52"
-                    />
-                    <p className="mt-1 text-xs text-slate-500">Comma-separated residues on the antigen to target (e.g., A45,A46,A52)</p>
-                </div>
+                {/* Chain Selector (when PDB is parsed) */}
+                {parsedChains.length > 1 && (
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">Antigen Chain</label>
+                        <div className="flex gap-2 flex-wrap">
+                            {parsedChains.map(chain => (
+                                <button
+                                    key={chain.id}
+                                    onClick={() => {
+                                        setSelectedChain(chain.id);
+                                        setSelectedResidues(new Set()); // Clear selection when chain changes
+                                    }}
+                                    className={`px-4 py-2 rounded-lg font-medium transition-all ${selectedChain === chain.id
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                        }`}
+                                >
+                                    Chain {chain.id} ({chain.length} aa)
+                                </button>
+                            ))}
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">Select the chain representing the antigen/target</p>
+                    </div>
+                )}
+
+                {/* Interactive Epitope Selector */}
+                {parsedChains.length > 0 && (
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">
+                            Epitope Selection
+                            <span className="ml-2 text-xs text-slate-500 font-normal">
+                                (Click residues to select epitope hotspots)
+                            </span>
+                        </label>
+                        <EpitopeSelector
+                            chains={parsedChains}
+                            selectedResidues={selectedResidues}
+                            onSelectionChange={setSelectedResidues}
+                            activeChain={selectedChain || undefined}
+                        />
+                    </div>
+                )}
+
+                {/* Fallback text input if no PDB */}
+                {parsedChains.length === 0 && targetPdb && !isParsing && (
+                    <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+                        ⚠️ Could not parse PDB file. Please ensure it's a valid PDB format.
+                    </div>
+                )}
 
                 {/* Number of Designs */}
                 <div>
@@ -250,7 +327,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             <div className="mt-8 flex justify-end">
                 <button
                     onClick={handleSubmit}
-                    disabled={submitMutation.isPending || isUploading || !targetPdb}
+                    disabled={submitMutation.isPending || isUploading || !targetPdb || selectedResidues.size === 0}
                     className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
                 >
                     {isUploading ? (
@@ -265,7 +342,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </>
                     ) : (
                         <>
-                            🧬 Generate Antibodies
+                            🧬 Generate Antibodies ({selectedResidues.size} hotspots)
                         </>
                     )}
                 </button>
