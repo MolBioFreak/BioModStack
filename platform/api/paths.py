@@ -116,6 +116,14 @@ def get_mobile_ui_updates_dir() -> Path:
     return get_data_root() / "mobile-ui-updates"
 
 
+def get_mobile_apk_updates_dir() -> Path:
+    """Return the configurable root containing immutable native APK channels."""
+    env = os.getenv("BMS_MOBILE_APK_UPDATES_DIR")
+    if env:
+        return _resolve_path(env)
+    return get_data_root() / "mobile-apk-updates"
+
+
 def get_container_dir() -> Path:
     return Path(str(_runtime_paths()["container_dir"]))
 

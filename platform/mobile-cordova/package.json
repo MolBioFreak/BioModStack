@@ -1,7 +1,7 @@
 {
   "name": "biomodstack-cordova-android",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone Apache Cordova Android wrapper for the BioModStack frontend",
   "scripts": {
     "doctor:android": "npx cordova requirements android",
@@ -24,6 +24,7 @@
   "devDependencies": {
     "cordova": "13.0.0",
     "cordova-android": "13.0.0",
+    "cordova-plugin-bms-apk-updater": "file:local-plugins/cordova-plugin-bms-apk-updater",
     "cordova-plugin-bms-ui-bundle": "file:local-plugins/cordova-plugin-bms-ui-bundle"
   },
   "cordova": {
@@ -31,7 +32,8 @@
       "android"
     ],
     "plugins": {
-      "cordova-plugin-bms-ui-bundle": {}
+      "cordova-plugin-bms-ui-bundle": {},
+      "cordova-plugin-bms-apk-updater": {}
     }
   }
 }
