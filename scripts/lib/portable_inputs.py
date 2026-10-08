@@ -281,6 +281,13 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
             visit(path.parent / "cm_runtime_registry_v1.json", path, ("runtime_registry",), "runtime-config", (*lineage, logical_id))
             visit(path.parent / "cm_coordinate_plan_v1.json", path, ("coordinate_plan",), "coordinate-plan", (*lineage, logical_id))
     keys = {"complex_json_path", "sequence_batch_json_path", "msa_path", "bcp_input_path", "input_path", "cm_request_path", "cm_coordinate_plan_path", "md_job_config", "laproteina_motif_pdb", "disco_input_json_path", "disco_ligand_sdf", "protein_cad_request", "boltz_launch_authority_path", "boltz_prepared_msa_dir"}
+    if model_id in {'antibody_denovo', 'template_antibody_denovo'} and mode in {
+            'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}:
+        # Full-root preview and transport must bind the actual native biological
+        # inputs, not just the path strings in the selected compiler plan.
+        keys.update({'target_pdb', 'selected_input_dir', 'selected_input_manifest',
+                     'rfantibody_input_pdbs', 'fampnn_collected_pdbs',
+                     'manual_mutation_fixed_positions_json'})
     if model_id == "nanopore":
         keys.update({"fastq_path", "reference_fasta", "bam_path"})
     for key in sorted(keys & params.keys()):
