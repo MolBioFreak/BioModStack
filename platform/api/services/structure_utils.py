@@ -12,7 +12,10 @@ Usage:
     plddt_values = get_residue_plddt("path/to/file.cif")
 """
 
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from typing import Optional, Tuple, List, Union
 import numpy as np
 
@@ -83,7 +86,7 @@ def get_residue_plddt(path: Union[str, Path]) -> Tuple[Optional[float], Optional
         
         # Check if B-factors are available (stored in 'b_factor' annotation)
         if 'b_factor' not in structure.get_annotation_categories():
-            print(f"[structure_utils] No B-factors in {path}")
+            logger.info(f"[structure_utils] No B-factors in {path}")
             return None, None
         
         # Get CA atoms for per-residue values
@@ -106,7 +109,7 @@ def get_residue_plddt(path: Union[str, Path]) -> Tuple[Optional[float], Optional
         return avg_plddt, per_residue
         
     except Exception as e:
-        print(f"[structure_utils] Error extracting pLDDT from {path}: {e}")
+        logger.error(f"[structure_utils] Error extracting pLDDT from {path}: {e}")
         return None, None
 
 
@@ -152,7 +155,7 @@ def get_secondary_structure(path: Union[str, Path]) -> dict:
             'coil': int(np.sum(sse == 'c'))
         }
     except Exception as e:
-        print(f"[structure_utils] Error computing SSE for {path}: {e}")
+        logger.error(f"[structure_utils] Error computing SSE for {path}: {e}")
         return {'helix': 0, 'sheet': 0, 'coil': 0}
 
 
@@ -187,7 +190,7 @@ def compute_rmsd(
         
         return float(rmsd)
     except Exception as e:
-        print(f"[structure_utils] Error computing RMSD: {e}")
+        logger.error(f"[structure_utils] Error computing RMSD: {e}")
         return None
 
 
@@ -222,7 +225,7 @@ def convert_cif_to_pdb(cif_path: Union[str, Path], output_path: Union[str, Path]
         
         return True
     except Exception as e:
-        print(f"[structure_utils] Error converting CIF to PDB: {e}")
+        logger.error(f"[structure_utils] Error converting CIF to PDB: {e}")
         return False
 
 
@@ -336,5 +339,5 @@ def get_per_chain_metrics(path: Union[str, Path]) -> dict:
         return result
         
     except Exception as e:
-        print(f"[structure_utils] Error extracting chain metrics from {path}: {e}")
+        logger.error(f"[structure_utils] Error extracting chain metrics from {path}: {e}")
         return {}

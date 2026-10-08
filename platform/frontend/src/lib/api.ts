@@ -273,7 +273,7 @@ export const toggleDesignFavorite = (designId: string, isFavorite: boolean) =>
     api.post(`/api/designs/${designId}/favorite`, { is_favorite: isFavorite });
 
 export const downloadDesignPdb = (designId: string) =>
-    `http://localhost:8000/api/designs/${designId}/pdb`;
+    `/api/designs/${designId}/pdb`;
 
 // Per-residue metrics for charts
 export interface ResidueMetrics {
