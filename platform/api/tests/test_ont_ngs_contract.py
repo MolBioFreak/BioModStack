@@ -104,6 +104,33 @@ class TestCanonicalWorkflows:
         assert spec is not None
         assert spec.input_modes == ("pod5", "bam")
 
+    def test_fast5_is_not_advertised_until_conversion_and_model_qualification_exist(self):
+        for spec in CANONICAL_ONT_WORKFLOWS.values():
+            assert "fast5" not in spec.input_modes
+
+        model_config = (REPO_ROOT / "platform/api/config/models/nanopore.yaml").read_text(
+            encoding="utf-8"
+        )
+        assert "POD5/FAST5" not in model_config
+
+        dorado_module = (REPO_ROOT / "modules/ngs/dorado_basecall.nf").read_text(
+            encoding="utf-8"
+        )
+        assert "scripts/dorado_supports_option.sh" in dorado_module
+        assert "supports --emit-summary" in dorado_module
+        assert "basecaller --help 2>&1 | grep" not in dorado_module
+
+        for relative_path in (
+            "workflows/ngs/ont_basecall_dna.nf",
+            "workflows/ngs/ont_basecall_rna.nf",
+            "workflows/ngs/ont_plasmid_qc.nf",
+            "workflows/ngs/ont_construct_screening.nf",
+            "workflows/ngs/ont_methylation_analysis.nf",
+            "workflows/ngs/wf_clone_validation.nf",
+        ):
+            workflow = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+            assert '"${params.out_dir}/basecall/sequencing_summary.tsv"' not in workflow
+
     def test_rna_launch_defaults_to_rna_dorado_model(self):
         """RNA workflow normalization must select an RNA model, not generic 'sup'."""
         normalized = normalize_ont_launch_params("ont_basecall_rna", {})

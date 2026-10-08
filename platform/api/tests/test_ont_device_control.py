@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -64,6 +66,25 @@ def test_analysis_handoff_requires_existing_run_outputs_not_live_device_handle(t
     assert handoff["requires_live_device"] is False
     assert handoff["primary_input_kind"] == "pod5"
     assert handoff["run_output_dir"] == str(run_dir)
+
+
+def test_analysis_handoff_rejects_fast5_and_workflow_incompatible_inputs(tmp_path: Path) -> None:
+    run_dir = tmp_path / "ont_run_legacy"
+    run_dir.mkdir()
+
+    assert "fast5" not in ONT_DEVICE_CONTROL_CAPABILITIES["analysis_handoff_inputs"]
+    with pytest.raises(ValueError, match="does not accept ONT input kind"):
+        build_analysis_handoff(
+            workflow_id="ont_basecall_dna",
+            run_output_dir=run_dir,
+            primary_input_kind="fast5",
+        )
+    with pytest.raises(ValueError, match="does not accept ONT input kind"):
+        build_analysis_handoff(
+            workflow_id="ont_basecall_dna",
+            run_output_dir=run_dir,
+            primary_input_kind="bam",
+        )
 
 
 def test_ont_device_router_exposes_truthful_not_configured_status() -> None:

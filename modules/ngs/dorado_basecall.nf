@@ -62,9 +62,10 @@ process DoradoBasecall {
     def minQscoreValue = doradoBoundedInteger(params.min_qscore, 'min_qscore', 0, 100)
     def minQscore = minQscoreValue != null ? "--min-qscore ${minQscoreValue}" : ''
     def trimAdapt = params.trim_adapters != false ? '' : '--no-trim'
-    def emitSummary = params.emit_summary != false ? '--emit-summary' : ''
+    def emitSummaryRequested = params.emit_summary != false ? 'true' : 'false'
     def batchSizeValue = doradoBoundedInteger(params.dorado_batch_size, 'dorado_batch_size', 1, 1000000)
     def batchSize = batchSizeValue != null ? "--batchsize ${batchSizeValue}" : ''
+    def capabilityProbe = doradoShellQuote("${params.code_root}/scripts/dorado_supports_option.sh")
     def doradoDevice = (params.dorado_device ?: 'cuda:0').toString().trim()
     if (!doradoDevice) {
         doradoDevice = 'cuda:0'
@@ -82,6 +83,19 @@ process DoradoBasecall {
         exit 1
     fi
 
+    : > basecall.log
+    SUMMARY_ARGS=()
+    if [[ '${emitSummaryRequested}' == 'true' ]]; then
+        # Dorado releases differ: only pass this option when the active runtime
+        # actually supports --emit-summary (the host 1.1.1 binary does not).
+        if bash ${capabilityProbe} dorado basecaller --emit-summary; then
+            SUMMARY_ARGS+=(--emit-summary)
+            echo "Dorado basecaller supports --emit-summary; requesting summary output." >> basecall.log
+        else
+            echo "Dorado basecaller does not support --emit-summary; optional sequencing summary is unavailable." >> basecall.log
+        fi
+    fi
+
     dorado basecaller \\
         ${model} \\
         "${pod5_dir}" \\
@@ -89,13 +103,13 @@ process DoradoBasecall {
         ${modBases} \\
         ${minQscore} \\
         ${trimAdapt} \\
-        ${emitSummary} \\
+        "\${SUMMARY_ARGS[@]}" \\
         ${batchSize} \\
         --device ${device} \\
         > calls.bam \\
-        2> basecall.log
+        2>> basecall.log
 
-    # Dorado emits sequencing_summary.txt by default; normalize to .tsv for pipeline consumers.
+    # If requested and emitted, normalize Dorado's legacy summary filename for consumers.
     if [[ -f sequencing_summary.txt && ! -f sequencing_summary.tsv ]]; then
         mv sequencing_summary.txt sequencing_summary.tsv
     fi
