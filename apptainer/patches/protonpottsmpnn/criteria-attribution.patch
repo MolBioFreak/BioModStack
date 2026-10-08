@@ -1,0 +1,39 @@
+--- a/foundry/models/mpnn/src/mpnn/inference_engines/potts_mpnn_ph.py
++++ b/foundry/models/mpnn/src/mpnn/inference_engines/potts_mpnn_ph.py
+@@ -558,6 +558,8 @@
+     # extended_tokens}. The last two are the binder sequence AT that step (1-letter + 3-letter/protonation
+     # token string), so any step's sequence can be saved. step 0 = initial seq.
+     energy_trajectory: Optional[List[Dict[str, Any]]] = None
++    # Observational attribution only; never used in scoring or RNG.
++    criteria_index: Optional[int] = None
+ 
+     def design_id(self) -> str:
+         if self.protonation_type is not None and self.center_res_ids:
+@@ -614,7 +616,7 @@
+     def deduped(self) -> "PHDesignSet":
+         seen, out = set(), PHDesignSet()
+         for d in self:
+-            did = d.design_id()
++            did = (d.criteria_index, d.design_id())
+             if did not in seen:
+                 seen.add(did)
+                 out.append(d)
+@@ -671,10 +673,14 @@
+     field_fn, field_at, valid_mask = eng._criteria_fields(ctx, crit)
+     seed = base_seed + 1009 * ci
+     if crit.method in WHOLE_CHAIN_METHODS:
+-        return list(eng._run_whole_chain(ctx, crit, field_fn, valid_mask, seed=seed))
+-    initial_sequence, seeded = eng._placement_initial(ctx, crit, seq_i)
+-    return list(eng._run_placement_one_seed(
+-        ctx, crit, field_fn, field_at, valid_mask, seed, seq_i, initial_sequence, seeded))
++        out = list(eng._run_whole_chain(ctx, crit, field_fn, valid_mask, seed=seed))
++    else:
++        initial_sequence, seeded = eng._placement_initial(ctx, crit, seq_i)
++        out = list(eng._run_placement_one_seed(
++            ctx, crit, field_fn, field_at, valid_mask, seed, seq_i, initial_sequence, seeded))
++    for design in out:
++        design.criteria_index = ci
++    return out
+ 
+ 
+ def _pool_task(task):
