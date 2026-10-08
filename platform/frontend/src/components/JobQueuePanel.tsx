@@ -295,7 +295,7 @@ export function JobQueuePanel() {
     const [elapsedTick, setElapsedTick] = useState(0);
 
     useEffect(() => {
-        const timer = setInterval(() => setElapsedTick(t => t + 1), 5000);
+        const timer = setInterval(() => setElapsedTick(t => t + 1), 2000);
         return () => clearInterval(timer);
     }, []);
 
@@ -303,7 +303,7 @@ export function JobQueuePanel() {
     const { data: queueData, isLoading } = useQuery({
         queryKey: ['queue'],
         queryFn: () => fetchQueue(),
-        refetchInterval: 5000,
+        refetchInterval: 2000,
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });

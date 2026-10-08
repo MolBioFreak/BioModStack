@@ -157,7 +157,7 @@ class SystemStatusResponse(BaseModel):
 _gpu_status_cache: List[GPUStatusEnhanced] = []
 _gpu_status_error: Optional[str] = None
 _gpu_status_cache_time: float = 0.0
-_GPU_STATUS_CACHE_TTL_SECONDS = 0.75
+_GPU_STATUS_CACHE_TTL_SECONDS = 1.25
 
 _power_control_cache: Optional[Dict[str, Any]] = None
 _power_control_cache_time: float = 0.0
@@ -2570,6 +2570,7 @@ class SchedulerGlobalConfig(BaseModel):
     """Global scheduler settings."""
     busy_threshold: float = DEFAULT_SCHEDULER_CONFIG["global"]["busy_threshold"]  # 0.0-1.0
     cooldown_ms: int = DEFAULT_SCHEDULER_CONFIG["global"]["cooldown_ms"]
+    cpu_threads_per_job: int = DEFAULT_SCHEDULER_CONFIG["global"]["cpu_threads_per_job"]
     enabled: bool = DEFAULT_SCHEDULER_CONFIG["global"]["enabled"]
     target_vram_fill: float = DEFAULT_SCHEDULER_CONFIG["global"]["target_vram_fill"]
     capacity_weight: float = DEFAULT_SCHEDULER_CONFIG["global"]["capacity_weight"]
@@ -2618,6 +2619,7 @@ async def update_scheduler_config(global_config: SchedulerGlobalConfig):
     config["global"] = {
         "busy_threshold": max(0.0, min(1.0, global_config.busy_threshold)),
         "cooldown_ms": max(0, min(60000, global_config.cooldown_ms)),
+        "cpu_threads_per_job": max(1, min(24, global_config.cpu_threads_per_job)),
         "enabled": global_config.enabled,
         "target_vram_fill": max(0.5, min(0.95, global_config.target_vram_fill)),
         "capacity_weight": max(0.0, min(10.0, global_config.capacity_weight)),

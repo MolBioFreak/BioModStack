@@ -673,6 +673,7 @@ interface SchedulerConfig {
     global: {
         busy_threshold: number;
         cooldown_ms: number;
+        cpu_threads_per_job: number;
         enabled: boolean;
         target_vram_fill: number;
         capacity_weight: number;
@@ -697,6 +698,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
     const [localThreshold, setLocalThreshold] = useState(75);
     const [localBusyThreshold, setLocalBusyThreshold] = useState(50);
     const [localCooldown, setLocalCooldown] = useState(10);
+    const [localCpuThreadsPerJob, setLocalCpuThreadsPerJob] = useState(11);
     const [localCapacityWeight, setLocalCapacityWeight] = useState(3.0);
     const [localEmptinessWeight, setLocalEmptinessWeight] = useState(5.0);
     const [localMaxLaunchesPerCycle, setLocalMaxLaunchesPerCycle] = useState(3);
@@ -727,6 +729,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 setLocalThreshold(Math.round((data.global?.target_vram_fill ?? 0.75) * 100));
                 setLocalBusyThreshold(Math.round((data.global?.busy_threshold ?? 0.5) * 100));
                 setLocalCooldown(Math.round((data.global?.cooldown_ms ?? 10000) / 1000));
+                setLocalCpuThreadsPerJob(data.global?.cpu_threads_per_job ?? 11);
                 setLocalCapacityWeight(data.global?.capacity_weight ?? 3.0);
                 setLocalEmptinessWeight(data.global?.emptiness_weight ?? 5.0);
                 setLocalMaxLaunchesPerCycle(data.global?.max_launches_per_cycle ?? 3);
@@ -880,6 +883,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 body: JSON.stringify({
                     busy_threshold: localBusyThreshold / 100,
                     cooldown_ms: localCooldown * 1000,
+                    cpu_threads_per_job: localCpuThreadsPerJob,
                     enabled: config?.global?.enabled ?? true,
                     target_vram_fill: localThreshold / 100,
                     capacity_weight: localCapacityWeight,
@@ -959,6 +963,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
         localThreshold !== Math.round((config.global.target_vram_fill ?? 0.75) * 100) ||
         localBusyThreshold !== Math.round((config.global.busy_threshold ?? 0.5) * 100) ||
         localCooldown !== Math.round(config.global.cooldown_ms / 1000) ||
+        localCpuThreadsPerJob !== (config.global.cpu_threads_per_job ?? 11) ||
         localCapacityWeight !== (config.global.capacity_weight ?? 3.0) ||
         localEmptinessWeight !== (config.global.emptiness_weight ?? 5.0) ||
         localMaxLaunchesPerCycle !== (config.global.max_launches_per_cycle ?? 3);
@@ -1026,7 +1031,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div>
                                 <div className="flex justify-between text-xs text-slate-400 mb-1">
                                     <span>Launch Cooldown</span>
@@ -1041,6 +1046,26 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                                     onChange={(e) => setLocalCooldown(parseInt(e.target.value, 10) || 0)}
                                     className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
                                 />
+                            </div>
+
+                            <div>
+                                <div className="flex justify-between text-xs text-slate-400 mb-1">
+                                    <span>CPU Threads / GPU Job</span>
+                                    <span className="text-sky-400 font-medium">{localCpuThreadsPerJob}</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="1"
+                                    max="24"
+                                    step="1"
+                                    value={localCpuThreadsPerJob}
+                                    onChange={(e) => setLocalCpuThreadsPerJob(parseInt(e.target.value, 10) || 1)}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-sky-500"
+                                />
+                                <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                    <span>1</span>
+                                    <span>24</span>
+                                </div>
                             </div>
 
                             <div>

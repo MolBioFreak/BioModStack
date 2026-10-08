@@ -15,6 +15,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+CPU_RESERVED_THREADS = 4
+MIN_DYNAMIC_GPU_CPUS = 2
+
 # Track running processes
 _running_processes: Dict[str, asyncio.subprocess.Process] = {}
 
@@ -28,6 +31,7 @@ from paths import (
     get_colabfold_db,
     get_msa_cache_dir,
 )
+from .gpu_config import read_scheduler_config
 
 # Project root (parent of platform directory)
 PROJECT_ROOT = get_code_root()
@@ -261,6 +265,52 @@ def _normalize_protenix_msa_backend(value: object) -> str:
     if backend in {"auto", "local", "colabfold_api"}:
         return backend
     return ""
+
+
+def _dynamic_gpu_cpu_pool_threads() -> int:
+    total_threads = os.cpu_count() or 48
+    return max(1, total_threads - CPU_RESERVED_THREADS)
+
+
+async def _resolve_dynamic_gpu_cpu_share(session, job, launch_params: Dict[str, Any]) -> Optional[int]:
+    scheduler_config = read_scheduler_config()
+    configured_share = scheduler_config.get("global", {}).get("cpu_threads_per_job")
+    try:
+        if configured_share is not None:
+            return max(1, min(24, int(configured_share)))
+    except (TypeError, ValueError):
+        pass
+
+    from sqlalchemy import select
+    from database import Job
+
+    gpu_id = launch_params.get("gpu_id")
+    if gpu_id in (None, "") and getattr(job, "assigned_gpu", None) is None:
+        return None
+
+    concurrency_target = 0
+    batch_id = getattr(job, "batch_id", None)
+
+    if batch_id:
+        sibling_rows = await session.execute(
+            select(Job.id).where(
+                Job.batch_id == batch_id,
+                Job.queue_status.in_(["queued", "running"]),
+            )
+        )
+        concurrency_target = len(list(sibling_rows.scalars().all()))
+    else:
+        running_rows = await session.execute(
+            select(Job.id).where(
+                Job.queue_status == "running",
+                Job.assigned_gpu.isnot(None),
+            )
+        )
+        concurrency_target = len(list(running_rows.scalars().all()))
+
+    concurrency_target = max(1, concurrency_target)
+    cpu_share = max(MIN_DYNAMIC_GPU_CPUS, _dynamic_gpu_cpu_pool_threads() // concurrency_target)
+    return cpu_share
 
 
 def _estimate_protenix_token_count(params: Dict[str, Any]) -> int:
@@ -1159,7 +1209,16 @@ async def launch_nextflow_job(
         if job.status == JobStatus.CANCELLED.value:
             logger.info(f"Job {job_id} was cancelled just before spawn, aborting")
             return
-        
+
+        dynamic_gpu_cpus = await _resolve_dynamic_gpu_cpu_share(session, job, launch_params)
+        if dynamic_gpu_cpus is not None:
+            launch_params["cpus_per_gpu"] = dynamic_gpu_cpus
+            logger.info(
+                f"[CPU] Job {job_id} dynamic GPU CPU share set to {dynamic_gpu_cpus} "
+                f"threads from pool {_dynamic_gpu_cpu_pool_threads()} "
+                f"(batch={job.batch_id or 'none'})"
+            )
+
         try:
             # ═══════════════════════════════════════════════════════════════
             # GPU ASSIGNMENT: Set CUDA_VISIBLE_DEVICES from orchestrator

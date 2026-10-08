@@ -11,10 +11,11 @@ Provides endpoints for managing the GPU orchestrator job queue:
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, field_serializer
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 
 from database import Job, get_session
 from services.gpu_metadata import HARDWARE_LIMITS
@@ -27,6 +28,15 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/queue", tags=["queue"])
+
+_QUEUE_ENRICHMENT_TTL_SECONDS = 2.5
+_queue_enrichment_cache_time = 0.0
+_queue_enrichment_cache_signature: tuple = ()
+_queue_enrichment_cache_payload: Dict[str, Dict[str, object]] = {
+    "live_vram_by_job": {},
+    "scheduler_diagnostics": {},
+    "stage_progress_by_job": {},
+}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -116,7 +126,7 @@ def _collect_live_vram_by_job(jobs: List[Job]) -> Dict[str, int]:
         return {}
     try:
         from routers.gpu import get_gpu_stats_with_error
-        gpu_stats, _error = get_gpu_stats_with_error(force_refresh=True)
+        gpu_stats, _error = get_gpu_stats_with_error(force_refresh=False)
     except Exception as exc:
         logger.debug("Queue VRAM enrichment unavailable: %s", exc)
         return {}
@@ -216,6 +226,71 @@ def _collect_stage_progress_by_job(jobs: List[Job]) -> Dict[str, str]:
     return progress_by_job
 
 
+def _queue_enrichment_signature(jobs: List[Job]) -> Tuple[Tuple[object, ...], ...]:
+    signature_rows: List[Tuple[object, ...]] = []
+    for job in jobs:
+        signature_rows.append((
+            job.id,
+            job.queue_status,
+            bool(job.paused),
+            job.assigned_gpu,
+            job.pinned_gpu,
+            job.priority,
+            str(job.current_stage or ""),
+            str(job.stage_progress or ""),
+            str(job.stage_work_dir or ""),
+            int(job.vram_estimate_mb or 0),
+            job.started_at.isoformat() if job.started_at else None,
+        ))
+    return tuple(signature_rows)
+
+
+def _get_queue_enrichment(jobs: List[Job]) -> Dict[str, Dict[str, object]]:
+    global _queue_enrichment_cache_time
+    global _queue_enrichment_cache_signature
+    global _queue_enrichment_cache_payload
+
+    now = time.time()
+    signature = _queue_enrichment_signature(jobs)
+    if (
+        signature == _queue_enrichment_cache_signature
+        and (now - _queue_enrichment_cache_time) <= _QUEUE_ENRICHMENT_TTL_SECONDS
+    ):
+        return _queue_enrichment_cache_payload
+
+    live_vram_by_job: Dict[str, int] = {}
+    scheduler_diagnostics: Dict[str, Dict[str, object]] = {}
+    stage_progress_by_job = _collect_stage_progress_by_job(jobs)
+
+    running_jobs = [job for job in jobs if job.queue_status == "running"]
+    queued_jobs = [job for job in jobs if job.queue_status == "queued"]
+
+    try:
+        from routers.gpu import get_gpu_stats_with_error
+
+        gpu_stats, _gpu_error = get_gpu_stats_with_error(force_refresh=False)
+        if gpu_stats:
+            live_vram_by_job = collect_live_vram_by_job(running_jobs, gpu_stats)
+            if queued_jobs:
+                scheduler_diagnostics = build_queue_scheduler_diagnostics(
+                    queued_jobs,
+                    running_jobs,
+                    gpu_stats,
+                    read_scheduler_config(),
+                )
+    except Exception as exc:
+        logger.debug("Queue scheduler diagnostics unavailable: %s", exc)
+
+    _queue_enrichment_cache_time = now
+    _queue_enrichment_cache_signature = signature
+    _queue_enrichment_cache_payload = {
+        "live_vram_by_job": live_vram_by_job,
+        "scheduler_diagnostics": scheduler_diagnostics,
+        "stage_progress_by_job": stage_progress_by_job,
+    }
+    return _queue_enrichment_cache_payload
+
+
 class PinGPURequest(BaseModel):
     """Request to pin job to specific GPU."""
     gpu_id: Optional[int]  # None = auto-assign
@@ -297,27 +372,10 @@ async def list_queue(
     
     result = await session.execute(query)
     jobs = result.scalars().all()
-    live_vram_by_job: Dict[str, int] = {}
-    scheduler_diagnostics: Dict[str, Dict[str, object]] = {}
-    running_jobs = [job for job in jobs if job.queue_status == "running"]
-    queued_jobs = [job for job in jobs if job.queue_status == "queued"]
-    try:
-        from routers.gpu import get_gpu_stats_with_error
-
-        gpu_stats, _gpu_error = get_gpu_stats_with_error(force_refresh=True)
-        if gpu_stats:
-            live_vram_by_job = collect_live_vram_by_job(running_jobs, gpu_stats)
-            if queued_jobs:
-                scheduler_diagnostics = build_queue_scheduler_diagnostics(
-                    queued_jobs,
-                    running_jobs,
-                    gpu_stats,
-                    read_scheduler_config(),
-                )
-    except Exception as exc:
-        logger.debug("Queue scheduler diagnostics unavailable: %s", exc)
-
-    stage_progress_by_job = _collect_stage_progress_by_job(jobs)
+    enrichment = _get_queue_enrichment(jobs)
+    live_vram_by_job = enrichment.get("live_vram_by_job", {})
+    scheduler_diagnostics = enrichment.get("scheduler_diagnostics", {})
+    stage_progress_by_job = enrichment.get("stage_progress_by_job", {})
 
     return [
         QueuedJobResponse(
