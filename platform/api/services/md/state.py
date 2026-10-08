@@ -136,7 +136,10 @@ async def create_replica_attempt(
         id=str(uuid.uuid4()), replica_run_id=replica.id, segment_index=0, state="queued",
         execution_plan_sha256=execution_plan_sha256, compatibility_key=compatibility_key,
     )
-    session.add_all([replica, segment]); await session.flush()
+    session.add(replica)
+    await session.flush()
+    session.add(segment)
+    await session.flush()
     return replica, segment
 
 
@@ -394,7 +397,12 @@ async def retry_replica_attempt(
         execution_plan_sha256=source.execution_plan_sha256,
         compatibility_key=source.compatibility_key,
     )
-    session.add_all([child, replica, segment])
+    session.add(child)
+    await session.flush()
+    session.add(replica)
+    await session.flush()
+    session.add(segment)
+    await session.flush()
     parent_job = await session.get(Job, job_id)
     if parent_job is not None:
         parent_job.status = "queued"; parent_job.queue_status = "queued"
