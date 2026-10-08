@@ -21,7 +21,7 @@ from molbio_ngs_database import molbio_ngs_session_factory
 from build_identity import current_build_identity
 from readiness import collect_runtime_readiness, http_readiness
 from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
@@ -308,6 +308,7 @@ app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(external_imports.router, prefix="/api/jobs/imports/external", tags=["external-result-imports"])
 app.include_router(md_results.router, prefix="/api/jobs", tags=["molecular-dynamics-results"])
 app.include_router(viewer_resources.router, prefix="/api/jobs", tags=["viewer-resources"])
+app.include_router(plr_results.router, prefix="/api/jobs", tags=["plr-workflow-results"])
 app.include_router(conformational_mapping.router)
 app.include_router(shape_blueprint.router, prefix="/api/shape-blueprint", tags=["shape-blueprint"])
 app.include_router(designs.router, prefix="/api/designs", tags=["designs"])

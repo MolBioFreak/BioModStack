@@ -149,6 +149,72 @@ export interface RFD3LocalRedesignReadModel {
         metadata: Record<string, UntypedApiValue>;
     }>;
 }
+export interface ProteinLocalRedesignResultSurface {
+    schema: 'bms.workflow.protein-local-redesign.results.v1';
+    job: {
+        id: string;
+        name: string;
+        status: string;
+        model_id: string;
+        mode: string;
+        request_sha256: string | null;
+    };
+    source: { artifacts: ProteinLocalRedesignResultArtifact[] };
+    receipt: Record<string, UntypedApiValue> | null;
+    tabs: Array<{
+        id: 'rfd3' | 'fampnn' | 'esmfold2' | 'protenix_v2';
+        label: string;
+        role: string;
+        status: 'complete' | 'partial';
+        count: number;
+        candidate_count: number;
+        expected_candidate_count: number;
+        items: ProteinLocalRedesignResultItem[];
+    }>;
+    artifacts: ProteinLocalRedesignResultArtifact[];
+    capabilities: {
+        model_native_tabs: string[];
+        structure_viewer: boolean;
+        sequence_viewer: boolean;
+        volume_viewer: boolean;
+    };
+    counts: {
+        persisted_design_rows: number;
+        source_artifacts: number;
+        tabs: Record<string, number>;
+    };
+    composition: { algorithm: string; sha256: string };
+}
+
+export interface ProteinLocalRedesignResultArtifact {
+    artifact_id: string;
+    kind: string;
+    label: string;
+    relative_path: string;
+    sha256: string;
+    bytes: number;
+    media_type: string;
+    content_url: string;
+}
+
+export interface ProteinLocalRedesignResultItem {
+    item_id: string;
+    design_id: string | null;
+    candidate_id: string;
+    candidate_label: string;
+    sample_index: number | null;
+    name: string;
+    structure: ProteinLocalRedesignResultArtifact;
+    metrics: Record<string, UntypedApiValue>;
+    metadata: Record<string, UntypedApiValue>;
+    sequence?: string;
+    metrics_artifact?: string;
+    confidence_artifact?: string;
+    msa_artifact?: string;
+    native_metadata_artifact?: string;
+    msa?: Record<string, UntypedApiValue>;
+}
+
 export interface MDSummary {
     schema: 'bms.md.summary.v1';
     job_id: string;
@@ -467,6 +533,7 @@ export const fetchTelemetryHistory = (startMs: number, endMs: number, resolution
     });
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
+export const fetchProteinLocalRedesignResults = (id: string) => api.get<ProteinLocalRedesignResultSurface>(`/api/jobs/${encodeURIComponent(id)}/workflow-results`);
 export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);
 export interface ProteinBaseBundleImportRequest {
     bundle_path: string;
