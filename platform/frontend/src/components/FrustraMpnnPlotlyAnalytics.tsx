@@ -50,7 +50,7 @@ export default function FrustraMpnnPlotlyAnalytics({
         customdata: model.heatmapCustomData as unknown as Datum[][],
         colorscale: 'RdBu',
         reversescale: true,
-        colorbar: { title: { text: 'Persisted score' } },
+        colorbar: { title: { text: 'FrustraMPNN score' } },
         hovertemplate: 'Residue %{x}<br>WT %{customdata[0]} → %{y}<br>Score %{z:.3f}<br>Class %{customdata[1]}<br>Status %{customdata[2]}<br>%{customdata[3]}<extra></extra>',
         zsmooth: false,
     }];
@@ -122,44 +122,44 @@ export default function FrustraMpnnPlotlyAnalytics({
         <section aria-label="FrustraMPNN Plotly visual analytics" className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
             <div className="border-b border-slate-800 p-4">
                 <h2 className="font-semibold">FrustraMPNN visual analytics</h2>
-                <p className="mt-1 text-xs text-slate-400">Purpose: reveal sequence-local frustration patterns, mutation-specific score structure, and substitution distributions across the complete persisted landscape. Plotly zoom, pan, hover, and PNG export operate on all {model.residueLabels.length.toLocaleString()} residues and {model.residueLabels.length * 20} exact slots.</p>
+                <p className="mt-1 text-xs text-slate-400">{model.residueLabels.length.toLocaleString()} residues · 20 amino acids per residue. Zoom, pan, hover, or export as PNG.</p>
                 <p className="mt-2 text-xs text-slate-400">Highly frustrated ≤ {highMax} · minimally frustrated ≥ {minimalMin}</p>
             </div>
             <div className="grid gap-3 p-3 xl:grid-cols-2">
                 <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 xl:col-span-2">
                     <h3 className="px-2 pt-2 text-sm font-medium">Complete score heatmap</h3>
-                    <p className="px-2 text-xs text-slate-500">Question: where do residue position and proposed amino acid jointly produce favorable or unfavorable persisted scores? Drag to zoom; double-click to reset.</p>
-                    <Plot data={heatmapData} layout={{ ...commonLayout, height: 460, title: { text: 'All residue × substitution scores' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Exact author residue (chain:sequence+insertion)' }, nticks: 24 }, yaxis: { ...baseLayout.yaxis, title: { text: 'Mutation amino acid' }, autorange: 'reversed' } }} config={PLOT_CONFIG} className="h-[460px] w-full" useResizeHandler />
+                    <p className="px-2 text-xs text-slate-500">Drag to zoom; double-click to reset.</p>
+                    <Plot data={heatmapData} layout={{ ...commonLayout, height: 460, title: { text: 'All residue × substitution scores' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Author residue (chain:number+insertion)' }, nticks: 24 }, yaxis: { ...baseLayout.yaxis, title: { text: 'Mutation amino acid' }, autorange: 'reversed' } }} config={PLOT_CONFIG} className="h-[460px] w-full" useResizeHandler />
                 </article>
                 <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2">
                     <h3 className="px-2 pt-2 text-sm font-medium">Native frustration along sequence</h3>
-                    <p className="px-2 text-xs text-slate-500">Question: where are contiguous or isolated native residues highly, neutrally, or minimally frustrated? Dashed lines are persisted backend thresholds.</p>
-                    <Plot data={nativeData} layout={{ ...commonLayout, height: 390, title: { text: 'Native-slot score by exact residue' }, shapes: thresholdShapes, xaxis: { ...baseLayout.xaxis, title: { text: 'Exact author residue' }, nticks: 16 }, yaxis: { ...baseLayout.yaxis, title: { text: 'Persisted FrustraMPNN score' } }, showlegend: false }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
+                    <p className="px-2 text-xs text-slate-500">Dashed lines mark frustration thresholds.</p>
+                    <Plot data={nativeData} layout={{ ...commonLayout, height: 390, title: { text: 'Native score by residue' }, shapes: thresholdShapes, xaxis: { ...baseLayout.xaxis, title: { text: 'Author residue' }, nticks: 16 }, yaxis: { ...baseLayout.yaxis, title: { text: 'FrustraMPNN score' } }, showlegend: false }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
                 </article>
                 <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2">
                     <h3 className="px-2 pt-2 text-sm font-medium">Substitution score distributions</h3>
-                    <p className="px-2 text-xs text-slate-500">Question: which proposed amino acids systematically shift the landscape? Boxes show median and quartiles; whiskers/outliers preserve distribution shape.</p>
-                    <Plot data={distributionData} layout={{ ...commonLayout, height: 390, title: { text: 'Score distribution by mutation amino acid' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Mutation amino acid' } }, yaxis: { ...baseLayout.yaxis, title: { text: 'Persisted FrustraMPNN score' } }, showlegend: false }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
+                    <p className="px-2 text-xs text-slate-500">Boxes show median and quartiles; points show outliers.</p>
+                    <Plot data={distributionData} layout={{ ...commonLayout, height: 390, title: { text: 'Score distribution by mutation amino acid' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Mutation amino acid' } }, yaxis: { ...baseLayout.yaxis, title: { text: 'FrustraMPNN score' } }, showlegend: false }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
                 </article>
                 <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 xl:col-span-2">
-                    <h3 className="px-2 pt-2 text-sm font-medium">Alternative-score envelope along sequence</h3>
-                    <p className="px-2 text-xs text-slate-500">Question: at each residue, how far can the best and worst of the 19 non-native substitutions move the persisted score relative to the native slot? Δ = alternative score − native score; this is descriptive, not a redesign recommendation.</p>
-                    <Plot data={alternativeEnvelopeData} layout={{ ...commonLayout, height: 390, title: { text: 'Best and worst non-native score deltas' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Exact author residue' }, nticks: 24 }, yaxis: { ...baseLayout.yaxis, title: { text: 'Alternative − native score' }, zeroline: true, zerolinecolor: colors.textMuted }, legend: { orientation: 'h', y: 1.12 } }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
+                    <h3 className="px-2 pt-2 text-sm font-medium">Alternative score range along sequence</h3>
+                    <p className="px-2 text-xs text-slate-500">Δ = alternative score − native score; not a redesign recommendation.</p>
+                    <Plot data={alternativeEnvelopeData} layout={{ ...commonLayout, height: 390, title: { text: 'Best and worst non-native score deltas' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Author residue' }, nticks: 24 }, yaxis: { ...baseLayout.yaxis, title: { text: 'Alternative − native score' }, zeroline: true, zerolinecolor: colors.textMuted }, legend: { orientation: 'h', y: 1.12 } }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
                 </article>
                 <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2">
-                    <h3 className="px-2 pt-2 text-sm font-medium">Alternative-class burden</h3>
-                    <p className="px-2 text-xs text-slate-500">Question: which positions are mutation-sensitive versus tolerant? Fractions use the 19 scoreable non-native substitutions and persisted canonical classes.</p>
-                    <Plot data={burdenData} layout={{ ...commonLayout, height: 390, title: { text: 'Canonical class fraction among non-native substitutions' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Exact author residue' }, nticks: 16 }, yaxis: { ...baseLayout.yaxis, title: { text: 'Fraction of 19 alternatives' }, tickformat: '.0%', range: [0, 1] }, legend: { orientation: 'h', y: 1.14 } }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
+                    <h3 className="px-2 pt-2 text-sm font-medium">Frustration among alternatives</h3>
+                    <p className="px-2 text-xs text-slate-500">Fractions include only available non-native scores.</p>
+                    <Plot data={burdenData} layout={{ ...commonLayout, height: 390, title: { text: 'Frustration among non-native substitutions' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Author residue' }, nticks: 16 }, yaxis: { ...baseLayout.yaxis, title: { text: 'Fraction of available alternatives' }, tickformat: '.0%', range: [0, 1] }, legend: { orientation: 'h', y: 1.14 } }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
                 </article>
                 <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2">
                     <h3 className="px-2 pt-2 text-sm font-medium">Native versus alternative profile</h3>
-                    <p className="px-2 text-xs text-slate-500">Question: does the native residue sit above or below the typical non-native profile? Each point is one exact residue; color is its highly-frustrated alternative fraction.</p>
+                    <p className="px-2 text-xs text-slate-500">Each point is a residue; color shows its highly frustrated alternative fraction.</p>
                     <Plot data={nativeVsAlternativeData} layout={{ ...commonLayout, height: 390, title: { text: 'Native score vs median non-native score' }, xaxis: { ...baseLayout.xaxis, title: { text: 'Native score' } }, yaxis: { ...baseLayout.yaxis, title: { text: 'Median score across 19 alternatives' } }, showlegend: false }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
                 </article>
                 <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 xl:col-span-2">
-                    <h3 className="px-2 pt-2 text-sm font-medium">Mutation-specific class composition</h3>
-                    <p className="px-2 text-xs text-slate-500">Question: which proposed amino acids disproportionately produce each backend-owned frustration class across all residues?</p>
-                    <Plot data={compositionData} layout={{ ...commonLayout, height: 390, title: { text: 'Canonical class composition by mutation amino acid' }, barmode: 'stack', xaxis: { ...baseLayout.xaxis, title: { text: 'Mutation amino acid' } }, yaxis: { ...baseLayout.yaxis, title: { text: 'Fraction of residues' }, tickformat: '.0%', range: [0, 1] }, legend: { orientation: 'h', y: 1.13 } }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
+                    <h3 className="px-2 pt-2 text-sm font-medium">Frustration by amino acid</h3>
+                    <p className="px-2 text-xs text-slate-500">Class fractions across all residues; missing scores are shown separately.</p>
+                    <Plot data={compositionData} layout={{ ...commonLayout, height: 390, title: { text: 'Frustration by amino acid' }, barmode: 'stack', xaxis: { ...baseLayout.xaxis, title: { text: 'Mutation amino acid' } }, yaxis: { ...baseLayout.yaxis, title: { text: 'Fraction of residues' }, tickformat: '.0%', range: [0, 1] }, legend: { orientation: 'h', y: 1.13 } }} config={PLOT_CONFIG} className="h-[390px] w-full" useResizeHandler />
                 </article>
             </div>
         </section>
