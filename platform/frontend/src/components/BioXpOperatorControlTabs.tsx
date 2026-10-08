@@ -23,19 +23,6 @@ type ReceiptBoundObservation = {
     authorityKey: string;
     note: string;
 };
-type ActionConfirmation = Readonly<{
-    fingerprint: string;
-}>;
-type ActionConfirmationFingerprintInput = Readonly<{
-    actionId: string;
-    inputs: Record<string, unknown>;
-    connectionGeneration: number;
-    ownershipGeneration: number;
-    registrySha256: string;
-    evidenceLockSha256: string;
-    sourceAuthorityVerified: boolean;
-}>;
-
 const paneClass = (active: boolean) => `rounded px-4 py-2 text-sm font-semibold ${active ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-300'}`;
 const safetyTone: Record<BioXpOperatorActionSpec['safety_class'], string> = {
     read_only: 'border-sky-700/60 bg-sky-950/20',
@@ -111,10 +98,6 @@ function normalizeInput(action: BioXpOperatorActionSpec, values: Record<string, 
         }
     }
     return result;
-}
-
-function buildActionConfirmationFingerprint(value: ActionConfirmationFingerprintInput): string {
-    return JSON.stringify(value);
 }
 
 function ReceiptCard({ receipt, generation = 0, connected = false }: {
@@ -193,7 +176,6 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const resetInvoke = invoke.reset;
     const resetInterrupt = interrupt.reset;
 
-    const [confirmation, setConfirmation] = useState<ActionConfirmation | null>(null);
     const [operatorObservation, setOperatorObservation] = useState<ReceiptBoundObservation>({ receiptCommandId: null, authorityKey: '', note: '' });
     const [subsystemFilter, setSubsystemFilter] = useState<PrimitiveGroup>('all');
     const [actionSearch, setActionSearch] = useState('');
@@ -268,25 +250,6 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const assessmentAuthorityKey = `${String(connected)}:${generation}:${authoritativeCatalog?.ownership_generation ?? 0}:${authoritativeCatalog?.registry_sha256 ?? ''}:${authoritativeCatalog?.evidence_lock_sha256 ?? ''}`;
     const isSafetyInterrupt = selected?.safety_class === 'stop' || selected?.safety_class === 'emergency';
     const selectedSubmissionPending = isSafetyInterrupt ? interrupt.isPending : invoke.isPending || interrupt.isPending;
-    const isExactXzAction = selected?.action_id.startsWith('oem.x.') === true
-        || selected?.action_id.startsWith('oem.z.') === true;
-    const sourceAuthorityAllowsAction = authoritativeCatalog?.source_authority_verified === true
-        || isSafetyInterrupt
-        || isExactXzAction;
-    const currentConfirmationFingerprint = selected && normalizedForAdmission !== null
-        ? buildActionConfirmationFingerprint({
-            actionId: selected.action_id,
-            inputs: normalizedForAdmission,
-            connectionGeneration: generation,
-            ownershipGeneration: authoritativeCatalog?.ownership_generation ?? 0,
-            registrySha256: authoritativeCatalog?.registry_sha256 ?? '',
-            evidenceLockSha256: authoritativeCatalog?.evidence_lock_sha256 ?? '',
-            sourceAuthorityVerified: authoritativeCatalog?.source_authority_verified === true,
-        })
-        : null;
-    const confirmationMatchesCurrentAction = currentConfirmationFingerprint !== null
-        && confirmation?.fingerprint === currentConfirmationFingerprint;
-
     useEffect(() => {
         resetInvoke();
         resetInterrupt();
@@ -302,7 +265,6 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     }, [selected, selectedId]);
     useEffect(() => {
         setInputs(initialInputs(selected));
-        setConfirmation(null);
     }, [selected?.action_id]);
     useEffect(() => {
         const selectedGroup = groupedBrowseActions.find((group) => group.actions.some((action) => action.action_id === selected?.action_id));
@@ -312,23 +274,10 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     }, [groupedBrowseActions, selected?.action_id]);
 
     const run = () => {
-        if (!selected || !connected || !actionEnabled || !sourceAuthorityAllowsAction || selectedSubmissionPending) return;
+        if (!selected || !connected || !actionEnabled || selectedSubmissionPending) return;
         setLocalError(null);
         try {
             const normalized = normalizeInput(selected, inputs);
-            const runFingerprint = buildActionConfirmationFingerprint({
-                actionId: selected.action_id,
-                inputs: normalized,
-                connectionGeneration: generation,
-                ownershipGeneration: authoritativeCatalog?.ownership_generation ?? 0,
-                registrySha256: authoritativeCatalog?.registry_sha256 ?? '',
-                evidenceLockSha256: authoritativeCatalog?.evidence_lock_sha256 ?? '',
-                sourceAuthorityVerified: authoritativeCatalog?.source_authority_verified === true,
-            });
-            if (selected.requires_confirmation && confirmation?.fingerprint !== runFingerprint) {
-                setLocalError('Explicit confirmation is required for this exact governed action and authority.');
-                return;
-            }
             (isSafetyInterrupt ? interrupt : invoke).mutate({
                 actionId: selected.action_id,
                 connectionGeneration: generation,
@@ -380,7 +329,6 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
             stopped_observed: false,
             note: '',
         });
-        setConfirmation(null);
         setLocalError(null);
     };
 
@@ -535,13 +483,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                                     ))}
                                 </div>
                             )}
-                            {selected.requires_confirmation && (
-                                <label className="mt-4 flex items-center gap-2 rounded border border-amber-700/70 bg-amber-950/30 p-3 text-sm text-amber-100">
-                                    <input type="checkbox" checked={confirmationMatchesCurrentAction} onChange={(event) => setConfirmation(event.target.checked && currentConfirmationFingerprint !== null ? { fingerprint: currentConfirmationFingerprint } : null)} />
-                                    I confirm this exact governed action and its published machine scope.
-                                </label>
-                            )}
-                            <button type="button" disabled={!connected || !actionEnabled || selectedSubmissionPending || !sourceAuthorityAllowsAction || (selected.requires_confirmation && !confirmationMatchesCurrentAction)} onClick={run} className={`mt-4 rounded px-4 py-2 font-semibold disabled:opacity-35 ${selected.safety_class === 'emergency' ? 'bg-red-700' : selected.safety_class === 'motion' ? 'bg-amber-700' : 'bg-cyan-700'}`}>Run exactly this action</button>
+                            <button type="button" disabled={!connected || !actionEnabled || selectedSubmissionPending} onClick={run} className={`mt-4 rounded px-4 py-2 font-semibold disabled:opacity-35 ${selected.safety_class === 'emergency' ? 'bg-red-700' : selected.safety_class === 'motion' ? 'bg-amber-700' : 'bg-cyan-700'}`}>Run exactly this action</button>
                             {!actionEnabled && <p className="mt-2 text-sm text-amber-200">Blocked: {disabledReason}</p>}
                         </article>
                     )}

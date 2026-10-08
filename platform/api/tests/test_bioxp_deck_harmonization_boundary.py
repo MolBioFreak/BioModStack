@@ -66,8 +66,10 @@ def test_deck_harmonization_receipt_boundary_survives_failed_readiness(tmp_path,
                         if (source == "native" or not os.environ.get("BMS_NATIVE_DECK_EXPORT")) and (output := os.environ.get("BMS_DECK_DETAIL_EXPORT")):
                             Path(output).write_text(json.dumps(row))
             before = len(calls)
-            with pytest.raises(ConnectionStateError, match="fresh reachable"):
-                await b.connection.request_active_v2_enqueue("invoke_operator_action_v2", expected_generation=generation, path_params={"action_id": "oem.deck.move_to_location"}, json_data={})
+            # Receipt reads never submit; an invalid generation remains fenced
+            # even though stale process-local status no longer fences enqueue.
+            with pytest.raises(ConnectionStateError, match="generation"):
+                await b.connection.request_active_v2_enqueue("invoke_operator_action_v2", expected_generation=generation + 1, path_params={"action_id": "oem.deck.move_to_location"}, json_data={})
             assert len(calls) == before
             with pytest.raises(ConnectionStateError, match="generation"):
                 await b.connection.request_active_v2_query("operator_action_receipt_v2", expected_generation=generation + 1, path_params={"command_id": command_id})
@@ -119,7 +121,7 @@ def test_deck_harmonization_typed_camera_envelope_through_actual_api(tmp_path, t
     asyncio.run(scenario())
 
 
-def test_deck_harmonization_explicit_refresh_can_repair_stale_status_not_motion(tmp_path):
+def test_deck_harmonization_enqueue_reaches_robot_admission_despite_stale_status(tmp_path):
     from test_serial206_bioxp_v2_models import compact_payload
 
     async def scenario():
@@ -133,6 +135,9 @@ def test_deck_harmonization_explicit_refresh_can_repair_stale_status_not_motion(
                 raise httpx.ReadTimeout("status unavailable", request=request)
             calls.append((request.method, request.url.path, json.loads(request.content)))
             assert request.method == "POST"
+            if request.url.path.endswith("/oem.deck.move_to_location"):
+                assert json.loads(request.content)["inputs"] == {"target": "LOC_OC", "camera_offset": False}
+                return httpx.Response(409, json={"detail": "robot admission refused"})
             assert request.url.path.endswith("/oem.deck.collect_authority")
             assert json.loads(request.content)["inputs"] == {}
             return httpx.Response(202, json=compact_payload(action_id="oem.deck.collect_authority"))
@@ -149,10 +154,11 @@ def test_deck_harmonization_explicit_refresh_can_repair_stale_status_not_motion(
             for action, inputs in [("oem.deck.move_to_location", {"target": "LOC_OC", "camera_offset": False}), ("oem.deck.collect_authority", {"axis": "x"})]:
                 result = await client.post("/operator-controls/v2/actions/" + action, json={**body, "expected_board_epoch_by_board": {"4": 2, "5": 8}, "inputs": inputs})
                 assert result.status_code in (409, 422)
-            assert len(calls) == 1
+            assert len(calls) == 2
+            assert calls[1][1].endswith('/oem.deck.move_to_location')
             result = await client.post("/operator-controls/v2/actions/oem.deck.collect_authority", json={**body, "expected_connection_generation": generation + 1})
             assert result.status_code == 409
-            assert len(calls) == 1
+            assert len(calls) == 2
         assert b.connection.snapshot().reachable is False  # query ACK is not readiness
         await b.connection.disconnect()
 

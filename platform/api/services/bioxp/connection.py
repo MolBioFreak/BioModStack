@@ -418,21 +418,16 @@ class BioXpConnectionService:
         json_data: dict[str, Any],
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        # Explicit query-only deck refresh may repair a stale status/readiness
-        # observation. This exact fixed-input alias is not motion admission;
-        # all other enqueue actions retain the fresh-status prerequisite.
-        query_only_refresh = (
-            route_name == "invoke_operator_action_v2"
-            and path_params == {"action_id": "oem.deck.collect_authority"}
-            and json_data.get("inputs") == {}
-        )
+        # Process-local status is an observation, not enqueue admission.
+        # The lease still binds the active client and expected generation;
+        # robot/controller admission remains with the robot.
         return await self._request_with_retained_timeout(
             lane_lock=self._v2_enqueue_lock,
             timeout_seconds=self.v2_enqueue_timeout_seconds,
             timeout_label="BioXP v2 enqueue lane",
             route_name=route_name,
             expected_generation=expected_generation,
-            require_fresh=not query_only_refresh,
+            require_fresh=False,
             json_data=json_data,
             path_params=path_params,
         )
