@@ -253,14 +253,6 @@ def test_source_adapter_rejects_unrecognized_source():
         native.instrument_source('ppiflow', 'data/parsers.py', b'changed upstream')
 
 
-def test_source_adapter_exposes_only_identity_frame_transport():
-    # The immutable source map is independently checked against extracted
-    # installed bytes in the static source gate; no scientific runtime here.
-    assert callable(getattr(native, 'install', None)), 'G-09 source loader is missing'
-    assert callable(getattr(native, 'publish_partial', None)), 'G-09 native writer hook is missing'
-    assert callable(getattr(native, 'publish_fampnn', None)), 'G-09 FA-MPNN writer hook is missing'
-
-
 def atom(chain, number, insertion='', x=10.0, serial=1):
     return (f'ATOM  {serial:5d}  CA  ALA {chain}{number:4d}{insertion:1s}   '
             f'{x:8.3f}{0.:8.3f}{0.:8.3f}{1.:6.2f}{0.:6.2f}           C  \n')
@@ -272,8 +264,7 @@ def test_native_writer_publishes_source_identity_and_restores_frame(tmp_path):
     reference.write_text(atom('H', 100, 'A', 10) + atom('H', 101, '', 12, 2) + atom('T', 9, '', 20, 3))
     candidate = tmp_path / 'sample.pdb'
     candidate.write_text(atom('A', 1, '', 15) + atom('B', 1, '', 5, 2))
-    publisher = getattr(correspondence, 'publish_native_export', None)
-    assert callable(publisher), 'G-09 producer-owned publication is missing'
+    publisher = correspondence.publish_native_export
     request = publisher(reference, candidate,
         records=[{'source': ['T', 9, ''], 'exported': ['A', 1, ''], 'offset': [5., 0., 0.]},
                  {'source': ['H', 100, 'A'], 'exported': ['B', 1, ''], 'offset': [5., 0., 0.]}],

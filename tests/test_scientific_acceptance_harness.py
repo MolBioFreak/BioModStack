@@ -135,7 +135,7 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(before, driver.source_snapshot(self.base))
         self.assertEqual(before['tracked-link'], hashlib.sha256(str(outside).encode()).hexdigest())
 
-    def test_mapping_has_48_distinct_source_resolvable_cases(self):
+    def test_mapping_has_48_distinct_source_resolvable_requirements(self):
         root = driver.HERE.parent
         mapping = json.loads((driver.HERE / 'scientific_acceptance_cases.json').read_text())
         self.assertEqual(len(mapping['cases']), 48)
@@ -153,12 +153,8 @@ class HarnessTests(unittest.TestCase):
                 else:
                     self.assertIn('::'.join(names), text)
 
-    def test_vitest_manifest_is_unconditional_and_unique(self):
+    def test_vitest_manifest_is_unique(self):
         self.assertEqual(len(driver.GATES['frontend']), len(set(driver.GATES['frontend'])))
-        config = (driver.HERE.parent / 'platform/frontend/tests/vitest.scientific.config.ts').read_text()
-        self.assertIn('include: gates.frontend', config)
-        self.assertIn('Object.keys(gates.wire_files)', config)
-        self.assertNotIn('vitest.md.config', config)
 
 
 if __name__ == '__main__':

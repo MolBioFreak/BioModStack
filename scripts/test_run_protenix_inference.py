@@ -11,7 +11,7 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(run_protenix_inference)
 
 
-def _install_fake_protenix_template_utils():
+def _install_fake_protenix_template_utils(monkeypatch):
     class FakeTemplateHitFilter:
         def _assess_hit(
             self,
@@ -36,16 +36,16 @@ def _install_fake_protenix_template_utils():
     template = types.ModuleType("protenix.data.template")
     template.template_utils = template_utils
 
-    sys.modules["protenix"] = protenix
-    sys.modules["protenix.data"] = data
-    sys.modules["protenix.data.template"] = template
-    sys.modules["protenix.data.template.template_utils"] = template_utils
+    monkeypatch.setitem(sys.modules, "protenix", protenix)
+    monkeypatch.setitem(sys.modules, "protenix.data", data)
+    monkeypatch.setitem(sys.modules, "protenix.data.template", template)
+    monkeypatch.setitem(sys.modules, "protenix.data.template.template_utils", template_utils)
 
     return template_utils.TemplateHitFilter
 
 
-def test_allow_exact_duplicate_template_pdb_ids_relaxes_duplicate_filter():
-    template_filter_cls = _install_fake_protenix_template_utils()
+def test_allow_exact_duplicate_template_pdb_ids_relaxes_duplicate_filter(monkeypatch):
+    template_filter_cls = _install_fake_protenix_template_utils(monkeypatch)
 
     run_protenix_inference._install_exact_template_duplicate_allowlist(["2LGV"])
 

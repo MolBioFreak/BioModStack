@@ -31,7 +31,8 @@ from services.result_state_integrity import finalize_successful_job, job_expects
 from routers.jobs import reingest_job_results
 
 
-def test_job_get_handlers_are_read_only() -> None:
+def test_job_get_handlers_omit_direct_write_and_repair_tokens() -> None:
+    """Lexical policy only: delegated helpers are not proven read-only here."""
     jobs_source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
     tree = ast.parse(jobs_source)
     handlers = {
@@ -56,7 +57,8 @@ def test_job_get_handlers_are_read_only() -> None:
         assert "schedule_viewer_minimum_analyses_for_job" not in source, name
 
 
-def test_design_get_handlers_and_review_hydration_are_read_only() -> None:
+def test_design_get_handlers_and_review_hydration_omit_direct_write_tokens() -> None:
+    """Lexical policy only: delegated helpers are not proven read-only here."""
     designs_source = (API_ROOT / "routers" / "designs.py").read_text(encoding="utf-8")
     tree = ast.parse(designs_source)
     handlers = {

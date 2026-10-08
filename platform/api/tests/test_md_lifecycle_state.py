@@ -53,10 +53,10 @@ async def session(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_pause_requires_terminal_process_observation_and_accepted_checkpoint(session) -> None:
-    job = Job(id="md-parent", name="MD", status="running", model_id="md", mode="molecular_dynamics", params={})
+    job = Job(id="md-parent", name="MD", status="running", model_id="molecular_dynamics", mode="simulate", params={})
     child = Job(
-        id="md-parent-replica-0", name="MD replica 0", status="running", model_id="md",
-        mode="molecular_dynamics", params={}, parent_job_id=job.id, child_stage="md_replica",
+        id="md-parent-replica-0", name="MD replica 0", status="running", model_id="molecular_dynamics",
+        mode="replica", params={}, parent_job_id=job.id, child_stage="md_replica",
     )
     session.add_all([job, child]); await session.flush()
     run = await create_md_run(session, job=job, normalized_request=_request())
@@ -128,7 +128,7 @@ async def test_retry_dynamics_creates_new_attempt_without_mutating_failed_attemp
     session, tmp_path, monkeypatch, response_lost,
 ) -> None:
     job = Job(
-        id="md-retry", name="MD", status="failed", model_id="md", mode="molecular_dynamics", params={},
+        id="md-retry", name="MD", status="failed", model_id="molecular_dynamics", mode="simulate", params={},
         output_dir=str(tmp_path / "md-retry-results"),
     )
     session.add(job); await session.flush()
@@ -220,8 +220,8 @@ async def test_retry_dynamics_creates_new_attempt_without_mutating_failed_attemp
 
 @pytest.mark.asyncio
 async def test_retry_dynamics_rejects_scientific_failures(session) -> None:
-    parent = Job(id="md-science-fail", name="MD", status="failed", model_id="md", mode="molecular_dynamics", params={})
-    child = Job(id="md-science-child", name="replica", status="failed", model_id="md", mode="replica", params={"md_attempt": 0})
+    parent = Job(id="md-science-fail", name="MD", status="failed", model_id="molecular_dynamics", mode="simulate", params={})
+    child = Job(id="md-science-child", name="replica", status="failed", model_id="molecular_dynamics", mode="replica", params={"md_attempt": 0})
     session.add_all([parent, child]); await session.flush()
     run = await create_md_run(session, job=parent, normalized_request=_request())
     replica, _ = await create_replica_attempt(
@@ -242,7 +242,7 @@ async def test_retry_dynamics_rejects_scientific_failures(session) -> None:
 
 @pytest.mark.asyncio
 async def test_cas_idempotency_and_cancel_barrier(session) -> None:
-    job = Job(id="md-cancel", name="MD", status="running", model_id="md", mode="molecular_dynamics", params={})
+    job = Job(id="md-cancel", name="MD", status="running", model_id="molecular_dynamics", mode="simulate", params={})
     session.add(job); await session.flush()
     run = await create_md_run(session, job=job, normalized_request=_request())
     run.phase = "replicas_running"
@@ -270,7 +270,7 @@ async def test_cancel_actuator_commits_intent_then_stops_and_terminalizes_descen
 
     parent = Job(
         id="md-cancel-actuated", name="MD", status="running",
-        model_id="md", mode="molecular_dynamics", params={},
+        model_id="molecular_dynamics", mode="simulate", params={},
         nextflow_run_id="nextflow-cancel-parent",
     )
     session.add(parent)
@@ -279,7 +279,7 @@ async def test_cancel_actuator_commits_intent_then_stops_and_terminalizes_descen
     run.phase = "replicas_running"
     child = Job(
         id="md-cancel-actuated-child", name="replica", status="running",
-        queue_status="running", model_id="md", mode="replica", params={},
+        queue_status="running", model_id="molecular_dynamics", mode="replica", params={},
         parent_job_id=parent.id, child_stage="md_replica",
         nextflow_run_id="nextflow-cancel-1",
     )
@@ -332,11 +332,11 @@ async def test_cancel_actuator_commits_intent_then_stops_and_terminalizes_descen
 async def test_cancel_replay_after_restart_finalizes_already_terminal_descendants(session) -> None:
     parent = Job(
         id="md-cancel-restart", name="MD", status="running", queue_status="running",
-        model_id="md", mode="molecular_dynamics", params={}, nextflow_run_id="dead-parent-run",
+        model_id="molecular_dynamics", mode="simulate", params={}, nextflow_run_id="dead-parent-run",
     )
     child = Job(
         id="md-cancel-restart-child", name="replica", status="running", queue_status="running",
-        model_id="md", mode="replica", params={}, parent_job_id=parent.id,
+        model_id="molecular_dynamics", mode="replica", params={}, parent_job_id=parent.id,
         child_stage="md_replica", nextflow_run_id="dead-child-run",
     )
     session.add_all([parent, child])
@@ -381,7 +381,7 @@ async def test_cancel_replay_after_restart_finalizes_already_terminal_descendant
 async def test_cancel_processless_validating_coordinator_without_workflow_identity(session) -> None:
     parent = Job(
         id="md-processless-coordinator", name="MD", status="running", queue_status="running",
-        model_id="md", mode="molecular_dynamics", params={}, nextflow_run_id=None,
+        model_id="molecular_dynamics", mode="simulate", params={}, nextflow_run_id=None,
     )
     session.add(parent)
     await session.flush()
@@ -410,7 +410,7 @@ async def test_cancel_processless_validating_coordinator_without_workflow_identi
 
 @pytest.mark.asyncio
 async def test_stale_state_version_fails_closed(session) -> None:
-    job = Job(id="md-cas", name="MD", status="running", model_id="md", mode="molecular_dynamics", params={})
+    job = Job(id="md-cas", name="MD", status="running", model_id="molecular_dynamics", mode="simulate", params={})
     session.add(job); await session.flush(); await create_md_run(session, job=job, normalized_request=_request())
     await append_event_cas(session, job_id=job.id, idempotency_key="one", event_type="observed",
                            expected_version=0, next_phase="preparing")
@@ -422,9 +422,9 @@ async def test_stale_state_version_fails_closed(session) -> None:
 
 @pytest.mark.asyncio
 async def test_resume_and_generic_controls_reject_unbacked_durable_checkpoint(session) -> None:
-    parent = Job(id="md-unbacked", name="MD", status="paused", model_id="md", mode="molecular_dynamics", params={})
+    parent = Job(id="md-unbacked", name="MD", status="paused", model_id="molecular_dynamics", mode="simulate", params={})
     child = Job(
-        id="md-unbacked-child", name="replica", status="paused", model_id="md", mode="replica", params={},
+        id="md-unbacked-child", name="replica", status="paused", model_id="molecular_dynamics", mode="replica", params={},
         parent_job_id=parent.id, child_stage="md_replica",
     )
     session.add_all([parent, child]); await session.flush()
@@ -456,7 +456,7 @@ async def test_resume_and_generic_controls_reject_unbacked_durable_checkpoint(se
 
 @pytest.mark.asyncio
 async def test_finalize_pause_rejects_wrong_phase(session) -> None:
-    job = Job(id="md-wrong-phase", name="MD", status="running", model_id="md", mode="molecular_dynamics", params={})
+    job = Job(id="md-wrong-phase", name="MD", status="running", model_id="molecular_dynamics", mode="simulate", params={})
     session.add(job); await session.flush()
     run = await create_md_run(session, job=job, normalized_request=_request())
     run.phase = "replicas_running"
@@ -470,8 +470,8 @@ async def test_finalize_pause_rejects_wrong_phase(session) -> None:
 @pytest.mark.asyncio
 async def test_event_idempotency_key_cannot_cross_run_or_operation(session) -> None:
     jobs = [
-        Job(id="md-event-a", name="A", status="running", model_id="md", mode="molecular_dynamics", params={}),
-        Job(id="md-event-b", name="B", status="running", model_id="md", mode="molecular_dynamics", params={}),
+        Job(id="md-event-a", name="A", status="running", model_id="molecular_dynamics", mode="simulate", params={}),
+        Job(id="md-event-b", name="B", status="running", model_id="molecular_dynamics", mode="simulate", params={}),
     ]
     session.add_all(jobs); await session.flush()
     for job in jobs:
@@ -504,10 +504,10 @@ async def test_event_idempotency_key_cannot_cross_run_or_operation(session) -> N
 
 @pytest.mark.asyncio
 async def test_mixed_active_replica_states_do_not_advertise_or_partially_resume(session) -> None:
-    parent = Job(id="md-mixed", name="MD", status="paused", model_id="md", mode="molecular_dynamics", params={})
+    parent = Job(id="md-mixed", name="MD", status="paused", model_id="molecular_dynamics", mode="simulate", params={})
     children = [
         Job(id=f"md-mixed-child-{index}", name=f"replica {index}", status="paused", queue_status="paused",
-            paused=True, model_id="md", mode="replica", params={}, parent_job_id=parent.id, child_stage="md_replica")
+            paused=True, model_id="molecular_dynamics", mode="replica", params={}, parent_job_id=parent.id, child_stage="md_replica")
         for index in range(2)
     ]
     session.add_all([parent, *children]); await session.flush()

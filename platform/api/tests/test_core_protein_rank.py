@@ -114,8 +114,7 @@ def test_malformed_evidence_container_is_invalid(malformed):
 def test_canonical_rank_envelope_uses_exact_owner_descriptor_and_source():
     from services import design_metrics
     from services.core_protein_scientific_contract import validate_metric
-    build = getattr(design_metrics, 'build_ppiflow_rank_envelope', None)
-    assert callable(build), 'canonical rank adapter is missing'
+    build = design_metrics.build_ppiflow_rank_envelope
     s = subject()
     for value in s['confidence_metrics']['ppiflow_rank_inputs'].values():
         value['document_id'] = 'document-1'
@@ -125,7 +124,6 @@ def test_canonical_rank_envelope_uses_exact_owner_descriptor_and_source():
     source = {'artifact_sha256': 'c' * 64, 'candidate_id': 'candidate-A', 'document_id': 'document-1'}
     envelope = build(s, descriptor=descriptor, expected_source=source)
     assert validate_metric(envelope, expected_source=source) == envelope
-    assert envelope['value'] == 92
     assert envelope == {**descriptor, 'source': source, 'state': 'ok', 'value': 92, 'reason_code': None}
     s['confidence_metrics']['ppiflow_rank_inputs']['validator_iptm']['document_id'] = 'other-document'
     assert build(s, descriptor=descriptor, expected_source=source)['state'] == 'invalid'
