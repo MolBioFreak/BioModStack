@@ -1766,7 +1766,20 @@ def _normalize_boltz_cp_params_for_validation(
     size_cp = _coerce_positive_int(normalized.get("size_cp")) or _coerce_positive_int(
         normalized.get("bcp_size_cp")
     )
-    if gpu_ids:
+    requested_cp = normalized.get("size_cp", normalized.get("bcp_size_cp"))
+    if requested_cp not in (None, ""):
+        from services.nextflow import _derive_boltz_cp_gpu_launch_settings
+        try:
+            gpu_ids, size_cp = _derive_boltz_cp_gpu_launch_settings(
+                pinned_gpus=normalized.get("pinned_gpus"),
+                requested_size_cp=requested_cp,
+                fallback_gpu_ids=gpu_ids,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if gpu_ids:
+            normalized["gpu_ids"] = gpu_ids
+    elif gpu_ids:
         gpu_count = len([item for item in gpu_ids.split(",") if item.strip()])
         if gpu_count > 0:
             size_cp = _largest_square_divisor(gpu_count, size_cp)

@@ -275,13 +275,16 @@ export const deriveBoltzCpGpuLaunchSettings = ({
     pinnedGpus,
     requestedSizeCp,
     fallbackGpuIds,
-}: BoltzCpGpuLaunchInput): { gpuIds: string; sizeCp: number } => {
+}: BoltzCpGpuLaunchInput): { gpuIds: string; sizeCp: number; error?: string } => {
     const resolvedGpuIds = parseBoltzCpGpuIds(
         Array.isArray(pinnedGpus) && pinnedGpus.length > 0 ? pinnedGpus : fallbackGpuIds
     );
+    const sizeCp = requestedSizeCp ?? getLargestSquareDivisor(resolvedGpuIds.length);
     return {
         gpuIds: resolvedGpuIds.join(','),
-        sizeCp: getLargestSquareDivisor(resolvedGpuIds.length, requestedSizeCp),
+        sizeCp,
+        ...((resolvedGpuIds.length === 0 && sizeCp > 1) || getLargestSquareDivisor(resolvedGpuIds.length, sizeCp) !== sizeCp
+            ? { error: `Fold-CP size_cp ${requestedSizeCp} requires a nonempty GPU selection divisible by that square CP size. Select compatible GPUs; CP will not be reduced automatically.` } : {}),
     };
 };
 

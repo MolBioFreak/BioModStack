@@ -153,7 +153,7 @@ const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
 export function StructurePredictionTemplate({ onBack, initialValues, onDraftChange, onOpenTemplateManager, sourceSequenceId = null, mdDraftId = null, returnTemplate = null }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const { gpuOptions } = useLiveGpuCatalog();
+    const { gpuOptions, executionTargetId } = useLiveGpuCatalog({ followExecutionTarget: true });
     const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn', fetchFrustraMpnnIntegration);
     const normalizeProtenixModel = (_model?: string) => 'protenix-v2';
     const initialPrimaryProteinComponent = resolveInitialPrimaryProteinComponent(initialValues);
@@ -173,7 +173,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const initialBoltzCpSeed = initialValues?.seed ?? initialValues?.bcp_seed;
 
     // Core state
-    const initialGpuPinningState = resolveInitialGpuPinningState(initialValues);
+    const initialPlacementMatches = (initialValues?.execution_target_id ?? null) === (executionTargetId ?? null);
+    const initialGpuPinningState = resolveInitialGpuPinningState(initialPlacementMatches ? initialValues : undefined);
     const [jobName, setJobName] = useState(initialValues?.name || initialValues?.job_name || 'structure_prediction');
     const initialFrustrampnnSelection = createModelIntegrationSelection(initialValues?.run_frustrampnn, true);
     const frustrampnnSelectionRef = useRef(initialFrustrampnnSelection);
@@ -197,6 +198,15 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     };
     const [pinnedGpus, setPinnedGpus] = useState(initialGpuPinningState.pinnedGpus);
     const [lockGpus, setLockGpus] = useState(initialGpuPinningState.lockGpus);
+    const placementOwner = useRef(executionTargetId);
+    const [useSavedGpuIds, setUseSavedGpuIds] = useState(initialPlacementMatches);
+    useEffect(() => {
+        if (placementOwner.current === executionTargetId) return;
+        placementOwner.current = executionTargetId;
+        setPinnedGpus([]);
+        setLockGpus(false);
+        setUseSavedGpuIds(false);
+    }, [executionTargetId]);
     const clearGpuPinning = () => {
         setPinnedGpus([]);
         setLockGpus(false);
@@ -687,13 +697,19 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const boltzCpFallbackGpuIds = useMemo(() => {
         const explicitGpuIds = initialValues?.gpu_ids ?? initialValues?.bcp_gpu_ids;
         const explicitGpuIdsText = String(explicitGpuIds ?? '').trim();
-        return explicitGpuIdsText || gpuOptions.map((gpu) => gpu.index).join(',');
-    }, [gpuOptions, initialValues?.gpu_ids, initialValues?.bcp_gpu_ids]);
+        return (useSavedGpuIds ? explicitGpuIdsText : '') || gpuOptions.map((gpu) => gpu.index).join(',');
+    }, [gpuOptions, useSavedGpuIds, initialValues?.gpu_ids, initialValues?.bcp_gpu_ids]);
     const boltzCpGpuSettings = deriveBoltzCpGpuLaunchSettings({
         pinnedGpus,
         requestedSizeCp: bcpRequestedSizeCp,
         fallbackGpuIds: boltzCpFallbackGpuIds,
     });
+    const boltzCpPlacementError = isBoltzCpLaunch ? (
+        executionTargetId && (!gpuOptions.length || boltzCpGpuSettings.gpuIds.split(',')
+            .some(id => !gpuOptions.some(gpu => gpu.index === Number(id))))
+            ? 'Selected worker GPU telemetry is unavailable or does not contain the selected GPUs. Refresh or select compatible GPUs.'
+            : boltzCpGpuSettings.error
+    ) : undefined;
     const boltzQualityState = getBoltzQualitySliderState({
         samplingSteps: boltzSamplingSteps,
         recyclingSteps: boltzRecyclingSteps,
@@ -702,6 +718,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         const params: Record<string, UntypedApiValue> = {
             name: jobName,
             job_name: jobName,
+            execution_target_id: executionTargetId ?? null,
             sequence: sequence.trim(),
             sequence_name: sequenceName,
             pred_method: resolvedPredictorSelection.valid ? resolvedPredictorSelection.canonicalSelection : resolvedPredictorSelection.requestedSelection,
@@ -832,7 +849,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     // Project drafts reuse the saved-template scientific projection, not a second serializer.
     const projectDraftJson = JSON.stringify(currentTemplateParams);
     useEffect(() => {
@@ -964,6 +981,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                 : 'Cache: none';
 
     const buildSubmission = (resolvedSourcePath: string | null, requireSource = true) => {
+        if (placementOwner.current !== executionTargetId) throw new Error('Execution target changed; GPU placement is being refreshed.');
+        if (boltzCpPlacementError) throw new Error(boltzCpPlacementError);
         if (sequenceHandoffLoading || sequenceHandoffError) {
             throw new Error(sequenceHandoffError || 'The selected saved sequence is still loading.');
         }
@@ -1469,6 +1488,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                 <span className="text-sm text-slate-400">Lock selected GPU(s) exclusively during workflow</span>
                             </label>
                         )}
+                        {boltzCpPlacementError && <p role="alert" className="mt-2 text-xs text-amber-200">{boltzCpPlacementError}</p>}
                     </div>
                     )}
                 </div>
@@ -2016,7 +2036,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                         className="w-full max-w-xs bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                     />
                                     <p className="mt-2 text-xs text-slate-400">
-                                        OEM Fold-CP uses a square context-parallel mesh. Current GPU resolution: {boltzCpGpuSettings.gpuIds || 'auto fallback'} → size_cp {boltzCpGpuSettings.sizeCp}.
+                                        OEM Fold-CP uses a square context-parallel mesh. Current GPU resolution: {boltzCpGpuSettings.gpuIds || 'unavailable'} → size_cp {boltzCpGpuSettings.sizeCp}.
+                                        {boltzCpGpuSettings.error && <span role="alert"> {boltzCpGpuSettings.error}</span>}
                                     </p>
                                 </div>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

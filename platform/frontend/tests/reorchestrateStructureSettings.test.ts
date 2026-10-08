@@ -202,7 +202,7 @@ test('derives Boltz-CP re-orchestrate settings from a prior CP launch', () => {
     assert.equal(settings.boltzCp.seed, '17');
 });
 
-test('builds Boltz-CP overrides using OEM square-divisor sizing', () => {
+test('preserves requested Boltz-CP sizing for admission rather than silently reducing it', () => {
     const job = {
         model_id: 'boltz_cp_experimental',
         mode: 'design',
@@ -230,7 +230,7 @@ test('builds Boltz-CP overrides using OEM square-divisor sizing', () => {
 
     assert.deepEqual(overrides.pinned_gpus, [2, 3]);
     assert.equal(overrides.bcp_gpu_ids, '2,3');
-    assert.equal(overrides.bcp_size_cp, 1);
+    assert.equal(overrides.bcp_size_cp, 16);
     assert.equal(Object.prototype.hasOwnProperty.call(overrides, 'bcp_shard_plan_id'), false);
 });
 

@@ -202,7 +202,7 @@ test('esmfold2 controls are driven by the parent structure predictor selection',
     assert.match(source, /PDB coordinates are not structural templates/);
 });
 
-test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to a valid square divisor', () => {
+test('boltz cp gpu launch settings preserve requested CP and report incompatible device selection', () => {
     assert.deepEqual(
         deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [0, 1, 2, 3], requestedSizeCp: 4 }),
         { gpuIds: '0,1,2,3', sizeCp: 4 },
@@ -210,7 +210,7 @@ test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to
 
     assert.deepEqual(
         deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [2, 3], requestedSizeCp: 16 }),
-        { gpuIds: '2,3', sizeCp: 1 },
+        { gpuIds: '2,3', sizeCp: 16, error: 'Fold-CP size_cp 16 requires a nonempty GPU selection divisible by that square CP size. Select compatible GPUs; CP will not be reduced automatically.' },
     );
 
     assert.deepEqual(
@@ -220,7 +220,7 @@ test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to
 
     assert.deepEqual(
         deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [], requestedSizeCp: 16, fallbackGpuIds: '0,1,2,3' }),
-        { gpuIds: '0,1,2,3', sizeCp: 4 },
+        { gpuIds: '0,1,2,3', sizeCp: 16, error: 'Fold-CP size_cp 16 requires a nonempty GPU selection divisible by that square CP size. Select compatible GPUs; CP will not be reduced automatically.' },
     );
 });
 

@@ -477,6 +477,7 @@ export function JobSubmission() {
                         ...data.params,
                         name: data.name,
                         pred_method: 'fold_cp',
+                        execution_target_id: data.execution_target_id ?? null,
                     });
                 }
                 // 4. ESMFold2 compatibility IDs reopen the parent Structure Prediction workflow.
