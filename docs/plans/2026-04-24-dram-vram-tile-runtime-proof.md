@@ -146,7 +146,9 @@ Interpretation:
 
 - Concurrent DRAM↔VRAM streaming works.
 - The machine is highly heterogeneous in effective copy behavior.
-- The 3090 path is much slower than the 5090 and 5060 Ti in this simple probe, so weighted scheduling is mandatory.
+- Follow-up PCIe checks show the 3090 result is not mainly a benchmark artifact: under load both 3090s negotiate PCIe Gen4 x4, not x8.
+- Gen4 x4 raw bandwidth is ~7.88 GB/s per direction; 85-90% practical payload is ~6.7-7.1 GB/s, matching the measured ~6.7 GB/s.
+- If the MCIO splitter is expected to provide x8/x8 to the 3090s, the hardware/BIOS/riser path is not currently delivering that to Linux/NVIDIA.
 - The all-GPU aggregate is bounded by the slow workers if every phase has a global barrier; work assignment must avoid forcing equal tile counts at equal phase cadence.
 
 ## Planning example
@@ -274,6 +276,68 @@ GPU count affects worker concurrency only. It must not redefine logical shard ge
 - First DRAM↔VRAM concurrent transfer probe exists and passes tests.
 - First transfer measurements are positive but expose strong heterogeneity.
 - The real proof is still ahead: persistent DRAM tile store + deterministic fake kernel + one real Fold-CP op.
+
+## PCIe root-cause check for 3090 bandwidth
+
+Christian correctly flagged that ~6.6 GB/s is too slow for an expected PCIe Gen4 x8 path. Follow-up diagnostics show the 3090s are not currently running as x8 links.
+
+Idle `nvidia-smi` query:
+
+```text
+nvidia-smi index 2, RTX 3090, bus E1:00.0: current Gen1 x4, max Gen4 x16, P8
+nvidia-smi index 3, RTX 3090, bus E2:00.0: current Gen1 x4, max Gen4 x16, P8
+```
+
+During a sustained copy load on torch CUDA ordinals 1 and 2:
+
+```text
+nvidia-smi index 2, RTX 3090, bus E1:00.0: current Gen4 x4, max Gen4 x16, P2
+nvidia-smi index 3, RTX 3090, bus E2:00.0: current Gen4 x4, max Gen4 x16, P2
+```
+
+Linux sysfs confirms the upstream root ports feeding those two 3090s are x4 ports, not x8 ports:
+
+```text
+/sys/bus/pci/devices/0000:e0:01.1/max_link_width = 4  -> downstream bus E1 RTX 3090
+/sys/bus/pci/devices/0000:e0:01.4/max_link_width = 4  -> downstream bus E2 RTX 3090
+/sys/bus/pci/devices/0000:e1:00.0/current_link_width = 4
+/sys/bus/pci/devices/0000:e2:00.0/current_link_width = 4
+```
+
+Torch CUDA ordinal mapping from the Fold-CP uv environment:
+
+```text
+torch ordinal 0: RTX 5090, bus 01:00.0
+torch ordinal 1: RTX 3090, bus E1:00.0
+torch ordinal 2: RTX 3090, bus E2:00.0
+torch ordinal 3: RTX 5060 Ti, bus C1:00.0
+```
+
+Note: `nvidia-smi` index 1 is the RTX 5060 Ti; torch ordinal 1 is a RTX 3090. Use torch ordinals for PyTorch worker assignment.
+
+Longer per-direction pinned-memory copy probe with 512 MiB tiles, 16 iterations:
+
+```text
+Torch GPU0 RTX 5090:
+  H2D 57.85 GB/s, D2H 58.02 GB/s, roundtrip 57.91 GB/s
+Torch GPU1 RTX 3090:
+  H2D 6.73 GB/s, D2H 6.77 GB/s, roundtrip 6.75 GB/s
+Torch GPU2 RTX 3090:
+  H2D 6.73 GB/s, D2H 6.77 GB/s, roundtrip 6.75 GB/s
+Torch GPU3 RTX 5060 Ti:
+  H2D 28.79 GB/s, D2H 29.01 GB/s, roundtrip 28.89 GB/s
+```
+
+Bandwidth math:
+
+```text
+PCIe Gen4 x4 raw per direction:  7.88 GB/s; 85-90% practical:  6.70-7.09 GB/s
+PCIe Gen4 x8 raw per direction: 15.75 GB/s; 85-90% practical: 13.39-14.18 GB/s
+PCIe Gen5 x8 raw per direction: 31.51 GB/s; 85-90% practical: 26.78-28.36 GB/s
+PCIe Gen5 x16 raw per direction: 63.02 GB/s; 85-90% practical: 53.56-56.71 GB/s
+```
+
+Conclusion: the measured 3090 bandwidth is exactly what Gen4 x4 would predict. If the MCIO/riser path is expected to bifurcate as x8/x8, the platform is currently exposing the two 3090 downstream root ports as x4/x4 to Linux. Check BIOS PCIe bifurcation/slot settings, MCIO cable/riser wiring, and which motherboard lanes the splitter actually feeds. For runtime planning, treat the 3090s as Gen4 x4 devices until hardware/BIOS diagnostics prove otherwise.
 
 ## Current project priority
 
