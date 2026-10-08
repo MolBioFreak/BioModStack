@@ -20,7 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "platform/api/config/ngs_molbio_runtime/runtime_implementation_v1.json"
 DENOMINATOR_RELATIVE = "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
 DENOMINATOR = ROOT / DENOMINATOR_RELATIVE
+N0_REPORT = ROOT / "docs/reports/ngs-molbio-phase-n0-verification-v1.json"
 _GIT_OBJECT_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 PHASES = (
     ("N1", "Additive global/domain persistence and immutable binding source are implemented."),
@@ -142,6 +144,74 @@ def _load_source_denominator() -> dict[str, object]:
     return value
 
 
+def _load_n0_authority() -> dict[str, object]:
+    try:
+        value = json.loads(
+            N0_REPORT.read_text(encoding="utf-8"),
+            object_pairs_hook=_pairs,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("N0 verification receipt authority is unreadable") from exc
+    expected_keys = {
+        "schema",
+        "baseline_commit",
+        "baseline_tree",
+        "payload_files",
+        "payload_fingerprint_sha256",
+        "verification_command",
+        "executed_at",
+        "environment",
+        "result",
+        "content_sha256",
+    }
+    if type(value) is not dict or set(value) != expected_keys:
+        raise RuntimeError("N0 verification receipt authority shape is invalid")
+    payload_files = value.get("payload_files")
+    if (
+        value.get("schema")
+        != "bms.ngs-molbio.phase-n0-verification-receipt.v1"
+        or value.get("baseline_commit")
+        != "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517"
+        or value.get("baseline_tree")
+        != "f89094ba373e3dd8fa181fd17d942e54a6f0f63e"
+        or not isinstance(value.get("content_sha256"), str)
+        or value["content_sha256"] != _content_sha256(value)
+        or type(payload_files) is not list
+        or not payload_files
+        or len(payload_files) > 256
+    ):
+        raise RuntimeError("N0 verification receipt authority is invalid or digest-divergent")
+    fingerprint = hashlib.sha256()
+    observed_paths: list[str] = []
+    for row in payload_files:
+        if type(row) is not dict or set(row) != {"path", "sha256", "size_bytes"}:
+            raise RuntimeError("N0 verification receipt payload authority is invalid")
+        relative = row.get("path")
+        digest = row.get("sha256")
+        size = row.get("size_bytes")
+        if (
+            type(relative) is not str
+            or not relative
+            or relative.startswith("/")
+            or ".." in Path(relative).parts
+            or not isinstance(digest, str)
+            or _SHA256_RE.fullmatch(digest) is None
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 1
+        ):
+            raise RuntimeError("N0 verification receipt payload authority is invalid")
+        observed_paths.append(relative)
+        fingerprint.update(f"{relative}\0{digest}\n".encode("utf-8"))
+    if (
+        observed_paths != sorted(observed_paths)
+        or len(observed_paths) != len(set(observed_paths))
+        or value.get("payload_fingerprint_sha256") != fingerprint.hexdigest()
+    ):
+        raise RuntimeError("N0 verification receipt payload fingerprint diverged")
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -169,6 +239,7 @@ def main() -> int:
         arguments.successor_commit_object,
     )
     denominator = _load_source_denominator()
+    n0_authority = _load_n0_authority()
     source_paths = denominator["paths"]
     assert isinstance(source_paths, list)
     authorities: list[dict[str, object]] = []
@@ -189,8 +260,8 @@ def main() -> int:
         "baseline_source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
         "successor_source_commit": arguments.successor_source_commit,
         "successor_source_tree": arguments.successor_source_tree,
-        "n0_package_fingerprint": "5ac2aedad42e1e93c5b22186090860ab32404944c6b7b3496cd06e9562952a8c",
-        "n0_receipt_content_sha256": "6e7134a32d2b13e6e24548056c92ddf48576997494bfc921013d19fab003782d",
+        "n0_package_fingerprint": n0_authority["payload_fingerprint_sha256"],
+        "n0_receipt_content_sha256": n0_authority["content_sha256"],
         "implementation_state": "implemented_unverified",
         "release_acceptance_state": "open",
         "verification_state": "source_audit_only",
