@@ -11,7 +11,6 @@ import { useState, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { fetchFiles, submitOntNgsJob, uploadFile } from '../lib/api';
-import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 
 // ============================================================================
@@ -25,6 +24,7 @@ type AssemblyTool = 'flye' | 'canu';
 type FlyeReadQuality = 'nano-hq' | 'nano-corr' | 'nano-raw';
 type MinimapPreset = 'map-ont' | 'map-hifi' | 'map-pb' | 'sr';
 type InputSource = 'pod5' | 'bam' | 'fastq';
+type WorkflowKey = 'clone' | 'plasmidQc' | 'bamQc' | 'dna' | 'rna' | 'duplex' | 'modified' | 'barcode';
 type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath' | 'referencePath';
 type PathPickerMode = 'file' | 'directory';
 type ReferenceTab = 'browse' | 'paste' | 'create';
@@ -65,19 +65,6 @@ const MODIFIED_BASES_OPTIONS: Record<ModifiedBases, { label: string; description
     '6mA': { label: '6mA only', description: 'Adenine methylation.' },
     '5mC_5hmC': { label: '5mC + 5hmC', description: 'Cytosine + hydroxymethyl-cytosine.' },
     none: { label: 'No modification detection', description: 'No modification tags.' },
-};
-
-const DORADO_EXACT_MODELS: Record<DoradoMolecule, Record<DoradoModel, string>> = {
-    dna: {
-        fast: 'dna_r10.4.1_e8.2_400bps_fast@v5.2.0',
-        hac: 'dna_r10.4.1_e8.2_400bps_hac@v5.2.0',
-        sup: 'dna_r10.4.1_e8.2_400bps_sup@v5.2.0',
-    },
-    rna: {
-        fast: 'rna004_130bps_fast@v5.2.0',
-        hac: 'rna004_130bps_hac@v5.2.0',
-        sup: 'rna004_130bps_sup@v5.2.0',
-    },
 };
 
 const QSCORE_LABELS: Record<number, string> = {
@@ -133,6 +120,12 @@ function coerceIntegerInput(value: unknown, fallback: number, min: number, max: 
     return Math.min(max, Math.max(min, Math.trunc(parsed)));
 }
 
+function coerceNumberInput(value: unknown, fallback: number, min: number, max: number): number {
+    const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, parsed));
+}
+
 function isIntegerInRange(value: number, min: number, max: number): boolean {
     return Number.isFinite(value) && Number.isInteger(value) && value >= min && value <= max;
 }
@@ -165,7 +158,7 @@ function parentBrowserPath(path: string): string {
 
 function formatPathDisplay(path: string): string {
     if (!path) return '';
-    return path;
+    return path.split('/').filter(Boolean).pop() || 'Selected input';
 }
 
 function matchesPathFilter(fileName: string, filter: PathFilter): boolean {
@@ -416,13 +409,26 @@ function normalizeReferenceLabel(name: string): string {
 export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const { gpuOptions } = useLiveGpuCatalog();
+    // Analysis workflows use the scheduler's fixed safe policy; this surface does
+    // not inspect or admit runtime resources.
+    const gpuOptions: Array<{ index: number; label: string }> = [];
 
     // ============================================================================
     // State: Core Configuration
     // ============================================================================
     const [jobName, setJobName] = useState(initialValues?.jobName as string || '');
     const [inputSource, setInputSource] = useState<InputSource>(initialValues?.inputSource as InputSource || 'pod5');
+    const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowKey>(() => {
+        if (typeof initialValues?.selectedWorkflow === 'string') return initialValues.selectedWorkflow as WorkflowKey;
+        if (initialValues?.runAssembly === true) return 'clone';
+        if (initialValues?.inputSource === 'bam') return 'bamQc';
+        if (initialValues?.inputSource === 'fastq') return 'plasmidQc';
+        if (initialValues?.doradoMolecule === 'rna') return 'rna';
+        if (initialValues?.modifiedBases && initialValues.modifiedBases !== 'none') return 'modified';
+        if (initialValues?.barcodeKit) return 'barcode';
+        if (initialValues?.doradoMode === 'duplex') return 'duplex';
+        return 'dna';
+    });
     const [pod5Dir, setPod5Dir] = useState(initialValues?.pod5Dir as string || '');
     const [bamPath, setBamPath] = useState(initialValues?.bamPath as string || '');
     const [bamForceRealign, setBamForceRealign] = useState<boolean>(
@@ -432,10 +438,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     );
     const [fastqPath, setFastqPath] = useState(initialValues?.fastqPath as string || '');
     const [referencePath, setReferencePath] = useState(initialValues?.referencePath as string || '');
-    const [wfClonePrimers, setWfClonePrimers] = useState(initialValues?.wfClonePrimers as string || '');
-    const [wfCloneInsertReference, setWfCloneInsertReference] = useState(initialValues?.wfCloneInsertReference as string || '');
-    const [wfCloneHostReference, setWfCloneHostReference] = useState(initialValues?.wfCloneHostReference as string || '');
-    const [wfCloneRegionsBedfile, setWfCloneRegionsBedfile] = useState(initialValues?.wfCloneRegionsBedfile as string || '');
 
     // ============================================================================
     // State: Basecalling Config
@@ -516,12 +518,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [assemblyCoverage, setAssemblyCoverage] = useState<number>(initialValues?.assemblyCoverage as number || 60);
     const [assemblyTrimLength, setAssemblyTrimLength] = useState<number>(initialValues?.assemblyTrimLength as number || 0);
     const [assemblyMinQuality, setAssemblyMinQuality] = useState<number>(initialValues?.assemblyMinQuality as number || 9);
-    const [wfCloneBasecallerModel, setWfCloneBasecallerModel] = useState(
-        initialValues?.wfCloneBasecallerModel as string || 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0',
-    );
     const [wfCloneSample, setWfCloneSample] = useState(initialValues?.wfCloneSample as string || '');
     const [wfCloneLargeConstruct, setWfCloneLargeConstruct] = useState(initialValues?.wfCloneLargeConstruct === true);
-    const [wfCloneAnalyseUnclassified, setWfCloneAnalyseUnclassified] = useState(initialValues?.wfCloneAnalyseUnclassified === true);
     const [wfCloneFlyeQuality, setWfCloneFlyeQuality] = useState<FlyeReadQuality>(
         initialValues?.wfCloneFlyeQuality as FlyeReadQuality || 'nano-hq',
     );
@@ -530,12 +528,20 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [wfCloneCutsiteMismatch, setWfCloneCutsiteMismatch] = useState<number>(
         coerceIntegerInput(initialValues?.wfCloneCutsiteMismatch, 1, 0, 10),
     );
+    const [wfClonePrimerMismatch, setWfClonePrimerMismatch] = useState<number>(
+        coerceIntegerInput(initialValues?.wfClonePrimerMismatch, 2, 0, 10),
+    );
     const [wfCloneExpectedCoverage, setWfCloneExpectedCoverage] = useState<number>(
-        coerceIntegerInput(initialValues?.wfCloneExpectedCoverage, 95, 0, 100),
+        Number(initialValues?.wfCloneExpectedCoverage ?? 95),
     );
     const [wfCloneExpectedIdentity, setWfCloneExpectedIdentity] = useState<number>(
-        coerceIntegerInput(initialValues?.wfCloneExpectedIdentity, 99, 0, 100),
+        Number(initialValues?.wfCloneExpectedIdentity ?? 99),
     );
+    const [enableRotatingReferenceFrames, setEnableRotatingReferenceFrames] = useState(initialValues?.enableRotatingReferenceFrames !== false);
+    const [rotationScanStepBp, setRotationScanStepBp] = useState(() => coerceIntegerInput(initialValues?.rotationScanStepBp, 1, 1, 10_000));
+    const [singleRefSplitMinMapq, setSingleRefSplitMinMapq] = useState(() => coerceIntegerInput(initialValues?.singleRefSplitMinMapq, 20, 0, 60));
+    const [singleRefSplitMinSegmentBp, setSingleRefSplitMinSegmentBp] = useState(() => coerceIntegerInput(initialValues?.singleRefSplitMinSegmentBp, 250, 1, 1_000_000));
+    const [singleRefSplitMaxQueryGapBp, setSingleRefSplitMaxQueryGapBp] = useState(() => coerceIntegerInput(initialValues?.singleRefSplitMaxQueryGapBp, 500, 0, 1_000_000));
     const [pinnedGpus, setPinnedGpus] = useState<number[]>(() => {
         const raw = (initialValues?.pinnedGpus ?? initialValues?.pinned_gpus ?? initialValues?.pinned_gpu) as unknown;
         if (Array.isArray(raw)) {
@@ -608,6 +614,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
     const canSubmit = useMemo(() => {
         if (!jobName.trim()) return false;
+        const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
+        if (requiresReference && !hasFastqReferenceInput) return false;
         if (inputSource === 'pod5') return pod5Dir.trim() !== '';
         if (inputSource === 'bam') return bamPath.trim() !== '';
         // FASTQ can run either BMS plasmid QC or the vendor clone-validation
@@ -616,14 +624,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             && (runFastqQc || runAssembly)
             && hasFastqReferenceInput
             && hasValidFastqNumericControls;
-    }, [jobName, inputSource, pod5Dir, bamPath, fastqPath, runAssembly, runFastqQc, hasFastqReferenceInput, hasValidFastqNumericControls]);
+    }, [jobName, inputSource, pod5Dir, bamPath, fastqPath, runAssembly, runFastqQc, hasFastqReferenceInput, hasValidFastqNumericControls, selectedWorkflow]);
     const selectedSavedReference = useMemo(
         () => savedReferences.find((entry) => entry.id === selectedSavedReferenceId) || null,
         [savedReferences, selectedSavedReferenceId]
     );
 
     const methylationEnabled = modifiedBases !== 'none';
-    const canRunModkit = inputSource !== 'fastq' && (inputSource === 'bam' || methylationEnabled);
+    const canRunModkit = selectedWorkflow === 'modified' && methylationEnabled;
     const fastqCliPreview = useMemo(() => {
         if (inputSource !== 'fastq' || !runFastqQc) return '';
         const referenceHint = referencePath.trim() || '<uploaded/pasted FASTA>';
@@ -786,7 +794,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     const submitMutation = useMutation({
         mutationFn: async () => {
-            const isCpuOnly = inputSource === 'fastq';
             let effectiveReferencePath = '';
 
             const createTabFasta = (
@@ -820,36 +827,29 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 effectiveReferencePath = uploadedPath;
             }
 
-            if (inputSource === 'fastq' && !effectiveReferencePath) {
-                throw new Error('FASTQ plasmid QC requires a reference FASTA (path or pasted sequence).');
-            }
-            if (runAssembly && !effectiveReferencePath) {
-                throw new Error('Consensus assembly requires a reference FASTA for construct verification.');
+            const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
+            if (requiresReference && !effectiveReferencePath) {
+                throw new Error('This workflow requires a reference FASTA (path or pasted sequence).');
             }
 
-            const workflowId = runAssembly && !barcodeKit
+            const workflowId = selectedWorkflow === 'clone'
                 ? 'wf_clone_validation'
-                : inputSource === 'fastq'
+                : selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc'
                     ? 'ont_plasmid_qc'
-                    : inputSource === 'bam'
-                        ? 'ont_methylation_analysis'
-                        : doradoMolecule === 'rna'
-                            ? 'ont_basecall_rna'
-                            : modifiedBases !== 'none'
-                                ? 'ont_methylation_analysis'
-                                : 'ont_basecall_dna';
+                    : selectedWorkflow === 'rna'
+                        ? 'ont_basecall_rna'
+                        : selectedWorkflow === 'modified'
+                            ? 'ont_methylation_analysis'
+                            : 'ont_basecall_dna';
             const jobPayload = {
                 name: jobName || `nanopore_${Date.now()}`,
-                pinned_gpu: isCpuOnly ? null : (pinnedGpus.length === 1 ? pinnedGpus[0] : null),
                 params: {
                     reference_fasta: effectiveReferencePath || undefined,
                     min_qscore: inputSource === 'pod5' ? minQscore : undefined,
                     run_modkit: runModkit && canRunModkit,
                     run_fastq_qc: inputSource === 'fastq' && !runAssembly ? runFastqQc : false,
                     run_multimer_qc: inputSource === 'fastq' && !runAssembly ? runFastqQc : false,
-                    run_assembly: runAssembly && !barcodeKit,
-                    pinned_gpus: isCpuOnly ? undefined : (pinnedGpus.length > 0 ? pinnedGpus : undefined),
-                    lock_gpus: isCpuOnly ? false : (lockGpus && pinnedGpus.length > 0),
+                    run_assembly: selectedWorkflow === 'clone',
                     ...(inputSource === 'pod5' && {
                         pod5_dir: pod5Dir,
                         dorado_quality_mode: doradoModel,
@@ -878,26 +878,28 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         igv_report_max_sites: igvReportMaxSites,
                         igv_report_flanking_bp: igvReportFlankingBp,
                     }),
-                    ...(runAssembly && !barcodeKit && {
+                    ...(selectedWorkflow === 'clone' && {
                         wf_clone_assembly_tool: assemblyTool,
                         wf_clone_approx_size: assemblyApproxSize,
                         wf_clone_assm_coverage: assemblyCoverage,
                         wf_clone_trim_length: assemblyTrimLength,
                         wf_clone_min_quality: assemblyMinQuality,
-                        wf_clone_basecaller_model: wfCloneBasecallerModel,
                         wf_clone_large_construct: wfCloneLargeConstruct,
-                        wf_clone_analyse_unclassified: wfCloneAnalyseUnclassified,
                         wf_clone_flye_quality: wfCloneFlyeQuality,
                         wf_clone_non_uniform_coverage: wfCloneNonUniformCoverage,
                         wf_clone_canu_fast: wfCloneCanuFast,
                         wf_clone_cutsite_mismatch: wfCloneCutsiteMismatch,
+                        wf_clone_primer_mismatch: wfClonePrimerMismatch,
                         wf_clone_expected_coverage: wfCloneExpectedCoverage,
                         wf_clone_expected_identity: wfCloneExpectedIdentity,
                         ...(wfCloneSample.trim() && { wf_clone_sample: wfCloneSample.trim() }),
-                        ...(wfClonePrimers.trim() && { wf_clone_primers: wfClonePrimers.trim() }),
-                        ...(wfCloneInsertReference.trim() && { wf_clone_insert_reference: wfCloneInsertReference.trim() }),
-                        ...(wfCloneHostReference.trim() && { wf_clone_host_reference: wfCloneHostReference.trim() }),
-                        ...(wfCloneRegionsBedfile.trim() && { wf_clone_regions_bedfile: wfCloneRegionsBedfile.trim() }),
+                    }),
+                    ...((selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc') && {
+                        enable_rotating_reference_frames: enableRotatingReferenceFrames,
+                        rotation_scan_step_bp: rotationScanStepBp,
+                        single_ref_split_min_mapq: singleRefSplitMinMapq,
+                        single_ref_split_min_segment_bp: singleRefSplitMinSegmentBp,
+                        single_ref_split_max_query_gap_bp: singleRefSplitMaxQueryGapBp,
                     }),
                     ...(runModkit && canRunModkit && modkitFilterThreshold != null && { modkit_filter_threshold: modkitFilterThreshold }),
                 }
@@ -956,8 +958,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             setError('Choose either FASTQ plasmid QC or vendor clone validation before submitting a FASTQ analysis.');
             return;
         }
-        if (inputSource === 'fastq' && !hasFastqReferenceInput) {
-            setError('FASTQ plasmid QC requires a reference FASTA path or a pasted/created FASTA sequence.');
+        const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
+        if (requiresReference && !hasFastqReferenceInput) {
+            setError('This workflow requires a reference FASTA path or a pasted/created FASTA sequence.');
             return;
         }
         if (inputSource === 'fastq' && !hasValidFastqNumericControls) {
@@ -1015,13 +1018,16 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         pathPicker && pathPicker.mode === 'directory' && normalizedBrowserPath !== '/'
     );
 
-    const selectWorkflow = (workflow: 'clone' | 'plasmidQc' | 'dna' | 'rna' | 'duplex' | 'modified' | 'barcode') => {
+    const selectWorkflow = (workflow: WorkflowKey) => {
         setError(null);
+        setSelectedWorkflow(workflow);
         if (workflow === 'clone') {
             setInputSource('fastq');
             setRunAssembly(true);
             setRunFastqQc(false);
             setRunModkit(false);
+            setBarcodeKit('');
+            setSampleSheet('');
             setShowAdvanced(true);
             return;
         }
@@ -1030,6 +1036,15 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             setRunAssembly(false);
             setRunFastqQc(true);
             setRunModkit(false);
+            setBarcodeKit('');
+            return;
+        }
+        if (workflow === 'bamQc') {
+            setInputSource('bam');
+            setRunAssembly(false);
+            setRunFastqQc(false);
+            setRunModkit(false);
+            setBarcodeKit('');
             return;
         }
         setInputSource('pod5');
@@ -1105,6 +1120,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     {[
                         { key: 'clone' as const, title: 'Validate a known plasmid / clone from FASTQ', input: 'FASTQ + expected construct FASTA', result: 'Vendor wf-clone-validation HTML report, assembly, construct evidence', tone: 'border-[var(--accent-secondary)]' },
                         { key: 'plasmidQc' as const, title: 'QC plasmid reads', input: 'FASTQ + reference FASTA', result: 'BMS plasmid QC, alignment and generic multimer evidence', tone: 'border-[var(--border-primary)]' },
+                        { key: 'bamQc' as const, title: 'Analyze aligned plasmid BAM', input: 'BAM + reference FASTA', result: 'BMS plasmid QC and alignment evidence', tone: 'border-[var(--border-primary)]' },
                         { key: 'dna' as const, title: 'Basecall DNA simplex', input: 'DNA POD5', result: 'Dorado calls BAM, summary and runtime provenance', tone: 'border-[var(--border-primary)]' },
                         { key: 'rna' as const, title: 'Basecall RNA', input: 'RNA POD5', result: 'RNA004 simplex calls BAM, trimming and provenance', tone: 'border-[var(--border-primary)]' },
                         { key: 'duplex' as const, title: 'Basecall DNA duplex', input: 'DNA POD5 + validated read-pairs file', result: 'Duplex BAM with retained stereo model provenance', tone: 'border-[var(--border-primary)]' },
@@ -1115,7 +1131,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             key={workflow.key}
                             type="button"
                             onClick={() => selectWorkflow(workflow.key)}
-                            className={`rounded-lg border p-3 text-left hover:bg-[var(--bg-tertiary)] transition-colors ${workflow.tone}`}
+                            aria-pressed={selectedWorkflow === workflow.key}
+                            className={`rounded-lg border-2 p-3 text-left hover:bg-[var(--bg-tertiary)] transition-colors ${selectedWorkflow === workflow.key ? 'border-[var(--accent-secondary)] bg-[color-mix(in_srgb,var(--accent-secondary)_12%,transparent)] ring-1 ring-[var(--accent-secondary)]' : workflow.tone}`}
                         >
                             <div className="font-medium text-[var(--text-primary)] text-sm">{workflow.title}</div>
                             <div className="text-xs text-[var(--text-secondary)] mt-1"><strong>Provide:</strong> {workflow.input}</div>
@@ -1139,7 +1156,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     placeholder="my_nanopore_run"
                     className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-[var(--text-primary)]"
                 />
-                {inputSource !== 'fastq' && (
+                {false && (
                     <div className="mt-4">
                         <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
                             GPU Pinning {pinnedGpus.length > 0 && <span className="text-[var(--accent-secondary)]">({pinnedGpus.length} selected)</span>}
@@ -1204,21 +1221,15 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
                 <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Primary Input *</label>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
-                    {[
-                        { key: 'pod5' as const, label: 'POD5 Raw Reads' },
-                        { key: 'bam' as const, label: 'Existing BAM' },
-                        { key: 'fastq' as const, label: 'FASTQ Analysis' },
+                    {[selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc'
+                        ? { key: 'fastq' as const, label: 'FASTQ Analysis' }
+                        : selectedWorkflow === 'bamQc'
+                            ? { key: 'bam' as const, label: 'Existing BAM' }
+                            : { key: 'pod5' as const, label: 'POD5 Raw Reads' }
                     ].map((source) => (
                         <button
                             key={source.key}
-                            onClick={() => {
-                                setInputSource(source.key);
-                                if (source.key === 'fastq') {
-                                    setRunFastqQc(true);
-                                    setRunAssembly(false);
-                                    setRunModkit(false);
-                                }
-                            }}
+                            onClick={() => setInputSource(source.key)}
                             className={`px-3 py-2 rounded border text-sm text-left transition-colors ${inputSource === source.key
                                 ? ''
                                 : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
@@ -1532,7 +1543,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             <input value={sampleSheet} onChange={(event) => setSampleSheet(event.target.value)} disabled={!barcodeKit} placeholder="Optional confined sample sheet" className="bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40" />
                         </div>
                     )}
-                    <div className="text-xs text-[var(--text-secondary)]">Locked runtime: Dorado 1.3.1 · exact model: <code>{DORADO_EXACT_MODELS[doradoMolecule][doradoModel]}</code>{doradoMode === 'duplex' ? ' · stereo v1.4' : ''}</div>
+                    <div className="text-xs text-[var(--text-secondary)]">Locked basecalling settings are applied automatically for this workflow.</div>
                 </div>
             )}
 
@@ -1945,13 +1956,27 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 </div>
                             </div>
                         )}
-                        {inputSource === 'fastq' && runFastqQc && fastqCliPreview && (
-                            <div className="space-y-2 border-t border-[var(--border-primary)] pt-3">
-                                <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">CLI parameter preview</div>
-                                <pre className="text-[11px] leading-5 whitespace-pre-wrap break-all bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3 text-[var(--text-primary)] font-mono">
-nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
-  {fastqCliPreview}
-                                </pre>
+                        {(selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc') && (
+                            <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
+                                <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Plasmid dimer QC</div>
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" checked={enableRotatingReferenceFrames} onChange={(e) => setEnableRotatingReferenceFrames(e.target.checked)} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)]" />
+                                    <span className="text-xs text-[var(--text-secondary)]">Evaluate circular-reference rotations</span>
+                                </label>
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                                    <label className="text-xs text-[var(--text-secondary)]">Rotation scan step (bp)
+                                        <input type="number" min={1} max={10000} value={rotationScanStepBp} onChange={(e) => setRotationScanStepBp(coerceIntegerInput(e.target.value, 1, 1, 10000))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">Minimum split MAPQ
+                                        <input type="number" min={0} max={60} value={singleRefSplitMinMapq} onChange={(e) => setSingleRefSplitMinMapq(coerceIntegerInput(e.target.value, 20, 0, 60))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">Minimum split segment (bp)
+                                        <input type="number" min={1} max={1000000} value={singleRefSplitMinSegmentBp} onChange={(e) => setSingleRefSplitMinSegmentBp(coerceIntegerInput(e.target.value, 250, 1, 1000000))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
+                                    </label>
+                                    <label className="text-xs text-[var(--text-secondary)]">Maximum split query gap (bp)
+                                        <input type="number" min={0} max={1000000} value={singleRefSplitMaxQueryGapBp} onChange={(e) => setSingleRefSplitMaxQueryGapBp(coerceIntegerInput(e.target.value, 500, 0, 1000000))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
+                                    </label>
+                                </div>
                             </div>
                         )}
                         {runAssembly && !barcodeKit && (
@@ -1967,16 +1992,6 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                                         >
                                             <option value="flye">Flye (default)</option>
                                             <option value="canu">Canu</option>
-                                        </select>
-                                    </label>
-                                    <label className="text-xs text-[var(--text-secondary)]">
-                                        Pinned upstream model
-                                        <select
-                                            value={wfCloneBasecallerModel}
-                                            onChange={(e) => setWfCloneBasecallerModel(e.target.value)}
-                                            className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono"
-                                        >
-                                            <option value="dna_r10.4.1_e8.2_400bps_hac@v5.0.0">dna_r10.4.1_e8.2_400bps_hac@v5.0.0</option>
                                         </select>
                                     </label>
                                     <label className="text-xs text-[var(--text-secondary)]">
@@ -2039,19 +2054,19 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                                     </label>
                                     <label className="text-xs text-[var(--text-secondary)]">
                                         Expected reference coverage (%)
-                                        <input type="number" min={0} max={100} value={wfCloneExpectedCoverage} onChange={(e) => setWfCloneExpectedCoverage(coerceIntegerInput(e.target.value, 95, 0, 100))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
+                                        <input type="number" min={0} max={100} step="0.01" value={wfCloneExpectedCoverage} onChange={(e) => setWfCloneExpectedCoverage(coerceNumberInput(e.target.value, 95, 0, 100))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
                                     </label>
                                     <label className="text-xs text-[var(--text-secondary)]">
                                         Expected reference identity (%)
-                                        <input type="number" min={0} max={100} value={wfCloneExpectedIdentity} onChange={(e) => setWfCloneExpectedIdentity(coerceIntegerInput(e.target.value, 99, 0, 100))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
+                                        <input type="number" min={0} max={100} step="0.01" value={wfCloneExpectedIdentity} onChange={(e) => setWfCloneExpectedIdentity(coerceNumberInput(e.target.value, 99, 0, 100))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
                                     </label>
                                     <label className="text-xs text-[var(--text-secondary)]">
                                         Cut-site mismatch allowance
                                         <input type="number" min={0} max={10} value={wfCloneCutsiteMismatch} onChange={(e) => setWfCloneCutsiteMismatch(coerceIntegerInput(e.target.value, 1, 0, 10))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
                                     </label>
-                                    <label className="flex items-center gap-2 cursor-pointer">
-                                        <input type="checkbox" checked={wfCloneAnalyseUnclassified} onChange={(e) => setWfCloneAnalyseUnclassified(e.target.checked)} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]" />
-                                        <span className="text-xs text-[var(--text-secondary)]">Analyse unclassified reads in multiplex input</span>
+                                    <label className="text-xs text-[var(--text-secondary)]">
+                                        Primer mismatch allowance
+                                        <input type="number" min={0} max={10} value={wfClonePrimerMismatch} onChange={(e) => setWfClonePrimerMismatch(coerceIntegerInput(e.target.value, 2, 0, 10))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
                                     </label>
                                     <label className="flex items-center gap-2 cursor-pointer">
                                         <input type="checkbox" checked={wfCloneNonUniformCoverage} onChange={(e) => setWfCloneNonUniformCoverage(e.target.checked)} disabled={assemblyTool !== 'flye'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
@@ -2060,22 +2075,6 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                                     <label className="flex items-center gap-2 cursor-pointer">
                                         <input type="checkbox" checked={wfCloneCanuFast} onChange={(e) => setWfCloneCanuFast(e.target.checked)} disabled={assemblyTool !== 'canu'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
                                         <span className="text-xs text-[var(--text-secondary)]">Canu fast mode (may reduce contiguity)</span>
-                                    </label>
-                                    <label className="text-xs text-[var(--text-secondary)] md:col-span-2">
-                                        Primers TSV (optional; enables vendor insert discovery)
-                                        <input type="text" value={wfClonePrimers} onChange={(e) => setWfClonePrimers(e.target.value)} placeholder="/confined/path/primers.tsv" className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono" />
-                                    </label>
-                                    <label className="text-xs text-[var(--text-secondary)]">
-                                        Insert reference FASTA (requires primers)
-                                        <input type="text" value={wfCloneInsertReference} onChange={(e) => setWfCloneInsertReference(e.target.value)} placeholder="/confined/path/insert.fasta" className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono" />
-                                    </label>
-                                    <label className="text-xs text-[var(--text-secondary)]">
-                                        Host reference FASTA (optional filtering)
-                                        <input type="text" value={wfCloneHostReference} onChange={(e) => setWfCloneHostReference(e.target.value)} placeholder="/confined/path/host.fasta" className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono" />
-                                    </label>
-                                    <label className="text-xs text-[var(--text-secondary)] md:col-span-2">
-                                        Host mask BED (requires host reference)
-                                        <input type="text" value={wfCloneRegionsBedfile} onChange={(e) => setWfCloneRegionsBedfile(e.target.value)} placeholder="/confined/path/masked-regions.bed" className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm font-mono" />
                                     </label>
                                     <label className="flex items-center gap-2 cursor-pointer md:col-span-2">
                                         <input
@@ -2162,22 +2161,7 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                             >
                                 Up
                             </button>
-                            <input
-                                type="text"
-                                value={normalizedBrowserPath === '/' ? '' : normalizedBrowserPath}
-                                onChange={(e) => {
-                                    const v = e.target.value.trim();
-                                    setBrowserPath(v || '/');
-                                }}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                        e.preventDefault();
-                                        // The queryKey change will auto-fetch
-                                    }
-                                }}
-                                placeholder="Type path or browse below…"
-                                className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-1.5 text-xs font-mono text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]"
-                            />
+                                <div className="flex-1 text-xs text-[var(--text-secondary)]">Browse the approved input library</div>
                             {canSelectCurrentDirectory && (
                                 <button
                                     onClick={() => selectPathFromBrowser(normalizedBrowserPath)}
@@ -2233,7 +2217,6 @@ nextflow run workflows/ngs/ont_fastq_qc.nf -profile ont_fastq_qc,apptainer \\
                                                 </svg>
                                                 <div className="min-w-0 flex-1">
                                                     <div className="text-sm text-[var(--text-primary)] truncate">{entry.name}</div>
-                                                    <div className="text-xs text-[var(--text-secondary)] font-mono truncate">{entry.path}</div>
                                                 </div>
                                                 {isSelectable && (
                                                     <button

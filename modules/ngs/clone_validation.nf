@@ -26,7 +26,7 @@ process RunCloneValidation {
         .replaceAll(/[^A-Za-z0-9._-]/, "_")
     def approxSize = (params.wf_clone_approx_size ?: 7000) as Integer
     def assmCoverage = (params.wf_clone_assm_coverage ?: 60) as Integer
-    def minQuality = (params.wf_clone_min_quality != null ? params.wf_clone_min_quality : (params.min_qscore ?: 9)) as Integer
+    def minQuality = (params.wf_clone_min_quality != null ? params.wf_clone_min_quality : 9) as Integer
     def trimLength = (params.wf_clone_trim_length ?: 0) as Integer
     def assemblyTool = (params.wf_clone_assembly_tool ?: 'flye').toString().trim()
     def basecallerModel = (params.wf_clone_basecaller_model ?: 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0').toString().trim()
@@ -39,7 +39,6 @@ process RunCloneValidation {
         error("Unsupported --wf_clone_basecaller_model '${basecallerModel}'. Supported exact identities: ${allowedModels.join(', ')}")
     }
     def largeConstruct = params.wf_clone_large_construct ? '--large_construct' : ''
-    def analyseUnclassified = params.wf_clone_analyse_unclassified ? '--analyse_unclassified' : ''
     def flyeQuality = (params.wf_clone_flye_quality ?: 'nano-hq').toString().trim()
     def allowedFlyeQualities = ['nano-hq', 'nano-corr', 'nano-raw'] as Set
     if (!allowedFlyeQualities.contains(flyeQuality)) {
@@ -48,9 +47,10 @@ process RunCloneValidation {
     def nonUniformCoverage = params.wf_clone_non_uniform_coverage ? '--non_uniform_coverage' : ''
     def canuFast = params.wf_clone_canu_fast ? '--canu_fast' : ''
     def cutsiteMismatch = (params.wf_clone_cutsite_mismatch != null ? params.wf_clone_cutsite_mismatch : 1) as Integer
-    def expectedCoverage = (params.wf_clone_expected_coverage != null ? params.wf_clone_expected_coverage : 95) as Integer
-    def expectedIdentity = (params.wf_clone_expected_identity != null ? params.wf_clone_expected_identity : 99) as Integer
-    if (cutsiteMismatch < 0 || cutsiteMismatch > 10 || expectedCoverage < 0 || expectedCoverage > 100 || expectedIdentity < 0 || expectedIdentity > 100) {
+    def primerMismatch = (params.wf_clone_primer_mismatch != null ? params.wf_clone_primer_mismatch : 2) as Integer
+    def expectedCoverage = (params.wf_clone_expected_coverage != null ? params.wf_clone_expected_coverage : 95) as BigDecimal
+    def expectedIdentity = (params.wf_clone_expected_identity != null ? params.wf_clone_expected_identity : 99) as BigDecimal
+    if (cutsiteMismatch < 0 || cutsiteMismatch > 10 || primerMismatch < 0 || primerMismatch > 10 || expectedCoverage < 0 || expectedCoverage > 100 || expectedIdentity < 0 || expectedIdentity > 100) {
         error('wf_clone advanced thresholds are outside the accepted bounded policy')
     }
     def primersPath = (params.wf_clone_primers ?: '').toString().trim()
@@ -89,6 +89,7 @@ process RunCloneValidation {
     set +e
     /usr/local/bin/nextflow -log wf_clone.log run /mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1 \
         -offline \
+        --disable_ping \
         -profile singularity \
         -w wf_clone_work \
         --bam "${bam}" \
@@ -101,9 +102,9 @@ process RunCloneValidation {
         --assembly_tool "${assemblyTool}" \
         --flye_quality "${flyeQuality}" \
         --cutsite_mismatch ${cutsiteMismatch} \
+        --primer_mismatch ${primerMismatch} \
         --expected_coverage ${expectedCoverage} \
         --expected_identity ${expectedIdentity} \
-        ${analyseUnclassified} \
         ${nonUniformCoverage} \
         ${canuFast} \
         --override_basecaller_cfg "${basecallerModel}" \

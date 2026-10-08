@@ -131,6 +131,11 @@ modes:
       - igv_track_window_bp
       - igv_report_max_sites
       - igv_report_flanking_bp
+      - enable_rotating_reference_frames
+      - rotation_scan_step_bp
+      - single_ref_split_min_mapq
+      - single_ref_split_min_segment_bp
+      - single_ref_split_max_query_gap_bp
 
   - id: construct_screening
     name: ONT Construct Screening
@@ -161,6 +166,13 @@ modes:
       - wf_clone_trim_length
       - wf_clone_min_quality
       - wf_clone_assembly_tool
+      - wf_clone_flye_quality
+      - wf_clone_non_uniform_coverage
+      - wf_clone_canu_fast
+      - wf_clone_cutsite_mismatch
+      - wf_clone_primer_mismatch
+      - wf_clone_expected_coverage
+      - wf_clone_expected_identity
 
   - id: fastq_qc
     name: ONT FASTQ QC
@@ -175,6 +187,11 @@ modes:
       - igv_track_window_bp
       - igv_report_max_sites
       - igv_report_flanking_bp
+      - enable_rotating_reference_frames
+      - rotation_scan_step_bp
+      - single_ref_split_min_mapq
+      - single_ref_split_min_segment_bp
+      - single_ref_split_max_query_gap_bp
 
   - id: methylation_analysis
     name: Methylation Analysis
@@ -215,7 +232,18 @@ modes:
       - wf_clone_trim_length
       - wf_clone_min_quality
       - wf_clone_assembly_tool
-      - wf_clone_basecaller_model
+      - wf_clone_flye_quality
+      - wf_clone_non_uniform_coverage
+      - wf_clone_canu_fast
+      - wf_clone_cutsite_mismatch
+      - wf_clone_primer_mismatch
+      - wf_clone_expected_coverage
+      - wf_clone_expected_identity
+      - enable_rotating_reference_frames
+      - rotation_scan_step_bp
+      - single_ref_split_min_mapq
+      - single_ref_split_min_segment_bp
+      - single_ref_split_max_query_gap_bp
 
 params:
   - name: pod5_dir
@@ -476,13 +504,94 @@ params:
       - flye
       - canu
 
-  - name: wf_clone_basecaller_model
+  - name: wf_clone_flye_quality
     type: string
-    description: Exact locked upstream basecaller model identity
+    description: Bounded Flye read-quality preset for clone validation
     required: false
-    default: dna_r10.4.1_e8.2_400bps_hac@v5.0.0
-    enum:
-      - dna_r10.4.1_e8.2_400bps_hac@v5.0.0
+    default: nano-hq
+    enum: [nano-hq, nano-corr, nano-raw]
+
+  - name: wf_clone_non_uniform_coverage
+    type: boolean
+    description: Enable the vendor non-uniform coverage mode when using Flye
+    required: false
+    default: false
+
+  - name: wf_clone_canu_fast
+    type: boolean
+    description: Enable the vendor Canu fast mode when using Canu
+    required: false
+    default: false
+
+  - name: wf_clone_cutsite_mismatch
+    type: integer
+    description: Allowed cut-site mismatches for clone validation
+    required: false
+    default: 1
+    minimum: 0
+    maximum: 10
+
+  - name: wf_clone_primer_mismatch
+    type: integer
+    description: Allowed primer mismatches for clone validation
+    required: false
+    default: 2
+    minimum: 0
+    maximum: 10
+
+  - name: wf_clone_expected_coverage
+    type: number
+    description: Expected reference coverage percentage for clone validation
+    required: false
+    default: 95
+    minimum: 0
+    maximum: 100
+
+  - name: wf_clone_expected_identity
+    type: number
+    description: Expected reference identity percentage for clone validation
+    required: false
+    default: 99
+    minimum: 0
+    maximum: 100
+
+  - name: enable_rotating_reference_frames
+    type: boolean
+    description: Evaluate circular-reference rotations during plasmid dimer QC
+    required: false
+    default: true
+
+  - name: rotation_scan_step_bp
+    type: integer
+    description: Rotation scan interval in base pairs for plasmid dimer QC
+    required: false
+    default: 1
+    minimum: 1
+    maximum: 10000
+
+  - name: single_ref_split_min_mapq
+    type: integer
+    description: Minimum MAPQ for single-reference split evidence
+    required: false
+    default: 20
+    minimum: 0
+    maximum: 60
+
+  - name: single_ref_split_min_segment_bp
+    type: integer
+    description: Minimum segment length for single-reference split evidence
+    required: false
+    default: 250
+    minimum: 1
+    maximum: 1000000
+
+  - name: single_ref_split_max_query_gap_bp
+    type: integer
+    description: Maximum query gap for single-reference split evidence
+    required: false
+    default: 500
+    minimum: 0
+    maximum: 1000000
 
 enabled: true
 experimental: true
