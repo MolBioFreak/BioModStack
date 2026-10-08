@@ -28,9 +28,13 @@ process RFANTIBODY {
     path "rfantibody_${meta.id}.log", emit: log
 
     script:
-    // Format hotspots for RFantibody (expects [T305,T456] format)
-    // Input format from UI: "A45,A46,A52" -> convert to "[A45,A46,A52]"
-    def hotspots = hotspot_residues ? "[${hotspot_residues}]" : "[]"
+    // Format hotspots for RFantibody (expects [T305,T456] format in HLT)
+    // Input format from UI: "A45,A46,A52" -> Need to convert chain prefix to 'T' for HLT format
+    // RFantibody uses HLT format where H=Heavy, L=Light, T=Target (all target chains get 'T')
+    def convertedHotspots = hotspot_residues 
+        ? hotspot_residues.split(',').collect { it.replaceAll(/^[A-Za-z]/, 'T') }.join(',')
+        : ""
+    def hotspots = convertedHotspots ? "[${convertedHotspots}]" : "[]"
     
     // Design loops - default to designing all CDRs with flexible lengths
     def design_loops = params.rfantibody_design_loops ?: "[H1:7-10,H2:6-8,H3:5-15,L1:8-13,L2:7,L3:9-11]"
