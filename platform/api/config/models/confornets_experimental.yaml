@@ -51,6 +51,7 @@ modes:
       - grad_clip
       - compute_confidence
       - save_full_confidence
+      - compute_evaluation
       - confornet_path
       - mse_dir
       - source_test_cases
@@ -209,13 +210,19 @@ params:
     type: boolean
     description: Request upstream pLDDT/gPDE/PTM confidence CSV outputs where supported.
     required: false
-    default: false
+    default: true
 
   - name: save_full_confidence
     type: boolean
     description: Also persist raw per-sample confidence tensors; implies confidence calculation upstream.
     required: false
     default: false
+
+  - name: compute_evaluation
+    type: boolean
+    description: Compute wrapper-side reference RMSD, success@1, pairwise diversity, and 2D landscape coordinates from real normalized CIFs and staged references.
+    required: false
+    default: true
 
   - name: confornet_path
     type: file

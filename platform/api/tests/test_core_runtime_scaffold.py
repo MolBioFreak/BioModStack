@@ -39,7 +39,7 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_CORE_RUNTIME_MODE"] == "${BMS_CORE_RUNTIME_MODE:-1}"
     assert api["environment"]["BMS_WORKFLOW_ADAPTER_URL"] == "${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}"
     assert api["environment"]["BMS_CPU_POWER_COLLECTOR_URL"] == "${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}"
-    assert api["environment"]["CORS_ORIGINS"] == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://localhost,https://localhost,http://localhost:5173,https://localhost:5173,https://127.0.0.1}"
+    assert api["environment"]["CORS_ORIGINS"] == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1}"
     assert api["environment"]["BMS_WEIGHTS"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights"
     assert api["environment"]["BMS_COLABFOLD_DB"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db"
     assert api["environment"]["BMS_MSA_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache"
@@ -64,12 +64,14 @@ def test_compose_core_runtime_contract() -> None:
     assert web["network_mode"] == "host"
     assert "ports" not in web
     assert web["depends_on"]["bms-api"]["condition"] == "service_healthy"
+    assert web["environment"]["BMS_WEB_HOST_PORT"] == "${BMS_WEB_HOST_PORT:-18080}"
+    assert web["healthcheck"]["test"] == ["CMD-SHELL", 'wget -qO- "http://127.0.0.1:${BMS_WEB_HOST_PORT:-18080}/bms/"']
 
 
 def test_nginx_contract_preserves_bms_and_api_routes() -> None:
     nginx_conf = (REPO_ROOT / "docker" / "web" / "nginx.conf").read_text(encoding="utf-8")
 
-    assert "listen 127.0.0.1:5173;" in nginx_conf
+    assert "listen 127.0.0.1:${BMS_WEB_HOST_PORT};" in nginx_conf
     assert "absolute_redirect off;" in nginx_conf
     assert "location = / {" in nginx_conf
     assert "return 302 /bms/;" in nginx_conf
@@ -111,14 +113,14 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
     for required in [
         "BMS_STATE_DIR=",
         "BMS_CONTAINER_STATE_PATH=",
-        "CORS_ORIGINS=http://127.0.0.1,http://127.0.0.1:5173,http://localhost,https://localhost,http://localhost:5173,https://localhost:5173,https://127.0.0.1",
+        "BMS_WEB_HOST_PORT=18080",
+        "CORS_ORIGINS=http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1",
         "BMS_CORE_RUNTIME_MODE=1",
         "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001",
         "BIOXP_SERVER_URL=",
     ]:
         assert required in env_example
     assert "BMS_API_HOST_PORT" not in env_example
-    assert "BMS_WEB_HOST_PORT" not in env_example
 
 
 def test_core_runtime_script_loads_repo_local_env_overrides() -> None:
@@ -127,6 +129,25 @@ def test_core_runtime_script_loads_repo_local_env_overrides() -> None:
     assert ".env.core-runtime.local" in runtime_script
     assert "BMS_CORE_RUNTIME_ENV_FILE" in runtime_script
     assert "--env-file" in runtime_script
+    assert 'BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-18080}"' in runtime_script
+
+
+def test_frontend_dev_server_owns_vite_default_port_with_hmr_enabled() -> None:
+    vite_config = (REPO_ROOT / "platform" / "frontend" / "vite.config.ts").read_text(encoding="utf-8")
+
+    assert "strictPort: true" in vite_config
+    assert "hmr: false" not in vite_config
+    assert "127.0.0.1:5173" in vite_config
+
+
+def test_one_command_ui_surface_smoke_checker_exists() -> None:
+    smoke_script = REPO_ROOT / "scripts" / "smoke_ui_surfaces.py"
+
+    assert smoke_script.exists()
+    text = smoke_script.read_text(encoding="utf-8")
+    assert "http://127.0.0.1:5173/@vite/client" in text
+    assert "http://127.0.0.1:18080/bms/" in text
+    assert "platform/desktop-electron" in text
 
 
 def test_api_dockerfile_uses_prebuilt_venv_at_runtime() -> None:

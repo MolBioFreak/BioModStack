@@ -23,16 +23,18 @@ under `docs/plans/` and should not be mistaken for the product truth.
 - [Frontend README](../platform/frontend/README.md)
 - [Electron shell README](../platform/desktop-electron/README.md)
 - [Model Integrations](ai_guidance/Model_Integrations.md)
-- [Database Instructions](ai_guidance/Database_Instructions.md)
-- [Pathing and Centralization Rules](ai_guidance/Centralization_and_Standardization.md)
 
 ## Active plans
 
 - [Plans README](plans/README.md)
-- [Android APK thin-shell comparison](plans/2026-04-20-android-apk-thin-shell-comparison.md)
-- [Control plane / Electron / install-path upgrade](plans/2026-04-20-control-plane-electron-runtime-paths-upgrade.md)
-- [Core-runtime workflow-adapter cutover](plans/2026-04-20-core-runtime-workflow-adapter-cutover.md)
-- [Fold-CP large-protein sharding plan](plans/2026-04-20-fold-cp-large-protein-sharding-plan.md)
+- [MSA control-plane guardrails and regression checklist](plans/2026-04-22-msa-control-plane-guardrails-and-regression-checklist.md)
+- [Local high-quality MSA target-DB sharding spec](plans/2026-04-23-local-msa-target-db-sharding-spec.md)
+- [DRAM→VRAM tiled runtime proof plan](plans/2026-04-24-dram-vram-tile-runtime-proof.md)
+- [Fold-CP DRAM context-spill workhorse implementation spec](plans/2026-04-24-fold-cp-dram-context-spill-additional-work-spec.md)
+- [RepA local MSA root-cause and fix spec](plans/2026-04-24-repa-local-msa-root-cause-and-fix-spec.md)
+- [MolBio read-QC harmonization implementation plan](plans/2026-04-25-molbio-read-qc-harmonization-spec.md)
+- [Caliby finishing changes specification](plans/2026-04-27-caliby-finishing-changes-spec.md)
+- [GPU MMseqs EnvDB fix implementation plan](plans/2026-04-27-gpu-mmseqs-envdb-fix-spec.md)
 
 ## Canonical doc roles
 
@@ -47,8 +49,8 @@ under `docs/plans/` and should not be mistaken for the product truth.
   canonical product contract.
 - `docs/plans/archive/*.md`:
   archived historical planning/spec material kept for auditability.
-- `docs/ai_guidance/*.md`:
-  implementation policies and contributor guidance.
+- `docs/ai_guidance/Model_Integrations.md`:
+  current model integration guidance. Older AI instruction docs are pruned once stale.
 
 ## Current scope
 
@@ -59,16 +61,24 @@ The canonical docs set now covers:
 - structure design, validation, refinement, and experimental workflow families
 - mol bio construct editing and sequence operations
 - nanopore/NGS launch and review surfaces
-- BioXP robotics linkage and the current cockpit/proxy surface rather than a
-  full mirror of every robot-local endpoint
+- BioXP robotics linkage and the current curated cockpit/proxy surface rather
+  than a promise that every robot-local endpoint is mirrored
 - results, lineage, analytics, and persisted runtime-path management
 
 For BioXP, the canonical docs intentionally distinguish between the current BMS
-cockpit surface and the broader robot-local runtime. Reference-state,
-liquid-handling, and some recovery semantics still live more completely on the
-robot runtime than in the BMS proxy today, and current reliability language
-should be read as unresolved transport/recovery instability rather than a
-blanket hardware-failure verdict.
+cockpit/proxy surface and the broader robot-local runtime. BMS now proxies core
+cockpit families such as reference-state, liquid handling, motion/power,
+latch/LED, thermal/chiller, camera, vision, and protocol routes when linkage is
+configured, but route parity must still be verified before documenting a new
+robot capability as BMS-supported. Current reliability language should be read
+as unresolved transport/recovery instability rather than a blanket
+hardware-failure verdict.
+
+For the core runtime, the canonical docs distinguish dashboard/control-plane
+robustness from full scientific workflow readiness. A general Linux host should
+be able to bring up API/web and show degraded capability states; full workflow
+readiness still requires host-side Nextflow, Apptainer, GPU/tooling, model, and
+reference-cache setup.
 
 Older build/implementation planning docs that no longer belong on the repo-facing
 surface should be pruned instead of left beside the canonical docs as passive

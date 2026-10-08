@@ -87,7 +87,7 @@ def test_capabilities_exposes_external_tool_registry_not_in_house_claims() -> No
     payload = response.json()
 
     assert payload["source_of_truth"] == "BMS API /api/assay-analytics"
-    assert payload["not_used"] == "Document Parser service"
+    assert payload["not_used"] == "legacy standalone parser service"
     assert "external_tools" in payload
 
     external_tools = payload["external_tools"]

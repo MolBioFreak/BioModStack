@@ -1,6 +1,6 @@
 <!-- TOC -->
 
-- [[CHANGELOG](Changelog.md)](#changelogchangelogmd)
+- [[CHANGELOG](CHANGELOG.md)](#changelogchangelogmd)
 - [Installing](#installing)
 - [Usage](#usage)
 - [About this Repo](#about-this-repo)
@@ -14,7 +14,7 @@
 
 <!-- /TOC -->
 
-## [CHANGELOG](Changelog.md)
+## [CHANGELOG](CHANGELOG.md)
 
 ## Installing
 

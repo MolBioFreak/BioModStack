@@ -13,12 +13,17 @@
   "include": [
     "src/components/designOutputSource.ts",
     "src/components/gpuToggleState.ts",
+    "src/components/infraTelemetryScaling.ts",
     "src/components/structureViewerLayout.ts",
     "src/components/molstarTouchInteraction.ts",
     "src/components/MolBioToolkit/utils/alignmentLabels.ts",
     "src/components/MolBioToolkit/utils/seqVizTouch.ts",
     "src/components/MolBioToolkit/utils/viewerLayout.ts",
+    "src/components/qpcr/plotHelpers.ts",
+    "src/components/qpcr/plateMap.ts",
     "src/runtime/navigation.ts",
+    "src/runtime/runtimeSwitch.ts",
+    "src/runtime/uiDiagnostics.ts",
     "tests/**/*.ts"
   ]
 }

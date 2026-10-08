@@ -35,6 +35,17 @@ If runtime is omitted, BioModStack resolves it as:
 2. `BMS_RUNTIME_MODE`
 3. `container`
 
+Current robustness snapshot:
+
+- container mode has a dedicated Compose stack, generated env file, health checks,
+  and a longer startup-readiness budget for first builds/recreates
+- workflow execution is intentionally not owned by the API/web container; launches,
+  cancels, and running-job inspection cross the host workflow-adapter boundary
+- guarded core-runtime mode should keep the dashboard/API alive even when workflow
+  assets, GPUs, BioXP linkage, or adapter-side capabilities are missing
+- full workflow capability still depends on host-native Nextflow, Apptainer,
+  NVIDIA/GPU visibility, model weights, reference databases, and workflow caches
+
 ## Workflow surface
 
 BMS is not just a protein-design launcher. The live repo covers:
@@ -82,7 +93,8 @@ Explicit dev/runtime commands:
 
 Important local URLs:
 
-- UI: `http://127.0.0.1:5173/bms/`
+- Stable hosted UI: `http://127.0.0.1:18080/bms/`
+- Dev browser UI: `http://127.0.0.1:5173/`
 - API: `http://127.0.0.1:8000`
 - API docs: `http://127.0.0.1:8000/docs`
 - workflow adapter health: `http://127.0.0.1:8001/api/workflow-adapter/health`

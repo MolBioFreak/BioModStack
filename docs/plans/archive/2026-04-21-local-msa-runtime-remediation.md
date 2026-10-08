@@ -59,7 +59,7 @@ The tranche is complete only when all of the following are true:
 - `scripts/test_local_msa_runtime.py`
 - `scripts/test_batch_msa.py`
 - `platform/api/tests/test_msa_server.py`
-- `docs/plans/2026-04-21-local-msa-runtime-remediation.md`
+- `docs/plans/archive/2026-04-21-local-msa-runtime-remediation.md`
 
 ### Modify
 

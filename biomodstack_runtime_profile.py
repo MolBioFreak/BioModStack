@@ -12,13 +12,16 @@ COMPAT_ENV_FILENAME = "env.sh"
 
 DEFAULT_CONTAINER_STATE_PATH = "/var/lib/biomodstack"
 DEFAULT_API_HOST_PORT = 8000
-DEFAULT_WEB_HOST_PORT = 5173
+DEFAULT_DEV_WEB_HOST_PORT = 5173
+DEFAULT_WEB_HOST_PORT = 18080
 DEFAULT_CORS_ORIGINS = [
     "http://127.0.0.1",
     "http://127.0.0.1:5173",
+    "http://127.0.0.1:18080",
     "http://localhost",
     "https://localhost",
     "http://localhost:5173",
+    "http://localhost:18080",
     "https://localhost:5173",
     "https://127.0.0.1",
 ]
@@ -42,7 +45,7 @@ _CONFIG_FIELDS = (
     "workflow_adapter_url",
     "compose_project_name",
 )
-_INT_FIELDS = ("api_host_port", "web_host_port")
+_INT_FIELDS = ("api_host_port", "dev_web_host_port", "web_host_port")
 
 
 def _resolve_path(value: str) -> Path:
@@ -345,6 +348,10 @@ def resolve_runtime_paths(
         "inputs_container_path": inputs_container_path,
         "db_container_path": db_container_path,
         "api_host_port": _coerce_env_int("BMS_API_HOST_PORT", int(normalized_profile.get("api_host_port") or DEFAULT_API_HOST_PORT)),
+        "dev_web_host_port": _coerce_env_int(
+            "BMS_DEV_WEB_HOST_PORT",
+            int(normalized_profile.get("dev_web_host_port") or DEFAULT_DEV_WEB_HOST_PORT),
+        ),
         "web_host_port": _coerce_env_int("BMS_WEB_HOST_PORT", int(normalized_profile.get("web_host_port") or DEFAULT_WEB_HOST_PORT)),
         "cors_origins": resolved_cors_origins,
         "workflow_adapter_url": workflow_adapter_url,
@@ -375,6 +382,7 @@ def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'export BMS_INPUTS_CONTAINER_PATH="${{BMS_INPUTS_CONTAINER_PATH:-{resolved["inputs_container_path"]}}}"',
         f'export BMS_DB_CONTAINER_PATH="${{BMS_DB_CONTAINER_PATH:-{resolved["db_container_path"]}}}"',
         f'export BMS_API_HOST_PORT="${{BMS_API_HOST_PORT:-{resolved["api_host_port"]}}}"',
+        f'export BMS_DEV_WEB_HOST_PORT="${{BMS_DEV_WEB_HOST_PORT:-{resolved["dev_web_host_port"]}}}"',
         f'export BMS_WEB_HOST_PORT="${{BMS_WEB_HOST_PORT:-{resolved["web_host_port"]}}}"',
         f'export CORS_ORIGINS="${{CORS_ORIGINS:-{cors_origins}}}"',
         f'export BMS_CORE_RUNTIME_MODE="${{BMS_CORE_RUNTIME_MODE:-{core_runtime_mode}}}"',
@@ -394,6 +402,7 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'BMS_INPUTS_CONTAINER_PATH={resolved["inputs_container_path"]}',
         f'BMS_DB_CONTAINER_PATH={resolved["db_container_path"]}',
         f'BMS_API_HOST_PORT={resolved["api_host_port"]}',
+        f'BMS_DEV_WEB_HOST_PORT={resolved["dev_web_host_port"]}',
         f'BMS_WEB_HOST_PORT={resolved["web_host_port"]}',
         f'CORS_ORIGINS={cors_origins}',
         f'BMS_CORE_RUNTIME_MODE={core_runtime_mode}',

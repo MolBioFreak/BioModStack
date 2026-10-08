@@ -185,6 +185,7 @@ def build_request(args: argparse.Namespace) -> dict[str, Any]:
             "grad_clip": float(args.grad_clip),
             "compute_confidence": _bool(args.compute_confidence),
             "save_full_confidence": _bool(args.save_full_confidence),
+            "compute_evaluation": _bool(args.compute_evaluation),
             "confornet_path": args.confornet_path or "",
             "mse_dir": args.mse_dir or "",
             "source_test_cases": args.source_test_cases or "",
@@ -228,8 +229,9 @@ def main() -> None:
     parser.add_argument("--num-diffusion-steps", type=int, default=200)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--grad-clip", type=float, default=10.0)
-    parser.add_argument("--compute-confidence", default="false")
+    parser.add_argument("--compute-confidence", default="true")
     parser.add_argument("--save-full-confidence", default="false")
+    parser.add_argument("--compute-evaluation", default="true")
     parser.add_argument("--confornet-path", default="")
     parser.add_argument("--mse-dir", default="")
     parser.add_argument("--source-test-cases", default="")

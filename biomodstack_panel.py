@@ -45,6 +45,8 @@ from biomodstack_services import (  # noqa: E402
     build_launch_ui_command,
     operator_frontend_url,
     operator_runtime_mode,
+    runtime_port_settings,
+    save_runtime_port_settings,
     service_is_active,
 )
 
@@ -262,6 +264,7 @@ class BioModStackPanel(Adw.Application):
         # Build UI sections
         content.append(self._build_status_section())
         content.append(self._build_privilege_section())
+        content.append(self._build_runtime_ports_section())
         content.append(self._build_actions_section())
         content.append(self._build_logs_section())
         content.append(self._build_database_section())
@@ -315,6 +318,88 @@ class BioModStackPanel(Adw.Application):
     def _update_jobs_row(self):
         running, queued, total = get_job_counts()
         self.jobs_row.set_subtitle(f"{running} running  |  {queued} queued  |  {total} total")
+
+    def _load_runtime_port_settings(self) -> dict:
+        try:
+            return runtime_port_settings(project_root=PROJECT_ROOT)
+        except Exception:
+            return {
+                "dev_web_host_port": 5173,
+                "prod_web_host_port": 18080,
+                "dev_url": "http://127.0.0.1:5173/",
+                "prod_url": "http://127.0.0.1:18080/bms/",
+            }
+
+    def _runtime_ports_subtitle(self, settings: dict) -> str:
+        return f"Dev {settings['dev_url']}  |  Stable {settings['prod_url']}"
+
+    def _update_runtime_ports_row(self, settings: dict):
+        if hasattr(self, "dev_port_entry"):
+            self.dev_port_entry.set_text(str(settings["dev_web_host_port"]))
+        if hasattr(self, "prod_port_entry"):
+            self.prod_port_entry.set_text(str(settings["prod_web_host_port"]))
+        if hasattr(self, "runtime_ports_row"):
+            self.runtime_ports_row.set_subtitle(self._runtime_ports_subtitle(settings))
+
+    def _build_runtime_ports_section(self) -> Gtk.Widget:
+        """Manual dev/prod frontend port configuration."""
+        group = Adw.PreferencesGroup()
+        group.set_title("Runtime Ports")
+
+        settings = self._load_runtime_port_settings()
+        self.runtime_ports_row = Adw.ActionRow()
+        self.runtime_ports_row.set_title("Frontend ports")
+        self.runtime_ports_row.set_subtitle(self._runtime_ports_subtitle(settings))
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.set_halign(Gtk.Align.END)
+
+        dev_label = Gtk.Label(label="Dev")
+        box.append(dev_label)
+        self.dev_port_entry = Gtk.Entry()
+        self.dev_port_entry.set_width_chars(6)
+        self.dev_port_entry.set_text(str(settings["dev_web_host_port"]))
+        box.append(self.dev_port_entry)
+
+        prod_label = Gtk.Label(label="Stable")
+        box.append(prod_label)
+        self.prod_port_entry = Gtk.Entry()
+        self.prod_port_entry.set_width_chars(6)
+        self.prod_port_entry.set_text(str(settings["prod_web_host_port"]))
+        box.append(self.prod_port_entry)
+
+        apply_button = Gtk.Button(label="Apply")
+        apply_button.connect("clicked", self._on_apply_runtime_ports)
+        box.append(apply_button)
+
+        self.runtime_ports_row.add_suffix(box)
+        group.add(self.runtime_ports_row)
+        return group
+
+    def _parse_port_entry(self, entry, label: str) -> int:
+        try:
+            port = int(str(entry.get_text()).strip())
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label} must be an integer TCP port") from exc
+        if not 1 <= port <= 65535:
+            raise ValueError(f"{label} must be between 1 and 65535")
+        return port
+
+    def _on_apply_runtime_ports(self, button):
+        try:
+            settings = save_runtime_port_settings(
+                dev_web_host_port=self._parse_port_entry(self.dev_port_entry, "Dev port"),
+                prod_web_host_port=self._parse_port_entry(self.prod_port_entry, "Stable port"),
+                project_root=PROJECT_ROOT,
+            )
+        except Exception as exc:
+            show_notification("Runtime Port Error", str(exc))
+            return
+        self._update_runtime_ports_row(settings)
+        show_notification(
+            "Runtime Ports Saved",
+            "Restart the selected surfaces, then reload Electron/browser to apply the new ports.",
+        )
     
     def _build_actions_section(self) -> Gtk.Widget:
         """Quick action buttons."""
@@ -327,6 +412,14 @@ class BioModStackPanel(Adw.Application):
         button_box.set_margin_top(8)
         button_box.set_margin_bottom(8)
         
+        # Start-mode selector
+        self.runtime_target_combo = Gtk.ComboBoxText()
+        self.runtime_target_combo.append("prod", "Prod only")
+        self.runtime_target_combo.append("dev", "Dev only")
+        self.runtime_target_combo.append("both", "Both")
+        self.runtime_target_combo.set_active_id("prod")
+        button_box.append(self.runtime_target_combo)
+
         # Open UI button
         btn_ui = Gtk.Button(label="🖥 Open UI")
         btn_ui.add_css_class("suggested-action")
@@ -402,11 +495,19 @@ class BioModStackPanel(Adw.Application):
 
     def _on_open_browser(self, button):
         webbrowser.open(operator_frontend_url(project_root=PROJECT_ROOT))
+
+    def _selected_runtime_target(self) -> str:
+        combo = getattr(self, "runtime_target_combo", None)
+        if combo is not None:
+            active_id = combo.get_active_id()
+            if active_id in {"prod", "dev", "both"}:
+                return active_id
+        return "prod"
     
     def _on_start_all(self, button):
-        show_notification("Starting", "Starting all services...")
-        runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
-        subprocess.Popen(["bash", str(START_SCRIPT), "--runtime", runtime_mode], env=self._script_env())
+        target = self._selected_runtime_target()
+        show_notification("Starting", f"Starting BioModStack runtime target: {target}")
+        subprocess.Popen(["bash", str(START_SCRIPT), "start-target", "--target", target], env=self._script_env())
         GLib.timeout_add_seconds(5, self._refresh_status)
     
     def _on_restart_all(self, button):

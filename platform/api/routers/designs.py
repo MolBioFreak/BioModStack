@@ -405,11 +405,34 @@ class PlotlyMetricPoint(BaseModel):
     metrics: Dict[str, float]
 
 
+class PlotlyMetricMetadata(BaseModel):
+    label: str
+    description: Optional[str] = None
+    unit: Optional[str] = None
+    source: Optional[str] = None
+    semantics: Optional[str] = None
+    higher_is_better: Optional[bool] = None
+    color: Optional[str] = None
+
+
+class PlotlyChartSuggestion(BaseModel):
+    id: str
+    label: str
+    type: str
+    xAxis: Optional[str] = None
+    yAxis: Optional[str] = None
+    zAxis: Optional[str] = None
+    colorBy: Optional[str] = None
+    description: Optional[str] = None
+
+
 class PlotlyMetricsResponse(BaseModel):
     job_id: str
     metric_keys: List[str]
     points: List[PlotlyMetricPoint]
     total: int
+    metric_metadata: Dict[str, PlotlyMetricMetadata] = {}
+    chart_suggestions: List[PlotlyChartSuggestion] = []
 
 
 class PlotlyMetricsRequest(BaseModel):
@@ -815,6 +838,53 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
     for key, value in raw_conf.items():
         _inject_metric(metrics, key, value)
 
+    confornets_sample = raw_conf.get("confornets_sample") if isinstance(raw_conf.get("confornets_sample"), dict) else {}
+    confornets_ensemble = raw_conf.get("confornets_ensemble") if isinstance(raw_conf.get("confornets_ensemble"), dict) else {}
+    confornets_manifest = raw_conf.get("confornets_artifact_manifest") if isinstance(raw_conf.get("confornets_artifact_manifest"), dict) else {}
+    confornets_landscape = raw_conf.get("confornets_landscape") if isinstance(raw_conf.get("confornets_landscape"), dict) else {}
+    confornets_training = raw_conf.get("confornets_training_loss_summary") if isinstance(raw_conf.get("confornets_training_loss_summary"), dict) else {}
+    confornets_confidence = raw_conf.get("confornets_confidence") if isinstance(raw_conf.get("confornets_confidence"), dict) else {}
+    confornets_reference = raw_conf.get("confornets_reference_evaluation") if isinstance(raw_conf.get("confornets_reference_evaluation"), dict) else {}
+    confornets_pairwise = raw_conf.get("confornets_pairwise_diversity") if isinstance(raw_conf.get("confornets_pairwise_diversity"), dict) else {}
+    confornets_landscape_point = raw_conf.get("confornets_landscape_point") if isinstance(raw_conf.get("confornets_landscape_point"), dict) else {}
+    confornets_evaluation_summary = raw_conf.get("confornets_evaluation_summary") if isinstance(raw_conf.get("confornets_evaluation_summary"), dict) else {}
+    confornets_sample_index = confornets_sample.get(
+        "sample_index",
+        confornets_sample.get(
+            "frame_index",
+            confornets_ensemble.get("sample_index", confornets_ensemble.get("frame_index")),
+        ),
+    )
+    confornets_metrics = {
+        "confornets_sample_index": confornets_sample_index,
+        "confornets_frame_index": confornets_sample.get("frame_index", confornets_ensemble.get("frame_index")),
+        "confornets_bytes": confornets_sample.get("bytes"),
+        "confornets_sample_count": confornets_manifest.get("sample_count", confornets_landscape.get("sample_count")),
+        "confornets_training_first_loss": confornets_training.get("first_loss"),
+        "confornets_training_final_loss": confornets_training.get("final_loss"),
+        "confornets_training_min_loss": confornets_training.get("min_loss"),
+        "confornets_training_max_loss": confornets_training.get("max_loss"),
+        "confornets_training_step_count": confornets_training.get("row_count"),
+        "confornets_training_first_step": confornets_training.get("first_step"),
+        "confornets_training_last_step": confornets_training.get("last_step"),
+        "confornets_confidence_plddt": confornets_confidence.get("plddt"),
+        "confornets_confidence_gpde": confornets_confidence.get("gpde"),
+        "confornets_confidence_ptm": confornets_confidence.get("ptm"),
+        "confornets_confidence_iptm": confornets_confidence.get("iptm"),
+        "confornets_min_reference_rmsd": confornets_reference.get("min_reference_rmsd"),
+        "confornets_reference_success_at_1": confornets_reference.get("success_at_1"),
+        "confornets_pairwise_min_rmsd": confornets_pairwise.get("min_pairwise_rmsd"),
+        "confornets_pairwise_mean_rmsd": confornets_pairwise.get("mean_pairwise_rmsd"),
+        "confornets_pairwise_max_rmsd": confornets_pairwise.get("max_pairwise_rmsd"),
+        "confornets_landscape_x": confornets_landscape_point.get("x"),
+        "confornets_landscape_y": confornets_landscape_point.get("y"),
+        "confornets_success_at_1_rate": confornets_evaluation_summary.get("success_at_1_rate"),
+        "confornets_reference_count": confornets_evaluation_summary.get("reference_count"),
+        "confornets_rmsd_threshold": confornets_evaluation_summary.get("rmsd_threshold"),
+    }
+    for key, value in confornets_metrics.items():
+        _inject_metric(metrics, key, value)
+
     provenance = design.provenance if isinstance(design.provenance, dict) else {}
     ppiflow = provenance.get("ppiflow") if isinstance(provenance.get("ppiflow"), dict) else {}
     ppiflow_score = (
@@ -868,6 +938,247 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         _inject_metric(metrics, key, value)
 
     return metrics
+
+
+_CONFORNETS_PLOTLY_METADATA: Dict[str, Dict[str, Any]] = {
+    "confornets_sample_index": {
+        "label": "ConforNets sample index",
+        "description": "Zero-based independent generated conformer sample index. This is a sample selector, not a time-resolved simulation frame.",
+        "source": "bms_wrapper",
+        "semantics": "independent_generated_conformer_sample",
+    },
+    "confornets_frame_index": {
+        "label": "ConforNets frame index",
+        "description": "Legacy zero-based index carried by upstream/sample manifests; equivalent to sample index for current BMS ConforNets outputs.",
+        "source": "bms_wrapper",
+        "semantics": "independent_generated_conformer_sample",
+    },
+    "confornets_bytes": {
+        "label": "Conformer file size",
+        "description": "Size of the final normalized conformer structure artifact.",
+        "unit": "bytes",
+        "source": "bms_wrapper",
+    },
+    "confornets_sample_count": {
+        "label": "ConforNets sample count",
+        "description": "Number of final ConforNets conformer samples recorded in the final artifact manifest or landscape payload.",
+        "source": "bms_wrapper",
+    },
+    "confornets_training_first_loss": {
+        "label": "ConforNets first training loss",
+        "description": "First parsed loss value from ConforNets training_loss.csv.",
+        "source": "upstream_confornets",
+        "higher_is_better": False,
+    },
+    "confornets_training_final_loss": {
+        "label": "ConforNets final training loss",
+        "description": "Final parsed loss value from ConforNets training_loss.csv.",
+        "source": "upstream_confornets",
+        "higher_is_better": False,
+    },
+    "confornets_training_min_loss": {
+        "label": "ConforNets minimum training loss",
+        "description": "Minimum parsed loss value from ConforNets training_loss.csv.",
+        "source": "upstream_confornets",
+        "higher_is_better": False,
+    },
+    "confornets_training_max_loss": {
+        "label": "ConforNets maximum training loss",
+        "description": "Maximum parsed loss value from ConforNets training_loss.csv.",
+        "source": "upstream_confornets",
+        "higher_is_better": False,
+    },
+    "confornets_training_step_count": {
+        "label": "ConforNets training-loss rows",
+        "description": "Number of parsed rows in ConforNets training_loss.csv.",
+        "source": "bms_wrapper",
+    },
+    "confornets_training_first_step": {
+        "label": "ConforNets first training step",
+        "description": "First parsed step/iteration/epoch in ConforNets training_loss.csv.",
+        "source": "upstream_confornets",
+    },
+    "confornets_training_last_step": {
+        "label": "ConforNets last training step",
+        "description": "Last parsed step/iteration/epoch in ConforNets training_loss.csv.",
+        "source": "upstream_confornets",
+    },
+    "confornets_confidence_plddt": {
+        "label": "ConforNets scalar pLDDT",
+        "description": "Scalar pLDDT reported by ConforNets/OpenFold3 confidence evaluation for this sample. It is not a per-residue tensor unless a full confidence tensor artifact is present.",
+        "source": "upstream_confornets",
+        "semantics": "sample_scalar_confidence",
+        "higher_is_better": True,
+    },
+    "confornets_confidence_gpde": {
+        "label": "ConforNets gPDE",
+        "description": "Global predicted distance error reported by ConforNets/OpenFold3 confidence evaluation for this sample.",
+        "source": "upstream_confornets",
+        "semantics": "sample_scalar_error",
+        "higher_is_better": False,
+    },
+    "confornets_confidence_ptm": {
+        "label": "ConforNets pTM",
+        "description": "Predicted TM-score reported by ConforNets/OpenFold3 confidence evaluation for this sample.",
+        "source": "upstream_confornets",
+        "semantics": "sample_scalar_confidence",
+        "higher_is_better": True,
+    },
+    "confornets_confidence_iptm": {
+        "label": "ConforNets iPTM",
+        "description": "Interface pTM if produced by the confidence path. For current monomer-only ConforNets this is usually absent.",
+        "source": "upstream_confornets",
+        "semantics": "sample_scalar_confidence",
+        "higher_is_better": True,
+    },
+    "confornets_min_reference_rmsd": {
+        "label": "Nearest staged-reference Cα RMSD",
+        "description": "Minimum ordered Cα RMSD after Kabsch alignment between this generated sample and the staged reference structures. Only meaningful when references were supplied and evaluation was enabled.",
+        "unit": "Å",
+        "source": "bms_wrapper",
+        "semantics": "reference_conditioned_evaluation",
+        "higher_is_better": False,
+    },
+    "confornets_reference_success_at_1": {
+        "label": "Reference success@1",
+        "description": "Whether this sample met the configured RMSD threshold to its nearest staged reference.",
+        "source": "bms_wrapper",
+        "semantics": "reference_conditioned_evaluation",
+        "higher_is_better": True,
+    },
+    "confornets_pairwise_min_rmsd": {
+        "label": "Post-hoc pairwise minimum RMSD",
+        "description": "Minimum post-hoc pairwise Cα RMSD from this sample to other generated samples; not a thermodynamic trajectory statistic.",
+        "unit": "Å",
+        "source": "bms_wrapper",
+        "semantics": "post_hoc_sample_space_diversity",
+    },
+    "confornets_pairwise_mean_rmsd": {
+        "label": "Post-hoc pairwise sample RMSD",
+        "description": "Mean post-hoc pairwise Cα RMSD from this sample to other generated samples; not a thermodynamic trajectory statistic.",
+        "unit": "Å",
+        "source": "bms_wrapper",
+        "semantics": "post_hoc_sample_space_diversity",
+    },
+    "confornets_pairwise_max_rmsd": {
+        "label": "Post-hoc pairwise maximum RMSD",
+        "description": "Maximum post-hoc pairwise Cα RMSD from this sample to other generated samples; not a thermodynamic trajectory statistic.",
+        "unit": "Å",
+        "source": "bms_wrapper",
+        "semantics": "post_hoc_sample_space_diversity",
+    },
+    "confornets_landscape_x": {
+        "label": "ConforNets landscape X",
+        "description": "Post-hoc 2D sample-landscape coordinate derived from pairwise RMSD/MDS in the BMS wrapper. This is not calibrated thermodynamics.",
+        "source": "bms_wrapper",
+        "semantics": "post_hoc_sample_space_embedding",
+    },
+    "confornets_landscape_y": {
+        "label": "ConforNets landscape Y",
+        "description": "Post-hoc 2D sample-landscape coordinate derived from pairwise RMSD/MDS in the BMS wrapper. This is not calibrated thermodynamics.",
+        "source": "bms_wrapper",
+        "semantics": "post_hoc_sample_space_embedding",
+    },
+    "confornets_success_at_1_rate": {
+        "label": "ConforNets success@1 rate",
+        "description": "Aggregate fraction of samples meeting the configured staged-reference RMSD threshold.",
+        "source": "bms_wrapper",
+        "semantics": "reference_conditioned_evaluation_summary",
+        "higher_is_better": True,
+    },
+    "confornets_reference_count": {
+        "label": "Staged reference count",
+        "description": "Number of reference structures used for ConforNets reference RMSD evaluation.",
+        "source": "bms_wrapper",
+        "semantics": "reference_conditioned_evaluation_summary",
+    },
+    "confornets_rmsd_threshold": {
+        "label": "Reference RMSD threshold",
+        "description": "Configured Cα RMSD threshold used for success@1 reporting.",
+        "unit": "Å",
+        "source": "bms_wrapper",
+        "semantics": "reference_conditioned_evaluation_summary",
+    },
+}
+
+
+_BASE_PLOTLY_METADATA: Dict[str, Dict[str, Any]] = {
+    "plddt_overall": {"label": "pLDDT", "description": "Overall predicted local distance difference test score.", "higher_is_better": True},
+    "pae_overall": {"label": "PAE", "description": "Overall predicted aligned error.", "unit": "Å", "higher_is_better": False},
+    "pae_interaction": {"label": "Interaction PAE", "description": "Predicted aligned error across the modeled interface.", "unit": "Å", "higher_is_better": False},
+    "ptm": {"label": "pTM", "description": "Predicted TM-score.", "higher_is_better": True},
+    "iptm": {"label": "iPTM", "description": "Predicted interface TM-score.", "higher_is_better": True},
+    "conf_score": {"label": "Confidence score", "description": "Model-native confidence score when available.", "higher_is_better": True},
+    "rmsd_overall": {"label": "RMSD", "description": "Overall root-mean-square deviation.", "unit": "Å", "higher_is_better": False},
+    "rog": {"label": "Radius of gyration", "description": "Structure radius of gyration.", "unit": "Å"},
+}
+
+
+def _fallback_plotly_metric_label(key: str) -> str:
+    label = key
+    for suffix, rendered in (("_mean", " (mean)"), ("_min", " (min)"), ("_max", " (max)"), ("_n", " (n)")):
+        if label.endswith(suffix):
+            label = f"{label[:-len(suffix)]}{rendered}"
+            break
+    return " ".join(part.capitalize() for part in label.replace("_", " ").split())
+
+
+def _build_plotly_metric_metadata(metric_keys: Any) -> Dict[str, Dict[str, Any]]:
+    """Return label/source/semantics metadata for available plot-ready metric keys."""
+    metadata: Dict[str, Dict[str, Any]] = {}
+    for key in sorted(str(metric_key) for metric_key in metric_keys if metric_key):
+        configured = _CONFORNETS_PLOTLY_METADATA.get(key) or _BASE_PLOTLY_METADATA.get(key)
+        if configured:
+            metadata[key] = dict(configured)
+            continue
+        source = "confidence_metrics" if key.startswith("confornets_") or "_mean" in key or "_min" in key or "_max" in key else "design"
+        metadata[key] = {
+            "label": _fallback_plotly_metric_label(key),
+            "description": f"Numeric design metric '{key}' exposed for exploratory Plotly charting.",
+            "source": source,
+        }
+    return metadata
+
+
+def _build_plotly_chart_suggestions(metric_keys: Any) -> List[Dict[str, Any]]:
+    """Suggest useful Plotly chart presets for the metric keys actually present."""
+    keys = {str(metric_key) for metric_key in metric_keys if metric_key}
+    suggestions: List[Dict[str, Any]] = []
+
+    def has(*required: str) -> bool:
+        return all(key in keys for key in required)
+
+    if has("confornets_min_reference_rmsd", "confornets_confidence_plddt"):
+        suggestions.append({
+            "id": "confornets_reference_confidence",
+            "label": "ConforNets reference RMSD vs confidence",
+            "type": "scatter",
+            "xAxis": "confornets_min_reference_rmsd",
+            "yAxis": "confornets_confidence_plddt",
+            "colorBy": "confornets_confidence_gpde" if "confornets_confidence_gpde" in keys else "confornets_sample_index",
+            "description": "Compare staged-reference Cα RMSD against ConforNets scalar confidence for generated samples.",
+        })
+    if has("confornets_landscape_x", "confornets_landscape_y"):
+        suggestions.append({
+            "id": "confornets_sample_landscape",
+            "label": "ConforNets post-hoc sample landscape",
+            "type": "scatter",
+            "xAxis": "confornets_landscape_x",
+            "yAxis": "confornets_landscape_y",
+            "colorBy": "confornets_min_reference_rmsd" if "confornets_min_reference_rmsd" in keys else "confornets_sample_index",
+            "description": "Plot post-hoc RMSD/MDS sample-space coordinates. This is an exploratory embedding, not a thermodynamic trajectory.",
+        })
+    if has("confornets_sample_index", "confornets_training_final_loss"):
+        suggestions.append({
+            "id": "confornets_sample_training_loss",
+            "label": "ConforNets sample index vs final loss",
+            "type": "scatter",
+            "xAxis": "confornets_sample_index",
+            "yAxis": "confornets_training_final_loss",
+            "colorBy": "confornets_confidence_plddt" if "confornets_confidence_plddt" in keys else None,
+            "description": "Check whether final loss varies across generated sample rows for the ingested ConforNets run.",
+        })
+    return suggestions
 
 
 def _normalize_chain_scalar_map(raw: Any) -> Dict[str, float]:
@@ -1500,11 +1811,14 @@ async def _collect_plotly_metrics(
             )
         )
 
+    sorted_metric_keys = sorted(metric_keys)
     return PlotlyMetricsResponse(
         job_id=job_id,
-        metric_keys=sorted(metric_keys),
+        metric_keys=sorted_metric_keys,
         points=points,
         total=int(total),
+        metric_metadata=_build_plotly_metric_metadata(sorted_metric_keys),
+        chart_suggestions=_build_plotly_chart_suggestions(sorted_metric_keys),
     )
 
 

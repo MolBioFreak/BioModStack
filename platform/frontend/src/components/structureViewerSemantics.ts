@@ -36,18 +36,29 @@ export interface StructureViewerQuickViewSpec {
     colorMode: StructureViewerColorMode;
 }
 
-type SummaryMetricDesign = Partial<Pick<Design,
-    | 'plddt_overall'
-    | 'plddt_binder'
-    | 'plddt_target'
-    | 'pae_overall'
-    | 'pae_interaction'
-    | 'ptm'
-    | 'iptm'
-    | 'ipsae'
-    | 'complex_iplddt'
-    | 'complex_ipde'
->>;
+type SummaryMetricDesign = Partial<Design>;
+
+interface ChainMetricLike {
+    plddt?: number[] | null;
+    residue_numbers?: number[] | null;
+    length?: number | null;
+}
+
+export interface StructureViewerResidueColor {
+    r: number;
+    g: number;
+    b: number;
+}
+
+export interface PlddtResidueColorMapInput {
+    chainMetrics?: Record<string, ChainMetricLike | null | undefined> | null;
+    plddtProfile?: number[] | null;
+    residueNumbers?: number[] | null;
+    fallbackChainId?: string | null;
+    scalarPlddtFallback?: number | null;
+    preferScalarFallback?: boolean;
+    colorForValue: (value: number) => StructureViewerResidueColor;
+}
 
 interface ConfidenceSemanticsInput {
     activeJobModelId?: string | null;
@@ -78,6 +89,266 @@ interface SummaryCardsInput {
 }
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+const asRecord = (value: unknown): Record<string, unknown> | null => (
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+);
+
+const normalizeToken = (value: unknown): string => String(value ?? '').trim().toLowerCase();
+
+const finiteNumericValue = (value: unknown): number | null => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+};
+
+export interface ConforNetsConformerSummary {
+    id: string;
+    name: string;
+    frameIndex: number | null;
+    design: Design;
+}
+
+export interface ConforNetsConformerSet {
+    selectedIndex: number;
+    selectedConformer: ConforNetsConformerSummary;
+    conformers: ConforNetsConformerSummary[];
+}
+
+export interface ConforNetsConformerNavigation {
+    totalCount: number;
+    selectedNumber: number;
+    selectedId: string;
+    previousId: string | null;
+    nextId: string | null;
+    sliderMin: number;
+    sliderMax: number;
+    sliderValue: number;
+    selectedLabel: string;
+}
+
+export const isConforNetsDesign = (design: Partial<Design> | null | undefined): boolean => {
+    if (!design) return false;
+    const provenance = asRecord(design.provenance);
+    const confidenceMetrics = asRecord(design.confidence_metrics);
+    const provenanceModelId = normalizeToken(provenance?.model_id);
+    const provenanceArtifactGroup = normalizeToken(provenance?.artifact_group);
+    const provenanceStageFamily = normalizeToken(provenance?.stage_family);
+    const topLevelModelId = normalizeToken((design as Partial<Design> & { model_id?: unknown }).model_id);
+
+    return normalizeToken(design.artifact_group) === 'confornets'
+        || normalizeToken(design.stage_family) === 'confornets'
+        || provenanceArtifactGroup === 'confornets'
+        || provenanceStageFamily === 'confornets'
+        || provenanceModelId.includes('confornets')
+        || topLevelModelId.includes('confornets')
+        || Boolean(asRecord(confidenceMetrics?.confornets_sample))
+        || Boolean(asRecord(confidenceMetrics?.confornets_ensemble))
+        || Boolean(asRecord(confidenceMetrics?.confornets_artifact_manifest))
+        || /^cn_\d+_sample_\d+$/i.test(String(design.name ?? ''));
+};
+
+const sanitizeChainId = (value: unknown): string | null => {
+    const normalized = String(value ?? '').trim();
+    return normalized ? normalized : null;
+};
+
+export const getConforNetsDefaultChainId = (design: Partial<Design> | null | undefined): string | null => {
+    if (!design) return null;
+    const confidenceMetrics = asRecord(design.confidence_metrics);
+    const request = asRecord(confidenceMetrics?.confornets_request);
+    const provenance = asRecord(design.provenance);
+    const confornetsProvenance = asRecord(provenance?.confornets_provenance);
+    const provenanceRequest = asRecord(confornetsProvenance?.request);
+
+    return sanitizeChainId(request?.chain_id)
+        ?? sanitizeChainId(provenanceRequest?.chain_id);
+};
+
+export const getConforNetsScalarPlddt = (design: Partial<Design> | null | undefined): number | null => {
+    if (!design || !isConforNetsDesign(design)) return null;
+    const confidenceMetrics = asRecord(design.confidence_metrics);
+    const sample = asRecord(confidenceMetrics?.confornets_sample);
+    const sampleConfidence = asRecord(sample?.confidence);
+    const confidence = asRecord(confidenceMetrics?.confornets_confidence);
+
+    return finiteNumericValue(sampleConfidence?.plddt)
+        ?? finiteNumericValue(confidence?.plddt)
+        ?? finiteNumericValue(design.plddt_overall);
+};
+
+const addUniformScalarResidueColors = (
+    colorMap: Map<string, StructureViewerResidueColor>,
+    input: Omit<PlddtResidueColorMapInput, 'colorForValue'>,
+    scalarPlddt: number,
+    colorForValue: (value: number) => StructureViewerResidueColor,
+): void => {
+    const scalarColor = colorForValue(scalarPlddt);
+    for (const [rawChainId, metric] of Object.entries(input.chainMetrics ?? {})) {
+        const chainId = sanitizeChainId(rawChainId);
+        if (!chainId) continue;
+        const plddt = Array.isArray(metric?.plddt) ? metric.plddt : [];
+        const residueNumbers = Array.isArray(metric?.residue_numbers) ? metric.residue_numbers : [];
+        const metricLength = isFiniteNumber(metric?.length) ? metric.length : 0;
+        const count = Math.max(plddt.length, residueNumbers.length, metricLength);
+        for (let idx = 0; idx < count; idx++) {
+            const residueNumber = residueNumbers[idx] ?? (idx + 1);
+            if (!Number.isFinite(residueNumber)) continue;
+            colorMap.set(`${chainId}:${residueNumber}`, scalarColor);
+        }
+    }
+    if (colorMap.size > 0) return;
+
+    const fallbackChainId = sanitizeChainId(input.fallbackChainId);
+    if (!fallbackChainId) return;
+    const profile = Array.isArray(input.plddtProfile) ? input.plddtProfile : [];
+    const residueNumbers = Array.isArray(input.residueNumbers) ? input.residueNumbers : [];
+    const count = Math.max(profile.length, residueNumbers.length);
+    for (let idx = 0; idx < count; idx++) {
+        const residueNumber = residueNumbers[idx] ?? (idx + 1);
+        if (!Number.isFinite(residueNumber)) continue;
+        colorMap.set(`${fallbackChainId}:${residueNumber}`, scalarColor);
+    }
+};
+
+export const buildPlddtResidueColorMap = ({
+    chainMetrics,
+    plddtProfile,
+    residueNumbers,
+    fallbackChainId,
+    scalarPlddtFallback,
+    preferScalarFallback,
+    colorForValue,
+}: PlddtResidueColorMapInput): Map<string, StructureViewerResidueColor> | undefined => {
+    const colorMap = new Map<string, StructureViewerResidueColor>();
+    const scalarFallback = finiteNumericValue(scalarPlddtFallback);
+    if (preferScalarFallback && scalarFallback !== null) {
+        addUniformScalarResidueColors(
+            colorMap,
+            { chainMetrics, plddtProfile, residueNumbers, fallbackChainId, scalarPlddtFallback, preferScalarFallback },
+            scalarFallback,
+            colorForValue,
+        );
+        if (colorMap.size > 0) return colorMap;
+    }
+
+    for (const [chainId, metric] of Object.entries(chainMetrics ?? {})) {
+        const plddt = Array.isArray(metric?.plddt) ? metric.plddt : [];
+        if (!plddt.length) continue;
+        const chainResidueNumbers = Array.isArray(metric?.residue_numbers) ? metric.residue_numbers : [];
+        for (let idx = 0; idx < plddt.length; idx++) {
+            const value = plddt[idx];
+            if (!isFiniteNumber(value)) continue;
+            const residueNumber = chainResidueNumbers[idx] ?? (idx + 1);
+            if (!Number.isFinite(residueNumber)) continue;
+            colorMap.set(`${chainId}:${residueNumber}`, colorForValue(value));
+        }
+    }
+    if (colorMap.size > 0) return colorMap;
+
+    const chainId = sanitizeChainId(fallbackChainId);
+    const profile = Array.isArray(plddtProfile) ? plddtProfile : [];
+    if (!chainId || profile.length === 0) return undefined;
+    const numbers = Array.isArray(residueNumbers) ? residueNumbers : [];
+    for (let idx = 0; idx < profile.length; idx++) {
+        const value = profile[idx];
+        if (!isFiniteNumber(value)) continue;
+        const residueNumber = numbers[idx] ?? (idx + 1);
+        if (!Number.isFinite(residueNumber)) continue;
+        colorMap.set(`${chainId}:${residueNumber}`, colorForValue(value));
+    }
+    return colorMap.size > 0 ? colorMap : undefined;
+};
+
+export const getConforNetsSampleIndex = (design: Partial<Design> | null | undefined): number | null => {
+    if (!design) return null;
+    const confidenceMetrics = asRecord(design.confidence_metrics);
+    const sample = asRecord(confidenceMetrics?.confornets_sample);
+    const ensemble = asRecord(confidenceMetrics?.confornets_ensemble);
+    const explicitIndex = finiteNumericValue(sample?.frame_index)
+        ?? finiteNumericValue(sample?.sample_index)
+        ?? finiteNumericValue(ensemble?.frame_index)
+        ?? finiteNumericValue(ensemble?.sample_index);
+    if (explicitIndex !== null) return explicitIndex;
+
+    const nameMatch = String(design.name ?? '').match(/^cn_(\d+)_sample_(\d+)$/i);
+    if (!nameMatch) return null;
+    return Number.parseInt(nameMatch[2] ?? nameMatch[1], 10);
+};
+
+export const buildConforNetsConformerSet = (
+    designs: Design[],
+    selectedDesignId: string | null | undefined,
+): ConforNetsConformerSet | null => {
+    if (!selectedDesignId) return null;
+    const selectedDesign = designs.find((design) => design.id === selectedDesignId);
+    if (!selectedDesign || !isConforNetsDesign(selectedDesign)) return null;
+
+    const conformers = designs
+        .filter((design) => design.job_id === selectedDesign.job_id && isConforNetsDesign(design))
+        .map((design): ConforNetsConformerSummary => ({
+            id: design.id,
+            name: design.name,
+            frameIndex: getConforNetsSampleIndex(design),
+            design,
+        }))
+        .sort((a, b) => {
+            if (a.frameIndex !== null && b.frameIndex !== null && a.frameIndex !== b.frameIndex) {
+                return a.frameIndex - b.frameIndex;
+            }
+            if (a.frameIndex !== null && b.frameIndex === null) return -1;
+            if (a.frameIndex === null && b.frameIndex !== null) return 1;
+            return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+        });
+
+    const selectedIndex = conformers.findIndex((conformer) => conformer.id === selectedDesignId);
+    if (selectedIndex < 0) return null;
+    return {
+        selectedIndex,
+        selectedConformer: conformers[selectedIndex],
+        conformers,
+    };
+};
+
+const formatConforNetsConformerLabel = (conformer: ConforNetsConformerSummary): string => {
+    const frameLabel = conformer.frameIndex === null ? 'Frame ?' : `Frame ${conformer.frameIndex}`;
+    return `${frameLabel} • ${conformer.name}`;
+};
+
+export const buildConforNetsConformerNavigation = (
+    conformerSet: ConforNetsConformerSet | null | undefined,
+): ConforNetsConformerNavigation | null => {
+    if (!conformerSet || conformerSet.conformers.length === 0) return null;
+    const lastIndex = conformerSet.conformers.length - 1;
+    const selectedIndex = Math.min(Math.max(conformerSet.selectedIndex, 0), lastIndex);
+    const selectedConformer = conformerSet.conformers[selectedIndex];
+    return {
+        totalCount: conformerSet.conformers.length,
+        selectedNumber: selectedIndex + 1,
+        selectedId: selectedConformer.id,
+        previousId: selectedIndex > 0 ? conformerSet.conformers[selectedIndex - 1].id : null,
+        nextId: selectedIndex < lastIndex ? conformerSet.conformers[selectedIndex + 1].id : null,
+        sliderMin: 0,
+        sliderMax: lastIndex,
+        sliderValue: selectedIndex,
+        selectedLabel: formatConforNetsConformerLabel(selectedConformer),
+    };
+};
+
+export const resolveConforNetsOverlayIds = (
+    conformerSet: ConforNetsConformerSet | null | undefined,
+    requestedIds: readonly string[],
+): string[] => {
+    if (!conformerSet) return [];
+    const requested = new Set(requestedIds);
+    requested.delete(conformerSet.selectedConformer.id);
+    return conformerSet.conformers
+        .map((conformer) => conformer.id)
+        .filter((id) => requested.has(id));
+};
 
 export const resolveStructureViewerConfidenceSemantics = ({
     activeJobModelId,
@@ -225,11 +496,78 @@ export const buildStructureViewerQuickViews = ({
     return quickViews;
 };
 
+const buildConforNetsSummaryCards = (selectedDesign: SummaryMetricDesign): StructureViewerSummaryCardSpec[] => {
+    if (!isConforNetsDesign(selectedDesign)) return [];
+    const confidenceMetrics = asRecord(selectedDesign.confidence_metrics);
+    const sample = asRecord(confidenceMetrics?.confornets_sample);
+    const confidence = asRecord(confidenceMetrics?.confornets_confidence) ?? asRecord(sample?.confidence);
+    const referenceEvaluation = asRecord(confidenceMetrics?.confornets_reference_evaluation) ?? asRecord(sample?.reference_evaluation);
+    const pairwiseDiversity = asRecord(confidenceMetrics?.confornets_pairwise_diversity) ?? asRecord(sample?.pairwise_diversity);
+
+    const cards: StructureViewerSummaryCardSpec[] = [];
+    const scalarPlddt = finiteNumericValue(confidence?.plddt) ?? finiteNumericValue(selectedDesign.plddt_overall);
+    if (scalarPlddt !== null) {
+        cards.push({
+            label: 'ConforNets pLDDT',
+            value: scalarPlddt,
+            decimals: 1,
+            accentField: 'plddt_overall',
+        });
+    }
+
+    const gpde = finiteNumericValue(confidence?.gpde);
+    if (gpde !== null) {
+        cards.push({
+            label: 'ConforNets gPDE',
+            value: gpde,
+            decimals: 3,
+            accentClass: 'text-cyan-300',
+        });
+    }
+
+    const ptm = finiteNumericValue(confidence?.ptm) ?? finiteNumericValue(selectedDesign.ptm);
+    if (ptm !== null) {
+        cards.push({
+            label: 'ConforNets pTM',
+            value: ptm,
+            decimals: 3,
+            accentClass: 'text-violet-400',
+        });
+    }
+
+    const minReferenceRmsd = finiteNumericValue(referenceEvaluation?.min_reference_rmsd);
+    if (minReferenceRmsd !== null) {
+        cards.push({
+            label: 'Staged-reference Cα RMSD',
+            value: minReferenceRmsd,
+            decimals: 2,
+            suffix: ' Å',
+            accentClass: 'text-emerald-300',
+        });
+    }
+
+    const meanPairwiseRmsd = finiteNumericValue(pairwiseDiversity?.mean_pairwise_rmsd);
+    if (meanPairwiseRmsd !== null) {
+        cards.push({
+            label: 'Pairwise sample RMSD',
+            value: meanPairwiseRmsd,
+            decimals: 2,
+            suffix: ' Å',
+            accentClass: 'text-fuchsia-300',
+        });
+    }
+
+    return cards;
+};
+
 export const buildStructureViewerSummaryCards = ({
     confidenceLabel,
     selectedDesign,
 }: SummaryCardsInput): StructureViewerSummaryCardSpec[] => {
     if (!selectedDesign) return [];
+
+    const conforNetsCards = buildConforNetsSummaryCards(selectedDesign);
+    if (conforNetsCards.length > 0) return conforNetsCards;
 
     const cards: StructureViewerSummaryCardSpec[] = [
         {

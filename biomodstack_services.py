@@ -14,8 +14,12 @@ from pathlib import Path
 from textwrap import dedent
 
 from biomodstack_runtime_profile import (
+    DEFAULT_DEV_WEB_HOST_PORT,
+    DEFAULT_WEB_HOST_PORT,
     get_biomodstack_config_dir as runtime_profile_config_dir,
     install_profile_snapshot as runtime_profile_snapshot,
+    load_install_profile,
+    save_install_profile,
 )
 
 API_SERVICE = "biomodstack-api.service"
@@ -23,6 +27,7 @@ FRONTEND_SERVICE = "biomodstack-frontend.service"
 WORKFLOW_ADAPTER_SERVICE = "biomodstack-workflow-adapter.service"
 CORE_RUNTIME_SERVICE = "biomodstack-core-runtime.service"
 TARGET_UNIT = "biomodstack.target"
+DEV_TARGET_UNIT = "biomodstack-dev.target"
 
 DEV_RUNTIME_MODE = "dev"
 CONTAINER_RUNTIME_MODE = "container"
@@ -30,10 +35,11 @@ DEFAULT_RUNTIME_MODE = CONTAINER_RUNTIME_MODE
 VALID_RUNTIME_MODES = {DEV_RUNTIME_MODE, CONTAINER_RUNTIME_MODE}
 
 API_PORT = 8000
-FRONTEND_PORT = 5173
+FRONTEND_PORT = DEFAULT_DEV_WEB_HOST_PORT
+STABLE_FRONTEND_PORT = DEFAULT_WEB_HOST_PORT
 WORKFLOW_ADAPTER_PORT = 8001
 API_HEALTH_URL = f"http://127.0.0.1:{API_PORT}/api/health"
-FRONTEND_URL = f"http://127.0.0.1:{FRONTEND_PORT}/bms/"
+FRONTEND_URL = f"http://127.0.0.1:{STABLE_FRONTEND_PORT}/bms/"
 WORKFLOW_ADAPTER_HEALTH_URL = f"http://127.0.0.1:{WORKFLOW_ADAPTER_PORT}/api/workflow-adapter/health"
 DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS = 30.0
 CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS = 180.0
@@ -161,7 +167,12 @@ def runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
     mode = resolve_runtime_mode(runtime_mode)
     if mode == CONTAINER_RUNTIME_MODE:
         return (WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE)
-    return (API_SERVICE, FRONTEND_SERVICE)
+    return (FRONTEND_SERVICE,)
+
+
+def runtime_target_unit(runtime_mode: str | None = None) -> str:
+    mode = resolve_runtime_mode(runtime_mode)
+    return TARGET_UNIT if mode == CONTAINER_RUNTIME_MODE else DEV_TARGET_UNIT
 
 
 def all_runtime_service_names() -> tuple[str, ...]:
@@ -169,12 +180,36 @@ def all_runtime_service_names() -> tuple[str, ...]:
 
 
 def incompatible_runtime_service_names(runtime_mode: str | None = None) -> tuple[str, ...]:
-    active = set(runtime_service_names(runtime_mode))
-    return tuple(name for name in all_runtime_service_names() if name not in active)
+    mode = resolve_runtime_mode(runtime_mode)
+    if mode == CONTAINER_RUNTIME_MODE:
+        return (API_SERVICE,)
+    return ()
 
 
-def runtime_frontend_origin() -> str:
-    return f"http://127.0.0.1:{FRONTEND_PORT}"
+def _resolved_profile_int(project_root: Path | None, key: str, default: int) -> int:
+    try:
+        snapshot = install_profile_snapshot(project_root=(project_root or get_project_root()).resolve())
+    except Exception:
+        snapshot = {}
+    if isinstance(snapshot, Mapping):
+        resolved = snapshot.get("resolved", {})
+        if isinstance(resolved, Mapping):
+            try:
+                return int(resolved.get(key) or default)
+            except (TypeError, ValueError):
+                return default
+    return default
+
+
+def runtime_frontend_port(runtime_mode: str | None = None, project_root: Path | None = None) -> int:
+    mode = resolve_runtime_mode(runtime_mode)
+    if mode == DEV_RUNTIME_MODE:
+        return _resolved_profile_int(project_root, "dev_web_host_port", FRONTEND_PORT)
+    return _resolved_profile_int(project_root, "web_host_port", STABLE_FRONTEND_PORT)
+
+
+def runtime_frontend_origin(runtime_mode: str | None = None, project_root: Path | None = None) -> str:
+    return f"http://127.0.0.1:{runtime_frontend_port(runtime_mode, project_root)}"
 
 
 def runtime_router_basename(runtime_mode: str | None = None) -> str:
@@ -182,8 +217,8 @@ def runtime_router_basename(runtime_mode: str | None = None) -> str:
     return "/bms/" if mode == CONTAINER_RUNTIME_MODE else "/"
 
 
-def runtime_frontend_url(runtime_mode: str | None = None) -> str:
-    origin = runtime_frontend_origin()
+def runtime_frontend_url(runtime_mode: str | None = None, project_root: Path | None = None) -> str:
+    origin = runtime_frontend_origin(runtime_mode, project_root)
     basename = runtime_router_basename(runtime_mode)
     if basename == "/":
         return f"{origin}/"
@@ -212,7 +247,60 @@ def operator_runtime_mode(project_root: Path | None = None, runtime_mode: str | 
 
 
 def operator_frontend_url(project_root: Path | None = None, runtime_mode: str | None = None) -> str:
-    return runtime_frontend_url(operator_runtime_mode(project_root=project_root, runtime_mode=runtime_mode))
+    return runtime_frontend_url(operator_runtime_mode(project_root=project_root, runtime_mode=runtime_mode), project_root=project_root)
+
+
+def _coerce_host_port(value: int | str | None, *, label: str) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ServiceManagerError(f"{label} must be an integer TCP port") from exc
+    if not 1 <= port <= 65535:
+        raise ServiceManagerError(f"{label} must be between 1 and 65535")
+    return port
+
+
+def _runtime_port_settings_from_resolved(resolved: Mapping[str, object], project_root: Path | None = None) -> dict[str, object]:
+    dev_port = _coerce_host_port(resolved.get("dev_web_host_port"), label="dev_web_host_port") or FRONTEND_PORT
+    prod_port = _coerce_host_port(resolved.get("web_host_port"), label="prod_web_host_port") or STABLE_FRONTEND_PORT
+    return {
+        "dev_web_host_port": dev_port,
+        "prod_web_host_port": prod_port,
+        "dev_url": runtime_frontend_url(DEV_RUNTIME_MODE, project_root=project_root),
+        "prod_url": runtime_frontend_url(CONTAINER_RUNTIME_MODE, project_root=project_root),
+    }
+
+
+def runtime_port_settings(project_root: Path | None = None) -> dict[str, object]:
+    root = (project_root or get_project_root()).resolve()
+    snapshot = install_profile_snapshot(project_root=root)
+    resolved = snapshot.get("resolved", {}) if isinstance(snapshot, Mapping) else {}
+    if not isinstance(resolved, Mapping):
+        resolved = {}
+    return _runtime_port_settings_from_resolved(resolved, project_root=root)
+
+
+def save_runtime_port_settings(
+    dev_web_host_port: int | str | None = None,
+    prod_web_host_port: int | str | None = None,
+    project_root: Path | None = None,
+) -> dict[str, object]:
+    dev_port = _coerce_host_port(dev_web_host_port, label="dev_web_host_port")
+    prod_port = _coerce_host_port(prod_web_host_port, label="prod_web_host_port")
+    payload = dict(load_install_profile())
+    if dev_port is not None:
+        payload["dev_web_host_port"] = dev_port
+    if prod_port is not None:
+        payload["web_host_port"] = prod_port
+    root = (project_root or get_project_root()).resolve()
+    saved_profile = save_install_profile(payload, project_root=root)
+    snapshot = install_profile_snapshot(profile=saved_profile, project_root=root)
+    resolved = snapshot.get("resolved", {}) if isinstance(snapshot, Mapping) else {}
+    if not isinstance(resolved, Mapping):
+        resolved = {}
+    return _runtime_port_settings_from_resolved(resolved, project_root=root)
 
 
 def runtime_log_descriptors(runtime_mode: str | None = None) -> list[dict[str, str]]:
@@ -239,7 +327,7 @@ def runtime_service_descriptors(project_root: Path | None = None, runtime_mode: 
 def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, object]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
-    frontend_url = runtime_frontend_url(mode)
+    frontend_url = runtime_frontend_url(mode, project_root=root)
     services = runtime_service_descriptors(root, mode)
     install_profile = install_profile_snapshot(project_root=root)
     if not isinstance(install_profile, Mapping):
@@ -261,7 +349,7 @@ def runtime_descriptor(project_root: Path | None = None, runtime_mode: str | Non
         "runtime_active": all(service["active"] for service in services),
         "runtime_manager": "systemd-user",
         "api_url": f"http://127.0.0.1:{API_PORT}",
-        "frontend_origin": runtime_frontend_origin(),
+        "frontend_origin": runtime_frontend_origin(mode, project_root=root),
         "frontend_url": frontend_url,
         "browser_url": frontend_url,
         "router_basename": runtime_router_basename(mode),
@@ -388,12 +476,13 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
     api_runner = root / "scripts" / "run_biomodstack_api.sh"
     frontend_runner = root / "scripts" / "run_biomodstack_frontend.sh"
+    dev_web_host_port = runtime_frontend_port(DEV_RUNTIME_MODE, project_root=root)
 
     api_unit = dedent(
         f"""\
         [Unit]
         Description=BioModStack API service
-        PartOf={TARGET_UNIT}
+        PartOf={DEV_TARGET_UNIT}
         After=network-online.target
         Wants=network-online.target
 
@@ -413,7 +502,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         StandardError=append:{API_LOG}
 
         [Install]
-        WantedBy={TARGET_UNIT}
+        WantedBy={DEV_TARGET_UNIT}
         """
     )
 
@@ -421,15 +510,16 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         f"""\
         [Unit]
         Description=BioModStack frontend dev service
-        PartOf={TARGET_UNIT}
-        After={API_SERVICE}
-        Wants={API_SERVICE}
+        PartOf={DEV_TARGET_UNIT}
+        After=network-online.target
+        Wants=network-online.target
 
         [Service]
         Type=simple
         Environment=BMS_HOME={root}
         Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
         Environment=BMS_FRONTEND_MODE=dev
+        Environment=BMS_DEV_WEB_HOST_PORT={dev_web_host_port}
         ExecStart={frontend_runner}
         Restart=on-failure
         RestartSec=2
@@ -439,15 +529,15 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         StandardError=append:{FRONTEND_LOG}
 
         [Install]
-        WantedBy={TARGET_UNIT}
+        WantedBy={DEV_TARGET_UNIT}
         """
     )
 
     target_unit = dedent(
         f"""\
         [Unit]
-        Description=BioModStack workstation runtime target
-        Wants={API_SERVICE} {FRONTEND_SERVICE}
+        Description=BioModStack development UI target
+        Wants={FRONTEND_SERVICE}
 
         [Install]
         WantedBy=default.target
@@ -457,7 +547,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     return {
         API_SERVICE: api_unit,
         FRONTEND_SERVICE: frontend_unit,
-        TARGET_UNIT: target_unit,
+        DEV_TARGET_UNIT: target_unit,
     }
 
 
@@ -509,12 +599,15 @@ def ensure_user_units(project_root: Path | None = None, runtime_mode: str | None
     daemon_reload(project_root=project_root)
 
 
-def ensure_target_enabled(project_root: Path | None = None) -> None:
-    run_systemctl("enable", TARGET_UNIT, project_root=project_root)
+def ensure_target_enabled(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
+    run_systemctl("enable", runtime_target_unit(runtime_mode), project_root=project_root)
 
 
 def service_is_active(service_name: str, project_root: Path | None = None) -> bool:
-    result = run_systemctl("is-active", service_name, check=False, project_root=project_root)
+    try:
+        result = run_systemctl("is-active", service_name, check=False, project_root=project_root)
+    except (FileNotFoundError, OSError):
+        return False
     return result.returncode == 0 and result.stdout.strip() == "active"
 
 
@@ -548,7 +641,8 @@ def is_biomodstack_frontend_process(cmdline: str, cwd: str | None, project_root:
     root = (project_root or get_project_root()).resolve()
     frontend_dir = str(root / "platform" / "frontend")
     cmd = cmdline.strip()
-    if f"--port {FRONTEND_PORT}" not in cmd:
+    frontend_port = runtime_frontend_port(DEV_RUNTIME_MODE, project_root=root)
+    if f"--port {frontend_port}" not in cmd and f"--port={frontend_port}" not in cmd:
         return False
     if any(token in cmd for token in ("vite", "npm run dev", "vite.js")) and frontend_dir in cmd:
         return True
@@ -717,7 +811,7 @@ def cleanup_legacy_listener(kind: str, project_root: Path | None = None) -> None
         port = API_PORT
         matcher = is_biomodstack_api_process
     elif kind == "frontend":
-        port = FRONTEND_PORT
+        port = runtime_frontend_port(DEV_RUNTIME_MODE, project_root=root)
         matcher = is_biomodstack_frontend_process
     else:
         raise ValueError(f"Unknown listener kind: {kind}")
@@ -771,7 +865,7 @@ def should_cleanup_legacy_listeners_before_start(
 
     root = (project_root or get_project_root()).resolve()
     runtime_listener_found = False
-    for kind, port in (("api", API_PORT), ("frontend", FRONTEND_PORT)):
+    for kind, port in (("api", API_PORT),):
         pids = listener_pids(port)
         if not pids:
             continue
@@ -791,27 +885,55 @@ def runtime_http_wait_timeout_seconds(runtime_mode: str | None = None) -> float:
 def start_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
-    frontend_url = runtime_frontend_url(mode)
+    frontend_url = runtime_frontend_url(mode, project_root=root)
     wait_timeout_seconds = runtime_http_wait_timeout_seconds(mode)
     ensure_user_units(root, runtime_mode=mode)
-    ensure_target_enabled(root)
+
+    if mode == DEV_RUNTIME_MODE:
+        services_to_start: list[str] = []
+        if not url_is_ready(API_HEALTH_URL):
+            cleanup_legacy_listener("api", root)
+            services_to_start.append(API_SERVICE)
+        if not service_is_active(FRONTEND_SERVICE, project_root=root):
+            cleanup_legacy_listener("frontend", root)
+        services_to_start.append(FRONTEND_SERVICE)
+        run_systemctl("start", *services_to_start, DEV_TARGET_UNIT, project_root=root)
+        wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+        wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
+        return
+
+    ensure_target_enabled(root, runtime_mode=mode)
     incompatible_services = incompatible_runtime_service_names(mode)
-    run_systemctl("stop", *incompatible_services, check=False, project_root=root)
+    if incompatible_services:
+        run_systemctl("stop", *incompatible_services, check=False, project_root=root)
     if should_cleanup_legacy_listeners_before_start(mode, project_root=root):
         cleanup_legacy_listener("api", root)
-        cleanup_legacy_listener("frontend", root)
     run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
-    if mode == CONTAINER_RUNTIME_MODE:
-        wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+    wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
     wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
     wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
+
+
+def start_runtime_target(target: str | None = None, project_root: Path | None = None) -> None:
+    normalized = str(target or "prod").strip().lower()
+    if normalized in {"prod", "production", "stable", CONTAINER_RUNTIME_MODE}:
+        start_all(project_root=project_root, runtime_mode=CONTAINER_RUNTIME_MODE)
+        return
+    if normalized == DEV_RUNTIME_MODE:
+        start_all(project_root=project_root, runtime_mode=DEV_RUNTIME_MODE)
+        return
+    if normalized == "both":
+        start_all(project_root=project_root, runtime_mode=CONTAINER_RUNTIME_MODE)
+        start_all(project_root=project_root, runtime_mode=DEV_RUNTIME_MODE)
+        return
+    raise ServiceManagerError("Unknown BioModStack runtime target '{target}'. Expected dev, prod, or both".format(target=target))
 
 
 def stop_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
     ensure_user_units(root, runtime_mode=mode)
-    run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
+    run_systemctl("stop", TARGET_UNIT, DEV_TARGET_UNIT, check=False, project_root=root)
     run_systemctl("stop", *all_runtime_service_names(), check=False, project_root=root)
     cleanup_legacy_listener("api", root)
     cleanup_legacy_listener("frontend", root)
@@ -820,17 +942,31 @@ def stop_all(project_root: Path | None = None, runtime_mode: str | None = None) 
 def restart_all(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
-    frontend_url = runtime_frontend_url(mode)
+    frontend_url = runtime_frontend_url(mode, project_root=root)
     wait_timeout_seconds = runtime_http_wait_timeout_seconds(mode)
     ensure_user_units(root, runtime_mode=mode)
-    ensure_target_enabled(root)
+
+    if mode == DEV_RUNTIME_MODE:
+        local_api_active = service_is_active(API_SERVICE, project_root=root)
+        run_systemctl("stop", DEV_TARGET_UNIT, FRONTEND_SERVICE, check=False, project_root=root)
+        cleanup_legacy_listener("frontend", root)
+        services_to_start: list[str] = []
+        if local_api_active or not url_is_ready(API_HEALTH_URL):
+            run_systemctl("stop", API_SERVICE, check=False, project_root=root)
+            cleanup_legacy_listener("api", root)
+            services_to_start.append(API_SERVICE)
+        services_to_start.append(FRONTEND_SERVICE)
+        run_systemctl("start", *services_to_start, DEV_TARGET_UNIT, project_root=root)
+        wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+        wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
+        return
+
+    ensure_target_enabled(root, runtime_mode=mode)
     run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
-    run_systemctl("stop", *all_runtime_service_names(), check=False, project_root=root)
+    run_systemctl("stop", API_SERVICE, WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE, check=False, project_root=root)
     cleanup_legacy_listener("api", root)
-    cleanup_legacy_listener("frontend", root)
     run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
-    if mode == CONTAINER_RUNTIME_MODE:
-        wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
+    wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
     wait_for_http(API_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
     wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
 
@@ -841,8 +977,13 @@ def restart_api(project_root: Path | None = None, runtime_mode: str | None = Non
     ensure_user_units(root, runtime_mode=mode)
     if mode == CONTAINER_RUNTIME_MODE:
         run_core_runtime_script("restart", "bms-api", project_root=root)
-    else:
+    elif service_is_active(API_SERVICE, project_root=root):
         run_systemctl("stop", API_SERVICE, check=False, project_root=root)
+        cleanup_legacy_listener("api", root)
+        run_systemctl("start", API_SERVICE, project_root=root)
+    elif service_is_active(CORE_RUNTIME_SERVICE, project_root=root):
+        run_core_runtime_script("restart", "bms-api", project_root=root)
+    else:
         cleanup_legacy_listener("api", root)
         run_systemctl("start", API_SERVICE, project_root=root)
     wait_for_http(API_HEALTH_URL)
@@ -864,8 +1005,8 @@ def status_lines(project_root: Path | None = None, runtime_mode: str | None = No
 
     services_by_name = {item["name"]: item["active"] for item in descriptor["services"]}
     return [
-        f"API: {'active' if services_by_name.get(API_SERVICE, False) else 'inactive'} ({API_SERVICE})",
-        f"Frontend: {'active' if services_by_name.get(FRONTEND_SERVICE, False) else 'inactive'} ({FRONTEND_SERVICE})",
+        f"API: {'ready' if descriptor['health']['api_ready'] else 'not ready'} ({API_HEALTH_URL})",
+        f"Frontend: {'active' if services_by_name.get(FRONTEND_SERVICE, False) else 'inactive'} ({FRONTEND_SERVICE}; {descriptor['frontend_url']})",
         f"API log: {API_LOG}",
         f"Frontend log: {FRONTEND_LOG}",
     ]

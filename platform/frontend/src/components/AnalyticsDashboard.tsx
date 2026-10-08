@@ -478,10 +478,11 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         }
         for (const key of plotlyMetricsData?.metric_keys || []) {
             if (!merged.has(key)) {
+                const metadata = plotlyMetricsData?.metric_metadata?.[key];
                 merged.set(key, {
                     key,
-                    label: toMetricLabel(key),
-                    color: hashColor(key),
+                    label: metadata?.label || toMetricLabel(key),
+                    color: metadata?.color || hashColor(key),
                     family: inferMetricFamily(key),
                 });
             }

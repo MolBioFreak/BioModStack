@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   EXPOSED_BIOMODSTACK_API_KEYS,
   buildBrowserWindowOptions,
+  resolveRuntimeSwitchContext,
   resolveShellContext,
 } from '../src/windowState.js';
 import { SHELL_STORAGE_PARTITION } from '../src/shellPaths.js';
@@ -16,12 +17,61 @@ test('dev shell context defaults to the root BioModStack frontend url', () => {
   assert.equal(context.browserUrl, 'http://127.0.0.1:5173/');
 });
 
+test('dev shell context honors the configured Vite dev port without changing stable /bms/', () => {
+  const previousDevPort = process.env.BMS_DEV_WEB_HOST_PORT;
+  const previousProdPort = process.env.BMS_WEB_HOST_PORT;
+  process.env.BMS_DEV_WEB_HOST_PORT = '5179';
+  process.env.BMS_WEB_HOST_PORT = '19090';
+  try {
+    const devContext = resolveShellContext({ runtimeMode: 'dev' });
+    const stableContext = resolveShellContext({ runtimeMode: 'container' });
+
+    assert.equal(devContext.routerBasename, '/');
+    assert.equal(devContext.windowUrl, 'http://127.0.0.1:5179/');
+    assert.equal(stableContext.routerBasename, '/bms/');
+    assert.equal(stableContext.windowUrl, 'http://127.0.0.1:19090/bms/');
+  } finally {
+    if (previousDevPort === undefined) {
+      delete process.env.BMS_DEV_WEB_HOST_PORT;
+    } else {
+      process.env.BMS_DEV_WEB_HOST_PORT = previousDevPort;
+    }
+    if (previousProdPort === undefined) {
+      delete process.env.BMS_WEB_HOST_PORT;
+    } else {
+      process.env.BMS_WEB_HOST_PORT = previousProdPort;
+    }
+  }
+});
+
 test('container shell context defaults to the /bms/ hosted frontend url', () => {
   const context = resolveShellContext({ runtimeMode: 'container' });
 
   assert.equal(context.routerBasename, '/bms/');
-  assert.equal(context.windowUrl, 'http://127.0.0.1:5173/bms/');
-  assert.equal(context.browserUrl, 'http://127.0.0.1:5173/bms/');
+  assert.equal(context.windowUrl, 'http://127.0.0.1:18080/bms/');
+  assert.equal(context.browserUrl, 'http://127.0.0.1:18080/bms/');
+});
+
+test('runtime switch context reloads the requested channel while preserving the app path', () => {
+  const stableContext = resolveShellContext({ runtimeMode: 'container' });
+  const devSwitch = resolveRuntimeSwitchContext({
+    currentContext: stableContext,
+    currentUrl: 'http://127.0.0.1:18080/bms/designs?job=abc#metrics',
+    targetRuntimeMode: 'dev',
+  });
+  const stableSwitch = resolveRuntimeSwitchContext({
+    currentContext: devSwitch,
+    currentUrl: 'http://127.0.0.1:5173/designer/oligos',
+    targetRuntimeMode: 'container',
+  });
+
+  assert.equal(devSwitch.runtimeMode, 'dev');
+  assert.equal(devSwitch.routerBasename, '/');
+  assert.equal(devSwitch.windowUrl, 'http://127.0.0.1:5173/designs?job=abc#metrics');
+  assert.equal(devSwitch.browserUrl, 'http://127.0.0.1:5173/designs?job=abc#metrics');
+  assert.equal(stableSwitch.runtimeMode, 'container');
+  assert.equal(stableSwitch.routerBasename, '/bms/');
+  assert.equal(stableSwitch.windowUrl, 'http://127.0.0.1:18080/bms/designer/oligos');
 });
 
 test('browser window options keep the renderer hardened, persistent, and expose only the audited preload api', () => {
@@ -34,6 +84,8 @@ test('browser window options keep the renderer hardened, persistent, and expose 
     'stopAll',
     'restartAll',
     'restartApi',
+    'switchRuntime',
+    'startRuntimeTarget',
     'openInBrowser',
     'getZoomFactor',
     'setZoomFactor',

@@ -6,6 +6,53 @@ import { useState, useCallback } from 'react';
 import Plot from 'react-plotly.js';
 import { runDeltaCq, runDeltaDeltaCq } from '../../api/client';
 import { useThemePlotlyLayout } from '../useThemeColors';
+import { AssayPrimaryButton } from '../assay/AssayWorkbenchPrimitives';
+
+type CqInputRow = {
+    sample: string;
+    gene: string;
+    cq: number;
+    group: string;
+};
+
+function requireColumn(headers: string[], column: string): number {
+    const idx = headers.indexOf(column);
+    if (idx < 0) {
+        throw new Error(`CSV must include ${column} column`);
+    }
+    return idx;
+}
+
+function parseCqCsv(text: string): CqInputRow[] {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        throw new Error('Paste real qPCR rows before running analysis');
+    }
+    const lines = trimmed.split(/\r?\n/).filter(line => line.trim().length > 0);
+    if (lines.length < 2) {
+        throw new Error('CSV must include a header and at least one data row');
+    }
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const sampleIndex = requireColumn(headers, 'sample');
+    const geneIndex = requireColumn(headers, 'gene');
+    const cqIndex = requireColumn(headers, 'cq');
+    const groupIndex = requireColumn(headers, 'group');
+
+    return lines.slice(1).map((line, lineIdx) => {
+        const values = line.split(',').map(v => v.trim());
+        const rowNumber = lineIdx + 2;
+        const sample = values[sampleIndex]?.trim();
+        const gene = values[geneIndex]?.trim();
+        const group = values[groupIndex]?.trim();
+        const cqRaw = values[cqIndex]?.trim();
+        const cq = Number.parseFloat(cqRaw ?? '');
+        if (!sample) throw new Error(`Row ${rowNumber} missing Sample value`);
+        if (!gene) throw new Error(`Row ${rowNumber} missing Gene value`);
+        if (!group) throw new Error(`Row ${rowNumber} missing Group value`);
+        if (!Number.isFinite(cq)) throw new Error(`Row ${rowNumber} missing finite Cq value`);
+        return { sample, gene, cq, group };
+    });
+}
 
 export function DeltaCqPanel() {
     const [dataText, setDataText] = useState('');
@@ -17,28 +64,13 @@ export function DeltaCqPanel() {
 
     const plotlyLayout = useThemePlotlyLayout();
 
-    const parseData = (text: string) => {
-        const lines = text.trim().split('\n');
-        const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-
-        return lines.slice(1).map(line => {
-            const values = line.split(',').map(v => v.trim());
-            return {
-                sample: values[headers.indexOf('sample')] || '',
-                gene: values[headers.indexOf('gene')] || '',
-                cq: parseFloat(values[headers.indexOf('cq')]) || 0,
-                group: values[headers.indexOf('group')] || '',
-            };
-        });
-    };
-
     const handleRun = useCallback(async () => {
         setLoading(true);
         setError('');
         setResult(null);
 
         try {
-            const data = parseData(dataText);
+            const data = parseCqCsv(dataText);
             const refs = refGenes.split(',').map(g => g.trim()).filter(Boolean);
             const targets = targetGenes.split(',').map(g => g.trim()).filter(Boolean);
 
@@ -93,13 +125,9 @@ export function DeltaCqPanel() {
                         </div>
                     </div>
 
-                    <button
-                        onClick={handleRun}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
+                    <AssayPrimaryButton onClick={handleRun} disabled={loading} className="w-full">
                         {loading ? 'Analyzing...' : 'Calculate ΔCq'}
-                    </button>
+                    </AssayPrimaryButton>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                 </div>
@@ -147,28 +175,13 @@ export function DeltaDeltaCqPanel() {
 
     const plotlyLayout = useThemePlotlyLayout();
 
-    const parseData = (text: string) => {
-        const lines = text.trim().split('\n');
-        const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-
-        return lines.slice(1).map(line => {
-            const values = line.split(',').map(v => v.trim());
-            return {
-                sample: values[headers.indexOf('sample')] || '',
-                gene: values[headers.indexOf('gene')] || '',
-                cq: parseFloat(values[headers.indexOf('cq')]) || 0,
-                group: values[headers.indexOf('group')] || '',
-            };
-        });
-    };
-
     const handleRun = useCallback(async () => {
         setLoading(true);
         setError('');
         setResult(null);
 
         try {
-            const data = parseData(dataText);
+            const data = parseCqCsv(dataText);
             const refs = refGenes.split(',').map(g => g.trim()).filter(Boolean);
             const targets = targetGenes.split(',').map(g => g.trim()).filter(Boolean);
 
@@ -232,13 +245,9 @@ export function DeltaDeltaCqPanel() {
                         </div>
                     </div>
 
-                    <button
-                        onClick={handleRun}
-                        disabled={loading}
-                        className="w-full bg-accent-primary hover:bg-accent-secondary text-white px-4 py-2 font-medium disabled:opacity-50"
-                    >
+                    <AssayPrimaryButton onClick={handleRun} disabled={loading} className="w-full">
                         {loading ? 'Analyzing...' : 'Calculate ΔΔCq'}
-                    </button>
+                    </AssayPrimaryButton>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
                 </div>

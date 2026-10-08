@@ -257,15 +257,19 @@ Requires network reachability from BMS to the robot-local BioXP runtime. In
 normal operation BMS stores a linkage URL and proxies the robot API over HTTP;
 it does not supervise the robot daemon from the cockpit.
 
-The current BMS BioXP surface is intentionally narrower than the full
-robot-local runtime. For example, the robot already exposes
-`/motion/reference/status` and `/liquid/*` routes that are not yet mirrored
-through `/api/bioxp/*` in BMS.
+The current BMS BioXP surface is a curated robot-local proxy, not a guarantee
+that every robot endpoint is mirrored. It currently includes linkage/status,
+reference-state, liquid-handling, motion/power, latch/LED, thermal/chiller,
+camera, vision, and protocol route families under `/api/bioxp/*` when linkage is
+configured.
 
-Also note that BMS connection/status surfaces can disagree briefly during
-reconnect or recovery windows. `/api/bioxp/status` and
-`/api/bioxp/daemon/status` are both useful, but they are not identical signals
-and should not be collapsed into a single hardware-truth claim.
+Before documenting a new robot capability as supported through BMS, verify route
+parity against both the BMS API and the robot-local runtime. The robot runtime
+can still expose additional non-cockpit endpoints, and BMS connection/status
+surfaces can disagree briefly during reconnect or recovery windows.
+`/api/bioxp/status` and `/api/bioxp/daemon/status` are both useful, but they are
+not identical signals and should not be collapsed into a single hardware-truth
+claim.
 
 Operationally, current camera/UVC failures and the historical Novo USB/CAN
 reset pattern should be described as unresolved transport/recovery instability,
@@ -301,12 +305,27 @@ After startup:
 
 1. open `http://127.0.0.1:8000/api/health`
 2. open `http://127.0.0.1:8001/api/workflow-adapter/health`
-3. open `http://127.0.0.1:5173/bms/`
+3. open stable hosted UI at `http://127.0.0.1:18080/bms/` or dev browser UI at `http://127.0.0.1:5173/` when running the Vite dev surface
 4. verify models appear in the launcher
 5. confirm the resolved install profile/runtime paths if needed through
    `/api/system/install-profile`
 6. confirm the expected data root, weights, container, and mobile-update
    directories exist
+
+For a fresh/general Linux host, separate dashboard viability from full workflow
+viability. A robust core-runtime smoke should prove:
+
+- `/api/health` returns successfully
+- `/bms/` loads from the web container
+- `/api/system/runtime-state` reports the selected runtime and path profile
+- `/api/jobs` can render an empty or existing job list without crashing the UI
+- missing workflow assets, GPU telemetry, BioXP linkage, or adapter services are
+  reported as unavailable/degraded capabilities rather than causing a blank
+  dashboard or API startup failure
+
+Only treat the workstation as full-workflow ready after the host workflow
+adapter, Nextflow, Apptainer, NVIDIA stack, model weights, reference databases,
+and workflow-specific caches have also been verified.
 
 ## Read next
 

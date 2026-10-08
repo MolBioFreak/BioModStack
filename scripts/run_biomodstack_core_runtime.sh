@@ -63,7 +63,7 @@ fi
 
 export BMS_CONTAINER_STATE_PATH="${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}"
 export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-8000}"
-export BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-5173}"
+export BMS_WEB_HOST_PORT="${BMS_WEB_HOST_PORT:-18080}"
 mkdir -p "$BMS_STATE_DIR"
 
 compose_cmd=()

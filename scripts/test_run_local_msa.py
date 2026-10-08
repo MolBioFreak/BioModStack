@@ -1004,6 +1004,42 @@ def test_gpu_required_missing_padded_targets_fails_before_mmseqs(monkeypatch, tm
     assert commands == []
 
 
+def test_target_split_semantics_marks_gpu_split_as_top_level_not_internal_proof() -> None:
+    semantics = run_local_msa.describe_target_split_semantics(
+        {
+            "stage": "envdb_search",
+            "module": "search",
+            "uses_gpu_flag": True,
+            "uses_gpu_server": False,
+            "split_count": 4,
+            "split_mode": 0,
+        }
+    )
+
+    assert semantics["requested"] is True
+    assert semantics["scope"] == "top_level_mmseqs_search_argv"
+    assert semantics["internal_child_split_proven"] is False
+    assert "ungappedprefilter" in semantics["caveat"]
+
+
+def test_target_split_semantics_for_unsharded_search_is_not_requested() -> None:
+    semantics = run_local_msa.describe_target_split_semantics(
+        {
+            "stage": "envdb_search",
+            "module": "search",
+            "uses_gpu_flag": True,
+            "split_count": None,
+        }
+    )
+
+    assert semantics == {
+        "requested": False,
+        "scope": "not_requested",
+        "internal_child_split_proven": None,
+        "caveat": None,
+    }
+
+
 def test_cpu_target_split_quality_report_records_acceleration_truth(monkeypatch, tmp_path: Path) -> None:
     db_dir = tmp_path / "db"
     _prepare_full_colabfold_db(db_dir)
@@ -1055,6 +1091,10 @@ def test_cpu_target_split_quality_report_records_acceleration_truth(monkeypatch,
     assert report["envdb_acceleration"]["backend"] == "cpu_native_split"
     assert report["envdb_acceleration"]["effective_gpu"] is False
     assert report["envdb_acceleration"]["target_split"] is True
+    assert report["envdb_acceleration"]["split_semantics"]["requested"] is True
+    assert report["envdb_acceleration"]["split_semantics"]["scope"] == "top_level_mmseqs_search_argv"
+    assert report["target_sharding"]["implementation_scope"] == "top_level_mmseqs_search_argv"
+    assert report["target_sharding"]["internal_split_proven"] is None
     assert report["effective_gpu_stages"] == []
     envdb_stages = [stage for stage in report["mmseqs_stage_reports"] if stage["stage"] == "envdb_search"]
     assert envdb_stages

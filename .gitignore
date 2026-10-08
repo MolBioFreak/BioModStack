@@ -93,6 +93,42 @@ apptainer/*
 # Environment
 .venv/
 gpu_debug.log
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local.env
+*.secret
+*.secrets
+*.secret.*
+*.secrets.*
+*.credentials
+*.credentials.*
+*.pem
+*.key
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+.ssh/
+ssh_config*
+
+# BioXP / robot-local linkage and credentials (local only)
+bioxp_linkage_url
+*bioxp*.env
+*bioxp*.local.*
+*bioxp*secret*
+*bioxp*credential*
+*bioxp*private_key*
+*bioxp*ssh_key*
+*bioxp*id_rsa*
+*bioxp*id_ecdsa*
+*bioxp*id_ed25519*
+*bioxp*ssh_config*
+*bioxp*known_hosts*
+config/bioxp.local.*
+config/bioxp.secrets.*
+platform/api/bioxp_linkage_url
 
 # Additional runtime files
 api.log

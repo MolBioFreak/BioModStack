@@ -5,6 +5,7 @@ import type {
   ShellContext,
   ShellRuntimeMode,
 } from './windowState.js';
+import type { ServiceRuntimeTarget } from './serviceControl.js';
 
 declare global {
   interface Window {
@@ -19,6 +20,8 @@ const START_ALL_CHANNEL = 'biomodstack:start-all';
 const STOP_ALL_CHANNEL = 'biomodstack:stop-all';
 const RESTART_ALL_CHANNEL = 'biomodstack:restart-all';
 const RESTART_API_CHANNEL = 'biomodstack:restart-api';
+const SWITCH_RUNTIME_CHANNEL = 'biomodstack:switch-runtime';
+const START_RUNTIME_TARGET_CHANNEL = 'biomodstack:start-runtime-target';
 const OPEN_IN_BROWSER_CHANNEL = 'biomodstack:open-in-browser';
 const GET_ZOOM_FACTOR_CHANNEL = 'biomodstack:get-zoom-factor';
 const SET_ZOOM_FACTOR_CHANNEL = 'biomodstack:set-zoom-factor';
@@ -60,10 +63,22 @@ function buildHostedUrl(frontendOrigin: string, routerBasename: string): string 
   return `${frontendOrigin}${routerBasename}`;
 }
 
+function defaultFrontendOrigin(runtimeMode: ShellRuntimeMode): string {
+  if (runtimeMode === 'dev') {
+    const devPort = process.env.BMS_DEV_WEB_HOST_PORT || '5173';
+    return `http://127.0.0.1:${devPort}`;
+  }
+  const stablePort = process.env.BMS_WEB_HOST_PORT || '18080';
+  return `http://127.0.0.1:${stablePort}`;
+}
+
 function resolvePreloadShellContext(options: Partial<ShellContext> = {}): ShellContext {
   const runtimeMode = options.runtimeMode ?? (process.env.BMS_RUNTIME_MODE === 'dev' ? 'dev' : 'container');
   const frontendOrigin = normalizeOrigin(
-    options.frontendOrigin ?? process.env.BMS_FRONTEND_ORIGIN ?? 'http://127.0.0.1:5173',
+    options.frontendOrigin
+      ?? process.env.BMS_ACTIVE_FRONTEND_ORIGIN
+      ?? process.env.BMS_FRONTEND_ORIGIN
+      ?? defaultFrontendOrigin(runtimeMode),
   );
   const routerBasename = normalizeRouterBasename(
     options.routerBasename ?? process.env.BMS_ROUTER_BASENAME ?? (runtimeMode === 'dev' ? '/' : '/bms/'),
@@ -88,6 +103,8 @@ const biomodstackApi: BiomodstackDesktopApi = {
   stopAll: (runtimeMode?: ShellRuntimeMode) => ipcRenderer.invoke(STOP_ALL_CHANNEL, runtimeMode),
   restartAll: (runtimeMode?: ShellRuntimeMode) => ipcRenderer.invoke(RESTART_ALL_CHANNEL, runtimeMode),
   restartApi: (runtimeMode?: ShellRuntimeMode) => ipcRenderer.invoke(RESTART_API_CHANNEL, runtimeMode),
+  switchRuntime: (runtimeMode: ShellRuntimeMode) => ipcRenderer.invoke(SWITCH_RUNTIME_CHANNEL, runtimeMode),
+  startRuntimeTarget: (target: ServiceRuntimeTarget) => ipcRenderer.invoke(START_RUNTIME_TARGET_CHANNEL, target),
   openInBrowser: () => ipcRenderer.invoke(OPEN_IN_BROWSER_CHANNEL),
   getZoomFactor: () => ipcRenderer.invoke(GET_ZOOM_FACTOR_CHANNEL),
   setZoomFactor: (zoomFactor: number) => ipcRenderer.invoke(SET_ZOOM_FACTOR_CHANNEL, zoomFactor),

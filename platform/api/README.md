@@ -9,9 +9,11 @@ and hardware proxying.
 
 - [main.py](main.py)
 
-On startup the API initializes the database, starts the GPU orchestrator,
-starts the analysis worker, and registers the router surface used by the web UI,
-Electron shell, local tooling, and linked hardware clients.
+On startup the API initializes the database, starts the analysis worker, and
+registers the router surface used by the web UI, Electron shell, local tooling,
+and linked hardware clients. The GPU workflow orchestrator starts only when the
+runtime is allowed to own workflow launches; guarded core-runtime mode skips that
+scheduler ownership and relies on the host workflow adapter instead.
 
 ## Runtime role
 
@@ -148,10 +150,12 @@ The API is responsible for:
 - serving optional mobile shell update metadata/assets
 - proxying BioXP linkage and robot-adjacent actions
 
-The BioXP router is intentionally centered on the current cockpit surface, not
-on mirroring every robot-local endpoint. Some robot-local routes, including
-motion reference-state and liquid-handling status/action surfaces, exist on the
-robot runtime before they exist under `/api/bioxp/*`.
+The BioXP router is intentionally centered on the current cockpit/proxy surface,
+not on a guarantee that every robot-local endpoint is mirrored. It currently
+covers linkage/status plus reference-state, liquid-handling, motion/power,
+latch/LED, thermal/chiller, camera, vision, and protocol route families under
+`/api/bioxp/*` when linkage is configured. Verify route parity before treating a
+new robot-local capability as BMS-supported.
 
 ## Related docs
 
@@ -159,5 +163,3 @@ robot runtime before they exist under `/api/bioxp/*`.
 - [../../docs/Platform_Overview.md](../../docs/Platform_Overview.md)
 - [../../docs/Desktop_Runtime_and_Shell_Architecture.md](../../docs/Desktop_Runtime_and_Shell_Architecture.md)
 - [../../docs/Results_and_Analysis.md](../../docs/Results_and_Analysis.md)
-- [../../docs/ai_guidance/Database_Instructions.md](../../docs/ai_guidance/Database_Instructions.md)
-- [../../docs/ai_guidance/Centralization_and_Standardization.md](../../docs/ai_guidance/Centralization_and_Standardization.md)
