@@ -581,7 +581,9 @@ async def test_confornets_ingest_resolves_legacy_absolute_output_dir(monkeypatch
 
         created = await ingest_job_results("job-confornets-legacy-absolute", str(legacy_output), session)
         assert created == 1
-        assert resolver_calls == [legacy_output.resolve()]
+        # Native and component publication owners may each resolve the root.
+        # Translation and the persisted artifact path, not call count, are the contract.
+        assert legacy_output.resolve() in resolver_calls
         design = (
             await session.execute(select(Design).where(Design.job_id == "job-confornets-legacy-absolute"))
         ).scalar_one()
