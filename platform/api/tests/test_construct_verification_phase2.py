@@ -292,11 +292,13 @@ def _run_case(
         encoding="utf-8",
     )
     breakpoint_path.write_text(
-        "breakpoint_status\tconfidence\tprimary_breakpoint_in_boundary_window\n",
+        "breakpoint_status\tconfidence\tprimary_breakpoint_in_boundary_window\n"
+        f"split_supported\thigh\t{'outside' if contradictory_breakpoint_evidence else 'inside'}\n",
         encoding="utf-8",
     )
     secondary_path.write_text(
-        f"non_boundary_split_reads\taligned_dimer_reads\n0\t{bam_mapped}\n",
+        "non_boundary_split_reads\taligned_dimer_reads\n"
+        f"{0 if not math.isfinite(secondary_anomaly_fraction) else int(round(secondary_anomaly_fraction * bam_mapped))}\t{bam_mapped}\n",
         encoding="utf-8",
     )
     topology = {
