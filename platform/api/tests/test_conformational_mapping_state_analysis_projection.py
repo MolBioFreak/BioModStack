@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import copy
 import importlib
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 
 from database import (
     ConformationalMappingLandscapeRow,
@@ -282,3 +285,115 @@ def test_state_analysis_projection_pair_row_migration_rejects_orphan_and_candida
         assert connection.execute(
             "SELECT id FROM conformational_mapping_state_landscape_analysis_rows"
         ).fetchall() == [("row-valid",)]
+
+
+@pytest.mark.asyncio
+async def test_production_sqlite_session_enforces_state_analysis_pair_row_foreign_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh production database module must enable SQLite FKs on its own connections."""
+
+    database_path = tmp_path / "production-pair-row-integrity.db"
+    import sqlite3
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TABLE conformational_mapping_requests (request_id VARCHAR(36) PRIMARY KEY NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO conformational_mapping_requests(request_id) VALUES ('request-1')"
+        )
+
+    importlib.import_module("migrations.add_state_landscape_analysis_projection").migrate(
+        str(database_path)
+    )
+    importlib.import_module("migrations.enforce_state_landscape_analysis_pair_row_integrity").migrate(
+        str(database_path)
+    )
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+    module_name = "production_database_pair_row_integrity_test"
+    database_module_path = Path(__file__).parents[1] / "database.py"
+    spec = importlib.util.spec_from_file_location(module_name, database_module_path)
+    assert spec is not None and spec.loader is not None
+    production_database = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = production_database
+    spec.loader.exec_module(production_database)
+
+    try:
+        async with production_database.async_session() as session:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO conformational_mapping_state_landscape_analysis_headers (
+                        request_id, analysis_id, content_sha256, source_ensemble_sha256,
+                        source_landscape_sha256, source_structure_map_sha256, comparison_sha256,
+                        formula_version, formula_sha256, policy_sha256, comparison_mode,
+                        comparison_target_id, comparison_scope, reference_backend_coordinates_json,
+                        reference_candidate_id, pair_count, row_count, exclusion_count
+                    ) VALUES (
+                        'request-1', 'analysis-1', :content_sha256, :source_ensemble_sha256,
+                        :source_landscape_sha256, :source_structure_map_sha256, :comparison_sha256,
+                        'formula-v1', :formula_sha256, :policy_sha256, 'all_pairs', 'target-1',
+                        'all', NULL, NULL, 1, 1, 0
+                    )
+                    """
+                ),
+                {
+                    "content_sha256": "a" * 64,
+                    "source_ensemble_sha256": "b" * 64,
+                    "source_landscape_sha256": "c" * 64,
+                    "source_structure_map_sha256": "d" * 64,
+                    "comparison_sha256": "e" * 64,
+                    "formula_sha256": "f" * 64,
+                    "policy_sha256": "0" * 64,
+                },
+            )
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO conformational_mapping_state_landscape_analysis_pairs (
+                        request_id, analysis_id, pair_id, candidate_a_id, candidate_b_id
+                    ) VALUES ('request-1', 'analysis-1', 'pair-1', 'candidate-a', 'candidate-b')
+                    """
+                )
+            )
+            await session.commit()
+
+            row_insert = text(
+                """
+                INSERT INTO conformational_mapping_state_landscape_analysis_rows (
+                    id, request_id, analysis_id, pair_id, candidate_a_id, candidate_b_id,
+                    target_id, entity_instance_id, auth_asym_id, auth_seq_id, insertion_code,
+                    sequence_index, validated_wt, metrics_json, availability_json
+                ) VALUES (
+                    :id, 'request-1', 'analysis-1', :pair_id, :candidate_a_id, :candidate_b_id,
+                    'target-1', 'entity-1', 'A', 1, '', 1, 'A', '{}', '{}'
+                )
+                """
+            )
+            with pytest.raises(IntegrityError):
+                await session.execute(
+                    row_insert,
+                    {
+                        "id": "row-orphan",
+                        "pair_id": "pair-not-in-pairs",
+                        "candidate_a_id": "candidate-a",
+                        "candidate_b_id": "candidate-b",
+                    },
+                )
+            await session.rollback()
+
+            with pytest.raises(IntegrityError):
+                await session.execute(
+                    row_insert,
+                    {
+                        "id": "row-mismatch",
+                        "pair_id": "pair-1",
+                        "candidate_a_id": "candidate-a",
+                        "candidate_b_id": "candidate-other",
+                    },
+                )
+    finally:
+        await production_database.engine.dispose()
+        sys.modules.pop(module_name, None)

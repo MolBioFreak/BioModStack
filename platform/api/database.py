@@ -21,6 +21,18 @@ engine_kwargs = {"echo": False}
 if DATABASE_URL.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"timeout": 30}
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
+
+if engine.dialect.name == "sqlite":
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+        """SQLite foreign-key constraints are disabled by default per DBAPI connection."""
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cursor.close()
+
+
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 Base = declarative_base()
