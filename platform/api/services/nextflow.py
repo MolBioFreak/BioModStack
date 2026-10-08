@@ -2037,7 +2037,7 @@ async def _persist_boltz_launch_authority(session, job, command, *, compiled_par
     authority_transport = transport(authority)
     if compiled_parameters is not None:
         compiled_parameters.update({
-            'protein_science_contract_revision': 1,
+            'protein_science_contract_revision': compiled_parameters.get('protein_science_contract_revision', '1'),
             'boltz_launch_authority_path': authority_transport[1],
             'boltz_launch_authority_sha256': authority_transport[3],
         })
@@ -2303,11 +2303,12 @@ async def launch_nextflow_job(
                 if gpu_id is not None:
                     launch_params["gpu_id"] = gpu_id
                 compiled_parameters: Dict[str, Any] = {}
+                native_invocations = []
                 remote_command = (
                     _build_msa_batch_command(launch_params, output_dir)
                     if model_id == "msa_batch"
                     else build_job_nextflow_command(job, launch_params, output_dir,
-                        compiled_parameters=compiled_parameters)
+                        compiled_parameters=compiled_parameters, native_invocations=native_invocations)
                 )
                 remote_command = await _persist_boltz_launch_authority(session, job, remote_command,
                     compiled_parameters=compiled_parameters)
@@ -2327,6 +2328,7 @@ async def launch_nextflow_job(
                     job,
                     command=remote_command,
                     compiled_parameters=compiled_parameters,
+                    native_invocation=native_invocations[0] if native_invocations else None,
                     environment=remote_environment,
                     secret_environment={stage_reporting.ENV_TOKEN_KEY: stage_report_token},
                 )
@@ -3371,9 +3373,12 @@ def uses_native_parent_components(command: list[str]) -> bool:
                for value in command if value.endswith('.nf'))
 
 
-def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=None, materialize_inputs=True):
+def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=None,
+                               materialize_inputs=True, native_invocations=None):
     """Execution projection of the complete, persisted-Job native invocation."""
     invocation = compile_job_nextflow_invocation(job, params, output_dir)
+    if native_invocations is not None:
+        native_invocations[:] = [invocation]
     if materialize_inputs:
         invocation.materialize_inputs(Path(output_dir))
     if compiled_parameters is not None:
@@ -3476,7 +3481,8 @@ def compile_nextflow_invocation(
         return NativeInvocation.capture(model_id=model_id, mode=mode,
             command=[os.fspath(value) if isinstance(value, os.PathLike) else value for value in command],
             requested=requested_snapshot, effective=params,
-            native_parameters=native_parameters, generated_inputs=generated_inputs)
+            native_parameters=native_parameters, entrypoint=workflow_entrypoint,
+            generated_inputs=generated_inputs)
 
     from services.msa_policy import apply_msa_policy
     params = apply_msa_policy(model_id, params)

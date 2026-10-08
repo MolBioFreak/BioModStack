@@ -453,6 +453,7 @@ def _controller_attempt_guard(job_id: str):
 async def launch_remote_job(
     session: AsyncSession, job: Job, *, command: list[str],
     compiled_parameters: dict,
+    native_invocation=None,
     environment: dict[str, str] | None = None,
     secret_environment: dict[str, str] | None = None,
 ) -> str:
@@ -461,6 +462,7 @@ async def launch_remote_job(
             raise RemoteExecutionError("Remote attempt already has an active controller")
         return await _launch_remote_job_owned(session, job, command=command,
             compiled_parameters=compiled_parameters,
+            native_invocation=native_invocation,
             environment=environment, secret_environment=secret_environment)
 
 
@@ -470,6 +472,7 @@ async def _launch_remote_job_owned(
     *,
     command: list[str],
     compiled_parameters: dict,
+    native_invocation=None,
     environment: dict[str, str] | None = None,
     secret_environment: dict[str, str] | None = None,
 ) -> str:
@@ -488,6 +491,7 @@ async def _launch_remote_job_owned(
         bundle = await asyncio.to_thread(
             prepare_remote_bundle, job=job, target=target, command=command,
             compiled_parameters=compiled_parameters,
+            native_invocation=native_invocation,
             environment=environment, attempt_id=requested_attempt_id,
         )
         run_id = f"{REMOTE_RUN_PREFIX}{bundle.attempt_id}"

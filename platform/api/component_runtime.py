@@ -263,6 +263,7 @@ class NativeInvocation:
     native_parameters_json: bytes
     generated_inputs: tuple[GeneratedInput, ...] = ()
     source_identity: SourceIdentity | None = None
+    entrypoint: str | None = None
 
     def __post_init__(self) -> None:
         if (type(self.model_id) is not str or not self.model_id
@@ -273,6 +274,14 @@ class NativeInvocation:
             raise ValueError('native invocation command must contain text arguments')
         if self.source_identity is not None and not isinstance(self.source_identity, SourceIdentity):
             raise ValueError('native invocation source identity must be typed')
+        if self.entrypoint is not None:
+            if type(self.entrypoint) is not str or '\x00' in self.entrypoint:
+                raise ValueError('native workflow entrypoint must be text')
+            entrypoint = PurePosixPath(self.entrypoint)
+            if (entrypoint.is_absolute() or '..' in entrypoint.parts
+                    or '\\' in self.entrypoint or entrypoint.as_posix() != self.entrypoint
+                    or entrypoint.suffix != '.nf'):
+                raise ValueError('native workflow entrypoint must be a contained Nextflow source path')
         if type(self.generated_inputs) is not tuple or any(not isinstance(item, GeneratedInput) for item in self.generated_inputs):
             raise ValueError('generated input roster must be immutable and typed')
         paths = [item.relative_path for item in self.generated_inputs]
@@ -293,10 +302,11 @@ class NativeInvocation:
     def capture(cls, *, model_id: str, mode: str, command: Sequence[str],
                 requested: Mapping[str, Any], effective: Mapping[str, Any],
                 native_parameters: Mapping[str, Any],
+                entrypoint: str,
                 generated_inputs: Sequence[GeneratedInput] = ()) -> NativeInvocation:
         return cls(model_id, mode, tuple(command), canonical_bytes(dict(requested)),
                    canonical_bytes(dict(effective)), canonical_bytes(dict(native_parameters)),
-                   tuple(generated_inputs))
+                   generated_inputs=tuple(generated_inputs), entrypoint=entrypoint)
 
     @property
     def native_parameters(self) -> dict[str, Any]:
@@ -308,6 +318,7 @@ class NativeInvocation:
             'schema_name': 'bms.native-invocation.v1', 'schema_version': 1,
             'model_id': self.model_id, 'mode': self.mode,
             'source_identity': asdict(self.source_identity) if self.source_identity is not None else None,
+            'entrypoint': self.entrypoint,
             'command': list(self.command),
             'requested': json.loads(self.requested_json),
             'requested_sha256': hashlib.sha256(self.requested_json).hexdigest(),

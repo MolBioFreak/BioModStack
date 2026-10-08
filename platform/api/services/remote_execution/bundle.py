@@ -484,18 +484,59 @@ def _rewrite(value: str, path_map: dict[str, str]) -> str:
 
 
 def compile_remote_dependencies(model_id: str, mode: str, command: list[str], *,
-                                compiled_parameters: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+                                compiled_parameters: dict[str, Any],
+                                native_invocation=None) -> tuple[list[str], dict[str, Any]]:
     """Materialize dependencies from the shared compiler's native projection.
 
     Rendered argv is transport, never a source for reconstructing scientific
     values. Remaining placement adapters below must preserve this authority.
     """
+    from component_runtime import NativeInvocation, canonical_bytes
+    if (not isinstance(native_invocation, NativeInvocation)
+            or native_invocation.source_identity is None or native_invocation.entrypoint is None):
+        raise RemoteBundleError('Source-bound shared native invocation is required')
+    if (native_invocation.model_id, native_invocation.mode) != (model_id, mode):
+        raise RemoteBundleError('Native invocation belongs to another workflow request')
+    if not isinstance(compiled_parameters, dict):
+        raise RemoteBundleError('Shared compiler parameter projection is required')
+    declared = native_invocation.native_parameters
+    if (not declared or any(key not in compiled_parameters for key in declared)
+            or canonical_bytes({key: compiled_parameters[key] for key in declared})
+            != native_invocation.native_parameters_json):
+        raise RemoteBundleError('Native parameter projection changed after compilation')
+    prefix = native_invocation.command
+    if tuple(command[:len(prefix)]) != prefix:
+        raise RemoteBundleError('Native command changed after compilation')
+    # Existing server-owned launch metadata may extend, but never replace,
+    # the scientific projection. Placement path translation happens below.
+    extensions = command[len(prefix):]
+    metadata = {'component_attempt_id', 'protein_science_contract_revision',
+                'boltz_launch_authority_path', 'boltz_launch_authority_sha256'}
+    if len(extensions) % 2:
+        raise RemoteBundleError('Native launch metadata is not a key/value projection')
+    observed_metadata = {}
+    for index in range(0, len(extensions), 2):
+        flag, value = extensions[index:index + 2]
+        if (type(flag) is not str or type(value) is not str
+                or not flag.startswith('--') or flag[2:] not in metadata):
+            raise RemoteBundleError('Undeclared native command extension')
+        key = flag[2:]
+        if key in observed_metadata and observed_metadata[key] != value:
+            raise RemoteBundleError('Conflicting native launch metadata')
+        observed_metadata[key] = value
+        if key in declared and str(declared[key]) != value:
+            raise RemoteBundleError('Native launch metadata conflicts with compiled authority')
+        if key != 'component_attempt_id' and (
+                key not in compiled_parameters or str(compiled_parameters[key]) != value):
+            raise RemoteBundleError('Native launch metadata differs from its typed binding')
+    if set(compiled_parameters) - set(declared) - metadata:
+        raise RemoteBundleError('Undeclared native parameter extension')
     # These current workflows still require controller-side child orchestration.
     # Reject rather than silently dropping required stages or falling back locally.
     callback_workflows = {
         'antibody_denovo.nf', 'protein_local_redesign.nf', 'ppiflow_generator_design.nf',
     }
-    selected_workflows = {Path(value).name for value in command if value.endswith('.nf')}
+    selected_workflows = {PurePosixPath(native_invocation.entrypoint).name}
     blocked = selected_workflows & callback_workflows
     if blocked:
         raise RemoteBundleError(
@@ -640,6 +681,7 @@ def prepare_remote_bundle(
     target: Any,
     command: list[str],
     compiled_parameters: dict[str, Any],
+    native_invocation=None,
     environment: dict[str, str] | None = None,
     attempt_id: str | None = None,
 ) -> PreparedRemoteBundle:
@@ -691,6 +733,10 @@ def prepare_remote_bundle(
         raise RemoteBundleError(
             "Job source identity no longer matches the code compiling this remote command"
         )
+    from component_runtime import NativeInvocation, SourceIdentity
+    if (not isinstance(native_invocation, NativeInvocation)
+            or native_invocation.source_identity != SourceIdentity(revision, inherited_tree)):
+        raise RemoteBundleError('Native invocation source differs from remote bundle source')
     tree = _git(repo_root, "rev-parse", f"{revision}^{{tree}}")
     if inherited_tree != tree:
         raise RemoteBundleError("Inherited source tree does not match the inherited revision")
@@ -721,7 +767,7 @@ def prepare_remote_bundle(
             raise RemoteBundleError('Remote component attempt must be bound by the bundle owner')
         command = [*command, '--component_attempt_id', attempt_id]
     command, effective_params = compile_remote_dependencies(str(job.model_id), str(job.mode), command,
-        compiled_parameters=compiled_parameters)
+        compiled_parameters=compiled_parameters, native_invocation=native_invocation)
     if native and effective_params.get('run_frustrampnn') is True:
         assignment = dict((job.provenance or {}).get('remote_execution_assignment') or {})
         indices = assignment.get('gpu_indices')
