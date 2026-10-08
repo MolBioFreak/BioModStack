@@ -10,7 +10,7 @@
 import { useState, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { fetchFiles, submitJob, uploadFile } from '../lib/api';
+import { fetchFiles, submitOntNgsJob, uploadFile } from '../lib/api';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 
@@ -798,10 +798,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 throw new Error('FASTQ plasmid QC requires a reference FASTA (path or pasted sequence).');
             }
 
+            const workflowId = inputSource === 'fastq'
+                ? 'ont_plasmid_qc'
+                : 'ont_methylation_analysis';
             const jobPayload = {
                 name: jobName || `nanopore_${Date.now()}`,
-                model_id: 'nanopore',
-                mode: 'methylation_analysis',
                 pinned_gpu: isCpuOnly ? null : (pinnedGpus.length === 1 ? pinnedGpus[0] : null),
                 params: {
                     reference_fasta: effectiveReferencePath || undefined,
@@ -851,11 +852,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     ...(runModkit && canRunModkit && modkitFilterThreshold != null && { modkit_filter_threshold: modkitFilterThreshold }),
                 }
             };
-            return submitJob(jobPayload);
+            return submitOntNgsJob(workflowId, jobPayload);
         },
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            const submittedJobId = response.data?.job_id ?? response.data?.id;
+            const submittedJobId = response.data?.id;
             if (submittedJobId) {
                 navigate(`/jobs/${submittedJobId}`);
                 return;
