@@ -49,7 +49,7 @@ PROCESS_CONTRACTS = {
     'modules/combine_metadata.nf:CombineMetadata': (('pyrosetta_tools',), ('path metadata_fold', 'path metadata_fold_seq'), ('path ("combined_metadata.csv"), emit: csv', 'path "combined_metadata.log"'), (), ()),
     'modules/compress.nf:Compress': (('pyrosetta_tools',), ('val program', 'path files'), ('path "*.tar.gz"',), (), ()),
     'modules/conformational_mapping_confornets.nf:PrepCanonicalConforNetsRequest': (('ConforNetsCanonical',), ('path request_root',), ("path 'confornets_request.json', emit: request", "path 'confornets_assets', emit: assets_dir"), ('scripts/prep_canonical_confornets_request.py',), ()),
-    'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets': (('ConforNetsCanonical', 'gpu'), ('path request_json', 'path assets_dir'), ("path 'confornets_results', emit: results_dir", "path 'run_confornets.log', emit: log"), (), ()),
+    'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets': (('ConforNetsCanonical', 'gpu'), ('path request_json', 'path assets_dir'), ("path 'confornets_results', emit: results_dir", "path 'run_confornets.log', emit: log"), ('scripts/run_confornets_inference.py', 'scripts/prepare_confornets_msa.py'), ()),
     'modules/conformational_mapping_confornets.nf:BindCanonicalConforNetsOutputLedger': (('local_cpu',), ('path request_root', 'path native_results'), ("path 'bound_confornets_results', emit: results_dir",), ('scripts/bind_confornets_output_ledger.py',), ()),
     'modules/conformational_mapping_confornets.nf:FinalizeCanonicalConforNets': (('local_cpu',), ('path request_root', 'path native_results'), ("path 'canonical_confornets', emit: canonical_dir", "path 'canonical_confornets/cm_native_artifacts_v1.json', emit: native_manifest", "path 'canonical_confornets/cm_ensemble_v1.json', emit: ensemble_manifest"), ('scripts/finalize_confornets_conformational_mapping.py',), ()),
     'modules/conformational_mapping_frustrampnn.nf:PrepareConformationalMappingFrustraMPNNV2': (('CPU',), ('tuple val(request_id), val(backend_dir), path(request_root), path(canonical_dir)',), ("tuple val(request_id), val(backend_dir), path('frustrampnn_prepared'), \\", "path('cm_frustrampnn_preparation_manifest_v1.json'), emit: prepared"), ('scripts/prepare_conformational_mapping_frustrampnn_v2.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
@@ -59,7 +59,7 @@ PROCESS_CONTRACTS = {
     'modules/conformational_mapping_protenix.nf:PrepareProtenixExecution': ((), ('tuple val(request_id), path(request_root)',), ("tuple val(request_id), path('protenix_preflight'), emit: prepared",), ('scripts/prepare_protenix_execution_snapshot.py', 'scripts/prepare_runtime_image_attestation.py', 'scripts/run_protenix_inference.py'), ()),
     'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble': (('Protenix', 'gpu'), ('tuple val(request_id), path(preflight), val(runtime_image), val(preflight_source)',), ("tuple val(request_id), path('canonical_protenix'), emit: canonical", "path 'canonical_protenix/cm_native_artifacts_v1.json', emit: native_manifest", "path 'canonical_protenix/cm_ensemble_v1.json', emit: ensemble_manifest"), ('scripts/attest_protenix_runtime.py', 'scripts/finalize_protenix_conformational_mapping.py', 'scripts/prepare_protenix_conformational_mapping.py', 'scripts/prepare_protenix_msa.py', 'scripts/prepare_runtime_image_attestation.py'), ('container { runtime_image }', 'beforeScript {\n        def store = params.runtime_image_store ?: System.getenv(\'BMS_RUNTIME_IMAGE_STORE\') ?: "${params.container_dir}/.image-store"\n        """\n        ${params.api_python} ${params.code_root}/scripts/prepare_runtime_image_attestation.py \\\n          --resolve-reference --store-root "${store}" \\\n          --registry "${preflight_source}/request/cm_runtime_registry_v1.json" \\\n          --reference "${preflight_source}/runtime-image-reference.json" \\\n          --receipt "${preflight_source}/runtime-image-receipt.json" \\\n          --executing-image "${runtime_image}" >/dev/null || exit 1\n\n        """\n    }')),
     'modules/confornets_experimental.nf:PrepConforNetsRequest': (('local_cpu',), (), ("path 'confornets_request.json', emit: request", "path 'confornets_assets', emit: assets_dir", "path '*.log'"), ('scripts/prep_confornets_request.py',), ()),
-    'modules/confornets_experimental.nf:RunConforNets': (('ConforNets', 'gpu'), ('path request_json', 'path assets_dir'), ("path 'confornets_results', emit: results_dir", "path '*.log'"), (), ()),
+    'modules/confornets_experimental.nf:RunConforNets': (('ConforNets', 'gpu'), ('path request_json', 'path assets_dir'), ("path 'confornets_results', emit: results_dir", "path '*.log'"), ('scripts/run_confornets_inference.py', 'scripts/prepare_confornets_msa.py'), ()),
     'modules/confornets_experimental.nf:FinalizeConforNetsOutputs': (('local_cpu',), ('path results_dir',), ("path 'final_confornets_results', emit: results_dir", "path 'final_confornets_results/conformers/*.cif', emit: cifs, optional: true", "path 'final_confornets_results/**/*.json', emit: jsons, optional: true", "path 'final_confornets_results/**/*.csv', emit: csvs, optional: true", "path 'final_confornets_results/**/*.pt', emit: states, optional: true", "path '*.log'"), (), ()),
     'modules/esmfold2_experimental.nf:ESMFold2MSAPredict': (('ESMFold2', 'gpu'), ("tuple val(producer_meta), val(request), val(source_paths), path(staged_files, stageAs: 'inputs/input??/*')",), ("tuple val(producer_meta), path('esmfold2_results/*.cif'), emit: typed_cifs", "path 'esmfold2_results/*.metrics.json', emit: metrics", "path 'esmfold2_results/*.telemetry.json', emit: telemetry", "path 'esmfold2_results/manifest.json', emit: manifest", "path 'esmfold2_results/summary.tsv', emit: summary", "path 'esmfold2_results/effective_settings.json', emit: effective_settings"), (), ()),
     'modules/esmfold2_experimental.nf:ESMFold2Predict': (('ESMFold2', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name)',), ("tuple val(producer_meta), path('esmfold2_results/*.cif'), emit: typed_cifs", 'path "esmfold2_results/*.metrics.json", emit: metrics', "tuple val(sequence_name), path('esmfold2_results/*.cif'), path('esmfold2_results/*.metrics.json'), emit: shape_result", 'path "esmfold2_results/*.telemetry.json", emit: telemetry', 'path "esmfold2_results/manifest.json", emit: manifest', 'path "esmfold2_results/summary.tsv", emit: summary'), (), ()),
@@ -561,7 +561,9 @@ class _NativeAnnotations:
         key = predictor + ':generated_msa'
         if consumer in {'modules/antibody_batch.nf:BatchProtenixValidation',
                         'modules/protenix.nf:ProtenixFromComplex',
-                        'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble'}:
+                        'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble',
+                        'modules/confornets_experimental.nf:RunConforNets',
+                        'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets'}:
             self.asset('support_tool', 'scripts/lib/component_adapter.py', consumer)
         enabled = self.p.get('protenix_use_msa', True) is not False if predictor == 'protenix' else self.p.get('boltz_use_msa') is True
         self.roles.append(NativeArtifactRole(key, predictor, 'input', 'native_chain_alignments',
@@ -814,7 +816,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         for selector in ('cn_confornet_path', 'cn_mse_dir', 'cn_source_test_cases'):
             if p.get(selector):a.asset('runtime_data', None, entrypoint, selector)
         if not yes('cn_skip_msa'):
-            a.msa('protenix', ('PrepConforNetsRequest',))
+            a.msa('protenix', ('PrepConforNetsRequest',), consumer='modules/confornets_experimental.nf:RunConforNets')
         return True
 
     if workflow == 'boltz_cp_experimental':
@@ -839,6 +841,8 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             elif backend == 'confornets':
                 after = a.chain(['PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets',
                     'FinalizeConforNetsOutputs', 'BindCanonicalConforNetsOutputLedger', 'FinalizeCanonicalConforNets'])
+                if not cfg.get('confornets', {}).get('skip_msa', False):
+                    a.msa('protenix', ('PrepCanonicalConforNetsRequest',), consumer='modules/conformational_mapping_confornets.nf:RunCanonicalConforNets')
             elif backend == 'external_import':
                 after = a.chain(['CanonicalConformationalImport'])
             else:

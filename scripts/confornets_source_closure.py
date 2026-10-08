@@ -72,7 +72,7 @@ BMS_WRAPPER_SOURCES: Final = {
 }
 
 
-def required_source_paths(task: str) -> tuple[str, ...]:
+def required_source_paths(task: str, *, prepared_msa: bool = False) -> tuple[str, ...]:
     """Return the exact ordered source-path closure for one task."""
     if task not in TASK_UPSTREAM_SOURCES:
         raise ValueError(f"unsupported ConforNets task: {task!r}")
@@ -80,6 +80,10 @@ def required_source_paths(task: str) -> tuple[str, ...]:
         *COMMON_UPSTREAM_SOURCES,
         *TASK_UPSTREAM_SOURCES[task],
         *BMS_WRAPPER_SOURCES[task],
+        *(("biomodstack/prepare_confornets_msa.py",
+           "biomodstack/lib/component_adapter.py",
+           "bms-source/biomodstack_msa_handoff.py",
+           "bms-source/platform/api/component_runtime.py") if prepared_msa else ()),
     )
 
 
@@ -89,13 +93,13 @@ def validate_source_evidence(
     commands: object,
 ) -> tuple[str, ...]:
     """Require the exact task source set and both ordered child drivers."""
-    expected = required_source_paths(task)
     if not isinstance(sources, list):
         raise ValueError("ConforNets source evidence is missing")
     observed = tuple(
         source.get("relative_path") if isinstance(source, dict) else None
         for source in sources
     )
+    expected = required_source_paths(task, prepared_msa="biomodstack/prepare_confornets_msa.py" in observed)
     if observed != expected:
         raise ValueError("ConforNets source evidence does not equal the required closure")
     if (

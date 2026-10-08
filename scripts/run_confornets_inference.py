@@ -46,16 +46,21 @@ def _sha256_file(path: Path) -> str:
 def _runtime_source_records(
     repo_path: Path,
     task: str,
+    *, prepared_msa: bool = False,
 ) -> list[dict[str, Any]]:
     repo_root = repo_path.resolve(strict=True)
     wrapper_root = Path(__file__).resolve(strict=True).parent
     records: list[dict[str, Any]] = []
-    for relative in required_source_paths(task):
+    for relative in required_source_paths(task, prepared_msa=prepared_msa):
         if relative.startswith("biomodstack/"):
             path = (wrapper_root / relative.removeprefix("biomodstack/")).resolve(
                 strict=True
             )
             path.relative_to(wrapper_root)
+        elif relative.startswith("bms-source/"):
+            source_root = wrapper_root.parent
+            path = (source_root / relative.removeprefix("bms-source/")).resolve(strict=True)
+            path.relative_to(source_root)
         else:
             path = (repo_root / relative).resolve(strict=True)
             path.relative_to(repo_root)
@@ -218,7 +223,7 @@ def _build_run_command(request: dict[str, Any], assets_dir: Path, raw_dir: Path)
 
 
 def _build_preprocess_command(
-    request: dict[str, Any], assets_dir: Path
+    request: dict[str, Any], assets_dir: Path, *, prepared_msa: bool = False
 ) -> tuple[Path, list[str]]:
     repo_path = Path(request.get("params", {}).get("confornets_repo_path") or "")
     if not repo_path.exists() or not repo_path.is_dir():
@@ -231,7 +236,10 @@ def _build_preprocess_command(
         "--assets-dir",
         str(assets_dir),
     ]
-    if _bool((request.get("params") or {}).get("skip_msa")):
+    if prepared_msa and not (assets_dir / request['benchmark'] / 'query_msa.json').is_file():
+        raise ValueError('Prepared ConforNets query_msa.json is missing')
+    # Upstream skips its search, not save_batches or OF3's use_msas=True.
+    if prepared_msa or _bool((request.get("params") or {}).get("skip_msa")):
         cmd.append("--skip-msa")
     return repo_path, cmd
 
@@ -877,6 +885,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run upstream ConforNets and normalize BioModStack artifacts")
     parser.add_argument("--request", required=True)
     parser.add_argument("--assets-dir", default="")
+    parser.add_argument("--generated-msa-service", action="store_true")
     parser.add_argument("--output-dir", default="confornets_results")
     args = parser.parse_args()
 
@@ -893,6 +902,8 @@ def main() -> None:
         assets_dir = Path(request["assets_dir"]).resolve()
     if not assets_dir.exists():
         raise SystemExit(f"ConforNets assets directory not found: {assets_dir}")
+
+    prepared_msa = args.generated_msa_service and not _bool(request['params'].get('skip_msa'))
 
     relocated_request = dict(request)
     relocated_request["assets_dir"] = str(assets_dir)
@@ -954,10 +965,17 @@ def main() -> None:
                 "selected ConforNets checkpoint differs from registered identity"
             )
         source_records = _runtime_source_records(
-            repo_path, relocated_request["task"]
+            repo_path, relocated_request["task"], prepared_msa=prepared_msa
         )
+    if prepared_msa:
+        from prepare_confornets_msa import prepare
+        prepared_assets = output_dir / 'prepared_assets'
+        prepare(request, assets_dir, prepared_assets)
+        assets_dir = prepared_assets.resolve()
+        relocated_request['assets_dir'] = str(assets_dir)
+        (output_dir / 'request.json').write_text(json.dumps(relocated_request, indent=2), encoding='utf-8')
     preprocess_repo, preprocess_cmd = _build_preprocess_command(
-        relocated_request, assets_dir
+        relocated_request, assets_dir, prepared_msa=prepared_msa
     )
     if preprocess_repo.resolve(strict=True) != repo_path:
         raise RuntimeError("ConforNets preprocessing and inference repositories differ")
@@ -971,7 +989,7 @@ def main() -> None:
         assert commit is not None
         assert identity is not None
         ledger_path.chmod(0o440)
-        if _runtime_source_records(repo_path, relocated_request["task"]) != source_records:
+        if _runtime_source_records(repo_path, relocated_request["task"], prepared_msa=prepared_msa) != source_records:
             raise RuntimeError("ConforNets source identity changed during execution")
         attestation = {
             "schema_name": "cm_confornets_runtime_attestation", "schema_version": 2,

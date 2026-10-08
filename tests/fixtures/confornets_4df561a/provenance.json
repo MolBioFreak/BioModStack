@@ -1,0 +1,34 @@
+{
+  "confornets_commit": "4df561a1fbd0fd2b9c7a230fa62957a837d9f72d",
+  "openfold3_commit": "cc8bf9dd3f162fed45cc1189a130877996b425d3",
+  "files": {
+    "openfold3__projects__of3_all_atom__config__inference_query_format.py.txt": {
+      "source": "openfold3/projects/of3_all_atom/config/inference_query_format.py",
+      "sha256": "1be6c916300c0a3c2f2426f483ff8c210ffb21d13ca4b18aba12daea4a4aa8f2"
+    },
+    "openfold3__core__config__config_utils.py.txt": {
+      "source": "openfold3/core/config/config_utils.py",
+      "sha256": "ba4f59f3d4be7f75b82439e3f6d9f2235798cf2790b519e0d6870b1d0fbbaeb1"
+    },
+    "openfold3__core__data__io__sequence__msa.py.txt": {
+      "source": "openfold3/core/data/io/sequence/msa.py",
+      "sha256": "f1846df437d3deb4bbf3d2bbbdff0ff863938b5e48618998d5a7e0e5ba0eae63"
+    },
+    "openfold3__core__data__io__sequence__fasta.py.txt": {
+      "source": "openfold3/core/data/io/sequence/fasta.py",
+      "sha256": "523cacb28a27f5262b858ce5540580d35cd3786a8cc806fbe9a266636f2b31d2"
+    },
+    "openfold3__core__data__resources__residues.py.txt": {
+      "source": "openfold3/core/data/resources/residues.py",
+      "sha256": "23b4f80a23f8f0239c80e80984114f737e8052fc3dfba76889c872e29b62fa72"
+    },
+    "confornet_preprocess.py.txt": {
+      "source": "confornet/preprocess.py",
+      "sha256": "9c262d2aad845b3a196c88ef5bc3a19de2661388967a998482d15a1d44b33c93"
+    },
+    "preprocess.py.txt": {
+      "source": "preprocess.py",
+      "sha256": "928ab0711cf65be93b995f3a86c2492bbb764612aae70be36c0fa2b365a82933"
+    }
+  }
+}
