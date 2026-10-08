@@ -64,6 +64,7 @@ def test_panel_status_indicators_ignore_stale_process_fallbacks(monkeypatch) -> 
     import urllib.request
 
     monkeypatch.setattr(module, "operator_runtime_mode", lambda project_root=None: "dev")
+    monkeypatch.setattr(module, "runtime_descriptor", _ready_runtime_descriptor)
     monkeypatch.setattr(module, "runtime_api_health_url", lambda **kwargs: "http://dev/api/health")
     monkeypatch.setattr(module, "operator_frontend_url", lambda **kwargs: "http://dev/")
     monkeypatch.setattr(urllib.request, "urlopen", unreachable)
@@ -73,11 +74,43 @@ def test_panel_status_indicators_ignore_stale_process_fallbacks(monkeypatch) -> 
     assert module.check_frontend_status() is False
 
 
-def test_panel_status_indicators_use_one_selected_runtime_and_accept_http_200(monkeypatch) -> None:
-    module = load_module(monkeypatch)
-    requested_urls = []
+def _ready_runtime_descriptor(*, runtime_mode, **kwargs):
+    components = {
+        "api": {
+            "required": True,
+            "active": True,
+            "ready": True,
+            "http_ready": True,
+            "owner_verified": True,
+        },
+        "frontend": {
+            "required": True,
+            "active": True,
+            "ready": True,
+            "http_ready": True,
+            "owner_verified": True,
+        },
+    }
+    if runtime_mode == "container":
+        components["workflow-adapter"] = {
+            "required": True,
+            "active": True,
+            "ready": True,
+            "http_ready": True,
+            "owner_verified": True,
+        }
+    return {
+        "runtime_mode": runtime_mode,
+        "runtime_active": True,
+        "runtime_ready": True,
+        "components": components,
+    }
 
-    class ReadyResponse:
+
+def _json_response(payload: dict):
+    import json
+
+    class JsonResponse:
         status = 200
 
         def __enter__(self):
@@ -86,19 +119,114 @@ def test_panel_status_indicators_use_one_selected_runtime_and_accept_http_200(mo
         def __exit__(self, exc_type, exc, traceback):
             return False
 
-    def ready(req, **kwargs):
-        requested_urls.append(req.full_url)
-        return ReadyResponse()
+        def read(self):
+            return json.dumps(payload).encode("utf-8")
 
+    return JsonResponse()
+
+
+def test_panel_status_rejects_http_200_with_degraded_api_readiness(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    monkeypatch.setattr(module, "runtime_descriptor", _ready_runtime_descriptor)
     import urllib.request
 
-    monkeypatch.setattr(module, "runtime_api_health_url", lambda **kwargs: f"http://{kwargs['runtime_mode']}/api/health")
-    monkeypatch.setattr(module, "operator_frontend_url", lambda **kwargs: f"http://{kwargs['runtime_mode']}/")
-    monkeypatch.setattr(urllib.request, "urlopen", ready)
+    monkeypatch.setattr(urllib.request, "urlopen",
+        lambda *args, **kwargs: _json_response(
+            {
+                "status": "degraded",
+                "liveness": {"alive": True},
+                "readiness": {"ready": False},
+            }
+        ),
+    )
 
-    assert module.check_api_status("dev") is True
-    assert module.check_frontend_status("dev") is True
-    assert requested_urls == ["http://dev/api/health", "http://dev/"]
+    status = module.runtime_status_snapshot("container")
+
+    assert status["runtime_ready"] is False
+    assert status["api_ready"] is False
+
+
+def test_panel_status_rejects_http_200_from_unmanaged_frontend(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    descriptor = _ready_runtime_descriptor(runtime_mode="dev")
+    descriptor["runtime_active"] = False
+    descriptor["runtime_ready"] = False
+    descriptor["components"]["frontend"].update(
+        active=False,
+        ready=False,
+        owner_verified=False,
+    )
+    monkeypatch.setattr(module, "runtime_descriptor", lambda **kwargs: descriptor)
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen",
+        lambda *args, **kwargs: _json_response(
+            {
+                "status": "healthy",
+                "liveness": {"alive": True},
+                "readiness": {"ready": True},
+            }
+        ),
+    )
+
+    status = module.runtime_status_snapshot("dev")
+
+    assert status["runtime_ready"] is False
+    assert status["frontend_ready"] is False
+
+
+def test_panel_status_section_labels_dev_and_production_separately(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+
+    class FakeRow:
+        def __init__(self):
+            self.title = ""
+            self.subtitle = ""
+
+        def set_title(self, title):
+            self.title = title
+
+        def set_subtitle(self, subtitle):
+            self.subtitle = subtitle
+
+        def set_subtitle_lines(self, *args):
+            pass
+
+        def get_last_child(self):
+            return None
+
+    class FakeGroup:
+        def __init__(self):
+            self.rows = []
+
+        def set_title(self, *args):
+            pass
+
+        def add(self, row):
+            self.rows.append(row)
+
+    monkeypatch.setattr(module.Adw, "ActionRow", FakeRow, raising=False)
+    monkeypatch.setattr(module.Adw, "PreferencesGroup", FakeGroup, raising=False)
+    monkeypatch.setattr(module, "get_job_counts", lambda: (0, 0, 0))
+    monkeypatch.setattr(module, "operator_runtime_mode", lambda **kwargs: "container")
+    monkeypatch.setattr(module, "check_api_status", lambda mode=None: False)
+    monkeypatch.setattr(module, "check_frontend_status", lambda mode=None: False)
+    monkeypatch.setattr(
+        module,
+        "runtime_status_snapshot",
+        lambda mode: {
+            "runtime_ready": False,
+            "api_ready": False,
+            "frontend_ready": False,
+            "adapter_ready": False,
+        },
+        raising=False,
+    )
+
+    panel = object.__new__(module.BioModStackPanel)
+    group = panel._build_status_section()
+
+    assert [row.title for row in group.rows[:2]] == ["Development", "Production"]
 
 
 def test_bioxp_summary_requires_runtime_and_hardware_readiness(monkeypatch) -> None:
@@ -131,7 +259,7 @@ def test_panel_periodic_refresh_calls_read_only_bioxp_refresh_without_obsolete_a
     module = load_module(monkeypatch)
     calls: list[str] = []
     panel = SimpleNamespace(
-        _update_status_row=lambda: calls.append("status"),
+        _update_status_rows=lambda: calls.append("status"),
         _update_jobs_row=lambda: calls.append("jobs"),
         _update_db_info=lambda: calls.append("db"),
         _update_bioxp_row=lambda: calls.append("bioxp"),
