@@ -52,7 +52,8 @@ def spawn_fampnn_jobs(
             timeout=10
         )
         if resp.ok:
-            existing_jobs = resp.json()
+            payload = resp.json()
+            existing_jobs = payload.get("jobs", payload) if isinstance(payload, dict) else payload
             for job in existing_jobs:
                 # Check if this is a completed FAMPNN child job
                 if (job.get("status") == "completed" and 

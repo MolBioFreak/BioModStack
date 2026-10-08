@@ -7,6 +7,7 @@ import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
+import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
 
 interface MutagenesisTemplateProps {
     onBack: () => void;
@@ -50,6 +51,9 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
     // Complex Mode: Ligands & Ions
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
+
+    // Physics refinement (OpenMM) - for ΔΔG validation
+    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
 
     // PDB Import State
     const [showPdbImport, setShowPdbImport] = useState(false);
@@ -153,7 +157,19 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                 ccd: l.ccd,
                 smiles: l.smiles,
                 sequence: l.sequence  // CRITICAL: This was missing - DNA/RNA entries need their sequence
-            }))
+            })),
+            // Physics refinement (OpenMM) for ΔΔG
+            openmm_enabled: physicsSettings.enabled,
+            openmm_compute_tier: physicsSettings.computeTier,
+            openmm_restraint_mode: physicsSettings.restraintMode,
+            openmm_mmgbsa_mode: physicsSettings.mmgbsaMode,
+            openmm_force_field: physicsSettings.forceField,
+            openmm_top_n_percentage: physicsSettings.topNPercentage,
+            openmm_max_iterations: physicsSettings.maxIterations,
+            openmm_tolerance: physicsSettings.tolerance,
+            openmm_restraint_strength: physicsSettings.restraintStrength,
+            openmm_implicit_solvent: physicsSettings.implicitSolvent,
+            openmm_platform: physicsSettings.platform
         });
     };
 
@@ -538,6 +554,15 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                             </div>
                         </div>
                     </div>
+                </section>
+
+                {/* Physics Refinement (OpenMM) for ΔΔG Validation */}
+                <section className="pt-4 border-t border-slate-800">
+                    <PhysicsRefinementPanel
+                        settings={physicsSettings}
+                        onSettingsChange={setPhysicsSettings}
+                        isAntibody={false}
+                    />
                 </section>
 
                 {/* 6. Ligands & Cofactors (Complex Mode) */}

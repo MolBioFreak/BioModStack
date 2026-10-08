@@ -19,6 +19,7 @@ import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { parsePDBFile, parsePDB, type Chain, formatSelectedResidues } from '../utils/pdbUtils';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
+import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
 
 // NTP Templates - pre-defined nucleotide SMILES
 const NTP_TEMPLATES = [
@@ -261,6 +262,9 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
     // Parallelization factor - designs per child job (SWA pattern)
     const [designsPerJob, setDesignsPerJob] = useState<number>(initialValues?.boltzgen_designs_per_job || 100);
 
+    // Physics refinement settings (OpenMM)
+    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
+
     // Template manager state
     const [showTemplateManager, setShowTemplateManager] = useState(false);
 
@@ -445,6 +449,22 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
             if (numDesigns > designsPerJob) {
                 params.boltzgen_parallel_mode = true;
             }
+        }
+
+        // Physics refinement (OpenMM)
+        if (physicsSettings.enabled) {
+            params.openmm_enabled = true;
+            params.openmm_compute_tier = physicsSettings.computeTier;
+            params.openmm_cdr_only = physicsSettings.cdrOnly;
+            params.openmm_restraint_mode = physicsSettings.restraintMode;
+            params.openmm_mmgbsa_mode = physicsSettings.mmgbsaMode;
+            params.openmm_force_field = physicsSettings.forceField;
+            params.openmm_top_n_percentage = physicsSettings.topNPercentage;
+            params.openmm_max_iterations = physicsSettings.maxIterations;
+            params.openmm_tolerance = physicsSettings.tolerance;
+            params.openmm_restraint_strength = physicsSettings.restraintStrength;
+            params.openmm_implicit_solvent = physicsSettings.implicitSolvent;
+            params.openmm_platform = physicsSettings.platform;
         }
 
         submitMutation.mutate({
@@ -1122,6 +1142,15 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                         </div>
                     )}
                 </div>
+            </div>
+
+            {/* Physics Refinement Panel */}
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
+                <PhysicsRefinementPanel
+                    settings={physicsSettings}
+                    onSettingsChange={setPhysicsSettings}
+                    isAntibody={mode === 'nanobody_binder'}
+                />
             </div>
 
             {/* Advanced Options */}

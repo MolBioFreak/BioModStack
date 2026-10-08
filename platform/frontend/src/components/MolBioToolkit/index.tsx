@@ -4,7 +4,7 @@
  * OVE-based sequence editor with persistence + cloning/mutagenesis workflows.
  */
 
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, memo } from 'react';
 
 // Import OVE from workspace package
 import { Editor, updateEditor } from '@biomodstack/ove';
@@ -112,7 +112,7 @@ function detectSequenceType(seq: string): 'dna' | 'rna' {
     return 'dna';
 }
 
-function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
+const OVEWrapper = memo(function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
     const oveSequenceData = useMemo(() => ({
         name: sequenceData.name,
         circular: sequenceData.circular,
@@ -227,7 +227,7 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
             </Provider>
         </div>
     );
-}
+});
 
 export function MolBioToolkit() {
     const [sequenceData, setSequenceData] = useState<SequenceData>(SAMPLE_SEQUENCE);

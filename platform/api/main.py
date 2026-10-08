@@ -4,7 +4,7 @@ BioModStack Control Platform - FastAPI Backend
 Main application entry point.
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
@@ -80,10 +80,28 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS for frontend dev server
+# Allow Private Network Access (PNA) preflights from secure origins
+@app.middleware("http")
+async def add_private_network_access_header(request: Request, call_next):
+    response = await call_next(request)
+    if request.headers.get("access-control-request-private-network") == "true":
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
+
+# CORS for frontend dev + remote access
+default_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://localhost:3000",
+    "https://localhost:5173",
+    "https://compute-node.taileb3a90.ts.net",
+]
+env_origins = os.getenv("CORS_ORIGINS")
+allowed_origins = [o.strip() for o in env_origins.split(",")] if env_origins else default_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
