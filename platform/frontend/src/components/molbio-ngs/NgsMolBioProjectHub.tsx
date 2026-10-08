@@ -58,7 +58,9 @@ function ngsDomainPayload(objective: string): JsonObject {
 
 export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolBioProjectHubProps) {
     const queryClient = useQueryClient();
-    const { workspaceId, updateQueryParams } = useGlobalExperimentContext();
+    const { workspaceId, globalExperimentId, domainExperimentId, selectedDomainExperiment, updateQueryParams } = useGlobalExperimentContext();
+    const showRoutineWorkspace = presentation === 'inline'
+        && Boolean(workspaceId && globalExperimentId && domainExperimentId && selectedDomainExperiment?.domain_experiment_id === domainExperimentId);
     const [mode, setMode] = useState<OwnershipMode>('local-new');
     const [projectName, setProjectName] = useState('');
     const [projectDescription, setProjectDescription] = useState('');
@@ -84,11 +86,13 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
 
     const localProjectsQuery = useQuery({
         queryKey: ['ngs-molbio-projects', 'local'],
+        enabled: !showRoutineWorkspace,
         queryFn: ({ signal }) => searchProjects({ projectScope: 'ngs_molbio_local', archive: 'active', limit: 100, signal }),
         retry: false,
     });
     const globalProjectsQuery = useQuery({
         queryKey: ['ngs-molbio-projects', 'global'],
+        enabled: !showRoutineWorkspace,
         queryFn: ({ signal }) => searchProjects({ projectScope: 'global', archive: 'active', limit: 100, signal }),
         retry: false,
     });
@@ -105,7 +109,7 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
 
     const localHierarchyQuery = useQuery({
         queryKey: ['ngs-molbio-project-hierarchy', selectedLocalProjectId],
-        enabled: Boolean(selectedLocalProjectId),
+        enabled: !showRoutineWorkspace && Boolean(selectedLocalProjectId),
         retry: false,
         queryFn: async ({ signal }): Promise<LocalHierarchy> => {
             const experiments = await listGlobalExperiments(selectedLocalProjectId, signal);
@@ -143,13 +147,13 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
 
     const linksQuery = useQuery({
         queryKey: ['ngs-molbio-project-links', selectedLocalProjectId],
-        enabled: Boolean(selectedLocalProjectId),
+        enabled: !showRoutineWorkspace && Boolean(selectedLocalProjectId),
         queryFn: ({ signal }) => listNgsMolBioProjectLinks(selectedLocalProjectId, signal),
         retry: false,
     });
     const shareableResultsQuery = useQuery({
         queryKey: ['ngs-molbio-shareable-results', selectedLocalProjectId],
-        enabled: Boolean(selectedLocalProjectId),
+        enabled: !showRoutineWorkspace && Boolean(selectedLocalProjectId),
         queryFn: ({ signal }) => listNgsMolBioShareableResults(selectedLocalProjectId, signal),
         retry: false,
     });
@@ -558,6 +562,7 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
         </div>
     );
 
+    if (showRoutineWorkspace) return advancedProjectWorkspace;
     if (presentation === 'inline') return projectSurface;
 
     return (

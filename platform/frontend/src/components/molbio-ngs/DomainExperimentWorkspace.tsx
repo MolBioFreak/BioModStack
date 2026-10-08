@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
     fetchFullJob,
@@ -14,13 +14,18 @@ import {
     fetchMolBioNgsStateRevisions,
     fetchOntInstrumentRunGeneration,
     fetchPcrExperimentRevision,
+    fetchProjectHub,
+    updateProjectHubPlasmidInfo,
     type DomainStateMember,
+    type ProjectHubPlasmidInfoDraft,
+    type ProjectHubPlasmidSummary,
 } from '../../lib/api';
 import { getProject } from '../../lib/projectManager';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
 import DomainDatasetOperator from './DomainDatasetOperator';
 import DomainWorkflowOperator from './DomainWorkflowOperator';
 import ExperimentReferenceLibrary from './ExperimentReferenceLibrary';
+import ProjectHubShell from './project-hub/ProjectHubShell';
 import {
     DomainEvidenceMutationPanel,
     DomainReferenceMutationPanel,
@@ -163,6 +168,7 @@ function MemberAuthority({ member }: { member: DomainStateMember }) {
 }
 
 export default function DomainExperimentWorkspace() {
+    const queryClient = useQueryClient();
     const context = useGlobalExperimentContext();
     const {
         workspaceId,
@@ -189,9 +195,11 @@ export default function DomainExperimentWorkspace() {
         updateQueryParams({ dataset_revision_ids: exactRevisionIds.length ? exactRevisionIds.join(',') : null });
     }, [updateQueryParams]);
 
+    const exactDomainId = selectedDomainExperiment?.domain_experiment_id ?? null;
+    const hasProjectHubContext = Boolean(workspaceId && globalExperimentId && exactDomainId);
     const projectAuthorityQuery = useQuery({
         queryKey: ['ngs-molbio-project-authority', workspaceId],
-        enabled: Boolean(workspaceId),
+        enabled: Boolean(workspaceId) && !hasProjectHubContext,
         queryFn: ({ signal }) => {
             if (!workspaceId) throw new Error('workspace_id is required');
             return getProject(workspaceId, signal);
@@ -203,7 +211,6 @@ export default function DomainExperimentWorkspace() {
     const activeSection: SectionKey = SECTIONS.some(([key]) => key === requestedSection)
         ? requestedSection as SectionKey
         : 'overview';
-    const exactDomainId = selectedDomainExperiment?.domain_experiment_id ?? null;
 
     const stateQuery = useQuery({
         queryKey: ['molbio-ngs-domain-state', exactDomainId],
@@ -214,25 +221,25 @@ export default function DomainExperimentWorkspace() {
     const historyQuery = useQuery({
         queryKey: ['molbio-ngs-state-revisions', exactDomainId],
         queryFn: () => fetchMolBioNgsStateRevisions(exactDomainId as string),
-        enabled: exactDomainId !== null,
+        enabled: exactDomainId !== null && !hasProjectHubContext,
         retry: false,
     });
     const samplesQuery = useQuery({
         queryKey: ['molbio-ngs-samples', exactDomainId],
         queryFn: () => fetchMolBioNgsSamples(exactDomainId as string),
-        enabled: exactDomainId !== null,
+        enabled: exactDomainId !== null && !hasProjectHubContext,
         retry: false,
     });
     const referencesQuery = useQuery({
         queryKey: ['molbio-ngs-references', exactDomainId],
         queryFn: () => fetchMolBioNgsReferences(exactDomainId as string),
-        enabled: exactDomainId !== null,
+        enabled: exactDomainId !== null && !hasProjectHubContext,
         retry: false,
     });
     const evidenceQuery = useQuery({
         queryKey: ['molbio-ngs-evidence', exactDomainId],
         queryFn: () => fetchMolBioNgsEvidence(exactDomainId as string),
-        enabled: exactDomainId !== null,
+        enabled: exactDomainId !== null && !hasProjectHubContext,
         retry: false,
     });
 
@@ -250,8 +257,59 @@ export default function DomainExperimentWorkspace() {
     const selectedRevisionQuery = useQuery({
         queryKey: ['molbio-ngs-state-revision', exactDomainId, selectedStateRevisionId],
         queryFn: () => fetchMolBioNgsStateRevision(exactDomainId as string, selectedStateRevisionId as string),
-        enabled: exactDomainId !== null && selectedStateRevisionId !== null,
+        enabled: exactDomainId !== null && selectedStateRevisionId !== null && !hasProjectHubContext,
         retry: false,
+    });
+
+    const projectHubQuery = useQuery({
+        queryKey: ['molbio-project-hub', workspaceId, globalExperimentId, exactDomainId, selectedStateRevisionId],
+        queryFn: ({ signal }) => fetchProjectHub(
+            workspaceId as string,
+            globalExperimentId as string,
+            exactDomainId as string,
+            selectedStateRevisionId as string,
+            signal,
+        ),
+        enabled: hasProjectHubContext && selectedStateRevisionId !== null,
+        retry: false,
+    });
+    const plasmidInfoMutation = useMutation({
+        mutationFn: async ({ plasmid, draft }: { plasmid: ProjectHubPlasmidSummary; draft: ProjectHubPlasmidInfoDraft }) => {
+            const model = projectHubQuery.data;
+            if (!model || !workspaceId || !globalExperimentId || !exactDomainId) {
+                throw new Error('The exact project context is unavailable.');
+            }
+            const idempotencyKey = typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : `${Date.now()}-${plasmid.sequence_id}`;
+            return updateProjectHubPlasmidInfo(workspaceId, globalExperimentId, exactDomainId, plasmid.sequence_id, {
+                expected_molecular_revision_id: plasmid.revision_id,
+                expected_state_revision_id: model.identity.current_state_revision_id,
+                expected_state_head_generation: model.identity.state_head_generation,
+                idempotency_key: idempotencyKey,
+                molecular_fields: {
+                    name: draft.name,
+                    molecule_type: draft.molecule_type,
+                    topology: draft.topology,
+                    description: draft.description,
+                    organism_host_context: draft.organism_host_context,
+                },
+                project_metadata: {
+                    project_tags: draft.project_tags,
+                    project_notes: draft.project_notes,
+                },
+            });
+        },
+        onSuccess: (model) => {
+            queryClient.setQueryData(
+                ['molbio-project-hub', workspaceId, globalExperimentId, exactDomainId, model.identity.selected_state_revision_id],
+                model,
+            );
+            void queryClient.invalidateQueries({ queryKey: ['molbio-project-hub', workspaceId, globalExperimentId, exactDomainId] });
+            if (model.identity.selected_state_revision_id !== selectedStateRevisionId) {
+                setStateRevisionId(model.identity.selected_state_revision_id);
+            }
+        },
     });
 
     const sampleRevisionQueries = useQueries({
@@ -814,6 +872,38 @@ export default function DomainExperimentWorkspace() {
         evidence: renderEvidence,
         history: renderHistory,
     };
+
+    if (hasProjectHubContext) {
+        if (projectHubQuery.isLoading || selectedStateRevisionId === null) {
+            return <div className="px-6 py-10 text-sm text-content-secondary" role="status">Loading project hub…</div>;
+        }
+        if (projectHubQuery.error || !projectHubQuery.data) {
+            return (
+                <div className="px-6 py-6">
+                    <div className="rounded-xl border border-error/40 bg-error/10 p-4 text-sm text-error" role="alert">
+                        <strong className="block">Project hub is unavailable</strong>
+                        <span className="mt-1 block">{errorText(projectHubQuery.error) ?? 'The project summary response was empty.'}</span>
+                    </div>
+                </div>
+            );
+        }
+        return (
+            <ProjectHubShell
+                model={projectHubQuery.data}
+                canMutate={availability.canMutateDomain}
+                mutationBlocker={availability.canMutateDomain ? null : availability.reason}
+                selectedSection={requestedSection}
+                selectedPlasmidId={new URLSearchParams(window.location.search).get('plasmid')}
+                onNavigate={(updates) => updateQueryParams(updates)}
+                onSavePlasmidInfo={async (plasmid, draft) => {
+                    plasmidInfoMutation.reset();
+                    await plasmidInfoMutation.mutateAsync({ plasmid, draft });
+                }}
+                saveError={errorText(plasmidInfoMutation.error)}
+                saving={plasmidInfoMutation.isPending}
+            />
+        );
+    }
 
     return (
         <div className="w-full max-w-none px-4 pb-4 sm:px-5 lg:px-6">

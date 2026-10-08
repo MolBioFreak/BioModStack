@@ -1,0 +1,344 @@
+import React, { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const apiMocks = vi.hoisted(() => ({
+    fetchProjectHub: vi.fn(),
+    updateProjectHubPlasmidInfo: vi.fn(),
+    fetchMolBioNgsDomainState: vi.fn(),
+    fetchMolBioNgsStateRevisions: vi.fn(),
+    fetchMolBioNgsStateRevision: vi.fn(),
+    fetchMolBioNgsSamples: vi.fn(),
+    fetchMolBioNgsReferences: vi.fn(),
+    fetchMolBioNgsEvidence: vi.fn(),
+}));
+const managerMocks = vi.hoisted(() => ({ getProject: vi.fn() }));
+const contextMocks = vi.hoisted(() => ({
+    updateQueryParams: vi.fn(),
+    setStateRevisionId: vi.fn(),
+}));
+
+vi.mock('../../src/lib/api', async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    ...apiMocks,
+}));
+vi.mock('../../src/lib/projectManager', async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    ...managerMocks,
+}));
+vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
+    useGlobalExperimentContext: () => ({
+        workspaceId: 'project-1',
+        globalExperimentId: 'experiment-1',
+        domainExperimentId: 'domain-1',
+        stateRevisionId: new URLSearchParams(window.location.search).get('state_revision_id') || 'state-current',
+        selectedDomainExperiment: {
+            project_id: 'project-1',
+            global_experiment_id: 'experiment-1',
+            domain_experiment_id: 'domain-1',
+            global_domain_experiment_revision_id: 'domain-revision-1',
+            local_state_revision_id: 'state-current',
+            local_state_head_generation: 4,
+            local_counts: { samples: 0, references: 0, evidence_assessments: 0 },
+        },
+        availability: {
+            status: 'available',
+            canMutateDomain: true,
+            localBinding: 'acknowledged',
+            globalAdapter: 'available',
+            reason: 'Ready.',
+            error: null,
+        },
+        setStateRevisionId: contextMocks.setStateRevisionId,
+        updateQueryParams: contextMocks.updateQueryParams,
+        contextHref: (pathname: string, updates: Record<string, string | null | undefined> = {}) => {
+            const query = new URLSearchParams(window.location.search);
+            for (const [key, value] of Object.entries(updates)) {
+                if (value === null || value === undefined || value === '') query.delete(key);
+                else query.set(key, value);
+            }
+            const search = query.toString();
+            return `${pathname}${search ? `?${search}` : ''}`;
+        },
+    }),
+}));
+
+import DomainExperimentWorkspace from '../../src/components/molbio-ngs/DomainExperimentWorkspace';
+
+const plasmids = [
+    {
+        sequence_id: 'sequence-pl1480', revision_id: 'revision-pl1480', revision_number: 1,
+        name: 'PL1480', description: 'Synthetic circular DNA', availability: 'available',
+        length_bp: 5512, gc_percent: 53.52, feature_count: 10,
+        feature_labels: ['NeoR/KanR', 'CMV promoter', 'f1 ori', 'SV40 ori'],
+        cmv_promoter: true, neor_kanr: true, replication_origin_count: 3,
+        saved_experiment_count: 0, organism_host_context: null, project_tags: ['new plasmid'], project_notes: '',
+        reopen_href: '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=plasmids&molbio_sequence_id=sequence-pl1480&molbio_revision_id=revision-pl1480',
+        map_segments: [{ start: 0, end: 500, tone: 'accent' }],
+    },
+    {
+        sequence_id: 'sequence-pl2190', revision_id: 'revision-pl2190', revision_number: 1,
+        name: 'PL2190', description: 'Synthetic circular DNA', availability: 'available',
+        length_bp: 5759, gc_percent: 47.32, feature_count: 8,
+        feature_labels: ['CMV promoter', 'ori', 'NeoR/KanR'],
+        cmv_promoter: true, neor_kanr: true, replication_origin_count: 1,
+        saved_experiment_count: 1, organism_host_context: null, project_tags: [], project_notes: '',
+        reopen_href: '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=plasmids&molbio_sequence_id=sequence-pl2190&molbio_revision_id=revision-pl2190',
+        map_segments: [{ start: 700, end: 1400, tone: 'success' }],
+    },
+];
+
+const readModel = {
+    schema: 'bms.project-hub.v1',
+    project: {
+        id: 'project-1', name: 'Syenex New Plasmids', objective: 'Routine new plasmid onboarding.',
+        lifecycle_state: 'active', created_at: '2026-08-24T12:00:00Z', plasmid_count: 2,
+        settings_href: '/projects/project-1', add_plasmid_href: '/designer?workspace_id=project-1&section=plasmids&action=add-plasmid',
+    },
+    identity: {
+        workspace_id: 'project-1', global_experiment_id: 'experiment-1', domain_experiment_id: 'domain-1',
+        selected_state_revision_id: 'state-current', current_state_revision_id: 'state-current', state_head_generation: 4,
+        global_domain_revision_id: 'domain-revision-1', membership_graph_sha256: 'membership-digest',
+        binding_status: 'acknowledged', adapter_status: 'available',
+    },
+    plasmids,
+    sequence_data: {
+        items: [],
+        import_href: '/ngs?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=sequence-data&action=import-ont',
+        launcher_href: '/ngs?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=sequence-data',
+    },
+    experiments: [
+        { id: 'pcr-1', persistence: 'saved', kind: 'pcr', plasmid_sequence_id: 'sequence-pl2190', plasmid_name: 'PL2190', title: 'Validation PCR', status: 'saved', created_at: '2026-08-25T12:00:00Z', reopen_href: '/designer?pcr_experiment_id=pcr-1&pcr_revision_id=pcr-revision-1' },
+        { id: 'alignment-draft', persistence: 'unsaved', kind: 'alignment', plasmid_sequence_id: 'sequence-pl1480', plasmid_name: 'PL1480', title: 'Transient alignment', status: 'draft', created_at: '2026-08-25T12:00:00Z', reopen_href: null },
+    ],
+    results: [],
+    activity: [
+        { id: 'activity-1', summary: 'PL1480 added to the project', occurred_at: '2026-08-24T12:00:00Z', technical_event_type: 'molecular_member_attached', receipt_id: 'receipt-1', envelope_sha256: 'event-digest' },
+    ],
+};
+
+let container: HTMLDivElement;
+let root: Root;
+let queryClient: QueryClient;
+
+beforeEach(() => {
+    vi.clearAllMocks();
+    window.history.replaceState({}, '', '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current');
+    apiMocks.fetchProjectHub.mockResolvedValue(readModel);
+    apiMocks.updateProjectHubPlasmidInfo.mockResolvedValue(readModel);
+    apiMocks.fetchMolBioNgsDomainState.mockResolvedValue({ current_state_revision_id: 'state-current', head_generation: 4 });
+    apiMocks.fetchMolBioNgsStateRevisions.mockResolvedValue([]);
+    apiMocks.fetchMolBioNgsStateRevision.mockResolvedValue({ id: 'state-current', members: [], payload: { acquisition_policy: {}, assessment_policy: {} } });
+    apiMocks.fetchMolBioNgsSamples.mockResolvedValue([]);
+    apiMocks.fetchMolBioNgsReferences.mockResolvedValue([]);
+    apiMocks.fetchMolBioNgsEvidence.mockResolvedValue([]);
+    managerMocks.getProject.mockResolvedValue({ id: 'project-1', name: 'Syenex New Plasmids', payload: { project_scope: 'ngs_molbio_local' } });
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+});
+
+afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    queryClient.clear();
+});
+
+async function renderWorkspace(search?: string) {
+    if (search) window.history.replaceState({}, '', `/designer?${search}`);
+    await act(async () => {
+        root.render(
+            <MemoryRouter>
+                <QueryClientProvider client={queryClient}>
+                    <DomainExperimentWorkspace />
+                </QueryClientProvider>
+            </MemoryRouter>,
+        );
+    });
+    for (let attempt = 0; attempt < 20 && !container.textContent?.includes('Syenex New Plasmids'); attempt += 1) {
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    }
+}
+
+function buttonNamed(name: string) {
+    return Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === name) ?? null;
+}
+
+describe('mounted MolBio project hub', () => {
+    it('leads with the approved project header, tab order, extended plasmid cards, and collapsed technical details', async () => {
+        await renderWorkspace();
+
+        expect(container.querySelector('h1')?.textContent).toBe('Syenex New Plasmids');
+        expect(Array.from(container.querySelectorAll('[role="tab"]')).map((tab) => tab.textContent?.trim())).toEqual([
+            'Overview', 'Plasmids', 'Sequence Data', 'Experiments', 'Results', 'Activity',
+        ]);
+        expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Overview');
+        expect(container.textContent).toContain('Routine new plasmid onboarding.');
+        expect(container.textContent).toContain('PL1480');
+        expect(container.textContent).toContain('5,512 bp');
+        expect(container.textContent).toContain('53.52%');
+        expect(container.textContent).toContain('10 features');
+        expect(container.textContent).toContain('Saved Mol Bio experiments');
+        expect(container.textContent).toContain('No sequencing data attached');
+        expect(container.querySelector<HTMLDetailsElement>('details[data-testid="project-technical-details"]')?.open).toBe(false);
+        expect(container.querySelector('a[href*="molbio_sequence_id=sequence-pl1480"][href*="molbio_revision_id=revision-pl1480"]')?.textContent).toContain('Open plasmid');
+    });
+
+    it('renders Sequence Data exclusively as the honest ONT empty state with exact supported routes', async () => {
+        await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=sequence-data');
+
+        expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Sequence Data');
+        expect(container.textContent).toContain('No ONT sequencing data attached');
+        expect(container.textContent).toContain('Runs and read sets');
+        expect(container.textContent).toContain('Alignment and coverage');
+        expect(container.textContent).toContain('Clone assessment');
+        expect(container.textContent).toContain('Viewer evidence');
+        expect(container.querySelector('a[href*="action=import-ont"]')?.textContent).toContain('Import ONT data');
+        expect(container.querySelector('a[href^="/ngs?"][href*="state_revision_id=state-current"]:not([href*="action=import-ont"])')?.textContent).toContain('Open NGS launcher');
+        expect(container.textContent).not.toContain('canonical plasmid sequence data');
+    });
+
+    it('shows only persisted saved work and filters it by plasmid through readable query state', async () => {
+        await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=experiments&plasmid=sequence-pl2190');
+
+        expect(container.textContent).toContain('Validation PCR');
+        expect(container.textContent).not.toContain('Transient alignment');
+        expect(container.querySelector('[aria-pressed="true"]')?.textContent).toBe('PL2190');
+        expect(container.textContent).toContain('1 saved');
+        expect(container.textContent).toContain('0 saved');
+
+        await act(async () => buttonNamed('PL1480')?.click());
+        expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ plasmid: 'sequence-pl1480' });
+    });
+
+    it('opens the readable edit dialog, traps focus, closes on Escape, and restores the invoking control', async () => {
+        await renderWorkspace();
+        const edit = buttonNamed('Edit info');
+        expect(edit).not.toBeNull();
+
+        await act(async () => { edit?.click(); await Promise.resolve(); });
+        const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+        expect(dialog?.getAttribute('aria-labelledby')).toBe('project-plasmid-edit-title');
+        expect(dialog?.textContent).toContain('Edit plasmid information');
+        expect(dialog?.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe('PL1480');
+        expect(dialog?.textContent).toContain('Molecule type');
+        expect(dialog?.textContent).toContain('Organism / host context');
+        expect(dialog?.textContent).toContain('Project tags');
+        expect(dialog?.textContent).toContain('Project notes');
+        expect(document.activeElement).toBe(dialog?.querySelector('input[name="name"]'));
+
+        await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+        expect(container.querySelector('[role="dialog"]')).toBeNull();
+        expect(document.activeElement).toBe(edit);
+    });
+
+    it('binds keyboard tabs to their tabpanel and preserves exact project context', async () => {
+        await renderWorkspace();
+        const overviewTab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((button) => button.textContent === 'Overview');
+        expect(overviewTab?.id).toBe('project-tab-overview');
+        expect(overviewTab?.getAttribute('aria-controls')).toBe('project-panel-overview');
+        expect(container.querySelector('#project-panel-overview')?.getAttribute('role')).toBe('tabpanel');
+
+        await act(async () => overviewTab?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
+        expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ section: 'plasmids', plasmid: null });
+    });
+
+    it('keeps historical project states visibly read-only while preserving exact reopen links', async () => {
+        apiMocks.fetchProjectHub.mockResolvedValue({
+            ...readModel,
+            identity: { ...readModel.identity, selected_state_revision_id: 'state-historical' },
+        });
+        await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-historical');
+
+        expect(container.textContent).toContain('Historical project state — read-only');
+        expect(buttonNamed('Edit info')?.disabled).toBe(true);
+        expect(container.querySelector<HTMLAnchorElement>('a[href*="molbio_revision_id=revision-pl1480"]')).not.toBeNull();
+        expect(container.querySelector('a[href*="action=add-plasmid"]')).toBeNull();
+    });
+
+    it('submits one governed edit-info command with exact revision and state expectations', async () => {
+        await renderWorkspace();
+        await act(async () => buttonNamed('Edit info')?.click());
+        const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+        const name = dialog?.querySelector<HTMLInputElement>('input[name="name"]');
+        expect(name).not.toBeNull();
+        await act(async () => {
+            if (name) {
+                Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(name, 'PL1480 renamed');
+                name.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            dialog?.querySelector<HTMLButtonElement>('button[type="submit"]')?.click();
+            await Promise.resolve();
+        });
+        expect(apiMocks.updateProjectHubPlasmidInfo).toHaveBeenCalledTimes(1);
+        const [projectId, experimentId, domainId, sequenceId, request] = apiMocks.updateProjectHubPlasmidInfo.mock.calls[0];
+        expect([projectId, experimentId, domainId, sequenceId]).toEqual(['project-1', 'experiment-1', 'domain-1', 'sequence-pl1480']);
+        expect(request).toMatchObject({
+            expected_molecular_revision_id: 'revision-pl1480',
+            expected_state_revision_id: 'state-current',
+            expected_state_head_generation: 4,
+            molecular_fields: { name: 'PL1480 renamed' },
+            project_metadata: { project_tags: ['new plasmid'], project_notes: '' },
+        });
+        expect(request.idempotency_key).toEqual(expect.any(String));
+    });
+
+    it('keeps edit input open and readable when the governed command conflicts', async () => {
+        apiMocks.updateProjectHubPlasmidInfo.mockRejectedValueOnce(new Error('Project state advanced; reload before saving.'));
+        await renderWorkspace();
+        await act(async () => buttonNamed('Edit info')?.click());
+        await act(async () => {
+            container.querySelector<HTMLElement>('[role="dialog"]')?.querySelector<HTMLButtonElement>('button[type="submit"]')?.click();
+            await Promise.resolve();
+        });
+        for (let attempt = 0; attempt < 20 && !container.querySelector('[role="alert"]'); attempt += 1) {
+            await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+        }
+        expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+        expect(container.querySelector('[role="alert"]')?.textContent).toContain('Project state advanced');
+    });
+
+    it('renders populated Sequence Data from persisted typed summaries without bulk read payloads', async () => {
+        apiMocks.fetchProjectHub.mockResolvedValue({
+            ...readModel,
+            sequence_data: {
+                ...readModel.sequence_data,
+                items: [{
+                    id: 'run-42', plasmid_sequence_id: 'sequence-pl1480', plasmid_name: 'PL1480', kind: 'run',
+                    title: 'ONT run 42', summary: 'Basecalled read set available.', status: 'completed',
+                    created_at: '2026-08-26T12:00:00Z', reopen_href: '/ngs?run_id=run-42&observed_generation=3',
+                }],
+            },
+        });
+        await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=sequence-data');
+        expect(container.textContent).toContain('ONT run 42');
+        expect(container.textContent).toContain('Basecalled read set available.');
+        expect(container.querySelector('a[href*="run_id=run-42"][href*="observed_generation=3"]')).not.toBeNull();
+        expect(container.textContent).not.toContain('No ONT sequencing data attached');
+        expect(JSON.stringify(apiMocks.fetchProjectHub.mock.results)).not.toContain('fastq');
+    });
+
+    it('renders persisted Results and readable Activity without exposing technical envelopes by default', async () => {
+        apiMocks.fetchProjectHub.mockResolvedValue({
+            ...readModel,
+            results: [{ id: 'result-1', plasmid_name: 'PL2190', type: 'Clone assessment', status: 'ready', owner: 'ONT run 42', created_at: '2026-08-26T12:00:00Z', summary: 'Clone matches the expected plasmid.', reopen_href: '/ngs?job_id=job-42' }],
+        });
+        await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=results');
+        expect(container.textContent).toContain('Clone assessment');
+        expect(container.textContent).toContain('Clone matches the expected plasmid.');
+        expect(container.querySelector('a[href="/ngs?job_id=job-42"]')).not.toBeNull();
+
+        window.history.replaceState({}, '', '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=activity');
+        await act(async () => root.render(
+            <MemoryRouter>
+                <QueryClientProvider client={queryClient}><DomainExperimentWorkspace /></QueryClientProvider>
+            </MemoryRouter>,
+        ));
+        expect(container.textContent).toContain('PL1480 added to the project');
+        expect(container.textContent).not.toContain('molecular_member_attached');
+        expect(container.textContent).not.toContain('event-digest');
+    });
+});
