@@ -981,6 +981,60 @@ async def test_execute_cancellation_terminates_and_reaps_child(
 
 
 @pytest.mark.asyncio
+async def test_waveform_runtime_timeout_terminates_and_reaps_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+
+    class Child:
+        returncode: int | None = None
+        terminated = False
+        waited = False
+
+        async def communicate(self):
+            started.set()
+            await asyncio.Event().wait()
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        async def wait(self):
+            self.waited = True
+            return self.returncode
+
+    child = Child()
+
+    async def fake_create(*_args, **_kwargs):
+        return child
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    monkeypatch.setattr(
+        OntRawSignalWorker,
+        "_assert_waveform_command_policy",
+        staticmethod(lambda _command: None),
+    )
+    monkeypatch.setattr(
+        ont_raw_signal_worker,
+        "RAW_SIGNAL_WAVEFORM_RUNTIME_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    worker = OntRawSignalWorker(lambda: None)
+
+    with pytest.raises(RuntimeError, match="waveform runtime exceeded"):
+        await asyncio.wait_for(
+            worker._execute(["fake"], "lookup-timeout", "claim-timeout", waveform=True),
+            timeout=0.5,
+        )
+
+    assert started.is_set()
+    assert child.terminated is True
+    assert child.waited is True
+    assert worker._child is None
+
+
+@pytest.mark.asyncio
 async def test_transient_source_lease_failure_is_deferred_for_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
