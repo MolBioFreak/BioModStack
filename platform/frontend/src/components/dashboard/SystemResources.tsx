@@ -195,7 +195,7 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending, disabled, onToggleD
     const isDirty = parseInt(inputValue, 10) !== currentLimit;
 
     return (
-        <div className={`bg-slate-800/50 backdrop-blur-sm border rounded-lg p-3 transition-all duration-300 ${disabled ? 'border-red-500/50 opacity-60' : 'border-slate-700 hover:border-purple-500/50'
+        <div className={`bg-slate-800/50 backdrop-blur-sm border rounded-lg p-3 transition-all duration-300 ${disabled ? 'border-red-500/50 opacity-60' : 'border-slate-700 hover:border-accent/50'
             }`}>
             {/* Header - compact */}
             <div className="flex items-center justify-between mb-1">
@@ -238,7 +238,7 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending, disabled, onToggleD
                     {gpu.temperature}°C
                 </span>
                 <span className="text-blue-400">{gpu.fan_speed}% Fan</span>
-                <span className="text-purple-400">{gpu.clock_graphics_mhz}MHz</span>
+                <span className="text-accent">{gpu.clock_graphics_mhz}MHz</span>
             </div>
 
             {/* VRAM Bar - compact */}
@@ -249,7 +249,7 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending, disabled, onToggleD
                 </div>
                 <div className="w-full bg-slate-700 rounded-full h-1.5 relative overflow-hidden">
                     <div
-                        className="absolute top-0 left-0 h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all z-20"
+                        className="absolute top-0 left-0 h-full bg-gradient-to-r from-blue-500 to-accent rounded-full transition-all z-20"
                         style={{ width: `${memoryPercent}%` }}
                     />
                     {gpu.reserved_memory_mb > 0 && (

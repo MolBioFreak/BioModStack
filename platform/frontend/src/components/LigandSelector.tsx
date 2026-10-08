@@ -246,15 +246,15 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
 
                 {/* RNA Input with SS/DS Toggle */}
                 <div className="flex gap-2 items-center">
-                    <span className="text-xs text-purple-400 w-12">RNA:</span>
+                    <span className="text-xs text-accent w-12">RNA:</span>
                     <div className="flex items-center gap-1 bg-slate-800 rounded-lg p-0.5">
                         <button
                             onClick={() => setIsDsRna(false)}
-                            className={`px-2 py-1 text-xs rounded transition-colors ${!isDsRna ? 'bg-purple-500 text-white' : 'text-slate-400 hover:text-white'}`}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${!isDsRna ? 'bg-accent text-white' : 'text-slate-400 hover:text-white'}`}
                         >SS</button>
                         <button
                             onClick={() => setIsDsRna(true)}
-                            className={`px-2 py-1 text-xs rounded transition-colors ${isDsRna ? 'bg-purple-500 text-white' : 'text-slate-400 hover:text-white'}`}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${isDsRna ? 'bg-accent text-white' : 'text-slate-400 hover:text-white'}`}
                         >DS</button>
                     </div>
                     <input
@@ -267,7 +267,7 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                     <button
                         onClick={() => addNucleicAcid('rna', rnaSequence, isDsRna)}
                         disabled={!rnaSequence.trim()}
-                        className="px-3 py-2 bg-purple-500/20 text-purple-400 rounded-lg text-sm hover:bg-purple-500/30 transition-colors disabled:opacity-50"
+                        className="px-3 py-2 bg-accent/20 text-accent rounded-lg text-sm hover:bg-accent/30 transition-colors disabled:opacity-50"
                     >
                         + Add {isDsRna ? 'dsRNA' : 'ssRNA'}
                     </button>
@@ -369,7 +369,7 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                             className={`px-3 py-1.5 rounded-full text-sm flex items-center gap-2 ${lig.type === 'dna'
                                 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                                 : lig.type === 'rna'
-                                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                    ? 'bg-accent/20 text-accent border border-accent/30'
                                     : lig.type === 'ion'
                                         ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                                         : lig.type === 'protein'

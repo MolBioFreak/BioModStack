@@ -175,7 +175,7 @@ function DebugMenu() {
                                 className="w-full px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-all flex items-center justify-between disabled:opacity-50"
                             >
                                 <span>Purge 7+ day old cache</span>
-                                {loading === '7d' && <span className="text-xs text-purple-400">Running...</span>}
+                                {loading === '7d' && <span className="text-xs text-accent">Running...</span>}
                             </button>
 
                             <button
@@ -184,7 +184,7 @@ function DebugMenu() {
                                 className="w-full px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-all flex items-center justify-between disabled:opacity-50"
                             >
                                 <span>Purge 30+ day old cache</span>
-                                {loading === '30d' && <span className="text-xs text-purple-400">Running...</span>}
+                                {loading === '30d' && <span className="text-xs text-accent">Running...</span>}
                             </button>
 
                             <button
@@ -257,14 +257,14 @@ function EcoModeToggle() {
         if (!enabled) return 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-600';
         if (powerPercent < 50) return 'bg-green-500/20 text-green-400 border-green-500/30 hover:bg-green-500/30';
         if (powerPercent < 80) return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30 hover:bg-yellow-500/30';
-        return 'bg-purple-500/20 text-purple-400 border-purple-500/30 hover:bg-purple-500/30';
+        return 'bg-accent/20 text-accent border-accent/30 hover:bg-accent/30';
     };
 
     const getDotColor = () => {
         if (!enabled) return 'bg-slate-600';
         if (powerPercent < 50) return 'bg-green-400';
         if (powerPercent < 80) return 'bg-yellow-400';
-        return 'bg-purple-400';
+        return 'bg-accent';
     };
 
     return (

@@ -500,7 +500,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         const colorClasses: Record<string, string> = {
                             emerald: 'bg-emerald-500/20 text-emerald-400',
                             blue: 'bg-blue-500/20 text-blue-400',
-                            purple: 'bg-purple-500/20 text-purple-400',
+                            purple: 'bg-accent/20 text-accent',
                             amber: 'bg-amber-500/20 text-amber-400',
                             rose: 'bg-rose-500/20 text-rose-400',
                             teal: 'bg-teal-500/20 text-teal-400',
@@ -547,7 +547,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-slate-400 mb-2">
-                                GPU Pinning {pinnedGpus.length > 0 && <span className="text-purple-400">({pinnedGpus.length} selected)</span>}
+                                GPU Pinning {pinnedGpus.length > 0 && <span className="text-accent">({pinnedGpus.length} selected)</span>}
                             </label>
                             <div className="flex gap-2">
                                 <button
@@ -575,7 +575,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             );
                                         }}
                                         className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.includes(gpu.id)
-                                            ? 'bg-purple-600 text-white ring-2 ring-purple-400'
+                                            ? 'bg-accent text-white ring-2 ring-accent'
                                             : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                             }`}
                                     >
@@ -589,7 +589,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         type="checkbox"
                                         checked={lockGpus}
                                         onChange={e => setLockGpus(e.target.checked)}
-                                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-500 focus:ring-purple-500"
+                                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
                                     />
                                     <span className="text-sm text-slate-400">Lock selected GPU(s) exclusively during workflow</span>
                                 </label>
@@ -650,7 +650,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         ? fw.id === 'standard-fv'
                                             ? 'bg-blue-600/20 border-blue-500 text-blue-400'
                                             : fw.id === 'nanobody'
-                                                ? 'bg-purple-600/20 border-purple-500 text-purple-400'
+                                                ? 'bg-accent/20 border-accent text-accent'
                                                 : fw.id === 'sabdab'
                                                     ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400'
                                                     : 'bg-amber-600/20 border-amber-500 text-amber-400'
@@ -743,22 +743,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                 {(detectedCDRs.cdr_l1 || detectedCDRs.cdr_l2 || detectedCDRs.cdr_l3) && (
                                                     <div className="grid grid-cols-3 gap-2 text-xs mt-2">
                                                         {detectedCDRs.cdr_l1 && (
-                                                            <div className="bg-purple-900/30 border border-purple-800/50 rounded p-2">
-                                                                <div className="text-purple-400 font-medium">L1</div>
+                                                            <div className="bg-accent/10 border border-accent/30 rounded p-2">
+                                                                <div className="text-accent font-medium">L1</div>
                                                                 <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_l1}>{detectedCDRs.cdr_l1}</div>
                                                                 {detectedCDRs.cdr_l1_range && <div className="text-slate-500">{detectedCDRs.cdr_l1_range[0]}-{detectedCDRs.cdr_l1_range[1]}</div>}
                                                             </div>
                                                         )}
                                                         {detectedCDRs.cdr_l2 && (
-                                                            <div className="bg-purple-900/30 border border-purple-800/50 rounded p-2">
-                                                                <div className="text-purple-400 font-medium">L2</div>
+                                                            <div className="bg-accent/10 border border-accent/30 rounded p-2">
+                                                                <div className="text-accent font-medium">L2</div>
                                                                 <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_l2}>{detectedCDRs.cdr_l2}</div>
                                                                 {detectedCDRs.cdr_l2_range && <div className="text-slate-500">{detectedCDRs.cdr_l2_range[0]}-{detectedCDRs.cdr_l2_range[1]}</div>}
                                                             </div>
                                                         )}
                                                         {detectedCDRs.cdr_l3 && (
-                                                            <div className="bg-purple-900/30 border border-purple-800/50 rounded p-2">
-                                                                <div className="text-purple-400 font-medium">L3</div>
+                                                            <div className="bg-accent/10 border border-accent/30 rounded p-2">
+                                                                <div className="text-accent font-medium">L3</div>
                                                                 <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_l3}>{detectedCDRs.cdr_l3}</div>
                                                                 {detectedCDRs.cdr_l3_range && <div className="text-slate-500">{detectedCDRs.cdr_l3_range[0]}-{detectedCDRs.cdr_l3_range[1]}</div>}
                                                             </div>
@@ -878,7 +878,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                 setShow3DViewer(show3DViewer && viewerMode === 'framework' ? false : true);
                                             }}
                                             className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2 ${show3DViewer && viewerMode === 'framework'
-                                                ? 'bg-purple-600/20 text-purple-400 border border-purple-500/50'
+                                                ? 'bg-accent/20 text-accent border border-accent/50'
                                                 : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
                                                 }`}
                                         >
@@ -1412,7 +1412,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 <button
                     type="button"
                     onClick={() => setShowTemplateManager(true)}
-                    className="px-6 py-3 text-purple-400 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 font-medium rounded-lg transition-colors flex items-center gap-2"
+                    className="px-6 py-3 text-accent bg-accent/20 hover:bg-accent/30 border border-accent/30 font-medium rounded-lg transition-colors flex items-center gap-2"
                 >
                     Save Template
                 </button>

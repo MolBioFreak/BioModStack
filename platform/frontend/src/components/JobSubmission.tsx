@@ -570,7 +570,7 @@ export function JobSubmission() {
                         &lt; Back
                     </Link>
                     <div>
-                        <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+                        <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-accent bg-clip-text text-transparent">
                             New Experiment
                         </h1>
                         <p className="text-slate-400 text-sm">Configure and launch a new job</p>
@@ -1139,7 +1139,7 @@ export function JobSubmission() {
                         {(wizardMode === 'templates' || (wizardMode === 'manual' && selectedModelId)) && (
                             <button
                                 onClick={() => setShowTemplateManager(true)}
-                                className="px-6 py-4 rounded-xl font-semibold text-purple-400 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 transition-all flex items-center gap-2"
+                                className="px-6 py-4 rounded-xl font-semibold text-accent bg-accent/20 hover:bg-accent/30 border border-accent/30 transition-all flex items-center gap-2"
                             >
                                 📋 Template Manager
                             </button>
@@ -1148,7 +1148,7 @@ export function JobSubmission() {
                             onClick={handleSubmit}
                             disabled={!isReady || submitMutation.isPending}
                             className={`px-8 py-4 rounded-xl font-semibold text-white shadow-xl transition-all ${isReady
-                                ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:scale-[1.02] active:scale-[0.98] shadow-blue-500/25'
+                                ? 'bg-gradient-to-r from-blue-600 to-accent-secondary hover:scale-[1.02] active:scale-[0.98] shadow-blue-500/25'
                                 : 'bg-slate-800 text-slate-500 cursor-not-allowed'
                                 }`}
                         >
@@ -1162,7 +1162,7 @@ export function JobSubmission() {
             {submitMutation.isPending && selectedTemplateId === 'mutagenesis' && (
                 <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center">
                     <div className="bg-slate-900 border border-slate-700 p-8 rounded-2xl shadow-2xl flex flex-col items-center">
-                        <div className="w-16 h-16 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mb-4" />
+                        <div className="w-16 h-16 border-4 border-accent/30 border-t-accent rounded-full animate-spin mb-4" />
                         <h3 className="text-xl font-bold text-white mb-2">Submitting Batch Jobs...</h3>
                         <p className="text-slate-400">Please wait while we launch your variant library.</p>
                     </div>

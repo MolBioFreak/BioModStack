@@ -83,7 +83,7 @@ function VramBadge({ vramMb }: { vramMb: number | null }) {
     if (!vramMb) return null;
     const vramGb = (vramMb / 1024).toFixed(1);
     return (
-        <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-500/20 text-purple-400">
+        <span className="px-2 py-0.5 rounded text-xs font-medium bg-accent/20 text-accent">
             {vramGb} GB
         </span>
     );
@@ -382,7 +382,7 @@ export function JobQueuePanel() {
                         </div>
                     ) : isLoading ? (
                         <div className="flex justify-center py-4">
-                            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-500" />
+                            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent" />
                         </div>
                     ) : queue.length === 0 ? (
                         <div className="text-center py-4 text-slate-500 text-sm">
@@ -519,7 +519,7 @@ function JobRow({
                                 </span>
                             )}
                             {job.batch_name && (
-                                <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-500/20 text-purple-400" title={`Batch: ${job.batch_name}`}>
+                                <span className="px-2 py-0.5 rounded text-xs font-medium bg-accent/20 text-accent" title={`Batch: ${job.batch_name}`}>
                                     📦 {job.batch_name.length > 15 ? job.batch_name.slice(0, 15) + '...' : job.batch_name}
                                 </span>
                             )}

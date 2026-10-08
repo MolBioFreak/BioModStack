@@ -251,7 +251,7 @@ export function SequenceManager({
                                                         {seq.length} aa
                                                     </span>
                                                     {seq.is_preset && (
-                                                        <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded">
+                                                        <span className="text-xs bg-accent/20 text-accent px-2 py-0.5 rounded">
                                                             Preset
                                                         </span>
                                                     )}

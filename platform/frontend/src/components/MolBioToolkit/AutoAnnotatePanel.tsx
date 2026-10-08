@@ -50,7 +50,7 @@ export function AutoAnnotatePanel({
                 {/* Header */}
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-semibold text-slate-100 flex items-center gap-2">
-                        <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
                         </svg>
                         Auto-Annotate Settings
@@ -85,7 +85,7 @@ export function AutoAnnotatePanel({
                     <div>
                         <label className="flex items-center justify-between text-sm text-slate-300 mb-2">
                             <span>Minimum Identity</span>
-                            <span className="text-purple-400 font-mono">{settings.minIdentity}%</span>
+                            <span className="text-accent font-mono">{settings.minIdentity}%</span>
                         </label>
                         <input
                             type="range"
@@ -93,7 +93,7 @@ export function AutoAnnotatePanel({
                             max="99"
                             value={settings.minIdentity}
                             onChange={e => setSettings({ ...settings, minIdentity: parseInt(e.target.value) })}
-                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-accent"
                         />
                         <div className="flex justify-between text-xs text-slate-500 mt-1">
                             <span>More hits</span>
@@ -109,7 +109,7 @@ export function AutoAnnotatePanel({
                         </div>
                         <button
                             onClick={() => setSettings({ ...settings, detailed: !settings.detailed })}
-                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.detailed ? 'bg-purple-500' : 'bg-slate-600'
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.detailed ? 'bg-accent' : 'bg-slate-600'
                                 }`}
                         >
                             <span
@@ -127,7 +127,7 @@ export function AutoAnnotatePanel({
                         </div>
                         <button
                             onClick={() => setSettings({ ...settings, filterFragments: !settings.filterFragments })}
-                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.filterFragments ? 'bg-purple-500' : 'bg-slate-600'
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.filterFragments ? 'bg-accent' : 'bg-slate-600'
                                 }`}
                         >
                             <span
@@ -156,7 +156,7 @@ export function AutoAnnotatePanel({
                     <button
                         onClick={() => onAnnotate(settings)}
                         disabled={isAnnotating || !hasSequence}
-                        className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-600 hover:bg-purple-500 disabled:bg-slate-600 disabled:cursor-not-allowed rounded text-white transition-colors"
+                        className="flex items-center gap-2 px-4 py-2 text-sm bg-accent hover:bg-accent disabled:bg-slate-600 disabled:cursor-not-allowed rounded text-white transition-colors"
                     >
                         {isAnnotating ? (
                             <>

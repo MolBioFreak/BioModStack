@@ -638,7 +638,7 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                                     setNanobodyFramework('');
                                 }}
                                 className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${!useFrameworkTemplate
-                                    ? 'bg-purple-500/20 border border-purple-500 text-purple-300'
+                                    ? 'bg-accent/20 border border-accent text-accent'
                                     : 'bg-slate-800 border border-slate-700 text-slate-400 hover:border-slate-600'
                                     }`}
                             >
@@ -839,7 +839,7 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                                                     }
                                                 }}
                                                 className={`text-xs px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${viewerMode === 'framework' && show3DViewer
-                                                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/50'
+                                                    ? 'bg-accent/20 text-accent border border-accent/50'
                                                     : 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
                                                     }`}
                                             >
@@ -1786,7 +1786,7 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                                                 min={0.7}
                                                 max={1.3}
                                                 step={0.02}
-                                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-accent"
                                             />
                                         )}
                                         <div className="flex justify-between text-xs text-slate-500 mt-1">

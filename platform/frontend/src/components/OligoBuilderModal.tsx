@@ -213,7 +213,7 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                             >DNA</button>
                             <button
                                 onClick={() => setNaType('rna')}
-                                className={`px-3 py-1 text-sm rounded ${naType === 'rna' ? 'bg-purple-500 text-white' : 'text-slate-400'}`}
+                                className={`px-3 py-1 text-sm rounded ${naType === 'rna' ? 'bg-accent text-white' : 'text-slate-400'}`}
                             >RNA</button>
                         </div>
                     </div>
@@ -266,7 +266,7 @@ export function OligoBuilderModal({ isOpen, onClose, onSubmit, ligandCount }: Ol
                         </button>
                         <button
                             onClick={() => setShowTemplates(!showTemplates)}
-                            className={`px-3 py-1.5 text-sm rounded-lg flex items-center gap-1.5 transition-colors ${showTemplates ? 'bg-purple-600 text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                            className={`px-3 py-1.5 text-sm rounded-lg flex items-center gap-1.5 transition-colors ${showTemplates ? 'bg-accent text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
                                 }`}
                         >
                             📂 {savedTemplates.length > 0 ? `(${savedTemplates.length})` : 'Load'}

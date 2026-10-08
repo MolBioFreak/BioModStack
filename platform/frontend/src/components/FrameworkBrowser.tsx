@@ -294,10 +294,10 @@ export function FrameworkBrowser({
 
             {/* Selected indicator */}
             {selectedFramework && (
-                <div className="flex items-center justify-between px-3 py-2 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+                <div className="flex items-center justify-between px-3 py-2 bg-accent/10 border border-accent/30 rounded-lg">
                     <div className="flex items-center gap-2 text-sm">
-                        <span className="w-2 h-2 bg-purple-400 rounded-full" />
-                        <span className="text-purple-300 truncate">
+                        <span className="w-2 h-2 bg-accent rounded-full" />
+                        <span className="text-accent truncate">
                             {selectedFramework.name}
                         </span>
                     </div>
@@ -317,7 +317,7 @@ export function FrameworkBrowser({
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
                         className={`px-3 py-2 text-xs font-medium transition-colors ${activeTab === tab.id
-                            ? 'text-purple-400 border-b-2 border-purple-400 -mb-px'
+                            ? 'text-accent border-b-2 border-accent -mb-px'
                             : 'text-slate-400 hover:text-slate-200'
                             }`}
                     >
@@ -341,7 +341,7 @@ export function FrameworkBrowser({
                                 key={preset.id}
                                 onClick={() => handlePresetSelect(preset)}
                                 className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors ${selectedFramework?.id === preset.id
-                                    ? 'bg-purple-500/20 border border-purple-500/50 text-purple-300'
+                                    ? 'bg-accent/20 border border-accent/50 text-accent'
                                     : 'bg-slate-900/50 hover:bg-slate-700/50 text-slate-300'
                                     }`}
                             >
@@ -415,7 +415,7 @@ export function FrameworkBrowser({
                         <div>
                             <label className="text-xs text-slate-500 flex items-center justify-between">
                                 <span>CDR-H3 Length</span>
-                                <span className="text-purple-400">
+                                <span className="text-accent">
                                     {cdrH3Min ?? cdrRange[0]} - {cdrH3Max ?? cdrRange[1]}
                                 </span>
                             </label>
@@ -426,7 +426,7 @@ export function FrameworkBrowser({
                                     max={cdrRange[1]}
                                     value={cdrH3Min ?? cdrRange[0]}
                                     onChange={e => setCdrH3Min(parseInt(e.target.value))}
-                                    className="flex-1 accent-purple-500"
+                                    className="flex-1 accent-accent"
                                 />
                                 <input
                                     type="range"
@@ -434,7 +434,7 @@ export function FrameworkBrowser({
                                     max={cdrRange[1]}
                                     value={cdrH3Max ?? cdrRange[1]}
                                     onChange={e => setCdrH3Max(parseInt(e.target.value))}
-                                    className="flex-1 accent-purple-500"
+                                    className="flex-1 accent-accent"
                                 />
                             </div>
                         </div>
@@ -461,7 +461,7 @@ export function FrameworkBrowser({
                                                     key={method}
                                                     onClick={() => toggleMethod(method)}
                                                     className={`text-[10px] px-2 py-1 rounded ${selectedMethods.includes(method)
-                                                        ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50'
+                                                        ? 'bg-accent/30 text-accent border border-accent/50'
                                                         : 'bg-slate-800 text-slate-400 border border-slate-700'
                                                         }`}
                                                 >
@@ -485,7 +485,7 @@ export function FrameworkBrowser({
                                                 key={String(opt.value)}
                                                 onClick={() => setHasAntigen(opt.value)}
                                                 className={`text-[10px] px-2 py-1 rounded ${hasAntigen === opt.value
-                                                    ? 'bg-purple-500/30 text-purple-300'
+                                                    ? 'bg-accent/30 text-accent'
                                                     : 'bg-slate-800 text-slate-400'
                                                     }`}
                                             >
@@ -513,7 +513,7 @@ export function FrameworkBrowser({
                             <button
                                 onClick={() => setSortDesc(!sortDesc)}
                                 className={`px-2 py-1.5 text-xs rounded border ${sortDesc
-                                    ? 'bg-purple-500/20 border-purple-500/50 text-purple-300'
+                                    ? 'bg-accent/20 border-accent/50 text-accent'
                                     : 'bg-slate-900 border-slate-700 text-slate-400'
                                     }`}
                                 title={sortDesc ? 'Sort descending' : 'Sort ascending'}
@@ -568,12 +568,12 @@ export function FrameworkBrowser({
                                         onClick={() => downloadMutation.mutate({ pdbCode: fw.pdb_code, cdrH3Length: fw.cdr_h3_length })}
                                         disabled={downloadingPdb !== null}
                                         className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${selectedFramework?.pdbCode === fw.pdb_code
-                                            ? 'bg-purple-500/20 border border-purple-500/50'
+                                            ? 'bg-accent/20 border border-accent/50'
                                             : 'bg-slate-900/50 hover:bg-slate-700/50'
                                             }`}
                                     >
                                         <div className="flex items-center justify-between">
-                                            <span className="font-mono text-sm text-purple-400">
+                                            <span className="font-mono text-sm text-accent">
                                                 {fw.pdb_code.toUpperCase()}
                                             </span>
                                             <div className="flex items-center gap-2 text-xs text-slate-500">
@@ -585,7 +585,7 @@ export function FrameworkBrowser({
                                                     <span className="text-green-400">•bound</span>
                                                 )}
                                                 {downloadingPdb === fw.pdb_code && (
-                                                    <span className="text-purple-400">Downloading...</span>
+                                                    <span className="text-accent">Downloading...</span>
                                                 )}
                                             </div>
                                         </div>
@@ -626,12 +626,12 @@ export function FrameworkBrowser({
                                         key={`${fw.pdb_code}-${fw.scheme}`}
                                         onClick={() => handleCachedSelect(fw)}
                                         className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${selectedFramework?.pdbCode === fw.pdb_code
-                                            ? 'bg-purple-500/20 border border-purple-500/50'
+                                            ? 'bg-accent/20 border border-accent/50'
                                             : 'bg-slate-900/50 hover:bg-slate-700/50'
                                             }`}
                                     >
                                         <div className="flex items-center justify-between">
-                                            <span className="font-mono text-sm text-purple-400">
+                                            <span className="font-mono text-sm text-accent">
                                                 {fw.pdb_code.toUpperCase()}
                                             </span>
                                             <span className="text-xs text-slate-500">
@@ -654,7 +654,7 @@ export function FrameworkBrowser({
                             Framework Contains Antigen
                         </h3>
                         <p className="text-sm text-slate-400 mb-4">
-                            <span className="font-mono text-purple-400">{pendingDownload.data.pdb_code}</span>
+                            <span className="font-mono text-accent">{pendingDownload.data.pdb_code}</span>
                             {' '}contains both antibody and antigen chains.
                         </p>
 

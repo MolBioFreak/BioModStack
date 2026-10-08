@@ -10,12 +10,14 @@ process GenerateLocalMSA {
     // No internet required, no API rate limits
     // GPU-accelerated when available (~5-10 sec vs ~2-3 min CPU)
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "*.a3m"
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "*_msa_quality.json"
 
     input:
     tuple val(sequence), val(sequence_name)
 
     output:
     tuple val(sequence), val(sequence_name), path("${sequence_name}.a3m"), emit: msa
+    path "*_msa_quality.json", emit: quality_report, optional: true
     path "*.log"
 
     script:
@@ -25,6 +27,14 @@ process GenerateLocalMSA {
     def useGpu = params.msa_use_gpu != false ? "" : "--cpu-only"
     def refSeq = params.msa_reference_sequence ? "--reference-sequence \"${params.msa_reference_sequence}\"" : ""
     def forceRefresh = params.msa_force_refresh ? "--force_refresh" : ""
+    // MSA Quality Parameters
+    def evalue = params.msa_evalue ? "--evalue ${params.msa_evalue}" : ""
+    def sensitivity = params.msa_sensitivity ? "--sensitivity ${params.msa_sensitivity}" : ""
+    def minSeqId = params.msa_min_seq_id ? "--min-seq-id ${params.msa_min_seq_id}" : ""
+    def minCoverage = params.msa_min_coverage ? "--min-coverage ${params.msa_min_coverage}" : ""
+    def taxonList = params.msa_taxon_list ? "--taxon-list \"${params.msa_taxon_list}\"" : ""
+    def minDepthWarning = params.msa_min_depth_warning ?: 100
+    def minDepthFail = params.msa_min_depth_fail ?: 10
     """
     python3 ${projectDir}/scripts/run_local_msa.py \\
         --sequence "${sequence}" \\
@@ -33,12 +43,20 @@ process GenerateLocalMSA {
         --db_path ${dbPath} \\
         --cache_dir ${cacheDir} \\
         --threads ${threads} \\
+        --min-depth-warning ${minDepthWarning} \\
+        --min-depth-fail ${minDepthFail} \\
         ${useGpu} \\
         ${refSeq} \\
         ${forceRefresh} \\
+        ${evalue} \\
+        ${sensitivity} \\
+        ${minSeqId} \\
+        ${minCoverage} \\
+        ${taxonList} \\
         2>&1 | tee msa_${sequence_name}.log
     """
 }
+
 
 // Batch MSA Generation - processes multiple sequences in parallel
 // Used by orchestrator for MSA batch jobs
@@ -393,6 +411,13 @@ process BoltzFromComplex {
     def msaThreads = params.msa_threads ?: 32
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
+    // MSA Quality Parameters
+    def msaTaxonList = params.msa_taxon_list ?: ""
+    def msaEvalue = params.msa_evalue ?: "0.001"
+    def msaMinSeqId = params.msa_min_seq_id ?: ""
+    def msaMinCoverage = params.msa_min_coverage ?: ""
+    def msaMinDepthWarning = params.msa_min_depth_warning ?: 100
+    def msaMinDepthFail = params.msa_min_depth_fail ?: 0  // 0 = warn but don't fail
     """
     set -o pipefail  # Propagate exit codes through pipes (fixes | tee masking failures)
     
@@ -423,6 +448,13 @@ msa_threads = int("${msaThreads}")
 use_msa = "${useMsa}" == "true"
 force_refresh = "${msaForceRefresh}" == "true"
 complex_name = "${complex_name}"
+# MSA Quality params
+msa_taxon_list = "${msaTaxonList}"
+msa_evalue = "${msaEvalue}"
+msa_min_seq_id = "${msaMinSeqId}"
+msa_min_coverage = "${msaMinCoverage}"
+msa_min_depth_warning = "${msaMinDepthWarning}"
+msa_min_depth_fail = "${msaMinDepthFail}"
 msa_fallback_path = "${msa_files}"
 fallback_msa = None
 try:
@@ -483,6 +515,17 @@ for comp in complex_def.get("components", []):
                         cmd.extend(["--reference-sequence", ref_seq])
                     if force_refresh:
                         cmd.append("--force_refresh")
+                    # Add MSA quality params
+                    if msa_taxon_list:
+                        cmd.extend(["--taxon-list", msa_taxon_list])
+                    if msa_evalue:
+                        cmd.extend(["--evalue", msa_evalue])
+                    if msa_min_seq_id:
+                        cmd.extend(["--min-seq-id", msa_min_seq_id])
+                    if msa_min_coverage:
+                        cmd.extend(["--min-coverage", msa_min_coverage])
+                    cmd.extend(["--min-depth-warning", msa_min_depth_warning])
+                    cmd.extend(["--min-depth-fail", msa_min_depth_fail])
                     
                     result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
                     if result.returncode != 0:

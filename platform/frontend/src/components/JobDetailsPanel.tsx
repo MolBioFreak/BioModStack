@@ -65,7 +65,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                     <div className="flex justify-between items-center mb-3">
                         <div className="flex items-center gap-3">
                             <h3 className="text-sm font-semibold text-white">{job.name}</h3>
-                            <span className="px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded text-xs">
+                            <span className="px-2 py-0.5 bg-accent/20 text-accent rounded text-xs">
                                 {job.model_id}
                             </span>
                         </div>
@@ -89,7 +89,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                     <div className="flex items-center gap-6 text-xs text-slate-400 mb-3">
                         <span>Mode: <span className="text-slate-300">{job.mode}</span></span>
                         <span>Designs: <span className="text-slate-300">{job.design_count}</span></span>
-                        <span>Output: <code className="text-purple-400/80">{job.output_dir}</code></span>
+                        <span>Output: <code className="text-accent/80">{job.output_dir}</code></span>
                     </div>
 
                     {/* Results Summary */}
@@ -147,7 +147,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                                 (!isDockingJob && structureData && structureData.count > 6)) && (
                                     <Link
                                         to={`/designs/${job.id}`}
-                                        className="px-2 py-1 bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 rounded text-xs transition-colors"
+                                        className="px-2 py-1 bg-accent/20 text-accent hover:bg-accent/30 rounded text-xs transition-colors"
                                     >
                                         +{isDockingJob ? poses.length - 5 : structureData!.count - 6} more →
                                     </Link>

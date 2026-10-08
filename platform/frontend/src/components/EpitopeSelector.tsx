@@ -17,7 +17,7 @@ const CHAIN_COLORS: Record<string, { bg: string; border: string; text: string }>
     'A': { bg: 'bg-blue-500/20', border: 'border-blue-500', text: 'text-blue-400' },
     'B': { bg: 'bg-emerald-500/20', border: 'border-emerald-500', text: 'text-emerald-400' },
     'C': { bg: 'bg-amber-500/20', border: 'border-amber-500', text: 'text-amber-400' },
-    'D': { bg: 'bg-purple-500/20', border: 'border-purple-500', text: 'text-purple-400' },
+    'D': { bg: 'bg-accent/20', border: 'border-accent', text: 'text-accent' },
     'E': { bg: 'bg-rose-500/20', border: 'border-rose-500', text: 'text-rose-400' },
     'F': { bg: 'bg-cyan-500/20', border: 'border-cyan-500', text: 'text-cyan-400' },
 };

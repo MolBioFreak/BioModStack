@@ -863,8 +863,8 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
             unselected: 'bg-slate-800 border-slate-700 text-slate-400 hover:border-blue-600/50',
         },
         purple: {
-            selected: 'bg-purple-600/20 border-purple-500 text-purple-400',
-            unselected: 'bg-slate-800 border-slate-700 text-slate-400 hover:border-purple-600/50',
+            selected: 'bg-accent/20 border-accent text-accent',
+            unselected: 'bg-slate-800 border-slate-700 text-slate-400 hover:border-accent/50',
         },
         rose: {
             selected: 'bg-rose-600/20 border-rose-500 text-rose-400',
@@ -919,7 +919,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
 
                     {/* RFantibody Settings */}
                     <div className="space-y-3">
-                        <div className="flex items-center gap-2 text-sm font-medium text-pink-400">
+                        <div className="flex items-center gap-2 text-sm font-medium text-accent-secondary">
                             Backbone Design (RFantibody)
                         </div>
 
@@ -1010,7 +1010,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
 
                     {/* Boltz-2 Settings */}
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
-                        <div className="flex items-center gap-2 text-sm font-medium text-purple-400">
+                        <div className="flex items-center gap-2 text-sm font-medium text-accent">
                             Structure Prediction (Boltz-2)
                         </div>
 
@@ -1027,7 +1027,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     step={50}
                                     value={settings.boltz_sampling_steps}
                                     onChange={(e) => updateSetting('boltz_sampling_steps', parseInt(e.target.value))}
-                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-accent"
                                 />
                                 <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                                     <span>50</span>
@@ -1047,7 +1047,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     step={1}
                                     value={settings.boltz_recycling_steps}
                                     onChange={(e) => updateSetting('boltz_recycling_steps', parseInt(e.target.value))}
-                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-accent"
                                 />
                                 <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                                     <span>1</span>
@@ -1069,7 +1069,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 step={1}
                                 value={settings.boltz_num_samples}
                                 onChange={(e) => updateSetting('boltz_num_samples', parseInt(e.target.value))}
-                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-accent"
                             />
                             <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                                 <span>1 (fastest)</span>
@@ -1085,7 +1085,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     type="checkbox"
                                     checked={settings.boltz_use_potentials}
                                     onChange={(e) => updateSetting('boltz_use_potentials', e.target.checked)}
-                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-600 focus:ring-purple-500"
+                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
                                 />
                                 <span className="text-sm text-slate-300">
                                     Boltz-2x <span className="text-xs text-slate-500">(physics potentials)</span>
@@ -1097,7 +1097,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     type="checkbox"
                                     checked={settings.boltz_use_msa}
                                     onChange={(e) => updateSetting('boltz_use_msa', e.target.checked)}
-                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-600 focus:ring-purple-500"
+                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
                                 />
                                 <span className="text-sm text-slate-300">
                                     Use MSA <span className="text-xs text-slate-500">(better accuracy)</span>
@@ -1109,7 +1109,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     type="checkbox"
                                     checked={settings.boltz_predict_affinity}
                                     onChange={(e) => updateSetting('boltz_predict_affinity', e.target.checked)}
-                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-600 focus:ring-purple-500"
+                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
                                 />
                                 <span className="text-sm text-slate-300">
                                     Predict Affinity <span className="text-xs text-slate-500">(log₁₀ IC50)</span>
@@ -1655,10 +1655,10 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
 
                     {/* Info Banner */}
                     {settings.boltz_use_potentials && (
-                        <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+                        <div className="p-3 bg-accent/10 border border-accent/30 rounded-lg">
                             <div className="flex items-start gap-2">
                                 <div>
-                                    <div className="text-sm font-medium text-purple-400">Boltz-2x Mode Active</div>
+                                    <div className="text-sm font-medium text-accent">Boltz-2x Mode Active</div>
                                     <p className="text-xs text-slate-400">
                                         Physics-based potentials will improve structural quality but increase runtime.
                                     </p>

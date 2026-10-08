@@ -84,7 +84,7 @@ export function JobDetailPage() {
     if (jobLoading) {
         return (
             <div className="flex items-center justify-center min-h-[60vh]">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500" />
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent" />
             </div>
         );
     }
@@ -95,7 +95,7 @@ export function JobDetailPage() {
                 <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-6 text-center">
                     <h2 className="text-xl font-semibold text-red-400 mb-2">Job Not Found</h2>
                     <p className="text-slate-400 mb-4">The job with ID "{jobId}" could not be found.</p>
-                    <Link to="/" className="text-purple-400 hover:text-purple-300">
+                    <Link to="/" className="text-accent hover:text-accent">
                         ← Back to Dashboard
                     </Link>
                 </div>
@@ -167,7 +167,7 @@ export function JobDetailPage() {
 
                 {job.status === 'running' && (
                     <div className="flex items-center gap-3 text-slate-400">
-                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-purple-500" />
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-accent" />
                         Job is running...
                     </div>
                 )}
@@ -187,7 +187,7 @@ export function JobDetailPage() {
                     <div>
                         {dockingLoading ? (
                             <div className="flex items-center justify-center py-8">
-                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500" />
+                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
                             </div>
                         ) : poses.length > 0 ? (
                             <div>
@@ -197,7 +197,7 @@ export function JobDetailPage() {
                                     <select
                                         value={selectedPose}
                                         onChange={(e) => setSelectedPose(Number(e.target.value))}
-                                        className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-purple-500"
+                                        className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-accent"
                                     >
                                         {poses.map((pose: DockingResult, idx: number) => {
                                             // Show appropriate score based on engine
@@ -258,7 +258,7 @@ export function JobDetailPage() {
                                         {/* Show engine badge */}
                                         <span className={`ml-3 px-2 py-0.5 text-xs rounded ${currentSdf?.engine === 'unidock'
                                                 ? 'bg-emerald-500/20 text-emerald-400'
-                                                : 'bg-purple-500/20 text-purple-400'
+                                                : 'bg-accent/20 text-accent'
                                             }`}>
                                             {currentSdf?.engine === 'unidock' ? 'Uni-Dock (Physics)' : 'DiffDock (ML)'}
                                         </span>
@@ -281,14 +281,14 @@ export function JobDetailPage() {
 
                         {structureLoading ? (
                             <div className="flex items-center justify-center py-4">
-                                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-500" />
+                                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent" />
                             </div>
                         ) : structureData?.structures && structureData.structures.length > 0 ? (
                             <div className="grid gap-3">
                                 {structureData.structures.map((struct) => (
                                     <div
                                         key={struct.path}
-                                        className="flex items-center justify-between bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700/50 hover:border-purple-500/30 transition-colors"
+                                        className="flex items-center justify-between bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700/50 hover:border-accent/30 transition-colors"
                                     >
                                         <div className="flex items-center gap-3">
                                             <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase ${struct.type === 'pdb'
@@ -309,7 +309,7 @@ export function JobDetailPage() {
                                                 href={`/api/files/pdb/${struct.path}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
-                                                className="px-3 py-1.5 bg-purple-600/20 text-purple-400 rounded-lg text-sm hover:bg-purple-600/30 transition-colors"
+                                                className="px-3 py-1.5 bg-accent/20 text-accent rounded-lg text-sm hover:bg-accent/30 transition-colors"
                                             >
                                                 View
                                             </a>
@@ -331,7 +331,7 @@ export function JobDetailPage() {
                         )}
 
                         <div className="mt-4 text-sm text-slate-500">
-                            Results directory: <code className="text-purple-400">{job.output_dir}</code>
+                            Results directory: <code className="text-accent">{job.output_dir}</code>
                         </div>
                     </div>
                 )}

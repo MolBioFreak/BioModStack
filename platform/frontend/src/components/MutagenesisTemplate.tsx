@@ -350,7 +350,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                         ← Back
                     </button>
                     <div>
-                        <h2 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">
+                        <h2 className="text-xl font-bold bg-gradient-to-r from-accent to-accent-secondary bg-clip-text text-transparent">
                             Mutagenesis Library
                         </h2>
                         <p className="text-slate-400 text-sm">Generate variant libraries for structure prediction</p>
@@ -360,7 +360,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                 <div className="flex bg-slate-800/50 p-1 rounded-lg">
                     <button
                         onClick={() => setMode('library')}
-                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode !== 'affinityMaturation' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode !== 'affinityMaturation' ? 'bg-accent text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
                     >
                         Standard Workflow
                     </button>
@@ -422,7 +422,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                         onChange={(e) => setBaseSequence(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
                         placeholder="Select a sequence from library or paste raw amino acids..."
                         rows={4}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-purple-500 outline-none"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-accent outline-none"
                     />
 
                     {baseSequence && (
@@ -440,7 +440,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <button
                                     onClick={() => setShow3DViewer(!show3DViewer)}
                                     className={`px-3 py-1 text-xs rounded-lg transition-all ${show3DViewer
-                                        ? 'bg-purple-600/20 text-purple-400 border border-purple-500/50'
+                                        ? 'bg-accent/20 text-accent border border-accent/50'
                                         : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
                                         }`}
                                 >
@@ -488,13 +488,13 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     <div className="flex bg-slate-800/50 p-1 rounded-lg w-fit">
                         <button
                             onClick={() => setMode('library')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'library' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'library' ? 'bg-accent text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
                         >
                             Library Generator
                         </button>
                         <button
                             onClick={() => setMode('manual')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'manual' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'manual' ? 'bg-accent text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
                         >
                             Manual Editor
                         </button>
@@ -513,12 +513,12 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 value={regionInput}
                                 onChange={(e) => setRegionInput(e.target.value)}
                                 placeholder="e.g., 10-20, 45-50"
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:ring-2 focus:ring-accent outline-none"
                             />
                             {regions.length > 0 && (
                                 <div className="flex gap-2 mt-2 flex-wrap">
                                     {regions.map(r => (
-                                        <span key={r.id} className="text-xs bg-purple-500/20 text-purple-300 px-2 py-1 rounded border border-purple-500/30">
+                                        <span key={r.id} className="text-xs bg-accent/20 text-accent px-2 py-1 rounded border border-accent/30">
                                             Pos {r.start}-{r.end} ({r.end - r.start + 1} aa)
                                         </span>
                                     ))}
@@ -570,7 +570,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                                         className={`w-7 h-7 rounded border transition-colors ${isSelected
                                                             ? 'bg-emerald-600/40 border-emerald-400 text-emerald-200 font-bold'
                                                             : isInRegion
-                                                                ? 'bg-purple-500/20 border-purple-400 text-purple-200'
+                                                                ? 'bg-accent/20 border-accent text-accent'
                                                                 : 'bg-slate-900 border-slate-700 text-slate-500 hover:bg-slate-800 hover:text-slate-200'
                                                             }`}
                                                         title={`Pos ${pos}: ${aa}${isSelected ? ' (target)' : isInRegion ? ' (in region)' : ''}`}
@@ -634,7 +634,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                             type="checkbox"
                                             checked={allowInsertions}
                                             onChange={(e) => setAllowInsertions(e.target.checked)}
-                                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-purple-600"
+                                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-accent"
                                         />
                                         Allow insertions
                                     </label>
@@ -643,7 +643,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                             type="checkbox"
                                             checked={allowDeletions}
                                             onChange={(e) => setAllowDeletions(e.target.checked)}
-                                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-purple-600"
+                                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-accent"
                                         />
                                         Allow deletions
                                     </label>
@@ -665,7 +665,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                                             return Array.from(next).sort();
                                                         });
                                                     }}
-                                                    className="w-3 h-3 rounded bg-slate-900 border-slate-700 text-purple-600"
+                                                    className="w-3 h-3 rounded bg-slate-900 border-slate-700 text-accent"
                                                 />
                                                 {size}
                                             </label>
@@ -784,7 +784,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <button
                                     onClick={handleGeneratePreview}
                                     disabled={!baseSequence || (regions.length === 0 && selectedPositions.size === 0)}
-                                    className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded transition-colors"
+                                    className="px-3 py-1.5 bg-accent hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded transition-colors"
                                 >
                                     Generate Preview
                                 </button>
@@ -794,7 +794,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <div className="max-h-60 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
                                     {generatedVariants.map((v, i) => (
                                         <div key={i} className="text-xs bg-slate-900 p-2 rounded flex justify-between items-center border border-slate-800">
-                                            <span className="text-purple-400 font-mono font-medium">{v.mutations.map(formatMutationLabel).join(', ')}</span>
+                                            <span className="text-accent font-mono font-medium">{v.mutations.map(formatMutationLabel).join(', ')}</span>
                                             <span className="text-slate-500 font-mono text-[10px] truncate max-w-[200px]" title={v.sequence}>{v.sequence}</span>
                                         </div>
                                     ))}
@@ -844,7 +844,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                             <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
                                 <h3 className="text-sm font-semibold text-slate-300 mb-2">Variant Preview</h3>
                                 <div className="text-xs bg-slate-900 p-2 rounded flex justify-between items-center border border-slate-800">
-                                    <span className="text-purple-400 font-mono font-medium">
+                                    <span className="text-accent font-mono font-medium">
                                         {manualMutations.map(formatMutationLabel).join(', ')}
                                     </span>
                                     <span className="text-slate-500 font-mono text-[10px] truncate max-w-[200px]">
@@ -986,7 +986,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                                     </td>
                                                     <td className="py-2 px-2 font-mono text-slate-500">{row.chain}</td>
                                                     <td className="py-2 px-2 font-mono text-slate-300">{row.position}</td>
-                                                    <td className="py-2 px-2 font-mono font-bold text-purple-400">{row.aa}</td>
+                                                    <td className="py-2 px-2 font-mono font-bold text-accent">{row.aa}</td>
                                                     <td className="py-2 px-2 font-mono">
                                                         {row.frustration.toFixed(2)}
                                                     </td>
@@ -1110,7 +1110,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                             <div className="font-bold mb-1">RoseTTAFold3</div>
                             <div className="text-xs opacity-70">Single Model</div>
                         </div>
-                        <div className={`cursor-pointer p-3 rounded-lg border text-center transition-all ${predictor === 'both' ? 'bg-purple-600/20 border-purple-500 text-purple-300' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'}`}
+                        <div className={`cursor-pointer p-3 rounded-lg border text-center transition-all ${predictor === 'both' ? 'bg-accent/20 border-accent text-accent' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'}`}
                             onClick={() => setPredictor('both')}
                         >
                             <div className="font-bold mb-1">Ensemble (Both)</div>
@@ -1180,7 +1180,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 type="checkbox"
                                 checked={predictorParams.use_msa}
                                 onChange={(e) => setPredictorParams(p => ({ ...p, use_msa: e.target.checked }))}
-                                className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-purple-600"
+                                className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-accent"
                             />
                             <label className="text-slate-300">Generate MSA</label>
                         </div>
@@ -1241,7 +1241,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     <button
                         onClick={handleSubmit}
                         disabled={generatedVariants.length === 0}
-                        className="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-purple-900/20 transition-all transform active:scale-95 flex items-center gap-2"
+                        className="px-6 py-3 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95 flex items-center gap-2"
                     >
                         <span>🚀</span> Submit {generatedVariants.length} Jobs
                     </button>

@@ -59,7 +59,7 @@ export function DockingComparePane({ jobId }: Props) {
     if (isLoading) {
         return (
             <div className="flex items-center justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500" />
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
             </div>
         );
     }
@@ -85,7 +85,7 @@ export function DockingComparePane({ jobId }: Props) {
                 <StatCard
                     label="DiffDock Poses"
                     value={summary.total_diffdock_poses}
-                    color="text-purple-400"
+                    color="text-accent"
                 />
                 <StatCard
                     label="Uni-Dock Poses"
@@ -109,7 +109,7 @@ export function DockingComparePane({ jobId }: Props) {
                 <button
                     onClick={() => { setViewMode('all'); setSelectedIndex(0); }}
                     className={`px-4 py-2 rounded-lg font-medium transition-colors ${viewMode === 'all'
-                            ? 'bg-purple-600 text-white'
+                            ? 'bg-accent text-white'
                             : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                         }`}
                 >
@@ -152,14 +152,14 @@ export function DockingComparePane({ jobId }: Props) {
                     {/* Side-by-Side Viewers */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         {/* DiffDock Panel */}
-                        <div className="bg-purple-950/30 border border-purple-500/30 rounded-xl p-4">
+                        <div className="bg-accent/10 border border-accent/30 rounded-xl p-4">
                             <div className="flex items-center justify-between mb-3">
-                                <h3 className="text-lg font-semibold text-purple-400 flex items-center gap-2">
-                                    <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
+                                <h3 className="text-lg font-semibold text-accent flex items-center gap-2">
+                                    <span className="w-2 h-2 bg-accent rounded-full"></span>
                                     DiffDock (ML)
                                 </h3>
                                 {current?.diffdock_confidence !== null && (
-                                    <span className="text-sm bg-purple-500/20 px-2 py-1 rounded text-purple-300">
+                                    <span className="text-sm bg-accent/20 px-2 py-1 rounded text-accent">
                                         Confidence: {current.diffdock_confidence?.toFixed(2)}
                                     </span>
                                 )}

@@ -130,7 +130,7 @@ export function FrameworkEditor({
                     <button
                         onClick={() => onChange({ ...state, protectTetrad: !state.protectTetrad })}
                         className={`px-2 py-1 text-xs rounded ${state.protectTetrad
-                            ? 'bg-purple-500/20 text-purple-400 border border-purple-500/50'
+                            ? 'bg-accent/20 text-accent border border-accent/50'
                             : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                             }`}
                     >

@@ -115,7 +115,7 @@ export function SequenceHeader({
                             <button
                                 onClick={() => onViewModeChange('linear')}
                                 className={`px-2 py-1 text-xs transition-colors ${viewMode === 'linear'
-                                    ? 'bg-purple-600 text-white'
+                                    ? 'bg-accent text-white'
                                     : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                                     }`}
                                 title="Linear view only"
@@ -125,7 +125,7 @@ export function SequenceHeader({
                             <button
                                 onClick={() => onViewModeChange('both')}
                                 className={`px-2 py-1 text-xs border-x border-slate-600 transition-colors ${viewMode === 'both'
-                                    ? 'bg-purple-600 text-white'
+                                    ? 'bg-accent text-white'
                                     : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                                     }`}
                                 title="Both views split"
@@ -135,7 +135,7 @@ export function SequenceHeader({
                             <button
                                 onClick={() => onViewModeChange('circular')}
                                 className={`px-2 py-1 text-xs transition-colors ${viewMode === 'circular'
-                                    ? 'bg-purple-600 text-white'
+                                    ? 'bg-accent text-white'
                                     : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                                     }`}
                                 title="Circular view only"

@@ -140,7 +140,7 @@ export function AptamerBrowser({ onSelect, selectedAptamer, aptamerType }: Aptam
                                 <div className="flex justify-between items-start">
                                     <div className="font-medium text-white text-sm">{apt.name}</div>
                                     <span className={`text-xs px-2 py-0.5 rounded ${apt.aptamer_type === 'RNA'
-                                        ? 'bg-purple-500/20 text-purple-300'
+                                        ? 'bg-accent/20 text-accent'
                                         : 'bg-blue-500/20 text-blue-300'
                                         }`}>
                                         {apt.aptamer_type}
@@ -177,7 +177,7 @@ export function AptamerBrowser({ onSelect, selectedAptamer, aptamerType }: Aptam
                             <div className="flex justify-between items-start">
                                 <div className="font-medium text-white text-sm">{apt.name}</div>
                                 <span className={`text-xs px-2 py-0.5 rounded ${apt.aptamer_type === 'RNA'
-                                    ? 'bg-purple-500/20 text-purple-300'
+                                    ? 'bg-accent/20 text-accent'
                                     : 'bg-blue-500/20 text-blue-300'
                                     }`}>
                                     {apt.aptamer_type}

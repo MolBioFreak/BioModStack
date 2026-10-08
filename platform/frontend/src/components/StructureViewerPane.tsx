@@ -244,7 +244,7 @@ export default function StructureViewerPane({
                                     <div className="flex justify-between">
                                         <span>Secondary</span>
                                         <span>
-                                            <span className="text-pink-400">α{structureAnalysis.secondary_structure.helix?.toFixed(0)}%</span>
+                                            <span className="text-accent-secondary">α{structureAnalysis.secondary_structure.helix?.toFixed(0)}%</span>
                                             {' '}
                                             <span className="text-yellow-400">β{structureAnalysis.secondary_structure.sheet?.toFixed(0)}%</span>
                                         </span>
@@ -529,7 +529,7 @@ export default function StructureViewerPane({
                             <>
                                 <div className="flex justify-between">
                                     <span className="text-slate-500">α-Helix</span>
-                                    <span className="text-pink-400 font-mono">{structureAnalysis.secondary_structure.helix?.toFixed(0)}%</span>
+                                    <span className="text-accent-secondary font-mono">{structureAnalysis.secondary_structure.helix?.toFixed(0)}%</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-slate-500">β-Sheet</span>

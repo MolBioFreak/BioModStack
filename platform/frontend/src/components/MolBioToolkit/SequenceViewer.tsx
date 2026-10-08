@@ -8,6 +8,72 @@ import { SeqViz } from "seqviz";
 import { useMemo } from "react";
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// COLOR PALETTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type ColorPaletteName =
+    | 'classic'      // Traditional 4-color scheme
+    | 'gc_at'        // GC vs AT grouping (blue/red)
+    | 'purine_pyrimidine'  // Purines vs Pyrimidines
+    | 'muted'        // Softer, less saturated
+    | 'vivid'        // High contrast, saturated
+    | 'monochrome'   // Grayscale for printing
+    | 'colorblind'   // Deuteranopia-safe
+    | 'rasmol';      // RasMol/Jmol convention
+
+export interface BpColors {
+    A: string;
+    T: string;
+    G: string;
+    C: string;
+    U?: string;
+    [key: string]: string | undefined;
+}
+
+export const COLOR_PALETTES: Record<ColorPaletteName, { name: string; description: string; colors: BpColors }> = {
+    classic: {
+        name: 'Classic',
+        description: 'Traditional 4-color scheme (A=green, T=red, G=amber, C=blue)',
+        colors: { A: '#22c55e', T: '#ef4444', G: '#f59e0b', C: '#3b82f6', U: '#ec4899' }
+    },
+    gc_at: {
+        name: 'GC vs AT',
+        description: 'Group by base pairing: GC (blue/cyan) vs AT (red/orange)',
+        colors: { A: '#ef4444', T: '#f97316', G: '#3b82f6', C: '#06b6d4', U: '#f97316' }
+    },
+    purine_pyrimidine: {
+        name: 'Purine/Pyrimidine',
+        description: 'Purines A+G (warm) vs Pyrimidines C+T (cool)',
+        colors: { A: '#f97316', T: '#3b82f6', G: '#eab308', C: '#8b5cf6', U: '#8b5cf6' }
+    },
+    muted: {
+        name: 'Muted',
+        description: 'Softer colors, easier on eyes for long sessions',
+        colors: { A: '#6ee7b7', T: '#fca5a5', G: '#fcd34d', C: '#93c5fd', U: '#f9a8d4' }
+    },
+    vivid: {
+        name: 'Vivid',
+        description: 'High saturation for maximum contrast',
+        colors: { A: '#00ff00', T: '#ff0000', G: '#ffff00', C: '#0088ff', U: '#ff00ff' }
+    },
+    monochrome: {
+        name: 'Monochrome',
+        description: 'Grayscale for printing or colorblind accessibility',
+        colors: { A: '#404040', T: '#808080', G: '#c0c0c0', C: '#606060', U: '#909090' }
+    },
+    colorblind: {
+        name: 'Colorblind Safe',
+        description: 'Optimized for deuteranopia (red-green colorblindness)',
+        colors: { A: '#e69f00', T: '#56b4e9', G: '#cc79a7', C: '#0072b2', U: '#f0e442' }
+    },
+    rasmol: {
+        name: 'RasMol',
+        description: 'Traditional molecular visualization colors',
+        colors: { A: '#a0a0ff', T: '#ff8c4b', G: '#ff7070', C: '#ffc832', U: '#ff8080' }
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -76,6 +142,7 @@ interface SequenceViewerProps {
     highlightedRegions?: { start: number; end: number; color: string }[];
     className?: string;
     viewMode?: 'linear' | 'circular' | 'both' | 'both_flip';
+    colorPalette?: ColorPaletteName;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -106,7 +173,8 @@ export function SequenceViewer({
     onSearch,
     highlightedRegions,
     className,
-    viewMode
+    viewMode,
+    colorPalette = 'classic'
 }: SequenceViewerProps) {
 
     // Build annotations array based on visibility toggles
@@ -181,14 +249,8 @@ export function SequenceViewer({
                 showComplement={visibility.reverseComplement}
                 rotateOnScroll
 
-                // Base pair colors for dark mode visibility
-                bpColors={{
-                    A: "#22c55e",  // Green for Adenine
-                    T: "#ef4444",  // Red for Thymine  
-                    G: "#f59e0b",  // Amber for Guanine
-                    C: "#3b82f6",  // Blue for Cytosine
-                    U: "#ec4899",  // Pink for Uracil (RNA)
-                }}
+                // Base pair colors from selected palette
+                bpColors={COLOR_PALETTES[colorPalette].colors as Record<string, string>}
 
                 // Selection handling with type info
                 onSelection={(sel) => {

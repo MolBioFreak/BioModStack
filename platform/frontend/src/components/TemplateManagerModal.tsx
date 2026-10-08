@@ -195,7 +195,7 @@ export function TemplateManagerModal({
                 {/* Header */}
                 <div className="p-5 border-b border-slate-700 flex justify-between items-center bg-slate-800/50 rounded-t-xl">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center text-purple-400 text-xl">
+                        <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center text-accent text-xl">
                             📋
                         </div>
                         <div>
@@ -227,12 +227,12 @@ export function TemplateManagerModal({
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
                                     placeholder="Search templates..."
-                                    className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                                    className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-accent outline-none"
                                 />
                                 {currentParams && Object.keys(currentParams).length > 0 && (
                                     <button
                                         onClick={() => { resetForm(); setMode('edit'); }}
-                                        className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                                        className="px-4 py-2.5 bg-accent hover:bg-accent text-white rounded-lg font-medium transition-colors flex items-center gap-2"
                                     >
                                         <span>+</span> Save Current Config
                                     </button>
@@ -242,7 +242,7 @@ export function TemplateManagerModal({
                             {/* Template List */}
                             {isLoading ? (
                                 <div className="flex items-center justify-center py-12">
-                                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500" />
+                                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
                                 </div>
                             ) : templates.length === 0 ? (
                                 <div className="text-center py-12 text-slate-500">
@@ -285,7 +285,7 @@ export function TemplateManagerModal({
                                                 {onSelect && (
                                                     <button
                                                         onClick={() => { onSelect(template); handleClose(); }}
-                                                        className="flex-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-sm rounded transition-colors"
+                                                        className="flex-1 px-3 py-1.5 bg-accent hover:bg-accent text-white text-sm rounded transition-colors"
                                                     >
                                                         Load
                                                     </button>
@@ -331,7 +331,7 @@ export function TemplateManagerModal({
                                         value={formName}
                                         onChange={(e) => setFormName(e.target.value)}
                                         placeholder="e.g., My Boltz Config"
-                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-accent outline-none"
                                     />
                                 </div>
 
@@ -345,7 +345,7 @@ export function TemplateManagerModal({
                                         value={formDescription}
                                         onChange={(e) => setFormDescription(e.target.value)}
                                         placeholder="Brief description of what this template is for..."
-                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-accent outline-none"
                                     />
                                 </div>
 
@@ -361,7 +361,7 @@ export function TemplateManagerModal({
                                                     key={icon}
                                                     onClick={() => setFormIcon(icon)}
                                                     className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg transition-all ${formIcon === icon
-                                                        ? 'bg-purple-500/30 border-2 border-purple-500'
+                                                        ? 'bg-accent/30 border-2 border-accent'
                                                         : 'bg-slate-800 border border-slate-700 hover:border-slate-600'
                                                         }`}
                                                 >
@@ -436,7 +436,7 @@ export function TemplateManagerModal({
                                 <button
                                     onClick={handleSubmit}
                                     disabled={createMutation.isPending || updateMutation.isPending}
-                                    className="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
+                                    className="px-5 py-2.5 bg-accent hover:bg-accent text-white rounded-lg font-medium transition-colors disabled:opacity-50"
                                 >
                                     {createMutation.isPending || updateMutation.isPending
                                         ? 'Saving...'
