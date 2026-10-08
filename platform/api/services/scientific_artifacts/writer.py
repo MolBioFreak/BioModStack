@@ -40,6 +40,7 @@ class InstalledArtifact:
     size_bytes: int
     row_count: int
     column_schema_sha256: str
+    newly_installed: bool = False
     media_type: str = "application/vnd.apache.parquet"
 
     def reference(self) -> dict[str, Any]:
@@ -126,7 +127,8 @@ def install_parquet_rows(
         with staging.open("rb") as handle:
             os.fsync(handle.fileno())
         content_sha256, size_bytes = _content_digest(staging)
-        if destination.exists():
+        newly_installed = not destination.exists()
+        if not newly_installed:
             existing_sha256, existing_size = _content_digest(destination)
             if (existing_sha256, existing_size) != (content_sha256, size_bytes):
                 raise ScientificArtifactError(f"immutable artifact conflict: {destination}")
@@ -153,9 +155,29 @@ def install_parquet_rows(
             size_bytes=size_bytes,
             row_count=len(materialized),
             column_schema_sha256=_schema_digest(pq.read_schema(destination)),
+            newly_installed=newly_installed,
         )
     finally:
         staging.unlink(missing_ok=True)
+
+
+def guarded_delete_new_artifact(artifact: InstalledArtifact) -> bool:
+    """Delete only bytes installed here and still matching their receipt."""
+    if not artifact.newly_installed:
+        return False
+    path = artifact.storage_path
+    root = artifact_root()
+    try:
+        path.resolve(strict=False).relative_to(root)
+    except ValueError:
+        return False
+    if path.is_symlink() or not path.is_file():
+        return False
+    if _content_digest(path) != (artifact.content_sha256, artifact.size_bytes):
+        return False
+    path.unlink()
+    _fsync_directory(path.parent)
+    return True
 
 
 def verify_artifact(artifact: InstalledArtifact | Mapping[str, Any], *, root: Path | str | None = None) -> Path:

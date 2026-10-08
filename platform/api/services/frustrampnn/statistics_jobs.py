@@ -8,11 +8,11 @@ import hashlib
 import os
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from database import (
@@ -135,14 +135,45 @@ async def claim_statistics_child(
     *,
     analysis_id: str,
 ) -> FrustraMPNNStatisticsAnalysis:
-    child = await _child(session, analysis_id)
-    if child.state != "queued":
+    claimed_at = datetime.utcnow()
+    claimed = await session.execute(
+        update(FrustraMPNNStatisticsAnalysis)
+        .where(
+            FrustraMPNNStatisticsAnalysis.analysis_id == analysis_id,
+            FrustraMPNNStatisticsAnalysis.state == "queued",
+        )
+        .values(
+            state="running",
+            attempt_count=FrustraMPNNStatisticsAnalysis.attempt_count + 1,
+            diagnostic=None,
+            updated_at=claimed_at,
+        )
+    )
+    if claimed.rowcount != 1:
         raise FrustraMPNNStatisticsJobError("only queued statistics children can run")
-    child.state = "running"
-    child.attempt_count += 1
-    child.updated_at = datetime.utcnow()
-    await session.flush()
+    child = await _child(session, analysis_id)
+    await session.refresh(child)
     return child
+
+
+async def recover_abandoned_statistics_claims(
+    session: AsyncSession,
+    *,
+    stale_before: datetime,
+) -> int:
+    recovered = await session.execute(
+        update(FrustraMPNNStatisticsAnalysis)
+        .where(
+            FrustraMPNNStatisticsAnalysis.state == "running",
+            FrustraMPNNStatisticsAnalysis.updated_at < stale_before,
+        )
+        .values(
+            state="queued",
+            diagnostic="recovered abandoned statistics claim",
+            updated_at=datetime.utcnow(),
+        )
+    )
+    return int(recovered.rowcount or 0)
 
 
 async def fail_statistics_child(
@@ -172,6 +203,24 @@ async def retry_statistics_child(
     child = await _child(session, analysis_id)
     if child.state != "failed":
         raise FrustraMPNNStatisticsJobError("only failed statistics children can retry")
+    result = await session.get(
+        FrustraMPNNResult, (child.parent_job_id, child.invocation_id)
+    )
+    if result is None:
+        raise FrustraMPNNStatisticsJobError(
+            "statistics retry requires the exact successful v3 core result"
+        )
+    terminal = result.terminal_result_json
+    if (
+        not isinstance(terminal, dict)
+        or terminal.get("component_contract_version") != "3.0"
+        or terminal.get("status") != "succeeded"
+        or result.manifest_sha256 != child.core_manifest_sha256
+        or _landscape_sha256(result) != child.core_landscape_sha256
+    ):
+        raise FrustraMPNNStatisticsJobError(
+            "statistics retry requires the exact successful v3 core result"
+        )
     child.state = "queued"
     child.diagnostic = None
     child.artifact_relative_path = None
@@ -187,7 +236,7 @@ async def run_statistics_child_once(
     *,
     analysis_id: str,
 ) -> dict[str, Any]:
-    """Run one queued CPU child against its exact immutable v3 core bundle."""
+    """Compute one committed-running CPU child against its exact v3 core bundle."""
 
     from services.scientific_artifacts.persistence import publish_json_payload
 
@@ -197,7 +246,11 @@ async def run_statistics_child_once(
     from .persistence import load_and_validate_result_bundle
     from .settings import _CAPABILITY_INVENTORY_PATH, load_capability_inventory
 
-    child = await claim_statistics_child(session, analysis_id=analysis_id)
+    child = await _child(session, analysis_id)
+    if child.state != "running":
+        raise FrustraMPNNStatisticsJobError(
+            "statistics computation requires a committed running claim"
+        )
     result = await session.get(
         FrustraMPNNResult,
         (child.parent_job_id, child.invocation_id),
@@ -354,9 +407,9 @@ class FrustraMPNNStatisticsWorker:
         self._stop = asyncio.Event()
 
     async def run_pending_once(self) -> str | None:
-        async with self._session_factory() as session:
+        async with self._session_factory() as claim_session:
             analysis_id = (
-                await session.execute(
+                await claim_session.execute(
                     select(FrustraMPNNStatisticsAnalysis.analysis_id)
                     .where(FrustraMPNNStatisticsAnalysis.state == "queued")
                     .order_by(
@@ -368,6 +421,9 @@ class FrustraMPNNStatisticsWorker:
             ).scalar_one_or_none()
             if analysis_id is None:
                 return None
+            await claim_statistics_child(claim_session, analysis_id=analysis_id)
+            await claim_session.commit()
+        async with self._session_factory() as session:
             try:
                 await run_statistics_child_once(session, analysis_id=analysis_id)
                 await session.commit()
@@ -379,11 +435,7 @@ class FrustraMPNNStatisticsWorker:
                         FrustraMPNNStatisticsAnalysis,
                         analysis_id,
                     )
-                    if child is not None and child.state == "queued":
-                        await claim_statistics_child(
-                            failure_session,
-                            analysis_id=analysis_id,
-                        )
+                    if child is not None and child.state == "running":
                         await fail_statistics_child(
                             failure_session,
                             analysis_id=analysis_id,
@@ -396,6 +448,12 @@ class FrustraMPNNStatisticsWorker:
         if self._task is not None and not self._task.done():
             return
         self._stop.clear()
+        async with self._session_factory() as session:
+            await recover_abandoned_statistics_claims(
+                session,
+                stale_before=datetime.utcnow() - timedelta(hours=1),
+            )
+            await session.commit()
         self._task = asyncio.create_task(
             self._run(),
             name="frustrampnn-statistics-worker",
@@ -441,5 +499,6 @@ __all__ = [
     "ensure_statistics_child",
     "fail_statistics_child",
     "retry_statistics_child",
+    "recover_abandoned_statistics_claims",
     "run_statistics_child_once",
 ]

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import importlib
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from database import Base, FrustraMPNNResult, Job
+from database import Base, FrustraMPNNResult, FrustraMPNNStatisticsAnalysis, Job
 
 
 def test_api_lifespan_owns_statistics_worker() -> None:
@@ -160,6 +161,18 @@ async def test_failed_statistics_child_retries_without_changing_core_inference(t
             result.manifest_sha256,
             result.terminal_result_json,
         )
+        result.terminal_result_json = {
+            "component_contract_version": "1.0",
+            "status": "succeeded",
+        }
+        await session.commit()
+        with pytest.raises(
+            jobs.FrustraMPNNStatisticsJobError,
+            match="exact successful v3 core result",
+        ):
+            await jobs.retry_statistics_child(session, analysis_id=first.analysis_id)
+        result.terminal_result_json = core_before_retry[2]
+        await session.commit()
         retried = await jobs.retry_statistics_child(session, analysis_id=first.analysis_id)
         assert retried.state == "queued"
         assert retried.attempt_count == 1
@@ -173,5 +186,96 @@ async def test_failed_statistics_child_retries_without_changing_core_inference(t
         second = await jobs.claim_statistics_child(session, analysis_id=first.analysis_id)
         assert second.state == "running"
         assert second.attempt_count == 2
+        second.updated_at = datetime.utcnow() - timedelta(hours=2)
+        await session.commit()
+        recovered = await jobs.recover_abandoned_statistics_claims(
+            session,
+            stale_before=datetime.utcnow() - timedelta(hours=1),
+        )
+        assert recovered == 1
+        await session.commit()
+        await session.refresh(second)
+        assert second.state == "queued"
+        assert second.attempt_count == 2
 
+
+
+@pytest.mark.asyncio
+async def test_worker_commits_conditional_claim_before_cpu_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs = importlib.import_module("services.frustrampnn.statistics_jobs")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'claim-boundary.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    analysis_id = "33333333-3333-4333-8333-333333333333"
+    async with sessions() as session:
+        session.add(
+            Job(
+                id="claim-job",
+                name="claim-job",
+                status="completed",
+                queue_status="completed",
+                model_id="frustrampnn",
+                mode="analyze",
+                params={},
+            )
+        )
+        session.add(
+            FrustraMPNNResult(
+                parent_job_id="claim-job",
+                invocation_id="invoke-claim",
+                parent_workflow_id="frustrampnn_analysis",
+                candidate_id="candidate-claim",
+                requiredness="required",
+                request_sha256="1" * 64,
+                source_artifact_sha256="2" * 64,
+                manifest_sha256="3" * 64,
+                manifest_json={},
+                summary_sha256="4" * 64,
+                summary_json={"landscape_sha256": "5" * 64},
+                runtime_identity_json={},
+                assigned_gpu_json={},
+                terminal_result_json={"component_contract_version": "3.0", "status": "succeeded"},
+            )
+        )
+        await session.flush()
+        session.add(
+            FrustraMPNNStatisticsAnalysis(
+                analysis_id=analysis_id,
+                parent_job_id="claim-job",
+                invocation_id="invoke-claim",
+                core_artifact_id="artifact-claim",
+                core_bundle_relative_path="bundle",
+                core_landscape_sha256="5" * 64,
+                core_manifest_sha256="3" * 64,
+                state="queued",
+                attempt_count=0,
+                formula_version=jobs.FORMULA_VERSION,
+                policy_version=jobs.POLICY_VERSION,
+                package_version=jobs.PACKAGE_VERSION,
+                schema_version=jobs.SCHEMA_VERSION,
+            )
+        )
+        await session.commit()
+
+    async def compute_after_committed_claim(session, *, analysis_id: str):
+        async with sessions() as observer:
+            observed = await observer.get(FrustraMPNNStatisticsAnalysis, analysis_id)
+            assert observed is not None
+            assert observed.state == "running"
+            assert observed.attempt_count == 1
+        child = await session.get(FrustraMPNNStatisticsAnalysis, analysis_id)
+        assert child is not None and child.state == "running"
+        child.state = "completed"
+        await session.flush()
+        return {"completed": True}
+
+    monkeypatch.setattr(jobs, "run_statistics_child_once", compute_after_committed_claim)
+    worker = jobs.FrustraMPNNStatisticsWorker(sessions)
+    assert await worker.run_pending_once() == analysis_id
+    async with sessions() as session:
+        child = await session.get(FrustraMPNNStatisticsAnalysis, analysis_id)
+        assert child is not None and child.state == "completed"
     await engine.dispose()

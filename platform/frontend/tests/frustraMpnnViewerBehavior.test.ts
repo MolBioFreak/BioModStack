@@ -129,5 +129,5 @@ test('FrustraMpnnResultsViewer source gates and owns v3 derived statistics queri
     assert.match(source, /invalidateQueries\(\{ queryKey: \['frustrampnn-statistics-analysis', job\.id, selectedInvocation\] \}\)/);
     assert.match(source, /invalidateQueries\(\{ queryKey: \['frustrampnn-statistics', job\.id, selectedInvocation\] \}\)/);
     assert.match(source, /statisticsOverride=\{fetchedStatistics\}/);
-    assert.match(source, /canRetry=\{resultContext\.kind === 'scheduler-child'/);
+    assert.match(source, /canRetry=\{resultContext\.canRetryStatisticsAnalysis\}/);
 });

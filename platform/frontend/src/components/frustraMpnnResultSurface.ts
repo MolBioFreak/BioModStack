@@ -8,6 +8,7 @@ export interface FrustraMpnnResultContext {
     readonly kind: 'scheduler-child' | 'integrated-parent';
     readonly usesChildReceipt: boolean;
     readonly canReanalyzePersistedInputs: boolean;
+    readonly canRetryStatisticsAnalysis: boolean;
     readonly executionLabel: string;
 }
 
@@ -35,6 +36,7 @@ export const getFrustraMpnnResultContext = (
             kind: 'scheduler-child',
             usesChildReceipt: true,
             canReanalyzePersistedInputs: true,
+            canRetryStatisticsAnalysis: true,
             executionLabel: 'Persisted execution child',
         };
     }
@@ -42,6 +44,7 @@ export const getFrustraMpnnResultContext = (
         kind: 'integrated-parent',
         usesChildReceipt: false,
         canReanalyzePersistedInputs: false,
+        canRetryStatisticsAnalysis: true,
         executionLabel: 'Persisted workflow analysis',
     };
 };

@@ -5,11 +5,35 @@ from datetime import datetime
 from typing import Any, Iterable, Mapping
 
 import pyarrow as pa
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from database import ScientificArtifactReceipt
 from .contracts import canonical_sha256, envelope_rows
-from .writer import artifact_root, install_parquet_rows
+from .writer import artifact_root, guarded_delete_new_artifact, install_parquet_rows
+
+
+_ROLLBACK_ARTIFACTS_KEY = "scientific_artifacts_newly_installed"
+
+
+@event.listens_for(Session, "after_commit")
+def _forget_committed_artifacts(session: Session) -> None:
+    session.info.pop(_ROLLBACK_ARTIFACTS_KEY, None)
+
+
+@event.listens_for(Session, "after_rollback")
+def _cleanup_rolled_back_artifacts(session: Session) -> None:
+    artifacts = session.info.pop(_ROLLBACK_ARTIFACTS_KEY, ())
+    for artifact in reversed(artifacts):
+        guarded_delete_new_artifact(artifact)
+
+
+def _track_new_artifact(session: AsyncSession, artifact: Any) -> None:
+    if artifact.newly_installed:
+        session.sync_session.info.setdefault(_ROLLBACK_ARTIFACTS_KEY, []).append(
+            artifact
+        )
 
 
 async def publish_json_payload(
@@ -21,6 +45,7 @@ async def publish_json_payload(
     schema_id: str,
     payload: Mapping[str, Any],
     source_sha256: str | None = None,
+    installed_artifacts: list[Any] | None = None,
 ) -> dict[str, Any]:
     source_sha = source_sha256 or canonical_sha256(payload)
     schema = pa.schema(
@@ -41,6 +66,9 @@ async def publish_json_payload(
         rows=envelope_rows(payload),
         schema=schema,
     )
+    if installed_artifacts is not None:
+        installed_artifacts.append(artifact)
+    _track_new_artifact(session, artifact)
     await _add_receipt(session, artifact, source_sha)
     return artifact.reference()
 
@@ -55,6 +83,7 @@ async def publish_table_rows(
     source_sha256: str,
     rows: Iterable[Mapping[str, Any]],
     schema: pa.Schema,
+    installed_artifacts: list[Any] | None = None,
 ) -> Any:
     artifact = install_parquet_rows(
         root=artifact_root(),
@@ -67,6 +96,9 @@ async def publish_table_rows(
         rows=rows,
         schema=schema,
     )
+    if installed_artifacts is not None:
+        installed_artifacts.append(artifact)
+    _track_new_artifact(session, artifact)
     await _add_receipt(session, artifact, source_sha256)
     return artifact
 
