@@ -38,22 +38,57 @@ process RFANTIBODY {
     // (The HLT naming is for OUTPUT chains, not the input hotspot parameter)
     def hotspots = hotspot_residues ? "[${hotspot_residues}]" : "[]"
 
-    // Design loops - auto-select based on framework type
-    // VHH/Nanobodies: H-chain loops only (no light chain)
-    // Fab/scFv: Both H and L chain loops
-    def defaultLoops = params.framework_type == 'nanobody'
-        ? "[H1:7-10,H2:6-8,H3:5-15]"
-        : "[H1:7-10,H2:6-8,H3:5-15,L1:8-13,L2:7,L3:9-11]"
-    def design_loops = params.rfantibody_design_loops ?: defaultLoops
+    // Design loops configuration
+    // Accepts two formats:
+    //   1. Simple loop names from UI: "H1,H2,H3" or "H1,H3,L1,L3"
+    //   2. Full RFantibody format: "[H1:7-10,H2:6-8,H3:5-15]"
+    // If simple format, auto-apply default length ranges per loop
+
+    // Default length ranges for each CDR loop (based on typical antibody CDR statistics)
+    def loopLengthDefaults = [
+        'H1': '7-10',
+        'H2': '6-8',
+        'H3': '5-15',
+        'L1': '8-13',
+        'L2': '7',
+        'L3': '9-11',
+    ]
+
+    // Start with UI-provided loop selection, then rfantibody-specific param, then framework default
+    def rawLoops = params.antibody_design_loops ?: params.rfantibody_design_loops ?: ''
+
+    def design_loops
+    if (rawLoops && rawLoops.contains(':')) {
+        // Already in RFantibody format with ranges: "[H1:7-10,H2:6-8,H3:5-15]"
+        design_loops = rawLoops
+    }
+    else if (rawLoops && rawLoops.trim()) {
+        // Simple loop names from UI: "H1,H2,H3" -> convert to RFantibody format
+        def loopList = rawLoops.split(',').collect { it.trim().toUpperCase() }
+        def loopSpecs = loopList
+            .findAll { loopLengthDefaults.containsKey(it) }
+            .collect { "${it}:${loopLengthDefaults[it]}" }
+        design_loops = loopSpecs ? "[${loopSpecs.join(',')}]" : ''
+    }
+    else {
+        // No selection - use framework-based defaults (all loops)
+        design_loops = params.framework_type == 'nanobody'
+            ? "[H1:7-10,H2:6-8,H3:5-15]"
+            : "[H1:7-10,H2:6-8,H3:5-15,L1:8-13,L2:7,L3:9-11]"
+    }
 
     // Number of designs - use per-GPU allocation from input (supports multi-GPU splitting)
     def num_designs = num_designs_for_this_gpu ?: params.rfantibody_num_designs ?: 10
 
     // Quality parameters for diffusion process
-    def diffusion_steps = params.rfantibody_diffusion_steps ?: 50      // 20-200, higher = better quality
-    def noise_scale_ca = params.rfantibody_noise_scale_ca ?: 1.0       // 0.5-2.0, lower = more consistent
-    def noise_scale_frame = params.rfantibody_noise_scale_frame ?: 1.0 // 0.5-2.0, affects rotational diversity
-    def guide_scale = params.rfantibody_guide_scale ?: 10              // 1-50, higher = stronger hotspot guidance
+    def diffusion_steps = params.rfantibody_diffusion_steps ?: 50
+    // 20-200, higher = better quality
+    def noise_scale_ca = params.rfantibody_noise_scale_ca ?: 1.0
+    // 0.5-2.0, lower = more consistent
+    def noise_scale_frame = params.rfantibody_noise_scale_frame ?: 1.0
+    // 0.5-2.0, affects rotational diversity
+    def guide_scale = params.rfantibody_guide_scale ?: 10
+    // 1-50, higher = stronger hotspot guidance
 
     // Framework selection based on framework_type param
     // Options: 'standard-fv', 'nanobody', 'custom'

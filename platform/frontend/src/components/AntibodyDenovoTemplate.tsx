@@ -8,6 +8,7 @@ import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { DesignModeSelector } from './DesignModeSelector';
 import { QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset } from './QualitySettingsPanel';
+import { TemplateManagerModal } from './TemplateManagerModal';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -24,14 +25,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [seqDesigner, setSeqDesigner] = useState<'fampnn' | 'antifold' | 'proteinmpnn'>('fampnn');
     const [useAntiberty, setUseAntiberty] = useState(false);  // Disabled by default, planned for removal
     const [useThermoMPNN, setUseThermoMPNN] = useState(true);  // Controlled via qualitySettings.run_thermompnn
-    const [explorationMode, setExplorationMode] = useState(true); // Parallel GPU distribution
+    // explorationMode is now always true - parallelism controlled via parallelMode
     const [seqsPerDesign, setSeqsPerDesign] = useState(8); // Number of sequence variants per backbone
 
     // Orchestrator parallelism settings
-    type ParallelMode = 'standard' | 'full_orchestrator';
-    const [parallelMode, setParallelMode] = useState<ParallelMode>('standard');
+    const [parallelMode, setParallelMode] = useState<'standard' | 'full_orchestrator'>('standard');
     const [designsPerJob, setDesignsPerJob] = useState(5); // Backbones per child job
     const [pdBsPerJob, setPdBsPerJob] = useState(5); // FAMPNN PDBs per child job
+
+    // Template manager
+    const [showTemplateManager, setShowTemplateManager] = useState(false);
 
     // Design mode settings
     type DesignMode = 'cdr_only' | 'cdr_selective' | 'framework_allowed' | 'full_design';
@@ -84,7 +87,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (initialValues.name) setJobName(initialValues.name); // Job name usually comes from wrapper but might be passed
             if (initialValues.rfantibody_num_designs) setNumDesigns(initialValues.rfantibody_num_designs);
             if (initialValues.seqs_per_design) setSeqsPerDesign(initialValues.seqs_per_design);
-            if (initialValues.exploration_mode !== undefined) setExplorationMode(initialValues.exploration_mode);
+            // exploration_mode is now always true - controlled via parallel_mode instead
 
             // Booleans
             if (initialValues.run_immunogenicity_scoring !== undefined) setUseAntiberty(initialValues.run_immunogenicity_scoring);
@@ -283,7 +286,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_immunogenicity_scoring: useAntiberty,
                     run_stability_scoring: useThermoMPNN,
                     run_structure_validation: true, // Boltz2 is always run
-                    exploration_mode: explorationMode, // Parallel vs serial GPU processing
+                    exploration_mode: true, // Always parallel - granularity controlled via parallel_mode
                     seqs_per_design: seqsPerDesign, // Number of sequence variants per backbone
                     // Optional DNA sequence for complex prediction
                     target_dna_seq: targetDnaSeq.trim() || undefined,
@@ -313,6 +316,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     // ThermoMPNN stability scoring (before Boltz when enabled)
                     run_thermompnn: qualitySettings.run_thermompnn,
                     thermompnn_max_ddg: qualitySettings.thermompnn_max_ddg,
+                    // AF2 Backprop CDR refinement (after ThermoMPNN, before Boltz)
+                    run_af2_backprop: qualitySettings.run_af2_backprop,
+                    af2_backprop_soft_iters: qualitySettings.af2_backprop_soft_iters,
+                    af2_backprop_temp_iters: qualitySettings.af2_backprop_temp_iters,
+                    af2_backprop_hard_iters: qualitySettings.af2_backprop_hard_iters,
+                    af2_backprop_num_recycles: qualitySettings.af2_backprop_num_recycles,
+                    af2_backprop_learning_rate: qualitySettings.af2_backprop_learning_rate,
+                    af2_backprop_use_multimer: qualitySettings.af2_backprop_use_multimer,
+                    af2_backprop_num_models: qualitySettings.af2_backprop_num_models,
+                    af2_backprop_loss_plddt: qualitySettings.af2_backprop_loss_plddt,
+                    af2_backprop_loss_pae: qualitySettings.af2_backprop_loss_pae,
+                    af2_backprop_loss_contact: qualitySettings.af2_backprop_loss_contact,
                     // Orchestrator parallelism mode
                     parallel_mode: parallelMode,
                     designs_per_job: designsPerJob,
@@ -735,38 +750,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                 {/* Validation Options - removed, now controlled via QualitySettingsPanel */}
 
-                {/* GPU Processing Mode */}
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">GPU Processing Mode</label>
-                    <div className="flex gap-3">
-                        <button
-                            onClick={() => setExplorationMode(true)}
-                            className={`px-4 py-2 rounded-lg font-medium transition-all ${explorationMode
-                                ? 'bg-emerald-600 text-white'
-                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                                }`}
-                        >
-                            Parallel
-                        </button>
-                        <button
-                            onClick={() => setExplorationMode(false)}
-                            className={`px-4 py-2 rounded-lg font-medium transition-all ${!explorationMode
-                                ? 'bg-purple-600 text-white'
-                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                                }`}
-                        >
-                            Serial
-                        </button>
-                    </div>
-                    <p className="text-xs text-slate-500 mt-2">
-                        {explorationMode
-                            ? "Parallel: Jobs queue through scheduler for multi-GPU distribution"
-                            : "Serial: Run each validation one-by-one on assigned GPU"}
-                    </p>
-                </div>
-
                 {/* Orchestrator Parallelism Settings */}
-                <div className="border-t border-slate-700/50 pt-4 mt-4">
+                <div>
                     <label className="block text-sm font-medium text-slate-400 mb-2">Orchestrator Mode</label>
                     <div className="flex gap-3 mb-3">
                         <button
@@ -830,28 +815,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 {/* Template Manager Button */}
                 <button
                     type="button"
-                    onClick={() => {
-                        // Store current params in localStorage for template manager
-                        const templateData = {
-                            name: jobName,
-                            model_id: 'template_antibody_denovo',
-                            mode: 'antibody_denovo_pipeline',
-                            params: {
-                                framework_type: frameworkType,
-                                seq_designer: seqDesigner,
-                                num_designs: numDesigns,
-                                seqs_per_design: seqsPerDesign,
-                                use_antiberty: useAntiberty,
-                                use_thermompnn: useThermoMPNN,
-                                exploration_mode: explorationMode,
-                            }
-                        };
-                        localStorage.setItem('templateManagerParams', JSON.stringify(templateData));
-                        alert('Template Manager opened. Current settings saved.\n\nNote: Full Template Manager modal coming soon.');
-                    }}
+                    onClick={() => setShowTemplateManager(true)}
                     className="px-6 py-3 text-purple-400 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 font-medium rounded-lg transition-colors flex items-center gap-2"
                 >
-                    📋 Template Manager
+                    📋 Save Template
                 </button>
                 <button
                     onClick={handleSubmit}
@@ -875,6 +842,71 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     )}
                 </button>
             </div>
+
+            {/* Template Manager Modal */}
+            <TemplateManagerModal
+                isOpen={showTemplateManager}
+                onClose={() => setShowTemplateManager(false)}
+                onSelect={(template) => {
+                    console.log('[TEMPLATE_LOAD] Loading template:', template.name, template.params);
+                    try {
+                        // Load template params into state
+                        const p = template.params || {};
+                        // Core settings (check both new and old field names for backward compatibility)
+                        if (p.job_name) setJobName(p.job_name);
+                        if (p.framework_type) setFrameworkType(p.framework_type);
+                        if (p.seq_designer) setSeqDesigner(p.seq_designer);
+                        if (p.rfantibody_num_designs) setNumDesigns(p.rfantibody_num_designs);
+                        if (p.seqs_per_design) setSeqsPerDesign(p.seqs_per_design);
+                        if (typeof p.run_immunogenicity_scoring === 'boolean') setUseAntiberty(p.run_immunogenicity_scoring);
+                        if (typeof p.run_stability_scoring === 'boolean') setUseThermoMPNN(p.run_stability_scoring);
+                        if (p.parallel_mode) setParallelMode(p.parallel_mode);
+                        if (p.designs_per_job) setDesignsPerJob(p.designs_per_job);
+                        if (p.pdbs_per_job) setPdBsPerJob(p.pdbs_per_job);
+                        // Design mode
+                        if (p.design_mode) setDesignMode(p.design_mode);
+                        if (Array.isArray(p.selected_cdr_loops)) setSelectedCDRLoops(new Set(p.selected_cdr_loops));
+                        if (typeof p.protect_tetrad === 'boolean') setProtectTetrad(p.protect_tetrad);
+                        // Target (path only - user must re-upload if file no longer at path)
+                        if (p.uploaded_path) setUploadedPath(p.uploaded_path);
+                        if (p.selected_chain) setSelectedChain(p.selected_chain);
+                        if (Array.isArray(p.selected_residues)) setSelectedResidues(new Set(p.selected_residues));
+                        // Quality settings - check both old and new field names
+                        const qualityS = p.quality_settings || p.qualitySettings;
+                        if (qualityS) setQualitySettings(qualityS);
+                        if (p.quality_preset) setQualityPreset(p.quality_preset);
+                        console.log('[TEMPLATE_LOAD] Successfully loaded template');
+                    } catch (err) {
+                        console.error('[TEMPLATE_LOAD] Error loading template:', err);
+                    }
+                }}
+                currentParams={{
+                    // Core settings
+                    job_name: jobName,
+                    framework_type: frameworkType,
+                    seq_designer: seqDesigner,
+                    rfantibody_num_designs: numDesigns,
+                    seqs_per_design: seqsPerDesign,
+                    run_immunogenicity_scoring: useAntiberty,
+                    run_stability_scoring: useThermoMPNN,
+                    parallel_mode: parallelMode,
+                    designs_per_job: designsPerJob,
+                    pdbs_per_job: pdBsPerJob,
+                    // Design mode
+                    design_mode: designMode,
+                    selected_cdr_loops: Array.from(selectedCDRLoops),
+                    protect_tetrad: protectTetrad,
+                    // Target info (path only - file must exist at path)
+                    uploaded_path: uploadedPath,
+                    selected_chain: selectedChain,
+                    selected_residues: Array.from(selectedResidues),
+                    // Quality settings
+                    quality_preset: qualityPreset,
+                    quality_settings: qualitySettings,
+                }}
+                currentModelId="template_antibody_denovo"
+                currentMode="antibody_denovo_pipeline"
+            />
         </div>
     );
 };

@@ -64,36 +64,47 @@ type MetricKey = typeof NUMERIC_METRICS[number]['key'];
 // Preset analysis configurations
 const PRESET_ANALYSES = [
     // Scatter plots
-    { id: 'plddt_vs_pae', label: 'pLDDT vs PAE', xAxis: 'plddt_overall', yAxis: 'pae_overall', colorBy: 'ptm', type: 'scatter' },
-    { id: 'confidence_vs_iptm', label: 'Confidence vs iPTM', xAxis: 'conf_score', yAxis: 'iptm', colorBy: 'plddt_overall', type: 'scatter' },
-    { id: 'cdr_vs_plddt', label: 'CDR-H3 Length vs pLDDT', xAxis: 'cdr_h3_length', yAxis: 'plddt_overall', colorBy: 'iptm', type: 'scatter' },
+    { id: 'plddt_vs_pae', label: 'pLDDT vs PAE', xAxis: 'plddt_overall', yAxis: 'pae_overall', zAxis: null, colorBy: 'ptm', type: 'scatter' },
+    { id: 'confidence_vs_iptm', label: 'Confidence vs iPTM', xAxis: 'conf_score', yAxis: 'iptm', zAxis: null, colorBy: 'plddt_overall', type: 'scatter' },
+    { id: 'cdr_vs_plddt', label: 'CDR-H3 Length vs pLDDT', xAxis: 'cdr_h3_length', yAxis: 'plddt_overall', zAxis: null, colorBy: 'iptm', type: 'scatter' },
     // Distributions (match existing Analytics tab)
-    { id: 'plddt_distribution', label: 'pLDDT Distribution', xAxis: 'plddt_overall', yAxis: null, colorBy: null, type: 'histogram' },
-    { id: 'pae_distribution', label: 'PAE Distribution', xAxis: 'pae_overall', yAxis: null, colorBy: null, type: 'histogram' },
-    { id: 'ptm_distribution', label: 'pTM Distribution', xAxis: 'ptm', yAxis: null, colorBy: null, type: 'histogram' },
-    { id: 'confidence_distribution', label: 'Confidence Distribution', xAxis: 'conf_score', yAxis: null, colorBy: null, type: 'histogram' },
-    { id: 'affinity_distribution', label: 'Affinity Distribution', xAxis: 'affinity_score', yAxis: null, colorBy: null, type: 'histogram' },
+    { id: 'plddt_distribution', label: 'pLDDT Distribution', xAxis: 'plddt_overall', yAxis: null, zAxis: null, colorBy: null, type: 'histogram' },
+    { id: 'pae_distribution', label: 'PAE Distribution', xAxis: 'pae_overall', yAxis: null, zAxis: null, colorBy: null, type: 'histogram' },
+    { id: 'ptm_distribution', label: 'pTM Distribution', xAxis: 'ptm', yAxis: null, zAxis: null, colorBy: null, type: 'histogram' },
+    { id: 'confidence_distribution', label: 'Confidence Distribution', xAxis: 'conf_score', yAxis: null, zAxis: null, colorBy: null, type: 'histogram' },
+    { id: 'affinity_distribution', label: 'Affinity Distribution', xAxis: 'affinity_score', yAxis: null, zAxis: null, colorBy: null, type: 'histogram' },
     // Statistical views
-    { id: 'correlation_matrix', label: 'Metric Correlation Matrix', xAxis: null, yAxis: null, colorBy: null, type: 'heatmap' },
-    { id: 'violin_confidence', label: 'Confidence Metrics (Violin)', xAxis: null, yAxis: null, colorBy: null, type: 'violin' },
-    { id: 'box_binding', label: 'Binding Metrics (Box)', xAxis: null, yAxis: null, colorBy: null, type: 'box' },
+    { id: 'correlation_matrix', label: 'Metric Correlation Matrix', xAxis: null, yAxis: null, zAxis: null, colorBy: null, type: 'heatmap' },
+    { id: 'violin_confidence', label: 'Confidence Metrics (Violin)', xAxis: null, yAxis: null, zAxis: null, colorBy: null, type: 'violin' },
+    { id: 'box_binding', label: 'Binding Metrics (Box)', xAxis: null, yAxis: null, zAxis: null, colorBy: null, type: 'box' },
     // Antibody-specific
-    { id: 'cdr3d', label: 'CDR Lengths 3D (H1×H2×H3)', xAxis: null, yAxis: null, colorBy: 'plddt_overall', type: '3d' },
-    { id: 'aa_composition', label: 'AA Composition (CDRs)', xAxis: null, yAxis: null, colorBy: null, type: 'bar' },
-    { id: 'sequence_logo', label: 'Sequence Logo (CDR-H3)', xAxis: null, yAxis: null, colorBy: null, type: 'logo' },
+    { id: 'cdr3d', label: 'CDR Lengths 3D (H1×H2×H3)', xAxis: 'cdr_h1_length', yAxis: 'cdr_h2_length', zAxis: 'cdr_h3_length', colorBy: 'plddt_overall', type: '3d' },
+    { id: 'aa_composition', label: 'AA Composition (CDRs)', xAxis: null, yAxis: null, zAxis: null, colorBy: null, type: 'bar' },
+    { id: 'sequence_logo', label: 'Sequence Logo (CDR-H3)', xAxis: null, yAxis: null, zAxis: null, colorBy: null, type: 'logo' },
+    // DOE-focused 3D visualizations
+    { id: 'scatter_3d_custom', label: '3D Scatter (Custom)', xAxis: 'plddt_overall', yAxis: 'iptm', zAxis: 'pae_overall', colorBy: 'conf_score', type: '3d_custom' },
+    { id: 'quality_metrics_3d', label: 'Quality Metrics 3D', xAxis: 'plddt_overall', yAxis: 'iptm', zAxis: 'pae_overall', colorBy: 'ptm', type: '3d' },
+    { id: 'binding_landscape_3d', label: 'Binding Landscape 3D', xAxis: 'affinity_score', yAxis: 'binder_probability', zAxis: 'iptm', colorBy: 'plddt_overall', type: '3d' },
+    { id: 'structure_quality_3d', label: 'Structure Quality 3D', xAxis: 'plddt_overall', yAxis: 'rog', zAxis: 'mpnn_score', colorBy: 'pae_overall', type: '3d' },
+    // DOE multi-factor analysis
+    { id: 'parallel_coords', label: 'Parallel Coordinates', xAxis: null, yAxis: null, zAxis: null, colorBy: 'plddt_overall', type: 'parcoords' },
+    { id: 'contour_quality', label: 'Contour: pLDDT vs PAE', xAxis: 'plddt_overall', yAxis: 'pae_overall', zAxis: 'iptm', colorBy: null, type: 'contour' },
+    { id: 'contour_binding', label: 'Contour: Affinity vs iPTM', xAxis: 'affinity_score', yAxis: 'iptm', zAxis: 'plddt_overall', colorBy: null, type: 'contour' },
     // Phase 3a: Per-design structural visualizations
-    { id: 'residue_plddt', label: 'Per-Residue pLDDT Profile', xAxis: null, yAxis: null, colorBy: null, type: 'line' },
-    { id: 'chain_plddt', label: 'Chain-by-Chain pLDDT', xAxis: null, yAxis: null, colorBy: null, type: 'chain_line' },
-    { id: 'pae_heatmap', label: 'PAE Heatmap', xAxis: null, yAxis: null, colorBy: null, type: 'pae' },
-    { id: 'chain_iptm', label: 'Chain-Pair iPTM Matrix', xAxis: null, yAxis: null, colorBy: null, type: 'chain_heatmap' },
-    { id: 'contact_map', label: 'Residue Contact Map', xAxis: null, yAxis: null, colorBy: null, type: 'contact' },
+    { id: 'residue_plddt', label: 'Per-Residue pLDDT Profile', xAxis: null, yAxis: null, zAxis: null, colorBy: null, type: 'line' },
+    { id: 'chain_plddt', label: 'Chain-by-Chain pLDDT', xAxis: null, yAxis: null, zAxis: null, colorBy: null, type: 'chain_line' },
+    { id: 'pae_heatmap', label: 'PAE Heatmap', xAxis: null, yAxis: null, zAxis: null, colorBy: null, type: 'pae' },
+    { id: 'chain_iptm', label: 'Chain-Pair iPTM Matrix', xAxis: null, yAxis: null, zAxis: null, colorBy: null, type: 'chain_heatmap' },
+    { id: 'contact_map', label: 'Residue Contact Map', xAxis: null, yAxis: null, zAxis: null, colorBy: null, type: 'contact' },
 ] as const;
 
 export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }: ExperimentalAnalyticsPaneProps) {
     const [selectedPreset, setSelectedPreset] = useState<string>('plddt_vs_pae');
     const [xAxis, setXAxis] = useState<MetricKey>('plddt_overall');
     const [yAxis, setYAxis] = useState<MetricKey>('pae_overall');
+    const [zAxis, setZAxis] = useState<MetricKey>('iptm');  // Phase 1: Z-axis for 3D
     const [colorBy, setColorBy] = useState<MetricKey | 'none'>('ptm');
+    const [markerSize, setMarkerSize] = useState<number>(6);  // Phase 1: Adjustable marker size
     const [showCustom, setShowCustom] = useState(false);
     const [selectedCDR, setSelectedCDR] = useState<string>('CDR-H3');
     const [selectedDesignId, setSelectedDesignId] = useState<string | null>(designs[0]?.id || null);
@@ -200,8 +211,10 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         if (preset) {
             if (preset.xAxis) setXAxis(preset.xAxis as MetricKey);
             if (preset.yAxis) setYAxis(preset.yAxis as MetricKey);
+            if (preset.zAxis) setZAxis(preset.zAxis as MetricKey);  // Phase 1: 3D support
             if (preset.colorBy) setColorBy(preset.colorBy as MetricKey);
-            setShowCustom(false);
+            // Only auto-enable custom mode for the custom 3D scatter
+            setShowCustom(preset.type === '3d_custom');
         }
     };
 
@@ -308,10 +321,11 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         }));
     }, [designs, selectedPreset]);
 
-    // 3D CDR scatter data
-    const cdr3DData = useMemo((): Data[] => {
+    // Dynamic 3D scatter data (supports any X/Y/Z metric combination)
+    const scatter3DData = useMemo((): Data[] => {
         const preset = PRESET_ANALYSES.find(p => p.id === selectedPreset);
-        if (preset?.type !== '3d') return [];
+        // Support both '3d' and '3d_custom' types
+        if (preset?.type !== '3d' && preset?.type !== '3d_custom') return [];
 
         const xVals: number[] = [];
         const yVals: number[] = [];
@@ -319,23 +333,34 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         const colorVals: number[] = [];
         const names: string[] = [];
 
+        // Use the current xAxis/yAxis/zAxis state for dynamic selection
+        const xKey = xAxis;
+        const yKey = yAxis;
+        const zKey = zAxis;
+
         designs.forEach(d => {
             const dRecord = d as unknown as Record<string, unknown>;
-            const h1 = dRecord['cdr_h1_length'];
-            const h2 = dRecord['cdr_h2_length'];
-            const h3 = dRecord['cdr_h3_length'];
+            const x = dRecord[xKey];
+            const y = dRecord[yKey];
+            const z = dRecord[zKey];
             const col = dRecord[colorBy === 'none' ? 'plddt_overall' : colorBy];
 
-            if (typeof h1 === 'number' && typeof h2 === 'number' && typeof h3 === 'number') {
-                xVals.push(h1);
-                yVals.push(h2);
-                zVals.push(h3);
+            if (typeof x === 'number' && typeof y === 'number' && typeof z === 'number') {
+                xVals.push(x);
+                yVals.push(y);
+                zVals.push(z);
                 colorVals.push(typeof col === 'number' ? col : 0);
                 names.push(d.name);
             }
         });
 
         if (xVals.length === 0) return [];
+
+        // Get axis labels
+        const xLabel = NUMERIC_METRICS.find(m => m.key === xKey)?.label || xKey;
+        const yLabel = NUMERIC_METRICS.find(m => m.key === yKey)?.label || yKey;
+        const zLabel = NUMERIC_METRICS.find(m => m.key === zKey)?.label || zKey;
+        const colorLabel = NUMERIC_METRICS.find(m => m.key === (colorBy === 'none' ? 'plddt_overall' : colorBy))?.label || 'pLDDT';
 
         return [{
             type: 'scatter3d',
@@ -344,21 +369,21 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
             y: yVals,
             z: zVals,
             text: names,
-            hoverinfo: 'x+y+z+text' as const,
+            hovertemplate: `<b>%{text}</b><br>${xLabel}: %{x:.2f}<br>${yLabel}: %{y:.2f}<br>${zLabel}: %{z:.2f}<extra></extra>`,
             marker: {
-                size: 6,
+                size: markerSize,
                 color: colorVals,
                 colorscale: 'Viridis',
                 showscale: true,
                 colorbar: {
-                    title: { text: NUMERIC_METRICS.find(m => m.key === (colorBy === 'none' ? 'plddt_overall' : colorBy))?.label || 'pLDDT' },
+                    title: { text: colorLabel },
                     thickness: 15,
                     len: 0.5,
                 },
-                opacity: 0.8,
+                opacity: 0.85,
             },
         }];
-    }, [designs, colorBy, selectedPreset]);
+    }, [designs, xAxis, yAxis, zAxis, colorBy, markerSize, selectedPreset]);
 
     // Correlation matrix data
     const correlationData = useMemo(() => {
@@ -411,6 +436,96 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         const denom = Math.sqrt(denomX * denomY);
         return denom === 0 ? 0 : num / denom;
     }
+
+    // Parallel coordinates data - shows all designs across multiple metrics
+    const parallelCoordsData = useMemo((): Data[] => {
+        if (selectedPreset !== 'parallel_coords') return [];
+
+        // Use metrics that have sufficient data
+        const metricsForParallel = NUMERIC_METRICS.filter(m => extractValues(m.key).length > 3);
+        if (metricsForParallel.length < 3) return [];
+
+        // Build dimensions array for parcoords
+        const dimensions = metricsForParallel.map(m => {
+            const values = designs.map(d => {
+                const val = (d as unknown as Record<string, unknown>)[m.key];
+                return typeof val === 'number' ? val : null;
+            });
+            const validValues = values.filter((v): v is number => v !== null);
+            const minVal = validValues.length > 0 ? Math.min(...validValues) : 0;
+            const maxVal = validValues.length > 0 ? Math.max(...validValues) : 1;
+
+            return {
+                label: m.label,
+                values: values.map(v => v ?? minVal),  // Replace nulls with min
+                range: [minVal, maxVal],
+            };
+        });
+
+        // Color by the selected colorBy metric
+        const colorMetric = colorBy === 'none' ? 'plddt_overall' : colorBy;
+        const colorValues = designs.map(d => {
+            const val = (d as unknown as Record<string, unknown>)[colorMetric];
+            return typeof val === 'number' ? val : 0;
+        });
+
+        return [{
+            type: 'parcoords',
+            line: {
+                color: colorValues,
+                colorscale: 'Viridis',
+                showscale: true,
+                colorbar: {
+                    title: { text: NUMERIC_METRICS.find(m => m.key === colorMetric)?.label || 'Value' },
+                    thickness: 15,
+                    len: 0.5,
+                },
+            },
+            dimensions: dimensions,
+        } as Data];
+    }, [designs, colorBy, selectedPreset]);
+
+    // Contour plot data - 2D density visualization for factor interactions
+    const contourData = useMemo((): Data[] => {
+        const preset = PRESET_ANALYSES.find(p => p.id === selectedPreset);
+        if (preset?.type !== 'contour') return [];
+
+        const xVals: number[] = [];
+        const yVals: number[] = [];
+        const zVals: number[] = [];
+
+        designs.forEach(d => {
+            const dRecord = d as unknown as Record<string, unknown>;
+            const x = dRecord[xAxis];
+            const y = dRecord[yAxis];
+            const z = dRecord[zAxis];
+
+            if (typeof x === 'number' && typeof y === 'number' && typeof z === 'number') {
+                xVals.push(x);
+                yVals.push(y);
+                zVals.push(z);
+            }
+        });
+
+        if (xVals.length < 3) return [];
+
+        // Create a 2D histogram contour (density-based)
+        return [{
+            type: 'histogram2dcontour',
+            x: xVals,
+            y: yVals,
+            colorscale: 'Viridis',
+            contours: {
+                showlabels: true,
+                labelfont: { color: 'white', size: 10 },
+            },
+            colorbar: {
+                title: { text: 'Density', font: { color: '#e2e8f0' } },
+                tickfont: { color: '#94a3b8' },
+            },
+            hovertemplate: `${NUMERIC_METRICS.find(m => m.key === xAxis)?.label}: %{x:.2f}<br>${NUMERIC_METRICS.find(m => m.key === yAxis)?.label}: %{y:.2f}<extra></extra>`,
+        } as Data];
+    }, [designs, xAxis, yAxis, zAxis, selectedPreset]);
 
     // Layout configuration
     const scatterLayout: Partial<Layout> = {
@@ -544,6 +659,21 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                             ))}
                                         </select>
                                     </div>
+                                    {/* Phase 1: Z-axis for 3D charts */}
+                                    {(selectedPreset.includes('3d') || PRESET_ANALYSES.find(p => p.id === selectedPreset)?.type?.includes('3d')) && (
+                                        <div className="flex items-center gap-2">
+                                            <label className="text-sm text-slate-400">Z:</label>
+                                            <select
+                                                value={zAxis}
+                                                onChange={(e) => setZAxis(e.target.value as MetricKey)}
+                                                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white"
+                                            >
+                                                {NUMERIC_METRICS.map(m => (
+                                                    <option key={m.key} value={m.key}>{m.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
                                     <div className="flex items-center gap-2">
                                         <label className="text-sm text-slate-400">Color:</label>
                                         <select
@@ -557,6 +687,21 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                             ))}
                                         </select>
                                     </div>
+                                    {/* Phase 1: Marker size for scatter/3D charts */}
+                                    {(selectedPreset.includes('3d') || selectedPreset.includes('scatter') || PRESET_ANALYSES.find(p => p.id === selectedPreset)?.type === 'scatter') && (
+                                        <div className="flex items-center gap-2">
+                                            <label className="text-sm text-slate-400">Size:</label>
+                                            <input
+                                                type="range"
+                                                min="2"
+                                                max="15"
+                                                value={markerSize}
+                                                onChange={(e) => setMarkerSize(Number(e.target.value))}
+                                                className="w-20 accent-blue-500"
+                                            />
+                                            <span className="text-xs text-slate-500 font-mono">{markerSize}</span>
+                                        </div>
+                                    )}
                                 </>
                             )}
                         </>
@@ -590,6 +735,37 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                     <div className="h-[500px] flex items-center justify-center text-slate-500">
                         No designs available for analysis
                     </div>
+                ) : selectedPreset === 'cdr3d' ? (
+                    scatter3DData.length > 0 ? (
+                        <Plot
+                            data={scatter3DData}
+                            layout={{
+                                title: {
+                                    text: PRESET_ANALYSES.find(p => p.id === selectedPreset)?.label || '3D Scatter',
+                                    font: { color: '#e2e8f0', size: 16 }
+                                },
+                                paper_bgcolor: 'transparent',
+                                scene: {
+                                    xaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === xAxis)?.label || xAxis }, color: '#94a3b8', gridcolor: '#334155' },
+                                    yaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === yAxis)?.label || yAxis }, color: '#94a3b8', gridcolor: '#334155' },
+                                    zaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === zAxis)?.label || zAxis }, color: '#94a3b8', gridcolor: '#334155' },
+                                    bgcolor: '#1e293b',
+                                },
+                                font: { color: '#e2e8f0' },
+                                margin: { l: 0, r: 0, t: 50, b: 0 },
+                            }}
+                            config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: `3d_scatter_${selectedPreset}` } }}
+                            style={{ width: '100%', height: '600px' }}
+                        />
+                    ) : (
+                        <div className="h-[500px] flex items-center justify-center text-slate-500">
+                            <div className="text-center">
+                                <div className="text-2xl mb-2">📊</div>
+                                No data available for selected metrics<br />
+                                <span className="text-xs">Try different X/Y/Z axis combinations</span>
+                            </div>
+                        </div>
+                    )
                 ) : selectedPreset === 'correlation_matrix' ? (
                     correlationData ? (
                         <Plot
@@ -659,28 +835,86 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                         config={{ responsive: true, displayModeBar: true }}
                         style={{ width: '100%', height: '500px' }}
                     />
-                ) : selectedPreset === 'cdr3d' ? (
-                    cdr3DData.length > 0 ? (
+                ) : PRESET_ANALYSES.find(p => p.id === selectedPreset)?.type?.includes('3d') ? (
+                    scatter3DData.length > 0 ? (
                         <Plot
-                            data={cdr3DData}
+                            data={scatter3DData}
                             layout={{
-                                title: { text: 'CDR Loop Lengths (H1 × H2 × H3)', font: { color: '#e2e8f0', size: 16 } },
+                                title: {
+                                    text: PRESET_ANALYSES.find(p => p.id === selectedPreset)?.label || '3D Scatter',
+                                    font: { color: '#e2e8f0', size: 16 }
+                                },
                                 paper_bgcolor: 'transparent',
                                 scene: {
-                                    xaxis: { title: { text: 'CDR-H1 Length' }, color: '#94a3b8', gridcolor: '#334155' },
-                                    yaxis: { title: { text: 'CDR-H2 Length' }, color: '#94a3b8', gridcolor: '#334155' },
-                                    zaxis: { title: { text: 'CDR-H3 Length' }, color: '#94a3b8', gridcolor: '#334155' },
+                                    xaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === xAxis)?.label || xAxis }, color: '#94a3b8', gridcolor: '#334155' },
+                                    yaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === yAxis)?.label || yAxis }, color: '#94a3b8', gridcolor: '#334155' },
+                                    zaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === zAxis)?.label || zAxis }, color: '#94a3b8', gridcolor: '#334155' },
                                     bgcolor: '#1e293b',
                                 },
                                 font: { color: '#e2e8f0' },
                                 margin: { l: 0, r: 0, t: 50, b: 0 },
                             }}
-                            config={{ responsive: true, displayModeBar: true }}
+                            config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: `3d_scatter_${selectedPreset}` } }}
                             style={{ width: '100%', height: '600px' }}
                         />
                     ) : (
                         <div className="h-[500px] flex items-center justify-center text-slate-500">
-                            No CDR length data available (requires antibody designs with annotated CDRs)
+                            <div className="text-center">
+                                <div className="text-2xl mb-2">📊</div>
+                                No data available for selected metrics<br />
+                                <span className="text-xs">Try different X/Y/Z axis combinations</span>
+                            </div>
+                        </div>
+                    )
+                ) : selectedPreset === 'parallel_coords' ? (
+                    parallelCoordsData.length > 0 ? (
+                        <Plot
+                            data={parallelCoordsData}
+                            layout={{
+                                title: { text: 'Parallel Coordinates: Multi-Factor Analysis', font: { color: '#e2e8f0', size: 16 } },
+                                paper_bgcolor: 'transparent',
+                                plot_bgcolor: '#1e293b',
+                                font: { color: '#e2e8f0' },
+                                margin: { l: 80, r: 80, t: 50, b: 30 },
+                            }}
+                            config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: 'parallel_coords' } }}
+                            style={{ width: '100%', height: '600px' }}
+                        />
+                    ) : (
+                        <div className="h-[500px] flex items-center justify-center text-slate-500">
+                            Not enough metrics with data for parallel coordinates (need at least 3 metrics with 4+ values)
+                        </div>
+                    )
+                ) : PRESET_ANALYSES.find(p => p.id === selectedPreset)?.type === 'contour' ? (
+                    contourData.length > 0 ? (
+                        <Plot
+                            data={contourData}
+                            layout={{
+                                title: {
+                                    text: PRESET_ANALYSES.find(p => p.id === selectedPreset)?.label || 'Contour Plot',
+                                    font: { color: '#e2e8f0', size: 16 }
+                                },
+                                paper_bgcolor: 'transparent',
+                                plot_bgcolor: '#1e293b',
+                                font: { color: '#e2e8f0' },
+                                margin: { l: 60, r: 80, t: 50, b: 60 },
+                                xaxis: {
+                                    title: { text: NUMERIC_METRICS.find(m => m.key === xAxis)?.label || xAxis, font: { color: '#94a3b8' } },
+                                    gridcolor: '#334155',
+                                    color: '#94a3b8',
+                                },
+                                yaxis: {
+                                    title: { text: NUMERIC_METRICS.find(m => m.key === yAxis)?.label || yAxis, font: { color: '#94a3b8' } },
+                                    gridcolor: '#334155',
+                                    color: '#94a3b8',
+                                },
+                            }}
+                            config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: `contour_${selectedPreset}` } }}
+                            style={{ width: '100%', height: '550px' }}
+                        />
+                    ) : (
+                        <div className="h-[500px] flex items-center justify-center text-slate-500">
+                            Not enough data for contour plot (need at least 3 data points with valid X/Y values)
                         </div>
                     )
                 ) : selectedPreset === 'aa_composition' ? (
@@ -900,32 +1134,83 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                     })
                                     .map(([chainId, metric]: [string, ChainMetric]) => ({
                                         type: 'scatter' as const,
-                                        mode: 'lines+markers' as const,
+                                        mode: 'lines' as const,
                                         x: metric.residue_numbers ?? Array.from({ length: metric.length }, (_, i) => i + 1),
                                         y: metric.plddt,
-                                        name: `Chain ${chainId} (${metric.type}, ${metric.length} res, avg: ${metric.avg_plddt?.toFixed(1) ?? '—'})`,
+                                        name: `Chain ${chainId} (${metric.type}, avg: ${metric.avg_plddt?.toFixed(1) ?? '—'})`,
                                         line: {
-                                            width: 1.5,
-                                            color: metric.type === 'protein' ? '#60a5fa' : metric.type === 'dna' ? '#fbbf24' : metric.type === 'rna' ? '#a78bfa' : '#94a3b8'
+                                            width: 2.5,
+                                            color: metric.type === 'protein' ? '#3b82f6' : metric.type === 'dna' ? '#f59e0b' : metric.type === 'rna' ? '#8b5cf6' : '#64748b',
+                                            shape: 'spline' as const,
                                         },
-                                        marker: { size: 2 },
-                                        hovertemplate: `Chain ${chainId}<br>Residue %{x}<br>pLDDT: %{y:.1f}<extra></extra>`,
+                                        hovertemplate: `<b>Chain ${chainId}</b><br>Residue %{x}<br>pLDDT: <b>%{y:.1f}</b><extra></extra>`,
                                     })) as Data[]}
                                 layout={{
-                                    title: { text: `Chain-by-Chain pLDDT`, font: { color: '#e2e8f0', size: 16 } },
+                                    title: {
+                                        text: 'Chain-by-Chain pLDDT Profile',
+                                        font: { color: '#f1f5f9', size: 18, family: 'Inter, sans-serif' },
+                                        x: 0.5,
+                                    },
                                     paper_bgcolor: 'transparent',
-                                    plot_bgcolor: '#1e293b',
-                                    font: { color: '#e2e8f0' },
-                                    margin: { l: 60, r: 40, t: 50, b: 60 },
-                                    xaxis: { title: { text: 'Residue Number', font: { color: '#94a3b8' } }, gridcolor: '#334155', color: '#94a3b8' },
-                                    yaxis: { title: { text: 'pLDDT', font: { color: '#94a3b8' } }, gridcolor: '#334155', color: '#94a3b8', range: [0, 100] },
-                                    legend: { orientation: 'h', y: -0.15, font: { size: 10, color: '#94a3b8' } },
+                                    plot_bgcolor: 'transparent',
+                                    font: { color: '#e2e8f0', family: 'Inter, sans-serif' },
+                                    margin: { l: 70, r: 30, t: 60, b: 70 },
+                                    xaxis: {
+                                        title: { text: 'Residue Number', font: { color: '#94a3b8', size: 13 }, standoff: 15 },
+                                        gridcolor: '#334155',
+                                        color: '#94a3b8',
+                                        linecolor: '#475569',
+                                        linewidth: 1,
+                                        zeroline: false,
+                                    },
+                                    yaxis: {
+                                        title: { text: 'pLDDT Score', font: { color: '#94a3b8', size: 13 }, standoff: 15 },
+                                        gridcolor: '#33415580',
+                                        color: '#94a3b8',
+                                        range: [0, 100],
+                                        dtick: 20,
+                                        linecolor: '#475569',
+                                        linewidth: 1,
+                                        zeroline: false,
+                                    },
+                                    legend: {
+                                        orientation: 'h',
+                                        y: -0.18,
+                                        x: 0.5,
+                                        xanchor: 'center',
+                                        font: { size: 11, color: '#cbd5e1' },
+                                        bgcolor: 'transparent',
+                                    },
+                                    // Colored confidence region backgrounds
                                     shapes: [
-                                        { type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 90, y1: 90, line: { color: '#3b82f680', width: 1, dash: 'dash' } },
-                                        { type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 70, y1: 70, line: { color: '#22d3ee80', width: 1, dash: 'dash' } },
+                                        // Very high confidence (90-100) - Dark blue
+                                        { type: 'rect', x0: 0, x1: 1, xref: 'paper', y0: 90, y1: 100, fillcolor: '#1d4ed820', line: { width: 0 } },
+                                        // High confidence (70-90) - Teal
+                                        { type: 'rect', x0: 0, x1: 1, xref: 'paper', y0: 70, y1: 90, fillcolor: '#0d948820', line: { width: 0 } },
+                                        // Low confidence (50-70) - Yellow
+                                        { type: 'rect', x0: 0, x1: 1, xref: 'paper', y0: 50, y1: 70, fillcolor: '#ca8a0420', line: { width: 0 } },
+                                        // Very low confidence (0-50) - Orange/Red
+                                        { type: 'rect', x0: 0, x1: 1, xref: 'paper', y0: 0, y1: 50, fillcolor: '#dc262620', line: { width: 0 } },
+                                        // Threshold lines
+                                        { type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 90, y1: 90, line: { color: '#3b82f6', width: 1.5, dash: 'dot' } },
+                                        { type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 70, y1: 70, line: { color: '#14b8a6', width: 1.5, dash: 'dot' } },
+                                        { type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 50, y1: 50, line: { color: '#f59e0b', width: 1.5, dash: 'dot' } },
                                     ],
+                                    // Confidence region annotations
+                                    annotations: [
+                                        { x: 1.01, xref: 'paper', y: 95, text: '<b>Very High</b>', showarrow: false, font: { size: 9, color: '#60a5fa' }, xanchor: 'left' },
+                                        { x: 1.01, xref: 'paper', y: 80, text: '<b>High</b>', showarrow: false, font: { size: 9, color: '#2dd4bf' }, xanchor: 'left' },
+                                        { x: 1.01, xref: 'paper', y: 60, text: '<b>Low</b>', showarrow: false, font: { size: 9, color: '#fbbf24' }, xanchor: 'left' },
+                                        { x: 1.01, xref: 'paper', y: 30, text: '<b>Very Low</b>', showarrow: false, font: { size: 9, color: '#f87171' }, xanchor: 'left' },
+                                    ],
+                                    hovermode: 'x unified',
                                 }}
-                                config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg', filename: 'chain_plddt' } }}
+                                config={{
+                                    responsive: true,
+                                    displayModeBar: true,
+                                    modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+                                    toImageButtonOptions: { format: 'svg', filename: 'chain_plddt_profile', width: 1200, height: 600, scale: 2 }
+                                }}
                                 style={{ width: '100%', height: '550px' }}
                             />
                         ) : (

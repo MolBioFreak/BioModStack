@@ -35,6 +35,9 @@ include { ANTIBODY_DENOVO } from './workflows/antibody_denovo.nf'
 // Antibody Child Workflow (single design validation - spawned by parent in exploration mode)
 include { ANTIBODY_CHILD } from './workflows/antibody_child.nf'
 
+// RFantibody module for standalone backbone generation
+include { RFANTIBODY } from './modules/rfantibody'
+
 workflow {
     // Permit use of topic channels in Nextflow v24 by enabling preview features
     try {
@@ -81,26 +84,65 @@ workflow {
     // Single or Batch design validation job spawned by parent
     if (params.rfd_mode == 'antibody_child') {
         println("Running Antibody Child Validation Job")
-        
+
         def pdb_list = []
         if (params.pdb_paths) {
             // Parse batch list (comes as string "[path1, path2]" or "path1,path2")
-            def clean = params.pdb_paths.toString().replace('[','').replace(']','').split(',')
+            def clean = params.pdb_paths.toString().replace('[', '').replace(']', '').split(',')
             pdb_list = clean.collect { it.strip().replaceAll(/['"]/, '') }.findAll { it }.collect { file(it) }
             println("* Mode: Batch (${pdb_list.size()} designs)")
-        } else if (params.pdb_path) {
+        }
+        else if (params.pdb_path) {
             // Legacy single mode
             pdb_list = [file(params.pdb_path)]
             println("* Mode: Single (${params.pdb_path})")
-        } else {
-             error("No PDB inputs provided for antibody_child mode")
+        }
+        else {
+            error("No PDB inputs provided for antibody_child mode")
         }
 
         ANTIBODY_CHILD(
             pdb_list,
-            params.msa_path ?: ""
+            params.msa_path ?: "",
         )
-        
+
+        return null
+    }
+
+    /////////////////////////////
+    // RFANTIBODY STANDALONE    //
+    /////////////////////////////
+    // Standalone RFantibody backbone generation for orchestrator-spawned child jobs
+    if (params.rfd_mode == 'rfantibody_backbone') {
+        println("Running RFantibody Backbone Generation (Child Job)")
+        println("* Target PDB: ${params.target_pdb}")
+        println("* Epitope: ${params.epitope_residues}")
+        println("* Num designs: ${params.rfantibody_num_designs}")
+        println("* GPU: ${params.gpu_id}")
+
+        if (!params.target_pdb) {
+            error("Target PDB required for rfantibody_backbone mode")
+        }
+
+        def jobName = params.sequence_name ?: 'rfantibody_child'
+        def meta = [id: jobName]
+
+        // Prepare input tuple: [meta, target_pdb, hotspots, gpu_id, num_designs]
+        def hotspots = params.epitope_residues ?: ""
+        def gpu_id = params.gpu_id ?: 0
+        def rfantibody_num_designs = params.rfantibody_num_designs ?: 10
+
+        def rfantibody_input = channel.of(
+            tuple(meta, file(params.target_pdb), hotspots, gpu_id, rfantibody_num_designs)
+        )
+
+        // Use framework from params or dummy file for default
+        def framework_for_rfantibody = params.framework_pdb
+            ? file(params.framework_pdb)
+            : file("${projectDir}/lib/NO_FRAMEWORK")
+
+        RFANTIBODY(rfantibody_input, framework_for_rfantibody)
+
         return null
     }
 
@@ -431,9 +473,14 @@ workflow {
             params.boltzgen_secondary_structure ?: '',
             params.boltzgen_protocol ?: 'protein-anything',
             params.boltzgen_covalent_bonds ?: '',
+            params.boltzgen_nanobody_framework ?: '',
+            params.boltzgen_cdr_h1_length ?: '5-8',
+            params.boltzgen_cdr_h2_length ?: '6-10',
+            params.boltzgen_cdr_h3_length ?: '12-18',
             params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : file("${projectDir}/lib/NO_INPUT_PDB"),
             params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : file("${projectDir}/lib/NO_LIGAND_PDB"),
             params.boltzgen_dna_structure ? file(params.boltzgen_dna_structure) : file("${projectDir}/lib/NO_DNA_STRUCT"),
+            params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${projectDir}/lib/NO_TARGET_PDB"),
         )
 
         // Run generation

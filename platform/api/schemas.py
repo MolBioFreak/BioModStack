@@ -35,6 +35,12 @@ class JobCreate(BaseModel):
     mode: str = Field(..., description="Mode ID for the selected model")
     params: dict = Field(default_factory=dict)
     pinned_gpu: Optional[int] = Field(None, description="Optional: Pin job to specific GPU (0-3)")
+    # Child job tracking (spawn-wait-collect pattern)
+    parent_job_id: Optional[str] = Field(None, description="Parent job ID for child jobs")
+    child_stage: Optional[str] = Field(None, description="Stage identifier (rfantibody, fampnn, boltz2)")
+    batch_id: Optional[str] = Field(None, description="Batch ID for grouping")
+    batch_name: Optional[str] = Field(None, description="Human-readable batch name")
+    sequence_length: Optional[int] = Field(None, description="Sequence length for VRAM estimation")
     
     class Config:
         json_schema_extra = {

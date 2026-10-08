@@ -281,7 +281,7 @@ export function TemplateManagerModal({
                                                     </div>
                                                 </div>
                                             </div>
-                                            <div className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-700/50 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <div className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-700/50">
                                                 {onSelect && (
                                                     <button
                                                         onClick={() => { onSelect(template); handleClose(); }}

@@ -378,6 +378,24 @@ body {
   width: 100%;
 }
 
+/* ============================================
+   GLOBAL SQUARED EDGES - No rounded corners
+   ============================================ */
+* {
+  border-radius: 0 !important;
+}
+
+/* Exceptions for circular elements that should stay round */
+.rounded-full {
+  border-radius: 9999px !important;
+}
+
+/* Keep progress bars and spinners round if needed */
+[role="progressbar"],
+.animate-spin {
+  border-radius: inherit !important;
+}
+
 .striped-bar {
   background-image: linear-gradient(45deg, rgba(255, 255, 255, .15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, .15) 50%, rgba(255, 255, 255, .15) 75%, transparent 75%, transparent);
   background-size: 1rem 1rem;

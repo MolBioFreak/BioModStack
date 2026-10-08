@@ -69,6 +69,7 @@ include { PrepFAMPNN ; RunFAMPNN ; FilterFAMPNN } from '../modules/fampnn'
 include { PrepMPNN ; RunMPNN as ProteinMPNNSeq } from '../modules/proteinmpnn'
 include { ANTIBERTY_SCORE ; ANTIBERTY_FILTER } from '../modules/antiberty'
 include { THERMOMPNN } from '../modules/thermompnn'
+include { MergeComplex ; AF2_BACKPROP } from '../modules/af2_backprop'
 include { IGGM_AFFINITY_MATURATION } from '../modules/iggm'
 include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
 include { GenerateLocalMSA ; BoltzFromSequenceWithMSA } from '../modules/structure_prediction'
@@ -104,7 +105,8 @@ process SpawnRFantibodyJobs {
         rfantibody_noise_scale_ca: params.rfantibody_noise_scale_ca ?: 1.0,
         rfantibody_noise_scale_frame: params.rfantibody_noise_scale_frame ?: 1.0,
         rfantibody_guide_scale: params.rfantibody_guide_scale ?: 10,
-        rfantibody_design_loops: params.rfantibody_design_loops ?: ''
+        // Pass UI CDR loop selection - rfantibody.nf will convert to RFantibody format
+        antibody_design_loops: params.antibody_design_loops ?: ''
     ])
     """
     python3 ${projectDir}/scripts/spawn_rfantibody_children.py \\
@@ -207,7 +209,7 @@ process CollectChildOutputs {
     output_dirs = data.get("child_output_dirs", [])
     collected = []
     
-    for output_dir in output_dirs:
+    for job_idx, output_dir in enumerate(output_dirs):
         dir_path = Path(output_dir)
         if not dir_path.exists():
             print(f"Warning: Output dir not found: {output_dir}")
@@ -219,10 +221,12 @@ process CollectChildOutputs {
             if not search_path.exists():
                 continue
             for pdb in search_path.glob("*.pdb"):
-                dest = Path(pdb.name)
+                # Add job index prefix to avoid filename collisions between child jobs
+                dest = Path(f"job{job_idx}_{pdb.name}")
                 if not dest.exists():
                     shutil.copy(pdb, dest)
                     collected.append(str(dest))
+                    print(f"Collected: {pdb} -> {dest}")
     
     manifest = {
         "stage": "${stage_name}",
@@ -368,49 +372,99 @@ workflow ANTIBODY_DENOVO {
     def designs_per_gpu = (total_designs / num_gpus).intValue()
     def remainder = total_designs % num_gpus
     
-    log.info("  Multi-GPU mode: Splitting ${total_designs} designs across ${num_gpus} GPU(s): ${available_gpus}")
+    // =========================================================================
+    // PARALLELISM MODE: Choose between Nextflow-internal or Orchestrator spawning
+    // =========================================================================
+    def use_orchestrator = params.parallel_mode == 'full_orchestrator'
     
-    // Create parallel job channels for each GPU
-    // Each gets a portion of the total designs
-    rfantibody_parallel_inputs = Channel.from(available_gpus).map { gpu_id ->
-        def idx = available_gpus.indexOf(gpu_id)
-        def designs_for_this_gpu = designs_per_gpu + (idx < remainder ? 1 : 0)
-        log.info("    GPU ${gpu_id}: ${designs_for_this_gpu} designs")
-        [gpu_id, designs_for_this_gpu]
-    }
-    
-    // Prepare input for RFantibody with GPU assignment
-    // Combine target PDB with each GPU assignment
-    rfantibody_input = target_pdb_ch.combine(rfantibody_parallel_inputs).map { meta, pdb, gpu_id, designs_count ->
-        def hotspots = epitope_residues ?: ""
-        // Create unique meta for each GPU split
-        def split_meta = [id: "${meta.id}_gpu${gpu_id}"]
-        [split_meta, pdb, hotspots, gpu_id, designs_count]
-    }
-
-    RFANTIBODY(rfantibody_input, framework_for_rfantibody)
-    
-    // REPORT STAGE: rfantibody
-    RFANTIBODY.out.designs.subscribe { meta, files ->
-        try {
-            def file_list = files instanceof List ? files : [files]
-            // Limit number of files reported to avoid command line length limits
-            def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
-            def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
-            def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
-            proc.waitFor()
-        } catch (Exception e) {
-            println "Warning: Failed to report stage rfantibody: ${e.message}"
+    if (use_orchestrator) {
+        // =====================================================================
+        // ORCHESTRATOR MODE: Spawn child jobs through GPU queue
+        // Each child is a separate API job managed by the orchestrator
+        // =====================================================================
+        log.info("  Orchestrator mode: Spawning ${total_designs / (params.designs_per_job ?: 5)} child job(s)")
+        
+        // Spawn child jobs via API
+        SpawnRFantibodyJobs(
+            target_pdb_ch.map { meta, pdb -> pdb }.first(),
+            epitope_residues ?: "",
+            params.framework_type ?: "standard-fv",
+            total_designs,
+            params.designs_per_job ?: 5,
+            params.job_id ?: "unknown",
+            params.name ?: "antibody_batch"
+        )
+        
+        // Wait for all child jobs to complete
+        // Depends on spawn completion via SpawnRFantibodyJobs.out.result
+        wait_trigger = SpawnRFantibodyJobs.out.result.map { it -> params.job_id ?: "unknown" }
+        WaitForChildren(
+            wait_trigger,
+            "rfantibody",
+            30  // poll_interval_seconds
+        )
+        
+        // Collect outputs from completed child jobs
+        CollectChildOutputs(
+            WaitForChildren.out.child_outputs,
+            "rfantibody"
+        )
+        
+        // Create backbone_designs channel from collected outputs
+        backbone_designs = CollectChildOutputs.out.pdbs.flatten().toList().map { pdbs ->
+            def meta = [id: params.name ?: "antibody"]
+            [meta, pdbs]
         }
-    }
+        
+    } else {
+        // =====================================================================
+        // STANDARD MODE: Nextflow-internal multi-GPU parallelism
+        // Splits work across pinned GPUs within the same Nextflow process
+        // =====================================================================
+        log.info("  Multi-GPU mode: Splitting ${total_designs} designs across ${num_gpus} GPU(s): ${available_gpus}")
+        
+        // Create parallel job channels for each GPU
+        // Each gets a portion of the total designs
+        rfantibody_parallel_inputs = Channel.from(available_gpus).map { gpu_id ->
+            def idx = available_gpus.indexOf(gpu_id)
+            def designs_for_this_gpu = designs_per_gpu + (idx < remainder ? 1 : 0)
+            log.info("    GPU ${gpu_id}: ${designs_for_this_gpu} designs")
+            [gpu_id, designs_for_this_gpu]
+        }
+        
+        // Prepare input for RFantibody with GPU assignment
+        // Combine target PDB with each GPU assignment
+        rfantibody_input = target_pdb_ch.combine(rfantibody_parallel_inputs).map { meta, pdb, gpu_id, designs_count ->
+            def hotspots = epitope_residues ?: ""
+            // Create unique meta for each GPU split
+            def split_meta = [id: "${meta.id}_gpu${gpu_id}"]
+            [split_meta, pdb, hotspots, gpu_id, designs_count]
+        }
 
-    // Collect backbone designs from all parallel GPU runs
-    // Normalize meta.id by removing GPU suffix for downstream stages
-    backbone_designs = RFANTIBODY.out.designs.map { meta, files ->
-        def base_id = meta.id.replaceAll(/_gpu\d+$/, '')
-        def unified_meta = [id: base_id]
-        [unified_meta, files]
-    }
+        RFANTIBODY(rfantibody_input, framework_for_rfantibody)
+        
+        // REPORT STAGE: rfantibody
+        RFANTIBODY.out.designs.subscribe { meta, files ->
+            try {
+                def file_list = files instanceof List ? files : [files]
+                // Limit number of files reported to avoid command line length limits
+                def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
+                def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
+                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                proc.waitFor()
+            } catch (Exception e) {
+                println "Warning: Failed to report stage rfantibody: ${e.message}"
+            }
+        }
+
+        // Collect backbone designs from all parallel GPU runs
+        // Normalize meta.id by removing GPU suffix for downstream stages
+        backbone_designs = RFANTIBODY.out.designs.map { meta, files ->
+            def base_id = meta.id.replaceAll(/_gpu\d+$/, '')
+            def unified_meta = [id: base_id]
+            [unified_meta, files]
+        }
+    } // End of else block (standard mode)
 
     // Step 2: CDR Sequence Design (Cross-Validation Mode)
     // ---------------------------------------------------------------------------
@@ -430,8 +484,16 @@ workflow ANTIBODY_DENOVO {
     // FAMPNN branch
     if (run_fampnn) {
         log.info("  Running FAMPNN...")
+        
+        // Collect all PDBs from parallel GPU runs into a single list
+        // backbone_designs channel has [meta, files] per GPU - need to merge
+        all_backbone_pdbs = backbone_designs
+            .map { meta, files -> files }           // Extract just the files
+            .flatten()                              // Flatten list of lists
+            .collect()                              // Collect into single list
+        
         // PrepFAMPNN expects [pdbs, jsons]
-        fampnn_prep_input = backbone_designs.map { meta, pdbs ->
+        fampnn_prep_input = all_backbone_pdbs.map { pdbs ->
             // Create dummy JSON for prep
             [pdbs, file("${projectDir}/lib/NO_JSON")]
         }
@@ -439,29 +501,39 @@ workflow ANTIBODY_DENOVO {
 
         // RunFAMPNN expects [batch_id, pdbs, csv, gpu_id], analysis_chain_id
         // Collect all PDB outputs and the CSV into a single batch tuple
-        fampnn_pdbs_collected = PrepFAMPNN.out.pdbs.flatten().toList()
+        // Use collect() to get all PDBs as a single list emission
+        fampnn_pdbs_collected = PrepFAMPNN.out.pdbs.collect()
         fampnn_csv_file = PrepFAMPNN.out.csv.first()
         
         // Multi-GPU parallelism for FAMPNN
         // Split PDBs across available GPUs
         log.info("  Multi-GPU mode: Splitting FAMPNN across ${available_gpus.size()} GPU(s)")
         
-        // Create GPU channel for FAMPNN (reuse available_gpus from RFantibody section)
-        fampnn_gpu_ch = Channel.from(available_gpus)
-        
-        // Split PDbs into chunks for each GPU
+        // Create one job per GPU, splitting the PDBs
+        // Use map to structure data, then flatMap to emit multiple items
         fampnn_run_input = fampnn_pdbs_collected
-            .merge(fampnn_csv_file)
-            .combine(fampnn_gpu_ch)
-            .map { pdbs, csv, gpu_id ->
-                def gpu_list = available_gpus
-                def idx = gpu_list.indexOf(gpu_id)
-                def chunk_size = (pdbs.size() / gpu_list.size()).intValue()
-                def start = idx * chunk_size
-                def end = (idx == gpu_list.size() - 1) ? pdbs.size() : (idx + 1) * chunk_size
-                def pdb_subset = pdbs.subList(start, end)
-                log.info("    GPU ${gpu_id}: ${pdb_subset.size()} PDBs (${start}-${end-1})")
-                [idx, pdb_subset, csv, gpu_id]
+            .combine(fampnn_csv_file)
+            .map { items ->
+                // combine() flattens everything into a list, last item is csv
+                def csv = items[-1]
+                def pdb_list = items.size() > 1 ? items[0..-2] : []
+                return [pdb_list, csv]
+            }
+            .flatMap { pdb_list, csv ->
+                def fampnn_gpu_list = available_gpus
+                def fampnn_gpu_count = fampnn_gpu_list.size()
+                def chunk_size = Math.max(1, (pdb_list.size() / fampnn_gpu_count).intValue())
+                def items = []
+                fampnn_gpu_list.eachWithIndex { gpu_id, idx ->
+                    def start = idx * chunk_size
+                    def end = (idx == fampnn_gpu_count - 1) ? pdb_list.size() : (idx + 1) * chunk_size
+                    if (start < pdb_list.size()) {
+                        def pdb_subset = pdb_list.subList(start, end)
+                        log.info("    GPU ${gpu_id}: ${pdb_subset.size()} PDBs (${start}-${end-1})")
+                        items << [idx, pdb_subset, csv, gpu_id]
+                    }
+                }
+                return items
             }
 
         RunFAMPNN(fampnn_run_input, params.analysis_chain_id ?: "all_chains")
@@ -639,6 +711,51 @@ workflow ANTIBODY_DENOVO {
         log.info("ThermoMPNN stability scoring disabled (enable with run_thermompnn=true)")
         sequences_for_boltz = all_sequences
         stability_scores_early = Channel.empty()
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Step 2.6: AF2 Backprop CDR Refinement (Optional)
+    // Uses ColabDesign AfDesign to optimize CDR sequences for binding confidence
+    // ═══════════════════════════════════════════════════════════════════════
+    if (params.run_af2_backprop == true) {
+        log.info("Step 2.6: Refining CDR sequences with AF2 Backprop...")
+        
+        // Merge each antibody design with target for AF2 complex input
+        af2_merge_input = sequences_for_boltz
+            .flatMap { meta, pdbs ->
+                def pdb_list = pdbs instanceof List ? pdbs : [pdbs]
+                pdb_list.collect { pdb ->
+                    def design_meta = [id: pdb.baseName]
+                    [design_meta, pdb]
+                }
+            }
+            .combine(target_pdb_ch.first().map { meta, pdb -> pdb })
+            .map { meta, antibody_pdb, target_pdb ->
+                [meta, antibody_pdb, target_pdb]
+            }
+        
+        MergeComplex(af2_merge_input)
+        AF2_BACKPROP(MergeComplex.out.complex)
+        
+        // REPORT STAGE: af2_backprop
+        AF2_BACKPROP.out.refined.subscribe { meta, pdb ->
+            try {
+                def args = [params.job_id, "af2_backprop", "complete", pdb.toString()]
+                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                proc.waitFor()
+            } catch (Exception e) {
+                println "Warning: Failed to report stage af2_backprop: ${e.message}"
+            }
+        }
+        
+        // Collect refined PDBs for downstream Boltz validation
+        sequences_for_boltz = AF2_BACKPROP.out.refined
+            .map { meta, pdb -> pdb }
+            .collect()
+            .map { pdbs ->
+                def meta = [id: "af2_refined"]
+                [meta, pdbs]
+            }
     }
 
     // =========================================================================
@@ -825,7 +942,7 @@ workflow ANTIBODY_DENOVO {
     emit:
     designs = final_designs // Final antibody designs
     immunogenicity = immunogenicity_scores // AntiBERTy PLL scores
-    stability = stability_scores // ThermoMPNN ddG scores
+    stability = stability_scores_early // ThermoMPNN ddG scores
     mutations = mutations // IgGM suggested mutations
     backbones = backbone_designs // Original RFantibody backbones
 }
