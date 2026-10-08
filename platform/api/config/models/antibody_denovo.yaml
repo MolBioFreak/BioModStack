@@ -18,7 +18,7 @@ ui_color: "#ec4899"
 
 # Modes available for this workflow
 modes:
-  - id: default
+  - id: antibody_denovo_pipeline
     name: Full Pipeline
     description: Run complete de novo antibody design pipeline
     params: []

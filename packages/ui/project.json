@@ -1,0 +1,46 @@
+{
+  "name": "ui",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/ui/src",
+  "projectType": "library",
+  "tags": [],
+  "targets": {
+    "publish": {},
+    "publish-beta": {},
+    "build": {
+      "configurations": {
+        "demo": {
+          "mode": "demo"
+        },
+        "production": {
+          "mode": "production"
+        }
+      }
+    },
+    "pushToGhPages": {
+      //tnw: waiting for https://github.com/nrwl/nx/issues/15064 to be able to work with "build:demo"
+      // "dependsOn": ["build:demo"],
+      "command": "yarn gh-pages -a -d demo-dist"
+    },
+    "start": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["cd packages/ui && yarn vite"]
+      },
+      "configurations": {
+        "ci": {
+          "readyWhen": "ready in"
+        }
+      }
+    },
+    "launch-e2e": {},
+    "e2e": {
+      "options": {
+        "key": "1ced39be-1a3a-4fd8-b2d5-a88951d9b766"
+      }
+    },
+    "lint": {},
+    "test": {},
+    "version": {}
+  }
+}

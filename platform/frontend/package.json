@@ -12,6 +12,12 @@
   "dependencies": {
     "@tailwindcss/vite": "^4.1.17",
     "@tanstack/react-query": "^5.90.12",
+    "@biomodstack/ove": "workspace:*",
+    "@teselagen/ui": "workspace:*",
+    "@teselagen/bio-parsers": "workspace:*",
+    "@teselagen/sequence-utils": "workspace:*",
+    "@teselagen/range-utils": "workspace:*",
+    "@teselagen/file-utils": "workspace:*",
     "axios": "^1.13.2",
     "pdbe-molstar": "^3.3.0",
     "react": "^19.2.0",
