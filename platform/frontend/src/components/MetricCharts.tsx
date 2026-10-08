@@ -303,7 +303,8 @@ export function ResidueLineChart({ residueNumbers, plddt, designName, height = 3
                                 padding: '12px 16px',
                                 boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
                             }}
-                            formatter={(value: number) => {
+                            formatter={(value: number | undefined) => {
+                                if (value === undefined) return ['N/A', 'pLDDT'];
                                 const color = value >= 80 ? '#34d399' : value >= 60 ? '#fbbf24' : '#f87171';
                                 const label = value >= 80 ? 'High' : value >= 60 ? 'Medium' : 'Low';
                                 return [
@@ -506,7 +507,7 @@ export function SparklineChart({
                             padding: '4px 8px',
                             fontSize: '11px',
                         }}
-                        formatter={(value: number) => [`${value.toFixed(1)}`, 'pLDDT']}
+                        formatter={(value: number | undefined) => value !== undefined ? [`${value.toFixed(1)}`, 'pLDDT'] : ['N/A', 'pLDDT']}
                         labelFormatter={(idx) => `Residue ${idx + 1}`}
                     />
 
@@ -666,7 +667,7 @@ export interface StabilityHeatmapProps {
     height?: number;
 }
 
-export function StabilityHeatmap({ data, title = "Stability (ddG)", width = 300, height = 300 }: StabilityHeatmapProps) {
+export function StabilityHeatmap({ data, title = "Stability (ddG)", width = 300, height: _height = 300 }: StabilityHeatmapProps) {
     if (!data || Object.keys(data).length === 0) {
         return (
             <div className="flex items-center justify-center text-slate-500 text-xs h-full bg-slate-800/20 rounded-xl">
@@ -684,8 +685,7 @@ export function StabilityHeatmap({ data, title = "Stability (ddG)", width = 300,
     // For now, let's just take the first chain if multiple, or allow selection?
     // Simpler: Just visualize the first chain found.
     const chainId = chains[0];
-    const residueMap = data[chainId];
-    const residueIndices = Object.keys(residueMap).sort((a, b) => parseInt(a) - parseInt(b));
+    // residueMap and residueIndices not used in current implementation
 
     // We need 20 amino acids on Y axis (mutations) and Residue Index on X axis (positions)
     // Wait, ThermoMPNN output is usually (position, mutant_aa) -> ddG
@@ -702,7 +702,7 @@ export function StabilityHeatmap({ data, title = "Stability (ddG)", width = 300,
     const aminoAcids = ['A', 'R', 'N', 'D', 'C', 'Q', 'E', 'G', 'H', 'I', 'L', 'K', 'M', 'F', 'P', 'S', 'T', 'W', 'Y', 'V'];
 
     const cellSizeX = Math.max(10, (width - 60) / positions.length);
-    const cellSizeY = Math.max(10, (height - 40) / aminoAcids.length);
+    // cellSizeY not used - keeping cellSizeX only for now
 
     // Color scale: Blue (Stabilizing, < 0) -> White (0) -> Red (Destabilizing, > 0)
     const getColor = (val: number) => {
