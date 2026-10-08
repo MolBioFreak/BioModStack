@@ -1,5 +1,5 @@
 """
-Unified structure filtering library for ProteinDJ.
+Unified structure filtering library for BioModStack.
 
 Provides common functionality for filtering protein structures
 across different pipeline stages (backbone, sequence, prediction).

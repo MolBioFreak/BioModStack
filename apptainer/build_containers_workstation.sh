@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ################################################################################
-# ProteinDJ Container Build Script - Workstation Edition
+# BioModStack Container Build Script - Workstation Edition
 #
 # Builds all required Apptainer containers locally for workstation use.
 # Optimized for fast builds using local resources and parallel execution.
@@ -57,7 +57,7 @@ BUILD_ORDER=("rfdiffusion" "fampnn" "dl_binder_design" "af2" "boltz2" "pyrosetta
 
 print_header() {
     echo -e "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  ProteinDJ Workstation Container Build System                 ║${NC}"
+    echo -e "${CYAN}║  BioModStack Workstation Container Build System                 ║${NC}"
     echo -e "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -472,7 +472,7 @@ cleanup() {
 
 show_help() {
     cat << EOF
-ProteinDJ Container Build Script - Workstation Edition
+BioModStack Container Build Script - Workstation Edition
 
 Usage: $0 [OPTIONS]
 

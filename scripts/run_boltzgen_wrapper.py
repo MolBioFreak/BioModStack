@@ -10,7 +10,7 @@ try:
 except ImportError:
     gemmi = None
 
-# BoltzGen wrapper script for ProteinDJ pipeline
+# BoltzGen wrapper script for BioModStack pipeline
 # Uses the `boltzgen run` CLI
 
 # =============================================================================
