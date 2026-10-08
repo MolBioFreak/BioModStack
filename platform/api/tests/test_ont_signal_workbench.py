@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import stat
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -18,9 +19,11 @@ import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+import database as database_models
 
 from database import (
     Base,
@@ -28,6 +31,7 @@ from database import (
     Job,
     OntInstrumentRun,
     OntInstrumentRunEvent,
+    OntExternalMoveBamRegistrationReceipt,
     OntMoveTableSource,
     OntRawSignalRepresentation,
     OntSignalCalibrationArtifact,
@@ -40,6 +44,7 @@ from database import (
     OntSquigualiserViewJob,
 )
 from migrations.add_ont_signal_workbench import migrate
+from migrations import runner as migration_runner
 from migrations.runner import MIGRATIONS
 from routers import ont_signal_workbench as router
 from services import ont_signal_workbench as service
@@ -205,6 +210,628 @@ def test_migration_registers_closed_tables_checks_foreign_keys_and_is_idempotent
     assert [(item.version, item.fn) for item in registration] == [(32, migrate)]
 
 
+def test_external_move_bam_receipt_migration_is_registered_and_immutable(tmp_path: Path) -> None:
+    from migrations.add_ont_external_move_bam_receipts import migrate as migrate_external_move_bam
+
+    db_path = tmp_path / "external-move-receipts.db"
+    _bootstrap_migration_parents(db_path)
+    migrate(str(db_path))
+    migrate_external_move_bam(str(db_path))
+    migrate_external_move_bam(str(db_path))
+
+    with sqlite3.connect(db_path) as connection:
+        table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='ont_external_move_bam_registration_receipts'"
+        ).fetchone()[0]
+        assert "server_relative_path TEXT NOT NULL" in table_sql
+        assert "artifact_sha256 VARCHAR(64) NOT NULL" in table_sql
+        triggers = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger'"
+            )
+        }
+        assert {
+            "trg_ont_external_move_bam_receipt_no_update",
+            "trg_ont_external_move_bam_receipt_no_delete",
+        } <= triggers
+        connection.execute("INSERT INTO ont_instrument_runs(id) VALUES ('run-external')")
+        connection.execute("INSERT INTO ont_raw_signal_representations(id) VALUES ('raw-external')")
+        connection.execute(
+            """
+            INSERT INTO ont_external_move_bam_registration_receipts(
+                id, candidate_id, run_id, observed_generation, raw_representation_id,
+                server_relative_path, root_device, root_inode, file_device, file_inode,
+                file_mtime_ns, file_ctime_ns, artifact_sha256, artifact_size_bytes,
+                molecule_type, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "receipt-1", "a" * 64, "run-external", 1, "raw-external", "nested/moves.bam",
+                1, 2, 3, 4, 5, 6, "b" * 64, 7, "dna", "2026-08-21T00:00:00",
+            ),
+        )
+        connection.commit()
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute(
+                "UPDATE ont_external_move_bam_registration_receipts SET artifact_size_bytes = 8 WHERE id = 'receipt-1'"
+            )
+        connection.rollback()
+        with pytest.raises(sqlite3.IntegrityError, match="retained authority"):
+            connection.execute(
+                "DELETE FROM ont_external_move_bam_registration_receipts WHERE id = 'receipt-1'"
+            )
+        connection.rollback()
+
+    registration = [item for item in MIGRATIONS if item.name == "add_ont_external_move_bam_receipts"]
+    assert [(item.version, item.fn) for item in registration] == [(33, migrate_external_move_bam)]
+
+
+def test_move_source_attempt_lineage_migration_preserves_failed_external_row_exactly(
+    tmp_path: Path,
+) -> None:
+    from migrations.add_ont_external_move_bam_receipts import migrate as migrate_external_move_bam
+
+    db_path = tmp_path / "move-source-attempt-lineage.db"
+    _bootstrap_migration_parents(db_path)
+    migrate(str(db_path))
+    migrate_external_move_bam(str(db_path))
+    validation_receipt = json.dumps(
+        {
+            "external_registration_receipt_id": "receipt-failed",
+            "raw_manifest_sha256": "d" * 64,
+            "retry": {"failures": [{"code": "SourceRepairRequired"}]},
+        },
+        separators=(",", ":"),
+    )
+    source_runtime_identity = json.dumps(
+        {
+            "schema": "bms.ont-move-source-producer-runtime.v1",
+            "authority_state": "legacy_unknown",
+            "source_job_id": None,
+            "source_bam_sha256": "b" * 64,
+            "reason_code": "producer_runtime_provenance_unavailable",
+            "requires_independent_move_validation": True,
+        },
+        separators=(",", ":"),
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("INSERT INTO ont_instrument_runs(id) VALUES ('run-failed')")
+        connection.execute("INSERT INTO ont_raw_signal_representations(id) VALUES ('raw-failed')")
+        connection.execute("INSERT INTO input_files(id) VALUES ('input-failed')")
+        connection.execute(
+            """
+            INSERT INTO ont_external_move_bam_registration_receipts(
+                id, candidate_id, run_id, observed_generation, raw_representation_id,
+                server_relative_path, root_device, root_inode, file_device, file_inode,
+                file_mtime_ns, file_ctime_ns, artifact_sha256, artifact_size_bytes,
+                molecule_type, created_at
+            ) VALUES ('receipt-failed', ?, 'run-failed', 7, 'raw-failed',
+                      'retained/moves.bam', 11, 12, 13, 14, 15, 16, ?, 17,
+                      'dna', '2026-08-21T01:02:03.000004')
+            """,
+            ("a" * 64, "b" * 64),
+        )
+        connection.execute(
+            """
+            INSERT INTO ont_move_table_sources(
+                id, run_id, observed_generation, raw_representation_id, input_file_id,
+                source_job_id, external_registration_receipt_id, artifact_sha256,
+                artifact_size_bytes, bam_header_sha256, record_count, unique_read_count,
+                mv_tag_count, ts_tag_count, ns_tag_count, basecall_model_id, molecule_type,
+                source_runtime_identity, read_inventory_sha256, validation_state,
+                reason_code, validation_receipt, claim_token, lease_expires_at,
+                created_at, validated_at
+            ) VALUES (
+                'source-failed', 'run-failed', 7, 'raw-failed', 'input-failed',
+                NULL, 'receipt-failed', ?, 17, ?, 101, 99, 98, 97, 96,
+                'model-exact', 'dna', ?, ?, 'failed', 'SourceRepairRequired', ?,
+                NULL, NULL, '2026-08-21T01:02:03.000004', '2026-08-21T01:03:04.000005'
+            )
+            """,
+            (
+                "b" * 64,
+                "c" * 64,
+                source_runtime_identity,
+                "e" * 64,
+                validation_receipt,
+            ),
+        )
+        connection.commit()
+        columns_before = [
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info('ont_move_table_sources')")
+        ]
+        row_before = connection.execute(
+            "SELECT * FROM ont_move_table_sources WHERE id='source-failed'"
+        ).fetchone()
+
+    migration = next(
+        (
+            item
+            for item in MIGRATIONS
+            if item.name == "add_ont_move_source_attempt_lineage"
+        ),
+        None,
+    )
+    assert migration is not None, "move-source attempt-lineage migration is not registered"
+    assert migration.version == 34
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL,
+                content_sha256 TEXT
+            )
+            """
+        )
+        connection.executemany(
+            "INSERT INTO schema_migrations VALUES (?, ?, 'legacy', ?)",
+            [
+                (
+                    item.version,
+                    item.name,
+                    migration_runner._migration_content_sha256(item)
+                    if item.version == 33
+                    else None,
+                )
+                for item in MIGRATIONS
+                if item.version < 34
+            ],
+        )
+        connection.commit()
+    migration_runner.run_all(str(db_path))
+    migration.fn(str(db_path))
+
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=34"
+        ).fetchone() == (
+            "add_ont_move_source_attempt_lineage",
+            migration_runner._migration_content_sha256(migration),
+        )
+        connection.execute("PRAGMA foreign_keys=ON")
+        columns_after = [
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info('ont_move_table_sources')")
+        ]
+        row_after = connection.execute(
+            "SELECT * FROM ont_move_table_sources WHERE id='source-failed'"
+        ).fetchone()
+        preserved = dict(zip(columns_after, row_after, strict=True))
+        assert columns_after == columns_before + [
+            "attempt_number",
+            "predecessor_move_source_id",
+        ]
+        assert tuple(preserved[column] for column in columns_before) == row_before
+        assert preserved["attempt_number"] == 1
+        assert preserved["predecessor_move_source_id"] is None
+        assert preserved["validation_state"] == "failed"
+        assert preserved["reason_code"] == "SourceRepairRequired"
+        assert preserved["validation_receipt"] == validation_receipt
+        assert preserved["external_registration_receipt_id"] == "receipt-failed"
+        source_fks = {
+            (str(row[3]), str(row[2]), str(row[4]), str(row[6]))
+            for row in connection.execute(
+                "PRAGMA foreign_key_list('ont_move_table_sources')"
+            )
+        }
+        assert (
+            "predecessor_move_source_id",
+            "ont_move_table_sources",
+            "id",
+            "RESTRICT",
+        ) in source_fks
+        for child_table in (
+            "ont_signal_calibration_artifacts",
+            "ont_signal_calibration_jobs",
+            "ont_signal_mapping_jobs",
+            "ont_signal_viewer_sessions",
+        ):
+            assert any(
+                str(row[2]) == "ont_move_table_sources"
+                for row in connection.execute(f"PRAGMA foreign_key_list('{child_table}')")
+            )
+        index_columns = {
+            str(index[1]): tuple(
+                str(column[2])
+                for column in connection.execute(
+                    f"PRAGMA index_info('{str(index[1])}')"
+                )
+            )
+            for index in connection.execute("PRAGMA index_list('ont_move_table_sources')")
+        }
+        assert (
+            "run_id",
+            "observed_generation",
+            "artifact_sha256",
+            "attempt_number",
+        ) in index_columns.values()
+        assert ("predecessor_move_source_id",) in index_columns.values()
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def _assert_v33_startup_authority(db_path: Path) -> None:
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in MIGRATIONS if migration.version == 33)
+    )
+    with sqlite3.connect(db_path) as connection:
+        migration_runner.register_sqlite_sha256(connection)
+        assert connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=33"
+        ).fetchone() == ("add_ont_external_move_bam_receipts", expected_checksum)
+        triggers = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger'"
+            )
+        }
+        assert {
+            "trg_ont_external_move_bam_receipt_no_update",
+            "trg_ont_external_move_bam_receipt_no_delete",
+            "trg_ont_move_source_exact_producer_insert",
+            "trg_ont_move_source_exact_producer_update",
+            "trg_ont_move_source_external_receipt_insert",
+            "trg_ont_move_source_external_receipt_update",
+        } <= triggers
+        invalid_source = """
+            INSERT INTO ont_move_table_sources(
+                id, run_id, observed_generation, raw_representation_id, input_file_id,
+                source_job_id, external_registration_receipt_id, artifact_sha256,
+                artifact_size_bytes, molecule_type, source_runtime_identity,
+                validation_state, reason_code, validation_receipt, created_at
+            ) VALUES (?, 'startup-run', 1, 'startup-raw', 'startup-input',
+                      NULL, ?, ?, 7, 'dna', '{}', 'requested',
+                      'move_source_validation_requested', '{}', '2026-08-21T00:00:00')
+        """
+        with pytest.raises(sqlite3.IntegrityError, match="exactly one producer authority"):
+            connection.execute(invalid_source, ("startup-xor", None, "1" * 64))
+        with pytest.raises(sqlite3.IntegrityError, match="external receipt authority does not exist"):
+            connection.execute(
+                invalid_source,
+                ("startup-dangling", "missing-receipt", "2" * 64),
+            )
+
+
+def _assert_v34_startup_authority(db_path: Path) -> None:
+    from migrations.add_ont_move_source_attempt_lineage import attest
+
+    migration = next(item for item in MIGRATIONS if item.version == 34)
+    expected_checksum = migration_runner._migration_content_sha256(migration)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        assert connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=34"
+        ).fetchone() == ("add_ont_move_source_attempt_lineage", expected_checksum)
+        attest(connection)
+
+
+@pytest.mark.asyncio
+async def test_fresh_database_startup_applies_and_attests_migration_33_before_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "fresh-startup.db"
+    startup_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setattr(database_models, "engine", startup_engine)
+    try:
+        with pytest.raises(RuntimeError, match="migration 33 authority is absent"):
+            await database_models.init_db()
+        with sqlite3.connect(db_path) as connection:
+            assert connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ont_move_table_sources'"
+            ).fetchone() == (1,)
+            assert connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+            ).fetchone() is None
+    finally:
+        await startup_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_upgraded_database_startup_applies_and_attests_migrations_33_and_34_before_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "upgraded-startup.db"
+    startup_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    async with startup_engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY, name TEXT NOT NULL,
+                applied_at TEXT NOT NULL, content_sha256 TEXT
+            )"""
+        )
+        connection.executemany(
+            "INSERT INTO schema_migrations VALUES (?, ?, 'legacy', NULL)",
+            [(migration.version, migration.name) for migration in MIGRATIONS],
+        )
+        connection.execute(
+            "UPDATE schema_migrations SET content_sha256=? WHERE version=33",
+            (
+                migration_runner._migration_content_sha256(
+                    next(item for item in MIGRATIONS if item.version == 33)
+                ),
+            ),
+        )
+        connection.execute(
+            "UPDATE schema_migrations SET content_sha256=? WHERE version=34",
+            (migration_runner._migration_content_sha256(MIGRATIONS[-1]),),
+        )
+        connection.commit()
+    MIGRATIONS[-1].fn(str(db_path))
+    monkeypatch.setattr(database_models, "engine", startup_engine)
+    try:
+        await database_models.init_db()
+        _assert_v33_startup_authority(db_path)
+        _assert_v34_startup_authority(db_path)
+    finally:
+        await startup_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_upgraded_database_startup_rejects_same_name_altered_migration_33_trigger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "altered-v33-trigger.db"
+    startup_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    async with startup_engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY, name TEXT NOT NULL,
+                applied_at TEXT NOT NULL, content_sha256 TEXT
+            )"""
+        )
+        connection.executemany(
+            "INSERT INTO schema_migrations VALUES (?, ?, 'legacy', NULL)",
+            [(migration.version, migration.name) for migration in MIGRATIONS],
+        )
+        connection.execute(
+            "UPDATE schema_migrations SET content_sha256=? WHERE version=33",
+            (
+                migration_runner._migration_content_sha256(
+                    next(item for item in MIGRATIONS if item.version == 33)
+                ),
+            ),
+        )
+        connection.execute(
+            "UPDATE schema_migrations SET content_sha256=? WHERE version=34",
+            (migration_runner._migration_content_sha256(MIGRATIONS[-1]),),
+        )
+        connection.commit()
+    MIGRATIONS[-1].fn(str(db_path))
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("DROP TRIGGER trg_ont_move_source_exact_producer_insert")
+        connection.execute(
+            """
+            CREATE TRIGGER trg_ont_move_source_exact_producer_insert
+            BEFORE INSERT ON ont_move_table_sources
+            BEGIN SELECT 1; END
+            """
+        )
+        connection.commit()
+
+    monkeypatch.setattr(database_models, "engine", startup_engine)
+    try:
+        with pytest.raises(RuntimeError, match="migration 33 startup attestation failed"):
+            await database_models.init_db()
+    finally:
+        await startup_engine.dispose()
+
+
+def test_migration_runner_preserves_legacy_unknown_content_and_seals_new_v33_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "migration-content-ledger.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.executemany(
+            "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, 'legacy')",
+            [(migration.version, migration.name) for migration in MIGRATIONS if migration.version < 33],
+        )
+        connection.commit()
+
+    module_path = tmp_path / "fake_migration_33.py"
+    module_path.write_bytes(b"MIGRATION_CONTENT = 'v1'\n")
+
+    def fake_v33(db_path: str) -> None:
+        del db_path
+
+    fake_module = SimpleNamespace(__file__=str(module_path))
+    fake_migration = migration_runner.Migration(
+        33,
+        "add_ont_external_move_bam_receipts",
+        fake_v33,
+    )
+    registered = [migration for migration in MIGRATIONS if migration.version < 33] + [fake_migration]
+    monkeypatch.setattr(migration_runner, "MIGRATIONS", registered)
+    monkeypatch.setattr(
+        migration_runner,
+        "getmodule",
+        lambda fn: fake_module if fn is fake_v33 else None,
+        raising=False,
+    )
+
+    migration_runner.run_all(str(db_path))
+    expected_sha256 = hashlib.sha256(module_path.read_bytes()).hexdigest()
+    with sqlite3.connect(db_path) as connection:
+        columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info('schema_migrations')")
+        }
+        assert "content_sha256" in columns
+        assert connection.execute(
+            "SELECT DISTINCT content_sha256 FROM schema_migrations WHERE version < 33"
+        ).fetchall() == [(None,)]
+        assert connection.execute(
+            "SELECT content_sha256 FROM schema_migrations WHERE version = 33"
+        ).fetchone() == (expected_sha256,)
+
+    module_path.write_bytes(b"MIGRATION_CONTENT = 'changed-after-application'\n")
+    with pytest.raises(RuntimeError, match="migration content changed.*version 33"):
+        migration_runner.run_all(str(db_path))
+
+
+def test_external_move_bam_migration_enforces_exact_producer_authority_on_v32_data(
+    tmp_path: Path,
+) -> None:
+    from migrations.add_ont_external_move_bam_receipts import migrate as migrate_external_move_bam
+
+    db_path = tmp_path / "external-move-producer-authority.db"
+    _bootstrap_migration_parents(db_path)
+    migrate(str(db_path))
+
+    insert_source_sql = """
+        INSERT INTO ont_move_table_sources(
+            id, run_id, observed_generation, raw_representation_id, input_file_id,
+            source_job_id, external_registration_receipt_id, artifact_sha256,
+            artifact_size_bytes, molecule_type, source_runtime_identity,
+            validation_state, reason_code, validation_receipt, created_at
+        ) VALUES (?, 'run-authority', 1, 'raw-authority', ?, ?, ?, ?, 7, 'dna',
+                  '{}', 'requested', 'move_source_validation_requested', '{}', '2026-08-21T00:00:00')
+    """
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("INSERT INTO ont_instrument_runs(id) VALUES ('run-authority')")
+        connection.execute("INSERT INTO ont_raw_signal_representations(id) VALUES ('raw-authority')")
+        connection.execute("INSERT INTO jobs(id) VALUES ('job-authority')")
+        for input_id in (
+            "input-managed", "input-external", "input-missing", "input-dual", "input-dangling",
+        ):
+            connection.execute("INSERT INTO input_files(id) VALUES (?)", (input_id,))
+        connection.execute(
+            insert_source_sql,
+            ("source-managed", "input-managed", "job-authority", None, "1" * 64),
+        )
+        connection.commit()
+
+    migrate_external_move_bam(str(db_path))
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        assert connection.execute(
+            "SELECT source_job_id, external_registration_receipt_id FROM ont_move_table_sources WHERE id='source-managed'"
+        ).fetchone() == ("job-authority", None)
+        connection.execute(
+            """
+            INSERT INTO ont_external_move_bam_registration_receipts(
+                id, candidate_id, run_id, observed_generation, raw_representation_id,
+                server_relative_path, root_device, root_inode, file_device, file_inode,
+                file_mtime_ns, file_ctime_ns, artifact_sha256, artifact_size_bytes,
+                molecule_type, created_at
+            ) VALUES ('receipt-authority', ?, 'run-authority', 1, 'raw-authority',
+                      'nested/moves.bam', 1, 2, 3, 4, 5, 6, ?, 7, 'dna', '2026-08-21T00:00:00')
+            """,
+            ("a" * 64, "2" * 64),
+        )
+        connection.execute(
+            insert_source_sql,
+            ("source-external", "input-external", None, "receipt-authority", "2" * 64),
+        )
+        connection.commit()
+
+        with pytest.raises(sqlite3.IntegrityError, match="exactly one producer authority"):
+            connection.execute(
+                insert_source_sql,
+                ("source-missing", "input-missing", None, None, "3" * 64),
+            )
+        connection.rollback()
+        with pytest.raises(sqlite3.IntegrityError, match="exactly one producer authority"):
+            connection.execute(
+                insert_source_sql,
+                ("source-dual", "input-dual", "job-authority", "receipt-authority", "4" * 64),
+            )
+        connection.rollback()
+        with pytest.raises(sqlite3.IntegrityError, match="external receipt authority does not exist"):
+            connection.execute(
+                insert_source_sql,
+                ("source-dangling", "input-dangling", None, "receipt-missing", "5" * 64),
+            )
+        connection.rollback()
+
+        with pytest.raises(sqlite3.IntegrityError, match="exactly one producer authority"):
+            connection.execute(
+                """
+                UPDATE ont_move_table_sources
+                SET source_job_id = NULL, external_registration_receipt_id = NULL
+                WHERE id = 'source-managed'
+                """
+            )
+        connection.rollback()
+        with pytest.raises(sqlite3.IntegrityError, match="exactly one producer authority"):
+            connection.execute(
+                """
+                UPDATE ont_move_table_sources
+                SET external_registration_receipt_id = 'receipt-authority'
+                WHERE id = 'source-managed'
+                """
+            )
+        connection.rollback()
+        with pytest.raises(sqlite3.IntegrityError, match="external receipt authority does not exist"):
+            connection.execute(
+                """
+                UPDATE ont_move_table_sources
+                SET external_registration_receipt_id = 'receipt-missing'
+                WHERE id = 'source-external'
+                """
+            )
+        connection.rollback()
+
+
+def test_external_move_bam_migration_rejects_invalid_v32_rows_without_partial_ddl(
+    tmp_path: Path,
+) -> None:
+    from migrations.add_ont_external_move_bam_receipts import migrate as migrate_external_move_bam
+
+    db_path = tmp_path / "invalid-v32-producer-authority.db"
+    _bootstrap_migration_parents(db_path)
+    migrate(str(db_path))
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("INSERT INTO ont_instrument_runs(id) VALUES ('run-invalid')")
+        connection.execute("INSERT INTO ont_raw_signal_representations(id) VALUES ('raw-invalid')")
+        connection.execute("INSERT INTO input_files(id) VALUES ('input-invalid')")
+        connection.execute(
+            """
+            INSERT INTO ont_move_table_sources(
+                id, run_id, observed_generation, raw_representation_id, input_file_id,
+                source_job_id, external_registration_receipt_id, artifact_sha256,
+                artifact_size_bytes, molecule_type, source_runtime_identity,
+                validation_state, reason_code, validation_receipt, created_at
+            ) VALUES (
+                'source-invalid', 'run-invalid', 1, 'raw-invalid', 'input-invalid',
+                NULL, NULL, ?, 7, 'dna', '{}', 'requested',
+                'move_source_validation_requested', '{}', '2026-08-21T00:00:00'
+            )
+            """,
+            ("f" * 64,),
+        )
+        connection.commit()
+
+    with pytest.raises(RuntimeError, match="exactly one producer authority"):
+        migrate_external_move_bam(str(db_path))
+
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ont_external_move_bam_registration_receipts'"
+        ).fetchone() is None
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_ont_move_source_%producer%'"
+        ).fetchall() == []
+
+
 async def _seed_ready_authority(
     session: AsyncSession,
     root: Path,
@@ -215,7 +842,9 @@ async def _seed_ready_authority(
     blow5 = root / "reads.blow5"
     blow5.write_bytes(b"governed-blow5")
     Path(f"{blow5}.idx").write_bytes(b"governed-index")
-    move_bam = root / "moves.bam"
+    move_root = root / "seed-move-source"
+    move_root.mkdir()
+    move_bam = move_root / "moves.bam"
     move_bam.write_bytes(b"governed-move-bam")
     filtered_bam = root / "filtered-moves.bam"
     filtered_bam.write_bytes(b"governed-filtered-move-bam")
@@ -262,8 +891,17 @@ async def _seed_ready_authority(
                 id="move-input-1",
                 filename=move_bam.name,
                 file_type="bam",
-                directory=str(root),
+                directory=str(move_root),
                 size_bytes=move_bam.stat().st_size,
+            ),
+            Job(
+                id="seed-move-source-job",
+                name="seed move source",
+                status="completed",
+                model_id="dorado",
+                mode="basecall",
+                params={},
+                output_dir=str(move_root),
             ),
         ]
     )
@@ -310,7 +948,8 @@ async def _seed_ready_authority(
             observed_generation=1,
             raw_representation_id="raw-blow5-1",
             input_file_id="move-input-1",
-            external_registration_receipt_id="external-receipt-1",
+            source_job_id="seed-move-source-job",
+            external_registration_receipt_id=None,
             artifact_sha256=hashlib.sha256(move_bam.read_bytes()).hexdigest(),
             artifact_size_bytes=move_bam.stat().st_size,
             bam_header_sha256="b" * 64,
@@ -397,6 +1036,149 @@ def test_retained_parent_pin_rejects_intermediate_symlinks_beneath_governed_root
             )
 
 
+def _configure_external_move_bam_candidate_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    key_file = tmp_path / "external-move-bam-candidate.key"
+    key_file.write_bytes(os.urandom(32))
+    key_file.chmod(0o600)
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_CANDIDATE_KEY_FILE_ENV, str(key_file))
+    return key_file
+
+
+def test_external_move_bam_candidate_ids_are_keyed_and_key_specific(tmp_path: Path) -> None:
+    root = tmp_path / "candidate-id-root"
+    root.mkdir()
+    bam = root / "moves.bam"
+    bam.write_bytes(b"candidate-metadata-only")
+    root_info = root.stat()
+    file_info = bam.stat()
+    first_key = os.urandom(32)
+    second_key = os.urandom(32)
+
+    first_id = service._external_move_bam_candidate_id(
+        bam.name, root_info, file_info, first_key
+    )
+    second_id = service._external_move_bam_candidate_id(
+        bam.name, root_info, file_info, second_key
+    )
+    unkeyed_id = hashlib.sha256(
+        service._canonical(
+            service._external_move_bam_candidate_body(bam.name, root_info, file_info)
+        )
+    ).hexdigest()
+
+    assert re.fullmatch(r"[0-9a-f]{64}", first_id)
+    assert first_id != second_id
+    assert first_id != unkeyed_id
+
+
+@pytest.mark.parametrize("invalid_key", ["missing", "symlink", "world-readable", "short", "long"])
+def test_external_move_bam_candidate_key_file_contract_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_key: str,
+) -> None:
+    root = tmp_path / "invalid-key-root"
+    root.mkdir()
+    (root / "moves.bam").write_bytes(b"moves")
+    key_file = tmp_path / "configured-candidate.key"
+    if invalid_key == "missing":
+        monkeypatch.delenv(service.EXTERNAL_MOVE_BAM_CANDIDATE_KEY_FILE_ENV, raising=False)
+    elif invalid_key == "symlink":
+        target = tmp_path / "private-key-target"
+        target.write_bytes(os.urandom(32))
+        target.chmod(0o600)
+        key_file.symlink_to(target)
+        monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_CANDIDATE_KEY_FILE_ENV, str(key_file))
+    else:
+        sizes = {"world-readable": 32, "short": 31, "long": 33}
+        key_file.write_bytes(os.urandom(sizes[invalid_key]))
+        key_file.chmod(0o644 if invalid_key == "world-readable" else 0o600)
+        monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_CANDIDATE_KEY_FILE_ENV, str(key_file))
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(root))
+
+    with pytest.raises(
+        service.OntSignalError,
+        match=r"^external move-BAM source is unavailable$",
+    ) as raised:
+        service.list_external_move_bam_candidates()
+
+    assert str(key_file) not in str(raised.value)
+    assert str(root) not in str(raised.value)
+
+
+def test_external_move_bam_candidate_key_is_read_once_per_catalog_and_seal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "single-key-read-root"
+    root.mkdir()
+    (root / "one.bam").write_bytes(b"one")
+    (root / "two.bam").write_bytes(b"two")
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(root))
+    _configure_external_move_bam_candidate_key(tmp_path, monkeypatch)
+    original_read = service._read_external_move_bam_candidate_key
+    reads = 0
+
+    def observed_read() -> bytes:
+        nonlocal reads
+        reads += 1
+        return original_read()
+
+    monkeypatch.setattr(service, "_read_external_move_bam_candidate_key", observed_read)
+    candidates = service.list_external_move_bam_candidates()
+    assert reads == 1
+
+    reads = 0
+    _sealed, retained_descriptors = service._seal_external_move_bam_candidate(
+        candidates[0]["candidate_id"]
+    )
+    try:
+        assert reads == 1
+    finally:
+        for descriptor in retained_descriptors:
+            os.close(descriptor)
+
+
+def test_external_move_bam_candidate_catalog_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "external"
+    root.mkdir()
+    (root / "one.bam").write_bytes(b"one")
+    (root / "two.bam").write_bytes(b"two")
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(root))
+    _configure_external_move_bam_candidate_key(tmp_path, monkeypatch)
+    monkeypatch.setattr(service, "MAX_EXTERNAL_MOVE_BAM_CANDIDATES", 1)
+
+    with pytest.raises(service.OntSignalError, match="exceeds bounded policy"):
+        service.list_external_move_bam_candidates()
+
+
+def test_external_move_bam_candidate_traversal_bounds_all_visited_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "external-entry-flood"
+    root.mkdir()
+    for ordinal in range(4):
+        (root / f"unrelated-{ordinal}").mkdir()
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(root))
+    _configure_external_move_bam_candidate_key(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        service,
+        "MAX_EXTERNAL_MOVE_BAM_VISITED_ENTRIES",
+        3,
+        raising=False,
+    )
+
+    with pytest.raises(service.OntSignalError, match="visited-entry policy"):
+        service.list_external_move_bam_candidates()
+
+
 def _api(factory: async_sessionmaker[AsyncSession]) -> FastAPI:
     app = FastAPI()
 
@@ -409,6 +1191,471 @@ def _api(factory: async_sessionmaker[AsyncSession]) -> FastAPI:
     return app
 
 
+async def _seed_failed_external_move_source(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    source_id: str = "ont-moves-external-failed",
+    artifact_sha256: str = "9" * 64,
+    state: str = "failed",
+    legacy_retry_exhausted: bool = False,
+    null_validated_at: bool = False,
+) -> tuple[str, str]:
+    async with factory() as session:
+        representation = await session.get(OntRawSignalRepresentation, "raw-blow5-1")
+        assert representation is not None
+        receipt_body = {
+            "candidate_id": hashlib.sha256(source_id.encode()).hexdigest(),
+            "server_relative_path": f"retained/{source_id}.bam",
+            "root_device": 101,
+            "root_inode": 102,
+            "file_device": 103,
+            "file_inode": 104,
+            "file_mtime_ns": 105,
+            "file_ctime_ns": 106,
+            "artifact_sha256": artifact_sha256,
+            "artifact_size_bytes": 107,
+            "run_id": "run-1",
+            "observed_generation": 1,
+            "raw_representation_id": "raw-blow5-1",
+            "molecule_type": "dna",
+        }
+        receipt_id = f"ont-external-move-{service._digest(receipt_body)}"
+        input_file_id = f"ont-ext-bam-{artifact_sha256[:24]}"
+        session.add(
+            InputFile(
+                id=input_file_id,
+                filename=f"external-{artifact_sha256}.bam",
+                file_type="bam",
+                directory="",
+                size_bytes=receipt_body["artifact_size_bytes"],
+            )
+        )
+        session.add(
+            OntExternalMoveBamRegistrationReceipt(
+                id=receipt_id,
+                **receipt_body,
+                created_at=datetime.utcnow(),
+            )
+        )
+        validation_receipt: dict[str, Any] = {
+            "raw_manifest_sha256": representation.manifest_sha256,
+            "external_registration_receipt_id": receipt_id,
+            "failure": {"code": "SourceRepairRequired"},
+        }
+        if legacy_retry_exhausted:
+            validation_receipt = {
+                "raw_manifest_sha256": representation.manifest_sha256,
+                "external_registration_receipt_id": receipt_id,
+                "retry": {
+                    "max_attempts": 3,
+                    "failures": [
+                        {
+                            "attempt": attempt,
+                            "failed_at": f"2026-08-21T12:00:0{attempt}",
+                            "failure_code": "RuntimeError",
+                            "message_sha256": f"{attempt}" * 64,
+                        }
+                        for attempt in (1, 2, 3)
+                    ],
+                },
+            }
+        session.add(
+            OntMoveTableSource(
+                id=source_id,
+                run_id="run-1",
+                observed_generation=1,
+                raw_representation_id="raw-blow5-1",
+                input_file_id=input_file_id,
+                source_job_id=None,
+                external_registration_receipt_id=receipt_id,
+                artifact_sha256=artifact_sha256,
+                artifact_size_bytes=receipt_body["artifact_size_bytes"],
+                molecule_type="dna",
+                source_runtime_identity=service._external_move_bam_runtime_identity(
+                    artifact_sha256
+                ),
+                validation_state=state,
+                reason_code=(
+                    "runtime_validation_failed_retry_exhausted"
+                    if legacy_retry_exhausted
+                    else "SourceRepairRequired"
+                    if state == "failed"
+                    else "move_source_validation_requested"
+                ),
+                validation_receipt=validation_receipt,
+                claim_token=None,
+                lease_expires_at=None,
+                created_at=datetime.utcnow(),
+                validated_at=(
+                    None
+                    if legacy_retry_exhausted or null_validated_at
+                    else datetime.utcnow()
+                    if state in {"failed", "ready"}
+                    else None
+                ),
+                attempt_number=1,
+                predecessor_move_source_id=None,
+            )
+        )
+        await session.commit()
+    return receipt_id, str(receipt_body["candidate_id"])
+
+
+@pytest.mark.asyncio
+async def test_fresh_external_move_source_attempt_is_atomic_and_registration_replays_original(
+    workbench_store: WorkbenchStore,
+) -> None:
+    source_id = "ont-moves-external-failed"
+    receipt_id, candidate_id = await _seed_failed_external_move_source(
+        workbench_store.factory,
+        source_id=source_id,
+    )
+    async with workbench_store.factory() as session:
+        before_result = await session.execute(
+            text("SELECT * FROM ont_move_table_sources WHERE id=:id"),
+            {"id": source_id},
+        )
+        before = tuple(before_result.one())
+
+    route = (
+        "/api/ont/signal-workbench/move-sources/"
+        f"{source_id}/fresh-attempt"
+    )
+    app = _api(workbench_store.factory)
+
+    async def request_fresh_attempt() -> Any:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            return await client.post(route, json={})
+
+    first, concurrent_replay = await asyncio.gather(
+        request_fresh_attempt(),
+        request_fresh_attempt(),
+    )
+    assert first.status_code == 202
+    assert concurrent_replay.status_code == 202
+    first_body = first.json()
+    assert concurrent_replay.json() == first_body
+    assert first_body["move_source_id"] != source_id
+    assert OPAQUE_ID.fullmatch(first_body["move_source_id"])
+    assert first_body["attempt_number"] == 2
+    assert first_body["predecessor_move_source_id"] == source_id
+    assert first_body["state"] == "requested"
+    assert first_body["reason_code"] == "fresh_move_source_attempt_requested"
+    assert first_body["external_registration_receipt_id"] == receipt_id
+    assert first_body["source_job_id"] is None
+    assert first_body["validation_receipt"] == {
+        "schema": "bms.ont-move-source-fresh-attempt.v1",
+        "predecessor_move_source_id": source_id,
+        "raw_manifest_sha256": first_body["validation_receipt"][
+            "raw_manifest_sha256"
+        ],
+        "external_registration_receipt_id": receipt_id,
+    }
+
+    async with workbench_store.factory() as session:
+        after_result = await session.execute(
+            text("SELECT * FROM ont_move_table_sources WHERE id=:id"),
+            {"id": source_id},
+        )
+        assert tuple(after_result.one()) == before
+        attempts = (
+            await session.execute(
+                select(OntMoveTableSource)
+                .where(
+                    OntMoveTableSource.run_id == "run-1",
+                    OntMoveTableSource.artifact_sha256 == "9" * 64,
+                )
+                .order_by(OntMoveTableSource.attempt_number)
+            )
+        ).scalars().all()
+        assert [row.attempt_number for row in attempts] == [1, 2]
+        assert [row.predecessor_move_source_id for row in attempts] == [None, source_id]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        sequential_replay = await client.post(route, json={})
+        registration_replay = await client.post(
+            "/api/ont/signal-workbench/runs/run-1/generations/1/"
+            "external-move-bam-candidates/register",
+            json={
+                "candidate_id": candidate_id,
+                "raw_representation_id": "raw-blow5-1",
+                "molecule_type": "dna",
+            },
+        )
+        rejected_field = await client.post(
+            route,
+            json={"server_path": "/forbidden/host/path"},
+        )
+    assert sequential_replay.status_code == 202
+    assert sequential_replay.json() == first_body
+    assert registration_replay.status_code == 202
+    assert registration_replay.json()["move_source_id"] == source_id
+    assert registration_replay.json()["attempt_number"] == 1
+    assert registration_replay.json()["predecessor_move_source_id"] is None
+    assert rejected_field.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_fresh_attempt_accepts_only_exact_preserved_null_validated_retry_exhaustion(
+    workbench_store: WorkbenchStore,
+) -> None:
+    predecessor_id = "ont-moves-710c42e97bcc47709da2cb62f67f3746"
+    await _seed_failed_external_move_source(
+        workbench_store.factory,
+        source_id=predecessor_id,
+        artifact_sha256="8" * 64,
+        legacy_retry_exhausted=True,
+    )
+    arbitrary_id = "ont-moves-failed-null-arbitrary"
+    await _seed_failed_external_move_source(
+        workbench_store.factory,
+        source_id=arbitrary_id,
+        artifact_sha256="7" * 64,
+        null_validated_at=True,
+    )
+    async with workbench_store.factory() as session:
+        before_result = await session.execute(
+            text("SELECT * FROM ont_move_table_sources WHERE id=:id"),
+            {"id": predecessor_id},
+        )
+        predecessor_before = tuple(before_result.one())
+
+    app = _api(workbench_store.factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        accepted = await client.post(
+            f"/api/ont/signal-workbench/move-sources/{predecessor_id}/fresh-attempt",
+            json={},
+        )
+        rejected = await client.post(
+            f"/api/ont/signal-workbench/move-sources/{arbitrary_id}/fresh-attempt",
+            json={},
+        )
+
+    assert accepted.status_code == 202
+    assert accepted.json()["predecessor_move_source_id"] == predecessor_id
+    assert rejected.status_code == 409
+    async with workbench_store.factory() as session:
+        after_result = await session.execute(
+            text("SELECT * FROM ont_move_table_sources WHERE id=:id"),
+            {"id": predecessor_id},
+        )
+        assert tuple(after_result.one()) == predecessor_before
+        assert await session.scalar(
+            select(func.count())
+            .select_from(OntMoveTableSource)
+            .where(OntMoveTableSource.predecessor_move_source_id == arbitrary_id)
+        ) == 0
+
+
+@pytest.mark.asyncio
+async def test_fresh_external_move_source_attempt_rejects_invalid_state_and_authority(
+    workbench_store: WorkbenchStore,
+) -> None:
+    invalid_ids: list[str] = []
+    for ordinal, state in enumerate(("requested", "running", "ready"), start=1):
+        source_id = f"ont-moves-invalid-{state}"
+        await _seed_failed_external_move_source(
+            workbench_store.factory,
+            source_id=source_id,
+            artifact_sha256=f"{ordinal}" * 64,
+            state=state,
+        )
+        invalid_ids.append(source_id)
+
+    claimed_id = "ont-moves-invalid-claimed"
+    await _seed_failed_external_move_source(
+        workbench_store.factory,
+        source_id=claimed_id,
+        artifact_sha256="4" * 64,
+    )
+    leased_id = "ont-moves-invalid-leased"
+    await _seed_failed_external_move_source(
+        workbench_store.factory,
+        source_id=leased_id,
+        artifact_sha256="5" * 64,
+    )
+    dangling_id = "ont-moves-invalid-dangling"
+    dangling_receipt_id, _ = await _seed_failed_external_move_source(
+        workbench_store.factory,
+        source_id=dangling_id,
+        artifact_sha256="6" * 64,
+    )
+    divergent_id = "ont-moves-invalid-divergent"
+    divergent_receipt_id, _ = await _seed_failed_external_move_source(
+        workbench_store.factory,
+        source_id=divergent_id,
+        artifact_sha256="7" * 64,
+    )
+    async with workbench_store.factory() as session:
+        claimed = await session.get(OntMoveTableSource, claimed_id)
+        leased = await session.get(OntMoveTableSource, leased_id)
+        divergent_receipt = await session.get(
+            OntExternalMoveBamRegistrationReceipt,
+            divergent_receipt_id,
+        )
+        dangling_receipt = await session.get(
+            OntExternalMoveBamRegistrationReceipt,
+            dangling_receipt_id,
+        )
+        assert claimed is not None and leased is not None
+        assert divergent_receipt is not None and dangling_receipt is not None
+        claimed.claim_token = "claim-must-block"
+        leased.lease_expires_at = datetime.utcnow() + timedelta(minutes=5)
+        divergent_receipt.artifact_size_bytes += 1
+        await session.delete(dangling_receipt)
+        managed = await session.get(OntMoveTableSource, "ont-moves-ready")
+        assert managed is not None
+        managed.validation_state = "failed"
+        managed.reason_code = "SourceRepairRequired"
+        managed.claim_token = None
+        managed.lease_expires_at = None
+        await session.commit()
+    invalid_ids.extend(
+        [claimed_id, leased_id, dangling_id, divergent_id, "ont-moves-ready"]
+    )
+
+    app = _api(workbench_store.factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        responses = [
+            await client.post(
+                f"/api/ont/signal-workbench/move-sources/{source_id}/fresh-attempt",
+                json={},
+            )
+            for source_id in invalid_ids
+        ]
+    assert [response.status_code for response in responses] == [409] * len(invalid_ids)
+    assert all("path" not in response.text.lower() for response in responses)
+
+    async with workbench_store.factory() as session:
+        assert await session.scalar(
+            select(func.count())
+            .select_from(OntMoveTableSource)
+            .where(OntMoveTableSource.predecessor_move_source_id.in_(invalid_ids))
+        ) == 0
+
+
+@pytest.mark.asyncio
+async def test_external_move_bam_catalog_unavailability_is_safe_503(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_external_move_bam_candidate_key(workbench_store.root, monkeypatch)
+    monkeypatch.delenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, raising=False)
+    async with AsyncClient(
+        transport=ASGITransport(app=_api(workbench_store.factory)),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/api/ont/signal-workbench/external-move-bam-candidates"
+        )
+    assert response.status_code == 503
+    assert response.json() == {"detail": "external move-BAM source is unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_external_move_bam_catalog_and_registration_key_failures_are_path_opaque(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_root = workbench_store.root / "public-error-external-root"
+    external_root.mkdir()
+    (external_root / "moves.bam").write_bytes(b"moves")
+    rejected_key = workbench_store.root / "public-error-key"
+    rejected_key.write_bytes(os.urandom(32))
+    rejected_key.chmod(0o644)
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(external_root))
+    monkeypatch.setenv(
+        service.EXTERNAL_MOVE_BAM_CANDIDATE_KEY_FILE_ENV,
+        str(rejected_key),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=_api(workbench_store.factory)),
+        base_url="http://test",
+    ) as client:
+        catalog = await client.get(
+            "/api/ont/signal-workbench/external-move-bam-candidates"
+        )
+        registration = await client.post(
+            "/api/ont/signal-workbench/runs/run-1/generations/1/external-move-bam-candidates/register",
+            json={
+                "candidate_id": "0" * 64,
+                "raw_representation_id": "raw-blow5-1",
+                "molecule_type": "dna",
+            },
+        )
+
+    assert catalog.status_code == 503
+    assert catalog.json() == {"detail": "external move-BAM source is unavailable"}
+    assert registration.status_code == 409
+    assert registration.json() == {"detail": "external move-BAM source is unavailable"}
+    assert str(external_root) not in registration.text
+    assert str(rejected_key) not in registration.text
+
+
+@pytest.mark.asyncio
+async def test_external_move_bam_candidate_id_survives_api_restart_with_same_key(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_root = workbench_store.root / "restart-stable-external-root"
+    external_root.mkdir()
+    (external_root / "moves.bam").write_bytes(b"restart-stable")
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(external_root))
+    _configure_external_move_bam_candidate_key(workbench_store.root, monkeypatch)
+
+    observed_ids: list[str] = []
+    for app in (_api(workbench_store.factory), _api(workbench_store.factory)):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            response = await client.get(
+                "/api/ont/signal-workbench/external-move-bam-candidates"
+            )
+        assert response.status_code == 200
+        observed_ids.append(response.json()["items"][0]["candidate_id"])
+
+    assert observed_ids[0] == observed_ids[1]
+
+
+@pytest.mark.asyncio
+async def test_external_move_bam_catalog_listing_runs_off_the_async_event_loop(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_loop_thread = threading.get_ident()
+    listing_threads: list[int] = []
+
+    def list_candidates() -> list[dict[str, Any]]:
+        listing_threads.append(threading.get_ident())
+        return []
+
+    monkeypatch.setattr(service, "list_external_move_bam_candidates", list_candidates)
+    async with AsyncClient(
+        transport=ASGITransport(app=_api(workbench_store.factory)),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/api/ont/signal-workbench/external-move-bam-candidates"
+        )
+
+    assert response.status_code == 200
+    assert listing_threads and listing_threads[0] != event_loop_thread
+
+
 def test_router_openapi_closes_every_json_response_and_keeps_artifact_binary() -> None:
     app = FastAPI()
     app.include_router(router.router, prefix="/api/ont/signal-workbench")
@@ -417,6 +1664,9 @@ def test_router_openapi_closes_every_json_response_and_keeps_artifact_binary() -
         ("get", f"{root}/runs/{{run_id}}/generations/{{observed_generation}}/capabilities"): ("200", "WorkbenchCapabilitiesResponse"),
         ("get", f"{root}/runs/{{run_id}}/generations/{{observed_generation}}/move-sources"): ("200", "MoveSourceListResponse"),
         ("post", f"{root}/runs/{{run_id}}/generations/{{observed_generation}}/move-sources"): ("202", "MoveSourceResponse"),
+        ("get", f"{root}/external-move-bam-candidates"): ("200", "ExternalMoveBamCandidateListResponse"),
+        ("post", f"{root}/runs/{{run_id}}/generations/{{observed_generation}}/external-move-bam-candidates/register"): ("202", "MoveSourceResponse"),
+        ("post", f"{root}/move-sources/{{move_source_id}}/fresh-attempt"): ("202", "MoveSourceResponse"),
         ("get", f"{root}/mapping-profiles"): ("200", "MappingProfileListResponse"),
         ("post", f"{root}/mapping-profiles"): ("201", "MappingProfileResponse"),
         ("get", f"{root}/calibrations"): ("200", "CalibrationArtifactListResponse"),
@@ -458,6 +1708,7 @@ def test_router_openapi_closes_every_json_response_and_keeps_artifact_binary() -
         "MoveSourceResponse",
         "MoveSourceListResponse",
         "MoveTagCountsResponse",
+        "FreshMoveSourceAttemptCreate",
         "MappingProfileResponse",
         "MappingProfileListResponse",
         "CalibrationSampleSelectionResponse",
@@ -851,6 +2102,10 @@ async def test_leased_calibration_worker_recovers_cancels_and_publishes_only_onc
     workbench_store: WorkbenchStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv(
+        service.EXTERNAL_MOVE_BAM_ROOT_ENV,
+        str(workbench_store.root / "missing-optional-external-root"),
+    )
     worker = OntSignalWorker(workbench_store.factory, workbench_store.factory)
 
     async with workbench_store.factory() as session:
@@ -1432,6 +2687,468 @@ async def test_move_source_registration_is_nofollow_job_owned_and_external_recei
 
 
 @pytest.mark.asyncio
+async def test_external_move_bam_candidate_registration_is_path_opaque_durable_and_worker_revalidates_identity(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_root = workbench_store.root / "external-move-bams"
+    nested = external_root / "BFX6NB" / "bam"
+    nested.mkdir(parents=True)
+    bam = nested / "BFX6NB_1_JAN26-EL-Q2-01.bam"
+    bam_bytes = b"external-move-bam-with-mv-ts-ns"
+    bam.write_bytes(bam_bytes)
+    escaped = workbench_store.root / "escaped.bam"
+    escaped.write_bytes(b"escaped")
+    (external_root / "escaped-link.bam").symlink_to(escaped)
+    (external_root / "not-a-supported-candidate.ubam").write_bytes(b"ubam")
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(external_root))
+    _configure_external_move_bam_candidate_key(workbench_store.root, monkeypatch)
+    event_loop_thread = threading.get_ident()
+    sealing_threads: list[int] = []
+    original_seal = service._seal_external_move_bam_candidate
+
+    def observed_seal(candidate_id: str) -> dict[str, Any]:
+        sealing_threads.append(threading.get_ident())
+        return original_seal(candidate_id)
+
+    monkeypatch.setattr(service, "_seal_external_move_bam_candidate", observed_seal)
+
+    app = _api(workbench_store.factory)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        with monkeypatch.context() as listing_patch:
+            listing_patch.setattr(
+                service,
+                "_stable_descriptor_identity",
+                lambda _descriptor: (_ for _ in ()).throw(
+                    AssertionError("candidate listing must not hash BAM bytes")
+                ),
+            )
+            listed = await client.get(
+                "/api/ont/signal-workbench/external-move-bam-candidates"
+            )
+        assert listed.status_code == 200
+        candidates = listed.json()["items"]
+        assert len(candidates) == 1
+        candidate = candidates[0]
+        assert candidate == {
+            "candidate_id": candidate["candidate_id"],
+            "display_name": bam.name,
+            "size_bytes": len(bam_bytes),
+            "modified_at_ns": bam.stat().st_mtime_ns,
+        }
+        assert re.fullmatch(r"[0-9a-f]{64}", candidate["candidate_id"])
+        assert all("path" not in key and "root" not in key for key in candidate)
+
+        registered = await client.post(
+            "/api/ont/signal-workbench/runs/run-1/generations/1/external-move-bam-candidates/register",
+            json={
+                "candidate_id": candidate["candidate_id"],
+                "raw_representation_id": "raw-blow5-1",
+                "molecule_type": "dna",
+            },
+        )
+        assert registered.status_code == 202, registered.text
+        assert sealing_threads and sealing_threads[0] != event_loop_thread
+        source_payload = registered.json()
+        assert source_payload["source_job_id"] is None
+        assert OPAQUE_ID.fullmatch(source_payload["external_registration_receipt_id"])
+        assert source_payload["source_runtime_identity"] == {
+            "schema": "bms.ont-move-source-producer-runtime.v1",
+            "authority_state": "legacy_unknown",
+            "source_job_id": None,
+            "source_bam_sha256": hashlib.sha256(bam_bytes).hexdigest(),
+            "reason_code": "producer_runtime_provenance_unavailable",
+            "requires_independent_move_validation": True,
+        }
+        assert not any("path" in key or "root" in key for key in source_payload)
+
+    receipt_type = getattr(database_models, "OntExternalMoveBamRegistrationReceipt")
+    async with workbench_store.factory() as session:
+        receipt = await session.get(
+            receipt_type, source_payload["external_registration_receipt_id"]
+        )
+        assert receipt is not None
+        assert receipt.server_relative_path == "BFX6NB/bam/BFX6NB_1_JAN26-EL-Q2-01.bam"
+        assert receipt.run_id == "run-1"
+        assert receipt.observed_generation == 1
+        assert receipt.raw_representation_id == "raw-blow5-1"
+        assert receipt.artifact_sha256 == hashlib.sha256(bam_bytes).hexdigest()
+        assert receipt.artifact_size_bytes == len(bam_bytes)
+        root_info = external_root.stat()
+        registered_info = bam.stat()
+        assert (receipt.root_device, receipt.root_inode) == (root_info.st_dev, root_info.st_ino)
+        assert (
+            receipt.file_device,
+            receipt.file_inode,
+            receipt.file_mtime_ns,
+            receipt.file_ctime_ns,
+        ) == (
+            registered_info.st_dev,
+            registered_info.st_ino,
+            registered_info.st_mtime_ns,
+            registered_info.st_ctime_ns,
+        )
+        assert await session.scalar(select(func.count(Job.id))) == 1
+        tracked = await session.get(InputFile, source_payload["artifact_id"])
+        assert tracked is not None
+        assert tracked.directory == ""
+        assert str(external_root) not in tracked.filename
+
+    retired_root = workbench_store.root / "retired-external-move-bams"
+    replacement_root = workbench_store.root / "replacement-external-move-bams"
+    replacement_bam = replacement_root / "BFX6NB" / "bam" / bam.name
+    replacement_bam.parent.mkdir(parents=True)
+    replacement_bam.write_bytes(bam_bytes)
+    os.replace(external_root, retired_root)
+    os.replace(replacement_root, external_root)
+    worker = OntSignalWorker(workbench_store.factory, workbench_store.factory)
+    claimed = await worker._claim(OntMoveTableSource, "validation_state")
+    assert claimed is not None
+    invoked = False
+
+    async def forbidden_invoke(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal invoked
+        invoked = True
+        raise AssertionError("runtime must not run after external receipt identity divergence")
+
+    monkeypatch.setattr(worker, "_invoke", forbidden_invoke)
+    with pytest.raises(RuntimeError, match="external move BAM identity diverged"):
+        await worker._process_move(*claimed)
+    assert invoked is False
+
+
+@pytest.mark.asyncio
+async def test_external_move_bam_replay_uses_retained_authority_before_current_sources(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_root = workbench_store.root / "durable-replay-external-root"
+    external_root.mkdir()
+    bam = external_root / "durable-replay.bam"
+    bam.write_bytes(b"durable-replay-move-bam")
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(external_root))
+    key_file = _configure_external_move_bam_candidate_key(workbench_store.root, monkeypatch)
+    app = _api(workbench_store.factory)
+    route = "/api/ont/signal-workbench/runs/run-1/generations/1/external-move-bam-candidates/register"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        catalog = await client.get(
+            "/api/ont/signal-workbench/external-move-bam-candidates"
+        )
+        candidate_id = catalog.json()["items"][0]["candidate_id"]
+        request = {
+            "candidate_id": candidate_id,
+            "raw_representation_id": "raw-blow5-1",
+            "molecule_type": "dna",
+        }
+        created = await client.post(route, json=request)
+        assert created.status_code == 202, created.text
+
+        async with workbench_store.factory() as session:
+            representation = await session.get(
+                OntRawSignalRepresentation, "raw-blow5-1"
+            )
+            assert representation is not None
+            representation.state = "unavailable"
+            representation.reason_code = "current_raw_context_retired"
+            representation.validation_receipts = {}
+            await session.commit()
+
+        retired_root = workbench_store.root / "durable-replay-retired-root"
+        os.replace(external_root, retired_root)
+        key_file.unlink()
+        monkeypatch.delenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV)
+        monkeypatch.delenv(service.EXTERNAL_MOVE_BAM_CANDIDATE_KEY_FILE_ENV)
+
+        replayed = await client.post(route, json=request)
+        mismatched = await client.post(
+            route,
+            json={**request, "molecule_type": "rna"},
+        )
+
+    assert replayed.status_code == 202, replayed.text
+    assert replayed.json() == created.json()
+    assert mismatched.status_code == 409
+    assert mismatched.json() == {"detail": "ready indexed BLOW5 authority is required"}
+
+    receipt_type = getattr(database_models, "OntExternalMoveBamRegistrationReceipt")
+    async with workbench_store.factory() as session:
+        assert await session.scalar(select(func.count()).select_from(receipt_type)) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(OntMoveTableSource).where(
+                OntMoveTableSource.external_registration_receipt_id.is_not(None)
+            )
+        ) == 1
+
+
+def test_worker_governed_roots_include_raw_signal_publication_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging_root = tmp_path / "ont-raw"
+    publication_root = tmp_path / "ont-raw-signal"
+    staging_root.mkdir()
+    publication_root.mkdir()
+    monkeypatch.setenv(worker_service.ont_raw_signal.BLOW5_STAGING_ROOT_ENV, str(staging_root))
+
+    roots = OntSignalWorker._governed_parent_roots()
+
+    assert publication_root in roots
+
+
+@pytest.mark.asyncio
+async def test_worker_pins_external_move_bam_beneath_same_validated_root_generation(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_root = workbench_store.root / "worker-root-generation"
+    nested = external_root / "nested"
+    nested.mkdir(parents=True)
+    original_bytes = b"original-root-generation"
+    (nested / "moves.bam").write_bytes(original_bytes)
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(external_root))
+    _configure_external_move_bam_candidate_key(workbench_store.root, monkeypatch)
+    candidate_id = service.list_external_move_bam_candidates()[0]["candidate_id"]
+
+    async with workbench_store.factory() as session:
+        async with session.begin():
+            created = await service.register_external_move_bam_candidate(
+                session,
+                run_id="run-1",
+                observed_generation=1,
+                raw_representation_id="raw-blow5-1",
+                candidate_id=candidate_id,
+                molecule_type="dna",
+            )
+
+    worker = OntSignalWorker(workbench_store.factory, workbench_store.factory)
+    async with workbench_store.factory() as session:
+        source = await session.get(OntMoveTableSource, created["move_source_id"])
+        assert source is not None
+        authority = await worker._resolve_move_bam_authority(session, source)
+
+    retired_root = workbench_store.root / "worker-root-generation-retired"
+    replacement_root = workbench_store.root / "worker-root-generation-replacement"
+    replacement_nested = replacement_root / "nested"
+    replacement_nested.mkdir(parents=True)
+    (replacement_nested / "moves.bam").write_bytes(b"swapped-root-generation")
+    os.replace(external_root, retired_root)
+    os.replace(replacement_root, external_root)
+
+    with RetainedParentSet(worker._governed_parent_roots()) as parents:
+        retained = await worker._pin_move_bam_authority(
+            parents,
+            authority,
+            alias="moves.bam",
+            expected_sha256=created["artifact_sha256"],
+            expected_size=created["artifact_size_bytes"],
+        )
+        assert retained.sha256 == hashlib.sha256(original_bytes).hexdigest()
+        assert os.pread(retained.fd, len(original_bytes), 0) == original_bytes
+
+
+def test_external_move_bam_seal_closes_both_descriptors_on_prebind_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_root = tmp_path / "seal-error-root"
+    external_root.mkdir()
+    (external_root / "seal-error.bam").write_bytes(b"seal-error")
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(external_root))
+    _configure_external_move_bam_candidate_key(tmp_path, monkeypatch)
+    candidate_id = service.list_external_move_bam_candidates()[0]["candidate_id"]
+    captured: list[int] = []
+    original_open = service._open_external_move_bam_candidate
+
+    def observed_open(*args: Any, **kwargs: Any) -> Any:
+        result = original_open(*args, **kwargs)
+        captured.extend(value for value in result[:2] if isinstance(value, int))
+        return result
+
+    monkeypatch.setattr(service, "_open_external_move_bam_candidate", observed_open)
+    monkeypatch.setattr(
+        service,
+        "_stable_descriptor_identity",
+        lambda _descriptor: (_ for _ in ()).throw(RuntimeError("hash failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="hash failed"):
+        service._seal_external_move_bam_candidate(candidate_id)
+
+    assert len(captured) == 2
+    for descriptor in captured:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+@pytest.mark.asyncio
+async def test_external_move_bam_registration_holds_descriptors_through_outer_commit_and_savepoint(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_root = workbench_store.root / "descriptor-commit-root"
+    external_root.mkdir()
+    (external_root / "descriptor-commit.bam").write_bytes(b"descriptor-commit")
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(external_root))
+    _configure_external_move_bam_candidate_key(workbench_store.root, monkeypatch)
+    candidate_id = service.list_external_move_bam_candidates()[0]["candidate_id"]
+    captured: list[int] = []
+    original_seal = service._seal_external_move_bam_candidate
+
+    def observed_seal(selected_candidate_id: str) -> Any:
+        sealed, retained = cast(
+            tuple[dict[str, Any], list[int]],
+            original_seal(selected_candidate_id),
+        )
+        captured.extend(retained)
+        return sealed, retained
+
+    monkeypatch.setattr(service, "_seal_external_move_bam_candidate", observed_seal)
+    async with workbench_store.factory() as session:
+        async with session.begin():
+            await service.register_external_move_bam_candidate(
+                session,
+                run_id="run-1",
+                observed_generation=1,
+                raw_representation_id="raw-blow5-1",
+                candidate_id=candidate_id,
+                molecule_type="dna",
+            )
+            assert len(captured) == 2
+            async with session.begin_nested():
+                for descriptor in captured:
+                    os.fstat(descriptor)
+            for descriptor in captured:
+                os.fstat(descriptor)
+        for descriptor in captured:
+            with pytest.raises(OSError):
+                os.fstat(descriptor)
+
+
+@pytest.mark.asyncio
+async def test_external_move_bam_registration_closes_descriptors_after_outer_rollback(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_root = workbench_store.root / "descriptor-rollback-root"
+    external_root.mkdir()
+    (external_root / "descriptor-rollback.bam").write_bytes(b"descriptor-rollback")
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(external_root))
+    _configure_external_move_bam_candidate_key(workbench_store.root, monkeypatch)
+    candidate_id = service.list_external_move_bam_candidates()[0]["candidate_id"]
+    captured: list[int] = []
+    original_seal = service._seal_external_move_bam_candidate
+
+    def observed_seal(selected_candidate_id: str) -> Any:
+        sealed, retained = cast(
+            tuple[dict[str, Any], list[int]],
+            original_seal(selected_candidate_id),
+        )
+        captured.extend(retained)
+        return sealed, retained
+
+    monkeypatch.setattr(service, "_seal_external_move_bam_candidate", observed_seal)
+    async with workbench_store.factory() as session:
+        with pytest.raises(RuntimeError, match="force outer rollback"):
+            async with session.begin():
+                await service.register_external_move_bam_candidate(
+                    session,
+                    run_id="run-1",
+                    observed_generation=1,
+                    raw_representation_id="raw-blow5-1",
+                    candidate_id=candidate_id,
+                    molecule_type="dna",
+                )
+                assert len(captured) == 2
+                raise RuntimeError("force outer rollback")
+        for descriptor in captured:
+            with pytest.raises(OSError):
+                os.fstat(descriptor)
+
+
+@pytest.mark.asyncio
+async def test_external_move_bam_registration_cancellation_waits_for_seal_and_closes_handoff(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_root = workbench_store.root / "descriptor-cancel-root"
+    external_root.mkdir()
+    (external_root / "descriptor-cancel.bam").write_bytes(b"descriptor-cancel")
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(external_root))
+    _configure_external_move_bam_candidate_key(workbench_store.root, monkeypatch)
+    candidate_id = service.list_external_move_bam_candidates()[0]["candidate_id"]
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    returned_descriptors: list[int] = []
+
+    def blocked_seal(_candidate_id: str) -> tuple[dict[str, Any], list[int]]:
+        entered.set()
+        release.wait(timeout=5)
+        returned_descriptors.extend(os.pipe())
+        finished.set()
+        return {}, list(returned_descriptors)
+
+    monkeypatch.setattr(service, "_seal_external_move_bam_candidate", blocked_seal)
+    async with workbench_store.factory() as session:
+        task = asyncio.create_task(
+            service.register_external_move_bam_candidate(
+                session,
+                run_id="run-1",
+                observed_generation=1,
+                raw_representation_id="raw-blow5-1",
+                candidate_id=candidate_id,
+                molecule_type="dna",
+            )
+        )
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        completed_before_release = task.done()
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 5)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert completed_before_release is False
+    assert len(returned_descriptors) == 2
+    for descriptor in returned_descriptors:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+@pytest.mark.asyncio
+async def test_external_move_bam_router_rolls_back_unexpected_registration_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingSession:
+        rollback_calls = 0
+
+        async def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    async def fail_registration(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("unexpected registration failure")
+
+    session = FailingSession()
+    monkeypatch.setattr(service, "register_external_move_bam_candidate", fail_registration)
+    request = router.ExternalMoveBamRegistrationCreate(
+        candidate_id="d" * 64,
+        raw_representation_id="raw-blow5-1",
+        molecule_type="dna",
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected registration failure"):
+        await router.register_external_move_bam_candidate(
+            "run-1",
+            1,
+            request,
+            cast(AsyncSession, session),
+        )
+    assert session.rollback_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_equivalent_move_source_registration_race_returns_winner_and_unrelated_integrity_raises(
     workbench_store: WorkbenchStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -1542,6 +3259,85 @@ async def test_equivalent_move_source_registration_race_returns_winner_and_unrel
                 external_registration_receipt_id=None,
                 source_runtime_identity=None,
             )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_exact_external_move_bam_registrations_replay_one_winner(
+    workbench_store: WorkbenchStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_root = workbench_store.root / "external-registration-race"
+    external_root.mkdir()
+    bam = external_root / "race.bam"
+    bam.write_bytes(b"external-registration-race")
+    monkeypatch.setenv(service.EXTERNAL_MOVE_BAM_ROOT_ENV, str(external_root))
+    _configure_external_move_bam_candidate_key(workbench_store.root, monkeypatch)
+    async with workbench_store.factory() as session:
+        assert await session.scalar(text("PRAGMA journal_mode=WAL")) == "wal"
+        await session.commit()
+    candidate_id = service.list_external_move_bam_candidates()[0]["candidate_id"]
+    barrier = threading.Barrier(2)
+    seal_count = 0
+    seal_lock = threading.Lock()
+    original_seal = service._seal_external_move_bam_candidate
+
+    def synchronized_seal(selected_candidate_id: str) -> tuple[dict[str, Any], list[int]]:
+        nonlocal seal_count
+        result = original_seal(selected_candidate_id)
+        with seal_lock:
+            seal_count += 1
+            should_wait = seal_count <= 2
+        if should_wait:
+            barrier.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(service, "_seal_external_move_bam_candidate", synchronized_seal)
+    connection_ids: set[int] = set()
+
+    async def contender() -> dict[str, Any]:
+        async with workbench_store.factory() as session:
+            connection = await session.connection()
+            connection_ids.add(id(connection.sync_connection.connection.dbapi_connection))
+            await session.execute(text("BEGIN"))
+            result = await service.register_external_move_bam_candidate(
+                session,
+                run_id="run-1",
+                observed_generation=1,
+                raw_representation_id="raw-blow5-1",
+                candidate_id=candidate_id,
+                molecule_type="dna",
+            )
+            await session.commit()
+            return result
+
+    winners = await asyncio.gather(contender(), contender())
+    assert len(connection_ids) == 2
+    assert winners[0] == winners[1]
+    receipt_type = getattr(database_models, "OntExternalMoveBamRegistrationReceipt")
+    async with workbench_store.factory() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(InputFile).where(
+                InputFile.id == winners[0]["artifact_id"]
+            )
+        ) == 1
+        assert await session.scalar(select(func.count()).select_from(receipt_type)) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(OntMoveTableSource).where(
+                OntMoveTableSource.artifact_sha256 == winners[0]["artifact_sha256"]
+            )
+        ) == 1
+
+    async with workbench_store.factory() as session:
+        with pytest.raises(service.OntSignalError, match="replay authority diverged"):
+            async with session.begin():
+                await service.register_external_move_bam_candidate(
+                    session,
+                    run_id="run-1",
+                    observed_generation=1,
+                    raw_representation_id="raw-blow5-1",
+                    candidate_id=candidate_id,
+                    molecule_type="rna",
+                )
 
 
 @pytest.mark.asyncio
@@ -1811,6 +3607,7 @@ async def test_move_source_runtime_failures_are_boundedly_rerequested_before_ter
         source.reason_code = "worker_claimed"
         source.claim_token = "move-attempt-1"
         source.lease_expires_at = datetime.utcnow() + timedelta(minutes=5)
+        source.validated_at = None
         source.validation_receipt = {
             "raw_manifest_sha256": "a" * 64,
             "retry": {"max_attempts": 3, "failures": []},
@@ -1857,6 +3654,7 @@ async def test_move_source_runtime_failures_are_boundedly_rerequested_before_ter
         assert source.validation_state == "failed"
         assert source.reason_code == "runtime_validation_failed_retry_exhausted"
         assert len(source.validation_receipt["retry"]["failures"]) == 3
+        assert source.validated_at is not None
 
 
 def _assert_public_value_has_no_paths(value: Any) -> None:
@@ -2988,7 +4786,7 @@ async def test_move_source_publication_fence_retains_registration_authority(
             raw_representation_id="raw-blow5-1",
             input_file_id="move-input-1",
             source_job_id="source-job-original",
-            external_registration_receipt_id="receipt-original",
+            external_registration_receipt_id=None,
             artifact_sha256="7" * 64,
             artifact_size_bytes=10,
             molecule_type="dna",

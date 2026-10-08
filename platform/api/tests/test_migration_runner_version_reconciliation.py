@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import create_engine
 
+from database import Base
 from migrations import runner
 
 from migrations.runner import (
@@ -41,6 +46,15 @@ def test_migration_versions_are_unique_with_md_before_ont() -> None:
         (23, "add_frustrampnn_persistence"),
         (24, "add_ngs_reference_sets"),
         (25, "add_pooled_ont_reference_assignment"),
+        (26, "add_frustrampnn_statistics"),
+        (27, "add_frustrampnn_reviews"),
+        (28, "add_ont_raw_signal_ledger"),
+        (29, "add_ont_external_registration_identity"),
+        (30, "enforce_ont_external_registration_immutability"),
+        (31, "seal_ont_external_source_identity"),
+        (32, "add_ont_signal_workbench"),
+        (33, "add_ont_external_move_bam_receipts"),
+        (34, "add_ont_move_source_attempt_lineage"),
     ]
     assert len({migration.version for migration in MIGRATIONS}) == len(MIGRATIONS)
 
@@ -82,6 +96,9 @@ def test_full_runner_upgrades_complete_legacy_ont_history_to_canonical_v21(tmp_p
     assert connection.execute(
         "SELECT version, name FROM schema_migrations ORDER BY version"
     ).fetchall() == [(migration.version, migration.name) for migration in migrations_through_v21]
+    assert connection.execute(
+        "SELECT DISTINCT content_sha256 FROM schema_migrations ORDER BY content_sha256"
+    ).fetchall() == [(None,)]
     assert connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'md_runs'"
     ).fetchone() == (1,)
@@ -144,6 +161,39 @@ def test_runner_fails_closed_when_applied_version_has_wrong_name(tmp_path) -> No
 
     with pytest.raises(RuntimeError, match="version 18.*unrelated_migration.*add_ont_instrument_run_ledger"):
         runner.run_all(str(db_path))
+
+
+def test_runner_attests_migration_module_bytes_captured_before_execution(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = tmp_path / "pre-execution-attestation.db"
+    module_path = tmp_path / "mutable_migration.py"
+    original_bytes = b"MIGRATION_CONTENT = 'reviewed'\n"
+    changed_bytes = b"MIGRATION_CONTENT = 'mutated-during-execution'\n"
+    module_path.write_bytes(original_bytes)
+
+    def mutating_migration(db_path: str) -> None:
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("CREATE TABLE migration_side_effect (id INTEGER PRIMARY KEY)")
+        module_path.write_bytes(changed_bytes)
+
+    migration = runner.Migration(1, "mutating_migration", mutating_migration)
+    monkeypatch.setattr(runner, "MIGRATIONS", [migration])
+    monkeypatch.setattr(
+        runner,
+        "getmodule",
+        lambda fn: SimpleNamespace(__file__=str(module_path)) if fn is mutating_migration else None,
+    )
+
+    runner.run_all(str(db_path))
+
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT content_sha256 FROM schema_migrations WHERE version = 1"
+        ).fetchone() == (hashlib.sha256(original_bytes).hexdigest(),)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='migration_side_effect'"
+        ).fetchone() == ("migration_side_effect",)
 
 
 @pytest.mark.parametrize(
@@ -239,3 +289,138 @@ def test_v21_shape_schema_is_rebuilt_for_provenance_distinct_canonical_geometry(
         "SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1"
     ).fetchone() == (22, "relax_shape_geometry_hash_uniqueness")
     connection.close()
+
+
+@pytest.fixture(scope="module")
+def exact_v33_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    database = tmp_path_factory.mktemp("migration-v33") / "exact-v33.db"
+    engine = create_engine(f"sqlite:///{database}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute("DROP TABLE ont_move_table_sources")
+        connection.execute("DROP TABLE ont_external_move_bam_registration_receipts")
+        connection.commit()
+    runner._run_migration(MIGRATIONS[31], str(database))
+    runner._run_migration(MIGRATIONS[32], str(database))
+    with sqlite3.connect(database) as connection:
+        _ensure_migrations_table(connection)
+        connection.executemany(
+            """
+            INSERT INTO schema_migrations(version, name, applied_at, content_sha256)
+            VALUES (?, ?, 'live-shaped-v33', ?)
+            """,
+            (
+                (
+                    migration.version,
+                    migration.name,
+                    None
+                    if migration.version == 33
+                    else runner._migration_content_sha256(migration),
+                )
+                for migration in MIGRATIONS
+                if migration.version <= 33
+            ),
+        )
+    return database
+
+
+def _copy_database(source: Path, destination: Path) -> None:
+    with sqlite3.connect(source) as source_connection, sqlite3.connect(destination) as destination_connection:
+        source_connection.backup(destination_connection)
+
+
+def test_runner_truthfully_transitions_exact_null_v33_before_v34(
+    exact_v33_database: Path,
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "upgrade.db"
+    _copy_database(exact_v33_database, database)
+
+    runner.run_all(str(database))
+
+    expected = {
+        migration.version: runner._migration_content_sha256(migration)
+        for migration in MIGRATIONS
+        if migration.version in {33, 34}
+    }
+    with sqlite3.connect(database) as connection:
+        assert dict(
+            connection.execute(
+                "SELECT version, content_sha256 FROM schema_migrations WHERE version IN (33, 34)"
+            )
+        ) == expected
+        assert connection.execute(
+            "SELECT name FROM schema_migrations WHERE version=33"
+        ).fetchone() == ("add_ont_external_move_bam_receipts",)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("wrong_name", "missing_trigger", "tampered_trigger", "tampered_schema"),
+)
+def test_runner_rejects_null_v33_without_exact_name_schema_and_triggers(
+    exact_v33_database: Path,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    database = tmp_path / f"{mutation}.db"
+    _copy_database(exact_v33_database, database)
+    with sqlite3.connect(database) as connection:
+        if mutation == "wrong_name":
+            connection.execute(
+                "UPDATE schema_migrations SET name='wrong_v33_name' WHERE version=33"
+            )
+        elif mutation == "missing_trigger":
+            connection.execute(
+                "DROP TRIGGER trg_ont_external_move_bam_receipt_no_update"
+            )
+        elif mutation == "tampered_trigger":
+            connection.execute(
+                "DROP TRIGGER trg_ont_external_move_bam_receipt_no_update"
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER trg_ont_external_move_bam_receipt_no_update
+                BEFORE UPDATE ON ont_external_move_bam_registration_receipts
+                BEGIN SELECT RAISE(ABORT, 'tampered authority'); END
+                """
+            )
+        else:
+            connection.execute(
+                "ALTER TABLE ont_external_move_bam_registration_receipts ADD COLUMN tampered TEXT"
+            )
+
+    with pytest.raises(RuntimeError):
+        runner.run_all(str(database))
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT content_sha256 FROM schema_migrations WHERE version=33"
+        ).fetchone() == (None,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version=34"
+        ).fetchone() == (0,)
+
+
+def test_runner_still_rejects_divergent_non_null_v33_checksum(
+    exact_v33_database: Path,
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "divergent-v33.db"
+    _copy_database(exact_v33_database, database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE schema_migrations SET content_sha256=? WHERE version=33",
+            ("0" * 64,),
+        )
+
+    with pytest.raises(RuntimeError, match="content changed after application for version 33"):
+        runner.run_all(str(database))
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT content_sha256 FROM schema_migrations WHERE version=33"
+        ).fetchone() == ("0" * 64,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version=34"
+        ).fetchone() == (0,)
