@@ -98,18 +98,23 @@ def receipt_bindings(receipt):
 
 def _rows(plan):
     return [{'model_id': p['model_id'], 'status': 'blocked' if p['blockers'] else 'planned',
-             'qualification': 'not-qualified', 'blockers': list(p['blockers'])}
+             'qualification': 'not-qualified', 'bytes_materialized': False,
+             'scientifically_qualified': False, 'registered': False, 'blockers': list(p['blockers'])}
             for p in plan['models']]
 
 
 def provision_report(action, *, project_root, models=(), expected_plan_digest=None,
-                     operation_id=None, accepted_licenses=()):
+                     operation_id=None, accepted_licenses=(), runtime_attestation=None):
     report = {'schema_version': 'bms.provision.v1', 'action': action, 'status': 'blocked',
-              'ready': False, 'qualification': 'not-qualified', 'registered': False,
+              'ready': False, 'qualification': 'not-qualified', 'scientifically_qualified': False, 'registered': False,
               'models': [], 'blockers': []}
     try:
-        if action not in {'provision-plan', 'provision', 'resume'}:
+        if action not in {'provision-plan', 'provision', 'resume', 'verify'}:
             raise ProvisionBlocked('unsupported provision action')
+        if runtime_attestation is not None and (action != 'verify' or list(models) != ['protenix']):
+            raise ProvisionBlocked('attestation requires verify for exactly protenix')
+        if action == 'verify' and accepted_licenses:
+            raise ProvisionBlocked('verify cannot accept licenses')
         if not models:
             raise ProvisionBlocked('model_selection_required: repeat --model MODEL')
         if action == 'provision-plan':
@@ -130,7 +135,7 @@ def provision_report(action, *, project_root, models=(), expected_plan_digest=No
             authority = _authority(project_root)
             from lib.shared_runtime_images import _file
             journal_path = profiles.get_biomodstack_config_dir() / 'provision-v1' / operation_id / 'journal.json'
-            if action == 'resume':
+            if action in {'resume', 'verify'}:
                 try:
                     with _file(journal_path) as (fd, _, info):
                         if info.st_nlink != 1:
@@ -138,7 +143,7 @@ def provision_report(action, *, project_root, models=(), expected_plan_digest=No
                         with os.fdopen(os.dup(fd)) as stream:
                             journal = json.load(stream)
                 except FileNotFoundError:
-                    raise ProvisionBlocked('operation_not_found: resume requires an existing journal') from None
+                    raise ProvisionBlocked('operation_not_found: resume/verify requires an existing journal') from None
                 if not isinstance(journal, dict):
                     raise ProvisionBlocked('invalid_provision_journal')
                 if (journal.get('schema_version') != 'bms.provision-journal.v1'
@@ -166,30 +171,68 @@ def provision_report(action, *, project_root, models=(), expected_plan_digest=No
                            'recorded_at': datetime.now(timezone.utc).isoformat()},
                            'models': report['models'], 'events': []}
                 _write(journal_path, json.dumps(journal, sort_keys=True))
-            # Rebuild results on EVERY resume. Never return prior success without rehashing.
-            for row, model_plan in zip(report['models'], plan['models']):
-                missing = sorted({e['manifest']['license_id'] for e in model_plan['artifacts']
-                                  if e['manifest']['kind'] == 'weights'} - set(licenses))
-                row['blockers'].extend({'code': 'license_acceptance_required', 'license_id': x} for x in missing)
-                if row['blockers']:
-                    row['status'] = 'blocked'
-                else:
-                    row['status'] = 'materializing'
-                    journal['models'] = report['models']
-                    journal['events'].append({'model_id': row['model_id'], 'status': 'materializing'})
-                    _write(journal_path, json.dumps(journal, sort_keys=True), replace=True)
+            if action == 'verify':
+                report['read_only'] = True  # apart from the existing configuration lock
+                report['journal_path'] = str(journal_path)
+                saved_rows = journal.get('models')
+                if (not isinstance(saved_rows, list) or any(not isinstance(r, dict) for r in saved_rows)
+                        or [r.get('model_id') for r in saved_rows] != plan['selected_models']):
+                    raise ProvisionBlocked('invalid_provision_model_receipts')
+                from services.runtime_qualification_handoff import check_evidence
+                for row, model_plan, saved in zip(report['models'], plan['models'], saved_rows):
+                    row.update(bytes_materialized=False, scientifically_qualified=False, registered=False)
+                    missing = sorted({e['manifest']['license_id'] for e in model_plan['artifacts']
+                                      if e['manifest']['kind'] == 'weights'} - set(licenses))
+                    row['blockers'].extend({'code': 'license_acceptance_required', 'license_id': x} for x in missing)
+                    if row['blockers']:
+                        row['status'] = 'blocked'
+                        continue
                     try:
-                        receipt = authority.acquire_model(row['model_id'], Path(plan['store_roots']['container_dir']),
+                        if saved.get('status') != 'bytes-materialized':
+                            raise ProvisionBlocked('provision_incomplete: resume provisioning explicitly')
+                        receipt = authority.revalidate_model_receipt(row['model_id'],
+                            Path(plan['store_roots']['container_dir']),
                             weights_root=Path(plan['store_roots']['weights_root']),
-                            expected_plan_digest=model_plan['plan_digest'], accepted_licenses=licenses)
-                        row.update(status='bytes-materialized', receipt=receipt, bindings=receipt_bindings(receipt))
-                    except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
-                        row.update(status='blocked', blockers=[{'code': 'materialization_failed', 'detail': str(exc)}])
-                journal['models'] = report['models']
-                journal['events'].append({'model_id': row['model_id'], 'status': row['status']})
-                _write(journal_path, json.dumps(journal, sort_keys=True), replace=True)
-            report['journal_path'] = str(journal_path)
-            report['status'] = 'bytes-materialized' if all(r['status'] == 'bytes-materialized' for r in report['models']) else 'blocked'
+                            expected_plan_digest=model_plan['plan_digest'], receipt=saved.get('receipt'))
+                        bindings = receipt_bindings(receipt)
+                        if saved.get('bindings') != bindings:
+                            raise ProvisionBlocked('provision binding path identity drift')
+                        evidence = check_evidence(row['model_id'], receipt, attestation_path=runtime_attestation)
+                        # Rehash after evidence validation too: no stale observation
+                        # may survive a mutation during the handoff.
+                        authority.revalidate_model_receipt(row['model_id'],
+                            Path(plan['store_roots']['container_dir']),
+                            weights_root=Path(plan['store_roots']['weights_root']),
+                            expected_plan_digest=model_plan['plan_digest'], receipt=receipt)
+                        row.update(evidence, bytes_materialized=True, receipt=receipt, bindings=bindings)
+                    except (RuntimeError, OSError, ValueError, TypeError, KeyError, ImportError) as exc:
+                        row.update(status='blocked', blockers=[{'code': 'provision_revalidation_failed', 'detail': str(exc)}])
+                report['status'] = 'validator-blocked' if all(r['bytes_materialized'] for r in report['models']) else 'blocked'
+            else:
+                # Rebuild results on EVERY resume. Never return prior success without rehashing.
+                for row, model_plan in zip(report['models'], plan['models']):
+                    missing = sorted({e['manifest']['license_id'] for e in model_plan['artifacts']
+                                      if e['manifest']['kind'] == 'weights'} - set(licenses))
+                    row['blockers'].extend({'code': 'license_acceptance_required', 'license_id': x} for x in missing)
+                    if row['blockers']:
+                        row['status'] = 'blocked'
+                    else:
+                        row['status'] = 'materializing'
+                        journal['models'] = report['models']
+                        journal['events'].append({'model_id': row['model_id'], 'status': 'materializing'})
+                        _write(journal_path, json.dumps(journal, sort_keys=True), replace=True)
+                        try:
+                            receipt = authority.acquire_model(row['model_id'], Path(plan['store_roots']['container_dir']),
+                                weights_root=Path(plan['store_roots']['weights_root']),
+                                expected_plan_digest=model_plan['plan_digest'], accepted_licenses=licenses)
+                            row.update(status='bytes-materialized', bytes_materialized=True, receipt=receipt, bindings=receipt_bindings(receipt))
+                        except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
+                            row.update(status='blocked', blockers=[{'code': 'materialization_failed', 'detail': str(exc)}])
+                    journal['models'] = report['models']
+                    journal['events'].append({'model_id': row['model_id'], 'status': row['status']})
+                    _write(journal_path, json.dumps(journal, sort_keys=True), replace=True)
+                report['journal_path'] = str(journal_path)
+                report['status'] = 'bytes-materialized' if all(r['status'] == 'bytes-materialized' for r in report['models']) else 'blocked'
     except (RuntimeError, OSError, ValueError, TypeError, KeyError, ImportError) as exc:
         report['status'] = 'blocked'
         report['blockers'].append({'code': 'provision_blocked', 'detail': str(exc)})

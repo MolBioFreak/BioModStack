@@ -18,9 +18,10 @@ from model_registry import RuntimeAcquisitionArtifact
 from lib import pinned_acquisition as acquisition, pinned_weight_layout as layout
 from services import runtime_acquisition as service
 
-original = model_registry.get_registry().get_model('esmfold2')
+model_id = fixture.get('model_id', 'esmfold2')
+original = model_registry.get_registry().get_model(model_id)
 isolated = original.model_copy(update={'acquisition': [RuntimeAcquisitionArtifact(**e) for e in fixture['entries']]})
-model_registry.get_registry = lambda: SimpleNamespace(get_model=lambda name: isolated if name == 'esmfold2' else None)
+model_registry.get_registry = lambda: SimpleNamespace(get_model=lambda name: isolated if name == model_id else None)
 validate = acquisition.Artifact.validate
 acquisition.Artifact.validate = lambda self, **kwargs: validate(self, test_only=True)
 acquire = acquisition.acquire
@@ -36,6 +37,10 @@ def fixture_materialize(*args, **kwargs):
 
 service.acquire = layout.acquire = fixture_acquire
 service.materialize_weights = fixture_materialize
+revalidate = service.revalidate_model_receipt
+def fixture_revalidate(*args, **kwargs):
+    return revalidate(*args, **kwargs, test_only=True)
+service.revalidate_model_receipt = fixture_revalidate
 args = sys.argv[2:]
 if args[0] == '-B':
     args.pop(0)

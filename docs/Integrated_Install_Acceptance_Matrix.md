@@ -42,7 +42,8 @@ explicitly not production release or qualification evidence.
 | Python/shell/desktop agree on original and release generations | COMPLETE | API reader/interleaving suites plus all 19 desktop shell-path tests pass on combined sources. No Electron UI launch or package build occurred. |
 | Real production acquisition from empty stores without workstation assets | BLOCKED | The actual production registry returns `approved_acquisition_metadata_missing`. Requires reviewed immutable SIFs and complete member-pinned weight manifests, direct delivery URLs, hashes/sizes, source approval and license identities. Fixtures cannot satisfy this. |
 | Cache-free, reproducible model runtime distribution | BLOCKED | ESMFold2 runtime definition still needs reviewed locked base/packages/tools and an approved build/provenance artifact. See `ESMFold2_Acquisition_Release_Gap.md`; an existing workstation SIF or upstream source pin is not a release. |
-| Provision receipts consumed by scientific runtime admission/registration | PARTIAL | Verified layout/path binding contract exists and survives the core-release switch. The core managed receipt is not a selected-model qualification/registration transaction. A supported integrated per-model qualification/admission handoff remains required; no fixture registration is created. |
+| Offline selected-model receipt → existing validator handoff | COMPLETE | `start_ui.sh verify` revalidates current authority, exact image/member bytes and path/filesystem identities before and after the existing Protenix attestation validator. Actual validator fixture pass/failure, identity drift and post-core-release verification are exercised. A valid test attestation remains validator-blocked for scientific qualification/registration; see `Selected_Model_Qualification_Handoff.md`. |
+| Provision receipts consumed by scientific runtime admission/registration | PARTIAL | Offline Protenix attestation-validation handoff now exists. Native scientific result acceptance, complete model-wide qualification and safe registration integration remain required. No new registry or fixture registration is created; core acceptance is separate. |
 | Exact model settings: UI/API parity, execution mapping, persistence and result experience | BLOCKED | Canonical policy requires all model-specific gates and live request-to-result evidence for the exact distributed bytes. This installation change neither implements missing model surfaces nor certifies existing ones. |
 | Host toolchain, GPU/driver compatibility, disk/mount capacity and real service readiness | PARTIAL | Existing validation authorities are retained, not bypassed in production. This task exercised no Docker/systemd/GPU activation, host-package install or physical storage-failure test. Empty HOME is not an empty OS. |
 | No home-directory tools or pre-existing dependencies for full installation | PARTIAL | Model fixture acquisition uses no pre-existing SIF/cache. Test execution still uses the machine's Python/Node/bash and an isolated API environment populated from cached locked packages. A clean-machine prerequisite/bootstrap acceptance is outstanding. |
@@ -73,14 +74,27 @@ explicitly not production release or qualification evidence.
 
 ## Remaining implementation/integration boundaries
 
-- A supported selected-model qualification/admission/registration handoff from
-  provision receipts is not supplied by the core release receipt transition.
+- The supported offline Protenix receipt-to-attestation validator handoff is
+  implemented; scientific native-result acceptance and model-wide qualification/
+  registration are not supplied by the core release receipt transition or verify.
+  See `Selected_Model_Qualification_Handoff.md` for exact authorities and blockers.
 - Existing-install migration, general managed upgrades and automatic corrupt-state
   reconciliation are intentionally unsupported, not merely waiting for URLs.
 - Ingress intent is not enforcement. Full clean-host prerequisite provisioning,
   hardware/capacity validation and deployment acceptance are separate work.
 - Model/operator/agent parity and broader provider/worker lifecycle gaps must be
   assessed and closed by their owning integrations, not averaged into this result.
+
+## Follow-on offline model handoff validation
+
+The selected-model handoff delta reproduces **131 root tests passed** (the five
+root suites below plus `tests/test_model_qualification_handoff.py`) and **81 API
+tests passed** (`test_protenix_runtime_attestation.py`, `test_runtime_acquisition.py`,
+`test_runtime_member_layout.py`, `test_bootstrap_cli.py`,
+`test_bootstrap_review_regressions.py`, `test_bootstrap_unified.py`). This accepts
+offline handoff control flow only; production artifact and scientific gates remain
+blocked. The following historical combined-candidate evidence is retained, not
+claimed as a full rerun of every subsystem after the handoff delta.
 
 ## Validation evidence for this combined candidate
 

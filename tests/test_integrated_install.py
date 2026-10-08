@@ -51,6 +51,7 @@ def accept(backend, monkeypatch, root):
     assert json.loads((backend.state_dir / 'known-good.json').read_text())['configuration_generation_id'] == tx.configuration_identity()
 
 
+@pytest.mark.parametrize('cli', ['esmfold2', 'protenix'], indirect=True)
 def test_configure_provision_resume_release_revalidate(cli, monkeypatch):
     run, handler, root, env, fixture = cli
     backend = configure(cli, monkeypatch)
@@ -62,11 +63,13 @@ def test_configure_provision_resume_release_revalidate(cli, monkeypatch):
     assert code == 0, result
     bindings = result['models'][0]['bindings']
     weight = next(b for b in bindings if b['dependency']['kind'] == 'weights')
-    assert (Path(weight['path']) / 'nested/model.bin').read_bytes() == handler.payload
+    member = json.loads(fixture.read_text())['entries'][1]['member_path']
+    assert (Path(weight['path']) / member).read_bytes() == handler.payload
     accept(backend, monkeypatch, root)
     tx.assert_configuration_readable()
     count = len(handler.requests)
     assert 'stale_plan' in str(run('resume', *args)[1])
+    assert 'stale_plan' in str(run('verify', *args)[1])
     fresh = identity(run)
     assert fresh[1] != args[1]
     assert 'journal_plan_mismatch' in str(run('resume', *fresh)[1])
@@ -77,6 +80,14 @@ def test_configure_provision_resume_release_revalidate(cli, monkeypatch):
     assert len(handler.requests) == count
     assert not report['ready'] and not report['registered']
     assert report['qualification'] == 'not-qualified'
+    core_receipt = (backend.state_dir / 'known-good.json').read_bytes()
+    code, verified = run('verify', *fresh)
+    assert code == 3 and verified['status'] == 'validator-blocked', verified
+    assert verified['models'][0]['bytes_materialized']
+    assert verified['models'][0]['bindings'] == bindings
+    assert not verified['models'][0]['scientifically_qualified'] and not verified['registered']
+    assert (backend.state_dir / 'known-good.json').read_bytes() == core_receipt
+    assert len(handler.requests) == count
     assert 'approved_acquisition_metadata_missing' in str(run('provision-plan', production=True)[1])
     active = tx.transaction_dir() / tx.configuration_identity() / 'core_runtime_env'
     active.write_text(active.read_text().replace('combined-fixture', 'tampered-fixture'))

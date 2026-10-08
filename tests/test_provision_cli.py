@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def cli(tmp_path):
+def cli(tmp_path, request):
+    model_id = getattr(request, "param", "esmfold2")
     class Handler(BaseHTTPRequestHandler):
         failed = False
         requests = []
@@ -45,14 +46,15 @@ def cli(tmp_path):
             del env[key]
     authority = f'127.0.0.1:{server.server_port}'
     entries = []
-    for kind, path, member in [('image', 'esmfold2.sif', None), ('weights', 'esmfold2', 'nested/model.bin')]:
+    for kind, path, member in [('image', f'{model_id}.sif', None), ('weights', model_id,
+                               'checkpoint/protenix-v2.pt' if model_id == 'protenix' else 'nested/model.bin')]:
         entries.append({'artifact_id': f'fixture-{kind}', 'dependency': {'kind': kind, 'relative_path': path},
                         'url': f'http://{authority}/' + ('image' if kind == 'image' else 'member'),
                         'sha256': hashlib.sha256(Handler.payload).hexdigest(), 'size_bytes': len(Handler.payload),
                         'source_authority': authority, 'approval_ref': 'TEST-ONLY-NOT-APPROVAL',
                         'license_id': 'TEST-LICENSE' if member else None, 'member_path': member})
     fixture = tmp_path / 'fixture.json'
-    fixture.write_text(json.dumps({'entries': entries}))
+    fixture.write_text(json.dumps({'entries': entries, 'model_id': model_id}))
     bindir = tmp_path / 'bin'
     bindir.mkdir()
     python = bindir / 'python3'
@@ -63,7 +65,7 @@ def cli(tmp_path):
         selected_env = dict(env)
         if production:
             selected_env['PATH'] = str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH']
-        result = subprocess.run(['bash', str(ROOT / 'start_ui.sh'), action, '--json', '--model', 'esmfold2', *args],
+        result = subprocess.run(['bash', str(ROOT / 'start_ui.sh'), action, '--json', '--model', model_id, *args],
                                 env=selected_env, text=True, capture_output=True, timeout=20)
         assert result.returncode in (0, 3), result.stderr
         return result.returncode, json.loads(result.stdout)
