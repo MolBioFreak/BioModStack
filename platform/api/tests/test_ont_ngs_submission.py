@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from tests.ngs_resource_fixture import ngs_resources  # noqa: F401
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 from fastapi.testclient import TestClient
 
@@ -21,6 +22,8 @@ from model_registry import ModelRegistry  # noqa: E402
 import ont_runs  # noqa: E402
 import routers.jobs as jobs_router  # noqa: E402
 from schemas import JobResponse, JobStatus  # noqa: E402
+from services import verified_native_reads as _native
+_NATIVE_COMPUTE = _native.compute
 
 
 def _post_with_preview(client, url, **kwargs):
@@ -215,7 +218,10 @@ def test_context_and_managed_reference_cannot_cross_bind():
     (False, False, "ont_methylation_analysis", False),
     (False, True, "ont_methylation_analysis", False),
 ])
-def test_real_bam_prequeue_reference_proof_and_explicit_alternative(tmp_path, m5, realign, workflow, accepted):
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http", "ngs_resources")
+def test_real_bam_prequeue_reference_proof_and_explicit_alternative(tmp_path, monkeypatch, m5, realign, workflow, accepted):
+    monkeypatch.setattr(_native, "compute", _NATIVE_COMPUTE)
     import hashlib
     import pysam
     from services.ont_ngs_launch_admission import validate_bam_reference_admission
@@ -240,8 +246,17 @@ def test_real_bam_prequeue_reference_proof_and_explicit_alternative(tmp_path, m5
     if accepted:
         validate_bam_reference_admission(params)
     else:
-        with pytest.raises(ValueError, match="M5|realignment"):
-            validate_bam_reference_admission(params)
+        if realign:
+            with pytest.raises(ValueError, match="does not support BAM realignment"):
+                validate_bam_reference_admission(params)
+        else:
+            # Native transport deliberately redacts consumer ValueErrors. Prove
+            # the rejection came from missing M5, not unrelated IO/capacity.
+            with pytest.raises(ValueError, match="verified native BAM read failed") as failure:
+                validate_bam_reference_admission(params)
+            cause = failure.value.__context__
+            assert isinstance(cause, ValueError)
+            assert str(cause).startswith("Mapped BAM lacks M5 reference proof.")
     assert "bam_source_sha256" not in params and "bam_reference_sha256" not in params
 
 

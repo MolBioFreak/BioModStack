@@ -57,6 +57,22 @@ class _ObservationalPresentationSession:
         self.rollbacks += 1
 
 
+from services import verified_native_reads as _native
+_NATIVE_COMPUTE = _native.compute
+
+
+from tests.ngs_resource_fixture import ngs_resources  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def _session_resource_authority(monkeypatch, request, ngs_resources):
+    if request.node.get_closest_marker("native_http") is not None:
+        request.getfixturevalue("native_http")
+    # HTTP qualification stubs compute only for transport-unit tests. Integrated
+    # sessions retain the production resource owner and reservation accounting.
+    monkeypatch.setattr(_native, "compute", _NATIVE_COMPUTE)
+
+
 @pytest.fixture(autouse=True)
 def _stable_derived_artifact_creation_authority(monkeypatch: pytest.MonkeyPatch):
     from services import ngs_alignment_sessions as service
@@ -85,7 +101,7 @@ def test_governed_read_query_validation_is_runtime_typed() -> None:
         response = client.get(url)
         assert response.status_code == 400
         assert response.json() == {
-            "schema": "bms.ngs.error.v1",
+            "schema": "bms.ngs.error.v2",
             "code": "NGS_RANGE_INVALID",
             "message": "The read query parameters are invalid.",
             "job_id": "00000000-0000-4000-8000-000000000001",
@@ -105,7 +121,7 @@ def test_sortable_locus_read_query_uses_typed_400_and_closed_openapi_contract() 
     response = client.get(f"{path}?sort_by=unsupported")
     assert response.status_code == 400
     assert response.json() == {
-        "schema": "bms.ngs.error.v1",
+        "schema": "bms.ngs.error.v2",
         "code": "NGS_RANGE_INVALID",
         "message": "The sortable read query parameters are invalid.",
         "job_id": "job-a",
@@ -158,7 +174,7 @@ def test_sortable_locus_route_rejects_invalid_metric_bounds_before_presentation_
 
     assert response.status_code == 400
     assert response.json() == {
-        "schema": "bms.ngs.error.v1",
+        "schema": "bms.ngs.error.v2",
         "code": "NGS_RANGE_INVALID",
         "message": "The sortable read query parameters are invalid.",
         "job_id": "job-a",
@@ -233,7 +249,7 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         "OntAlignmentSessionDetailV1",
         "OntNgsRotationSuccessV1",
         "OntNgsCapabilityRevocationSuccessV1",
-        "OntNgsErrorV1",
+        "OntNgsErrorV2",
         "BinaryArtifactResponse",
         "OntPresentationPreparingV2",
         "OntPresentationReadyV2",
@@ -241,7 +257,7 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         "OntAlignmentLocusSliceRequestV1",
         "OntAlignmentLocusSliceV1",
     } <= set(components)
-    error_schema = components["OntNgsErrorV1"]
+    error_schema = components["OntNgsErrorV2"]
     assert error_schema["properties"]["job_id"]["format"] == "uuid"
     assert error_schema["properties"]["message"]["minLength"] == 1
     assert error_schema["properties"]["message"]["maxLength"] == 512
@@ -263,9 +279,9 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         ("/api/jobs/{job_id}/alignment-access", "delete"): {"200", "403", "404", "409"},
         ("/api/jobs/{job_id}/reads", "get"): {"200", "400", "403", "404", "409"},
         ("/api/jobs/{job_id}/reads/{read_id}", "get"): {"200", "400", "403", "404", "409"},
-        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation", "get"): {"200", "403", "404", "409"},
-        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation/retry", "post"): {"200", "403", "404", "409"},
-        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices", "post"): {"200", "400", "403", "404", "409"},
+        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation", "get"): {"200", "403", "404", "409", "410"},
+        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation/retry", "post"): {"200", "403", "404", "409", "410"},
+        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices", "post"): {"200", "400", "403", "404", "409", "410"},
     }
     binary_statuses = {"200", "206", "304", "400", "403", "404", "409", "416"}
     for path in (
@@ -284,12 +300,14 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         assert set(responses) == statuses
         for status in statuses - {"200", "206", "304"}:
             schema = responses[status]["content"]["application/json"]["schema"]
-            assert schema["$ref"] == "#/components/schemas/OntNgsErrorV1"
+            assert schema["$ref"] == "#/components/schemas/OntNgsErrorV2"
         if statuses == binary_statuses:
             assert responses["206"]["headers"]["Content-Range"]["schema"] == {"type": "string"}
             assert responses["416"]["headers"]["Content-Range"]["schema"] == {"type": "string"}
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_alignment_preview_is_deterministic_and_source_bound(tmp_path: Path) -> None:
     import pysam
     from services import ngs_alignment_sessions as service
@@ -445,6 +463,8 @@ def _write_v5_logical_read_fixture(path: Path) -> tuple[Path, str, int, str, int
     return index, bam_sha, bam_size, bai_sha, bai_size
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_v5_presentation_package_closes_catalog_locators_preview_and_response(
     tmp_path: Path,
 ) -> None:
@@ -570,6 +590,8 @@ def test_v5_presentation_package_closes_catalog_locators_preview_and_response(
     assert validated.locators.record_count == 10
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_ready_presentation_route_serializes_an_actually_built_v4_package(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -703,6 +725,8 @@ def test_alignment_record_fingerprint_preserves_b_array_subtype_and_order() -> N
 @pytest.mark.parametrize(
     "tamper", ["manifest_authority", "locator_semantics", "catalog_scalar", "catalog_derivation", "membership_count"]
 )
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_adoption_rejects_rehashed_semantic_forgery(
     tmp_path: Path, tamper: str,
 ) -> None:
@@ -761,6 +785,8 @@ def test_adoption_rejects_rehashed_semantic_forgery(
             verify_package_against_source(reloaded, source)
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_v5_publication_oserror_is_retryable_and_leaves_no_partial_package(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -798,6 +824,8 @@ def test_v5_publication_oserror_is_retryable_and_leaves_no_partial_package(
     assert {item.name for item in namespace.iterdir()} == {".generation.lock"}
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_v5_cooperative_abort_cleans_temporary_package_before_publication(
     tmp_path: Path,
 ) -> None:
@@ -833,6 +861,8 @@ def test_v5_cooperative_abort_cleans_temporary_package_before_publication(
     assert {item.name for item in namespace.iterdir()} == {".generation.lock"}
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_presentation_selects_unique_primary_reads_and_truthful_counts(tmp_path: Path) -> None:
     import pysam
     from services import ngs_alignment_sessions as service
@@ -884,6 +914,8 @@ def test_presentation_selects_unique_primary_reads_and_truthful_counts(tmp_path:
     assert package["manifest_metadata"]["mime_type"] == "application/json"
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_presentation_byte_ceiling_reduces_selection_deterministically(tmp_path: Path) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -903,6 +935,8 @@ def test_presentation_byte_ceiling_reduces_selection_deterministically(tmp_path:
     assert first["manifest"]["selected_read_set_sha256"] == second["manifest"]["selected_read_set_sha256"]
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_bounded_bam_writer_never_exceeds_kernel_file_limit(tmp_path: Path) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -922,6 +956,8 @@ def test_bounded_bam_writer_never_exceeds_kernel_file_limit(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("mode", ["abort", "deadline"])
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_bounded_bam_writer_abort_and_deadline_quiesce_process_tree_and_remove_partial_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -931,6 +967,8 @@ def test_bounded_bam_writer_abort_and_deadline_quiesce_process_tree_and_remove_p
 
     output = tmp_path / "bounded.bam"
     late = Path(f"{output}.late")
+    source = tmp_path / "source.bam"
+    _write_governed_alignment_fixture(source)
     script = """
 import os,subprocess,sys,time
 output_path=sys.argv[2]
@@ -956,7 +994,7 @@ with open(output_path, 'wb') as output:
     with pytest.raises(expected):
         service._write_bam_for_ids_bounded(
             output,
-            tmp_path / "unused-source.bam",
+            source,
             ["read-a"],
             byte_limit=10_000_000,
             deadline=time.monotonic() + (2 if mode == "abort" else 0.05),
@@ -969,6 +1007,8 @@ with open(output_path, 'wb') as output:
     assert not late.exists()
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_fresh_v4_build_does_not_reopen_every_locator_after_locked_source_derivation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -997,6 +1037,8 @@ def test_fresh_v4_build_does_not_reopen_every_locator_after_locked_source_deriva
 
 
 @pytest.mark.parametrize("stage", ["preview", "index"])
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_v5_preview_and_index_deadline_exhaustion_are_typed_build_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1025,6 +1067,8 @@ def test_v5_preview_and_index_deadline_exhaustion_are_typed_build_timeout(
     assert failure.value.code == "build_timeout"
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_presentation_namespace_bounds_entries_and_cleans_crash_residue(tmp_path: Path) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -1080,17 +1124,19 @@ def test_presentation_namespace_bounds_entries_and_cleans_crash_residue(tmp_path
     ]
 
 
-def test_presentation_uses_direct_verified_descriptor_above_snapshot_limit(
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
+def test_presentation_uses_managed_verified_chunks_without_descriptor_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from services import ngs_alignment_sessions as service
 
     source = tmp_path / "source.bam"
     index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
-    monkeypatch.setattr(service, "SNAPSHOT_CACHE_MAX_BYTES", bam_size - 1)
+    monkeypatch.setattr(service, "SNAPSHOT_CHUNK_BYTES", bam_size - 1)
     monkeypatch.setattr(
-        service, "open_verified_artifact_snapshot",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("shared snapshot cache used")),
+        service._SnapshotLease, "fileno",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("native descriptor bypass used")),
     )
     package = service.build_alignment_presentation(
         source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
@@ -1101,6 +1147,8 @@ def test_presentation_uses_direct_verified_descriptor_above_snapshot_limit(
     assert package["manifest"]["source_identity"]["size_bytes"] == str(bam_size)
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_presentation_coverage_uses_all_source_primary_records(tmp_path: Path) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -1118,6 +1166,8 @@ def test_presentation_coverage_uses_all_source_primary_records(tmp_path: Path) -
     assert package["manifest"]["coverage_primary_read_count"] == 12
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_cached_presentation_resolution_does_not_open_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -1129,7 +1179,12 @@ def test_cached_presentation_resolution_does_not_open_source(tmp_path: Path, mon
         job_id="job-e", session_id="5" * 24, mode="primary", cache_root=tmp_path / "cache",
         target_reads=3, max_output_bytes=1_000_000,
     )
-    monkeypatch.setattr(service, "_open_regular_file_no_symlinks", lambda *_args: (_ for _ in ()).throw(AssertionError("source opened")))
+    original_open = service._open_regular_file_no_symlinks
+    def forbid_source(path):
+        if isinstance(path, Path) and path.resolve() in {source.resolve(), index.resolve()}:
+            raise AssertionError("source opened")
+        return original_open(path)
+    monkeypatch.setattr(service, "_open_regular_file_no_symlinks", forbid_source)
     package = service.resolve_cached_alignment_presentation(
         "job-e", "5" * 24, cache_root=tmp_path / "cache",
         expected_authority_sha256=first["manifest"]["authority_sha256"],
@@ -1138,6 +1193,8 @@ def test_cached_presentation_resolution_does_not_open_source(tmp_path: Path, mon
     assert package["manifest"]["source_alignment_sha256"] == bam_sha
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_locus_slice_validates_and_deterministically_caps_primary_reads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1209,6 +1266,8 @@ def test_locus_slice_validates_and_deterministically_caps_primary_reads(
         service.build_alignment_locus_slice(source, **{**common, "end": service.LOCUS_MAX_SPAN + 1})
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_locus_admission_requires_primary_overlap_when_only_supplementary_is_inside(
     tmp_path: Path,
 ) -> None:
@@ -1292,6 +1351,8 @@ def test_sortable_read_alignment_end_consumes_reference_skip_and_is_typed() -> N
     assert validated.alignment_end_1based == 89
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_alignment_indexing_deadline_terminates_the_child(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1302,6 +1363,7 @@ def test_alignment_indexing_deadline_terminates_the_child(
         assert 0 < kwargs["timeout"] <= 1
         raise subprocess.TimeoutExpired("pysam-index", kwargs["timeout"])
 
+    _write_governed_alignment_fixture(tmp_path / "locus.bam")
     monkeypatch.setattr(service.subprocess, "run", time_out)
     with pytest.raises(service.AlignmentSessionError, match="locus slice time limit exceeded"):
         service._index_bam_with_deadline(
@@ -1326,6 +1388,8 @@ def test_presentation_generation_lock_is_nonblocking(
     assert operations[0] & service.fcntl.LOCK_NB
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_locus_slice_caps_output_records_without_rejecting_a_deep_source_region(tmp_path: Path) -> None:
     import pysam
     from services import ngs_alignment_sessions as service
@@ -1453,6 +1517,8 @@ async def test_locus_artifact_get_serves_a_current_authority(
 
 
 @pytest.mark.asyncio
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 async def test_presentation_get_path_never_materializes_a_missing_package(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1495,6 +1561,8 @@ async def test_presentation_get_path_never_materializes_a_missing_package(
         await router._prepare_presentation("job-a", "1" * 24, cast(Any, job), cast(Any, row))
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_presentation_publication_rejects_symlinked_authority_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1547,6 +1615,8 @@ def test_presentation_publication_rejects_symlinked_authority_root(
     assert list(outside.iterdir()) == []
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_cached_presentation_requires_persisted_manifest_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1587,6 +1657,8 @@ def test_cached_presentation_requires_persisted_manifest_authority(
         )
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_locus_slice_rejects_source_identity_mismatch(tmp_path: Path) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -2330,6 +2402,8 @@ def test_generic_file_routes_hide_governed_ngs_tree(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Browser root contains only result packages, never the resource DB fixture.
+    tmp_path = tmp_path / "file-root"
     result_root = tmp_path / "result"
     fastq_qc = result_root / "fastq_qc"
     fastq_qc.mkdir(parents=True)
@@ -2349,6 +2423,8 @@ def test_generic_file_routes_hide_governed_ngs_tree(
         json.dumps({"schema": "sequence_qc.manifest.v1", "artifacts": []}),
         encoding="utf-8",
     )
+    import paths
+    monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"bms_results": tmp_path})
     monkeypatch.setattr(files_router, "get_allowed_roots", lambda: {"bms_results": tmp_path})
     monkeypatch.setattr(files_router, "resolve_allowed_path", lambda value: tmp_path / Path(value).relative_to("bms_results"))
 
@@ -2474,6 +2550,8 @@ def _ready_session_wire(job_id: str = "job-a") -> dict[str, Any]:
     }
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_alignment_session_wire_shape_validates_against_normative_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2553,6 +2631,8 @@ def test_package_builder_reads_pinned_descriptor_across_aba_root_replacement(tmp
     assert alignment["relative_path"].endswith("aligned.bam")
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_manifest_schema_and_job_binding_are_required(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2573,6 +2653,8 @@ def test_manifest_schema_and_job_binding_are_required(
     assert "manifest job_id does not match requested job" in primary["unavailable_reason"]
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_manifest_workflow_and_input_mode_must_match_authorized_job_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2596,6 +2678,8 @@ def test_manifest_workflow_and_input_mode_must_match_authorized_job_provenance(
 
 
 @pytest.mark.parametrize("input_mode", ["fastq", "bam", "pod5"])
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_canonical_input_modes_can_become_ready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2622,6 +2706,8 @@ def test_canonical_input_modes_can_become_ready(
     assert primary["ready"] is True
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_duplicate_artifact_role_is_fail_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2649,6 +2735,8 @@ def test_duplicate_artifact_role_is_fail_closed(
         ("artifact_schema_version", 1),
     ],
 )
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_manifest_schema_version_is_fail_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2671,6 +2759,8 @@ def test_manifest_schema_version_is_fail_closed(
     assert "manifest schema" in primary["unavailable_reason"]
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_generic_artifact_resolution_rejects_unready_manifest_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2697,6 +2787,8 @@ def test_generic_artifact_resolution_rejects_unready_manifest_artifact(
         service.resolve_alignment_artifact("job-a", artifact_id, source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_primary_session_is_opaque_job_scoped_and_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -2716,6 +2808,8 @@ def test_primary_session_is_opaque_job_scoped_and_ready(tmp_path: Path, monkeypa
     assert primary["artifacts"]["alignment"]["sha256"]
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_dimer_kind_cannot_enter_primary_or_contradict_declared_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2740,6 +2834,8 @@ def test_dimer_kind_cannot_enter_primary_or_contradict_declared_mode(
     assert all(item["mode"] != "dimer_candidates" for item in sessions)
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_explicit_primary_mode_rejects_dimer_path_heuristic_conflict(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2762,6 +2858,8 @@ def test_explicit_primary_mode_rejects_dimer_path_heuristic_conflict(
     assert "contradictory primary session mode" in primary["unavailable_reason"]
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_bam_primary_session_accepts_persisted_sequence_manifest_package_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2797,6 +2895,8 @@ def test_bam_primary_session_accepts_persisted_sequence_manifest_package_authori
     assert primary["artifact_set_sha256"] == "d" * 64
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_persisted_production_output_directory_resolves_sessions_and_stays_confined(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2927,6 +3027,8 @@ def test_alignment_capability_enforces_two_principal_cross_job_denial(
     assert exc_info.value.status_code == 403
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_manifest_assigns_distinct_opaque_roles_without_treating_generic_coverage_as_bedgraph(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2988,6 +3090,8 @@ def test_manifest_assigns_distinct_opaque_roles_without_treating_generic_coverag
         ).name == expected_name
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_primary_never_mixes_dimer_sidecars(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -3005,6 +3109,8 @@ def test_primary_never_mixes_dimer_sidecars(tmp_path: Path, monkeypatch: pytest.
     assert service.resolve_alignment_artifact("job-a", dimer_id, source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path).name == "dimer_candidates.bam"
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_artifact_id_cannot_cross_jobs_or_accept_path_injection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3023,6 +3129,8 @@ def test_artifact_id_cannot_cross_jobs_or_accept_path_injection(
         service.build_alignment_sessions("../job-a", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_symlink_or_special_file_never_becomes_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from services import ngs_alignment_sessions as service
 
@@ -3055,6 +3163,8 @@ def test_symlink_or_special_file_never_becomes_ready(tmp_path: Path, monkeypatch
         service.build_alignment_sessions("job-symlink", source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(), results_dir=tmp_path)
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_semantic_role_resolver_requires_ready_exact_mode_role_and_digest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3090,6 +3200,8 @@ def test_semantic_role_resolver_requires_ready_exact_mode_role_and_digest(
             )
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_generic_alignment_routes_offload_blocking_service_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3401,6 +3513,7 @@ def test_ngs_package_routes_support_authenticated_inventory_and_http_range(
     app = _ngs_app()
     app.include_router(routes.router, prefix="/api")
     app.dependency_overrides[routes.require_alignment_job] = lambda: SimpleNamespace(
+        provenance={},
         child_output_dir=None,
         params={
             "reference_sequence_sha256": hashlib.sha256(b"ACGTACGT").hexdigest(),
@@ -3698,11 +3811,9 @@ def test_artifact_descriptor_rehashes_same_size_retimed_replacement(tmp_path: Pa
     first = service._artifact_descriptor("job-a", record, "alignment")
     artifact.write_bytes(tampered)
     os.utime(artifact, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
-    second = service._artifact_descriptor("job-a", record, "alignment")
-
     assert first["observed_sha256"] == original_digest
-    assert second["observed_sha256"] == hashlib.sha256(tampered).hexdigest()
-    assert second["integrity_valid"] is False
+    with pytest.raises(service.AlignmentSessionError, match="integrity"):
+        service._artifact_descriptor("job-a", record, "alignment")
 
 
 def test_verified_snapshot_rejects_ancestor_symlink_swap(tmp_path: Path) -> None:
@@ -3769,7 +3880,9 @@ def _isolate_snapshot_state(service, monkeypatch: pytest.MonkeyPatch, tmp_path: 
     cache_dir = tmp_path / "snapshots"
     cache_dir.mkdir()
     lock = threading.RLock()
-    monkeypatch.setattr(service, "SNAPSHOT_CACHE_MAX_BYTES", limit)
+    from services import global_resource_admission as resources
+    with resources._transaction() as db:
+        db.execute("UPDATE resource_admission_policy SET disk_byte_limit=?", (limit,))
     monkeypatch.setattr(service, "_snapshot_cache_lock", lock)
     monkeypatch.setattr(service, "_snapshot_cache_condition", threading.Condition(lock), raising=False)
     monkeypatch.setattr(service, "_snapshot_cache_dir", cache_dir)
@@ -3806,7 +3919,7 @@ def test_oversized_snapshot_is_rejected_before_source_or_temporary_open(
     monkeypatch.setattr(service, "_open_regular_file_no_symlinks", fail_source)
     monkeypatch.setattr(service.tempfile, "NamedTemporaryFile", fail_temporary)
 
-    with pytest.raises(service.AlignmentSessionError, match="exceeds snapshot limit"):
+    with pytest.raises(service.AlignmentCapacityUnavailable, match="capacity unavailable"):
         service.open_verified_artifact_snapshot(
             artifact,
             expected_size=5,
@@ -3830,6 +3943,7 @@ def test_same_digest_snapshot_copy_is_single_flight(
     first_read_started = threading.Event()
     release_first_read = threading.Event()
     source_open_count = 0
+    source_read_bytes = 0
     source_count_lock = threading.Lock()
     original_open = service._open_regular_file_no_symlinks
 
@@ -3837,10 +3951,19 @@ def test_same_digest_snapshot_copy_is_single_flight(
         def __init__(self, handle) -> None:
             self._handle = handle
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            self.close()
+
         def read(self, size: int = -1) -> bytes:
+            nonlocal source_read_bytes
             first_read_started.set()
             assert release_first_read.wait(timeout=2)
-            return self._handle.read(size)
+            data = self._handle.read(size)
+            source_read_bytes += len(data)
+            return data
 
         def fileno(self) -> int:
             return self._handle.fileno()
@@ -3870,7 +3993,9 @@ def test_same_digest_snapshot_copy_is_single_flight(
         first_snapshot = first.result(timeout=2)
         second_snapshot = second.result(timeout=2)
 
-    assert source_open_count == 1
+    # One import plus one metadata-only source change fence, never two copies.
+    assert source_open_count == 2
+    assert source_read_bytes == len(payload)
     assert first_snapshot.read() == payload
     assert second_snapshot.read() == payload
     first_snapshot.close()
@@ -3960,14 +4085,76 @@ def test_missing_cached_snapshot_releases_accounted_bytes(
 ) -> None:
     from services import ngs_alignment_sessions as service
 
-    digest = "a" * 64
-    monkeypatch.setattr(service, "_snapshot_cache_dir", tmp_path)
-    monkeypatch.setattr(service, "_snapshot_cache", service.OrderedDict([(digest, 17)]))
-    monkeypatch.setattr(service, "_snapshot_cache_bytes", 17)
-
-    assert service._cached_snapshot(digest, 17) is None
-    assert service._snapshot_cache == {}
+    from services import global_resource_admission as resources
+    payload = b"missing-cache"
+    source = tmp_path / "source"
+    source.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    with service.open_verified_artifact_snapshot(source, expected_sha256=digest, expected_size=len(payload)):
+        pass
+    service._snapshot_storage_path(digest).unlink()
+    with pytest.raises(service.AlignmentSessionError, match="integrity"):
+        service._cached_snapshot(digest, len(payload))
+    assert digest in service._snapshot_invalid
+    assert service._snapshot_cache_bytes == len(payload)
+    with resources._transaction() as db:
+        assert db.execute("SELECT SUM(disk_bytes) FROM derived_resource_reservations").fetchone()[0] == len(payload)
+    # Failure is durable and remains charged until explicit quiescent retry.
+    service.recover_verified_cache(retry_digest=digest)
     assert service._snapshot_cache_bytes == 0
+    with resources._transaction() as db:
+        assert db.execute("SELECT SUM(disk_bytes) FROM derived_resource_reservations").fetchone()[0] == 0
+    with service.open_verified_artifact_snapshot(source, expected_sha256=digest, expected_size=len(payload)) as recovered:
+        assert recovered.read() == payload
+
+
+@pytest.mark.parametrize("dimension", ["cpu", "dram", "disk"])
+def test_snapshot_import_uses_global_capacity_and_retains_exact_receipt(tmp_path, monkeypatch, dimension):
+    from services import ngs_alignment_sessions as service
+    from services import global_resource_admission as resources
+
+    payload = b"receipt-bound-cache"
+    source = tmp_path / "source.bin"
+    source.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    ram = 4 * service.SNAPSHOT_CHUNK_BYTES + 128
+    column, limit, held = {
+        "cpu": ("cpu_thread_limit", 1, {"cpu_threads": 1}),
+        "dram": ("dram_byte_limit", ram, {"dram_bytes": 1}),
+        "disk": ("disk_byte_limit", len(payload), {"disk_bytes": 1}),
+    }[dimension]
+    with resources._transaction() as db:
+        db.execute(f"UPDATE resource_admission_policy SET {column}=?", (limit,))
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    blocker = resources.reserve(owner="test-competing-work", storage_root=tmp_path,
+        owned_path=occupied, cpu_threads=held.get("cpu_threads", 0),
+        dram_bytes=held.get("dram_bytes", 0), disk_bytes=held.get("disk_bytes", 0))
+    original_open = service._open_regular_file_no_symlinks
+    opened = []
+    def observe(path):
+        if path == source:
+            opened.append(path)
+        return original_open(path)
+    monkeypatch.setattr(service, "_open_regular_file_no_symlinks", observe)
+    try:
+        with pytest.raises(service.AlignmentCapacityUnavailable, match="capacity unavailable"):
+            service.open_verified_artifact_snapshot(source, expected_sha256=digest, expected_size=len(payload))
+        assert not opened
+    finally:
+        blocker.release(storage_removed=True)
+    with service.open_verified_artifact_snapshot(source, expected_sha256=digest, expected_size=len(payload)) as lease:
+        assert lease.read() == payload
+        with resources._transaction() as db:
+            row = db.execute("SELECT * FROM derived_resource_reservations WHERE owner=? AND state!='released'",
+                ("artifact-snapshot:" + digest,)).fetchone()
+        assert row is not None
+        assert row["cpu_threads"] == 0
+        assert row["dram_bytes"] == ram
+        assert row["disk_bytes"] == len(payload)
+    # Closing a reader does not make retained cache memory/disk free.
+    assert service._snapshot_allocations[digest].dram_bytes == ram
+    assert service._snapshot_allocations[digest].disk_bytes == len(payload)
 
 
 @pytest.mark.asyncio
@@ -4068,6 +4255,8 @@ async def test_artifact_http_contract_handles_conditionals_ranges_head_and_typed
     drifted_not_modified = await serve(headers=[(b"if-none-match", etag.encode())])
     assert drifted_not_modified.status_code == 409
     artifact.write_bytes(content)
+    from services import ngs_alignment_sessions as service
+    service.recover_verified_cache(retry_digest=digest)
 
     malformed = await serve(headers=[(b"range", b"bytes=9-1"), (b"if-range", b'"different"')])
     assert malformed.status_code == 400
@@ -4106,12 +4295,14 @@ async def test_artifact_http_contract_handles_conditionals_ranges_head_and_typed
     from jsonschema import validate
 
     error_schema = json.loads(
-        (API_ROOT.parents[1] / "schemas/ngs/ont_ngs_error_v1.schema.json").read_text(encoding="utf-8")
+        (API_ROOT.parents[1] / "schemas/ngs/ont_ngs_error_v2.schema.json").read_text(encoding="utf-8")
     )
     for response in (malformed, unsatisfiable, conflict):
         validate(json.loads(bytes(response.body)), error_schema)
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_alignment_routes_enforce_the_job_authorization_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
     from routers import ngs_alignment_sessions as routes
     from services import ngs_alignment_sessions as service
@@ -4211,6 +4402,8 @@ def test_read_inspection_caps_cursor_and_total_records_scanned(monkeypatch: pyte
     assert page["scan_truncated"] is True
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_equal_length_wrong_reference_fails_exact_identity_validation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4235,6 +4428,8 @@ def test_equal_length_wrong_reference_fails_exact_identity_validation(
     assert reason is not None and "exact reference identity" in reason
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_missing_m5_accepts_only_matching_server_manifest_reference_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4260,6 +4455,8 @@ def test_missing_m5_accepts_only_matching_server_manifest_reference_binding(
     assert reason is not None and "manifest binding" in reason
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_manifest_declared_integrity_is_preserved_and_mismatch_is_not_ready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4313,6 +4510,8 @@ def test_exact_read_detail_scan_exhaustion_is_not_reported_as_404(monkeypatch: p
     assert response.json()["resource"] == "read"
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_production_dimer_process_emits_discoverable_authoritative_manifest() -> None:
     module_path = API_ROOT.parents[1] / "modules" / "ngs" / "fastq_dimer_qc.nf"
     source = module_path.read_text(encoding="utf-8")
@@ -4472,6 +4671,7 @@ def test_rotation_validates_signal_alignment_package_without_fastq_projection(
     validate = cast(Any, getattr(router, "_validate_rotation_package_authority", None))
     assert callable(validate), "rotation package-authority validator is missing"
     job = SimpleNamespace(
+        provenance={},
         model_id="nanopore",
         params={
             "ont_workflow_id": "ont_plasmid_qc",
@@ -4631,6 +4831,8 @@ def test_presentation_get_is_observational_for_nonready_durable_states(
     assert database.rollbacks == 0
 
 
+@pytest.mark.native_http
+@pytest.mark.usefixtures("native_http")
 def test_presentation_get_uses_ready_row_authority_not_job_provenance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -4819,17 +5021,17 @@ def test_legacy_retry_is_retired_without_queuing_or_mutating(monkeypatch, state)
 
 def test_presentation_errors_validate_through_model_and_openapi_with_presentation_resource() -> None:
     payload = {
-        "schema": "bms.ngs.error.v1",
+        "schema": "bms.ngs.error.v2",
         "code": "NGS_PRESENTATION_SOURCE_STALE",
         "message": "The presentation source is no longer current.",
         "job_id": "job-a",
         "resource": "presentation",
         "retryable": False,
     }
-    assert ngs_routes.OntNgsErrorV1.model_validate(payload).resource == "presentation"
+    assert ngs_routes.OntNgsErrorV2.model_validate(payload).resource == "presentation"
     app = _ngs_app()
     app.include_router(ngs_routes.router, prefix="/api")
-    schema = app.openapi()["components"]["schemas"]["OntNgsErrorV1"]
+    schema = app.openapi()["components"]["schemas"]["OntNgsErrorV2"]
     assert "presentation" in schema["properties"]["resource"]["enum"]
 
 
@@ -4876,19 +5078,23 @@ def test_f2_signal_input_is_pinned_before_query_scratch(monkeypatch, tmp_path):
 
 
 def test_f2_semantic_reuse_requires_live_exact_peer_generation(tmp_path):
-    import hashlib
+    from services import ngs_alignment_sessions as service
     path = tmp_path / "cache"
+    peer = tmp_path / "peer"
     path.write_bytes(b"receipt-bound")
-    with path.open("rb") as first, path.open("rb") as second:
-        identity = service._snapshot_file_identity(first)
-        chunks = (hashlib.sha256(b"receipt-bound").digest(),)
-        a = service._SnapshotLease(first, "semantic-a", service._SnapshotReceipt(identity, chunks))
-        b = service._SnapshotLease(second, "semantic-b", service._SnapshotReceipt(identity, chunks))
+    peer.write_bytes(b"peer-bound")
+    def open_lease(source) -> Any:
+        payload = source.read_bytes()
+        return service.open_verified_artifact_snapshot(source, expected_size=len(payload),
+            expected_sha256=hashlib.sha256(payload).hexdigest())
+    with open_lease(path) as a, open_lease(peer) as b:
         a.remember_semantic_value("contract-v1", ("contig", 12), b)
         assert a.verified_semantic_value("contract-v1", b) == (True, ("contig", 12))
-        replacement = service._SnapshotLease(second, "semantic-b", service._SnapshotReceipt(identity, chunks))
-        assert a.verified_semantic_value("contract-v1", replacement) == (False, None)
         assert a.verified_semantic_value("contract-v2", b) == (False, None)
+        digest = b._digest
+    service._discard_cached_snapshot_locked(digest)
+    with open_lease(path) as a, open_lease(peer) as replacement:
+        assert a.verified_semantic_value("contract-v1", replacement) == (False, None)
 
 
 def test_f2_retained_disk_is_not_subtracted_from_physical_free_twice(monkeypatch, tmp_path):
@@ -4919,6 +5125,7 @@ def test_f2_retained_disk_is_not_subtracted_from_physical_free_twice(monkeypatch
 
 
 def test_f2_signal_capacity_is_not_invalid_metrics(monkeypatch, tmp_path):
+    from services import ngs_alignment_sessions as service
     from contextlib import contextmanager
     from services import ngs_alignment_catalog_query as query
     @contextmanager
