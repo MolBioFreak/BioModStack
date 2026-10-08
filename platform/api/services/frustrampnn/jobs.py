@@ -226,6 +226,59 @@ def upload_selection(*, filename: str, payload: bytes, expected_sha256: str | No
     )
 
 
+def workflow_selection(
+    *,
+    filename: str,
+    payload: bytes,
+    metadata: Mapping[str, Any],
+    parent_job_id: str,
+    parent_workflow_id: str,
+) -> SourceSelection:
+    """Bind one live parent workflow terminal structure to child-job authority."""
+
+    required = {
+        "candidate_id", "parent_job_id", "parent_workflow_id", "producer_stage",
+        "producer_candidate_key", "requiredness",
+    }
+    if set(metadata) != required:
+        raise FrustraMPNNChildError("workflow candidate metadata fields are not exact")
+    candidate_id = metadata.get("candidate_id")
+    if (
+        not isinstance(candidate_id, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", candidate_id) is None
+        or metadata.get("parent_job_id") != parent_job_id
+        or metadata.get("parent_workflow_id") != parent_workflow_id
+        or metadata.get("requiredness") != "required"
+    ):
+        raise FrustraMPNNChildError("workflow candidate identity or requiredness is invalid")
+    producer_stage = metadata.get("producer_stage")
+    producer_key = metadata.get("producer_candidate_key")
+    if (
+        not isinstance(producer_stage, str) or not producer_stage.strip()
+        or not isinstance(producer_key, str) or not producer_key
+        or producer_key.startswith("/") or "\\" in producer_key
+        or any(part in {"", ".", ".."} for part in producer_key.split("/"))
+    ):
+        raise FrustraMPNNChildError("workflow candidate producer authority is invalid")
+    base = upload_selection(filename=filename, payload=payload, expected_sha256=None)
+    return SourceSelection(
+        design_id=None,
+        source_job_id=parent_job_id,
+        source_path=None,
+        source_bytes=base.source_bytes,
+        source_sha256=base.source_sha256,
+        media_type=base.media_type,
+        source_format=base.source_format,
+        producer_stage=producer_stage,
+        producer_coordinates={
+            "candidate_id": candidate_id,
+            "producer_stage": producer_stage,
+            "producer_candidate_key": producer_key,
+            "parent_workflow_id": parent_workflow_id,
+        },
+    )
+
+
 def handoff_selection(
     *,
     candidate_id: str,
@@ -813,7 +866,7 @@ async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
             grouped = json.loads(grouped_payload)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise FrustraMPNNChildError("grouped terminal artifact is unavailable") from exc
-        unsigned = {key: value for key, value in grouped.items() if key != "content_sha256"}
+        unsigned = {key: value for key, value in grouped.items() if key != "receipt_sha256"}
         records = grouped.get("records")
         if (
             grouped_payload != canonical_json_bytes(grouped)
@@ -824,7 +877,7 @@ async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
             or not isinstance(records, list)
             or grouped.get("record_count") != len(records)
             or len(records) != manifest["expected_cardinality"]
-            or grouped.get("content_sha256")
+            or grouped.get("receipt_sha256")
             != hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
         ):
             raise FrustraMPNNChildError("grouped terminal artifact authority is invalid")
@@ -846,7 +899,7 @@ async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
                 raise FrustraMPNNChildError("grouped terminal diagnostic is invalid")
         grouped_terminal_artifact = {
             "artifact_id": f"frustrampnn-grouped-terminal:{child.id}",
-            "content_sha256": grouped["content_sha256"],
+            "content_sha256": hashlib.sha256(grouped_payload).hexdigest(),
             "size_bytes": len(grouped_payload),
             "records": copy.deepcopy(records),
         }
@@ -948,5 +1001,5 @@ async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
 __all__ = [
     "ENVELOPE_KEY", "FrustraMPNNChildError", "child_receipt", "create_child_job",
     "create_reanalysis_child", "design_selections", "discard_uncommitted_child_artifacts",
-    "handoff_selection", "upload_selection",
+    "handoff_selection", "upload_selection", "workflow_selection",
 ]

@@ -494,7 +494,7 @@ include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
 include { BoltzFromSequence } from '../modules/structure_prediction'
 include { ANARCII } from '../modules/utils/anarci'
 include { PredictTargetComplex } from '../modules/predict_target_complex'
-include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn'
+include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout'
 include { BatchBoltzValidation ; BatchProtenixValidation ; BatchESMFold2Validation } from '../modules/antibody_batch'
 include { PrepareAntibodyFrustraMPNNCandidate ; PublishAntibodyFrustraMPNNCandidate ; AggregateAndReportAntibodyFrustraMPNN ; ReportAntibodyFrustraMPNNNotRequested } from '../modules/antibody_frustrampnn_parent'
 include { FinalizeSequentialValidationOutputs ; FinalizeTerminalAntibodyOutputs } from '../modules/antibody_output_finalization'
@@ -3308,20 +3308,19 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 error('antibody_denovo:ambiguous_terminal_candidate_metadata: every final structure requires its own producer metadata tuple')
             }
             def preparedCandidate = antibodyTerminalCandidate(candidate_meta, structures[0], terminalStage, terminalMethod)
-            [tuple(preparedCandidate[0], preparedCandidate[1], settingsBase64, settingsSha256, settingsValueOrigin)]
+            [tuple(preparedCandidate[0], preparedCandidate[1])]
         }
         def frustrampnn_candidate_count = typed_terminal_candidates.map { _candidate -> 1 }.count()
         CheckFrustraYield(frustrampnn_candidate_count)
 
-        PrepareAntibodyFrustraMPNNCandidate(typed_terminal_candidates)
-        CanonicalFrustraMPNNV2(PrepareAntibodyFrustraMPNNCandidate.out.prepared)
-        PublishAntibodyFrustraMPNNCandidate(CanonicalFrustraMPNNV2.out.result)
-        frustrampnn_results = PublishAntibodyFrustraMPNNCandidate.out.published
-        AggregateAndReportAntibodyFrustraMPNN(
-            PublishAntibodyFrustraMPNNCandidate.out.published
-                .map { result_meta, result_manifest, marker -> marker }
-                .collect()
+        SchedulerFrustraMPNNParentFanout(
+            typed_terminal_candidates,
+            Channel.value(params.job_id.toString()),
+            Channel.value('antibody_denovo'),
+            Channel.value(params.frustrampnn_settings.toString()),
+            Channel.value(settingsValueOrigin),
         )
+        frustrampnn_results = SchedulerFrustraMPNNParentFanout.out.receipt
     } else {
         ReportAntibodyFrustraMPNNNotRequested(Channel.value('not_requested'))
         frustrampnn_results = ReportAntibodyFrustraMPNNNotRequested.out.result

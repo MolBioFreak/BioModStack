@@ -373,8 +373,9 @@ def test_complex_module_exposes_typed_canonical_candidate_channel() -> None:
 def test_complex_prediction_uses_one_canonical_component_for_actual_candidates() -> None:
     workflow = _workflow()
 
-    assert "include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'" in workflow
-    assert workflow.count("CanonicalFrustraMPNNV2(") == 1
+    assert "include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'" in workflow
+    assert workflow.count("SchedulerFrustraMPNNParentFanout(") == 1
+    assert "CanonicalFrustraMPNNV2(" not in workflow
     assert "CanonicalFrustraMPNN(" not in workflow
     assert "FrustrampnnQC" not in workflow
     assert "AggregateFrustrationReports" not in workflow
@@ -383,7 +384,7 @@ def test_complex_prediction_uses_one_canonical_component_for_actual_candidates()
     assert "complex_prediction_wf.out.structures.flatten()" in workflow
     assert "PrepareComplexPredictionFrustraMPNNCandidate" in workflow
     assert "MaterializeComplexPredictionFrustraMPNNCandidate" in workflow
-    assert "CanonicalFrustraMPNNV2.out.result" in workflow
+    assert "frustrampnn_results = SchedulerFrustraMPNNParentFanout.out.receipt" in workflow
     assert re.search(r"emit:\s+structures\s+frustrampnn_results", workflow)
 
 
@@ -424,7 +425,8 @@ def test_complex_candidate_preparation_materializes_exact_pdb_before_component()
     assert "workflow_component_request_v3.json" in materialize_block
     assert "frustrampnn_structure_map_v1.json" in materialize_block
     assert "workflow_component_request_v1.json" not in materialize_block
-    assert "CanonicalFrustraMPNNV2(MaterializeComplexPredictionFrustraMPNNCandidate.out.prepared)" in workflow
+    assert "scheduler_candidates = deduplicated_candidates.map" in workflow
+    assert "SchedulerFrustraMPNNParentFanout(" in workflow
 
 
 def test_complex_prediction_transports_complete_bounded_typed_v3_settings() -> None:

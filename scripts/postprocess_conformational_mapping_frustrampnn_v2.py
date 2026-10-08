@@ -69,6 +69,7 @@ def _exact_binding(
     request: Mapping[str, Any],
     result: Mapping[str, Any],
 ) -> None:
+    scheduler_child = prepared.get("scheduler_child") is True
     exact = (
         request.get("candidate_id") == prepared.get("candidate_id")
         and request.get("invocation_id") == prepared.get("invocation_id")
@@ -76,9 +77,12 @@ def _exact_binding(
         and request.get("parent_workflow_id") == "conformational_mapping"
         and request.get("requiredness") == "required"
         and request.get("source_artifact", {}).get("sha256") == prepared.get("source_sha256")
-        and request.get("identity_authority_artifact", {}).get(
-            "cm_complex_snapshot_sha256"
-        ) == prepared.get("cm_complex_snapshot_sha256")
+        and (
+            scheduler_child
+            or request.get("identity_authority_artifact", {}).get(
+                "cm_complex_snapshot_sha256"
+            ) == prepared.get("cm_complex_snapshot_sha256")
+        )
         and request.get("requested_settings_sha256")
         == prepared.get("requested_settings_sha256")
         and request.get("effective_settings_sha256")
@@ -101,6 +105,7 @@ def postprocess_canonical_bundles(
     preparation_manifest_path: Path,
     bundle_dirs: Sequence[Path],
     output_dir: Path,
+    scheduler_terminal_receipt_path: Path | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists():
         raise CMFrustraMPNNPostprocessError("CM postprocessing output already exists")
@@ -132,6 +137,36 @@ def postprocess_canonical_bundles(
             "canonical result candidate identity/order differs from CM ensemble"
         )
     prepared_by_id = {str(item["candidate_id"]): item for item in prepared_rows}
+    scheduler_by_id: dict[str, dict[str, Any]] = {}
+    if scheduler_terminal_receipt_path is not None:
+        scheduler_terminal = json.loads(
+            scheduler_terminal_receipt_path.read_text(encoding="utf-8")
+        )
+        if (
+            scheduler_terminal.get("schema_name")
+            != "bms.frustrampnn.parent-fanout-terminal.v1"
+            or scheduler_terminal.get("parent_job_id") != preparation["parent_job_id"]
+            or scheduler_terminal.get("parent_workflow_id") != "conformational_mapping"
+            or scheduler_terminal.get("status") != "complete"
+        ):
+            raise CMFrustraMPNNPostprocessError("scheduler terminal receipt is invalid")
+        for child in scheduler_terminal.get("child_receipts") or []:
+            child_id = child.get("job_id") if isinstance(child, Mapping) else None
+            for candidate in child.get("candidates") or []:
+                candidate_id = candidate.get("candidate_id")
+                if candidate_id in scheduler_by_id:
+                    raise CMFrustraMPNNPostprocessError("scheduler candidate receipt is duplicate")
+                scheduler_by_id[str(candidate_id)] = {
+                    "scheduler_child": True,
+                    "parent_job_id": child_id,
+                    "invocation_id": candidate.get("invocation_id"),
+                    "request_sha256": candidate.get("component_request_sha256"),
+                    "source_sha256": candidate.get("source_artifact_sha256"),
+                    "requested_settings_sha256": candidate.get("requested_settings_sha256"),
+                    "effective_settings_sha256": candidate.get("effective_settings_sha256"),
+                }
+        if set(scheduler_by_id) != set(prepared_by_id):
+            raise CMFrustraMPNNPostprocessError("scheduler terminal candidate set is incomplete")
 
     loaded: dict[str, dict[str, Any]] = {}
     for bundle in bundle_dirs:
@@ -156,10 +191,9 @@ def postprocess_canonical_bundles(
             raise CMFrustraMPNNPostprocessError(
                 "canonical result candidate identity is duplicate or unexpected"
             )
-        prepared = {
-            **prepared_by_id[candidate_id],
-            "parent_job_id": preparation["parent_job_id"],
-        }
+        prepared = {**prepared_by_id[candidate_id], "parent_job_id": preparation["parent_job_id"]}
+        if scheduler_by_id:
+            prepared.update(scheduler_by_id[candidate_id])
         if hashlib.sha256(payloads[request_name]).hexdigest() != prepared[
             "request_sha256"
         ]:
@@ -187,6 +221,7 @@ def postprocess_canonical_bundles(
             "landscape_name": landscape_name,
             "landscape": landscape,
             "structure_map": structure_map,
+            "execution_binding": prepared,
         }
     if set(loaded) != set(candidate_ids):
         raise CMFrustraMPNNPostprocessError(
@@ -206,6 +241,7 @@ def postprocess_canonical_bundles(
         for candidate_id in candidate_ids:
             item = loaded[str(candidate_id)]
             prepared = prepared_by_id[str(candidate_id)]
+            execution_binding = item["execution_binding"]
             destination = global_results / str(candidate_id)
             shutil.copytree(item["bundle"], destination)
             copied_payloads = validate_result_manifest(destination, item["manifest"])
@@ -230,15 +266,15 @@ def postprocess_canonical_bundles(
             structure_maps.append(item["structure_map"])
             references.append({
                 "candidate_id": candidate_id,
-                "invocation_id": prepared["invocation_id"],
-                "source_sha256": prepared["source_sha256"],
+                "invocation_id": execution_binding["invocation_id"],
+                "source_sha256": execution_binding["source_sha256"],
                 "cm_complex_snapshot_sha256": prepared[
                     "cm_complex_snapshot_sha256"
                 ],
                 "requested_settings_sha256": prepared[
                     "requested_settings_sha256"
                 ],
-                "effective_settings_sha256": prepared[
+                "effective_settings_sha256": execution_binding[
                     "effective_settings_sha256"
                 ],
                 "bundle_relative_path": destination.relative_to(output_dir).as_posix(),
@@ -409,6 +445,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--canonical", type=Path, required=True)
     parser.add_argument("--preparation-manifest", type=Path, required=True)
+    parser.add_argument("--scheduler-terminal-receipt", type=Path)
     parser.add_argument("--bundle", type=Path, action="append", required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -417,6 +454,7 @@ def main(argv: list[str] | None = None) -> int:
             request_path=args.request,
             canonical_dir=args.canonical,
             preparation_manifest_path=args.preparation_manifest,
+            scheduler_terminal_receipt_path=args.scheduler_terminal_receipt,
             bundle_dirs=args.bundle,
             output_dir=args.out,
         )

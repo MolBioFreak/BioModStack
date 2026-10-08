@@ -855,9 +855,9 @@ def prepare_cm_candidate_v2(
         configuration_payload = configuration.model_dump(mode="json", exclude_none=False)
         request = {
             "schema_name": "workflow_component_request",
-            "schema_version": 2,
+            "schema_version": 3,
             "component_id": "frustrampnn",
-            "component_contract_version": "2.0",
+            "component_contract_version": "3.0",
             "invocation_id": f"frustrampnn:{parent_job_id}:{candidate_id}",
             "parent_job_id": parent_job_id,
             "parent_workflow_id": parent_workflow_id,
@@ -915,7 +915,7 @@ def prepare_cm_candidate_v2(
                 "structure_map", "raw_csv", "landscape", "summary", "execution_receipt",
             ],
         }
-        validate_frustrampnn_schema("workflow_component_request_v2", request)
+        validate_frustrampnn_schema("workflow_component_request_v3", request)
         component_request_path.write_bytes(canonical_json_bytes(request))
         authority_path.unlink()
         return request

@@ -478,7 +478,7 @@ async def test_child_receipt_binds_manifest_identity_and_every_ordered_group_ter
             "record_count": 2,
             "records": records,
         }
-        terminal["content_sha256"] = hashlib.sha256(
+        terminal["receipt_sha256"] = hashlib.sha256(
             canonical_json_bytes(terminal)
         ).hexdigest()
         artifact = Path(child.output_dir) / "frustrampnn" / "batches" / "grouped_batch_terminal_receipt_v1.json"
@@ -487,15 +487,18 @@ async def test_child_receipt_binds_manifest_identity_and_every_ordered_group_ter
 
         receipt = await child_jobs.child_receipt(session, child=child)
         assert receipt["batch_manifest"] == terminal["batch_manifest"]
-        assert receipt["grouped_terminal_artifact"]["content_sha256"] == terminal[
-            "content_sha256"
+        assert receipt["grouped_terminal_artifact"]["content_sha256"] == hashlib.sha256(
+            artifact.read_bytes()
+        ).hexdigest()
+        assert receipt["grouped_terminal_artifact"]["content_sha256"] != terminal[
+            "receipt_sha256"
         ]
         assert receipt["grouped_terminal_artifact"]["records"] == records
 
         tampered = dict(terminal)
         tampered["records"] = list(reversed(records))
-        tampered["content_sha256"] = hashlib.sha256(
-            canonical_json_bytes({k: v for k, v in tampered.items() if k != "content_sha256"})
+        tampered["receipt_sha256"] = hashlib.sha256(
+            canonical_json_bytes({k: v for k, v in tampered.items() if k != "receipt_sha256"})
         ).hexdigest()
         artifact.write_bytes(canonical_json_bytes(tampered))
         with pytest.raises(child_jobs.FrustraMPNNChildError, match="order"):
@@ -922,6 +925,80 @@ async def test_design_dataset_fans_out_into_scheduler_visible_jobs_with_remainde
             [item["design_id"] for item in child.params[child_jobs.ENVELOPE_KEY]["selection"]]
             for child in children
         ] == [["design-0", "design-1"], ["design-2", "design-3"], ["design-4"]]
+
+
+@pytest.mark.asyncio
+async def test_running_parent_workflow_uploads_terminal_dataset_to_generic_scheduler_fanout(
+    child_db,
+) -> None:
+    sessions, results = child_db
+    parent_root = results / "running-parent"
+    parent_root.mkdir()
+    async with sessions() as session:
+        session.add(Job(
+            id="running-parent-job",
+            name="running parent",
+            status="running",
+            queue_status="running",
+            model_id="proteinmpnn",
+            mode="protein_design",
+            params={},
+            output_dir=str(parent_root),
+            child_output_dir=str(parent_root),
+        ))
+        await session.commit()
+
+    app = FastAPI()
+    app.include_router(router)
+
+    async def override_session():
+        async with sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_session
+    settings_payload = _batched_settings(2).model_dump(mode="json")
+    settings_payload.pop("settings_value_origin")
+    candidates = [
+        {
+            "candidate_id": f"terminal-{ordinal}",
+            "parent_job_id": "running-parent-job",
+            "parent_workflow_id": "protein_design",
+            "producer_stage": "protein_design:terminal",
+            "producer_candidate_key": f"terminal/terminal-{ordinal}.pdb",
+            "requiredness": "required",
+        }
+        for ordinal in range(3)
+    ]
+    files = [
+        ("structure_files", (f"terminal-{ordinal}.pdb", _pdb_for_chain(chr(65 + ordinal)), "chemical/x-pdb"))
+        for ordinal in range(3)
+    ]
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/frustrampnn/jobs/running-parent-job/workflow-dataset/analyze",
+            data={
+                "parent_workflow_id": "protein_design",
+                "dataset_manifest": json.dumps({"candidates": candidates}, sort_keys=True, separators=(",", ":")),
+                "frustrampnn_settings": json.dumps(settings_payload, sort_keys=True, separators=(",", ":")),
+                "settings_value_origin": "bms_default",
+            },
+            files=files,
+        )
+
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    assert [child["structure_count"] for child in payload["child_jobs"]] == [2, 1]
+    assert [
+        [candidate["candidate_id"] for candidate in child["candidates"]]
+        for child in payload["child_jobs"]
+    ] == [["terminal-0", "terminal-1"], ["terminal-2"]]
+    async with sessions() as session:
+        children = (
+            await session.execute(select(Job).where(Job.parent_job_id == "running-parent-job"))
+        ).scalars().all()
+        assert len(children) == 2
+        assert all(child.child_stage == "frustrampnn" for child in children)
 
 
 @pytest.mark.asyncio

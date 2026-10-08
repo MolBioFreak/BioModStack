@@ -41,6 +41,7 @@ process CanonicalConformationalAnalysisPlaneV2 {
     tuple val(request_id), val(backend_dir), path(request_root), path(canonical_dir)
     path(preparation_manifest)
     path(result_bundles)
+    path(scheduler_terminal_receipt)
 
     output:
     tuple val(request_id), path('canonical_result'), emit: canonical
@@ -53,6 +54,7 @@ process CanonicalConformationalAnalysisPlaneV2 {
       --request '${request_root}/cm_request_v1.json' \
       --canonical '${canonical_dir}' \
       --preparation-manifest '${preparation_manifest}' \
+      --scheduler-terminal-receipt '${scheduler_terminal_receipt}' \
       ${bundleArgs} \
       --out canonical_result
     """
