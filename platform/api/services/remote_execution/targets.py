@@ -65,7 +65,8 @@ ATTACHMENT_RELEASED = "Attachment was released before setup completed"
 ATTACHMENT_WORKER_ABSENT = "Worker is absent from the provider inventory; attachment released"
 ATTACHMENT_NOT_RUNNING = "Provider reports the instance is not running; attachment released"
 ATTACHMENT_ENDPOINT_SELECTION = "Alternate SSH endpoint selection was superseded during setup"
-ATTACHMENT_COMMIT_SUPERSEDED = "Attachment commit was superseded before it could be recorded"
+ATTACHMENT_INVENTORY_STALE = "Provider inventory went stale during setup"
+ATTACHMENT_NOT_ATTACHING = "Attachment attempt is no longer the active setup attempt"
 ATTACHMENT_PUBLICATION_REFUSED = "Readiness publication was refused before it could be committed"
 ATTACHMENT_TASK_NOT_STARTED = "Attachment task could not be started; retry Attach"
 ATTACHMENT_ADMISSION_INCOMPLETE = "Setup admission did not publish an attempt identity"
@@ -73,7 +74,7 @@ ATTACHMENT_FENCE_REASONS = frozenset({
     ATTACHMENT_SUPERSEDED, ATTACHMENT_REPLACED, ATTACHMENT_ENDPOINT_CHANGED,
     ATTACHMENT_HOST_KEY_CHANGED, ATTACHMENT_LEASED, ATTACHMENT_RELEASED,
     ATTACHMENT_WORKER_ABSENT, ATTACHMENT_NOT_RUNNING, ATTACHMENT_ENDPOINT_SELECTION,
-    ATTACHMENT_COMMIT_SUPERSEDED, ATTACHMENT_PUBLICATION_REFUSED,
+    ATTACHMENT_INVENTORY_STALE, ATTACHMENT_NOT_ATTACHING, ATTACHMENT_PUBLICATION_REFUSED,
 })
 STALE_ATTACHMENT_RELEASED = "Stranded attachment attempt was released without a running task"
 DETACH_LEASE_BLOCKED = "Execution target has an active attempt lease; cannot detach"
@@ -526,6 +527,26 @@ def attachment_fence_reason(target, *, started_at, connection, fingerprint) -> s
     return None
 
 
+def attachment_admission_reason(target, *, started_at, connection, fingerprint) -> str:
+    """Typed reason the pre-commit fence refused a not-yet-committed attempt.
+
+    This is the one attempt fence that still requires an authoritative provider
+    reading: the attempt has not written its own attachment yet, so the fresh
+    complete inventory is what proves the worker is still the one being
+    attached. After the commit, provider confirmation is admission-only.
+    """
+    reason = attachment_fence_reason(target, started_at=started_at, connection=connection,
+                                     fingerprint=fingerprint)
+    if reason is not None:
+        return reason
+    inventory = (target.provider_metadata or {}).get("inventory") or {}
+    if target.state != "probing":
+        return ATTACHMENT_NOT_ATTACHING
+    if inventory.get("present") is False or inventory.get("running") is not True:
+        return _released_reason(inventory)
+    return ATTACHMENT_INVENTORY_STALE
+
+
 def telemetry_eligible(target):
     """Monitoring is not scientific admission; no SSH or metadata writes here."""
     metadata = target.provider_metadata or {}
@@ -787,19 +808,29 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         attachment = dict(started_at=started_at, host=connection.host, port=connection.port,
             username=connection.username, remote_root=connection.remote_root, fingerprint=fingerprint,
             telemetry="BMS_TELEMETRY" in attached.stdout.splitlines())
+        inventory = ExecutionTarget.provider_metadata["inventory"]
+        # The committing attempt has not published its own attachment yet, so this
+        # is the last point where the provider's fresh complete reading is the
+        # evidence that the worker being attached is still the owned instance.
         committed = await session.execute(update(ExecutionTarget).where(
-            ExecutionTarget.id == identifier,
+            ExecutionTarget.id == identifier, ExecutionTarget.state == "probing",
             ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
             ExecutionTarget.leased_job_id.is_(None), ExecutionTarget.host == connection.host,
             ExecutionTarget.port == connection.port, ExecutionTarget.username == connection.username,
             ExecutionTarget.remote_root == connection.remote_root,
             or_(ExecutionTarget.host_key_sha256.is_(None), ExecutionTarget.host_key_sha256 == fingerprint),
+            inventory["status"].as_string() == "complete",
+            inventory["present"].as_boolean().is_(True), inventory["running"].as_boolean().is_(True),
+            inventory["checked_at"].as_string() >= (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
+            inventory["checked_at"].as_string() <= now.isoformat(),
         ).values(active=True, host_key_sha256=fingerprint, activated_at=now, updated_at=now,
             provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.attachment",
                 func.json(json.dumps(attachment)))).execution_options(synchronize_session=False))
         if committed.rowcount != 1:
             await session.rollback()
-            raise ExecutionTargetError(ATTACHMENT_COMMIT_SUPERSEDED)
+            await session.refresh(target)
+            raise ExecutionTargetError(attachment_admission_reason(
+                target, started_at=started_at, connection=connection, fingerprint=fingerprint))
         await session.commit()
         script = Path(__file__).with_name("bootstrap_worker.sh").read_bytes()
         await checked_io(run_remote, connection, ["bash", "-s", "--", "check", connection.remote_root], input_bytes=script, timeout=60)

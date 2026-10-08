@@ -541,7 +541,7 @@ def managed_runtime(monkeypatch):
     return hooks
 
 
-def attach_stubs(monkeypatch, *, on_command=None, after=1):
+def attach_stubs(monkeypatch, *, on_command=None, after=1, on_attach=None):
     """Stub one attachment's transport; `on_command` runs once, after the commit."""
     seen = []
 
@@ -558,6 +558,8 @@ def attach_stubs(monkeypatch, *, on_command=None, after=1):
         if command[:3] == ['sh', '-s', '--']:
             assert command[3] == connection.remote_root
             assert b'BMS_ATTACHED' in kwargs['input_bytes']
+            if on_attach is not None:
+                await on_attach(command)
             return SimpleNamespace(stdout='BMS_ATTACHED\nBMS_TELEMETRY\n')
         seen.append(command)
         if on_command is not None and len(seen) == after:
@@ -741,7 +743,7 @@ async def test_attach_task_registry_failure_does_not_strand_the_target(store, mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('blocked', ['superseded', 'endpoint', 'lease', 'released', 'absent',
-                                     'not_running', 'publication'])
+                                     'not_running', 'stale_commit', 'publication'])
 async def test_attachment_fence_publishes_the_blocking_clause(store, monkeypatch, managed_runtime, blocked):
     session, factory = store
     identifier = '51264075'
@@ -752,6 +754,7 @@ async def test_attachment_fence_publishes_the_blocking_clause(store, monkeypatch
         'released': (targets.ATTACHMENT_RELEASED, 'recorded'),
         'absent': (targets.ATTACHMENT_WORKER_ABSENT, 'recorded'),
         'not_running': (targets.ATTACHMENT_NOT_RUNNING, 'recorded'),
+        'stale_commit': (targets.ATTACHMENT_INVENTORY_STALE, 'recorded'),
         'publication': (targets.ATTACHMENT_LEASED, 'lease'),
     }[blocked]
 
@@ -765,6 +768,11 @@ async def test_attachment_fence_publishes_the_blocking_clause(store, monkeypatch
                 row.host = '203.0.113.99'
             elif blocked in {'lease', 'publication'}:
                 row.leased_job_id = 'racing-owner'
+            elif blocked == 'stale_commit':
+                metadata = dict(row.provider_metadata)
+                metadata['inventory'] = {**metadata['inventory'],
+                                         'checked_at': (datetime.utcnow() - timedelta(seconds=121)).isoformat()}
+                row.provider_metadata = metadata
             else:
                 metadata = dict(row.provider_metadata)
                 metadata['inventory'] = {**metadata['inventory'],
@@ -778,6 +786,10 @@ async def test_attachment_fence_publishes_the_blocking_clause(store, monkeypatch
     if blocked == 'publication':
         managed_runtime.before_publication = mutate
         attach_stubs(monkeypatch)
+    elif blocked == 'stale_commit':
+        # The last pre-commit fence: the provider reading goes stale while the
+        # authenticated attachment root is being proved.
+        attach_stubs(monkeypatch, on_attach=mutate)
     else:
         # `superseded` must be observed by the fence, not by the setup writer.
         attach_stubs(monkeypatch, on_command=mutate, after=2 if blocked == 'superseded' else 1)

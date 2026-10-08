@@ -259,11 +259,13 @@ async def test_async_attach_persists_progress_and_rejects_duplicate(store, monke
     with pytest.raises(targets.ExecutionTargetError, match='in progress'):
         await controller.attach(session, request)
     async with factory() as other:
-        assert (await targets.list_targets(other))[0].setup.phase == 'checking'
+        listed = {row.id: row for row in await targets.list_targets(other)}
+        assert listed['vast:49674511'].setup.phase == 'checking'
     release.set()
     await asyncio.gather(*controller.tasks.values())
     async with factory() as other:
-        assert (await targets.list_targets(other))[0].setup.phase == 'ready'
+        listed = {row.id: row for row in await targets.list_targets(other)}
+        assert listed['vast:49674511'].setup.phase == 'ready'
     await controller.close()
 
 
