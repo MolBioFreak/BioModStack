@@ -48,6 +48,11 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     # Install RFdiffusion itself
     pip install --no-cache-dir /app/RFdiffusion --no-deps
 
+    # Create schedules directory for RFdiffusion (read-only filesystem workaround)
+    # RFdiffusion tries to create this at runtime, but Apptainer containers are read-only
+    mkdir -p /usr/local/lib/python3.10/dist-packages/schedules
+    chmod 777 /usr/local/lib/python3.10/dist-packages/schedules
+
 # Setting environment variables
 %environment
     DGLBACKEND="pytorch"
