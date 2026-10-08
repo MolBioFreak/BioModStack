@@ -60,6 +60,13 @@ class JobResponse(BaseModel):
     # Batch grouping for job sets
     batch_id: Optional[str] = None
     batch_name: Optional[str] = None
+    # GPU assignment
+    assigned_gpu: Optional[int] = None
+    vram_estimate_mb: Optional[int] = None
+    # Stage tracking for multi-stage pipelines
+    current_stage: Optional[str] = None
+    completed_stages: Optional[List[str]] = None
+    stage_outputs: Optional[dict] = None
     
     class Config:
         from_attributes = True

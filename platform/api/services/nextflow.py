@@ -264,6 +264,16 @@ async def launch_nextflow_job(
             # Wait for completion
             stdout, _ = await process.communicate()
             
+            # Save Nextflow execution log to output directory
+            try:
+                log_path = Path(output_dir) / "nextflow.log"
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(log_path, "wb") as f:
+                    if stdout:
+                        f.write(stdout)
+            except Exception as log_err:
+                logger.warning(f"Failed to save nextflow.log: {log_err}")
+            
             # Remove from running processes
             _running_processes.pop(job_id, None)
             
@@ -391,11 +401,23 @@ def build_nextflow_command(
 
     
     # Base command
-    cmd = [
-        "nextflow", "run", "main.nf",
-        "-profile", profile,
-        "--out_dir", output_dir,
-    ]
+    # Base command logic with Resumption support
+    resume_work_dir = params.get('resume_work_dir')
+    if resume_work_dir:
+        logger.info(f"Resuming job using work dir: {resume_work_dir}")
+        cmd = [
+            "nextflow", "run", "main.nf",
+            "-profile", profile,
+            "-w", resume_work_dir,
+            "-resume",
+            "--out_dir", output_dir,
+        ]
+    else:
+        cmd = [
+            "nextflow", "run", "main.nf",
+            "-profile", profile,
+            "--out_dir", output_dir,
+        ]
     
     # Map model-specific params to Nextflow params
     param_mapping = {

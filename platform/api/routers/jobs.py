@@ -5,7 +5,7 @@ Jobs API router - Create, list, cancel pipeline jobs.
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from typing import Optional
+from typing import Optional, List
 import uuid
 import os
 import logging
@@ -461,6 +461,190 @@ async def resubmit_job(
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE CHECKPOINTING ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/{job_id}/stage-complete")
+async def report_stage_complete(
+    job_id: str,
+    stage: str,
+    outputs: List[str] = [],
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Report that a workflow stage has completed.
+    Called by Nextflow workflows after each stage finishes.
+    """
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Update completed stages
+    completed = job.completed_stages or []
+    if stage not in completed:
+        completed.append(stage)
+    job.completed_stages = completed
+    
+    # Update stage outputs
+    stage_outputs = job.stage_outputs or {}
+    stage_outputs[stage] = outputs
+    job.stage_outputs = stage_outputs
+    
+    # Clear current stage (will be set when next stage starts)
+    job.current_stage = None
+    
+    await session.commit()
+    
+    logger.info(f"Job {job_id}: Stage '{stage}' completed with {len(outputs)} outputs")
+    
+    return {
+        "message": f"Stage '{stage}' marked complete",
+        "job_id": job_id,
+        "completed_stages": completed,
+        "outputs_count": len(outputs)
+    }
+
+
+@router.post("/{job_id}/stage-start")
+async def report_stage_start(
+    job_id: str,
+    stage: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Report that a workflow stage has started.
+    Called by Nextflow workflows when entering a new stage.
+    """
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job.current_stage = stage
+    await session.commit()
+    
+    logger.info(f"Job {job_id}: Stage '{stage}' started")
+    
+    return {"message": f"Stage '{stage}' started", "job_id": job_id}
+
+
+@router.get("/{job_id}/stages")
+async def get_job_stages(
+    job_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Get stage progress for a job.
+    Returns current stage, completed stages, and output paths.
+    """
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Define pipeline stages based on mode
+    pipeline_stages = {
+        "antibody_denovo": ["rfantibody", "fampnn", "boltz2"],
+        "antibody_denovo_pipeline": ["rfantibody", "fampnn", "boltz2"],
+        "binder_denovo": ["rfdiffusion", "proteinmpnn", "boltz2"],
+        "monomer_denovo": ["rfdiffusion", "proteinmpnn", "af2"],
+    }
+    
+    all_stages = pipeline_stages.get(job.mode, [])
+    completed = job.completed_stages or []
+    
+    return {
+        "job_id": job_id,
+        "mode": job.mode,
+        "all_stages": all_stages,
+        "current_stage": job.current_stage,
+        "completed_stages": completed,
+        "stage_outputs": job.stage_outputs or {},
+        "can_resume": job.status in ["failed", "cancelled"] and len(completed) > 0
+    }
+
+
+@router.post("/{job_id}/resume")
+async def resume_job(
+    job_id: str,
+    from_stage: str = None,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Resume a failed job from a checkpoint.
+    
+    If from_stage is specified, restarts from that stage using existing outputs.
+    If not specified, resumes from the last completed stage.
+    """
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.status not in ["failed", "cancelled"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot resume job with status: {job.status}"
+        )
+    
+    completed = job.completed_stages or []
+    if not completed:
+        raise HTTPException(
+            status_code=400,
+            detail="No completed stages to resume from. Use resubmit instead."
+        )
+    
+    # Determine work directory for resumption
+    # We use the shared 'work' directory in project root by default
+    # This allows Nextflow to find cached tasks from the previous run
+    resume_work_dir = "work"
+    
+    # Create new job with resume info
+    import uuid
+    new_job_id = str(uuid.uuid4())
+    base_name = job.name.replace("_resubmit", "").replace("_resumed", "")
+    new_name = f"{base_name}_resumed"
+    
+    new_job = Job(
+        id=new_job_id,
+        name=new_name,
+        status="queued",
+        model_id=job.model_id,
+        mode=job.mode,
+        params={
+            **job.params,
+            "resume_job_id": job_id,
+            "resume_work_dir": resume_work_dir,
+            # We don't need manual stage skipping params because we use -resume
+        },
+        output_dir=None,  # Will be auto-generated for new job
+        batch_id=job.batch_id,
+        batch_name=job.batch_name,
+        # Don't copy completed_stages/stage_outputs - they will be re-populated
+        # as the resumed workflow re-emits cached results
+        completed_stages=[], 
+        stage_outputs={},
+    )
+    
+    session.add(new_job)
+    await session.commit()
+    
+    logger.info(f"Job {job_id} resumed as {new_job_id} using work dir '{resume_work_dir}'")
+    
+    return {
+        "message": f"Job resumed. Checking cache in '{resume_work_dir}'",
+        "original_job_id": job_id,
+        "new_job_id": new_job_id,
+        "new_job_name": new_name,
+        "resume_from_stage": from_stage or "auto",
+        "preserved_stages": []
+    }
 
 
 @router.get("/{job_id}/structure-files")
@@ -610,7 +794,12 @@ async def get_job_logs(
     
     # Fallback: Read .nextflow.log from output_dir
     if job.output_dir:
-        nf_log_path = Path(job.output_dir) / ".nextflow.log"
+        # Check for explicitly saved nextflow.log first (from nextflow.py update)
+        nf_log_path = Path(job.output_dir) / "nextflow.log"
+        
+        if not nf_log_path.exists():
+            nf_log_path = Path(job.output_dir) / ".nextflow.log"
+            
         if not nf_log_path.exists():
             nf_log_path = PROJECT_ROOT / ".nextflow.log"
         
