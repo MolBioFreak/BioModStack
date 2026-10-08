@@ -108,7 +108,90 @@ export interface InfraLiveTelemetryProps {
     defaultPollIntervalMs?: PollPreset;
     defaultWindowMinutes?: WindowPreset;
     variant?: 'infra' | 'dashboard';
+    dashboardSize?: 'micro' | 'compact' | 'standard' | 'large' | 'xlarge';
 }
+
+interface DashboardSizingConfig {
+    compactFrame: boolean;
+    controlsGapClass: string;
+    layoutGapClass: string;
+    outerSpacingClass: string;
+    headerGapClass: string;
+    cpuPanelHeight: number;
+    cpuPlotHeight: number;
+    ramPanelHeight: number;
+    ramPlotHeight: number;
+    gpuPanelHeight: number;
+    gpuPlotHeight: number;
+}
+
+const DASHBOARD_SIZING: Record<NonNullable<InfraLiveTelemetryProps['dashboardSize']>, DashboardSizingConfig> = {
+    micro: {
+        compactFrame: true,
+        controlsGapClass: 'gap-1',
+        layoutGapClass: 'gap-1',
+        outerSpacingClass: 'space-y-1',
+        headerGapClass: 'gap-2',
+        cpuPanelHeight: 118,
+        cpuPlotHeight: 118,
+        ramPanelHeight: 118,
+        ramPlotHeight: 118,
+        gpuPanelHeight: 96,
+        gpuPlotHeight: 96,
+    },
+    compact: {
+        compactFrame: true,
+        controlsGapClass: 'gap-1.5',
+        layoutGapClass: 'gap-1.5',
+        outerSpacingClass: 'space-y-1.5',
+        headerGapClass: 'gap-2.5',
+        cpuPanelHeight: 168,
+        cpuPlotHeight: 168,
+        ramPanelHeight: 168,
+        ramPlotHeight: 168,
+        gpuPanelHeight: 132,
+        gpuPlotHeight: 132,
+    },
+    standard: {
+        compactFrame: true,
+        controlsGapClass: 'gap-2',
+        layoutGapClass: 'gap-2',
+        outerSpacingClass: 'space-y-2',
+        headerGapClass: 'gap-4',
+        cpuPanelHeight: 228,
+        cpuPlotHeight: 228,
+        ramPanelHeight: 228,
+        ramPlotHeight: 228,
+        gpuPanelHeight: 196,
+        gpuPlotHeight: 196,
+    },
+    large: {
+        compactFrame: true,
+        controlsGapClass: 'gap-2',
+        layoutGapClass: 'gap-3',
+        outerSpacingClass: 'space-y-3',
+        headerGapClass: 'gap-4',
+        cpuPanelHeight: 286,
+        cpuPlotHeight: 286,
+        ramPanelHeight: 286,
+        ramPlotHeight: 286,
+        gpuPanelHeight: 244,
+        gpuPlotHeight: 244,
+    },
+    xlarge: {
+        compactFrame: true,
+        controlsGapClass: 'gap-2.5',
+        layoutGapClass: 'gap-4',
+        outerSpacingClass: 'space-y-4',
+        headerGapClass: 'gap-4',
+        cpuPanelHeight: 360,
+        cpuPlotHeight: 360,
+        ramPanelHeight: 360,
+        ramPlotHeight: 360,
+        gpuPanelHeight: 310,
+        gpuPlotHeight: 310,
+    },
+};
 
 
 function stopSharedTelemetryCollector() {
@@ -1101,6 +1184,8 @@ function CpuPanel({
     samples,
     showXAxisLabels,
     compact = false,
+    panelHeight,
+    plotHeight,
     traceType = 'scatter',
     gapBreakMs,
     redrawKey,
@@ -1109,6 +1194,8 @@ function CpuPanel({
     samples: LiveSample[];
     showXAxisLabels: boolean;
     compact?: boolean;
+    panelHeight?: number;
+    plotHeight?: number;
     traceType?: 'scatter' | 'scattergl';
     gapBreakMs: number;
     redrawKey: string | number;
@@ -1137,9 +1224,9 @@ function CpuPanel({
 
     return (
         <PanelFrame title={current.name} compact={compact}>
-            <div className={compact ? 'h-[17rem]' : 'h-72'}>
+            <div style={{ height: panelHeight ?? (compact ? 270 : 288) }}>
                 <TimeSeriesPlot
-                    height={compact ? 270 : 288}
+                    height={plotHeight ?? (compact ? 270 : 288)}
                     samples={samples}
                     yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
@@ -1194,6 +1281,8 @@ function RamPanel({
     samples,
     showXAxisLabels,
     compact = false,
+    panelHeight,
+    plotHeight,
     traceType = 'scatter',
     gapBreakMs,
     redrawKey,
@@ -1202,6 +1291,8 @@ function RamPanel({
     samples: LiveSample[];
     showXAxisLabels: boolean;
     compact?: boolean;
+    panelHeight?: number;
+    plotHeight?: number;
     traceType?: 'scatter' | 'scattergl';
     gapBreakMs: number;
     redrawKey: string | number;
@@ -1223,9 +1314,9 @@ function RamPanel({
 
     return (
         <PanelFrame title="System Memory" compact={compact}>
-            <div className={compact ? 'h-[17rem]' : 'h-72'}>
+            <div style={{ height: panelHeight ?? (compact ? 270 : 288) }}>
                 <TimeSeriesPlot
-                    height={compact ? 270 : 288}
+                    height={plotHeight ?? (compact ? 270 : 288)}
                     samples={samples}
                     yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
@@ -1279,6 +1370,8 @@ function GpuPanel({
     samples,
     showXAxisLabels,
     compact = false,
+    panelHeight,
+    plotHeight,
     traceType = 'scatter',
     powerControls,
     gapBreakMs,
@@ -1288,6 +1381,8 @@ function GpuPanel({
     samples: LiveSample[];
     showXAxisLabels: boolean;
     compact?: boolean;
+    panelHeight?: number;
+    plotHeight?: number;
     traceType?: 'scatter' | 'scattergl';
     powerControls?: GpuInlinePowerControlProps;
     gapBreakMs: number;
@@ -1323,9 +1418,9 @@ function GpuPanel({
             {!compact ? <GpuProcessList gpu={gpu} compact={compact} /> : null}
             {compact && !powerControls ? <GpuProcessList gpu={gpu} compact /> : null}
 
-            <div className={compact ? 'h-60' : 'h-64'}>
+            <div style={{ height: panelHeight ?? (compact ? 240 : 256) }}>
                 <TimeSeriesPlot
-                    height={compact ? 240 : 256}
+                    height={plotHeight ?? (compact ? 240 : 256)}
                     samples={samples}
                     yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
@@ -1454,8 +1549,10 @@ export function InfraLiveTelemetry({
     defaultPollIntervalMs = 1000,
     defaultWindowMinutes = 3,
     variant = 'infra',
+    dashboardSize = 'standard',
 }: InfraLiveTelemetryProps = {}) {
     const compact = variant === 'dashboard';
+    const dashboardSizing = DASHBOARD_SIZING[dashboardSize];
     // Use SVG scatter everywhere here. The dashboard/infra charts are modest in size,
     // and avoiding Plotly's WebGL path is materially more stable under heavy browser load.
     const traceType: 'scatter' | 'scattergl' = 'scatter';
@@ -1581,11 +1678,11 @@ export function InfraLiveTelemetry({
     return (
         <section className={variant === 'infra'
             ? 'mb-6 rounded-3xl border border-[var(--border-primary)] bg-[var(--bg-primary)]/96 p-5 shadow-2xl shadow-black/10'
-            : 'space-y-2'
+            : dashboardSizing.outerSpacingClass
         }>
             <div className={variant === 'infra'
                 ? 'mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between'
-                : 'flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between'
+                : `flex flex-col ${dashboardSizing.headerGapClass} lg:flex-row lg:items-center lg:justify-between`
             }>
                 {variant === 'infra' ? (
                     <div>
@@ -1596,7 +1693,7 @@ export function InfraLiveTelemetry({
                     </div>
                 ) : null}
 
-                <div className="flex flex-wrap items-start justify-end gap-2">
+                <div className={`flex flex-wrap items-start justify-end ${dashboardSizing.controlsGapClass}`}>
                     <SegmentedControl
                         label="Poll"
                         value={pollIntervalMs}
@@ -1627,7 +1724,7 @@ export function InfraLiveTelemetry({
             )}
 
             {payload && (
-                <div className={compact ? 'space-y-2' : 'space-y-6'}>
+                <div className={compact ? dashboardSizing.outerSpacingClass : 'space-y-6'}>
                     {compact && (
                         <TotalPowerBar
                             payload={payload}
@@ -1635,12 +1732,14 @@ export function InfraLiveTelemetry({
                             compact={compact}
                         />
                     )}
-                    <div className={`grid xl:grid-cols-2 ${compact ? 'gap-2' : 'gap-6'}`}>
+                    <div className={`grid xl:grid-cols-2 ${compact ? dashboardSizing.layoutGapClass : 'gap-6'}`}>
                         <CpuPanel
                             current={payload.cpu}
                             samples={visibleSamples}
                             showXAxisLabels={showXAxisLabels}
-                            compact={compact}
+                            compact={compact && dashboardSizing.compactFrame}
+                            panelHeight={compact ? dashboardSizing.cpuPanelHeight : undefined}
+                            plotHeight={compact ? dashboardSizing.cpuPlotHeight : undefined}
                             traceType={traceType}
                             gapBreakMs={gapBreakMs}
                             redrawKey={`${plotRedrawKey}:cpu`}
@@ -1649,21 +1748,25 @@ export function InfraLiveTelemetry({
                             current={payload.ram}
                             samples={visibleSamples}
                             showXAxisLabels={showXAxisLabels}
-                            compact={compact}
+                            compact={compact && dashboardSizing.compactFrame}
+                            panelHeight={compact ? dashboardSizing.ramPanelHeight : undefined}
+                            plotHeight={compact ? dashboardSizing.ramPlotHeight : undefined}
                             traceType={traceType}
                             gapBreakMs={gapBreakMs}
                             redrawKey={`${plotRedrawKey}:ram`}
                         />
                     </div>
 
-                    <div className={`grid xl:grid-cols-2 ${compact ? 'gap-2' : 'gap-6'}`}>
+                    <div className={`grid xl:grid-cols-2 ${compact ? dashboardSizing.layoutGapClass : 'gap-6'}`}>
                         {payload.gpus.map((gpu) => (
                             <GpuPanel
                                 key={gpu.index}
                                 gpu={gpu}
                                 samples={visibleSamples}
                                 showXAxisLabels={showXAxisLabels}
-                                compact={compact}
+                                compact={compact && dashboardSizing.compactFrame}
+                                panelHeight={compact ? dashboardSizing.gpuPanelHeight : undefined}
+                                plotHeight={compact ? dashboardSizing.gpuPlotHeight : undefined}
                                 traceType={traceType}
                                 gapBreakMs={gapBreakMs}
                                 redrawKey={`${plotRedrawKey}:gpu:${gpu.index}`}
