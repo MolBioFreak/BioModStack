@@ -91,3 +91,4 @@ process FilterDiffDock {
         2>&1 | tee filter_diffdock.log
     """
 }
+

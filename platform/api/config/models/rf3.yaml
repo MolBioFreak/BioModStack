@@ -79,9 +79,8 @@ params:
     
   - name: rf3_extra_config
     type: string
-    description: Extra configuration flags
+    description: "Additional RF3 config overrides (e.g., 'seed=42')"
     required: false
-    hidden: true
 
 enabled: true
 experimental: true

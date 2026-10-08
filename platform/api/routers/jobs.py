@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import Optional
 import uuid
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -104,23 +105,34 @@ async def create_job(
         if errors:
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
     
+    # DEBUG: Trace complex_components in incoming request
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning(f"DEBUG jobs.py: Received job_data.params keys: {list(job_data.params.keys())}")
+    if 'complex_components' in job_data.params:
+        logger.warning(f"DEBUG jobs.py: complex_components found with {len(job_data.params['complex_components'])} items")
+    else:
+        logger.warning("DEBUG jobs.py: complex_components NOT in job_data.params!")
+    
     job_id = str(uuid.uuid4())
     
-    # Create output directory name
+    # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = f"pdj_results/{job_data.name}_{timestamp}"
+    # Use absolute path to ensure API and Nextflow agree on location
+    # API runs in platform/api, Nextflow runs in PROJECT_ROOT
+    output_dir = str(PROJECT_ROOT / "pdj_results" / f"{job_data.name}_{timestamp}")
+    os.makedirs(output_dir, exist_ok=True)
     
     # Create job record
     job = Job(
         id=job_id,
         name=job_data.name,
-        status=JobStatus.QUEUED.value,
         model_id=job_data.model_id,
         mode=job_data.mode,
         params=job_data.params,
-        output_dir=output_dir
+        output_dir=output_dir,  # Store absolute path
+        status=JobStatus.QUEUED.value
     )
-    
     session.add(job)
     await session.commit()
     await session.refresh(job)
@@ -134,6 +146,7 @@ async def create_job(
         params=job_data.params,
         output_dir=output_dir
     )
+    
     
     return JobResponse(
         id=job.id,

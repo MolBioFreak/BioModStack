@@ -219,3 +219,171 @@ async def get_ntp_library():
             "CTP": {"smiles": NTP_SMILES["CTP"], "name": "Cytidine triphosphate"},
         }
     }
+
+
+# ============================================================================
+# 3D Conformer Generation using RDKit
+# ============================================================================
+
+class Generate3DRequest(BaseModel):
+    """Request for 3D conformer generation from SMILES."""
+    smiles: str = Field(..., description="SMILES string to convert to 3D")
+    name: str = Field(default="ligand", description="Name for the output file")
+    num_conformers: int = Field(default=1, ge=1, le=10, description="Number of conformers to generate")
+    energy_minimize: bool = Field(default=True, description="Apply MMFF energy minimization")
+    output_format: Literal['pdb', 'sdf', 'mol'] = Field(default='pdb', description="Output format")
+
+
+class Generate3DResponse(BaseModel):
+    """Response with 3D coordinates."""
+    success: bool
+    pdb_block: Optional[str] = None
+    file_path: Optional[str] = None
+    smiles: str
+    name: str
+    num_atoms: int = 0
+    energy: Optional[float] = None
+    error: Optional[str] = None
+
+
+@router.post("/generate-3d", response_model=Generate3DResponse)
+async def generate_3d_conformer(request: Generate3DRequest):
+    """
+    Generate 3D coordinates from a SMILES string using RDKit.
+    
+    Uses ETKDG (Experimental-Torsion Distance Geometry) for conformer generation
+    and MMFF (Merck Molecular Force Field) for energy minimization.
+    
+    This is the industry-standard approach for LigandMPNN input preparation.
+    """
+    try:
+        from rdkit import Chem
+        from rdkit.Chem import AllChem
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="RDKit not available. Please install rdkit: pip install rdkit"
+        )
+    
+    import os
+    from pathlib import Path
+    
+    smiles = request.smiles.strip()
+    
+    # Parse SMILES
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return Generate3DResponse(
+            success=False,
+            smiles=smiles,
+            name=request.name,
+            error=f"Invalid SMILES string: {smiles}"
+        )
+    
+    # Add hydrogens (required for accurate 3D geometry)
+    mol = Chem.AddHs(mol)
+    
+    # Generate 3D conformer using ETKDG
+    try:
+        # ETKDGv3 is the latest and most accurate distance geometry method
+        params = AllChem.ETKDGv3()
+        params.randomSeed = 42  # For reproducibility
+        params.numThreads = 0   # Use all available threads
+        
+        result = AllChem.EmbedMolecule(mol, params)
+        if result == -1:
+            # Fallback to simpler embedding if ETKDGv3 fails
+            result = AllChem.EmbedMolecule(mol, randomSeed=42)
+            if result == -1:
+                return Generate3DResponse(
+                    success=False,
+                    smiles=smiles,
+                    name=request.name,
+                    error="Failed to generate 3D conformer. SMILES may be too complex."
+                )
+    except Exception as e:
+        return Generate3DResponse(
+            success=False,
+            smiles=smiles,
+            name=request.name,
+            error=f"3D embedding failed: {str(e)}"
+        )
+    
+    # Energy minimization with MMFF
+    energy = None
+    if request.energy_minimize:
+        try:
+            # Try MMFF first (better for drug-like molecules)
+            mmff_props = AllChem.MMFFGetMoleculeProperties(mol)
+            if mmff_props:
+                ff = AllChem.MMFFGetMoleculeForceField(mol, mmff_props)
+                if ff:
+                    ff.Minimize(maxIts=500)
+                    energy = ff.CalcEnergy()
+            else:
+                # Fallback to UFF
+                AllChem.UFFOptimizeMolecule(mol, maxIters=500)
+        except Exception:
+            pass  # Continue without minimization
+    
+    # Generate output
+    num_atoms = mol.GetNumAtoms()
+    
+    if request.output_format == 'pdb':
+        pdb_block = Chem.MolToPDBBlock(mol)
+    elif request.output_format == 'sdf':
+        pdb_block = Chem.MolToMolBlock(mol)
+    else:
+        pdb_block = Chem.MolToMolBlock(mol)
+    
+    # Save to file
+    file_path = None
+    try:
+        ligands_dir = Path(__file__).parent.parent / "inputs" / "ligands"
+        ligands_dir.mkdir(parents=True, exist_ok=True)
+        
+        ext = 'pdb' if request.output_format == 'pdb' else 'sdf'
+        safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in request.name)
+        file_path = str(ligands_dir / f"{safe_name}.{ext}")
+        
+        with open(file_path, 'w') as f:
+            f.write(pdb_block)
+    except Exception as e:
+        # File save failed but we can still return the PDB block
+        pass
+    
+    return Generate3DResponse(
+        success=True,
+        pdb_block=pdb_block,
+        file_path=file_path,
+        smiles=smiles,
+        name=request.name,
+        num_atoms=num_atoms,
+        energy=energy
+    )
+
+
+@router.get("/generate-3d/ntp/{ntp_name}")
+async def generate_ntp_3d(ntp_name: str, energy_minimize: bool = True):
+    """
+    Generate 3D coordinates for a known NTP by name.
+    
+    Valid names: dATP, dTTP, dGTP, dCTP, ATP, UTP, GTP, CTP
+    """
+    ntp_name = ntp_name.upper().strip()
+    
+    if ntp_name not in NTP_SMILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown NTP: {ntp_name}. Valid options: {', '.join(NTP_SMILES.keys())}"
+        )
+    
+    request = Generate3DRequest(
+        smiles=NTP_SMILES[ntp_name],
+        name=ntp_name,
+        num_conformers=1,
+        energy_minimize=energy_minimize,
+        output_format='pdb'
+    )
+    
+    return await generate_3d_conformer(request)

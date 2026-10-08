@@ -30,6 +30,7 @@ modes:
       - sequence_name
       - boltz_recycling_steps
       - boltz_diffusion_samples
+      - boltz_sampling_steps
       - boltz_use_msa
       - boltz_method
 
@@ -41,6 +42,7 @@ modes:
       - sequence_name
       - boltz_recycling_steps
       - boltz_diffusion_samples
+      - boltz_sampling_steps
       - boltz_use_potentials
       - boltz_use_msa
       - boltz_method
@@ -77,22 +79,13 @@ params:
 
   - name: boltz_sampling_steps
     type: integer
-    description: Number of sampling steps
+    description: Number of diffusion sampling steps (higher = better quality)
     required: false
     default: 200
-    hidden: true
-    minimum: 50
-    maximum: 500
+    minimum: 1
+    maximum: 1000
 
-  - name: boltz_use_potentials
-    type: boolean
-    description: Use physics-based potentials (Boltz-2x mode) for better accuracy
-    required: false
-    default: false
 
-    hidden: true
-    minimum: 50
-    maximum: 500
 
   - name: boltz_use_potentials
     type: boolean
@@ -133,9 +126,8 @@ params:
 
   - name: boltz_extra_config
     type: string
-    description: Additional Boltz-2 parameters
+    description: "Additional Boltz-2 parameters (e.g., '--msa_pairing_strategy complete')"
     required: false
-    hidden: true
 
 enabled: true
 experimental: false

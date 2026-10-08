@@ -97,3 +97,4 @@ process FilterMPNN {
         2>&1 | tee filter_mpnn_${task.index}.log
     """
 }
+

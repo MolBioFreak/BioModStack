@@ -3,6 +3,7 @@ import { SequenceManagerModal } from './SequenceManagerModal';
 import { parseRegions, generateLibrary } from '../utils/mutationUtils';
 import type { VariantSequence, SubstitutionStrategy, Mutation } from '../utils/mutationUtils';
 import { InteractiveSequence } from './InteractiveSequence';
+import { LigandSelector, type LigandEntry } from './LigandSelector';
 
 interface MutagenesisTemplateProps {
     onBack: () => void;
@@ -37,8 +38,13 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     const [predictorParams, setPredictorParams] = useState({
         recycling_steps: 3,
         diffusion_samples: 1,
+        sampling_steps: 50,
+        num_parallel_jobs: 1,
         use_msa: true
     });
+
+    // Complex Mode: Ligands & Ions
+    const [ligands, setLigands] = useState<LigandEntry[]>([]);
 
     // Handlers
     const handleGeneratePreview = () => {
@@ -102,7 +108,11 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
     const handleSubmit = () => {
         if (generatedVariants.length === 0) return;
-        onSubmit(jobNamePrefix, generatedVariants, { predictor, ...predictorParams });
+        onSubmit(jobNamePrefix, generatedVariants, {
+            predictor,
+            ...predictorParams,
+            ligands: ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles }))
+        });
     };
 
     return (
@@ -251,6 +261,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                             </div>
                         </div>
 
+
                         {/* Preview Action */}
                         <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
                             <div className="flex justify-between items-center mb-4">
@@ -384,6 +395,33 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 min={1} max={100}
                             />
                         </div>
+                        <div>
+                            <label className="text-slate-400 block mb-1" title="Diffusion sampling steps (higher = better quality, more VRAM)">Sampling Steps</label>
+                            <input
+                                type="range"
+                                min={10}
+                                max={200}
+                                step={10}
+                                value={predictorParams.sampling_steps}
+                                onChange={(e) => setPredictorParams(p => ({ ...p, sampling_steps: parseInt(e.target.value) }))}
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                            />
+                            <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                <span>10</span>
+                                <span className="text-slate-300 font-medium">{predictorParams.sampling_steps}</span>
+                                <span>200</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="text-slate-400 block mb-1" title="Number of parallel jobs to split the work into (helps with VRAM)">Parallel Jobs</label>
+                            <input
+                                type="number"
+                                value={predictorParams.num_parallel_jobs}
+                                onChange={(e) => setPredictorParams(p => ({ ...p, num_parallel_jobs: parseInt(e.target.value) || 1 }))}
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white"
+                                min={1} max={50}
+                            />
+                        </div>
                         <div className="flex items-center gap-2 pt-6">
                             <input
                                 type="checkbox"
@@ -395,6 +433,9 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                         </div>
                     </div>
                 </section>
+
+                {/* 6. Ligands & Cofactors (Complex Mode) */}
+                <LigandSelector ligands={ligands} setLigands={setLigands} showCustomSmiles={true} />
 
                 {/* Submit Panel */}
                 <div className="flex justify-end pt-6 border-t border-slate-800">

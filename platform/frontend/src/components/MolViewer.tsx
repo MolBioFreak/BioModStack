@@ -113,8 +113,24 @@ export const MolViewer = forwardRef<MolViewerRef, MolViewerProps>(({
                         format = 'cif';
                     }
 
-                    viewer.addModel(content, format);
+                    const addResult = viewer.addModel(content, format);
+                    if (!addResult) {
+                        console.error('Failed to add model, content length:', content?.length, 'format:', format);
+                        throw new Error(`Failed to parse ${format.toUpperCase()} structure`);
+                    }
                     const model = viewer.getModel(isOverlay ? -1 : 0); // -1 is last added
+                    if (!model) {
+                        console.error('Failed to get model after adding, isOverlay:', isOverlay);
+                        throw new Error('Model not available after adding');
+                    }
+
+                    // Validate that model has required methods (3Dmol.js version compatibility check)
+                    if (typeof model.addStyle !== 'function') {
+                        console.error('Model missing addStyle method. Model type:', typeof model, 'Model keys:', Object.keys(model || {}));
+                        console.error('3Dmol version info:', window.$3Dmol?.version || 'unknown');
+                        // Try using setStyle instead of addStyle as fallback
+                        console.warn('Falling back to basic rendering without custom ligand styles');
+                    }
 
 
                     if (colorScheme === 'plddt') {
@@ -162,6 +178,38 @@ export const MolViewer = forwardRef<MolViewerRef, MolViewerProps>(({
                             opacity: 0.3,
                             color: 'white'
                         }, { model: model });
+                    }
+
+                    // --- Custom Ligand Visualization ---
+                    // Only apply if model supports addStyle (3Dmol.js compatibility)
+                    if (typeof model.addStyle === 'function') {
+                        try {
+                            // 1. Magnesium (MG) - Large Red Sphere (3x size request)
+                            // using addStyle to overlay on top of base style
+                            model.addStyle({ resn: 'MG' }, {
+                                sphere: { color: '#ef4444', radius: 1.5 }
+                            });
+
+                            // 2. Nucleotides (ATP, ADP, GTP, GDP) - Vibrant Sticks
+                            // 'orangeCarbon' provides a vibrant contrast to the blue/spectrum protein
+                            model.addStyle({ resn: ['ATP', 'ADP', 'GTP', 'GDP'] }, {
+                                stick: { colorscheme: 'orangeCarbon', radius: 0.25 }
+                            });
+
+                            // 3. Ensure other organic ligands are visible (excluding water)
+                            // hetflag: true selects all HETATM residues
+                            // elem: 'O', resn: 'HOH' check is standard for water
+                            model.addStyle({
+                                and: [
+                                    { hetflag: true },
+                                    { not: { resn: ['MG', 'ATP', 'ADP', 'GTP', 'GDP', 'HOH'] } }
+                                ]
+                            }, {
+                                stick: { colorscheme: 'greenCarbon', radius: 0.2 }
+                            });
+                        } catch (styleErr) {
+                            console.warn('Failed to apply custom ligand styles:', styleErr);
+                        }
                     }
                 };
 

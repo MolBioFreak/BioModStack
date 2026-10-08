@@ -4,10 +4,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchJobs, fetchSystemStatus, cancelJob, fetchPowerControl, setPowerControlManual } from '../lib/api';
 import type { GPUStatus, CPUStatus, RAMStatus } from '../lib/api';
 import { JobDetailsPanel } from './JobDetailsPanel';
+import { QuickViewer } from './QuickViewer';
 
 export function Dashboard() {
     const queryClient = useQueryClient();
     const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
+    const [quickViewJobId, setQuickViewJobId] = useState<string | null>(null);
 
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs'],
@@ -139,6 +141,16 @@ export function Dashboard() {
                 </div>
             </section>
 
+            {/* Quick Viewer - Compact structure preview */}
+            <section className="mb-8">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <QuickViewer
+                        selectedJobId={quickViewJobId}
+                        onJobChange={setQuickViewJobId}
+                    />
+                </div>
+            </section>
+
             {/* Jobs Section */}
             <section>
                 <div className="flex items-center justify-between mb-4">
@@ -189,18 +201,35 @@ export function Dashboard() {
                                                 {new Date(job.created_at).toLocaleString()}
                                             </td>
                                             <td className="py-3 px-4">
-                                                {(job.status === 'running' || job.status === 'queued') && (
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            handleCancel(job.id, job.name);
-                                                        }}
-                                                        disabled={cancelMutation.isPending}
-                                                        className="px-2 py-1 text-xs bg-red-500/20 text-red-400 hover:bg-red-500/30 hover:text-red-300 rounded transition-colors disabled:opacity-50"
-                                                    >
-                                                        {cancelMutation.isPending ? '...' : 'Cancel'}
-                                                    </button>
-                                                )}
+                                                <div className="flex items-center gap-2">
+                                                    {job.status === 'completed' && (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setQuickViewJobId(job.id);
+                                                            }}
+                                                            className={`px-2 py-1 text-xs rounded transition-colors ${quickViewJobId === job.id
+                                                                    ? 'bg-purple-500/30 text-purple-300'
+                                                                    : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+                                                                }`}
+                                                            title="Load in Quick Viewer"
+                                                        >
+                                                            🔬 View
+                                                        </button>
+                                                    )}
+                                                    {(job.status === 'running' || job.status === 'queued') && (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleCancel(job.id, job.name);
+                                                            }}
+                                                            disabled={cancelMutation.isPending}
+                                                            className="px-2 py-1 text-xs bg-red-500/20 text-red-400 hover:bg-red-500/30 hover:text-red-300 rounded transition-colors disabled:opacity-50"
+                                                        >
+                                                            {cancelMutation.isPending ? '...' : 'Cancel'}
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </td>
                                         </tr>
                                         {expandedJobId === job.id && (

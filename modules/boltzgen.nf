@@ -8,8 +8,12 @@ process PrepBoltzGenInput {
     val num_designs
     val binding_site_residues
     val catalytic_site
+    val protein_sequence
+    val dna_template_seq
+    val dna_primer_seq
     path input_pdb
     path ligand_pdb
+    path dna_structure
 
     output:
     path "boltzgen_input.yaml", emit: yaml
@@ -27,8 +31,12 @@ process PrepBoltzGenInput {
         --num_designs ${num_designs} \\
         ${binding_site_residues ? "--binding_site_residues '${binding_site_residues}'" : ''} \\
         ${catalytic_site ? "--catalytic_site" : ''} \\
-        ${input_pdb.name != 'NO_FILE' ? "--input_pdb '${input_pdb}'" : ''} \\
-        ${ligand_pdb.name != 'NO_FILE' ? "--ligand_pdb '${ligand_pdb}'" : ''} \\
+        ${protein_sequence ? "--protein_sequence '${protein_sequence}'" : ''} \\
+        ${dna_template_seq ? "--dna_template_seq '${dna_template_seq}'" : ''} \\
+        ${dna_primer_seq ? "--dna_primer_seq '${dna_primer_seq}'" : ''} \\
+        ${input_pdb.name != 'NO_INPUT_PDB' ? "--input_pdb '${input_pdb}'" : ''} \\
+        ${ligand_pdb.name != 'NO_LIGAND_PDB' ? "--ligand_pdb '${ligand_pdb}'" : ''} \\
+        ${dna_structure.name != 'NO_DNA_STRUCT' ? "--dna_structure '${dna_structure}'" : ''} \\
         --output_yaml boltzgen_input.yaml
     """
 }
@@ -36,6 +44,7 @@ process PrepBoltzGenInput {
 process RunBoltzGen {
     label 'BoltzGen'
     label 'gpu'
+    containerOptions "--bind ${projectDir}/patches/confidence.py:/opt/venv/lib/python3.11/site-packages/boltzgen/model/modules/confidence.py"
     publishDir "${params.out_dir}/run/boltzgen", mode: 'copy', pattern: "*.log"
     // Wrapper outputs converted PDBs + JSONs to output/designs/
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/designs/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
@@ -53,7 +62,8 @@ process RunBoltzGen {
 
     script:
     def numDesigns = params.boltzgen_num_designs ?: 10
-    def protocol = params.boltzgen_protocol ?: 'protein-small_molecule'
+    def batchSize = params.boltzgen_batch_size ?: 1
+    def protocol = params.boltzgen_protocol ?: 'auto'
     // Handle both single config and batch of configs
     def configArg = yaml_configs instanceof List ? "--configs ${yaml_configs.join(' ')}" : "--config ${yaml_configs}"
     """
@@ -63,12 +73,12 @@ process RunBoltzGen {
         ${configArg} \\
         --out_dir output \\
         --num_designs ${numDesigns} \\
+        ${batchSize > 1 ? "--batch_size ${batchSize}" : ""} \\
         --protocol ${protocol} \\
         ${params.boltzgen_extra_config ? params.boltzgen_extra_config : ''} \\
         2>&1 | tee boltzgen.log
     """
 }
-
 
 process FilterBoltzGen {
     label 'pyrosetta_tools'

@@ -50,11 +50,38 @@ def main():
     parser.add_argument("--catalytic_site", action="store_true", help="Include Mg2+ coordination for enzyme design")
     parser.add_argument("--input_pdb", type=str, help="Existing protein backbone for docking mode")
     parser.add_argument("--ligand_pdb", type=str, help="Ligand structure with 3D coordinates")
+    parser.add_argument("--protein_sequence", type=str, help="Protein sequence for co-folding")
+    parser.add_argument("--dna_template_seq", type=str, help="DNA template sequence")
+    parser.add_argument("--dna_primer_seq", type=str, help="DNA primer sequence")
+    parser.add_argument("--dna_structure", type=str, help="Pre-generated DNA structure PDB")
     parser.add_argument("--output_yaml", type=str, required=True, help="Output YAML file")
     
     args = parser.parse_args()
     
-    # Resolve SMILES
+    # Auto-extract DNA sequences from oligo filename if not provided
+    # Supports naming patterns: ssDNA_CCCC.pdb, dsDNA_ATCG_CGAT.pdb
+    if args.dna_structure and Path(args.dna_structure).exists():
+        oligo_stem = Path(args.dna_structure).stem  # e.g., "ssDNA_CCCC"
+        
+        if not args.dna_template_seq:
+            if oligo_stem.startswith("ssDNA_"):
+                # Single-stranded: ssDNA_CCCC -> template = "CCCC"
+                extracted_seq = oligo_stem.replace("ssDNA_", "")
+                args.dna_template_seq = extracted_seq
+                print(f"Auto-extracted ssDNA template sequence: {extracted_seq}")
+                
+            elif oligo_stem.startswith("dsDNA_"):
+                # Double-stranded: dsDNA_ATCG_CGAT -> template = "ATCG", primer = "CGAT"
+                parts = oligo_stem.replace("dsDNA_", "").split("_")
+                if parts:
+                    args.dna_template_seq = parts[0]
+                    print(f"Auto-extracted dsDNA template sequence: {parts[0]}")
+                    
+                    if len(parts) > 1 and not args.dna_primer_seq:
+                        args.dna_primer_seq = parts[1]
+                        print(f"Auto-extracted dsDNA primer sequence: {parts[1]}")
+    
+    # Resolve SMILES from ligand_smiles or ntp_type
     smiles = args.ligand_smiles
     if not smiles and args.ntp_type:
         smiles = NTP_TEMPLATES.get(args.ntp_type)
@@ -65,8 +92,37 @@ def main():
     entities = []
     constraints = []
     
+    # Mode 4: DNA-Protein Complex Prediction
+    if args.protein_sequence and args.dna_template_seq:
+        print(f"Mode: DNA-Protein Complex Prediction")
+        # Protein entity
+        entities.append({
+            'protein': {
+                'id': 'A',
+                'sequence': args.protein_sequence
+            }
+        })
+        # DNA Template Entity
+        dna_template = {'id': 'B'}
+        if args.dna_structure and Path(args.dna_structure).exists():
+             # If PDB provided, maybe use it? But Boltz usually takes seqs for co-folding
+             # For now, just use sequence. If structure is meant to be a constraint/template,
+             # BoltzGen schema might differ. We will stick to sequence-based co-folding.
+             pass
+        dna_template['sequence'] = args.dna_template_seq
+        entities.append({'dna': dna_template})
+        
+        # DNA Primer Entity
+        if args.dna_primer_seq:
+            entities.append({
+                'dna': {
+                    'id': 'C',
+                    'sequence': args.dna_primer_seq
+                }
+            })
+            
     # Mode 1: Backbone docking - use existing protein structure
-    if args.input_pdb and Path(args.input_pdb).exists():
+    elif args.input_pdb and Path(args.input_pdb).exists():
         print(f"Mode: Backbone docking with existing structure: {args.input_pdb}")
         # Read sequence from PDB (simplified - just use as template)
         entities.append({

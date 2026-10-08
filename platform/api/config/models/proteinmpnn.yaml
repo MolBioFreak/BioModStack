@@ -29,6 +29,10 @@ modes:
       - mpnn_temperature
       - mpnn_omitAAs
       - mpnn_checkpoint_type
+      - mpnn_checkpoint_model
+      - mpnn_backbone_noise
+      - mpnn_relax_max_cycles
+      - mpnn_extra_config
 
 params:
   # Input file
@@ -67,7 +71,6 @@ params:
     description: Noise level model (higher noise = more robust to backbone errors)
     required: false
     default: v_48_020
-    hidden: true
     enum:
       - v_48_002
       - v_48_010
@@ -76,10 +79,9 @@ params:
 
   - name: mpnn_backbone_noise
     type: number
-    description: Add Gaussian noise to backbone (Å)
+    description: Add Gaussian noise to backbone (Å) for robustness
     required: false
     default: 0
-    hidden: true
     minimum: 0
     maximum: 1
 
@@ -88,13 +90,13 @@ params:
     description: Maximum FastRelax refinement cycles (0 = disabled)
     required: false
     default: 0
-    hidden: true
+    minimum: 0
+    maximum: 10
 
   - name: mpnn_extra_config
     type: string
-    description: Additional ProteinMPNN parameters
+    description: "Additional ProteinMPNN CLI arguments (e.g., '-protein_features=full')"
     required: false
-    hidden: true
 
 enabled: true
 experimental: false

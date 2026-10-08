@@ -69,11 +69,13 @@ params:
     description: PDB file containing ligand coordinates
     required: false
     file_type: pdb
+    preset_type: pdb
 
   - name: ligand_smiles
     type: string
     description: SMILES string of the ligand
     required: false
+    preset_type: ligand
 
   - name: target_pdb
     type: file

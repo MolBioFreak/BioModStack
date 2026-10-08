@@ -175,6 +175,9 @@ export interface Design {
     ptm: number | null;
     conf_score: number | null;
     rmsd_binder: number | null;
+    ligand_iptm: number | null;
+    affinity_score: number | null;
+    binder_probability: number | null;
     is_favorite: boolean;
     notes: string | null;
     created_at: string;
@@ -396,3 +399,28 @@ export const convertToSmiles = (data: SmilesConvertRequest) =>
 
 export const getNtpLibrary = () =>
     api.get('/api/smiles/ntp-library');
+
+// 3D Conformer Generation API
+export interface Generate3DRequest {
+    smiles: string;
+    name: string;
+    energy_minimize?: boolean;
+    output_format?: 'pdb' | 'sdf';
+}
+
+export interface Generate3DResponse {
+    success: boolean;
+    pdb_block?: string;
+    file_path?: string;
+    smiles: string;
+    name: string;
+    num_atoms: number;
+    energy?: number;
+    error?: string;
+}
+
+export const generate3DConformer = (data: Generate3DRequest) =>
+    api.post<Generate3DResponse>('/api/smiles/generate-3d', data);
+
+export const generateNTP3D = (ntpName: string) =>
+    api.get<Generate3DResponse>(`/api/smiles/generate-3d/ntp/${ntpName}`);

@@ -30,6 +30,7 @@ modes:
     params:
       - ligand_smiles
       - num_designs
+      - batch_size
       - scaffold_length
       - binding_site_residues
 
@@ -39,6 +40,7 @@ modes:
     params:
       - ntp_type
       - num_designs
+      - batch_size
       - scaffold_length
       - catalytic_site
 
@@ -49,6 +51,7 @@ modes:
       - ligand_pdb
       - scaffold_length
       - num_designs
+      - batch_size
 
   - id: backbone_docking
     name: Dock NTP to Existing Backbone
@@ -58,6 +61,18 @@ modes:
       - ntp_type
       - binding_site_residues
       - num_designs
+      - batch_size
+
+  - id: dna_complex
+    name: DNA-Protein Complex Prediction
+    description: Co-fold a protein with dsDNA (1-10bp). Ideal for DNA polymerase binding studies.
+    params:
+      - protein_sequence
+      - dna_template_seq
+      - dna_primer_seq
+      - dna_structure
+      - num_designs
+      - batch_size
 
 params:
   - name: ligand_smiles
@@ -117,6 +132,36 @@ params:
     description: Include catalytic site features for enzymatic activity (Mg2+ coordination, etc.)
     required: false
     default: false
+
+  - name: protein_sequence
+    type: string
+    description: Protein sequence for co-folding with DNA
+    required: false
+    preset_type: sequence
+
+  - name: dna_template_seq
+    type: string
+    description: "DNA template strand sequence (5'→3', e.g., 'ACGTACGTAC')"
+    required: false
+
+  - name: dna_primer_seq
+    type: string
+    description: "DNA primer strand sequence (5'→3', complementary to template)"
+    required: false
+
+  - name: dna_structure
+    type: file
+    description: "Pre-generated DNA structure (e.g. from oligo library)"
+    required: false
+    file_type: pdb
+    preset_type: pdb
+
+  - name: batch_size
+    type: integer
+    description: "Batch size for parallel generation (designs per GPU pass)"
+    default: 1
+    minimum: 1
+    maximum: 32
 
 # Pre-configured NTP templates
 ntp_templates:

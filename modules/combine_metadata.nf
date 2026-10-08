@@ -22,3 +22,4 @@ process CombineMetadata {
         2>&1 | tee combined_metadata.log
     """
 }
+

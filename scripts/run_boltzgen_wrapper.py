@@ -46,14 +46,64 @@ def create_metadata_json(csv_path: Path, output_dir: Path):
         print(f"Warning: Metadata JSON creation failed: {e}")
         return False
 
+
+def auto_detect_protocol(config_path: str) -> str:
+    """
+    Auto-detect the appropriate BoltzGen protocol based on entity types in the YAML.
+    
+    Protocols:
+    - protein-anything: For DNA, RNA, or protein targets
+    - protein-small_molecule: For small molecule/ligand targets
+    """
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        entities = config.get('entities', [])
+        
+        has_dna = False
+        has_rna = False
+        has_ligand = False
+        has_protein = False
+        
+        for entity in entities:
+            if 'dna' in entity:
+                has_dna = True
+            elif 'rna' in entity:
+                has_rna = True
+            elif 'ligand' in entity:
+                has_ligand = True
+            elif 'protein' in entity:
+                has_protein = True
+        
+        # Determine protocol based on entity types
+        if has_dna or has_rna:
+            # DNA/RNA targets use protein-anything
+            protocol = "protein-anything"
+            print(f"Auto-detected protocol: {protocol} (DNA/RNA target detected)")
+        elif has_ligand:
+            # Small molecule targets use protein-small_molecule
+            protocol = "protein-small_molecule"
+            print(f"Auto-detected protocol: {protocol} (ligand target detected)")
+        else:
+            # Default for protein-only
+            protocol = "protein-anything"
+            print(f"Auto-detected protocol: {protocol} (protein target)")
+        
+        return protocol
+        
+    except Exception as e:
+        print(f"Warning: Protocol auto-detection failed: {e}, using default")
+        return "protein-small_molecule"
+
 def main():
     parser = argparse.ArgumentParser(description="Run BoltzGen Wrapper")
     parser.add_argument("--config", type=str, help="Path to single design spec YAML (backward compat)")
     parser.add_argument("--configs", type=str, nargs='+', help="Paths to multiple design spec YAMLs for batch processing")
     parser.add_argument("--out_dir", type=str, required=True, help="Output directory")
     parser.add_argument("--num_designs", type=int, default=10, help="Number of designs to generate per config")
-    parser.add_argument("--protocol", type=str, default="protein-small_molecule", 
-                        help="BoltzGen protocol (protein-anything, protein-small_molecule, etc)")
+    parser.add_argument("--protocol", type=str, default="auto", 
+                        help="BoltzGen protocol (auto, protein-anything, protein-small_molecule, etc)")
     
     args, unknown = parser.parse_known_args()
     
@@ -82,8 +132,14 @@ def main():
         # Copy config for reproducibility
         shutil.copy(config_path, batch_out_dir / "run_config.yaml")
         
+        # Auto-detect protocol if set to 'auto'
+        if args.protocol == 'auto':
+            protocol = auto_detect_protocol(config_path)
+        else:
+            protocol = args.protocol
+        
         # BoltzGen CLI: boltzgen run <design_spec.yaml> --output <dir> --num_designs N --protocol X
-        cmd = f"boltzgen run {config_path} --output {batch_out_dir} --num_designs {args.num_designs} --protocol {args.protocol}"
+        cmd = f"boltzgen run {config_path} --output {batch_out_dir} --num_designs {args.num_designs} --protocol {protocol}"
         
         # Add any extra args passed through
         if unknown:

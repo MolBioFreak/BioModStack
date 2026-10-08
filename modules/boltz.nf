@@ -153,3 +153,4 @@ process FilterBoltz {
         2>&1 | tee filter_boltz_${task.index}.log
     """
 }
+
