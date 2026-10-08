@@ -54,7 +54,7 @@ type AxisDiagnosticBlock = {
 const AXIS_DIAGNOSTIC_BLOCKS: ReadonlyArray<AxisDiagnosticBlock> = [
     {
         axis: 'x', label: 'X axis', stopLabel: 'Stop X axis',
-        detail: 'OEM X carriage: bounded relative and absolute positioning, switch-search home/set-home, startup park, live state, and stop.',
+        detail: 'OEM X carriage: fixed commissioning jogs, switch-search home/set-home, startup park, live state, and stop.',
         operations: [
             { operation: 'move-negative', label: 'Commissioning jog −100', detail: 'Small fixed OEM MVP relative direction check; no caller-supplied distance.' },
             { operation: 'move-positive', label: 'Commissioning jog +100', detail: 'Small fixed OEM MVP relative direction check; no caller-supplied distance.' },
@@ -64,7 +64,7 @@ const AXIS_DIAGNOSTIC_BLOCKS: ReadonlyArray<AxisDiagnosticBlock> = [
     },
     {
         axis: 'y', label: 'Y axis', stopLabel: 'Stop Y axis',
-        detail: 'OEM Y carriage: bounded relative and absolute positioning, switch-search home/set-home, live state, and stop.',
+        detail: 'OEM Y carriage: fixed commissioning jogs, switch-search home/set-home, live state, and stop.',
         operations: [
             { operation: 'move-negative', label: 'Commissioning jog −100', detail: 'Small fixed OEM MVP relative direction check; no caller-supplied distance.' },
             { operation: 'move-positive', label: 'Commissioning jog +100', detail: 'Small fixed OEM MVP relative direction check; no caller-supplied distance.' },
@@ -73,7 +73,7 @@ const AXIS_DIAGNOSTIC_BLOCKS: ReadonlyArray<AxisDiagnosticBlock> = [
     },
     {
         axis: 'z', label: 'Z axis', stopLabel: 'Stop Z axis',
-        detail: 'OEM Z head: bounded relative and absolute positioning, positive-switch reference, live state, and stop.',
+        detail: 'OEM Z head: fixed commissioning jogs, positive-switch reference, live state, and stop.',
         operations: [
             { operation: 'move-negative', label: 'Commissioning jog −100', detail: 'Small fixed OEM MVP relative direction check; verify physical up/down direction.' },
             { operation: 'move-positive', label: 'Commissioning jog +100', detail: 'Small fixed OEM MVP relative direction check; verify physical up/down direction.' },
@@ -450,7 +450,7 @@ export function BioXpCockpit() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <h2 className="text-lg font-semibold">Per-axis OEM capability diagnostics</h2>
-                        <p className="mt-2 max-w-4xl text-sm text-slate-300">Each button targets one finite robot-owned movement mechanism. Values are fixed by the robot contract; there are no arbitrary motor, current, or transport controls. Relative and absolute positioning, OEM switch-search homing, calibrated component positions, and stop can be verified independently before they are composed into initializeSystem.</p>
+                        <p className="mt-2 max-w-4xl text-sm text-slate-300">Each button targets one finite robot-owned movement mechanism. Values are fixed by the robot contract; there are no arbitrary motor, current, or transport controls. Small fixed commissioning jogs, OEM switch-search homing, calibrated component positions, and stop can be verified independently before they are composed into initializeSystem.</p>
                     </div>
                     <button
                         type="button"
