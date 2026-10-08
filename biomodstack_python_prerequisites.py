@@ -235,6 +235,16 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
 
 
 def resolve_python_environment(project_root: Path) -> dict | None:
+    """Validated native consumer API; all invalid states raise PrerequisiteError."""
+    try:
+        return _resolve_python_environment(project_root)
+    except PrerequisiteError:
+        raise
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        raise PrerequisiteError("environment_unavailable", str(exc)) from exc
+
+
+def _resolve_python_environment(project_root: Path) -> dict | None:
     """Offline authority for native consumers; None means preserve legacy mode.
 
     Returns absolute ``python``, ``uv``, ``root`` strings and a subprocess ``env``
