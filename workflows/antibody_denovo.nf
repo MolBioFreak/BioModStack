@@ -2236,9 +2236,6 @@ workflow ANTIBODY_DENOVO {
                 def meta = [id: "selected_designs"]
                 [meta, pdbs]
             }
-            // These are already sequence-designed complexes; expose their
-            // directory as the primary sequence candidate source so downstream
-            // PPIFlow maturation can run without re-running FA-MPNN.
             fampnnCandidateDir = selectedInputDir.toString()
         }
 
