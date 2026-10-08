@@ -108,8 +108,8 @@ export function Layout({ children }: LayoutProps) {
                 </div>
             </nav>
 
-            {/* Main Content - takes remaining height */}
-            <main className="flex-1 overflow-hidden">
+            {/* Main Content - takes remaining height, scrollable */}
+            <main className="flex-1 overflow-auto">
                 {children}
             </main>
         </div>
