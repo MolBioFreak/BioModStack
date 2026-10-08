@@ -8,6 +8,12 @@ description: >
   sources. The UI reuses the production Structure Prediction launcher while the
   backend maps canonical structure inputs into the ESMFold2 runtime.
 container: esmfold2.sif
+# Shared managed dependency closure; independent of placement.
+runtime_dependencies:
+  - kind: image
+    relative_path: esmfold2.sif
+  - kind: weights
+    relative_path: esmfold2
 
 ui_icon: sparkles
 ui_color: "#22D3EE"

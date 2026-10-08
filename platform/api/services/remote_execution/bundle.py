@@ -297,8 +297,8 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
         raise RemoteBundleError(f"Managed workflow Python runtime is unavailable: {api_runtime}")
     extra_paths.add(api_runtime.resolve())
 
-    from model_registry import INDEPENDENT_RUNTIME_MODELS, model_runtime_dependencies
-    if normalized_model in INDEPENDENT_RUNTIME_MODELS:
+    from model_registry import independent_runtime_model_ids, model_runtime_dependencies
+    if normalized_model in independent_runtime_model_ids():
         for ref in model_runtime_dependencies(normalized_model):
             (container_names if ref.kind == "image" else weight_names).add(ref.relative_path)
     if normalized_model in {"protein_local_redesign", "protein_modification_experimental"}:

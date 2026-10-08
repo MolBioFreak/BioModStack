@@ -10,6 +10,10 @@ description: >
   Structure-conditioned residue-frustration and substitution-landscape analysis
   for interpreting structures and guiding scientifically informed mutagenesis.
 container: frustrampnn.sif
+# Shared managed dependency closure; independent of placement.
+runtime_dependencies:
+  - kind: image
+    relative_path: frustrampnn.sif
 
 ui_icon: activity
 ui_color: "#22D3EE"

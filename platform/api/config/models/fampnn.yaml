@@ -10,6 +10,10 @@ description: >
   Unlike ProteinMPNN, considers sidechain conformations for more
   accurate sequence predictions.
 container: fampnn.sif
+# Shared managed dependency closure; independent of placement.
+runtime_dependencies:
+  - kind: image
+    relative_path: fampnn.sif
 
 ui_icon: atom
 ui_color: "#06B6D4"

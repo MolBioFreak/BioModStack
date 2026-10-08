@@ -10,7 +10,7 @@ import re
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from functools import lru_cache
 
 from services.md.feature_gate import MD_MODEL_ID, molecular_dynamics_feature_enabled
@@ -84,22 +84,17 @@ class RuntimeDependencyRef(BaseModel):
     relative_path: str = Field(pattern=r"^[A-Za-z0-9_.-]+$")
 
 
-# Incremental migration of the existing launch dependency authority. Models not
-# listed here have not yet had their independent closure reviewed.
-INDEPENDENT_RUNTIME_MODELS = frozenset({
-    "protenix", "esmfold2", "esmfold2_experimental", "fampnn", "frustrampnn",
-})
+def independent_runtime_model_ids() -> tuple[str, ...]:
+    """Discover declared closures from the existing public model registry."""
+    return tuple(sorted(model.id for model in get_registry().list_models()
+                        if model.runtime_dependencies is not None))
 
 
 def model_runtime_dependencies(model_id: str) -> tuple[RuntimeDependencyRef, ...]:
     model = get_registry().get_model(model_id)
-    if model is None or model_id not in INDEPENDENT_RUNTIME_MODELS:
+    if model is None or model.runtime_dependencies is None:
         raise ValueError("Independent runtime closure is not available for this model")
-    refs = [RuntimeDependencyRef(kind="image", relative_path=model.container)]
-    weights = {"protenix": "protenix", "esmfold2": "esmfold2", "esmfold2_experimental": "esmfold2"}
-    if model_id in weights:
-        refs.append(RuntimeDependencyRef(kind="weights", relative_path=weights[model_id]))
-    return tuple(refs)
+    return tuple(model.runtime_dependencies)
 
 
 class ModelDefinition(BaseModel):
@@ -110,6 +105,9 @@ class ModelDefinition(BaseModel):
     category: str  # backbone_generation, sequence_design, structure_prediction, docking
     description: str
     container: str
+    # None means undeclared closure, never infer completeness from one image.
+    # System-owned registry metadata; not an operator scientific parameter.
+    runtime_dependencies: Optional[List[RuntimeDependencyRef]] = Field(default=None, min_length=1)
     workflow: Optional[str] = None
     engine_containers: Dict[str, str] = Field(default_factory=dict)
     capabilities: Dict[str, Any] = Field(default_factory=dict)
@@ -136,6 +134,18 @@ class ModelDefinition(BaseModel):
     # Status
     enabled: bool = True
     experimental: bool = False
+
+    @field_validator("runtime_dependencies")
+    @classmethod
+    def validate_runtime_dependencies(cls, refs):
+        if refs is None:
+            return None
+        identities = [(ref.kind, ref.relative_path) for ref in refs]
+        if len(identities) != len(set(identities)):
+            raise ValueError("runtime dependency closure contains duplicate assets")
+        if not any(ref.kind == "image" for ref in refs):
+            raise ValueError("independent model runtime closure requires an image")
+        return refs
 
 
 class ModelRegistry:

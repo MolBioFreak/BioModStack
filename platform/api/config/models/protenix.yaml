@@ -9,6 +9,12 @@ description: >
   complexes. BioModStack pins this model to the installed protenix-v2
   checkpoint; MSA-disabled operation remains Protenix V2 sequence-only mode.
 container: protenix.sif
+# Shared managed dependency closure; independent of placement.
+runtime_dependencies:
+  - kind: image
+    relative_path: protenix.sif
+  - kind: weights
+    relative_path: protenix
 
 ui_icon: cube
 ui_color: "#14B8A6"
