@@ -53,7 +53,21 @@ it('submits a compound cover transfer on one click with no checkbox, name or fab
     expect(request.live_execution).toEqual({ live_execution_ack: true });
     expect(request.dry_run).toBe(false); expect(request.expected_connection_generation).toBe(9);
     expect(JSON.stringify(request)).not.toContain('source_location');
+    expect(button().disabled).toBe(false);
+});
+it('reserves a single click only while its HTTP submission is in flight', async () => {
+    const original = vi.mocked(api.post).getMockImplementation()!;
+    let release!: () => void;
+    vi.mocked(api.post).mockImplementation(async (...args) => {
+        await new Promise<void>(resolve => { release = resolve; });
+        return original(...args);
+    });
+    await render();
+    await act(async () => { button().click(); button().click(); await Promise.resolve(); });
+    expect(api.post).toHaveBeenCalledTimes(1);
     expect(button().disabled).toBe(true);
+    await act(async () => { release(); await Promise.resolve(); }); await tick();
+    expect(button().disabled).toBe(false);
 });
 it('selects plate and destination and sends the robot plate_move kind', async () => {
     await render();
@@ -81,13 +95,14 @@ it.each(['completed', 'failed'])('shows terminal %s and custody/failure evidence
     expect(host.textContent).toContain(status === 'completed' ? 'released at destination' : 'pickup failed');
     expect(button().disabled).toBe(false);
 });
-it('excludes a live job but not a historical terminal custody error', async () => {
+it('shows listed live work without treating the jobs projection as admission', async () => {
     rows = [{ job_id: 'old', command: { status: 'ambiguous', terminal: true } }];
     await render(); expect(button().disabled).toBe(false);
 
     rows = [{ job_id: 'live', command: { status: 'executing', terminal: false } }];
     await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs'] }); }); await tick();
-    expect(button().disabled).toBe(true);
+    expect(host.textContent).toContain('Listed job live · executing');
+    expect(button().disabled).toBe(false);
 });
 it('reports a mismatched terminal readback without turning the record into an admission gate', async () => {
     const post = vi.mocked(api.post).getMockImplementation()!;
