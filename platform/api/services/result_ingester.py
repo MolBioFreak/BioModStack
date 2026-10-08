@@ -220,6 +220,28 @@ async def ingest_loose_files(
     # If still no designs, try just finding PDBs (e.g. valid job but missing metadata)
     if designs_created == 0:
         print("[Ingester] No JSON metrics found. Scanning for raw PDB files...")
+        
+        # Helper to extract pLDDT from PDB B-factors
+        def extract_plddt_from_pdb(pdb_path):
+            try:
+                total_bfactor = 0.0
+                atom_count = 0
+                with open(pdb_path, 'r') as f:
+                    for line in f:
+                        if line.startswith("ATOM  ") or line.startswith("HETATM"):
+                            # B-factor is columns 61-66 (1-indexed) -> 60-66 (0-indexed)
+                            try:
+                                bfactor = float(line[60:66].strip())
+                                total_bfactor += bfactor
+                                atom_count += 1
+                            except ValueError:
+                                pass
+                if atom_count > 0:
+                    return total_bfactor / atom_count
+                return None
+            except Exception:
+                return None
+
         for search_dir in search_paths:
             if not search_dir.exists():
                 continue
@@ -229,6 +251,9 @@ async def ingest_loose_files(
                 if design_name in ingested_names:
                     continue
                     
+                # Calculate pLDDT from structure
+                plddt = extract_plddt_from_pdb(pdb_file)
+                    
                 design = Design(
                     id=str(uuid.uuid4()),
                     job_id=job_id,
@@ -236,8 +261,9 @@ async def ingest_loose_files(
                     pdb_path=str(pdb_file),
                     json_path=None,
                     
-                    # No metrics available
-                    plddt_overall=None,
+                    # Store extracted pLDDT
+                    plddt_overall=plddt,
+                    
                     is_favorite=False,
                     created_at=datetime.utcnow()
                 )

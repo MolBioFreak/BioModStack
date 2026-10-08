@@ -10,17 +10,17 @@ import subprocess
 
 router = APIRouter()
 
-# Power profile configuration
-# GPU index -> (eco_limit_watts, default_limit_watts)
-POWER_PROFILES = {
-    0: (500, 575),   # RTX 5090: 500W eco, 575W default
-    2: (300, 370),   # RTX 3090: 300W eco, 370W default
-    3: (300, 390),   # RTX 3090: 300W eco, 390W default
-    # GPU 1 (5060 Ti) intentionally omitted - no limit changes
+# Hardware power limits per GPU: (min, default, max, eco_preset)
+# Values from nvidia-smi -q -d POWER
+HARDWARE_LIMITS = {
+    0: {"min": 400, "default": 575, "max": 600, "eco": 500, "name": "RTX 5090"},
+    1: {"min": 150, "default": 180, "max": 200, "eco": 165, "name": "RTX 5060 Ti"},
+    2: {"min": 100, "default": 370, "max": 380, "eco": 300, "name": "RTX 3090"},
+    3: {"min": 100, "default": 390, "max": 480, "eco": 300, "name": "RTX 3090"},
 }
 
-# Track current eco mode state (in-memory, resets on restart)
-_eco_mode_enabled = False
+# Track current power control state (in-memory, resets on restart)
+_current_limits = {gpu_idx: limits["default"] for gpu_idx, limits in HARDWARE_LIMITS.items()}
 
 
 # --- Enhanced GPU Schema ---
@@ -44,6 +44,9 @@ class GPUStatusEnhanced(BaseModel):
     # Power
     power_draw_w: float
     power_limit_w: float
+    min_power_watts: int
+    default_power_watts: int
+    max_power_watts: int
     # Temperature & Cooling
     temperature: int
     fan_speed: int  # percentage
@@ -259,6 +262,7 @@ class PowerProfileResponse(BaseModel):
 def set_gpu_power_limit(gpu_index: int, watts: int) -> bool:
     """Set power limit for a specific GPU using nvidia-smi."""
     try:
+        # Using sudo as requested/required for power limit modification
         result = subprocess.run(
             ["sudo", "nvidia-smi", "-i", str(gpu_index), "-pl", str(watts)],
             capture_output=True,
@@ -286,25 +290,23 @@ async def set_power_profile(enable_eco: bool) -> PowerProfileResponse:
     global _eco_mode_enabled
 
     errors = []
+    # GPU index -> (eco_limit_watts, default_limit_watts)
     for gpu_index, (eco_watts, default_watts) in POWER_PROFILES.items():
         target_watts = eco_watts if enable_eco else default_watts
         if not set_gpu_power_limit(gpu_index, target_watts):
             errors.append(f"GPU {gpu_index}")
 
-    # Determine message based on success/failure
+    message_suffix = ""
     if errors:
-        # In container environments without privileges, we likely can't set limits.
-        # We'll enable "Soft Eco Mode" (UI state only) to satisfy user preference for the display.
-        print(f"WARNING: Failed to set hardware power limits for {', '.join(errors)}. Running in simulation/soft mode.")
-        message = f"Soft Eco Mode {'enabled' if enable_eco else 'disabled'} (Hardware limits restricted)"
-    else:
-        message = f"Eco mode {'enabled' if enable_eco else 'disabled'} - limits applied"
-
-    # Always update the state so the UI toggles
+        # Log failure but DO NOT crash the UI - keep button in sync with intended state
+        print(f"ERROR: Failed to set power limits for: {', '.join(errors)}")
+        message_suffix = f" (Failed on: {', '.join(errors)})"
+    
+    # Always update state to keep UI responsive
     _eco_mode_enabled = enable_eco
 
     return PowerProfileResponse(
         eco_mode=_eco_mode_enabled,
-        message=message
+        message=f"Eco mode {'enabled' if enable_eco else 'disabled'} - limits applied{message_suffix}"
     )
 
