@@ -94,20 +94,23 @@ def test_boltz_cp_launch_copy_identifies_true_distributed_default_without_hiding
 def test_boltz_cp_workflow_banner_prints_true_distributed_default_and_legacy_boundary() -> None:
     workflow_text = (API_ROOT.parents[1] / "workflows" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
 
-    assert "* Backend: ${params.get('bcp_backend', 'true-distributed-context-parallel')}" in workflow_text
-    assert "* Data-plane: true-distributed-context-parallel launches torch.distributed DTensor CP prediction; shared-cache backends remain legacy output-tiling only" in workflow_text
+    assert "def bcpBackend = params.get('bcp_backend', 'true-distributed-context-parallel')" in workflow_text
+    assert "* Backend: ${bcpBackend}" in workflow_text
+    assert "* Data-plane: true-distributed-context-parallel launches torch.distributed DTensor CP prediction; shared-cache backends remain legacy serial full-prediction/output-tiling only" in workflow_text
 
 
-def test_main_boltz_cp_banner_prints_backend_and_serial_legacy_boundary() -> None:
+def test_boltz_cp_direct_workflow_banner_prints_backend_and_serial_legacy_boundary() -> None:
+    workflow_text = (API_ROOT.parents[1] / "workflows" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
     main_text = (API_ROOT.parents[1] / "main.nf").read_text(encoding="utf-8")
 
-    assert "def bcpBackend = params.get('bcp_backend', 'true-distributed-context-parallel')" in main_text
-    assert "* Backend: ${bcpBackend}" in main_text
-    assert "shared-cache backends remain legacy serial full-prediction/output-tiling only" in main_text
-    assert "params.bcp_input_path" not in main_text
-    assert "params.bcp_gpu_ids" not in main_text
-    assert "params.bcp_size_cp" not in main_text
-    assert "params.bcp_sampling_steps" not in main_text
+    assert "def bcpBackend = params.get('bcp_backend', 'true-distributed-context-parallel')" in workflow_text
+    assert "* Backend: ${bcpBackend}" in workflow_text
+    assert "shared-cache backends remain legacy serial full-prediction/output-tiling only" in workflow_text
+    assert "params.bcp_input_path" not in workflow_text
+    assert "params.bcp_gpu_ids" not in workflow_text
+    assert "params.bcp_size_cp" not in workflow_text
+    assert "params.bcp_sampling_steps" not in workflow_text
+    assert "boltz_cp_experimental" not in main_text
 
 
 def test_boltz_cp_workflow_uses_warning_safe_optional_param_access() -> None:
@@ -241,7 +244,7 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
 
     joined = " ".join(cmd)
 
-    assert cmd[:4] == ["nextflow", "run", "main.nf", "-profile"]
+    assert cmd[:4] == ["nextflow", "run", "workflows/boltz_cp_experimental.nf", "-profile"]
     assert "boltz_cp_experimental,workstation_ryzen7960x" in cmd
     assert "--bcp_input_path /tmp/complex_input.yaml" in joined
     assert "--bcp_shard_plan_id 4x4" in joined
