@@ -326,10 +326,14 @@ export function JobSubmission() {
         queryFn: () => fetchTemplates(),
     });
 
+    // Hardcoded templates that use dedicated components instead of API-driven config
+    const hardcodedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design'];
+
     const { data: selectedTemplateData } = useQuery({
         queryKey: ['template', selectedTemplateId],
         queryFn: () => selectedTemplateId ? fetchTemplateById(selectedTemplateId) : null,
-        enabled: !!selectedTemplateId,
+        // Skip fetch for hardcoded templates - they don't exist in the API
+        enabled: !!selectedTemplateId && !hardcodedTemplates.includes(selectedTemplateId),
     });
 
     // Fetch ligand presets for dynamic dropdown

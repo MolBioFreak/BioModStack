@@ -34,6 +34,7 @@ class JobCreate(BaseModel):
     model_id: str = Field(..., description="ID of the model to use (e.g., rfdiffusion)")
     mode: str = Field(..., description="Mode ID for the selected model")
     params: dict = Field(default_factory=dict)
+    pinned_gpu: Optional[int] = Field(None, description="Optional: Pin job to specific GPU (0-3)")
     
     class Config:
         json_schema_extra = {
@@ -46,7 +47,8 @@ class JobCreate(BaseModel):
                     "seqs_per_design": 4,
                     "rfd_contigs": "[A17-131/0 60-100]",
                     "rfd_input_pdb": "./benchmarkdata/5o45_pd-l1.pdb"
-                }
+                },
+                "pinned_gpu": 0
             }
         }
 

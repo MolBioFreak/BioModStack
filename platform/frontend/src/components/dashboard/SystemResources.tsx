@@ -306,6 +306,138 @@ function GPUCard({ gpu, currentLimit, onSetLimit, isPending, disabled, onToggleD
     );
 }
 
+// GPU Names for dropdown
+const GPU_NAMES: Record<number, string> = {
+    0: 'RTX 5090',
+    1: 'RTX 5060 Ti',
+    2: 'RTX 3090 #1',
+    3: 'RTX 3090 #2',
+};
+
+// Workflow Pinning Section Component
+function WorkflowPinningSection() {
+    const [workflowPins, setWorkflowPins] = useState<Record<string, number>>({});
+    const [gpuLocks, setGpuLocks] = useState<Record<string, number>>({});
+    const [expanded, setExpanded] = useState(false);
+    const [saving, setSaving] = useState(false);
+
+    const WORKFLOWS = ['boltz', 'fampnn', 'rfantibody', 'boltzgen', 'diffdock', 'rfdiffusion'];
+
+    // Fetch workflow pins and GPU locks
+    useEffect(() => {
+        fetch('/api/gpu/workflow-pins')
+            .then(res => res.json())
+            .then(data => setWorkflowPins(data.workflow_pins || {}))
+            .catch(console.error);
+
+        fetch('/api/gpu/gpu-locks')
+            .then(res => res.json())
+            .then(data => setGpuLocks(data.gpu_locks || {}))
+            .catch(console.error);
+    }, []);
+
+    const pinWorkflow = async (workflow: string, gpuId: number | null) => {
+        setSaving(true);
+        try {
+            if (gpuId === null) {
+                await fetch(`/api/gpu/workflow-pins/${workflow}`, { method: 'DELETE' });
+                setWorkflowPins(prev => {
+                    const next = { ...prev };
+                    delete next[workflow];
+                    return next;
+                });
+            } else {
+                await fetch(`/api/gpu/workflow-pins/${workflow}/gpu/${gpuId}`, { method: 'POST' });
+                setWorkflowPins(prev => ({ ...prev, [workflow]: gpuId }));
+            }
+        } catch (error) {
+            console.error('Failed to update workflow pin:', error);
+        }
+        setSaving(false);
+    };
+
+    const unlockGpu = async (batchId: string) => {
+        try {
+            await fetch(`/api/gpu/gpu-locks/${batchId}`, { method: 'DELETE' });
+            setGpuLocks(prev => {
+                const next = { ...prev };
+                delete next[batchId];
+                return next;
+            });
+        } catch (error) {
+            console.error('Failed to unlock GPU:', error);
+        }
+    };
+
+    return (
+        <div className="border-t border-slate-700 pt-4">
+            <button
+                onClick={() => setExpanded(!expanded)}
+                className="flex items-center justify-between w-full text-left"
+            >
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400">📌 Workflow GPU Pins</span>
+                    {Object.keys(workflowPins).length > 0 && (
+                        <span className="px-1.5 py-0.5 rounded text-xs bg-orange-500/20 text-orange-400">
+                            {Object.keys(workflowPins).length} active
+                        </span>
+                    )}
+                    {Object.keys(gpuLocks).length > 0 && (
+                        <span className="px-1.5 py-0.5 rounded text-xs bg-red-500/20 text-red-400">
+                            {Object.keys(gpuLocks).length} locks
+                        </span>
+                    )}
+                </div>
+                <span className="text-slate-500 text-xs">{expanded ? '▲' : '▼'}</span>
+            </button>
+
+            {expanded && (
+                <div className="mt-3 space-y-2">
+                    {/* Workflow Pins */}
+                    <div className="grid grid-cols-2 gap-2">
+                        {WORKFLOWS.map(workflow => (
+                            <div key={workflow} className="flex items-center justify-between bg-slate-700/30 rounded px-2 py-1.5">
+                                <span className="text-xs text-slate-300 capitalize">{workflow}</span>
+                                <select
+                                    value={workflowPins[workflow] ?? ''}
+                                    onChange={(e) => pinWorkflow(workflow, e.target.value ? parseInt(e.target.value) : null)}
+                                    disabled={saving}
+                                    className="bg-slate-700 border border-slate-600 text-slate-300 text-xs rounded px-1.5 py-0.5 disabled:opacity-50"
+                                >
+                                    <option value="">Auto</option>
+                                    {[0, 1, 2, 3].map(gpu => (
+                                        <option key={gpu} value={gpu}>{GPU_NAMES[gpu]}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* GPU Locks */}
+                    {Object.keys(gpuLocks).length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-slate-700">
+                            <div className="text-xs text-slate-400 mb-2">🔒 Active GPU Locks</div>
+                            {Object.entries(gpuLocks).map(([batchId, gpuId]) => (
+                                <div key={batchId} className="flex items-center justify-between bg-red-500/10 rounded px-2 py-1.5 mb-1">
+                                    <span className="text-xs text-red-300">
+                                        GPU {gpuId} locked by batch {batchId.slice(0, 8)}...
+                                    </span>
+                                    <button
+                                        onClick={() => unlockGpu(batchId)}
+                                        className="px-2 py-0.5 text-xs bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded"
+                                    >
+                                        Unlock
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
 // GPU Scheduler Settings Panel
 interface SchedulerConfig {
     global: {
@@ -613,6 +745,9 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                             ))}
                         </div>
                     </div>
+
+                    {/* Workflow GPU Pinning Section */}
+                    <WorkflowPinningSection />
 
                     {/* GPU Priority Weights Section */}
                     <div className="border-t border-slate-700 pt-4">

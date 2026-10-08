@@ -237,21 +237,45 @@ process BoltzFromSequenceWithMSA {
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     """
     # Setup temp directories for containerized execution
-    mkdir -p tmp yamls predictions
+    mkdir -p tmp yamls predictions msa
     export NUMBA_CACHE_DIR=tmp
     export XDG_CONFIG_HOME=tmp
     export TRITON_CACHE_DIR=tmp
     export HOME=tmp
     
+    # CRITICAL: Copy MSA file to local directory to resolve symlinks
+    # Inside containers, symlinks pointing to host paths don't work
+    MSA_LOCAL="msa/\$(basename ${msa_file})"
+    cp -L "${msa_file}" "\$MSA_LOCAL" 2>/dev/null || cp "${msa_file}" "\$MSA_LOCAL" 2>/dev/null || true
+    MSA_PATH="\$(readlink -f \$MSA_LOCAL 2>/dev/null || realpath \$MSA_LOCAL 2>/dev/null || echo '')"
+    echo "MSA file: ${msa_file} -> \$MSA_PATH"
+    
     # Generate proper multi-chain YAML using Python
     # Handles colon-separated sequences (e.g., "VH_SEQ:VL_SEQ" -> chains A, B)
-    python3 << 'PYEOF'
+    python3 << PYEOF
 import yaml
 from pathlib import Path
+import os
 
 sequence_input = "${sequence}"
 sequence_name = "${sequence_name}"
-msa_file = "${msa_file}"
+msa_local = os.environ.get('MSA_PATH', '') or "\$MSA_PATH"
+
+# Check local MSA from shell variable
+msa_path = None
+if msa_local and msa_local.strip():
+    msa_check = Path(msa_local.strip())
+    if msa_check.exists():
+        msa_path = str(msa_check.resolve())
+        print(f"Using MSA: {msa_path}")
+else:
+    # Fallback: check for any .a3m in msa/ directory
+    msa_files = list(Path("msa").glob("*.a3m"))
+    if msa_files:
+        msa_path = str(msa_files[0].resolve())
+        print(f"Found MSA in msa/: {msa_path}")
+    else:
+        print("WARNING: No MSA file found, proceeding without MSA")
 
 # Split by colon for multi-chain input
 chains = sequence_input.split(':')
@@ -259,8 +283,6 @@ chain_ids = [chr(ord('A') + i) for i in range(len(chains))]
 
 # Build Boltz YAML structure
 boltz_yaml = {"version": 1, "sequences": []}
-
-msa_path = str(Path(msa_file).resolve()) if Path(msa_file).exists() else None
 
 for chain_id, chain_seq in zip(chain_ids, chains):
     entry = {

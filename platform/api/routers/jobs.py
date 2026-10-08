@@ -284,6 +284,7 @@ async def create_job(
             queue_status=initial_queue_status,
             vram_estimate_mb=vram_estimate,
             sequence_length=sequence_length,
+            pinned_gpu=job_data.pinned_gpu,  # User-specified GPU pin from frontend
             priority=0,  # Default priority
             paused=False,
             retry_count=0,

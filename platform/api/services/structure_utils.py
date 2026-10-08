@@ -435,3 +435,69 @@ def calculate_epitope_contacts(
     except Exception as e:
         logger.error(f"[structure_utils] Error calculating epitope contacts: {e}")
         return 0, None
+
+
+def compute_contact_map(
+    path: Union[str, Path],
+    distance_cutoff: float = 8.0,
+    max_size: int = 500
+) -> Tuple[Optional[List[List[float]]], Optional[List[int]], Optional[List[str]]]:
+    """
+    Compute Cα-Cα distance matrix for contact map visualization.
+    
+    Args:
+        path: Path to structure file (PDB or CIF)
+        distance_cutoff: Distance cutoff for binary contact (Å), not used for distance matrix
+        max_size: Maximum matrix dimension (will downsample if larger)
+        
+    Returns:
+        Tuple of (distance_matrix, residue_numbers, chain_ids)
+        - distance_matrix: 2D list of distances in Angstroms
+        - residue_numbers: List of residue numbers for each row/col
+        - chain_ids: List of chain IDs for each residue
+        Returns (None, None, None) on error
+    """
+    try:
+        structure = load_structure(path)
+        
+        # Get CA atoms for protein chains
+        protein = structure[struc.filter_amino_acids(structure)]
+        if len(protein) == 0:
+            logger.warning(f"[structure_utils] No amino acids in {path}")
+            return None, None, None
+        
+        ca_atoms = protein[protein.atom_name == "CA"]
+        
+        if len(ca_atoms) == 0:
+            logger.warning(f"[structure_utils] No CA atoms in {path}")
+            return None, None, None
+        
+        coords = ca_atoms.coord
+        n_residues = len(ca_atoms)
+        
+        # Get residue info
+        res_ids = ca_atoms.res_id.tolist() if hasattr(ca_atoms, 'res_id') else list(range(1, n_residues + 1))
+        chain_ids = ca_atoms.chain_id.tolist() if hasattr(ca_atoms, 'chain_id') else ['A'] * n_residues
+        
+        # Compute pairwise distance matrix
+        # Use broadcasting for efficiency
+        diff = coords[:, np.newaxis, :] - coords[np.newaxis, :, :]
+        distances = np.sqrt(np.sum(diff ** 2, axis=-1))
+        
+        # Downsample if too large
+        if n_residues > max_size:
+            step = n_residues // max_size
+            indices = list(range(0, n_residues, step))[:max_size]
+            distances = distances[np.ix_(indices, indices)]
+            res_ids = [res_ids[i] for i in indices]
+            chain_ids = [chain_ids[i] for i in indices]
+        
+        # Convert to list for JSON serialization
+        distance_matrix = [[round(float(d), 2) for d in row] for row in distances]
+        
+        return distance_matrix, res_ids, chain_ids
+        
+    except Exception as e:
+        logger.error(f"[structure_utils] Error computing contact map from {path}: {e}")
+        return None, None, None
+

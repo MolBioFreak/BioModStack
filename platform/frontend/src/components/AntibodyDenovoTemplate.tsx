@@ -4,6 +4,7 @@ import { submitJob, uploadFile } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
+import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { DesignModeSelector } from './DesignModeSelector';
 import { QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset } from './QualitySettingsPanel';
@@ -15,6 +16,8 @@ interface AntibodyDenovoTemplateProps {
 
 export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues }) => {
     const [jobName, setJobName] = useState('antibody_design');
+    const [pinnedGpus, setPinnedGpus] = useState<number[]>(initialValues?.pinned_gpus ?? []);
+    const [lockGpus, setLockGpus] = useState(false);
     const [targetPdb, setTargetPdb] = useState<File | null>(null);
     const [targetSource, setTargetSource] = useState<{ type: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string } | null>(null);
     const [numDesigns, setNumDesigns] = useState(10);
@@ -48,6 +51,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [selectedChain, setSelectedChain] = useState<string | null>(null);
     const [selectedResidues, setSelectedResidues] = useState<Set<string>>(new Set());
     const [isParsing, setIsParsing] = useState(false);
+    const [pdbBlobUrl, setPdbBlobUrl] = useState<string | null>(null);
 
     // Optional DNA/RNA sequence for complex prediction (when protein binds nucleic acid)
     const [targetDnaSeq, setTargetDnaSeq] = useState<string>('');
@@ -142,8 +146,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     // Auto-parse PDB when file is selected
     useEffect(() => {
+        // Clean up old blob URL
+        if (pdbBlobUrl) {
+            URL.revokeObjectURL(pdbBlobUrl);
+            setPdbBlobUrl(null);
+        }
+
         if (targetPdb) {
             setIsParsing(true);
+
+            // Create blob URL for Molstar viewer
+            const blobUrl = URL.createObjectURL(targetPdb);
+            setPdbBlobUrl(blobUrl);
+
             parsePDBFile(targetPdb)
                 .then(result => {
                     setParsedChains(result.chains);
@@ -238,13 +253,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             // Step 3: Submit job with uploaded file path
             const jobData = {
                 name: jobName,
-                model_id: 'antibody_denovo',
+                model_id: 'template_antibody_denovo',
                 mode: 'antibody_denovo_pipeline', // Matches main.nf logic
+                pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 params: {
                     target_pdb: pdbPath,
                     pdb_source: 'upload',
                     epitope_residues: epitopeString,
                     antigen_chains: selectedChain || undefined, // Send selected chain
+                    pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
+                    lock_gpus: lockGpus && pinnedGpus.length > 0, // GPU locking
                     // Framework configuration
                     framework_type: frameworkType,
                     framework_pdb: frameworkPath || undefined, // Only if custom
@@ -340,16 +358,68 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
             {/* Form */}
             <div className="space-y-6">
-                {/* Job Name */}
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">Job Name</label>
-                    <input
-                        type="text"
-                        value={jobName}
-                        onChange={(e) => setJobName(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                        placeholder="antibody_design"
-                    />
+                {/* Job Name & GPU Pinning */}
+                <div className="flex gap-6">
+                    <div className="flex-1">
+                        <label className="block text-sm font-medium text-slate-400 mb-2">Job Name</label>
+                        <input
+                            type="text"
+                            value={jobName}
+                            onChange={(e) => setJobName(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                            placeholder="antibody_design"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">
+                            GPU Pinning {pinnedGpus.length > 0 && <span className="text-purple-400">({pinnedGpus.length} selected)</span>}
+                        </label>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setPinnedGpus([])}
+                                className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.length === 0
+                                    ? 'bg-slate-600 text-white ring-2 ring-slate-400'
+                                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                    }`}
+                            >
+                                Auto
+                            </button>
+                            {[
+                                { id: 0, name: '5090' },
+                                { id: 1, name: '5060Ti' },
+                                { id: 2, name: '3090#1' },
+                                { id: 3, name: '3090#2' },
+                            ].map(gpu => (
+                                <button
+                                    key={gpu.id}
+                                    onClick={() => {
+                                        setPinnedGpus(prev =>
+                                            prev.includes(gpu.id)
+                                                ? prev.filter(g => g !== gpu.id)
+                                                : [...prev, gpu.id].sort()
+                                        );
+                                    }}
+                                    className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.includes(gpu.id)
+                                        ? 'bg-purple-600 text-white ring-2 ring-purple-400'
+                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                        }`}
+                                >
+                                    {gpu.name}
+                                </button>
+                            ))}
+                        </div>
+                        {pinnedGpus.length > 0 && (
+                            <label className="flex items-center gap-2 mt-3 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={lockGpus}
+                                    onChange={e => setLockGpus(e.target.checked)}
+                                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-500 focus:ring-purple-500"
+                                />
+                                <span className="text-sm text-slate-400">Lock selected GPU(s) exclusively during workflow</span>
+                            </label>
+                        )}
+                    </div>
                 </div>
 
                 {/* Target PDB Selection - Now with multiple sources */}
@@ -401,7 +471,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 key={fw.id}
                                 onClick={() => setFrameworkType(fw.id as FrameworkType)}
                                 className={`p-3 rounded-lg border transition-all ${frameworkType === fw.id
-                                    ? `bg-${fw.color}-600/20 border-${fw.color}-500 text-${fw.color}-400`
+                                    ? fw.id === 'standard-fv'
+                                        ? 'bg-blue-600/20 border-blue-500 text-blue-400'
+                                        : fw.id === 'nanobody'
+                                            ? 'bg-purple-600/20 border-purple-500 text-purple-400'
+                                            : 'bg-amber-600/20 border-amber-500 text-amber-400'
                                     : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
                                     }`}
                             >
@@ -460,21 +534,47 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                 )}
 
-                {/* Interactive Epitope Selector */}
+                {/* Interactive Epitope Selector with 3D Viewer */}
                 {parsedChains.length > 0 && (
-                    <div>
+                    <div className="space-y-4">
                         <label className="block text-sm font-medium text-slate-400 mb-2">
                             Epitope Selection
                             <span className="ml-2 text-xs text-slate-500 font-normal">
-                                (Click residues to select epitope hotspots)
+                                (Click residues in 3D or 2D view to select epitope hotspots)
                             </span>
                         </label>
-                        <EpitopeSelector
-                            chains={parsedChains}
-                            selectedResidues={selectedResidues}
-                            onSelectionChange={setSelectedResidues}
-                            activeChain={selectedChain || undefined}
-                        />
+
+                        {/* 3D Molstar Viewer for spatial selection */}
+                        {pdbBlobUrl && (
+                            <div>
+                                <div className="text-xs text-slate-500 mb-1">3D Structure View (click to select)</div>
+                                <EpitopeMolstarViewer
+                                    structureUrl={pdbBlobUrl}
+                                    height={300}
+                                    selectedResidues={selectedResidues}
+                                    onResidueClick={(residueKey) => {
+                                        const newSelection = new Set(selectedResidues);
+                                        if (newSelection.has(residueKey)) {
+                                            newSelection.delete(residueKey);
+                                        } else {
+                                            newSelection.add(residueKey);
+                                        }
+                                        setSelectedResidues(newSelection);
+                                    }}
+                                />
+                            </div>
+                        )}
+
+                        {/* 2D Sequence Grid */}
+                        <div>
+                            <div className="text-xs text-slate-500 mb-1">2D Sequence View (shift+click for range)</div>
+                            <EpitopeSelector
+                                chains={parsedChains}
+                                selectedResidues={selectedResidues}
+                                onSelectionChange={setSelectedResidues}
+                                activeChain={selectedChain || undefined}
+                            />
+                        </div>
                     </div>
                 )}
 
@@ -669,7 +769,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         // Store current params in localStorage for template manager
                         const templateData = {
                             name: jobName,
-                            model_id: 'antibody_denovo',
+                            model_id: 'template_antibody_denovo',
                             mode: 'antibody_denovo_pipeline',
                             params: {
                                 framework_type: frameworkType,

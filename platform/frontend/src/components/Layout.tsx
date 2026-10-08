@@ -4,6 +4,7 @@
 
 import { Link, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
+import { ThemeSelector } from './ThemeSelector';
 
 interface LayoutProps {
     children: React.ReactNode;
@@ -15,17 +16,38 @@ export function Layout({ children }: LayoutProps) {
     const isActive = (path: string) => location.pathname === path;
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+        <div
+            className="min-h-screen transition-colors duration-300"
+            style={{
+                background: `linear-gradient(to bottom right, var(--bg-gradient-from), var(--bg-gradient-via), var(--bg-gradient-to))`
+            }}
+        >
             {/* Top Navigation Bar */}
-            <nav className="bg-slate-900/80 backdrop-blur-sm border-b border-slate-700/50 sticky top-0 z-50">
+            <nav
+                className="backdrop-blur-sm border-b sticky top-0 z-50 transition-colors duration-300"
+                style={{
+                    backgroundColor: 'var(--nav-bg)',
+                    borderColor: 'var(--border-primary)'
+                }}
+            >
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="flex items-center justify-between h-16">
                         {/* Logo / Brand */}
                         <Link to="/" className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                            <div
+                                className="w-10 h-10 rounded-xl flex items-center justify-center"
+                                style={{
+                                    background: `linear-gradient(to bottom right, var(--accent-gradient-from), var(--accent-gradient-to))`
+                                }}
+                            >
                                 <span className="text-white font-bold text-xl">B</span>
                             </div>
-                            <span className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+                            <span
+                                className="text-xl font-bold bg-clip-text text-transparent"
+                                style={{
+                                    backgroundImage: `linear-gradient(to right, var(--accent-gradient-from), var(--accent-gradient-to))`
+                                }}
+                            >
                                 BioModStack
                             </span>
                         </Link>
@@ -34,40 +56,47 @@ export function Layout({ children }: LayoutProps) {
                         <div className="flex items-center gap-2">
                             <Link
                                 to="/"
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${isActive('/')
-                                    ? 'bg-purple-500/20 text-purple-300'
-                                    : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
-                                    }`}
+                                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                                style={{
+                                    backgroundColor: isActive('/') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                    color: isActive('/') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                }}
                             >
                                 Dashboard
                             </Link>
                             <Link
                                 to="/submit"
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${isActive('/submit')
-                                    ? 'bg-purple-500/20 text-purple-300'
-                                    : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
-                                    }`}
+                                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                                style={{
+                                    backgroundColor: isActive('/submit') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                    color: isActive('/submit') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                }}
                             >
                                 New Job
                             </Link>
                             <Link
                                 to="/designer"
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${isActive('/designer')
-                                    ? 'bg-emerald-500/20 text-emerald-300'
-                                    : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
-                                    }`}
+                                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                                style={{
+                                    backgroundColor: isActive('/designer') ? 'color-mix(in srgb, var(--success) 20%, transparent)' : 'transparent',
+                                    color: isActive('/designer') ? 'var(--success)' : 'var(--text-secondary)'
+                                }}
                             >
                                 Molecular Biology Toolkit
                             </Link>
                             <Link
                                 to="/designs"
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${isActive('/designs')
-                                    ? 'bg-purple-500/20 text-purple-300'
-                                    : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
-                                    }`}
+                                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                                style={{
+                                    backgroundColor: isActive('/designs') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                    color: isActive('/designs') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                }}
                             >
                                 Results
                             </Link>
+
+                            {/* Theme Selector */}
+                            <ThemeSelector />
 
                             {/* Eco Mode Toggle */}
                             <EcoModeToggle />

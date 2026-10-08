@@ -759,3 +759,131 @@ async def get_antifold_logits(
         raise HTTPException(status_code=404, detail="Logits file not found")
         
     return FileResponse(path, media_type="text/csv", filename=f"{design.name}_logits.csv")
+
+
+# --- Phase 3a: Plotly Analytics Endpoints ---
+
+class ContactMapData(BaseModel):
+    """Contact map data for heatmap visualization."""
+    design_id: str
+    design_name: str
+    distance_matrix: List[List[float]]  # 2D distance matrix
+    residue_numbers: List[int]
+    chain_ids: List[str]
+    size: int
+
+
+@router.get("/{design_id}/contact-map", response_model=ContactMapData)
+async def get_contact_map(
+    design_id: str,
+    max_size: int = Query(400, description="Maximum matrix dimension"),
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Get Cα-Cα distance matrix for contact map visualization.
+    
+    Computes pairwise distances between all Cα atoms in the structure.
+    Large structures are automatically downsampled for rendering performance.
+    """
+    result = await session.execute(select(Design).where(Design.id == design_id))
+    design = result.scalar_one_or_none()
+    
+    if not design:
+        raise HTTPException(status_code=404, detail="Design not found")
+    
+    if not design.pdb_path:
+        raise HTTPException(status_code=404, detail="No structure file for this design")
+    
+    structure_path = Path(design.pdb_path)
+    if not structure_path.exists():
+        raise HTTPException(status_code=404, detail="Structure file not found on disk")
+    
+    try:
+        from services.structure_utils import compute_contact_map
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Structure analysis module not available")
+    
+    distance_matrix, res_ids, chain_ids = compute_contact_map(structure_path, max_size=max_size)
+    
+    if distance_matrix is None:
+        raise HTTPException(status_code=404, detail="Could not compute contact map for this structure")
+    
+    return ContactMapData(
+        design_id=design.id,
+        design_name=design.name,
+        distance_matrix=distance_matrix,
+        residue_numbers=res_ids,
+        chain_ids=chain_ids,
+        size=len(distance_matrix)
+    )
+
+
+class ChainPairIptmData(BaseModel):
+    """Chain-pair iPTM matrix data."""
+    design_id: str
+    design_name: str
+    chain_ids: List[str]
+    iptm_matrix: List[List[Optional[float]]]  # NxN matrix
+    size: int
+
+
+@router.get("/{design_id}/chain-iptm", response_model=ChainPairIptmData)
+async def get_chain_pair_iptm(
+    design_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Get chain-pair iPTM matrix for interface quality visualization.
+    
+    Returns the NxN matrix of interface pTM scores between all chain pairs,
+    already stored from Boltz2/AF3 predictions.
+    """
+    result = await session.execute(select(Design).where(Design.id == design_id))
+    design = result.scalar_one_or_none()
+    
+    if not design:
+        raise HTTPException(status_code=404, detail="Design not found")
+    
+    if not design.pair_chains_iptm:
+        raise HTTPException(status_code=404, detail="No chain-pair iPTM data for this design")
+    
+    # pair_chains_iptm is stored as dict: {"0": {"1": 0.85}, "1": {"0": 0.85}} etc.
+    # Convert to matrix form
+    pair_data = design.pair_chains_iptm
+    
+    # Get all chain indices
+    chain_indices = sorted(pair_data.keys(), key=lambda x: int(x) if x.isdigit() else x)
+    n = len(chain_indices)
+    
+    # Build symmetric matrix
+    iptm_matrix = []
+    for i in chain_indices:
+        row = []
+        for j in chain_indices:
+            if i == j:
+                # Diagonal: use chains_ptm if available
+                if design.chains_ptm and i in design.chains_ptm:
+                    row.append(design.chains_ptm.get(i))
+                else:
+                    row.append(None)
+            else:
+                # Off-diagonal: get from pair_chains_iptm
+                val = None
+                if i in pair_data and j in pair_data[i]:
+                    val = pair_data[i][j]
+                elif j in pair_data and i in pair_data[j]:
+                    val = pair_data[j][i]  # Symmetric
+                row.append(val)
+        iptm_matrix.append(row)
+    
+    # Convert chain indices to friendly names if possible
+    chain_labels = [f"Chain {c}" for c in chain_indices]
+    
+    return ChainPairIptmData(
+        design_id=design.id,
+        design_name=design.name,
+        chain_ids=chain_labels,
+        iptm_matrix=iptm_matrix,
+        size=n
+    )
+

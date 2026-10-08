@@ -1,30 +1,186 @@
 @import "tailwindcss";
 
-:root {
-  --background: 222.2 84% 4.9%;
-  --foreground: 210 40% 98%;
-  --card: 222.2 84% 6%;
-  --card-foreground: 210 40% 98%;
-  --primary: 217.2 91.2% 59.8%;
-  --primary-foreground: 222.2 47.4% 11.2%;
-  --secondary: 217.2 32.6% 17.5%;
-  --secondary-foreground: 210 40% 98%;
-  --accent: 262.1 83.3% 57.8%;
-  --accent-foreground: 210 40% 98%;
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 210 40% 98%;
-  --muted: 217.2 32.6% 17.5%;
-  --muted-foreground: 215 20.2% 65.1%;
-  --border: 217.2 32.6% 17.5%;
-  --ring: 224.3 76.3% 48%;
+/* ============================================
+   THEME SYSTEM - Color Scheme Variables
+   ============================================ */
+
+/* Theme: Midnight (Default) - Deep slate with purple accents */
+:root,
+[data-theme="midnight"] {
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tertiary: #334155;
+  --bg-gradient-from: #0f172a;
+  --bg-gradient-via: #1e293b;
+  --bg-gradient-to: #0f172a;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent-primary: #a855f7;
+  --accent-secondary: #ec4899;
+  --accent-gradient-from: #a855f7;
+  --accent-gradient-to: #ec4899;
+  --border-primary: #334155;
+  --border-secondary: #475569;
+  --nav-bg: rgba(15, 23, 42, 0.8);
+  --card-bg: #1e293b;
+  --card-hover: #334155;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --link: #60a5fa;
+  --link-hover: #93c5fd;
 }
 
+/* Theme: Light - Clean white with violet accents */
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-tertiary: #e2e8f0;
+  --bg-gradient-from: #ffffff;
+  --bg-gradient-via: #f1f5f9;
+  --bg-gradient-to: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --accent-primary: #7c3aed;
+  --accent-secondary: #db2777;
+  --accent-gradient-from: #7c3aed;
+  --accent-gradient-to: #db2777;
+  --border-primary: #cbd5e1;
+  --border-secondary: #94a3b8;
+  --nav-bg: rgba(255, 255, 255, 0.9);
+  --card-bg: #ffffff;
+  --card-hover: #f1f5f9;
+  --success: #16a34a;
+  --warning: #d97706;
+  --error: #dc2626;
+  --link: #2563eb;
+  --link-hover: #1d4ed8;
+}
+
+/* Theme: Desert Tan - Warm sandy desert tones */
+[data-theme="desert"] {
+  --bg-primary: #2a1f1a;
+  --bg-secondary: #3d2e24;
+  --bg-tertiary: #56443a;
+  --bg-gradient-from: #2a1f1a;
+  --bg-gradient-via: #3d2e24;
+  --bg-gradient-to: #2a1f1a;
+  --text-primary: #f5e6d3;
+  --text-secondary: #d4c4b0;
+  --text-muted: #a89888;
+  --accent-primary: #e8a849;
+  --accent-secondary: #c67b30;
+  --accent-gradient-from: #e8a849;
+  --accent-gradient-to: #c67b30;
+  --border-primary: #5e4d42;
+  --border-secondary: #76655a;
+  --nav-bg: rgba(42, 31, 26, 0.9);
+  --card-bg: #3d2e24;
+  --card-hover: #56443a;
+  --success: #9abe3e;
+  --warning: #e8a849;
+  --error: #d46b5d;
+  --link: #e8a849;
+  --link-hover: #f0c06a;
+}
+
+/* Theme: Retro Terminal - Classic green phosphor */
+[data-theme="retro"] {
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #111111;
+  --bg-tertiary: #1a1a1a;
+  --bg-gradient-from: #0a0a0a;
+  --bg-gradient-via: #0f0f0f;
+  --bg-gradient-to: #0a0a0a;
+  --text-primary: #4ade80;
+  --text-secondary: #22c55e;
+  --text-muted: #16a34a;
+  --accent-primary: #22c55e;
+  --accent-secondary: #4ade80;
+  --accent-gradient-from: #22c55e;
+  --accent-gradient-to: #86efac;
+  --border-primary: #1f2937;
+  --border-secondary: #374151;
+  --nav-bg: rgba(10, 10, 10, 0.9);
+  --card-bg: #111111;
+  --card-hover: #1a1a1a;
+  --success: #4ade80;
+  --warning: #fde047;
+  --error: #f87171;
+  --link: #86efac;
+  --link-hover: #bbf7d0;
+}
+
+/* Theme: Cyberpunk - Neon pink & cyan on deep purple */
+[data-theme="cyberpunk"] {
+  --bg-primary: #0f0a1e;
+  --bg-secondary: #1a0f2e;
+  --bg-tertiary: #2d1b4e;
+  --bg-gradient-from: #0f0a1e;
+  --bg-gradient-via: #1a0f2e;
+  --bg-gradient-to: #0f0a1e;
+  --text-primary: #f0abfc;
+  --text-secondary: #e879f9;
+  --text-muted: #c026d3;
+  --accent-primary: #f0abfc;
+  --accent-secondary: #22d3ee;
+  --accent-gradient-from: #f0abfc;
+  --accent-gradient-to: #22d3ee;
+  --border-primary: #4c1d95;
+  --border-secondary: #7c3aed;
+  --nav-bg: rgba(15, 10, 30, 0.85);
+  --card-bg: #1a0f2e;
+  --card-hover: #2d1b4e;
+  --success: #22d3ee;
+  --warning: #fde047;
+  --error: #fb7185;
+  --link: #22d3ee;
+  --link-hover: #67e8f9;
+}
+
+/* Theme: Ocean Depths - Deep blues with teal accents */
+[data-theme="ocean"] {
+  --bg-primary: #0c1929;
+  --bg-secondary: #0f2744;
+  --bg-tertiary: #1e3a5f;
+  --bg-gradient-from: #0c1929;
+  --bg-gradient-via: #0f2744;
+  --bg-gradient-to: #0c1929;
+  --text-primary: #e0f2fe;
+  --text-secondary: #7dd3fc;
+  --text-muted: #38bdf8;
+  --accent-primary: #14b8a6;
+  --accent-secondary: #06b6d4;
+  --accent-gradient-from: #14b8a6;
+  --accent-gradient-to: #06b6d4;
+  --border-primary: #1e3a5f;
+  --border-secondary: #2563eb;
+  --nav-bg: rgba(12, 25, 41, 0.85);
+  --card-bg: #0f2744;
+  --card-hover: #1e3a5f;
+  --success: #2dd4bf;
+  --warning: #fbbf24;
+  --error: #f87171;
+  --link: #38bdf8;
+  --link-hover: #7dd3fc;
+}
+
+/* ============================================
+   BASE STYLES - Using Theme Variables
+   ============================================ */
+
 body {
-  @apply bg-slate-950 text-slate-100 antialiased;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Open Sans', 'Helvetica Neue', sans-serif;
   font-weight: 400;
   margin: 0;
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 
@@ -39,85 +195,419 @@ body {
 }
 
 /* ============================================
-   Override dark text colors from OVE/BlueprintJS
-   BioModStack uses a dark theme - text must be light!
+   THEME-AWARE TAILWIND OVERRIDES
+   Remap Tailwind slate classes to theme variables
    ============================================ */
 
-/* Main app headings and text - force light colors */
-#root h1,
-#root h2,
-#root h3,
-#root h4,
-#root h5,
-#root h6,
-#root p,
-#root span,
-#root div,
-#root label,
-#root a {
-  color: inherit;
+/* Background color overrides */
+.bg-slate-950 {
+  background-color: var(--bg-primary) !important;
 }
 
-/* Headings should be clearly visible */
+.bg-slate-900 {
+  background-color: var(--bg-secondary) !important;
+}
+
+.bg-slate-800 {
+  background-color: var(--bg-tertiary) !important;
+}
+
+.bg-slate-700 {
+  background-color: var(--card-hover) !important;
+}
+
+.bg-slate-600 {
+  background-color: var(--border-secondary) !important;
+}
+
+/* Background with opacity - use color-mix for transparency */
+[class*="bg-slate-900/"] {
+  background-color: color-mix(in srgb, var(--bg-secondary) 50%, transparent) !important;
+}
+
+[class*="bg-slate-800/"] {
+  background-color: color-mix(in srgb, var(--bg-tertiary) 40%, transparent) !important;
+}
+
+[class*="bg-slate-700/"] {
+  background-color: color-mix(in srgb, var(--card-hover) 50%, transparent) !important;
+}
+
+/* Text color overrides */
+.text-slate-50,
+.text-slate-100 {
+  color: var(--text-primary) !important;
+}
+
+.text-slate-200,
+.text-slate-300 {
+  color: var(--text-primary) !important;
+}
+
+.text-slate-400,
+.text-slate-500 {
+  color: var(--text-secondary) !important;
+}
+
+.text-slate-600 {
+  color: var(--text-muted) !important;
+}
+
+.text-white {
+  color: var(--text-primary) !important;
+}
+
+/* Border color overrides */
+.border-slate-700,
+.border-slate-600 {
+  border-color: var(--border-primary) !important;
+}
+
+.border-slate-800 {
+  border-color: var(--border-primary) !important;
+}
+
+[class*="border-slate-700/"] {
+  border-color: color-mix(in srgb, var(--border-primary) 50%, transparent) !important;
+}
+
+/* Accent color overrides - purple mapped to theme accent */
+.bg-purple-500,
+.bg-purple-600 {
+  background-color: var(--accent-primary) !important;
+}
+
+[class*="bg-purple-500/"] {
+  background-color: color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
+}
+
+.text-purple-300,
+.text-purple-400 {
+  color: var(--accent-primary) !important;
+}
+
+.border-purple-500 {
+  border-color: var(--accent-primary) !important;
+}
+
+/* Gradient overrides for common patterns */
+.from-purple-500 {
+  --tw-gradient-from: var(--accent-gradient-from) !important;
+}
+
+.to-pink-500 {
+  --tw-gradient-to: var(--accent-gradient-to) !important;
+}
+
+.from-purple-400 {
+  --tw-gradient-from: var(--accent-gradient-from) !important;
+}
+
+.to-pink-400 {
+  --tw-gradient-to: var(--accent-gradient-to) !important;
+}
+
+/* Ring colors */
+.ring-purple-500 {
+  --tw-ring-color: var(--accent-primary) !important;
+}
+
+.focus\:ring-purple-500:focus {
+  --tw-ring-color: var(--accent-primary) !important;
+}
+
+.focus\:ring-blue-500:focus {
+  --tw-ring-color: var(--link) !important;
+}
+
+/* Status colors - mapped to theme */
+.bg-green-500,
+.bg-emerald-500,
+.bg-emerald-600 {
+  background-color: var(--success) !important;
+}
+
+.text-green-400,
+.text-emerald-400,
+.text-emerald-300 {
+  color: var(--success) !important;
+}
+
+[class*="bg-emerald-500/"] {
+  background-color: color-mix(in srgb, var(--success) 20%, transparent) !important;
+}
+
+/* Links */
+.text-blue-400 {
+  color: var(--link) !important;
+}
+
+.text-blue-300 {
+  color: var(--link-hover) !important;
+}
+
+/* Headings - use theme text */
 h1,
 h2,
 h3 {
-  color: #e2e8f0 !important;
-  /* slate-200 */
+  color: var(--text-primary) !important;
 }
 
 h4,
 h5,
 h6 {
-  color: #cbd5e1 !important;
-  /* slate-300 */
-}
-
-/* Body text - keep it readable */
-#root>div:not(.veEditor) {
-  color: #f1f5f9;
-  /* slate-100 */
-}
-
-/* Cards and containers in main app */
-.bg-slate-900,
-.bg-slate-800,
-.bg-slate-950,
-[class*="bg-slate-9"],
-[class*="bg-slate-8"] {
-  color: #e2e8f0;
-  /* slate-200 */
-}
-
-/* Muted/secondary text */
-.text-slate-400,
-.text-muted,
-[class*="text-slate-4"],
-[class*="text-slate-5"] {
-  color: #94a3b8 !important;
-  /* slate-400 */
+  color: var(--text-secondary) !important;
 }
 
 /* Ensure OVE editor uses its own styles when loaded */
-.veEditor {
+.veEditor,
+.veEditor * {
   /* OVE manages its own colors - don't override */
-  color: initial;
+  color: revert !important;
+  background-color: revert !important;
+  border-color: revert !important;
 }
-
 
 /* Fix BlueprintJS dark theme text that might leak */
 .bp3-dark,
 .bp5-dark {
-  color: #f5f8fa !important;
+  color: var(--text-primary) !important;
 }
 
 /* Ensure links are visible */
 a:not(.veEditor a) {
-  color: #60a5fa;
-  /* blue-400 */
+  color: var(--link);
 }
 
 a:not(.veEditor a):hover {
-  color: #93c5fd;
-  /* blue-300 */
+  color: var(--link-hover);
+}
+
+/* Smooth transitions for theme changes */
+*,
+*::before,
+*::after {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.15s ease;
+}
+
+/* Disable transitions during initial load to prevent flash */
+.no-transitions,
+.no-transitions * {
+  transition: none !important;
+}
+
+/* ============================================
+   ADDITIONAL TAILWIND CLASS OVERRIDES
+   ============================================ */
+
+/* Amber/yellow (warning) colors */
+.bg-amber-500,
+.bg-amber-600,
+.bg-yellow-500 {
+  background-color: var(--warning) !important;
+}
+
+[class*="bg-amber-500/"] {
+  background-color: color-mix(in srgb, var(--warning) 20%, transparent) !important;
+}
+
+.text-amber-400,
+.text-amber-500,
+.text-yellow-400 {
+  color: var(--warning) !important;
+}
+
+.border-amber-500 {
+  border-color: var(--warning) !important;
+}
+
+/* Red (error) colors */
+.bg-red-500,
+.bg-red-600 {
+  background-color: var(--error) !important;
+}
+
+[class*="bg-red-500/"] {
+  background-color: color-mix(in srgb, var(--error) 20%, transparent) !important;
+}
+
+.text-red-400,
+.text-red-500 {
+  color: var(--error) !important;
+}
+
+.border-red-500 {
+  border-color: var(--error) !important;
+}
+
+/* Cyan/teal colors */
+.bg-cyan-500,
+.bg-teal-500 {
+  background-color: var(--accent-secondary) !important;
+}
+
+.text-cyan-400,
+.text-teal-400 {
+  color: var(--accent-secondary) !important;
+}
+
+/* Pink colors (secondary accent) */
+.bg-pink-500 {
+  background-color: var(--accent-secondary) !important;
+}
+
+.text-pink-400 {
+  color: var(--accent-secondary) !important;
+}
+
+/* Indigo/violet colors */
+.bg-indigo-500,
+.bg-violet-500 {
+  background-color: var(--accent-primary) !important;
+}
+
+.text-indigo-400,
+.text-violet-400 {
+  color: var(--accent-primary) !important;
+}
+
+/* Gray fallbacks for neutral elements */
+.bg-gray-900 {
+  background-color: var(--bg-secondary) !important;
+}
+
+.bg-gray-800 {
+  background-color: var(--bg-tertiary) !important;
+}
+
+.bg-gray-700 {
+  background-color: var(--card-hover) !important;
+}
+
+.text-gray-400,
+.text-gray-500 {
+  color: var(--text-secondary) !important;
+}
+
+.text-gray-300 {
+  color: var(--text-primary) !important;
+}
+
+.border-gray-700,
+.border-gray-600 {
+  border-color: var(--border-primary) !important;
+}
+
+/* ============================================
+   PLOTLY CHART THEMING
+   Override Plotly's inline SVG styles where possible
+   ============================================ */
+
+/* Plotly container backgrounds */
+.js-plotly-plot .plotly,
+.js-plotly-plot .plot-container {
+  background-color: transparent !important;
+}
+
+/* Plotly main background layer */
+.js-plotly-plot .bg {
+  fill: var(--bg-secondary) !important;
+}
+
+/* Plotly axis labels and ticks */
+.js-plotly-plot .xtick text,
+.js-plotly-plot .ytick text,
+.js-plotly-plot .ztick text {
+  fill: var(--text-secondary) !important;
+}
+
+/* Plotly axis titles */
+.js-plotly-plot .g-xtitle text,
+.js-plotly-plot .g-ytitle text,
+.js-plotly-plot .g-ztitle text {
+  fill: var(--text-secondary) !important;
+}
+
+/* Plotly chart title */
+.js-plotly-plot .g-gtitle text {
+  fill: var(--text-primary) !important;
+}
+
+/* Plotly grid lines */
+.js-plotly-plot .xgrid line,
+.js-plotly-plot .ygrid line,
+.js-plotly-plot .zgrid line {
+  stroke: var(--border-primary) !important;
+}
+
+/* Plotly legend text */
+.js-plotly-plot .legendtext {
+  fill: var(--text-primary) !important;
+}
+
+/* Plotly colorbar labels */
+.js-plotly-plot .cbtitle text,
+.js-plotly-plot .cbaxis text {
+  fill: var(--text-secondary) !important;
+}
+
+/* Plotly hover labels */
+.js-plotly-plot .hovertext text {
+  fill: var(--text-primary) !important;
+}
+
+/* Plotly modebar (toolbar) icons */
+.js-plotly-plot .modebar-btn path {
+  fill: var(--text-muted) !important;
+}
+
+.js-plotly-plot .modebar-btn:hover path {
+  fill: var(--text-primary) !important;
+}
+
+/* Plotly annotation text */
+.js-plotly-plot .annotation-text {
+  fill: var(--text-primary) !important;
+}
+
+/* ============================================
+   FORM ELEMENT THEMING
+   ============================================ */
+
+/* Select dropdowns and inputs */
+select,
+input[type="text"],
+input[type="number"],
+textarea {
+  background-color: var(--bg-tertiary) !important;
+  border-color: var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+select:focus,
+input:focus,
+textarea:focus {
+  border-color: var(--accent-primary) !important;
+  outline-color: var(--accent-primary) !important;
+}
+
+/* Option elements */
+option {
+  background-color: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Checkbox and radio styling */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent-primary);
+}
+
+/* Range slider */
+input[type="range"] {
+  accent-color: var(--accent-primary);
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  background-color: var(--bg-tertiary);
 }

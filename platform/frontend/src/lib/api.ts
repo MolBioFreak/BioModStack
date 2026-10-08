@@ -23,6 +23,7 @@ export interface Job {
     batch_id?: string | null;
     batch_name?: string | null;
     // GPU and timing info
+    pinned_gpu?: number | null;  // User-specified GPU pin
     assigned_gpu?: number | null;
     started_at?: string | null;
     completed_at?: string | null;
@@ -778,3 +779,41 @@ export const fetchAAComposition = (jobId: string) =>
 
 export const fetchCDRLogos = (jobId: string) =>
     api.get<CDRAnalysisResponse>(`/api/analytics/job/${jobId}/cdr-logos`);
+
+// ============================================================
+// PHASE 3a: PLOTLY ANALYTICS ENDPOINTS
+// ============================================================
+
+export interface ContactMapData {
+    design_id: string;
+    design_name: string;
+    distance_matrix: number[][];  // 2D Cα-Cα distances
+    residue_numbers: number[];
+    chain_ids: string[];
+    size: number;
+}
+
+export interface ChainPairIptmData {
+    design_id: string;
+    design_name: string;
+    chain_ids: string[];
+    iptm_matrix: (number | null)[][];  // NxN chain iPTM matrix
+    size: number;
+}
+
+export const fetchContactMap = (designId: string, maxSize: number = 400) =>
+    api.get<ContactMapData>(`/api/designs/${designId}/contact-map`, { params: { max_size: maxSize } });
+
+export const fetchChainPairIptm = (designId: string) =>
+    api.get<ChainPairIptmData>(`/api/designs/${designId}/chain-iptm`);
+
+// PAE (Predicted Aligned Error) data
+export interface PAEData {
+    design_id: string;
+    design_name: string;
+    pae_matrix: number[][];  // 2D PAE matrix
+    size: number;
+}
+
+export const fetchPAEData = (designId: string) =>
+    api.get<PAEData>(`/api/designs/${designId}/pae`);
