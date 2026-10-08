@@ -100,40 +100,31 @@ const effectiveSettings = {
     effective_settings_sha256: hashes.b,
 };
 
-test('retained effective settings omit only historical v1 annotations without invented identities', () => {
-    const retained = structuredClone(effectiveSettings);
-    const residue = retained.resolved_chains[0].residues[0] as Record<string, unknown>;
-    const annotations = ['label_seq_id', 'pdb_residue_id', 'pdb_insertion_code', 'residue_name'];
-    annotations.forEach((key) => delete residue[key]);
-    const parsed = frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection(retained);
-    assert.deepEqual(parsed.resolved_chains[0].residues[0], residue);
-    assert.equal(parsed.effective_settings_sha256, retained.effective_settings_sha256);
-    assert.throws(() => frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection(retained, true));
-    const modern = { ...effectiveSettings, schema_version: 2, value_sources: {
-        ...effectiveSettings.value_sources, batching_enabled: 'operator_request', structures_per_job: 'operator_request',
-    } };
-    assert.deepEqual(frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection(modern).resolved_chains[0].residues[0], effectiveSettings.resolved_chains[0].residues[0]);
-    assert.throws(() => frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection({ ...retained, schema_version: 2 }));
-    for (const [key, value] of [
-        ['label_seq_id', '1'], ['label_seq_id', 0], ['pdb_residue_id', null],
-        ['pdb_residue_id', 10000], ['pdb_insertion_code', 'AB'], ['residue_name', 'G'],
-        ['unknown', true],
-    ] as const) {
-        assert.throws(() => frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection({
-            ...retained, resolved_chains: [{ ...retained.resolved_chains[0], residues: [{ ...residue, [key]: value }] }],
-        }));
+test('current effective settings require complete residue annotations in both supported versions', () => {
+    for (const schema_version of [1, 2]) {
+        const current = { ...effectiveSettings, schema_version, requested_settings: {
+            ...effectiveSettings.requested_settings, schema_version,
+            batching_enabled: false, structures_per_job: 1,
+        }, value_sources: {
+            ...effectiveSettings.value_sources,
+            batching_enabled: 'operator_request', structures_per_job: 'operator_request',
+        } };
+        assert.deepEqual(frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection(current).resolved_chains[0].residues,
+            effectiveSettings.resolved_chains[0].residues);
+        assert.equal(frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection(current).value_sources.batching_enabled, 'operator_request');
+        if (schema_version === 1) {
+            for (const invalid of [{ batching_enabled: true }, { structures_per_job: 2 }]) {
+                assert.throws(() => frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection({
+                    ...current, requested_settings: { ...current.requested_settings, ...invalid },
+                }));
+            }
+        }
+        for (const key of ['label_seq_id', 'pdb_residue_id', 'pdb_insertion_code', 'residue_name']) {
+            const incomplete = structuredClone(current);
+            delete (incomplete.resolved_chains[0].residues[0] as Record<string, unknown>)[key];
+            assert.throws(() => frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection(incomplete));
+        }
     }
-    for (const key of ['auth_seq_id', 'entity_instance_id', 'model_position', 'wt']) {
-        const invalid = { ...residue };
-        delete invalid[key];
-        assert.throws(() => frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection({
-            ...retained, resolved_chains: [{ ...retained.resolved_chains[0], residues: [invalid] }],
-        }));
-    }
-    for (const [key, value] of [['schema_version', 99], ['settings_sha256', 'invalid'], ['normalization_policy_id', 'other']] as const) {
-        assert.throws(() => frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection({ ...retained, [key]: value }));
-    }
-    assert.deepEqual(frustraMpnnApi.parseFrustraMpnnEffectiveSettingsProjection(effectiveSettings).resolved_chains[0].residues[0], effectiveSettings.resolved_chains[0].residues[0]);
 });
 
 const resultDetail = {
