@@ -778,8 +778,12 @@ def test_resume_accepts_only_hash_named_immutable_checkpoint_snapshot(
     snapshot = output / ".bms-checkpoints" / "segment-1" / f"{digest}.cpt"
     snapshot.parent.mkdir(parents=True)
     snapshot.write_bytes(snapshot_bytes)
+    canonical = output / "production" / "production.cpt"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(b"stale-checkpoint")
 
     def accepted(*_args: Any, **_kwargs: Any) -> str:
+        assert canonical.read_bytes() == snapshot_bytes
         raise RuntimeError("resume checkpoint accepted")
 
     monkeypatch.setattr("scripts.bms_md.gromacs_pipeline._run_command", accepted)
