@@ -15,8 +15,6 @@ from paths import (
     get_allowed_roots,
     resolve_allowed_path,
     to_allowed_relative,
-    get_data_root,
-    get_code_root,
 )
 
 router = APIRouter()
@@ -122,22 +120,6 @@ def _serve_file_response(full_path: Path, request: Request, as_attachment: bool)
         response.headers[key] = value
     return response
 
-
-def _resolve_igv_script_path() -> Path | None:
-    # 1) Explicit local vendor override in repo.
-    local_vendor = get_code_root() / "platform" / "frontend" / "public" / "vendor" / "igv.min.js"
-    if local_vendor.exists() and local_vendor.is_file():
-        return local_vendor
-
-    # 2) Cached copy in data root.
-    cache_dir = get_data_root() / "cache" / "igv"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = cache_dir / "igv.min.js"
-    if cache_file.exists() and cache_file.is_file():
-        return cache_file
-
-    # 3) No runtime CDN fetch fallback; this endpoint is intentionally local-only for stability.
-    return None
 
 def is_path_allowed(path: Path) -> bool:
     """Check if path is within allowed roots."""
@@ -260,24 +242,6 @@ async def stream_file(file_path: str, request: Request):
         raise HTTPException(status_code=400, detail="Path is not a file")
 
     return _serve_file_response(full_path, request, as_attachment=False)
-
-
-@router.get("/igv-script")
-async def get_igv_script():
-    """
-    Serve IGV script from local vendor file or cached copy only.
-    This endpoint is intentionally same-origin and local-only to avoid browser-side CDN/adblock failures.
-    """
-    script_path = _resolve_igv_script_path()
-    if script_path is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Unable to resolve local IGV script. Place igv.min.js at platform/frontend/public/vendor/igv.min.js or /mnt/BioModStack/cache/igv/igv.min.js",
-        )
-
-    response = FileResponse(path=script_path, media_type="application/javascript")
-    response.headers["Cache-Control"] = "public, max-age=86400"
-    return response
 
 
 @router.get("/pdb/{file_path:path}")

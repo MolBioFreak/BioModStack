@@ -410,18 +410,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // State: Analysis Options
     // ============================================================================
     const [runModkit, setRunModkit] = useState(initialValues?.runModkit !== false);
-    const [runMultimerQc, setRunMultimerQc] = useState(initialValues?.runMultimerQc as boolean ?? false);
+    const [runFastqQc, setRunFastqQc] = useState<boolean>(
+        (initialValues?.runFastqQc as boolean | undefined)
+        ?? (initialValues?.runMultimerQc as boolean | undefined)
+        ?? true
+    );
     const [expectedPlasmidSize, setExpectedPlasmidSize] = useState<number>(initialValues?.expectedPlasmidSize as number || 7000);
-    const [enableRotatingReferenceFrames, setEnableRotatingReferenceFrames] = useState<boolean>(() => {
-        const raw = initialValues?.enableRotatingReferenceFrames ?? initialValues?.enable_rotating_reference_frames;
-        return raw === undefined ? true : raw !== false;
-    });
-    const [rotationScanStepBp, setRotationScanStepBp] = useState<number>(() => {
-        const raw = Number(initialValues?.rotationScanStepBp ?? initialValues?.rotation_scan_step_bp ?? 1);
-        if (!Number.isFinite(raw)) return 1;
-        return Math.max(1, Math.round(raw));
-    });
-
     const [minFastqReadLength, setMinFastqReadLength] = useState<number>(initialValues?.minFastqReadLength as number || 0);
     const [runAssembly, setRunAssembly] = useState(initialValues?.runAssembly as boolean || false);
     const [assemblyTool, setAssemblyTool] = useState<AssemblyTool>(initialValues?.assemblyTool as AssemblyTool || 'flye');
@@ -494,8 +488,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (!jobName.trim()) return false;
         if (inputSource === 'pod5') return pod5Dir.trim() !== '';
         if (inputSource === 'bam') return bamPath.trim() !== '';
-        return fastqPath.trim() !== '' && runMultimerQc;
-    }, [jobName, inputSource, pod5Dir, bamPath, fastqPath, runMultimerQc]);
+        return fastqPath.trim() !== '' && runFastqQc;
+    }, [jobName, inputSource, pod5Dir, bamPath, fastqPath, runFastqQc]);
     const selectedSavedReference = useMemo(
         () => savedReferences.find((entry) => entry.id === selectedSavedReferenceId) || null,
         [savedReferences, selectedSavedReferenceId]
@@ -672,6 +666,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 effectiveReferencePath = uploadedPath;
             }
 
+            if (inputSource === 'fastq' && !effectiveReferencePath) {
+                throw new Error('FASTQ plasmid QC requires a reference FASTA (path or pasted sequence).');
+            }
+
             const jobPayload = {
                 name: jobName || `nanopore_${Date.now()}`,
                 model_id: 'nanopore',
@@ -681,7 +679,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     reference_fasta: effectiveReferencePath || undefined,
                     min_qscore: isCpuOnly ? undefined : minQscore,
                     run_modkit: runModkit && canRunModkit,
-                    run_multimer_qc: inputSource === 'fastq' ? runMultimerQc : false,
+                    run_fastq_qc: inputSource === 'fastq' ? runFastqQc : false,
+                    run_multimer_qc: inputSource === 'fastq' ? runFastqQc : false,
                     run_assembly: inputSource !== 'fastq' ? runAssembly : false,
                     pinned_gpus: isCpuOnly ? undefined : (pinnedGpus.length > 0 ? pinnedGpus : undefined),
                     lock_gpus: isCpuOnly ? false : (lockGpus && pinnedGpus.length > 0),
@@ -699,11 +698,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     ...(inputSource === 'fastq' && {
                         fastq_path: fastqPath,
                         expected_plasmid_size: expectedPlasmidSize,
-                        enable_rotating_reference_frames: enableRotatingReferenceFrames,
-                        rotation_scan_step_bp: enableRotatingReferenceFrames ? Math.max(1, rotationScanStepBp) : undefined,
-                        dimer_output_mode: 'core',
-                        dimer_emit_legacy_outputs: false,
-
                         min_fastq_read_length: minFastqReadLength,
                     }),
                     ...(inputSource !== 'fastq' && runAssembly && {
@@ -751,8 +745,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             setError('Please specify a FASTQ file path');
             return;
         }
-        if (inputSource === 'fastq' && !runMultimerQc) {
-            setError('Enable FASTQ multimer QC to submit a FASTQ analysis job');
+        if (inputSource === 'fastq' && !runFastqQc) {
+            setError('Enable FASTQ plasmid QC to submit a FASTQ analysis job');
             return;
         }
         submitMutation.mutate();
@@ -944,7 +938,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             onClick={() => {
                                 setInputSource(source.key);
                                 if (source.key === 'fastq') {
-                                    setRunMultimerQc(true);
+                                    setRunFastqQc(true);
                                     setRunAssembly(false);
                                     setRunModkit(false);
                                 }
@@ -1050,14 +1044,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 </button>
                             )}
                         </div>
-                        <p className="text-xs text-[var(--text-secondary)] mt-1">FASTQ read-length profiling for dimer/multimer candidate detection</p>
+                        <p className="text-xs text-[var(--text-secondary)] mt-1">FASTQ plasmid QC: alignment-backed read-length stats, coverage, and consensus output</p>
                     </>
                 )}
             </div>
 
             {/* Reference FASTA — tabbed input */}
             <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
-                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Reference FASTA (optional)</label>
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Reference FASTA (required for FASTQ, optional otherwise)</label>
                 <div className="flex gap-1 mb-3">
                     {(['browse', 'paste', 'create'] as ReferenceTab[]).map((tab) => (
                         <button
@@ -1378,23 +1372,23 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </label>
                 )}
 
-                {/* Multimer QC — FASTQ only */}
+                {/* FASTQ plasmid QC */}
                 {inputSource === 'fastq' && (
                     <label className="flex items-center gap-3 cursor-pointer">
                         <input
                             type="checkbox"
-                            checked={runMultimerQc}
-                            onChange={(e) => setRunMultimerQc(e.target.checked)}
+                            checked={runFastqQc}
+                            onChange={(e) => setRunFastqQc(e.target.checked)}
                             className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
-                            <span className="text-sm text-[var(--text-primary)]">FASTQ multimer QC</span>
-                            <p className="text-xs text-[var(--text-secondary)]">Read-length based dimer/multimer candidate detection</p>
+                            <span className="text-sm text-[var(--text-primary)]">FASTQ plasmid QC</span>
+                            <p className="text-xs text-[var(--text-secondary)]">Align to reference, calculate core QC stats, and build consensus sequence</p>
                         </div>
                     </label>
                 )}
 
-                {inputSource === 'fastq' && runMultimerQc && (
+                {inputSource === 'fastq' && runFastqQc && (
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3 border-t border-[var(--border-primary)] pt-3">
                         <label className="text-xs text-[var(--text-secondary)]">
                             Expected plasmid size (bp)
@@ -1417,26 +1411,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                             />
                         </label>
-                        <label className="flex items-center gap-2 cursor-pointer text-xs text-[var(--text-secondary)] md:col-span-2">
-                            <input
-                                type="checkbox"
-                                checked={enableRotatingReferenceFrames}
-                                onChange={(e) => setEnableRotatingReferenceFrames(e.target.checked)}
-                                className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
-                            />
-                            <span>Enable rotating reference-frame junction scan</span>
-                        </label>
-                        <label className="text-xs text-[var(--text-secondary)]">
-                            Rotation step (bp)
-                            <input
-                                type="number"
-                                min={1}
-                                value={rotationScanStepBp}
-                                onChange={(e) => setRotationScanStepBp(Math.max(1, parseInt(e.target.value || '1', 10)))}
-                                disabled={!enableRotatingReferenceFrames}
-                                className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm disabled:opacity-50"
-                            />
-                        </label>
+                        <div className="text-xs text-[var(--text-secondary)] md:col-span-2 self-end pb-1">
+                            This stage emits `fastq_qc_summary.tsv`, `fastq_alignment_stats.tsv`, `fastq_coverage.tsv`, and `fastq_consensus.fasta`.
+                        </div>
                     </div>
                 )}
             </div>

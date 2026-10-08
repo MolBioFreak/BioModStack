@@ -29,7 +29,7 @@ include { structure_prediction_wf ; complex_prediction_wf } from './modules/stru
 include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
 include { ANARCII } from './modules/utils/anarci'
 include { FrustrampnnQC ; AggregateFrustrationReports } from './modules/frustrampnn.nf'
-include { DoradoBasecall ; DoradoAlign ; PrepareBamForAnalysis ; ValidateMappedBam ; PrepareReferenceForIGV ; ModkitPileup ; ModkitSummary ; FastqAlign ; FastqMultimerQC ; FastqDimerAnalysis ; BuildDimerCanonicalOutputs ; RunCloneValidation } from './modules/dorado.nf'
+include { DoradoBasecall ; DoradoAlign ; PrepareBamForAnalysis ; ValidateMappedBam ; PrepareReferenceForIGV ; ModkitPileup ; ModkitSummary ; FastqAlign ; FastqPlasmidQC ; RunCloneValidation } from './modules/dorado.nf'
 
 include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
 
@@ -79,6 +79,10 @@ workflow {
     inputsDir.mkdirs()
 
     if (params.nanopore_enabled || params.rfd_mode == 'nanopore_methylation') {
+        def runFastqQc = params.run_fastq_qc != null
+            ? (params.run_fastq_qc != false)
+            : (params.run_multimer_qc != false)
+
         println("Running Nanopore Methylation Workflow")
         println("* POD5 dir: ${params.pod5_dir}")
         println("* BAM path: ${params.bam_path}")
@@ -86,9 +90,7 @@ workflow {
         println("* Dorado model: ${params.dorado_model ?: 'sup'}")
         println("* Modified bases: ${params.modified_bases ?: 'none'}")
         println("* Run modkit: ${params.run_modkit != false}")
-        println("* Run FASTQ multimer QC: ${params.run_multimer_qc ?: false}")
-        println("* Rotating reference frames: ${params.enable_rotating_reference_frames != false}")
-        println("* Rotation scan step (bp): ${params.rotation_scan_step_bp ?: 1}")
+        println("* Run FASTQ plasmid QC: ${runFastqQc}")
         println("* Run assembly: ${params.run_assembly ?: false}")
 
         def reportNanoporeStage = { String stageName, List outputs ->
@@ -128,6 +130,10 @@ workflow {
             if (!reference_file.exists()) {
                 error("Reference FASTA not found: ${params.reference_fasta}")
             }
+        }
+
+        if (has_fastq && !has_reference) {
+            error("FASTQ analysis requires --reference_fasta for alignment, consensus, and plasmid QC outputs")
         }
 
         def analysis_bam = null
@@ -221,76 +227,52 @@ workflow {
                 error("FASTQ file not found: ${params.fastq_path}")
             }
 
-            // Align FASTQ reads to reference if one is provided
-            if (has_reference) {
-                FastqAlign(
-                    Channel.of(fastq_input),
-                    Channel.of(reference_file)
-                )
-                FastqAlign.out.aligned.subscribe { _bam, _bai ->
-                    reportNanoporeStage("fastq_align", [
-                        "${params.out_dir}/align/aligned.bam",
-                        "${params.out_dir}/align/aligned.bam.bai",
-                        "${params.out_dir}/align/reference.fasta",
-                        "${params.out_dir}/align/reference.fasta.fai",
-                        "${params.out_dir}/align/fastq_align.log",
-                    ])
-                }
-                analysis_bam = FastqAlign.out.aligned
+            FastqAlign(
+                Channel.of(fastq_input),
+                Channel.of(reference_file)
+            )
+            FastqAlign.out.aligned.subscribe { _bam, _bai ->
+                reportNanoporeStage("fastq_align", [
+                    "${params.out_dir}/align/aligned.bam",
+                    "${params.out_dir}/align/aligned.bam.bai",
+                    "${params.out_dir}/align/reference.fasta",
+                    "${params.out_dir}/align/reference.fasta.fai",
+                    "${params.out_dir}/align/fastq_align.log",
+                ])
             }
+            analysis_bam = FastqAlign.out.aligned
 
-            if (params.run_multimer_qc != false) {
-                FastqMultimerQC(Channel.of(fastq_input))
-                FastqMultimerQC.out.summary.subscribe { _ ->
-                    reportNanoporeStage("multimer_qc", [
-                        "${params.out_dir}/multimer_qc/read_lengths.tsv",
-                        "${params.out_dir}/multimer_qc/multimer_summary.tsv",
-                        "${params.out_dir}/multimer_qc/multimer_candidates.tsv",
-                        "${params.out_dir}/multimer_qc/multimer_qc.log",
+            if (runFastqQc) {
+                FastqPlasmidQC(
+                    FastqAlign.out.aligned,
+                    Channel.of(reference_file),
+                    Channel.of(fastq_input)
+                )
+                FastqPlasmidQC.out.summary.subscribe { _ ->
+                    reportNanoporeStage("fastq_qc", [
+                        "${params.out_dir}/fastq_qc/read_lengths.tsv",
+                        "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
+                        "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
+                        "${params.out_dir}/fastq_qc/fastq_coverage.tsv",
+                        "${params.out_dir}/fastq_qc/igv_coverage_depth.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_position_gradient.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_gc_content.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_gc_zscore.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_split_read_density.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_softclip_density.bedgraph",
+                        "${params.out_dir}/fastq_qc/igv_junction_hotspots.bed",
+                        "${params.out_dir}/fastq_qc/igv_report_sites.bed",
+                        "${params.out_dir}/fastq_qc/igv_report_sites.tsv",
+                        "${params.out_dir}/fastq_qc/igv_track_config.json",
+                        "${params.out_dir}/fastq_qc/igv_report.html",
+                        "${params.out_dir}/fastq_qc/igv_report.log",
+                        "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
+                        "${params.out_dir}/fastq_qc/fastq_consensus.log",
+                        "${params.out_dir}/fastq_qc/fastq_qc.log",
                     ])
-                }
-
-                if (has_reference) {
-                    FastqDimerAnalysis(
-                        Channel.of(fastq_input),
-                        Channel.of(reference_file)
-                    )
-                    BuildDimerCanonicalOutputs(
-                        FastqDimerAnalysis.out.summary,
-                        FastqDimerAnalysis.out.junction_events,
-                        FastqDimerAnalysis.out.single_ref_split_events,
-                        FastqDimerAnalysis.out.single_ref_split_profile,
-                        FastqDimerAnalysis.out.breakpoint_screen,
-                        Channel.of(reference_file)
-                    )
-                    BuildDimerCanonicalOutputs.out.breakpoint_call.subscribe { _ ->
-                        reportNanoporeStage("dimer_analysis", [
-                            "${params.out_dir}/multimer_qc/dimer_candidates.fastq",
-                            "${params.out_dir}/multimer_qc/dimer_candidates.fasta",
-                            "${params.out_dir}/multimer_qc/dimer_read_lengths.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_analysis_summary.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_analysis.log",
-                            "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_evidence_by_position.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_read_events.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_breakpoint_sequences.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_secondary_anomalies.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_diagnostics.tar.gz",
-                            "${params.out_dir}/multimer_qc/dimer_candidates.aligned.bam",
-                            "${params.out_dir}/multimer_qc/dimer_candidates.aligned.bam.bai",
-                            "${params.out_dir}/multimer_qc/dimer_reference.fasta",
-                            "${params.out_dir}/multimer_qc/dimer_reference.fasta.fai",
-                            "${params.out_dir}/multimer_qc/dominant_dimer_consensus.fasta",
-                            "${params.out_dir}/multimer_qc/dominant_dimer_consensus.log",
-                            "${params.out_dir}/multimer_qc/dominant_dimer_consensus_metadata.tsv",
-                        ])
-                    }
-                } else {
-                    println("Skipping dimer sequence analysis (reference_fasta not provided)")
                 }
             } else {
-                println("Skipping FASTQ multimer QC (run_multimer_qc=false)")
+                println("Skipping FASTQ plasmid QC (run_fastq_qc=false)")
             }
         }
 

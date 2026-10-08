@@ -401,6 +401,9 @@ importers:
       events:
         specifier: ^3.3.0
         version: 3.3.0
+      igv:
+        specifier: 3.7.3
+        version: 3.7.3
       pdbe-molstar:
         specifier: ^3.3.0
         version: 3.9.0(@types/react@19.2.7)(fp-ts@2.16.11)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -2714,6 +2717,9 @@ packages:
   ignore@7.0.5:
     resolution: {integrity: sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg==}
     engines: {node: '>= 4'}
+
+  igv@3.7.3:
+    resolution: {integrity: sha512-CkK9s1eiMjpxyF9dwiyJ1IrO7HdTHbdEkFfVycdpsAfMDWSkurvdr75paVgdNb0kZEtcICHfi0ayPTofvJuPXQ==}
 
   immediate@3.0.6:
     resolution: {integrity: sha512-XXOFtyqDjNDAQxVfYxuF7g9Il/IbWmmlQg2MYKOH8ExIT1qg6xc4zyS3HaEEATgs1btfzxq15ciUiY7gjSXRGQ==}
@@ -7186,6 +7192,8 @@ snapshots:
   ignore@5.3.2: {}
 
   ignore@7.0.5: {}
+
+  igv@3.7.3: {}
 
   immediate@3.0.6: {}
 

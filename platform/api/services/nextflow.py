@@ -957,6 +957,14 @@ async def launch_nextflow_job(
                                 or 'reference_prepare' in stage_clean
                             ):
                                 stage = 'bam_prepare'
+                            elif 'fastqalign' in stage_clean or 'fastq_align' in stage_clean:
+                                stage = 'fastq_align'
+                            elif (
+                                'fastqplasmidqc' in stage_clean
+                                or 'fastq_qc' in stage_clean
+                                or 'fastqqc' in stage_clean
+                            ):
+                                stage = 'fastq_qc'
                             elif 'modkit' in stage_clean:
                                 stage = 'modkit'
                             elif 'multimer' in stage_clean:
