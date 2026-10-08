@@ -59,7 +59,7 @@ def render_mdp(stage_name: str, job_config: Mapping[str, Any], replica_index: in
     temperature = stage["temperature_k"]
     values: list[tuple[str, Any]] = [
         ("integrator", "md"),
-        ("dt", float(config["stages"]["production"]["timestep_fs"]) / 1000.0),
+        ("dt", 0.002),
         *shared,
         ("constraints", "h-bonds"),
         ("constraint_algorithm", "lincs"),

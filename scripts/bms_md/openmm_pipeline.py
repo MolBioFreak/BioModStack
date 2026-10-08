@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -144,8 +143,7 @@ def run_openmm_job(
         rigidWater=True,
     )
     system.addForce(Barostat(pressure * unit.bar, temperature * unit.kelvin, 25))
-    timestep_ps = float(production["timestep_fs"]) / 1000.0
-    integrator = Integrator(temperature * unit.kelvin, 1.0 / unit.picosecond, timestep_ps * unit.picoseconds)
+    integrator = Integrator(temperature * unit.kelvin, 1.0 / unit.picosecond, 0.002 * unit.picoseconds)
     integrator.setRandomNumberSeed(replica_seed(config["random_seed"], replica_index))
     platform = Platform.getPlatformByName("CUDA")
     simulation = app.Simulation(
@@ -179,7 +177,7 @@ def run_openmm_job(
             append=checkpoint.is_file(),
         )
     )
-    checkpoint_seconds = float(production["checkpoint_interval_minutes"]) * 60.0
+    simulation.reporters.append(app.CheckpointReporter(str(checkpoint), energy_interval))
 
     if checkpoint.is_file():
         simulation.loadCheckpoint(str(checkpoint))
@@ -194,16 +192,8 @@ def run_openmm_job(
     ledger = StageLedger(output_dir / "stage_state.json")
     ledger.mark_running("production", ["openmm", "CUDA", "production", str(remaining)])
     try:
-        checkpoint_at = time.monotonic() + checkpoint_seconds
-        while remaining:
-            # Observe wall-clock checkpoint cadence at bounded reporting steps;
-            # energy reporting frequency is not the requested checkpoint period.
-            steps = min(remaining, energy_interval)
-            simulation.step(steps)
-            remaining -= steps
-            if time.monotonic() >= checkpoint_at:
-                simulation.saveCheckpoint(str(checkpoint))
-                checkpoint_at = time.monotonic() + checkpoint_seconds
+        if remaining:
+            simulation.step(remaining)
         simulation.saveCheckpoint(str(checkpoint))
         simulation.saveState(str(state_xml))
         state = simulation.context.getState(getPositions=True)
@@ -255,7 +245,7 @@ def run_openmm_job(
         "semantic_role": "representative_structure",
         "selection_method": "completed_production_final_coordinates",
         "source_frame": target_steps // interval - 1 if target_steps % interval == 0 else None,
-        "time_ps": target_steps * timestep_ps,
+        "time_ps": target_steps * 0.002,
         "source_trajectory_sha256": manifest["artifacts"]["trajectory"]["sha256"],
     })
     manifest_path = output_dir / "manifest.json"

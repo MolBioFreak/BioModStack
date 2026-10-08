@@ -1651,12 +1651,6 @@ def normalize_typed_launch_settings(
         )
 
     requested = intent.requested_settings
-    if not requested.neutralize:
-        raise _error(
-            "MD_SETTING_FIXED_BY_PROFILE",
-            "Curated preparation profiles require charge neutralization.",
-            422,
-        )
     warnings: list[MdLaunchNotice] = []
     blockers: list[MdLaunchNotice] = []
     fixed_fields = {
