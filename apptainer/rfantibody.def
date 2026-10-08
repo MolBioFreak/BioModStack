@@ -43,27 +43,9 @@ From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
     export PATH="/opt/venv/bin:$PATH"
 
     # Install PyTorch nightly with CUDA 12.8 support (required for RTX 5090 sm_120)
-    # Use --no-deps to bypass dependency resolver issues with nightly builds
-    uv pip install --compile --no-deps --prerelease=allow torch --index-url https://download.pytorch.org/whl/nightly/cu128
-    uv pip install --compile --no-deps --prerelease=allow torchvision --index-url https://download.pytorch.org/whl/nightly/cu128
-    uv pip install --compile --no-deps --prerelease=allow torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
-
-    # Install PyTorch's CUDA dependencies from the nightly index
-    uv pip install --compile --prerelease=allow --index-url https://download.pytorch.org/whl/nightly/cu128 \
-        nvidia-cudnn-cu12 \
-        nvidia-cublas-cu12 \
-        nvidia-cuda-cupti-cu12 \
-        nvidia-cuda-nvrtc-cu12 \
-        nvidia-cuda-runtime-cu12 \
-        nvidia-cufft-cu12 \
-        nvidia-curand-cu12 \
-        nvidia-cusolver-cu12 \
-        nvidia-cusparse-cu12 \
-        nvidia-cusparselt-cu12 \
-        nvidia-nccl-cu12 \
-        nvidia-nvjitlink-cu12 \
-        nvidia-nvtx-cu12 \
-        pytorch-triton || true
+    # IMPORTANT: Use single install command WITHOUT --no-deps (matching working Boltz2 approach)
+    # The --no-deps approach was pulling in NVSHMEM-dependent builds that fail at runtime
+    uv pip install --compile --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
     # Install other dependencies
     uv pip install --compile "numpy<2.0" sympy networkx jinja2 fsspec filelock typing-extensions scipy pillow
@@ -99,8 +81,14 @@ From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
         uv pip install --compile dgl || true
 
     # Build and install SE3Transformer from RFantibody/include
+    # IMPORTANT: Must rebuild CUDA extensions from source for PyTorch 2.11 compatibility
+    # Clean any pre-built .so files that would cause ABI mismatch segfaults
     cd /opt/RFantibody/include/SE3Transformer
-    uv pip install --compile --no-deps . || true
+    find . -name "*.so" -delete 2>/dev/null || true
+    find . -name "*.pyc" -delete 2>/dev/null || true
+    rm -rf build/ *.egg-info/ 2>/dev/null || true
+    # Install with full rebuild (no --no-deps to allow proper extension compilation)
+    pip install --no-cache-dir --no-build-isolation . || uv pip install --compile . || true
 
     # Install RFantibody as editable package
     cd /opt/RFantibody
@@ -128,8 +116,12 @@ From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
     export VIRTUAL_ENV=/opt/venv
     export DGLBACKEND="pytorch"
     export PYTHONUNBUFFERED=1
-    # PyTorch CUDA libraries (needed for nvshmem, cusparselt, etc.)
-    export LD_LIBRARY_PATH="/opt/venv/lib/python3.11/site-packages/nvidia/nvshmem/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cusparselt/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cusparse/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cudnn/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cublas/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:/opt/venv/lib/python3.11/site-packages/nvidia/nvjitlink/lib:/opt/venv/lib/python3.11/site-packages/torch/lib:$LD_LIBRARY_PATH"
+    # CRITICAL: Disable TorchScript JIT - causes segfault with PyTorch 2.11 nightly on Blackwell
+    # The @torch.jit.script decorators in SE3Transformer's basis.py crash during JIT compilation
+    export PYTORCH_JIT=0
+    # PyTorch CUDA libraries (cusparselt, cudnn, cublas, etc.)
+    # Note: nvshmem is NOT available in PyTorch nightly cu128 - do not include it
+    export LD_LIBRARY_PATH="/opt/venv/lib/python3.11/site-packages/nvidia/cusparselt/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cusparse/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cudnn/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cublas/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:/opt/venv/lib/python3.11/site-packages/nvidia/nvjitlink/lib:/opt/venv/lib/python3.11/site-packages/torch/lib:$LD_LIBRARY_PATH"
     # CRITICAL: Include all necessary paths for rfantibody module imports
     export PYTHONPATH="/opt/RFantibody/src:/opt/RFantibody/src/rfantibody/rfdiffusion:/opt/RFantibody/src/rfantibody/rf2:/opt/RFantibody/include:/opt/RFantibody/include/SE3Transformer:/opt/RFantibody:$PYTHONPATH"
     # Weights path - should be mounted from host at /opt/RFantibody/weights
