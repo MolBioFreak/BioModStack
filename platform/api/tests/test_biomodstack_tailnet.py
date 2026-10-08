@@ -68,9 +68,10 @@ def test_adapter_policy_pins_and_verifies_loopback_binding(monkeypatch, tmp_path
     monkeypatch.setattr(tailnet, "_host_user_systemd_dir", lambda: systemd_dir)
     monkeypatch.setattr(tailnet, "_tailnet_owner_login", lambda: "owner@example.com")
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: "a" * 40)
-    tailnet._install_adapter_control_policy(tmp_path)
+    tailnet._install_adapter_control_policy(tmp_path, "b" * 40)
     dropin = systemd_dir / f"{tailnet.WORKFLOW_ADAPTER_SERVICE}.d" / "99-tailnet-canonical-source.conf"
     assert "Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1" in dropin.read_text()
+    assert f"Environment=BMS_BUILD_SHA={'b' * 40}" in dropin.read_text()
 
     monkeypatch.setattr(tailnet, "_pid_report", lambda port: [{"pid": 123}])
     monkeypatch.setattr(tailnet, "_host_listener_inodes", lambda port: [77])
@@ -724,7 +725,11 @@ def test_start_selected_environment_probes_only_selected_runtime_and_never_start
     )
     monkeypatch.setattr(tailnet, "wait_for_http", waits.append)
     monkeypatch.setattr(tailnet, "_validated_production_tailnet_proxy", lambda root: {"validated": True})
-    monkeypatch.setattr(tailnet, "_install_adapter_control_policy", lambda root, ledger=None: "owner@example.com")
+    monkeypatch.setattr(
+        tailnet,
+        "_install_adapter_control_policy",
+        lambda root, runtime_revision, ledger=None: "owner@example.com",
+    )
     monkeypatch.setattr(
         tailnet,
         "_adapter_identity_policy_matches",
