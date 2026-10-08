@@ -1,0 +1,243 @@
+import argparse
+import os
+import sys
+import yaml
+import shutil
+from pathlib import Path
+import json
+try:
+    import gemmi
+except ImportError:
+    gemmi = None
+
+# BoltzGen wrapper script for ProteinDJ pipeline
+# Uses the `boltzgen run` CLI
+
+def cif_to_pdb(cif_path: Path, pdb_path: Path):
+    """Convert CIF to PDB using Gemmi (robust) or Biopython (fallback)."""
+    # Try Gemmi first (Robust)
+    if gemmi:
+        try:
+            st = gemmi.read_structure(str(cif_path))
+            st.write_pdb(str(pdb_path))
+            return True
+        except Exception as e:
+            print(f"Warning: Gemmi conversion failed for {cif_path}: {e}")
+
+    # Fallback to Biopython (Fragile)
+    try:
+        from Bio.PDB import MMCIFParser, PDBIO
+        parser = MMCIFParser(QUIET=True)
+        structure = parser.get_structure("design", str(cif_path))
+        io = PDBIO()
+        io.set_structure(structure)
+        io.save(str(pdb_path))
+        return True
+    except Exception as e:
+        print(f"Warning: Fallback CIF to PDB conversion failed for {cif_path}: {e}")
+        return False
+
+def create_metadata_json(csv_path: Path, output_dir: Path):
+    """Convert BoltzGen metrics CSV to JSON metadata files."""
+    try:
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        for _, row in df.iterrows():
+            design_id = row.get('id', row.get('file_name', 'unknown')).replace('.cif', '')
+            metadata = {
+                'design_id': design_id,
+                'designed_sequence': row.get('designed_sequence', ''),
+                'affinity_probability': float(row.get('affinity_probability_binary1', 0)),
+                'design_ptm': float(row.get('design_ptm', 0)),
+                'filter_rmsd': float(row.get('filter_rmsd', 0)),
+                'source': 'boltzgen'
+            }
+            # Start with confidence_ prefix for Ingester compatibility
+            json_path = output_dir / f"confidence_{design_id}.json"
+            with open(json_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"Warning: Metadata JSON creation failed: {e}")
+        return False
+
+
+def auto_detect_protocol(config_path: str) -> str:
+    """
+    Auto-detect the appropriate BoltzGen protocol based on entity types in the YAML.
+    
+    Protocols:
+    - protein-anything: For DNA, RNA, or protein targets
+    - protein-small_molecule: For small molecule/ligand targets
+    """
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        entities = config.get('entities', [])
+        
+        has_dna = False
+        has_rna = False
+        has_ligand = False
+        has_protein = False
+        
+        for entity in entities:
+            if 'dna' in entity:
+                has_dna = True
+            elif 'rna' in entity:
+                has_rna = True
+            elif 'ligand' in entity:
+                has_ligand = True
+            elif 'protein' in entity:
+                has_protein = True
+        
+        # Determine protocol based on entity types
+        if has_dna or has_rna:
+            # DNA/RNA targets use protein-anything
+            protocol = "protein-anything"
+            print(f"Auto-detected protocol: {protocol} (DNA/RNA target detected)")
+        elif has_ligand:
+            # Small molecule targets use protein-small_molecule
+            protocol = "protein-small_molecule"
+            print(f"Auto-detected protocol: {protocol} (ligand target detected)")
+        else:
+            # Default for protein-only
+            protocol = "protein-anything"
+            print(f"Auto-detected protocol: {protocol} (protein target)")
+        
+        return protocol
+        
+    except Exception as e:
+        print(f"Warning: Protocol auto-detection failed: {e}, using default")
+        return "protein-small_molecule"
+
+def main():
+    parser = argparse.ArgumentParser(description="Run BoltzGen Wrapper")
+    parser.add_argument("--config", type=str, help="Path to single design spec YAML (backward compat)")
+    parser.add_argument("--configs", type=str, nargs='+', help="Paths to multiple design spec YAMLs for batch processing")
+    parser.add_argument("--out_dir", type=str, required=True, help="Output directory")
+    parser.add_argument("--num_designs", type=int, default=10, help="Number of designs to generate per config")
+    parser.add_argument("--protocol", type=str, default="auto", 
+                        help="BoltzGen protocol (auto, protein-anything, protein-small_molecule, etc)")
+    
+    args, unknown = parser.parse_known_args()
+    
+    # Collect config files (support both single and batch modes)
+    config_files = []
+    if args.configs:
+        config_files = args.configs
+    elif args.config:
+        config_files = [args.config]
+    else:
+        print("Error: Must provide --config or --configs")
+        sys.exit(1)
+    
+    print(f"Processing {len(config_files)} config file(s) in batch mode")
+    
+    os.makedirs(args.out_dir, exist_ok=True)
+    
+    # Process each config in the batch
+    for i, config_path in enumerate(config_files):
+        config_name = Path(config_path).stem
+        batch_out_dir = Path(args.out_dir) / f"batch_{i}_{config_name}"
+        batch_out_dir.mkdir(exist_ok=True)
+        
+        print(f"\n[{i+1}/{len(config_files)}] Processing: {config_path}")
+        
+        # Copy config for reproducibility
+        shutil.copy(config_path, batch_out_dir / "run_config.yaml")
+        
+        # Auto-detect protocol if set to 'auto'
+        if args.protocol == 'auto':
+            protocol = auto_detect_protocol(config_path)
+        else:
+            protocol = args.protocol
+        
+        # BoltzGen CLI: boltzgen run <design_spec.yaml> --output <dir> --num_designs N --protocol X
+        cmd = f"boltzgen run {config_path} --output {batch_out_dir} --num_designs {args.num_designs} --protocol {protocol}"
+        
+        # Add any extra args passed through
+        if unknown:
+            cmd += " " + " ".join(unknown)
+        
+        print(f"Executing: {cmd}")
+        ret = os.system(cmd)
+        
+        if ret != 0:
+            print(f"Warning: BoltzGen failed for {config_path} (code {ret}), continuing with next...")
+        
+    # Post-processing: Consolidate outputs from all batch directories
+    print("\n=== Post-processing: Consolidating outputs ===")
+    designs_dir = Path(args.out_dir) / "designs"
+    designs_dir.mkdir(exist_ok=True)
+    
+    # Collect all batch output directories
+    batch_dirs = list(Path(args.out_dir).glob("batch_*"))
+    if not batch_dirs:
+        # Fallback: single config mode, outputs directly in out_dir
+        batch_dirs = [Path(args.out_dir)]
+    
+    cif_converted = 0
+    processed_names = set()
+    
+    for batch_dir in batch_dirs:
+        # Find CIF files in each batch's output locations
+        search_dirs = [
+            batch_dir / "final_ranked_designs",
+            batch_dir / "intermediate_designs_inverse_folded",
+            batch_dir / "intermediate_designs",
+            batch_dir
+        ]
+        
+        for search_dir in search_dirs:
+            if not search_dir.exists():
+                continue
+            for cif in search_dir.glob("*.cif"):
+                # Skip input template CIFs (no numeric suffix) - only process actual designs
+                # Designs are named like: boltzgen_input_0.cif, boltzgen_input_1.cif, etc.
+                import re
+                if not re.search(r'_\d+$', cif.stem):
+                    print(f"Skipping input template: {cif.name}")
+                    continue
+                
+                if cif.stem in processed_names:
+                    continue
+                # Prefix with batch name to avoid collisions
+                batch_prefix = batch_dir.name.replace("batch_", "b") + "_" if len(batch_dirs) > 1 else ""
+                pdb_name = f"{batch_prefix}{cif.stem}.pdb"
+                pdb_path = designs_dir / pdb_name
+                
+                # Copy original CIF for zero data loss (Viewer prefers this for complexes)
+                cif_dest_name = f"{batch_prefix}{cif.stem}.cif"
+                shutil.copy(cif, designs_dir / cif_dest_name)
+                
+                if cif_to_pdb(cif, pdb_path):
+                    print(f"Converted: {cif.name} -> {pdb_name}")
+                    cif_converted += 1
+                    processed_names.add(cif.stem)
+    
+    if cif_converted == 0:
+        print("Warning: No CIF files converted to PDB")
+    else:
+        print(f"Converted {cif_converted} CIF files to PDB across {len(batch_dirs)} batch(es)")
+    
+    # Convert metrics CSVs to JSON metadata from all batches
+    for batch_dir in batch_dirs:
+        for loc in [batch_dir / "final_ranked_designs" / "all_designs_metrics.csv",
+                    batch_dir / "intermediate_designs_inverse_folded" / "metrics.csv"]:
+            if loc.exists():
+                create_metadata_json(loc, designs_dir)
+                print(f"Created JSON metadata from {loc}")
+                break
+    
+    # Create minimal JSON for any PDBs without metadata
+    for pdb in designs_dir.glob("*.pdb"):
+        json_path = designs_dir / f"confidence_{pdb.stem}.json"
+        if not json_path.exists():
+            with open(json_path, 'w') as f:
+                json.dump({'design_id': pdb.stem, 'source': 'boltzgen'}, f)
+    
+    print(f"BoltzGen batch execution completed. {cif_converted} designs in {designs_dir}")
+
+if __name__ == "__main__":
+    main()

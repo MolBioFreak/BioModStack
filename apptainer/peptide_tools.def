@@ -1,0 +1,51 @@
+Bootstrap: docker
+From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+%labels
+    Author BioModStack
+    Description FreeBindCraft peptide design tools
+    Version 1.0.0
+
+%post
+    apt-get update && apt-get install -y \
+        wget \
+        git \
+        curl \
+        python3 \
+        python3-pip \
+        python3-venv \
+        ffmpeg \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install UV package manager (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
+    # Create virtual environment
+    uv venv /opt/venv
+    export VIRTUAL_ENV=/opt/venv
+    export PATH="/opt/venv/bin:$PATH"
+
+    # Install PyTorch
+    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+    # Install FreeBindCraft
+    git clone https://github.com/cytokineking/FreeBindCraft.git /opt/FreeBindCraft
+    cd /opt/FreeBindCraft
+
+    # Dependencies for "No PyRosetta" mode
+    # Note: pdbfixer requires conda, using openmm from wheel if available
+    uv pip install openmm || true
+    uv pip install freesasa
+    uv pip install biopython
+    uv pip install numpy pandas scipy
+
+    # Cleanup
+    rm -rf /root/.cache/uv
+
+%environment
+    export PYTHONPATH="/opt/FreeBindCraft:$PYTHONPATH"
+    export PATH="/opt/venv/bin:/opt/FreeBindCraft:$PATH"
+    export FREESASA_QUIET="1"
+    export VIRTUAL_ENV=/opt/venv

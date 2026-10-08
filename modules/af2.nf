@@ -104,3 +104,4 @@ process FilterAF2 {
         2>&1 | tee filter_af2_${task.index}.log
     """
 }
+

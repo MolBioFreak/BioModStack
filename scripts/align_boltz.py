@@ -179,38 +179,47 @@ def main():
     # Create output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Map Design files
+    # Map Design files - match any PDB that is NOT a boltzpred
     design_files = {}
-    for design_file in args.design_dir.glob("fold_*_seq_*.pdb"):
-        match = re.match(r"fold_(\d+)_seq_(\d+)\.pdb", design_file.name)
-        if match:
-            fold_id = int(match.group(1))
-            seq_id = int(match.group(2))
-            design_files[(fold_id, seq_id)] = design_file
+    for design_file in args.design_dir.glob("*.pdb"):
+        # Skip boltzpred files
+        if "_boltzpred" in design_file.name:
+            continue
+        # Use the filename stem as the key
+        design_files[design_file.stem] = design_file
     
-    # Prepare processing tasks
+    logger.info(f"Found {len(design_files)} design files")
+    
+    # Prepare processing tasks - match boltzpred files to their designs
     tasks = []
-    for boltz_file in args.boltz_dir.glob("fold_*_seq_*_boltzpred.pdb"):
-        match = re.match(r"fold_(\d+)_seq_(\d+)_boltzpred\.pdb", boltz_file.name)
-        if not match:
-            continue
-            
-        fold_id = int(match.group(1))
-        seq_id = int(match.group(2))
-        key = (fold_id, seq_id)
+    for boltz_file in args.boltz_dir.glob("*_boltzpred.pdb"):
+        # Extract the base name by removing _boltzpred suffix
+        base_name = boltz_file.stem.replace("_boltzpred", "")
         
-        if key not in design_files:
-            logger.warning(f"No design file for fold {fold_id} seq {seq_id}, skipping {boltz_file.name}")
+        if base_name not in design_files:
+            logger.warning(f"No design file for {base_name}, skipping {boltz_file.name}")
             continue
+        
+        # Try to extract fold_id and seq_id from the filename
+        # Support both "fold_X_seq_Y" and "..._model_X_seq_Y" patterns
+        fold_id = 0
+        seq_id = 0
+        legacy_match = re.search(r"fold_(\d+)_seq_(\d+)", base_name)
+        new_match = re.search(r"model_(\d+)_seq_(\d+)", base_name)
+        if legacy_match:
+            fold_id = int(legacy_match.group(1))
+            seq_id = int(legacy_match.group(2))
+        elif new_match:
+            fold_id = int(new_match.group(1))
+            seq_id = int(new_match.group(2))
             
         # Generate paths
-        base_name = boltz_file.stem  # fold_X_seq_Y_boltzpred
-        src_json = args.boltz_dir / f"{base_name}.json"
-        out_pdb = args.output_dir / f"{base_name}.pdb"
-        dst_json = args.output_dir / f"{base_name}.json"
+        src_json = args.boltz_dir / f"{boltz_file.stem}.json"
+        out_pdb = args.output_dir / f"{boltz_file.stem}.pdb"
+        dst_json = args.output_dir / f"{boltz_file.stem}.json"
         
         tasks.append((
-            design_files[key],
+            design_files[base_name],
             boltz_file,
             out_pdb,
             src_json,

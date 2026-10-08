@@ -1,0 +1,204 @@
+# BoltzGen Model Configuration  
+# Generative all-atom binder design
+
+id: boltzgen
+name: BoltzGen
+version: "1.0.0"
+category: generative_design
+description: >
+  Generative all-atom protein design from the Boltz team. Designs
+  protein structures with explicit awareness of bound ligands,
+  nucleotides, or small molecules. Ideal for designing NTP-binding
+  proteins de novo.
+container: boltzgen.sif
+
+ui_icon: wand-sparkles
+ui_color: "#A855F7"
+
+inputs:
+  - pdb
+  - smiles
+  - yaml
+outputs:
+  - pdb
+  - json
+
+modes:
+  - id: ligand_binder
+    name: Ligand Binder Generation
+    description: Generate a protein that binds a specified ligand
+    params:
+      - ligand_smiles
+      - num_designs
+      - batch_size
+      - scaffold_length
+      - binding_site_residues
+
+  - id: ntp_binder
+    name: NTP Binder Generation
+    description: Generate a protein for nucleotide binding (DNA/RNA polymerase design)
+    params:
+      - ntp_type
+      - num_designs
+      - batch_size
+      - scaffold_length
+      - catalytic_site
+
+  - id: scaffold_around_ligand
+    name: Scaffold Around Ligand
+    description: Build protein scaffold around fixed ligand pose
+    params:
+      - ligand_pdb
+      - scaffold_length
+      - num_designs
+      - batch_size
+
+  - id: backbone_docking
+    name: Dock NTP to Existing Backbone
+    description: Dock nucleotides to an existing protein structure (e.g., polymerase active site)
+    params:
+      - input_pdb
+      - ntp_type
+      - binding_site_residues
+      - num_designs
+      - batch_size
+
+  # DEPRECATED: dna_complex mode has been moved to Boltz-2 Complex Prediction
+  # Use Boltz-2 with DNA/RNA complex components instead
+
+params:
+  - name: ligand_smiles
+    type: string
+    description: SMILES string of target ligand
+    required: false
+    preset_type: ligand
+
+  - name: ligand_pdb
+    type: file
+    description: Ligand structure with coordinates
+    required: false
+    file_type: pdb
+
+  - name: input_pdb
+    type: file
+    description: Existing protein backbone structure (e.g., polymerase for NTP docking)
+    required: false
+    file_type: pdb
+    preset_type: pdb
+
+  - name: ntp_type
+    type: string
+    description: Nucleotide type for binding design
+    required: false
+    enum:
+      - dATP
+      - dTTP
+      - dGTP
+      - dCTP
+      - ATP
+      - UTP
+      - GTP
+      - CTP
+
+  - name: num_designs
+    type: integer
+    description: Number of designs to generate
+    required: false
+    default: 10
+    minimum: 1
+    maximum: 100
+
+  - name: scaffold_length
+    type: string
+    description: "Target length range for designed protein (e.g., '80-120' residues)"
+    required: false
+    default: "80-120"
+
+  - name: binding_site_residues
+    type: string
+    description: "Binding pocket specification (e.g., 'A:45-52,A:78-85' for residue ranges)"
+    required: false
+
+  - name: catalytic_site
+    type: boolean
+    description: Include catalytic site features for enzymatic activity (Mg2+ coordination, etc.)
+    required: false
+    default: false
+
+  # DEPRECATED: DNA-complex params moved to Boltz-2 Complex Prediction
+  # - name: protein_sequence
+  #   type: string
+  #   description: Protein sequence for co-folding with DNA
+  #   required: false
+  #   preset_type: sequence
+  #
+  # - name: dna_template_seq
+  #   type: string
+  #   description: "DNA template strand sequence (5'→3', e.g., 'ACGTACGTAC')"
+  #   required: false
+  #
+  # - name: dna_primer_seq
+  #   type: string
+  #   description: "DNA primer strand sequence (5'→3', complementary to template)"
+  #   required: false
+  #
+  # - name: dna_structure
+  #   type: file
+  #   description: "Pre-generated DNA structure (e.g. from oligo library)"
+  #   required: false
+  #   file_type: pdb
+  #   preset_type: pdb
+
+  - name: batch_size
+    type: integer
+    description: "Batch size for parallel generation (designs per GPU pass)"
+    default: 1
+    minimum: 1
+    maximum: 32
+
+# Pre-configured NTP templates
+ntp_templates:
+  # DNA nucleotides (dNTPs)
+  - id: dATP
+    name: Deoxyadenosine Triphosphate
+    smiles: "Nc1ncnc2c1ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3"
+    description: dATP - pairs with thymine in DNA synthesis
+
+  - id: dTTP
+    name: Deoxythymidine Triphosphate
+    smiles: "Cc1cn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)[nH]c1=O"
+    description: dTTP - pairs with adenine in DNA synthesis
+
+  - id: dGTP
+    name: Deoxyguanosine Triphosphate
+    smiles: "Nc1nc2c(ncn2[C@H]3C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O3)c(=O)[nH]1"
+    description: dGTP - pairs with cytosine in DNA synthesis
+
+  - id: dCTP
+    name: Deoxycytidine Triphosphate
+    smiles: "Nc1ccn([C@H]2C[C@H](O)[C@@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)O2)c(=O)n1"
+    description: dCTP - pairs with guanine in DNA synthesis
+
+  # RNA nucleotides (NTPs)
+  - id: ATP
+    name: Adenosine Triphosphate
+    smiles: "Nc1ncnc2c1ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O"
+    description: ATP - RNA nucleotide, also energy currency
+
+  - id: UTP
+    name: Uridine Triphosphate
+    smiles: "O=c1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)[nH]1"
+    description: UTP - RNA nucleotide, replaces TTP
+
+  - id: GTP
+    name: Guanosine Triphosphate
+    smiles: "Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1"
+    description: GTP - RNA nucleotide, also signaling molecule
+
+  - id: CTP
+    name: Cytidine Triphosphate
+    smiles: "Nc1ccn([C@@H]2O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]2O)c(=O)n1"
+    description: CTP - RNA nucleotide
+
+enabled: true
+experimental: false

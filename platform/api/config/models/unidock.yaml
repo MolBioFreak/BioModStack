@@ -1,0 +1,192 @@
+# Uni-Dock GPU-Accelerated Molecular Docking
+# 
+# Physics-based docking using AutoDock Vina scoring with GPU acceleration.
+# Provides interpretable ΔG binding affinity scores in kcal/mol.
+# Supports flexible receptor sidechains via Meeko.
+#
+# Reference: https://github.com/dptech-corp/Uni-Dock
+
+id: unidock
+name: Uni-Dock
+version: "1.1.0"
+category: docking
+description: >
+  GPU-accelerated molecular docking with physics-based
+  scoring. 2000× faster than CPU Vina. Outputs binding
+  affinity (ΔG in kcal/mol).
+container: unidock.sif
+
+ui_icon: bullseye
+ui_color: "#10B981"
+
+inputs:
+  - pdb
+  - smiles
+outputs:
+  - pdb
+  - json
+
+modes:
+  - id: dock
+    name: Small Molecule Docking
+    description: >
+      Dock small molecules to protein receptors with GPU acceleration.
+      Outputs ranked poses with binding affinities.
+    params:
+      - protein_pdb
+      - ligand_smiles
+      - num_poses
+      - exhaustiveness
+      - box_size
+      - scoring_function
+      - flexible_residues
+      - search_mode
+      - affinity_threshold
+      - min_rmsd
+      - energy_range
+      - seed
+
+params:
+  # === INPUTS GROUP ===
+  - name: protein_pdb
+    type: file
+    description: Receptor protein structure
+    required: true
+    file_type: pdb
+    preset_type: pdb
+    ui_group: Inputs
+    ui_order: 1
+
+  - name: ligand_smiles
+    type: string
+    description: Small molecule to dock (SMILES format)
+    required: false
+    preset_type: ligand
+    ui_group: Inputs
+    ui_order: 2
+    ui_placeholder: "Select a preset or paste SMILES..."
+
+  # Hidden legacy field
+  - name: ntp_type
+    type: string
+    description: Pre-configured nucleotide template
+    required: false
+    hidden: true
+
+  # === DOCKING SETTINGS GROUP ===
+  - name: num_poses
+    type: integer
+    description: Number of docking poses to generate
+    default: 9
+    minimum: 1
+    maximum: 50
+    ui_group: Docking Settings
+    ui_order: 1
+
+  - name: exhaustiveness
+    type: integer
+    description: >
+      Search thoroughness (32=standard, 128=thorough, 256=blind docking)
+    default: 32
+    minimum: 8
+    maximum: 512
+    ui_group: Docking Settings
+    ui_order: 2
+
+  - name: box_size
+    type: integer
+    description: >
+      Search box size in Angstroms (25=active site, 50=large pocket)
+    default: 25
+    minimum: 15
+    maximum: 80
+    ui_group: Docking Settings
+    ui_order: 3
+
+  - name: scoring_function
+    type: string
+    description: Scoring function
+    default: vina
+    enum:
+      - vina
+      - vinardo
+      - ad4
+    ui_group: Docking Settings
+    ui_order: 4
+
+  # === ADVANCED GROUP (collapsed by default) ===
+  - name: flexible_residues
+    type: string
+    description: >
+      Flexible sidechains as CHAIN:RESID (e.g., "A:42,A:89")
+    required: false
+    ui_group: Advanced
+    ui_order: 1
+    ui_placeholder: "A:42,A:89,A:156"
+
+  - name: search_mode
+    type: string
+    description: Search mode preset (overrides exhaustiveness)
+    required: false
+    enum:
+      - fast
+      - balance
+      - detail
+    ui_group: Advanced
+    ui_order: 2
+
+  - name: affinity_threshold
+    type: number
+    description: >
+      Minimum affinity filter (kcal/mol). -7 ≈ µM binding.
+    default: -5.0
+    minimum: -20.0
+    maximum: 0.0
+    ui_group: Advanced
+    ui_order: 3
+
+  - name: min_rmsd
+    type: number
+    description: Minimum RMSD between output poses (Å)
+    default: 1.0
+    minimum: 0.5
+    maximum: 5.0
+    ui_group: Advanced
+    ui_order: 4
+    hidden: true
+
+  - name: energy_range
+    type: number
+    description: Max energy diff from best pose (kcal/mol)
+    default: 3.0
+    minimum: 1.0
+    maximum: 10.0
+    ui_group: Advanced
+    ui_order: 5
+    hidden: true
+
+  - name: seed
+    type: integer
+    description: Random seed (0 = random)
+    default: 0
+    minimum: 0
+    maximum: 999999999
+    ui_group: Advanced
+    ui_order: 6
+
+  - name: box_center
+    type: string
+    description: Box center as "x,y,z" (auto if empty)
+    required: false
+    hidden: true
+
+  - name: verbosity
+    type: integer
+    description: Verbosity level
+    default: 1
+    minimum: 0
+    maximum: 2
+    hidden: true
+
+enabled: true
+experimental: false
