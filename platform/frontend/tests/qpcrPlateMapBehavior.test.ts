@@ -6,8 +6,12 @@ import test from 'node:test';
 import {
   QPCR_PLATE_COLUMNS,
   QPCR_PLATE_ROWS,
+  buildQpcrAssayReviewMetrics,
+  buildQpcrChannelAnalytics,
+  buildQpcrDilutionWorksheetRows,
   buildQpcrPlateMap,
   buildSelectedQpcrWellAnalytics,
+  makeQpcrDilutionGroupKey,
   normalizeQpcrWellPosition,
 } from '../src/components/qpcr/plateMap.js';
 
@@ -124,7 +128,84 @@ test('qPCR selected-well analytics exposes labels, Ct summary, replicate QC, sta
   assert.equal(analytics.spikeRecovery.length, 1);
 });
 
-test('qPCR raw import renders a software-style circular plate map with selected-well analytics instead of a Plotly heatmap tab', () => {
+test('qPCR assay review metrics summarize parsed wells, replicate CV, and spike recovery for top-line cards', () => {
+  const metrics = buildQpcrAssayReviewMetrics(sampleWells, {
+    replicate_qc: [
+      { sample_name: 'Std 1e6', target_name: 'gag', n: 3, ct_cv_percent: 0.44 },
+      { sample_name: 'Spike 80%', target_name: 'gag', n: 3, ct_cv_percent: '1.28' },
+    ],
+    spike_recovery: [
+      { sample_name: 'Spike 80%', target_name: 'gag', recovery_percent: 96.4 },
+      { sample_name: 'Spike 120%', target_name: 'gag', recovery_percent: '104.8' },
+    ],
+  });
+
+  assert.equal(metrics.parsedRows, 3);
+  assert.equal(metrics.populatedWells, 2);
+  assert.equal(metrics.standardRows, 2);
+  assert.equal(metrics.replicateGroups, 2);
+  assert.equal(metrics.replicateCvMeanLabel, '0.86%');
+  assert.equal(metrics.replicateCvMaxLabel, '1.28%');
+  assert.equal(metrics.spikeRecoveryCount, 2);
+  assert.equal(metrics.spikeRecoveryMeanLabel, '100.60%');
+  assert.equal(metrics.spikeRecoveryRangeLabel, '96.40–104.80%');
+});
+
+test('qPCR channel analytics split multiplex targets by reporter channel and ROX passive normalization', () => {
+  const channelRows = buildQpcrChannelAnalytics([
+    { well_position: 'C1', sample_name: 'Sample A', target_name: 'E coli', task: 'UNKNOWN', ct: 24.6, reporter: 'FAM', passive_reference: 'ROX' },
+    { well_position: 'C1', sample_name: 'Sample A', target_name: 'IPC', task: 'UNKNOWN', ct: 27.4, reporter: 'VIC', passive_reference: 'ROX' },
+    { well_position: 'C2', sample_name: 'Sample A', target_name: 'E coli', task: 'UNKNOWN', ct: 24.8, reporter: 'FAM', passive_reference: 'ROX' },
+  ]);
+
+  assert.equal(channelRows.length, 2);
+  assert.equal(channelRows[0].targetName, 'E coli');
+  assert.equal(channelRows[0].reporter, 'FAM');
+  assert.equal(channelRows[0].passiveReference, 'ROX');
+  assert.equal(channelRows[0].role, 'target');
+  assert.equal(channelRows[0].rows, 2);
+  assert.equal(channelRows[0].ctMeanLabel, '24.700');
+  assert.equal(channelRows[1].targetName, 'IPC');
+  assert.equal(channelRows[1].reporter, 'VIC');
+  assert.equal(channelRows[1].role, 'internal_positive_control');
+});
+
+test('qPCR dilution worksheet cross-references standard-curve quantities and computes corrected % detection per triplicate group', () => {
+  const quantityRows = [
+    { well_position: 'C1', sample_name: 'Sample A', target_name: 'E coli', task: 'UNKNOWN', estimated_quantity: 10, log10_estimated_quantity: 1 },
+    { well_position: 'C2', sample_name: 'Sample A', target_name: 'E coli', task: 'UNKNOWN', estimated_quantity: 11, log10_estimated_quantity: 1.041 },
+    { well_position: 'C3', sample_name: 'Sample A', target_name: 'E coli', task: 'UNKNOWN', estimated_quantity: 9, log10_estimated_quantity: 0.954 },
+    { well_position: 'D1', sample_name: 'Sample A', target_name: 'IPC', task: 'UNKNOWN', estimated_quantity: 3, log10_estimated_quantity: 0.477 },
+  ];
+  const key = makeQpcrDilutionGroupKey(quantityRows[0]);
+  const worksheetRows = buildQpcrDilutionWorksheetRows(sampleWells, { quantities: quantityRows }, {
+    [key]: { dilutionFactor: '5', expectedQuantity: '100' },
+  });
+
+  assert.equal(worksheetRows.length, 2);
+  const ecoli = worksheetRows[0];
+  assert.equal(ecoli.sampleName, 'Sample A');
+  assert.equal(ecoli.targetName, 'E coli');
+  assert.equal(ecoli.n, 3);
+  assert.deepEqual(ecoli.wellPositions, ['C1', 'C2', 'C3']);
+  assert.equal(ecoli.meanEstimatedQuantityLabel, '10.000');
+  assert.equal(ecoli.correctedQuantityLabel, '50.000');
+  assert.equal(ecoli.percentDetectionLabel, '50.00%');
+  assert.equal(ecoli.quantityCvPercentLabel, '10.00%');
+});
+
+test('qPCR raw import source gives plots and result tables a wide analysis rail and exposes dilution/channel analytics', () => {
+  const source = readFileSync(join(root, 'src/components/qpcr/RawDataImport.tsx'), 'utf8');
+
+  assert.match(source, /Channel \/ assay split/);
+  assert.match(source, /Dilution-corrected DNA amount worksheet/);
+  assert.match(source, /Original-sample amount/);
+  assert.match(source, /% detection/);
+  assert.match(source, /min-\[1320px\]:grid-cols-\[minmax\(320px,430px\)_minmax\(0,1fr\)\]/);
+  assert.doesNotMatch(source, /min-\[1850px\]:grid-cols-\[minmax\(420px,0\.82fr\)_minmax\(0,1fr\)_minmax\(340px,0\.78fr\)\]/);
+});
+
+test('qPCR raw import renders a fit-to-panel compact circular plate map with selected-well analytics instead of a Plotly heatmap tab', () => {
   const source = readFileSync(join(root, 'src/components/qpcr/RawDataImport.tsx'), 'utf8');
 
   assert.match(source, /96-well Plate Map/);
@@ -132,5 +213,12 @@ test('qPCR raw import renders a software-style circular plate map with selected-
   assert.match(source, /buildQpcrPlateMap/);
   assert.match(source, /buildSelectedQpcrWellAnalytics/);
   assert.match(source, /rounded-full/);
+  assert.match(source, /data-qpcr-plate-map-fit="no-horizontal-scroll"/);
+  assert.match(source, /gridTemplateColumns: '1rem repeat\(12, minmax\(0, 1fr\)\)'/);
+  assert.match(source, /aspect-square w-full max-w-\[1\.72rem\] min-w-0 flex-col items-center justify-center overflow-hidden/);
+  assert.doesNotMatch(source, /overflow-x-auto/);
+  assert.doesNotMatch(source, /h-\[1\.95rem\] w-\[1\.95rem\]/);
+  assert.doesNotMatch(source, /min-w-\[520px\]/);
+  assert.doesNotMatch(source, /min-w-\[760px\]/);
   assert.doesNotMatch(source, /Plate Heatmap/);
 });

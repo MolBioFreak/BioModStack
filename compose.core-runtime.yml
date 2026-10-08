@@ -1,4 +1,23 @@
 services:
+  bms-analytical-postgres:
+    image: postgres:16-alpine
+    container_name: biomodstack-analytical-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bms_analytical_data
+      POSTGRES_USER: bms_assay
+      POSTGRES_PASSWORD: ${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}
+    ports:
+      - "127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}:5432"
+    volumes:
+      - bms_analytical_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bms_assay -d bms_analytical_data"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   bms-api:
     build:
       context: .
@@ -6,6 +25,9 @@ services:
     container_name: biomodstack-api
     restart: unless-stopped
     network_mode: host
+    depends_on:
+      bms-analytical-postgres:
+        condition: service_healthy
     environment:
       BMS_HOME: /app
       BMS_STATE_DIR: ${BMS_STATE_DIR:-/mnt/BioModStack}
@@ -23,6 +45,8 @@ services:
       BMS_CORE_RUNTIME_MODE: ${BMS_CORE_RUNTIME_MODE:-1}
       BMS_WORKFLOW_ADAPTER_URL: ${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}
       BMS_CPU_POWER_COLLECTOR_URL: ${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}
+      BMS_ANALYTICAL_DATABASE_URL: ${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}/bms_analytical_data}
+      BMS_ANALYTICAL_INIT_ON_STARTUP: ${BMS_ANALYTICAL_INIT_ON_STARTUP:-1}
       BIOXP_SERVER_URL: ${BIOXP_SERVER_URL:-}
     volumes:
       - type: bind
@@ -90,3 +114,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+volumes:
+  bms_analytical_postgres_data:

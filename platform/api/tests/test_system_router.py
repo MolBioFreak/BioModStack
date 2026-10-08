@@ -130,3 +130,72 @@ def test_start_runtime_target_endpoint_invokes_service_layer(monkeypatch) -> Non
     assert response.status_code == 200
     assert started == ["both"]
     assert response.json()["target"] == "both"
+
+
+def test_start_runtime_target_endpoint_accepts_json_body_from_web_ui(monkeypatch) -> None:
+    started: list[str] = []
+    monkeypatch.setattr(system, "start_runtime_target", lambda target=None: started.append(target or "missing"), raising=False)
+
+    with build_client() as client:
+        response = client.post("/api/system/runtime/start-target", json={"target": "dev"})
+
+    assert response.status_code == 200
+    assert started == ["dev"]
+    assert response.json()["target"] == "dev"
+
+
+def test_start_runtime_target_endpoint_proxies_from_core_runtime_to_host_adapter(monkeypatch) -> None:
+    adapter_calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fail_local_start(target=None):
+        raise AssertionError("container API must not call host systemctl directly")
+
+    def fake_adapter_request(method: str, path: str, payload: dict[str, object] | None = None):
+        adapter_calls.append((method, path, payload))
+        return {"target": payload["target"] if payload else "missing", "control_mode": "host-adapter"}
+
+    monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
+    monkeypatch.setattr(system, "start_runtime_target", fail_local_start, raising=False)
+    monkeypatch.setattr(system, "request_via_workflow_adapter", fake_adapter_request, raising=False)
+
+    with build_client() as client:
+        response = client.post("/api/system/runtime/start-target", json={"target": "both"})
+
+    assert response.status_code == 200
+    assert response.json() == {"target": "both", "control_mode": "host-adapter"}
+    assert adapter_calls == [
+        ("POST", "/api/workflow-adapter/runtime/start-target", {"target": "both"}),
+    ]
+
+
+def test_start_runtime_target_endpoint_service_errors_remain_500(monkeypatch) -> None:
+    monkeypatch.delenv("BMS_CORE_RUNTIME_MODE", raising=False)
+    monkeypatch.delenv("BMS_WORKFLOW_ADAPTER_URL", raising=False)
+
+    def fail_local_start(target=None):
+        raise system.ServiceManagerError("host service manager rejected start")
+
+    monkeypatch.setattr(system, "start_runtime_target", fail_local_start, raising=False)
+
+    with build_client() as client:
+        response = client.post("/api/system/runtime/start-target", json={"target": "dev"})
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "host service manager rejected start"
+
+
+def test_start_runtime_target_endpoint_adapter_runtime_errors_are_bad_gateway(monkeypatch) -> None:
+    monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
+    monkeypatch.setenv("BMS_WORKFLOW_ADAPTER_URL", "http://127.0.0.1:8001")
+
+    def fail_adapter_request(method: str, path: str, payload: dict[str, object] | None = None):
+        raise RuntimeError("workflow adapter unavailable")
+
+    monkeypatch.setattr(system, "request_via_workflow_adapter", fail_adapter_request, raising=False)
+
+    with build_client() as client:
+        response = client.post("/api/system/runtime/start-target", json={"target": "dev"})
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "workflow adapter unavailable"

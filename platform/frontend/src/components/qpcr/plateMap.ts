@@ -96,6 +96,74 @@ export interface QpcrSelectedWellAnalytics extends QpcrPlateWellSummary {
   spikeRecovery: QpcrSpikeRecoveryRow[];
 }
 
+export interface QpcrAssayReviewMetrics {
+  parsedRows: number;
+  populatedWells: number;
+  targetCount: number;
+  standardRows: number;
+  sampleRows: number;
+  ntcRows: number;
+  reviewRows: number;
+  replicateGroups: number;
+  replicateCvMean: number | null;
+  replicateCvMax: number | null;
+  replicateCvMeanLabel: string;
+  replicateCvMaxLabel: string;
+  spikeRecoveryCount: number;
+  spikeRecoveryMean: number | null;
+  spikeRecoveryMin: number | null;
+  spikeRecoveryMax: number | null;
+  spikeRecoveryMeanLabel: string;
+  spikeRecoveryRangeLabel: string;
+}
+
+export type QpcrChannelRole = 'target' | 'internal_positive_control' | 'control' | 'unknown';
+
+export interface QpcrChannelAnalyticsRow {
+  key: string;
+  targetName: string;
+  reporter: string;
+  passiveReference: string;
+  normalizationLabel: string;
+  role: QpcrChannelRole;
+  rows: number;
+  detectedRows: number;
+  wellCount: number;
+  sampleCount: number;
+  taskLabel: string;
+  ctMean: number | null;
+  ctMeanLabel: string;
+  ctRangeLabel: string;
+  thresholdLabel: string;
+  baselineLabel: string;
+}
+
+export interface QpcrDilutionWorksheetInput {
+  dilutionFactor?: number | string | null;
+  expectedQuantity?: number | string | null;
+}
+
+export interface QpcrDilutionWorksheetRow {
+  key: string;
+  sampleName: string;
+  targetName: string;
+  task: string;
+  reporter: string;
+  passiveReference: string;
+  n: number;
+  wellPositions: string[];
+  meanEstimatedQuantity: number | null;
+  correctedQuantity: number | null;
+  percentDetection: number | null;
+  quantityCvPercent: number | null;
+  meanEstimatedQuantityLabel: string;
+  correctedQuantityLabel: string;
+  percentDetectionLabel: string;
+  quantityCvPercentLabel: string;
+  dilutionFactor: string;
+  expectedQuantity: string;
+}
+
 export function normalizeQpcrWellPosition(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   const raw = String(value).trim().toUpperCase();
@@ -166,6 +234,169 @@ export function buildSelectedQpcrWellAnalytics(
     replicateQc: (assaySummary?.replicate_qc ?? []).filter((row) => matchesReplicateQc(row, normalizedPosition, entries)),
     spikeRecovery: (assaySummary?.spike_recovery ?? []).filter((row) => matchesSelectedWell(row, normalizedPosition, entries)),
   };
+}
+
+export function buildQpcrAssayReviewMetrics(
+  wells: QpcrWellEntry[],
+  assaySummary: QpcrAssaySummaryLike | null | undefined,
+): QpcrAssayReviewMetrics {
+  const plateMap = buildQpcrPlateMap(wells);
+  const taskText = (well: QpcrWellEntry) => (cleanText(well.task) ?? '').toUpperCase();
+  const standardRows = wells.filter((well) => taskText(well).includes('STANDARD')).length;
+  const ntcRows = wells.filter((well) => taskText(well).includes('NTC') || (cleanText(well.sample_name) ?? '').toUpperCase().includes('NTC')).length;
+  const reviewRows = wells.filter((well) => cleanText(well.ct_status)).length;
+  const sampleRows = Math.max(0, wells.length - standardRows - ntcRows);
+  const replicateCvValues = (assaySummary?.replicate_qc ?? [])
+    .map((row) => toFiniteNumber(row.ct_cv_percent))
+    .filter((value): value is number => value !== null);
+  const spikeRecoveryValues = (assaySummary?.spike_recovery ?? [])
+    .map((row) => toFiniteNumber(row.recovery_percent))
+    .filter((value): value is number => value !== null);
+  const replicateCvMean = finiteMean(replicateCvValues);
+  const replicateCvMax = replicateCvValues.length ? Math.max(...replicateCvValues) : null;
+  const spikeRecoveryMean = finiteMean(spikeRecoveryValues);
+  const spikeRecoveryMin = spikeRecoveryValues.length ? Math.min(...spikeRecoveryValues) : null;
+  const spikeRecoveryMax = spikeRecoveryValues.length ? Math.max(...spikeRecoveryValues) : null;
+
+  return {
+    parsedRows: wells.length,
+    populatedWells: plateMap.filter((well) => well.entries.length > 0).length,
+    targetCount: uniqueText(wells.map((well) => well.target_name)).length,
+    standardRows,
+    sampleRows,
+    ntcRows,
+    reviewRows,
+    replicateGroups: assaySummary?.replicate_qc?.length ?? 0,
+    replicateCvMean,
+    replicateCvMax,
+    replicateCvMeanLabel: formatPercentLabel(replicateCvMean),
+    replicateCvMaxLabel: formatPercentLabel(replicateCvMax),
+    spikeRecoveryCount: assaySummary?.spike_recovery?.length ?? 0,
+    spikeRecoveryMean,
+    spikeRecoveryMin,
+    spikeRecoveryMax,
+    spikeRecoveryMeanLabel: formatPercentLabel(spikeRecoveryMean),
+    spikeRecoveryRangeLabel: formatPercentRangeLabel(spikeRecoveryMin, spikeRecoveryMax),
+  };
+}
+
+export function buildQpcrChannelAnalytics(wells: QpcrWellEntry[]): QpcrChannelAnalyticsRow[] {
+  const groups = new Map<string, QpcrWellEntry[]>();
+  for (const well of wells) {
+    const target = cleanText(well.target_name) ?? 'Unknown target';
+    const reporter = cleanText(well.reporter) ?? 'Unknown reporter';
+    const passiveReference = cleanText(well.passive_reference) ?? 'No passive reference';
+    const key = `${target}\u001f${reporter}\u001f${passiveReference}`;
+    const rows = groups.get(key) ?? [];
+    rows.push(well);
+    groups.set(key, rows);
+  }
+
+  return [...groups.entries()].map(([key, rows]) => {
+    const targetName = cleanText(rows[0]?.target_name) ?? 'Unknown target';
+    const reporter = cleanText(rows[0]?.reporter) ?? 'Unknown reporter';
+    const passiveReference = cleanText(rows[0]?.passive_reference) ?? 'No passive reference';
+    const ctValues = rows.map((row) => toFiniteNumber(row.ct)).filter((value): value is number => value !== null);
+    const ctSummary = summarizeCtValues(ctValues);
+    const thresholds = rows.map((row) => toFiniteNumber(row.threshold)).filter((value): value is number => value !== null);
+    const baselineStarts = rows.map((row) => toFiniteNumber(row.baseline_start)).filter((value): value is number => value !== null);
+    const baselineEnds = rows.map((row) => toFiniteNumber(row.baseline_end)).filter((value): value is number => value !== null);
+    const baselineLabel = baselineStarts.length || baselineEnds.length
+      ? `${formatQpcrMetric(finiteMean(baselineStarts), 0)}–${formatQpcrMetric(finiteMean(baselineEnds), 0)}`
+      : '--';
+
+    return {
+      key,
+      targetName,
+      reporter,
+      passiveReference,
+      normalizationLabel: passiveReference === 'No passive reference' ? 'No passive normalization reported' : `${passiveReference} passive normalization`,
+      role: classifyQpcrChannelRole(targetName, rows),
+      rows: rows.length,
+      detectedRows: ctValues.length,
+      wellCount: new Set(rows.map((row) => normalizeQpcrWellPosition(row.well_position)).filter(Boolean)).size,
+      sampleCount: uniqueText(rows.map((row) => row.sample_name)).length,
+      taskLabel: collapsedLabel(uniqueText(rows.map((row) => row.task)), 'No task'),
+      ctMean: ctSummary.mean,
+      ctMeanLabel: ctSummary.meanLabel,
+      ctRangeLabel: ctSummary.rangeLabel,
+      thresholdLabel: thresholds.length ? formatQpcrMetric(finiteMean(thresholds), 3) : '--',
+      baselineLabel,
+    };
+  });
+}
+
+export function makeQpcrDilutionGroupKey(row: Pick<QpcrQuantityRow, 'sample_name' | 'target_name' | 'task'>): string {
+  const sample = cleanText(row.sample_name) ?? 'Unknown sample';
+  const target = cleanText(row.target_name) ?? 'Unknown target';
+  const task = cleanText(row.task) ?? 'UNKNOWN';
+  return `${sample}\u001f${target}\u001f${task}`;
+}
+
+export function buildQpcrDilutionWorksheetRows(
+  wells: QpcrWellEntry[],
+  assaySummary: QpcrAssaySummaryLike | null | undefined,
+  inputs: Record<string, QpcrDilutionWorksheetInput> = {},
+): QpcrDilutionWorksheetRow[] {
+  const groups = new Map<string, QpcrQuantityRow[]>();
+  for (const row of assaySummary?.quantities ?? []) {
+    const estimatedQuantity = toFiniteNumber(row.estimated_quantity);
+    if (estimatedQuantity === null) continue;
+    const key = makeQpcrDilutionGroupKey(row);
+    const rows = groups.get(key) ?? [];
+    rows.push(row);
+    groups.set(key, rows);
+  }
+
+  const wellEntryLookup = new Map<string, QpcrWellEntry[]>();
+  for (const well of wells) {
+    const position = normalizeQpcrWellPosition(well.well_position);
+    if (!position) continue;
+    const rows = wellEntryLookup.get(position) ?? [];
+    rows.push(well);
+    wellEntryLookup.set(position, rows);
+  }
+
+  return [...groups.entries()].map(([key, rows]) => {
+    const quantities = rows.map((row) => toFiniteNumber(row.estimated_quantity)).filter((value): value is number => value !== null);
+    const meanEstimatedQuantity = finiteMean(quantities);
+    const quantityCvPercent = coefficientOfVariationPercent(quantities);
+    const input = inputs[key] ?? {};
+    const dilutionFactorValue = toFiniteNumber(input.dilutionFactor);
+    const expectedQuantityValue = toFiniteNumber(input.expectedQuantity);
+    const correctedQuantity = meanEstimatedQuantity !== null && dilutionFactorValue !== null
+      ? meanEstimatedQuantity * dilutionFactorValue
+      : null;
+    const percentDetection = correctedQuantity !== null && expectedQuantityValue !== null && expectedQuantityValue !== 0
+      ? (correctedQuantity / expectedQuantityValue) * 100
+      : null;
+    const wellPositions = uniqueNormalizedWellPositions(rows.map((row) => row.well_position));
+    const matchedWellEntries = wellPositions.flatMap((position) => wellEntryLookup.get(position) ?? [])
+      .filter((entry) => rowMatchesEntry(rows[0] ?? {}, entry));
+    const reporter = collapsedLabel(uniqueText(matchedWellEntries.map((entry) => entry.reporter)), '--');
+    const passiveReference = collapsedLabel(uniqueText(matchedWellEntries.map((entry) => entry.passive_reference)), '--');
+
+    return {
+      key,
+      sampleName: cleanText(rows[0]?.sample_name) ?? 'Unknown sample',
+      targetName: cleanText(rows[0]?.target_name) ?? 'Unknown target',
+      task: cleanText(rows[0]?.task) ?? 'UNKNOWN',
+      reporter,
+      passiveReference,
+      n: quantities.length,
+      wellPositions,
+      meanEstimatedQuantity,
+      correctedQuantity,
+      percentDetection,
+      quantityCvPercent,
+      meanEstimatedQuantityLabel: formatQpcrMetric(meanEstimatedQuantity, 3),
+      correctedQuantityLabel: formatQpcrMetric(correctedQuantity, 3),
+      percentDetectionLabel: formatPercentLabel(percentDetection),
+      quantityCvPercentLabel: formatPercentLabel(quantityCvPercent),
+      dilutionFactor: input.dilutionFactor === null || input.dilutionFactor === undefined ? '' : String(input.dilutionFactor),
+      expectedQuantity: input.expectedQuantity === null || input.expectedQuantity === undefined ? '' : String(input.expectedQuantity),
+    };
+  });
 }
 
 function summarizePlateWell(position: string, entries: QpcrWellEntry[]): QpcrPlateWellSummary {
@@ -273,6 +504,51 @@ function toFiniteNumber(value: unknown): number | null {
   return null;
 }
 
+function finiteMean(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function coefficientOfVariationPercent(values: number[]): number | null {
+  if (values.length < 2) return null;
+  const mean = finiteMean(values);
+  if (mean === null || mean === 0) return null;
+  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1);
+  return (Math.sqrt(variance) / Math.abs(mean)) * 100;
+}
+
+function uniqueNormalizedWellPositions(values: unknown[]): string[] {
+  return uniqueText(values.map((value) => normalizeQpcrWellPosition(value))).sort(compareWellPositions);
+}
+
+function compareWellPositions(a: string, b: string): number {
+  const rowDelta = a.charCodeAt(0) - b.charCodeAt(0);
+  if (rowDelta !== 0) return rowDelta;
+  return Number(a.slice(1)) - Number(b.slice(1));
+}
+
+function classifyQpcrChannelRole(targetName: string, rows: QpcrWellEntry[]): QpcrChannelRole {
+  const target = targetName.toUpperCase();
+  const rowText = rows.map((row) => `${row.sample_name ?? ''} ${row.target_name ?? ''} ${row.task ?? ''}`).join(' ').toUpperCase();
+  if (/\b(IPC|IAC|INTERNAL\s+POSITIVE|INTERNAL\s+CONTROL)\b/.test(`${target} ${rowText}`)) {
+    return 'internal_positive_control';
+  }
+  if (/\b(NTC|NEGATIVE|NO\s+TEMPLATE|POSITIVE\s+CONTROL|CONTROL)\b/.test(`${target} ${rowText}`)) {
+    return 'control';
+  }
+  if (targetName === 'Unknown target') return 'unknown';
+  return 'target';
+}
+
+function formatPercentLabel(value: number | null): string {
+  return value === null ? '--' : `${formatQpcrMetric(value, 2)}%`;
+}
+
+function formatPercentRangeLabel(min: number | null, max: number | null): string {
+  if (min === null || max === null) return '--';
+  return `${formatQpcrMetric(min, 2)}–${formatQpcrMetric(max, 2)}%`;
+}
+
 function compareQpcrEntries(a: QpcrWellEntry, b: QpcrWellEntry): number {
   return `${cleanText(a.target_name) ?? ''}|${cleanText(a.task) ?? ''}|${cleanText(a.sample_name) ?? ''}`.localeCompare(
     `${cleanText(b.target_name) ?? ''}|${cleanText(b.task) ?? ''}|${cleanText(b.sample_name) ?? ''}`,
@@ -296,7 +572,7 @@ function matchesReplicateQc(row: QpcrReplicateQcRow, position: string, entries: 
 }
 
 function rowMatchesEntry(
-  row: Pick<QpcrWellEntry, 'sample_name' | 'target_name' | 'task' | 'quantity'>,
+  row: { sample_name?: string | null; target_name?: string | null; task?: string | null; quantity?: number | string | null },
   entry: QpcrWellEntry,
 ): boolean {
   const rowSample = cleanText(row.sample_name);

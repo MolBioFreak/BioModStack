@@ -27,7 +27,7 @@ def test_core_runtime_scaffold_files_exist() -> None:
 def test_compose_core_runtime_contract() -> None:
     compose = yaml.safe_load((REPO_ROOT / "compose.core-runtime.yml").read_text(encoding="utf-8"))
 
-    assert set(compose["services"]) == {"bms-api", "bms-cpu-power", "bms-web"}
+    assert set(compose["services"]) == {"bms-api", "bms-analytical-postgres", "bms-cpu-power", "bms-web"}
 
     api = compose["services"]["bms-api"]
     assert api["build"]["dockerfile"] == "docker/api.Dockerfile"
@@ -39,12 +39,23 @@ def test_compose_core_runtime_contract() -> None:
     assert api["environment"]["BMS_CORE_RUNTIME_MODE"] == "${BMS_CORE_RUNTIME_MODE:-1}"
     assert api["environment"]["BMS_WORKFLOW_ADAPTER_URL"] == "${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}"
     assert api["environment"]["BMS_CPU_POWER_COLLECTOR_URL"] == "${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}"
+    assert api["environment"]["BMS_ANALYTICAL_DATABASE_URL"] == "${BMS_ANALYTICAL_DATABASE_URL:-postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}/bms_analytical_data}"
+    assert api["environment"]["BMS_ANALYTICAL_INIT_ON_STARTUP"] == "${BMS_ANALYTICAL_INIT_ON_STARTUP:-1}"
     assert api["environment"]["CORS_ORIGINS"] == "${CORS_ORIGINS:-http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1}"
     assert api["environment"]["BMS_WEIGHTS"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights"
     assert api["environment"]["BMS_COLABFOLD_DB"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db"
     assert api["environment"]["BMS_MSA_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache"
     assert api["environment"]["BMS_SABDAB_CACHE"] == "${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache"
     assert "BIOXP_SERVER_URL" in api["environment"]
+
+    analytical_db = compose["services"]["bms-analytical-postgres"]
+    assert analytical_db["image"] == "postgres:16-alpine"
+    assert analytical_db["container_name"] == "biomodstack-analytical-postgres"
+    assert analytical_db["ports"] == ["127.0.0.1:${BMS_ANALYTICAL_DB_PORT:-55432}:5432"]
+    assert analytical_db["environment"]["POSTGRES_DB"] == "bms_analytical_data"
+    assert analytical_db["environment"]["POSTGRES_USER"] == "bms_assay"
+    assert analytical_db["environment"]["POSTGRES_PASSWORD"] == "${BMS_ANALYTICAL_DB_PASSWORD:-bms_assay_dev}"
+    assert analytical_db["volumes"] == ["bms_analytical_postgres_data:/var/lib/postgresql/data"]
 
     cpu_power = compose["services"]["bms-cpu-power"]
     assert cpu_power["build"]["dockerfile"] == "docker/api.Dockerfile"
@@ -66,6 +77,7 @@ def test_compose_core_runtime_contract() -> None:
     assert web["depends_on"]["bms-api"]["condition"] == "service_healthy"
     assert web["environment"]["BMS_WEB_HOST_PORT"] == "${BMS_WEB_HOST_PORT:-18080}"
     assert web["healthcheck"]["test"] == ["CMD-SHELL", 'wget -qO- "http://127.0.0.1:${BMS_WEB_HOST_PORT:-18080}/bms/"']
+    assert "bms_analytical_postgres_data" in compose["volumes"]
 
 
 def test_nginx_contract_preserves_bms_and_api_routes() -> None:
@@ -117,6 +129,10 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "CORS_ORIGINS=http://127.0.0.1,http://127.0.0.1:5173,http://127.0.0.1:18080,http://localhost,https://localhost,http://localhost:5173,http://localhost:18080,https://localhost:5173,https://127.0.0.1",
         "BMS_CORE_RUNTIME_MODE=1",
         "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001",
+        "BMS_ANALYTICAL_DB_PORT=55432",
+        "BMS_ANALYTICAL_DB_PASSWORD=bms_assay_dev",
+        "BMS_ANALYTICAL_DATABASE_URL=postgresql+asyncpg://bms_assay:${BMS_ANALYTICAL_DB_PASSWORD}@127.0.0.1:${BMS_ANALYTICAL_DB_PORT}/bms_analytical_data",
+        "BMS_ANALYTICAL_INIT_ON_STARTUP=1",
         "BIOXP_SERVER_URL=",
     ]:
         assert required in env_example

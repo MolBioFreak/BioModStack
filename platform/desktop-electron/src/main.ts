@@ -8,7 +8,7 @@ import { applyShellGraphicsWorkarounds } from './graphicsWorkarounds.js';
 import { resolveShellPaths } from './shellPaths.js';
 import { createServiceControl, type ServiceRuntimeTarget } from './serviceControl.js';
 import { createAppTray } from './tray.js';
-import { attachCloseToTrayBehavior } from './windowLifecycle.js';
+import { enforceSingleInstanceLock, attachCloseToTrayBehavior } from './windowLifecycle.js';
 import { attachWindowDiagnostics } from './windowDiagnostics.js';
 import {
   ADJUST_ZOOM_CHANNEL,
@@ -385,12 +385,16 @@ app.on('before-quit', () => {
   isQuitting = true;
 });
 
-app.whenReady().then(() => {
-  return bootstrap();
-}).catch((error: unknown) => {
-  reportFatalShellError('Failed to bootstrap the shell', error);
-  app.quit();
-});
+const singleInstanceLockAcquired = enforceSingleInstanceLock(app, () => showMainWindow());
+
+if (singleInstanceLockAcquired) {
+  app.whenReady().then(() => {
+    return bootstrap();
+  }).catch((error: unknown) => {
+    reportFatalShellError('Failed to bootstrap the shell', error);
+    app.quit();
+  });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

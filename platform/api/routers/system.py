@@ -3,6 +3,7 @@ System administration routes for cache cleanup, runtime control, and install-pro
 """
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -20,6 +21,7 @@ for root in (REPO_ROOT, API_ROOT):
         sys.path.insert(0, str(root))
 
 from biomodstack_runtime_profile import install_profile_snapshot, save_install_profile
+from services.workflow_adapter import WorkflowAdapterRequestError, request_via_workflow_adapter, workflow_adapter_enabled
 from biomodstack_services import (
     ServiceManagerError,
     resolve_runtime_mode,
@@ -88,6 +90,10 @@ class RuntimePortsPayload(BaseModel):
     prod_web_host_port: int | None = None
 
 
+class RuntimeStartTargetPayload(BaseModel):
+    target: str | None = None
+
+
 def _require_local_admin(request: Request) -> None:
     if request.client and request.client.host not in LOCAL_ADMIN_HOSTS:
         raise HTTPException(status_code=403, detail="BioModStack system-admin routes are limited to local requests")
@@ -102,6 +108,26 @@ def _resolve_runtime(runtime: str | None) -> str:
 
 def _install_profile_response(profile: Mapping[str, object] | None = None) -> dict[str, object]:
     return install_profile_snapshot(profile=profile)
+
+
+def _core_runtime_mode_enabled() -> bool:
+    normalized = str(os.getenv("BMS_CORE_RUNTIME_MODE") or "").strip().lower()
+    return normalized not in {"", "0", "false", "no", "off"}
+
+
+def _system_control_should_proxy_to_workflow_adapter() -> bool:
+    return _core_runtime_mode_enabled() and workflow_adapter_enabled()
+
+
+def _start_runtime_target_via_workflow_adapter(target: str) -> dict[str, object]:
+    response = request_via_workflow_adapter(
+        "POST",
+        "/api/workflow-adapter/runtime/start-target",
+        {"target": target},
+    )
+    if isinstance(response, dict):
+        return response
+    return {"target": target, "control_mode": "host-adapter"}
 
 
 def _run_runtime_action(
@@ -134,13 +160,23 @@ async def start_runtime(request: Request, runtime: str | None = None):
 
 
 @router.post("/runtime/start-target")
-async def start_runtime_target_route(request: Request, target: str | None = None):
+async def start_runtime_target_route(
+    request: Request,
+    payload: RuntimeStartTargetPayload | None = None,
+    target: str | None = None,
+):
     _require_local_admin(request)
-    normalized_target = str(target or "prod").strip().lower()
+    normalized_target = str(target or (payload.target if payload else None) or "prod").strip().lower()
     try:
+        if _system_control_should_proxy_to_workflow_adapter():
+            return _start_runtime_target_via_workflow_adapter(normalized_target)
         start_runtime_target(target=normalized_target)
+    except WorkflowAdapterRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"target": normalized_target}
 
 
