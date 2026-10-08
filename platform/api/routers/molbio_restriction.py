@@ -834,8 +834,8 @@ def _analysis_source(
         owned_topology = "circular" if resolved_revision.is_circular else "linear"
     elif resolved_revision.topology in {"linear", "circular"}:
         owned_topology = cast(Literal["linear", "circular"], resolved_revision.topology)
-    topology = owned_topology or source.topology
-    if topology is None or (owned_topology is not None and source.topology not in {None, owned_topology}):
+    topology = owned_topology
+    if topology is None or source.topology not in {None, owned_topology}:
         raise _error(422, "invalid_dna", "molecular revision topology authority is invalid")
     return sequence, topology, AnalysisSourceReceipt(
         kind="molecular_revision", name=resolved_revision.document_name,
@@ -1066,6 +1066,10 @@ async def _load_saved_digest(
             raise ValueError("row binding mismatch")
         operation = await session.get(MolecularOperation, operation_id)
         source_revision = await session.get(MolecularRevision, response.source_revision_id)
+        source_document = (
+            await session.get(MolecularDocument, response.simulation.source.sequence_id)
+            if response.simulation.source.sequence_id is not None else None
+        )
         inputs = (
             await session.execute(
                 select(MolecularOperationInput).where(
@@ -1080,16 +1084,88 @@ async def _load_saved_digest(
                 ).order_by(MolecularOperationOutput.position)
             )
         ).scalars().all()
+        operation_parameters = (
+            operation.parameters if operation is not None and isinstance(operation.parameters, dict)
+            else {}
+        )
+        fragment_name_prefix = operation_parameters.get("fragment_name_prefix")
+        if fragment_name_prefix is not None and (
+            not isinstance(fragment_name_prefix, str) or not fragment_name_prefix.strip()
+        ):
+            raise ValueError("invalid fragment name prefix")
+        fragment_name_prefix = (
+            fragment_name_prefix.strip() if isinstance(fragment_name_prefix, str) else None
+        )
+        expected_operation_parameters = {
+            "schema": "bms.molbio.restriction-digest-operation-parameters.v1",
+            "selected_enzyme_ids": list(response.simulation.selected_enzyme_ids),
+            "persistence_mode": operation_parameters.get("persistence_mode"),
+            "fragment_name_prefix": fragment_name_prefix,
+            "simulation_sha256": response.simulation.simulation_sha256,
+        }
+        expected_operation_provenance = {
+            "source_revision_id": response.source_revision_id,
+            "catalog_id": response.catalog_id,
+            "catalog_sha256": response.catalog_sha256,
+            "request_sha256": response.request_sha256,
+        }
+        persistence_mode = operation_parameters.get("persistence_mode")
+        expected_output_count = (
+            0 if persistence_mode == "operation_only"
+            else len(response.simulation.fragments)
+            if persistence_mode == "operation_and_fragments"
+            else -1
+        )
+        source_snapshot = (
+            source_revision.snapshot
+            if source_revision is not None and isinstance(source_revision.snapshot, dict)
+            else {}
+        )
+        if isinstance(source_snapshot.get("is_circular"), bool):
+            source_topology = "circular" if source_snapshot["is_circular"] else "linear"
+        elif source_snapshot.get("topology") in {"linear", "circular"}:
+            source_topology = source_snapshot["topology"]
+        else:
+            source_topology = None
+        source_sequence = source_snapshot.get("sequence")
+        source_sequence_bytes = (
+            source_sequence.encode("ascii") if isinstance(source_sequence, str) else b""
+        )
         if (
             operation is None or operation.operation_kind != "restriction_digest"
+            or operation.implementation != "services.restriction_digest.simulate_digest"
+            or operation.implementation_version != response.simulation.digest_algorithm_version
             or operation.status != "completed"
+            or operation_parameters != expected_operation_parameters
+            or operation.warnings != list(response.simulation.warnings)
+            or operation.provenance != expected_operation_provenance
+            or not isinstance(operation.idempotency_key, str)
+            or not operation.idempotency_key.strip()
+            or not isinstance(operation.request_fingerprint, str)
+            or re.fullmatch(r"[0-9a-f]{64}", operation.request_fingerprint) is None
             or source_revision is None
+            or source_document is None
+            or str(source_revision.document_id) != response.simulation.source.sequence_id
+            or source_revision.revision_number != response.simulation.source.revision_number
             or source_revision.content_sha256 != response.simulation.source.content_sha256
             or source_revision.content_length != response.simulation.source.content_length
+            or source_document.document_kind != "dna"
+            or source_document.name != response.simulation.source.name
+            or not isinstance(source_snapshot.get("sequence_type"), str)
+            or source_snapshot["sequence_type"].lower() != "dna"
+            or not isinstance(source_sequence, str)
+            or hashlib.sha256(source_sequence_bytes).hexdigest()
+            != response.simulation.source.content_sha256
+            or len(source_sequence) != response.simulation.source.content_length
+            or source_topology != response.simulation.source.topology
             or len(inputs) != 1 or inputs[0].position != 0 or inputs[0].role != "digest_source"
             or str(inputs[0].revision_id) != response.source_revision_id
-            or inputs[0].snapshot.get("content_sha256") != source_revision.content_sha256
-            or len(outputs) != len(response.outputs)
+            or inputs[0].snapshot != {
+                "content_sha256": response.simulation.source.content_sha256,
+                "sequence_id": response.simulation.source.sequence_id,
+            }
+            or len(response.outputs) != expected_output_count
+            or len(outputs) != expected_output_count
         ):
             raise ValueError("lineage cardinality mismatch")
         for ordinal, (edge, identity) in enumerate(zip(outputs, response.outputs, strict=True)):
@@ -1098,27 +1174,65 @@ async def _load_saved_digest(
             expected_fragment = response.simulation.fragments[ordinal]
             revision_snapshot = revision.snapshot if revision is not None and isinstance(revision.snapshot, dict) else {}
             revision_provenance = revision.provenance if revision is not None and isinstance(revision.provenance, dict) else {}
+            expected_name_prefix = (
+                fragment_name_prefix
+                or f"{response.simulation.source.name} digest fragment"
+            )
+            expected_name = f"{expected_name_prefix} {ordinal + 1}"
+            expected_sequence = expected_fragment.top_strand_sequence
+            expected_content_sha256 = hashlib.sha256(
+                expected_sequence.encode("ascii")
+            ).hexdigest()
+            expected_snapshot = {
+                "sequence_type": "dna",
+                "sequence": expected_sequence,
+                "is_circular": expected_fragment.topology == "circular",
+                "topology": expected_fragment.topology,
+                "name": expected_name,
+            }
+            expected_provenance = {
+                "schema": "bms.molbio.restriction-digest-fragment-provenance.v1",
+                "source_revision_id": response.source_revision_id,
+                "operation_id": operation_id,
+                "simulation_sha256": response.result_sha256,
+                "fragment_index": ordinal,
+                "geometry": expected_fragment.model_dump(mode="json", by_alias=True),
+            }
+            expected_identity = {
+                "fragment_index": ordinal,
+                "document_id": str(document_row.id) if document_row is not None else "",
+                "revision_id": str(revision.id) if revision is not None else "",
+                "output_edge_id": str(edge.id),
+                "name": expected_name,
+                "topology": expected_fragment.topology,
+                "content_sha256": expected_content_sha256,
+                "content_length": len(expected_sequence),
+            }
             if (
                 edge.position != ordinal or edge.role != "digest_fragment"
                 or str(edge.id) != identity.output_edge_id
                 or str(edge.revision_id) != identity.revision_id
+                or edge.snapshot != {
+                    "fragment_index": ordinal,
+                    "simulation_sha256": response.result_sha256,
+                }
                 or revision is None or document_row is None
                 or str(revision.document_id) != identity.document_id
                 or str(document_row.current_revision_id) != identity.revision_id
+                or document_row.document_kind != "dna"
+                or document_row.name != expected_name
+                or document_row.deleted_at is not None
                 or revision.operation_id != operation_id
+                or revision.revision_number != 1
+                or revision.change_kind != "restriction_digest_fragment"
                 or revision.content_sha256 != identity.content_sha256
                 or revision.content_length != identity.content_length
-                or revision_snapshot.get("sequence") != expected_fragment.top_strand_sequence
-                or revision_snapshot.get("topology") != expected_fragment.topology
-                or hashlib.sha256(str(revision_snapshot.get("sequence", "")).encode("ascii")).hexdigest()
-                != identity.content_sha256
-                or revision_provenance.get("geometry")
-                != expected_fragment.model_dump(mode="json", by_alias=True)
-                or revision_provenance.get("fragment_index") != ordinal
+                or revision.created_by is not None
+                or revision_snapshot != expected_snapshot
+                or revision_provenance != expected_provenance
+                or identity.model_dump(mode="json") != expected_identity
             ):
                 raise ValueError("fragment lineage mismatch")
-        if len(response.outputs) not in {0, len(response.simulation.fragments)}:
-            raise ValueError("fragment output count mismatch")
         return response
     except HTTPException:
         raise
@@ -1180,6 +1294,10 @@ async def save_restriction_digest(
     operation_id = str(uuid.uuid4())
     result_id = str(uuid.uuid4())
     outputs: list[DigestOutputIdentity] = []
+    normalized_fragment_name_prefix = (
+        payload.fragment_name_prefix.strip()
+        if payload.fragment_name_prefix is not None else None
+    )
     operation = MolecularOperation(
         id=operation_id, operation_kind="restriction_digest",
         implementation="services.restriction_digest.simulate_digest",
@@ -1189,7 +1307,7 @@ async def save_restriction_digest(
             "schema": "bms.molbio.restriction-digest-operation-parameters.v1",
             "selected_enzyme_ids": list(payload.enzyme_ids),
             "persistence_mode": payload.persistence_mode,
-            "fragment_name_prefix": payload.fragment_name_prefix,
+            "fragment_name_prefix": normalized_fragment_name_prefix,
             "simulation_sha256": payload.simulation_sha256,
         },
         warnings=list(simulation.warnings),
@@ -1215,7 +1333,7 @@ async def save_restriction_digest(
         await molbio_session.flush()
         _digest_persistence_stage_hook("operation")
         if payload.persistence_mode == "operation_and_fragments":
-            prefix = (payload.fragment_name_prefix or f"{resolved.document_name} digest fragment").strip()
+            prefix = normalized_fragment_name_prefix or f"{resolved.document_name} digest fragment"
             for fragment in simulation.fragments:
                 document_id = str(uuid.uuid4())
                 revision_id = str(uuid.uuid4())
