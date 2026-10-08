@@ -36,6 +36,7 @@ import { RunPanel } from '../components/project-manager/RunPanel';
 import { VirtualFolderPanel, type FolderKind } from '../components/project-manager/VirtualFolderPanel';
 import { focusIdFromReadModel, globalExperimentForNode } from '../components/project-manager/projectManagerState';
 import { ProteinProjectWorkspace } from '../components/project-manager/protein/ProteinProjectWorkspace';
+import { NewProjectExperimentDialog } from '../components/project-manager/ProjectWorkflowSetup';
 
 const MAP_LIMIT = 50;
 const RUN_LIMIT = 25;
@@ -325,6 +326,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const [inspectorWidth, setInspectorWidth] = useState(368);
     const [attachOpen, setAttachOpen] = useState(false);
     const [dialogMode, setDialogMode] = useState<ManagerDialogMode | null>(null);
+    const [newExperimentOpen, setNewExperimentOpen] = useState(false);
 
     const [accumulatedMap, setAccumulatedMap] = useState<{
         contextKey: string;
@@ -915,6 +917,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     {busy && <span role="status" className="text-[10px] font-medium text-accent">Refreshing…</span>}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                    {summary.project.project_scope === 'global' && <button type="button" onClick={() => setNewExperimentOpen(true)} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">New experiment</button>}
                     <button type="button" onClick={() => setAttachOpen(true)} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">{isStandaloneNativeProject ? 'Link Project or attach record' : 'Attach existing record'}</button>
                     {!isStandaloneNativeProject && <button type="button" onClick={() => setTreeOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{treeOpen ? 'Hide tree' : 'Show tree'}</button>}
                     {!isStandaloneNativeProject && <button type="button" onClick={() => setInspectorOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{inspectorOpen ? 'Hide inspector' : 'Show inspector'}</button>}
@@ -1000,6 +1003,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     void refreshSummary();
                 }}
             />
+            <NewProjectExperimentDialog projectId={projectId} open={newExperimentOpen} onClose={() => setNewExperimentOpen(false)} />
             <ManagerDialog
                 mode={dialogMode}
                 projectId={projectId}

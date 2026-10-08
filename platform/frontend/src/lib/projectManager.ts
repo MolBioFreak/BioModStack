@@ -888,7 +888,7 @@ export interface ProteinDomainAuthority {
     validation_strategy: string[];
 }
 
-export type ProteinWorkspaceSection = 'overview' | 'targets' | 'datasets' | 'plans' | 'runs' | 'results' | 'comparisons' | 'evidence' | 'history';
+export type ProteinWorkspaceSection = 'overview' | 'targets' | 'datasets' | 'plans' | 'runs' | 'results' | 'comparisons' | 'evidence' | 'history' | 'technical';
 
 export function proteinWorkspaceHref(
     projectId: string,
@@ -1012,6 +1012,52 @@ export interface FrustraMpnnExperimentScope {
     items: FrustraMpnnExperimentScopeItem[];
     count: number;
     bounded: true;
+}
+
+export interface ProteinProjectSetupCapability {
+    capability_id: string;
+    label: string;
+    project_setup_state: 'ready' | 'unavailable';
+    project_setup_adapter_id: string | null;
+    setup_destination: string | null;
+    source_requirements: JsonObject;
+    compatibility: JsonObject;
+}
+
+export interface ProteinProjectCapabilityInventory {
+    schema: 'bms.protein-project.capability-inventory.v1';
+    capabilities: ProteinProjectSetupCapability[];
+}
+
+export interface ProjectWorkflowSetupCreate {
+    schema: 'bms.project-workflow-setup.create.v1';
+    context: 'primary' | 'follow_up';
+    global_experiment_id?: string;
+    name: string;
+    objective: string;
+    domain: 'protein';
+    capability_id: string;
+}
+
+export interface ProjectWorkflowSetup {
+    schema: 'bms.project-workflow-setup.v1';
+    setup_context_id: string;
+    project_id: string;
+    global_experiment_id: string;
+    domain_experiment_id: string;
+    context: 'primary' | 'follow_up';
+    capability_id: string;
+    state: 'draft' | 'prepared' | 'submitted';
+    validation_state: 'unknown' | 'valid' | 'invalid';
+    setup_destination: string;
+    return_uri: string;
+    generation: number;
+    project_label: string;
+    experiment_label: string;
+    workflow_label: string;
+    draft: JsonObject;
+    field_errors: Record<string, string>;
+    diagnostics: JsonObject;
 }
 
 const segment = (value: string) => encodeURIComponent(value);
@@ -1715,9 +1761,100 @@ export async function listDomainAdapters(signal?: AbortSignal): Promise<DomainAd
     return parseDomainAdapterRegistry(response.data);
 }
 
-export async function listProteinProjectCapabilities(signal?: AbortSignal): Promise<unknown> {
+function parseProteinProjectCapability(value: unknown, label: string): ProteinProjectSetupCapability {
+    const record = exactRecord(value, label, [
+        'capability_id', 'label', 'project_setup_state', 'project_setup_adapter_id', 'setup_destination',
+        'source_requirements', 'compatibility',
+    ]);
+    const state = requireLiteral(record.project_setup_state, `${label}.project_setup_state`, ['ready', 'unavailable'] as const);
+    const adapterId = requireNullableString(record.project_setup_adapter_id, `${label}.project_setup_adapter_id`);
+    const destination = requireNullableString(record.setup_destination, `${label}.setup_destination`);
+    if (state === 'ready' && (!adapterId || !destination || !destination.startsWith('/') || destination.startsWith('//'))) {
+        throw new Error(`${label} is ready without a safe native setup destination and adapter.`);
+    }
+    return {
+        capability_id: requireString(record.capability_id, `${label}.capability_id`),
+        label: requireString(record.label, `${label}.label`),
+        project_setup_state: state,
+        project_setup_adapter_id: adapterId,
+        setup_destination: destination,
+        source_requirements: requireJsonObject(record.source_requirements, `${label}.source_requirements`),
+        compatibility: requireJsonObject(record.compatibility, `${label}.compatibility`),
+    };
+}
+
+export function parseProteinProjectCapabilityInventory(value: unknown): ProteinProjectCapabilityInventory {
+    const record = exactRecord(value, 'protein capability inventory', ['schema', 'capabilities']);
+    if (record.schema !== 'bms.protein-project.capability-inventory.v1') throw new Error('Protein capability inventory schema is unsupported.');
+    return {
+        schema: record.schema,
+        capabilities: requireArray(record.capabilities, 'protein capability inventory.capabilities', parseProteinProjectCapability),
+    };
+}
+
+export function parseProjectWorkflowSetup(value: unknown): ProjectWorkflowSetup {
+    const record = exactRecord(value, 'project workflow setup', [
+        'schema', 'setup_context_id', 'project_id', 'global_experiment_id', 'domain_experiment_id', 'context',
+        'capability_id', 'state', 'validation_state', 'setup_destination', 'return_uri', 'generation',
+        'project_label', 'experiment_label', 'workflow_label', 'draft', 'field_errors', 'diagnostics',
+    ]);
+    if (record.schema !== 'bms.project-workflow-setup.v1') throw new Error('Project workflow setup schema is unsupported.');
+    const destination = requireString(record.setup_destination, 'project workflow setup.setup_destination');
+    const returnUri = requireString(record.return_uri, 'project workflow setup.return_uri');
+    if (!destination.startsWith('/') || destination.startsWith('//')) throw new Error('Project workflow setup destination must be a safe local route.');
+    if (!returnUri.startsWith('/') || returnUri.startsWith('//')) throw new Error('Project workflow setup return_uri must be a safe local route.');
+    const rawErrors = exactRecord(record.field_errors, 'project workflow setup.field_errors', [], Object.keys(record.field_errors as UnknownRecord));
+    const fieldErrors: Record<string, string> = {};
+    for (const [key, item] of Object.entries(rawErrors)) fieldErrors[key] = requireString(item, `project workflow setup.field_errors.${key}`);
+    return {
+        schema: record.schema,
+        setup_context_id: requireString(record.setup_context_id, 'project workflow setup.setup_context_id'),
+        project_id: requireString(record.project_id, 'project workflow setup.project_id'),
+        global_experiment_id: requireString(record.global_experiment_id, 'project workflow setup.global_experiment_id'),
+        domain_experiment_id: requireString(record.domain_experiment_id, 'project workflow setup.domain_experiment_id'),
+        context: requireLiteral(record.context, 'project workflow setup.context', ['primary', 'follow_up'] as const),
+        capability_id: requireString(record.capability_id, 'project workflow setup.capability_id'),
+        state: requireLiteral(record.state, 'project workflow setup.state', ['draft', 'prepared', 'submitted'] as const),
+        validation_state: requireLiteral(record.validation_state, 'project workflow setup.validation_state', ['unknown', 'valid', 'invalid'] as const),
+        setup_destination: destination,
+        return_uri: returnUri,
+        generation: requireInteger(record.generation, 'project workflow setup.generation'),
+        project_label: requireString(record.project_label, 'project workflow setup.project_label'),
+        experiment_label: requireString(record.experiment_label, 'project workflow setup.experiment_label'),
+        workflow_label: requireString(record.workflow_label, 'project workflow setup.workflow_label'),
+        draft: requireJsonObject(record.draft, 'project workflow setup.draft'),
+        field_errors: fieldErrors,
+        diagnostics: requireJsonObject(record.diagnostics, 'project workflow setup.diagnostics'),
+    };
+}
+
+export async function listProteinProjectCapabilities(signal?: AbortSignal): Promise<ProteinProjectCapabilityInventory> {
     const response = await api.get<unknown>('/api/protein-project-capabilities', { signal });
-    return response.data;
+    return parseProteinProjectCapabilityInventory(response.data);
+}
+
+export async function createProjectWorkflowSetup(projectId: string, request: ProjectWorkflowSetupCreate): Promise<ProjectWorkflowSetup> {
+    const response = await api.post<unknown>(`/api/projects/${segment(projectId)}/workflow-setups`, request);
+    return parseProjectWorkflowSetup(response.data);
+}
+
+export async function getProjectWorkflowSetup(projectId: string, setupContextId: string, signal?: AbortSignal): Promise<ProjectWorkflowSetup> {
+    const response = await api.get<unknown>(`/api/projects/${segment(projectId)}/workflow-setups/${segment(setupContextId)}`, { signal });
+    return parseProjectWorkflowSetup(response.data);
+}
+
+export async function saveProjectWorkflowSetupDraft(projectId: string, setupContextId: string, request: { expected_generation: number; draft: JsonObject }): Promise<ProjectWorkflowSetup> {
+    const response = await api.put<unknown>(`/api/projects/${segment(projectId)}/workflow-setups/${segment(setupContextId)}/draft`, request);
+    return parseProjectWorkflowSetup(response.data);
+}
+
+export async function prepareProjectWorkflowSetup(projectId: string, setupContextId: string): Promise<ProjectWorkflowSetup> {
+    const response = await api.post<unknown>(`/api/projects/${segment(projectId)}/workflow-setups/${segment(setupContextId)}/prepare-launch`);
+    return parseProjectWorkflowSetup(response.data);
+}
+
+export async function deleteProjectWorkflowSetup(projectId: string, setupContextId: string): Promise<void> {
+    await api.delete(`/api/projects/${segment(projectId)}/workflow-setups/${segment(setupContextId)}`);
 }
 
 export async function searchAdapterEntities(adapterId: string, query: string, limit = 25, signal?: AbortSignal): Promise<AdapterSearchResult> {

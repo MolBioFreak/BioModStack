@@ -18,6 +18,11 @@ const managerApi = vi.hoisted(() => ({
     getProjectSummary: vi.fn(),
     listDomainAdapters: vi.fn(),
     listProteinProjectCapabilities: vi.fn(),
+    createProjectWorkflowSetup: vi.fn(),
+    getProjectWorkflowSetup: vi.fn(),
+    saveProjectWorkflowSetupDraft: vi.fn(),
+    prepareProjectWorkflowSetup: vi.fn(),
+    deleteProjectWorkflowSetup: vi.fn(),
     searchAdapterEntities: vi.fn(),
     issueAdapterReceipt: vi.fn(),
     reverifySourceReceipt: vi.fn(),
@@ -333,6 +338,17 @@ afterEach(async () => {
 });
 
 describe('ProjectManager', () => {
+    it('renders the Protein workspace task-first and keeps authority data under Technical details', async () => {
+        await renderAt('/projects/project-1/experiments/global-1/domains/domain-1?workspace=protein&section=overview');
+        await waitUntil(() => expect(container.textContent).toContain('Add workflow'));
+        expect(container.textContent).toContain('Project');
+        expect(container.textContent).toContain('Experiment');
+        expect(container.textContent).not.toContain('revision-project-1');
+        expect(container.textContent).not.toContain('receipt-9');
+        expect(container.textContent).not.toContain('a'.repeat(64));
+        expect(container.textContent).toContain('Technical details');
+    });
+
     it('preserves exact selected Domain-state identity when opening NGS/MolBio', async () => {
         managerApi.getProjectSummary.mockImplementation(() => {
             const value = summaryFor('domain_experiment:domain-1');
