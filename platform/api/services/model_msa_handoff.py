@@ -21,7 +21,9 @@ def generated_msa_service_supported(service) -> bool:
             and get('state') == 'planned_from_generated_candidates'
             and get('provider') in {'colabfold_api', 'neurosnap_api'}
             and bool({'modules/antibody_batch.nf:BatchProtenixValidation',
-                      'modules/protenix.nf:ProtenixFromComplex'}
+                      'modules/protenix.nf:ProtenixFromComplex',
+                      'modules/confornets_experimental.nf:RunConforNets',
+                      'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets'}
                      .intersection((get('authority') or '').split('; '))))
 
 
