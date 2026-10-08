@@ -43,15 +43,16 @@ workflow BOLTZ_CP_EXPERIMENTAL {
             def foldCpCandidates = selectedStructures
                 .flatten()
                 .map { structureFile ->
-                    def fileName = structureFile.getName()
-                    def stem = fileName.replaceFirst(/\.[^.]+$/, '').replaceAll(/[^A-Za-z0-9._-]/, '_')
-                    def candidateId = "foldcp_${stem}".take(128)
+                    def relativePath = structureFile.toString().split('/published/', 2).last()
+                    def stem = relativePath.replaceFirst(/\.[^.]+$/, '').replaceAll(/[^A-Za-z0-9._-]/, '_')
+                    def digest = java.security.MessageDigest.getInstance('SHA-256').digest(relativePath.getBytes('UTF-8')).encodeHex().toString().take(12)
+                    def candidateId = "foldcp_${stem.take(100)}_${digest}"
                     tuple([
                         candidate_id: candidateId,
                         parent_job_id: params.job_id.toString(),
                         parent_workflow_id: 'structure_prediction',
                         producer_stage: 'structure_prediction:fold_cp',
-                        producer_candidate_key: "fold_cp/${fileName}",
+                        producer_candidate_key: "fold_cp/${relativePath}",
                         requiredness: 'required',
                     ], structureFile)
                 }

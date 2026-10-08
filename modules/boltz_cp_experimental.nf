@@ -265,19 +265,20 @@ EOF
 process FinalizeBoltzCPExperimental {
     label 'process_low'
 
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: 'published/*.pdb', saveAs: { filename -> filename.replace('published/', '') }
-    publishDir "${params.out_dir}/cif_files/predictions", mode: 'copy', pattern: 'published/*.cif', saveAs: { filename -> filename.replace('published/', '') }
-    publishDir "${params.out_dir}/json_files/predictions", mode: 'copy', pattern: 'published/*.json', saveAs: { filename -> filename.replace('published/', '') }
-    publishDir "${params.out_dir}/npz_files/predictions", mode: 'copy', pattern: 'published/*.npz', saveAs: { filename -> filename.replace('published/', '') }
+    // Keep the native prediction subtree: DP shards can emit identical basenames.
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: 'published/**/*.pdb', saveAs: { filename -> filename.replaceFirst('^published/', '') }
+    publishDir "${params.out_dir}/cif_files/predictions", mode: 'copy', pattern: 'published/**/*.cif', saveAs: { filename -> filename.replaceFirst('^published/', '') }
+    publishDir "${params.out_dir}/json_files/predictions", mode: 'copy', pattern: 'published/**/*.json', saveAs: { filename -> filename.replaceFirst('^published/', '') }
+    publishDir "${params.out_dir}/npz_files/predictions", mode: 'copy', pattern: 'published/**/*.npz', saveAs: { filename -> filename.replaceFirst('^published/', '') }
 
     input:
     path results_dir
 
     output:
-    path 'published/*.pdb', emit: pdbs, optional: true
-    path 'published/*.cif', emit: cifs, optional: true
-    path 'published/*.json', emit: jsons, optional: true
-    path 'published/*.npz', emit: npzs, optional: true
+    path 'published/**/*.pdb', emit: pdbs, optional: true
+    path 'published/**/*.cif', emit: cifs, optional: true
+    path 'published/**/*.json', emit: jsons, optional: true
+    path 'published/**/*.npz', emit: npzs, optional: true
 
     script:
     """
@@ -287,11 +288,13 @@ process FinalizeBoltzCPExperimental {
 from pathlib import Path
 import shutil
 
+root = Path('${results_dir}')
 published = Path('published')
-published.mkdir(exist_ok=True)
 for pattern in ('*.pdb', '*.cif', '*.json', '*.npz'):
-    for src in Path('${results_dir}').rglob(pattern):
-        shutil.copy2(src, published / src.name)
+    for src in sorted(root.rglob(pattern)):
+        target = published / src.relative_to(root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, target)
 PY
     """
 }
