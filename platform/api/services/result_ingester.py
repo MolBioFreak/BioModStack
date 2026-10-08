@@ -20,6 +20,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import flag_modified
 
+from antibody_pipeline_contract import (
+    ANTIBODY_PIPELINE_CONTRACT_VERSION,
+    infer_antibody_artifact_class_from_stage,
+    is_antibody_pipeline_mode,
+    normalize_antibody_artifact_class,
+    normalize_antibody_pipeline_contract_version,
+)
 from database import Design, Job
 from paths import get_data_root
 from services.rfantibody_metadata import load_rfantibody_trb_summary
@@ -233,7 +240,7 @@ def _job_has_explicit_binder_target_roles(job: Optional[Job]) -> bool:
     mode = str(job.mode or "").strip().lower()
     rfd_mode = str(params.get("rfd_mode") or "").strip().lower()
 
-    if rfd_mode == "antibody_denovo_pipeline":
+    if is_antibody_pipeline_mode(rfd_mode):
         return True
     if "antibody" in model_id or "antibody" in mode:
         return True
@@ -251,6 +258,19 @@ def _job_has_explicit_binder_target_roles(job: Optional[Job]) -> bool:
         if len(protein_like) >= 2:
             return True
     return False
+
+
+def _job_has_reference_target_structure(job_params: Dict[str, Any]) -> bool:
+    target_pdb_value = str(
+        job_params.get("target_pdb")
+        or job_params.get("fixed_target_source_path")
+        or ""
+    ).strip()
+    return bool(target_pdb_value)
+
+
+def _job_supports_inferred_validation_roles(job: Optional[Job], job_params: Dict[str, Any]) -> bool:
+    return _job_has_explicit_binder_target_roles(job) or _job_has_reference_target_structure(job_params)
 
 
 def _parse_epitope_residues(raw_value: Any) -> Optional[List[str]]:
@@ -307,12 +327,6 @@ def _infer_complex_role_chain_ids(job_params: Dict[str, Any]) -> tuple[List[str]
 
 
 def _validation_role_fields(job: Optional[Job], job_params: Dict[str, Any]) -> Dict[str, Optional[str]]:
-    if not _job_has_explicit_binder_target_roles(job):
-        return {
-            "detected_antibody_chains": None,
-            "detected_target_chain": None,
-        }
-
     binder_chains = _parse_chain_ids(job_params.get("antibody_chains") or job_params.get("binder_chains"))
     target_chains = _parse_chain_ids(job_params.get("antigen_chains") or job_params.get("target_chains"))
     inferred_target_chains, inferred_binder_chains = _infer_complex_role_chain_ids(job_params)
@@ -799,6 +813,8 @@ _SOURCE_LINEAGE_LOAD_ONLY_COLUMNS = (
     Design.source_stage_job_id,
     Design.source_stage_family,
     Design.source_stage_mode,
+    Design.artifact_class,
+    Design.artifact_schema_version,
     Design.source_pdb_path,
     Design.source_design_name,
     Design.binder_length,
@@ -1070,6 +1086,22 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         or ""
     ).strip().lower() or None
     source_selection_count = params.get("source_selection_count") or getattr(job, "source_selection_count", None)
+    selected_input_artifact_class = normalize_antibody_artifact_class(
+        params.get("selected_input_artifact_class")
+        or (selection_manifest.get("selected_input_artifact_class") if isinstance(selection_manifest, dict) else None)
+        or getattr(job, "selected_input_artifact_class", None)
+    )
+    selected_input_schema_version = normalize_antibody_pipeline_contract_version(
+        params.get("selected_input_schema_version")
+        or (selection_manifest.get("selected_input_schema_version") if isinstance(selection_manifest, dict) else None)
+        or getattr(job, "selected_input_schema_version", None)
+    )
+    if selected_input_artifact_class and selected_input_schema_version is None:
+        selected_input_schema_version = ANTIBODY_PIPELINE_CONTRACT_VERSION
+    artifact_class = normalize_antibody_artifact_class(
+        infer_antibody_artifact_class_from_stage(stage_family, stage_mode)
+    )
+    artifact_schema_version = ANTIBODY_PIPELINE_CONTRACT_VERSION if artifact_class else None
 
     provenance = {
         "job_id": getattr(job, "id", None),
@@ -1091,6 +1123,10 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         "source_selection_count": source_selection_count,
         "selected_input_dir": str(selection_dir) if selection_dir else None,
         "selected_input_manifest": str(selection_manifest_path) if selection_manifest_path else None,
+        "selected_input_artifact_class": selected_input_artifact_class,
+        "selected_input_schema_version": selected_input_schema_version,
+        "artifact_class": artifact_class,
+        "artifact_schema_version": artifact_schema_version,
         "iteration_action": params.get("iteration_action"),
         "ppiflow_stage_target": params.get("ppiflow_stage_target"),
         "ppiflow_stage_mode": params.get("ppiflow_stage_mode"),
@@ -1109,6 +1145,10 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         "source_stage_mode": source_stage_mode,
         "source_selection_manifest_path": str(selection_manifest_path) if selection_manifest_path else None,
         "source_selection_count": source_selection_count,
+        "selected_input_artifact_class": selected_input_artifact_class,
+        "selected_input_schema_version": selected_input_schema_version,
+        "artifact_class": artifact_class,
+        "artifact_schema_version": artifact_schema_version,
         "provenance": provenance,
         "selection_index": selection_index,
         "source_design_index": source_design_index,
@@ -1293,6 +1333,8 @@ def _design_lineage_fields(context: Dict[str, Any], lineage: Dict[str, Any]) -> 
         "source_stage_mode": lineage.get("source_stage_mode") or context.get("source_stage_mode"),
         "source_pdb_path": lineage.get("source_pdb_path"),
         "source_design_name": lineage.get("source_design_name"),
+        "artifact_class": context.get("artifact_class"),
+        "artifact_schema_version": context.get("artifact_schema_version"),
     }
 
 
@@ -2789,7 +2831,8 @@ async def ingest_loose_files(
     is_maturation_child = str(job_mode or "").strip().lower() == "maturation_child"
     job_context = _job_stage_context(current_job)
     lineage_cache: Dict[str, Optional[Design]] = {}
-    allow_binder_target_metrics = _job_has_explicit_binder_target_roles(current_job)
+    allow_chain_ordered_metrics = _job_has_explicit_binder_target_roles(current_job)
+    allow_validation_interface_metrics = _job_supports_inferred_validation_roles(current_job, job_params)
     validation_role_fields = _validation_role_fields(current_job, job_params)
     detected_antibody_chains = validation_role_fields.get("detected_antibody_chains")
     detected_target_chain = validation_role_fields.get("detected_target_chain")
@@ -2977,7 +3020,7 @@ async def ingest_loose_files(
                         detected_target_chain=structure_role_fields.get("detected_target_chain"),
                         epitope_residues=epitope_residues,
                     )
-                    if allow_binder_target_metrics else {}
+                    if allow_validation_interface_metrics else {}
                 )
                 
                 # Create design
@@ -3304,7 +3347,7 @@ async def ingest_loose_files(
 
                 plddt_binder = None
                 plddt_target = None
-                if allow_binder_target_metrics and isinstance(chain_plddt, list) and len(chain_plddt) >= 2:
+                if allow_chain_ordered_metrics and isinstance(chain_plddt, list) and len(chain_plddt) >= 2:
                     plddt_binder = chain_plddt[0]
                     plddt_target = chain_plddt[1]
                     if plddt_binder is not None and plddt_binder <= 1.0:
@@ -3326,7 +3369,7 @@ async def ingest_loose_files(
                         detected_target_chain=structure_role_fields.get("detected_target_chain"),
                         epitope_residues=epitope_residues,
                     )
-                    if allow_binder_target_metrics else {}
+                    if allow_validation_interface_metrics else {}
                 )
                 lineage = await _resolve_parent_design_lineage(
                     session,

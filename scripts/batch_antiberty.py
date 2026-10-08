@@ -10,14 +10,9 @@ pseudo-log-likelihood (PLL) scores in a single batch inference pass.
 import sys
 import argparse
 import csv
+from pathlib import Path
 import torch
 from antiberty import AntiBERTyRunner
-from pathlib import Path
-import argparse
-import csv
-import torch
-from antiberty import AntiBERTyRunner
-from pathlib import Path
 
 # Try BioPython import, fallback to simple parser
 try:
@@ -62,9 +57,13 @@ def file_to_list(file_string):
         parts = clean.split()
     return [p.strip() for p in parts if p.strip()]
 
-def load_sequences(pdb_files):
-    """Load heavy/light chain sequences from PDBs"""
+def parse_chain_csv(raw):
+    return {token.strip() for token in str(raw or "").split(",") if token.strip()}
+
+def load_sequences(pdb_files, allowed_chain_ids=None):
+    """Load antibody-chain sequences from PDBs."""
     data = []
+    allowed_chain_id_set = {str(chain_id).strip() for chain_id in (allowed_chain_ids or set()) if str(chain_id).strip()}
     
     for pdb_str in pdb_files:
         pdb_path = Path(pdb_str)
@@ -82,8 +81,10 @@ def load_sequences(pdb_files):
              chains = parse_pdb_simple(pdb_path)
         
         # Heuristic: AntiBERTy is fine with full sequence, but usually applied to variable regions
-        # For batching, we just score all chains found
+        # For batching, score only the configured binder/antibody chains when known.
         for chain_id, seq in chains.items():
+            if allowed_chain_id_set and chain_id not in allowed_chain_id_set:
+                continue
             if len(seq) > 20: # Skip fragments
                 data.append({
                     "file": pdb_path.name,
@@ -96,6 +97,7 @@ def main():
     parser = argparse.ArgumentParser(description='Batch AntiBERTy Scoring')
     parser.add_argument('--pdb_files', nargs='+', required=True, help='List of PDB files')
     parser.add_argument('--out_csv', required=True, help='Output CSV file')
+    parser.add_argument('--chain_ids', default='', help='Optional comma-separated antibody/binder chain IDs to score')
     
     args = parser.parse_args()
     
@@ -103,7 +105,8 @@ def main():
     pdb_files = args.pdb_files
     print(f"Loading sequences from {len(pdb_files)} PDBs...")
     
-    records = load_sequences(pdb_files)
+    allowed_chain_ids = parse_chain_csv(args.chain_ids)
+    records = load_sequences(pdb_files, allowed_chain_ids=allowed_chain_ids)
     if not records:
         print("No valid sequences found")
         with open(args.out_csv, 'w') as f:

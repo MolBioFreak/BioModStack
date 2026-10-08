@@ -29,7 +29,7 @@ from services.analysis_registry import (
     normalize_pae_matrix_params,
 )
 from services.analysis_autorun import _viewer_minimum_analysis_types
-from services.aligned_error_utils import load_structure_residue_records
+from services.aligned_error_utils import detect_aligned_error_artifact, load_structure_residue_records
 from services.analysis_subprocess import _extract_metric_pairs
 from services.analysis_runs import build_artifact_manifest_for_run, serialize_analysis_run
 from services.result_ingester import _compute_validation_geometry_fields, _validation_role_fields
@@ -221,3 +221,30 @@ ATOM 2 C CB ALA A 1 1 1.5 2.5 3.5 A
     assert residues[0].chain_id == "A"
     assert residues[0].residue_name == "ALA"
     assert token_mask.tolist() == [True]
+
+
+def test_detect_aligned_error_artifact_prefers_summary_relative_sidecar_path() -> None:
+    with TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        structure_path = base / "design_protenixpred.pdb"
+        summary_path = base / "design_protenixpred.json"
+        aligned_error_path = base / "aligned_error" / "design_full_data_sample_0.json"
+
+        structure_path.write_text("MODEL\nENDMDL\n", encoding="utf-8")
+        aligned_error_path.parent.mkdir(parents=True, exist_ok=True)
+        aligned_error_path.write_text('{"token_pair_pae": [[0.0]]}', encoding="utf-8")
+        summary_path.write_text(
+            '{"aligned_error_artifact":"aligned_error/design_full_data_sample_0.json","aligned_error_format":"protenix_full_json"}',
+            encoding="utf-8",
+        )
+
+        detected = detect_aligned_error_artifact(
+            structure_path=structure_path,
+            summary_json_path=summary_path,
+        )
+
+    assert detected is not None
+    artifact_path, artifact_format, artifact_key = detected
+    assert artifact_path == aligned_error_path.resolve()
+    assert artifact_format == "protenix_full_json"
+    assert artifact_key == "token_pair_pae"

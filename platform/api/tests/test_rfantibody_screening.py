@@ -17,6 +17,8 @@ from screen_rfantibody_backbones import (
     annotate_loop_metrics,
     build_loop_screening_summary,
     choose_headline_scope,
+    infer_target_chain,
+    parse_chain_hints,
     normalize_screen_reference_scope,
 )
 
@@ -31,6 +33,26 @@ def test_normalize_antibody_job_params_normalizes_screen_reference_scope() -> No
         "rfantibody_screen_reference_scope": "cdr_loops",
     })
     assert normalized["rfantibody_screen_reference_scope"] == "cdr_loops"
+
+
+def test_normalize_antibody_job_params_promotes_singular_chain_aliases() -> None:
+    normalized = _normalize_antibody_job_params({
+        "antibody_chain": "H",
+        "antigen_chain": "A",
+    })
+
+    assert normalized["antibody_chains"] == "H"
+    assert normalized["antigen_chains"] == "A"
+
+
+def test_normalize_antibody_job_params_accepts_generic_binder_target_aliases() -> None:
+    normalized = _normalize_antibody_job_params({
+        "binder_chains": "H,L",
+        "target_chains": "A,B",
+    })
+
+    assert normalized["antibody_chains"] == "H,L"
+    assert normalized["antigen_chains"] == "A,B"
 
 
 def test_normalize_screen_reference_scope_defaults_to_cdr_loops() -> None:
@@ -116,3 +138,17 @@ def test_build_loop_screening_summary_tracks_framework_delta_and_redesign_candid
     assert summary["redesign_candidate_loops"] == ["H2"]
     assert summary["best_epitope_loop"] == "H1"
     assert summary["closest_target_loop"] == "H3"
+
+
+def test_parse_chain_hints_preserves_multiple_chain_ids() -> None:
+    assert parse_chain_hints("A,B") == ["A", "B"]
+    assert parse_chain_hints(" A ; B | C ") == ["A", "B", "C"]
+
+
+def test_infer_target_chain_honors_multi_chain_hint_before_heuristics() -> None:
+    assert infer_target_chain(
+        all_chains=["H", "L", "B"],
+        antibody_chain_ids=["H", "L"],
+        target_chain_hint="A,B",
+        epitope_residues=[],
+    ) == "B"
