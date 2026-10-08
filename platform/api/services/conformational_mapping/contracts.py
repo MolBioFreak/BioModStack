@@ -17,7 +17,8 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Mapping, Sequence
 
 from jsonschema import Draft202012Validator, FormatChecker
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, computed_field, model_validator
+from referencing import Registry, Resource
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, WithJsonSchema, computed_field, model_validator
 from services.frustrampnn.analysis import score_class as canonical_frustrampnn_score_class
 
 
@@ -229,8 +230,15 @@ def load_schema(schema_key: str) -> dict[str, Any]:
 def validate_schema(schema_key: str, instance: Any) -> None:
     _check_canonical_value(instance)
     schema = load_schema(schema_key)
+    from services.msa_policy import POLICY
+    msa_schema = canonical_json_loads((_SCHEMA_ROOT.parent / 'hosted_msa_settings_v2.schema.json').read_bytes())
+    registry = Registry().with_resources([
+        ('urn:bms:hosted-msa-settings:v2', Resource.from_contents(msa_schema)),
+        ('urn:bms:msa-search-policy:v2', Resource.from_contents({
+            '$schema': 'https://json-schema.org/draft/2020-12/schema', **POLICY})),
+    ])
     errors = sorted(
-        Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(instance),
+        Draft202012Validator(schema, format_checker=FormatChecker(), registry=registry).iter_errors(instance),
         key=lambda error: [str(part) for part in error.absolute_path],
     )
     if errors:
@@ -1356,14 +1364,29 @@ def switch_score(coordinate_support_fraction: Any, context_transition_rate: Any,
     return support * transition * abs(mean)
 
 
-def protenix_msa_settings(value: Mapping[str, Any]) -> dict[str, Any]:
+def protenix_msa_settings(value: Mapping[str, Any], *, enabled: bool = True) -> dict[str, Any]:
     """Reuse the global hosted policy; CM does not define provider science."""
     from services.msa_policy import POLICY, apply_msa_policy
     allowed = {'msa_provider', *POLICY['colabfold_settings'], *POLICY['neurosnap_settings']}
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise ValueError('Unknown CM hosted MSA settings: ' + ', '.join(unknown))
-    return apply_msa_policy('protenix', value)
+    errors = list(Draft202012Validator(hosted_msa_settings_schema()).iter_errors(value))
+    if errors:
+        raise ValueError('Invalid CM hosted MSA settings: ' + errors[0].message)
+    effective = apply_msa_policy('protenix', {**value, 'protenix_use_msa': enabled})
+    effective.pop('protenix_use_msa')  # Native feature flags belong to the request, not this settings object.
+    return effective
+
+
+def hosted_msa_settings_schema() -> dict[str, Any]:
+    """OpenAPI projection of the same inventory referenced by JSON Schema."""
+    from services.msa_policy import POLICY
+    schema = canonical_json_loads((_SCHEMA_ROOT.parent / 'hosted_msa_settings_v2.schema.json').read_bytes())
+    for group in ('colabfold_settings', 'neurosnap_settings'):
+        for key, field in POLICY[group].items():
+            schema['properties'][key] = dict(field)
+    return schema
 
 
 class FeaturePolicy(_StrictModel):
@@ -1378,7 +1401,7 @@ class FeaturePolicy(_StrictModel):
     protein_msa_enabled: bool | None = None
     templates_enabled: bool | None = None
     rna_msa_enabled: bool | None = None
-    msa_settings: dict[str, Any] | None = None
+    msa_settings: Annotated[dict[str, Any], WithJsonSchema(hosted_msa_settings_schema())] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1396,7 +1419,10 @@ class FeaturePolicy(_StrictModel):
     @model_validator(mode="after")
     def validate_disabled_control(self) -> "FeaturePolicy":
         if self.msa_settings is not None:
-            protenix_msa_settings(self.msa_settings)  # validate, never rewrite requested bytes
+            # This shared document does not own ConforNets skip_msa. Validate
+            # all global types/bounds here; the canonical request owns whether
+            # the selected consumer runs and applies capability restrictions.
+            protenix_msa_settings(self.msa_settings, enabled=False)
         if self.mode == "features_disabled_control_v1" and any(
             value is True for value in (
                 self.protein_msa_enabled, self.templates_enabled, self.rna_msa_enabled

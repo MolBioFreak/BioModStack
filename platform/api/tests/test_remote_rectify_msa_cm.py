@@ -174,7 +174,6 @@ def test_cm_actual_native_portable_delivery(cm, tmp_path, monkeypatch, provider)
 @pytest.mark.parametrize('settings', [
     None, {'msa_provider': 'local'}, {'unexpected': True}, {'colabfold_use_env': 'false'},
     {'msa_allow_empty_fallback': True}, {'msa_neurosnap_coverage_percent': -1},
-    {'msa_provider': 'neurosnap_api', 'msa_neurosnap_pad_sequences': True},
 ])
 def test_cm_settings_reuse_closed_global_validation(cm, settings):
     request, _, _ = cm
