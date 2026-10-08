@@ -32,6 +32,7 @@ from .transport import (
     run_remote,
 )
 from .vast import VastInventoryError, list_owned_instances
+from .progress import preload_active, preload_idle_clause
 
 RUNNING_PROVIDER_STATES = frozenset({"running", "ready"})
 INVENTORY_MAX_AGE_SECONDS = 120
@@ -50,7 +51,7 @@ def inventory_fresh(target: ExecutionTarget) -> bool:
 
 def target_eligible(target: ExecutionTarget) -> bool:
     inventory = (target.provider_metadata or {}).get("inventory", {})
-    return bool(target.active and target.state == "ready" and inventory_fresh(target)
+    return bool(target.active and target.state == "ready" and not preload_active(target) and inventory_fresh(target)
                 and inventory.get("present") is True and inventory.get("running") is True)
 
 
@@ -103,6 +104,8 @@ def target_id(provider: str, provider_instance_id: str) -> str:
 def _target_response(target: ExecutionTarget) -> ExecutionTargetResponse:
     return ExecutionTargetResponse(
         setup=(target.provider_metadata or {}).get("setup"),
+        preload=(target.provider_metadata or {}).get("preload"),
+        progress=(target.provider_metadata or {}).get("progress") if target.leased_job_id else None,
         id=str(target.id),
         provider="vast",
         provider_instance_id=str(target.provider_instance_id),
@@ -185,12 +188,21 @@ async def get_ready_target(session: AsyncSession, execution_target_id: str) -> E
     return target
 
 
+def blocking_job_clause():
+    # Finished remote work awaiting an explicit local pull owns no worker lease.
+    pending_return = (
+        (func.coalesce(Job.awaiting_stage, "") == "remote_results")
+        & func.coalesce(Job.remote_state, "").in_(("results_available", "result_pull_failed", "returning"))
+    )
+    return Job.status.notin_(("completed", "failed", "cancelled", "canceled")) & ~pending_return
+
+
 async def _has_nonterminal_jobs(session: AsyncSession, execution_target_id: str) -> bool:
     job_id = await session.scalar(
         select(Job.id)
         .where(
             Job.execution_target_id == execution_target_id,
-            Job.status.notin_(("completed", "failed", "cancelled", "canceled")),
+            blocking_job_clause(),
         )
         .limit(1)
     )
@@ -402,7 +414,7 @@ async def begin_activation(
             ExecutionTarget.id != identifier,
         )
     )
-    if active_target is not None and await _has_nonterminal_jobs(session, str(active_target.id)):
+    if active_target is not None and (preload_active(active_target) or await _has_nonterminal_jobs(session, str(active_target.id))):
         raise ExecutionTargetError(
             "The active execution target has nonterminal Jobs and cannot be replaced"
         )
@@ -410,6 +422,10 @@ async def begin_activation(
         ExecutionTarget.id == identifier,
         ExecutionTarget.leased_job_id.is_(None),
         ExecutionTarget.state != "probing",
+        preload_idle_clause(),
+        ~select(ExecutionTarget.id).where(
+            ExecutionTarget.provider_metadata["preload"]["phase"].as_string().in_(("checking", "transferring", "verifying"))
+        ).exists(),
         ExecutionTarget.provider_metadata["inventory"]["status"].as_string() == "complete",
         ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
         ExecutionTarget.provider_metadata["inventory"]["running"].as_boolean().is_(True),
@@ -558,12 +574,12 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
 
     nonterminal = select(Job.id).where(
         Job.execution_target_id == ExecutionTarget.id,
-        Job.status.notin_(("completed", "failed", "cancelled", "canceled")),
+        blocking_job_clause(),
     ).exists()
     await session.execute(
         update(ExecutionTarget)
         .where(ExecutionTarget.id != identifier, ExecutionTarget.active.is_(True),
-               ExecutionTarget.leased_job_id.is_(None), ~nonterminal)
+               ExecutionTarget.leased_job_id.is_(None), preload_idle_clause(), ~nonterminal)
         .values(active=False, state="inactive", updated_at=datetime.utcnow())
     )
     if await session.scalar(select(ExecutionTarget.id).where(
@@ -617,9 +633,13 @@ async def deactivate_target(
         raise ExecutionTargetError(
             "Execution target has nonterminal Jobs and cannot be detached"
         )
-    target.active = False
-    target.state = "inactive"
-    target.updated_at = datetime.utcnow()
+    changed = await session.execute(update(ExecutionTarget).where(
+        ExecutionTarget.id == execution_target_id, ExecutionTarget.leased_job_id.is_(None),
+        ExecutionTarget.state != "probing", preload_idle_clause(),
+    ).values(active=False, state="inactive", updated_at=datetime.utcnow()).execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        await session.rollback()
+        raise ExecutionTargetError("Worker has active setup, preload, or execution; cannot detach")
     await session.commit()
     await session.refresh(target)
     return _target_response(target)

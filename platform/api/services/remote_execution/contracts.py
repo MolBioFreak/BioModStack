@@ -51,8 +51,43 @@ class ExecutionTargetSetup(StrictModel):
     updated_at: datetime | None = None
 
 
+class RemoteWorkflowActivity(StrictModel):
+    stage: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_. -]+$")
+    state: Literal["started", "completed", "failed"]
+    updated_at: datetime
+
+
+class RemoteArtifactProgress(StrictModel):
+    operation_id: str = Field(min_length=1, max_length=64)
+    job_id: str = Field(min_length=1, max_length=64)
+    phase: Literal["checking", "transferring", "verifying", "running", "completed", "failed"]
+    artifact: str | None = Field(default=None, max_length=256)
+    message: str = Field(min_length=1, max_length=500)
+    updated_at: datetime
+    activity: RemoteWorkflowActivity | None = None
+
+
+class PreloadRequest(StrictModel):
+    job_id: str = Field(min_length=1, max_length=64)
+
+
+class PreloadProgress(StrictModel):
+    operation_id: str
+    job_id: str
+    source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    source_tree: str = Field(pattern=r"^[0-9a-f]{40}$")
+    request_sha256: str = Field(pattern=SHA256_PATTERN)
+    phase: Literal["checking", "transferring", "verifying", "source_download_ready", "failed"]
+    artifact: str | None = Field(default=None, max_length=256)
+    message: str = Field(min_length=1, max_length=500)
+    started_at: datetime
+    updated_at: datetime
+
+
 class ExecutionTargetResponse(StrictModel):
     setup: ExecutionTargetSetup | None = None
+    preload: PreloadProgress | None = None
+    progress: RemoteArtifactProgress | None = None
     id: str
     provider: Literal["vast"]
     provider_instance_id: str
@@ -139,6 +174,7 @@ class RemoteExecutionEnvelope(StrictModel):
 
 
 class RemoteAttemptStatus(StrictModel):
+    activity: RemoteWorkflowActivity | None = None
     schema_name: Literal["bms.remote-attempt-status.v1"] = Field(
         default="bms.remote-attempt-status.v1", alias="schema", serialization_alias="schema"
     )

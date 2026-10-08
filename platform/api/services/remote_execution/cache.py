@@ -1,0 +1,164 @@
+"""Shared artifact cache transport for bundle launch and explicit saved-Job prewarm."""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import tempfile
+import uuid
+
+from paths import get_code_root
+from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, current_source_identity,
+                     compile_remote_dependencies, _runtime_assets, _records_for_source,
+                     _safe_extract)
+from .transport import run_remote, rsync_to_remote
+
+
+async def _noop(*args, **kwargs):
+    pass
+
+
+async def _install_helper(connection, check_fence):
+    payload = (Path(__file__).parents[2] / 'tools/bms_artifact_cache.py').read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    destination = f'{connection.remote_root}/runner/cache-{digest}.py'
+    # The helper is small: one stdin transfer, verified before atomic publication.
+    script = """import hashlib,os,pathlib,sys,tempfile
+p=pathlib.Path(sys.argv[1]);expected=sys.argv[2];data=sys.stdin.buffer.read()
+if hashlib.sha256(data).hexdigest()!=expected: raise RuntimeError('helper identity mismatch')
+q=pathlib.Path('/')
+for part in p.parent.parts[1:]:
+ q=q/part
+ if q.is_symlink(): raise RuntimeError('unsafe helper path')
+ q.mkdir(mode=0o700,exist_ok=True)
+fd,t=tempfile.mkstemp(prefix='.cache-helper-',dir=p.parent)
+try:
+ with os.fdopen(fd,'wb') as f: f.write(data);f.flush();os.fsync(f.fileno())
+ os.chmod(t,0o500);os.replace(t,p)
+finally:
+ if os.path.exists(t): os.unlink(t)
+"""
+    await check_fence()
+    await run_remote(connection, ['python3', '-c', script, destination, digest], input_bytes=payload)
+    return destination
+
+
+async def _cache_artifacts(*, connection, artifacts, operation_id, progress, check_fence,
+                           materialize=False, links=(), runtime_root=None):
+    # Caller owns operation identity and destination authority; never use public paths.
+    uuid.UUID(operation_id)
+    tool = await _install_helper(connection, check_fence)
+    root = f'{connection.remote_root}/cache/artifacts/v1'
+    async def call(request):
+        await check_fence()
+        result = await run_remote(connection, ['python3', tool, '--root', root],
+                                  input_bytes=json.dumps(request).encode(), timeout=3600)
+        return json.loads(result.stdout)
+    artifacts = tuple(artifacts)
+    states = {}
+    for offset in range(0, len(artifacts), 128):
+        batch = artifacts[offset:offset + 128]
+        for entry in batch:
+            await progress({'phase': 'checking', 'artifact': entry.remote_destination.removeprefix(connection.remote_root.rstrip('/') + '/'), 'message': 'Verifying cached artifact'})
+        response = await call({'action': 'probe', 'artifacts': [{'sha256': entry.sha256, 'size_bytes': entry.size_bytes} for entry in batch]})
+        states.update({row['sha256']: row['state'] for row in response['artifacts']})
+    receipts = []
+    for entry in artifacts:
+        identity = {'sha256': entry.sha256, 'size_bytes': entry.size_bytes}
+        # Names only from authoritative relative destinations, never source paths.
+        name = entry.remote_destination.removeprefix(connection.remote_root.rstrip('/') + '/')
+        if states[entry.sha256] != 'cache_hit':
+            incoming = f'{root}/incoming/{operation_id}/{uuid.uuid4().hex}'
+            await check_fence()
+            await run_remote(connection, ['mkdir', '-p', str(Path(incoming).parent)])
+            await progress({'phase': 'transferring', 'artifact': name, 'message': 'Transferring artifact'})
+            await check_fence()
+            await rsync_to_remote(connection, entry.source, incoming, delete=False)
+            await progress({'phase': 'verifying', 'artifact': name, 'message': 'Verifying and publishing artifact'})
+            await call({'action': 'ingest', 'artifact': identity, 'source': incoming})
+            await check_fence()
+            await run_remote(connection, ['rm', '-f', '--', incoming])
+            states[entry.sha256] = 'cache_hit'
+        receipts.append({'name': name, **identity})
+    if materialize:
+        for offset in range(0, len(artifacts), 128):
+            batch = artifacts[offset:offset + 128]
+            for entry in batch:
+                await progress({'phase': 'verifying', 'artifact': entry.remote_destination.removeprefix(connection.remote_root.rstrip('/') + '/'), 'message': 'Materializing verified artifact'})
+            await call({'action': 'materialize_many', 'destination_root': connection.remote_root,
+                        'entries': [{'artifact': {'sha256': entry.sha256, 'size_bytes': entry.size_bytes},
+                                     'destination': entry.remote_destination, 'mode': entry.mode} for entry in batch]})
+        for offset in range(0, len(links), 128):
+            await call({'action': 'materialize_links', 'destination_root': runtime_root,
+                        'entries': links[offset:offset + 128]})
+        for entry in artifacts:
+            if entry.role == 'source':
+                await call({'action': 'extract_source', 'artifact': {'sha256': entry.sha256, 'size_bytes': entry.size_bytes},
+                            'destination': str(Path(entry.remote_destination).parent)})
+    await check_fence()
+    return receipts
+
+
+async def stage_cached_bundle(*, connection, bundle, progress=_noop, check_fence=_noop):
+    """Stage eligible source/runtime leaves; executor retains inputs/support-python.
+
+    Do NOT run the old full source/runtime rsync after this call. Preserve the
+    existing support-python transfer, attempt staging, symlinks and final verify.
+    """
+    links = [{'artifact': {'sha256': record.sha256, 'size_bytes': record.size_bytes},
+              'destination': bundle.remote_runtime_dir.rstrip('/') + '/' + record.relative_path.removeprefix('runtime/'),
+              'target': record.link_target}
+             for record in bundle.envelope.files
+             if record.role == 'runtime' and record.link_target is not None
+             and record.relative_path.startswith('runtime/')
+             and record.relative_path != 'runtime/support-python'
+             and not record.relative_path.startswith('runtime/support-python/')]
+    return await _cache_artifacts(connection=connection, artifacts=cache_transfer_artifacts(bundle),
+                                  operation_id=bundle.attempt_id, progress=progress,
+                                  check_fence=check_fence, materialize=True,
+                                  links=links, runtime_root=bundle.remote_runtime_dir)
+
+
+def _prewarm_plan(job, command, source_revision, source_tree, directory):
+    repo = get_code_root().resolve()
+    if current_source_identity(repo) != (source_revision, source_tree):
+        raise ValueError('Prewarm source identity does not match current committed source')
+    archive = directory / 'source.tar'
+    with archive.open('wb') as stream:
+        subprocess.run(['git', 'archive', '--format=tar', source_revision], cwd=repo,
+                       stdout=stream, stderr=subprocess.PIPE, check=True, timeout=300)
+    source = directory / 'source'
+    _safe_extract(archive, source)
+    archive.replace(source / '.bms-source.tar')
+    _, effective = compile_remote_dependencies(str(job.model_id), str(job.mode), command)
+    entries = []
+    assets = [(source / '.bms-source.tar', 'source/.bms-source.tar')]
+    assets.extend((path, 'runtime/' + relative) for path, relative in
+                  _runtime_assets(str(job.model_id), str(job.mode), effective)
+                  if relative != 'support-python')
+    for path, prefix in assets:
+        for record in _records_for_source(path, prefix, 'source' if prefix.startswith('source/') else 'runtime'):
+            if record.link_target is not None:
+                continue
+            suffix = record.relative_path[len(prefix):].lstrip('/')
+            local = path / suffix if suffix else path
+            entries.append(CacheTransferArtifact(local, record.relative_path, record.sha256,
+                                                  record.size_bytes, record.mode,
+                                                  'source' if prefix.startswith('source/') else 'runtime'))
+    return entries
+
+
+async def prewarm_cache(*, connection, job, command, source_revision, source_tree,
+                        operation_id, progress, check_fence):
+    """Only source/runtime: no input admission, envelope creation or scientific run."""
+    await check_fence()
+    with tempfile.TemporaryDirectory(prefix='bms-prewarm-') as temporary:
+        entries = await asyncio.to_thread(_prewarm_plan, job, command, source_revision,
+                                           source_tree, Path(temporary))
+        receipts = await _cache_artifacts(connection=connection, artifacts=entries,
+                                          operation_id=operation_id, progress=progress,
+                                          check_fence=check_fence)
+    return {'source_revision': source_revision, 'source_tree': source_tree, 'artifacts': receipts,
+            'excluded': [{'name': 'runtime/support-python', 'reason': 'destination-dependent relocation at launch'}]}

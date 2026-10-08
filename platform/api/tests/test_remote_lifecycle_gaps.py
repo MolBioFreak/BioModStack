@@ -22,6 +22,8 @@ async def store(tmp_path, monkeypatch):
     async with factory() as s:
         s.add(Job(id="job", name="job", model_id="boltz2", mode="predict", params={},
                   status="running", queue_status="running", execution_target_id="target",
+                  execution_source_revision="a" * 40, execution_source_tree="b" * 40,
+                  execution_bundle_sha256="c" * 64,
                   nextflow_run_id="remote:attempt", remote_attempt_id="attempt", remote_state="running"))
         s.add(ExecutionTarget(id="target", provider="vast", provider_instance_id="1",
                              leased_job_id="job", lease_acquired_at=datetime.utcnow()))
@@ -356,13 +358,24 @@ async def test_remote_reconciler_never_writes_after_finalizer_loses_authority(st
     monkeypatch.setattr(integrity, "finalize_successful_job", finalize)
     async with store() as s:
         await ex.reconcile_remote_job(s, await s.get(Job, "job"))
+        assert (await s.get(Job, "job")).remote_state == "results_available"
+    from fastapi import BackgroundTasks
+    from services import remote_stage_receipts
+    async def proof(*_, **__):
+        pass
+    monkeypatch.setattr(ex, "_prove_pull_endpoint", proof)
+    monkeypatch.setattr(remote_stage_receipts, "apply_remote_stage_receipts", proof)
+    background = BackgroundTasks()
+    async with store() as s:
+        await ex.request_remote_result_pull(s, await s.get(Job, "job"), background)
+    await background()
     async with store() as s:
         job = await s.get(Job, "job")
         assert job.remote_state == "operator_authority"
         assert job.params == {"operator_receipt": "preserved"}
         assert job.error_message == "operator reason"
         if competing == "retry":
-            assert (await s.get(ExecutionTarget, "target")).leased_job_id == "job"
+            assert (await s.get(ExecutionTarget, "target")).leased_job_id is None
 
 
 @pytest.mark.asyncio
@@ -539,13 +552,15 @@ async def test_cancellation_intent_survives_remote_terminal(store, monkeypatch, 
             current.queue_status = "cancelling"
             current.params = {"cancellation_receipt": {"state": "requested"}}
             await other.commit()
-        return receipt(terminal)
+        return receipt(terminal).model_copy(update={"result_manifest_sha256": "a" * 64})
     monkeypatch.setattr(ex, "remote_status", status)
     async with store() as s:
         await ex.reconcile_remote_job(s, await s.get(Job, "job"))
     async with store() as s:
         job = await s.get(Job, "job")
         assert (job.status, job.queue_status) == ("cancelled", "cancelled")
+        assert job.provenance["remote_execution_receipt"]["state"] == terminal
+        assert job.provenance["remote_execution_receipt"]["result_manifest_sha256"] == "a" * 64
         assert (await s.get(ExecutionTarget, "target")).leased_job_id is None
 
 

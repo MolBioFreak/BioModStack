@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import type { Job } from '../../lib/api';
 import { isNgsJob, ngsResultHref } from '../../lib/ngsResultRouting';
 import { JobDetailsPanel } from '../JobDetailsPanel';
+import { RemoteResultsPrompt } from '../RemoteResultsPrompt';
 import { getModeDisplayName, getStageDisplayName } from '../../constants/displayNames';
 import {
     getBatchJobOutputSummary,
@@ -329,7 +330,13 @@ export function JobQueueTable({
                     </button>
                 )}
 
-                {!mdJob && job.status === 'awaiting_input' && (
+                {job.execution_target_id && job.awaiting_stage === 'remote_results' && (
+                    <div onClick={event => event.stopPropagation()}>
+                        <RemoteResultsPrompt job={job} />
+                    </div>
+                )}
+
+                {!mdJob && job.status === 'awaiting_input' && !(job.execution_target_id && job.awaiting_stage === 'remote_results') && (
                     <>
                         <button
                             onClick={(event) => {

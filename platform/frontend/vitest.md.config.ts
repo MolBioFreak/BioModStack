@@ -25,6 +25,8 @@ export default defineConfig({
             './tests/vitest/mdFailedLaunchMounted.test.tsx',
             './tests/vitest/mdQueuePanel.test.tsx',
             './tests/vitest/remoteExecutionSurfaces.test.tsx',
+            './tests/vitest/remoteResultsMounted.test.tsx',
+            './tests/vitest/remoteDiagnosticsMounted.test.tsx',
             './tests/vitest/structureReorchestrateRemoteMounted.test.tsx',
             './tests/vitest/remoteTelemetryHistory.test.tsx',
             './tests/vitest/dashboardTelemetryScopes.test.tsx',

@@ -343,7 +343,11 @@ def test_bundle_preserves_committed_source_and_relocates_managed_paths(
         assert bundle.remote_output_alias == bundle.envelope.output_directory
         assert bundle.remote_output_alias.startswith("/opt/biomodstack/attempts/")
         assert str(data_root) not in " ".join(bundle.envelope.command)
-        assert bundle.envelope.environment["API_BASE_URL"] == "https://bms.example.invalid"
+        assert "API_BASE_URL" not in bundle.envelope.environment
+        assert bundle.envelope.environment["BMS_REMOTE_EXECUTION"] == "1"
+        assert bundle.envelope.environment["BMS_REMOTE_JOB_ID"] == job.id
+        assert bundle.envelope.environment["BMS_REMOTE_ATTEMPT_ID"] == bundle.envelope.attempt_id
+        assert bundle.envelope.environment["BMS_REMOTE_OUTPUT_ROOT"] == bundle.envelope.output_directory
         assert all("token" not in key.lower() for key in bundle.envelope.environment)
         envelope_path = bundle.local_attempt_dir / "execution-envelope.json"
         assert bundle.envelope_sha256 == hashlib.sha256(envelope_path.read_bytes()).hexdigest()
@@ -458,6 +462,7 @@ async def test_stage_bundle_never_uploads_existing_local_results(
     monkeypatch.setattr(executor_module, "rsync_to_remote", fake_rsync)
     monkeypatch.setattr(executor_module, "_transfer_plan", fake_remote)
 
+    monkeypatch.setattr("services.remote_execution.cache.stage_cached_bundle", fake_remote)
     await executor_module._stage_bundle(SimpleNamespace(), bundle)  # type: ignore[arg-type]
 
     assert local_attempt in copied_sources
@@ -488,7 +493,8 @@ def test_verified_remote_generation_replaces_stale_output_atomically(
 
     assert published == output
     assert (output / "fresh.txt").read_text(encoding="utf-8") == "fresh"
-    assert not (output / "result-manifest.json").exists()
+    # Retain the transfer manifest as the durable provenance of this generation.
+    assert (output / "result-manifest.json").read_text() == "{}"
     assert not (output / "stale.txt").exists()
     assert previous is not None
     assert (previous / "stale.txt").read_text(encoding="utf-8") == "stale"

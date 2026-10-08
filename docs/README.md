@@ -25,6 +25,7 @@ under `docs/plans/` and should not be mistaken for the product truth.
 - [Electron shell README](../platform/desktop-electron/README.md)
 - [Model Integrations](ai_guidance/Model_Integrations.md)
 - [FrustraMPNN global configuration and analysis workbench specification](specs/frustrampnn-global-configuration-analysis-workbench.md)
+- [Remote worker execution, cache, and explicit result retrieval](Remote_Worker_Execution_and_Cache.md) — revision contract; see its explicit software/live acceptance boundaries.
 
 ## Active plans
 

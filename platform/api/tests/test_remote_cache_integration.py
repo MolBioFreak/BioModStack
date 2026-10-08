@@ -1,0 +1,160 @@
+"""Offline real helper protocol exercised through a local transport double."""
+import hashlib
+import io
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tarfile
+from types import SimpleNamespace
+import uuid
+
+import pytest
+
+from services.remote_execution import cache
+from services.remote_execution.bundle import CacheTransferArtifact, TransferPlan, cache_transfer_artifacts, uncached_runtime_transfers
+
+
+def record(path, data, role='runtime', link_target=None):
+    return SimpleNamespace(relative_path=path, sha256=hashlib.sha256(data).hexdigest(),
+                           size_bytes=len(data), mode=0o644, role=role, link_target=link_target)
+
+
+@pytest.fixture
+def local_transport(monkeypatch):
+    calls, uploads = [], []
+    async def run(connection, argv, input_bytes=None, **kwargs):
+        if input_bytes and argv[0] == 'python3' and '-c' not in argv:
+            calls.append(json.loads(input_bytes))
+        return subprocess.run(argv, input=input_bytes, capture_output=True, check=True)
+    async def rsync(connection, source, destination, **kwargs):
+        uploads.append(str(source))
+        shutil.copyfile(source, destination)
+    monkeypatch.setattr(cache, 'run_remote', run)
+    monkeypatch.setattr(cache, 'rsync_to_remote', rsync)
+    return calls, uploads
+
+
+def make_bundle(tmp_path):
+    source = tmp_path / 'source'
+    source.mkdir()
+    archive = source / '.bms-source.tar'
+    with tarfile.open(archive, 'w') as tar:
+        info = tarfile.TarInfo('workflow.nf')
+        info.size = len(b'workflow')
+        tar.addfile(info, io.BytesIO(b'workflow'))
+    weights = tmp_path / 'weights'
+    weights.mkdir()
+    (weights / 'model').write_bytes(b'model')
+    (weights / 'alias').symlink_to('model')
+    remote = tmp_path / 'worker'
+    runtime = str(remote / 'lineages/job/runtime')
+    files = [record('source/.bms-source.tar', archive.read_bytes(), 'source'),
+             record('source/workflow.nf', b'workflow', 'source'),
+             record('runtime/weights/model', b'model'),
+             record('runtime/weights/alias', b'model', link_target='model'),
+             record('runtime/support-python/secret', b'excluded'),
+             record('inputs/secret', b'excluded', 'input'),
+             record('results/secret', b'excluded', 'result')]
+    bundle = SimpleNamespace(attempt_id=str(uuid.uuid4()), envelope=SimpleNamespace(files=files),
+                             source_transfer=TransferPlan(source, str(remote / 'revisions/tree')),
+                             remote_source_dir=str(remote / 'revisions/tree'), remote_runtime_dir=runtime,
+                             runtime_transfers=(TransferPlan(weights, runtime + '/weights'),
+                                                TransferPlan(tmp_path / 'support', runtime + '/support-python')))
+    return SimpleNamespace(remote_root=str(remote)), bundle
+
+
+@pytest.mark.asyncio
+async def test_prewarm_launch_share_verified_cache_and_links(tmp_path, monkeypatch, local_transport):
+    connection, bundle = make_bundle(tmp_path)
+    artifacts = cache_transfer_artifacts(bundle)
+    assert len(artifacts) == 2
+    assert [p.remote_destination for p in uncached_runtime_transfers(bundle)] == [bundle.remote_runtime_dir + '/support-python']
+    monkeypatch.setattr(cache, '_prewarm_plan', lambda *args: artifacts)
+    calls, uploads = local_transport
+    await cache.prewarm_cache(connection=connection, job=None, command=[], source_revision='a'*40,
+                              source_tree='b'*40, operation_id=str(uuid.uuid4()),
+                              progress=cache._noop, check_fence=cache._noop)
+    assert len(uploads) == 2
+    assert not Path(bundle.remote_runtime_dir).exists()
+    await cache.stage_cached_bundle(connection=connection, bundle=bundle)
+    assert len(uploads) == 2
+    assert (Path(bundle.remote_source_dir) / 'workflow.nf').read_bytes() == b'workflow'
+    model = Path(bundle.remote_runtime_dir) / 'weights/model'
+    alias = model.with_name('alias')
+    assert alias.is_symlink() and alias.read_bytes() == b'model'
+    alias.write_bytes(b'job mutation')
+    await cache.stage_cached_bundle(connection=connection, bundle=bundle)
+    assert model.read_bytes() == b'model' and len(uploads) == 2
+    # Corruption forces a verified replacement, not blind reuse.
+    item = artifacts[1]
+    obj = Path(connection.remote_root) / 'cache/artifacts/v1/objects/sha256' / item.sha256[:2] / item.sha256
+    obj.chmod(0o600)
+    obj.write_bytes(b'xxxxx')
+    await cache.stage_cached_bundle(connection=connection, bundle=bundle)
+    assert len(uploads) == 3 and model.read_bytes() == b'model'
+    assert not any('secret' in str(request) for request in calls)
+
+
+@pytest.mark.asyncio
+async def test_warm_probe_and_materialize_use_bounded_batches(tmp_path, monkeypatch):
+    calls = []
+    async def run(connection, argv, input_bytes=None, **kwargs):
+        if '-c' in argv:
+            return SimpleNamespace(stdout=b'')
+        request = json.loads(input_bytes)
+        calls.append(request)
+        return SimpleNamespace(stdout=json.dumps({'artifacts': [dict(a, state='cache_hit') for a in request.get('artifacts', [])]}))
+    async def no_upload(*args, **kwargs):
+        pytest.fail('warm artifacts must not upload')
+    monkeypatch.setattr(cache, 'run_remote', run)
+    monkeypatch.setattr(cache, 'rsync_to_remote', no_upload)
+    artifacts = [CacheTransferArtifact(tmp_path / str(i), '/worker/runtime/' + str(i),
+                                       hashlib.sha256(str(i).encode()).hexdigest(), 1, 0o644, 'runtime') for i in range(257)]
+    await cache._cache_artifacts(connection=SimpleNamespace(remote_root='/worker'), artifacts=artifacts,
+                                 operation_id=str(uuid.uuid4()), progress=cache._noop,
+                                 check_fence=cache._noop, materialize=True)
+    assert [len(r['artifacts']) for r in calls if r['action'] == 'probe'] == [128, 128, 1]
+    assert [len(r['entries']) for r in calls if r['action'] == 'materialize_many'] == [128, 128, 1]
+    assert len(calls) == 6
+
+
+@pytest.mark.parametrize('identity_matches', [True, False])
+def test_prewarm_plan_pins_source_and_excludes_support(tmp_path, monkeypatch, identity_matches):
+    connection, bundle = make_bundle(tmp_path)
+    revision, tree = 'a' * 40, 'b' * 40
+    monkeypatch.setattr(cache, 'get_code_root', lambda: tmp_path)
+    monkeypatch.setattr(cache, 'current_source_identity', lambda repo: (revision, tree if identity_matches else 'c' * 40))
+    monkeypatch.setattr(cache, '_runtime_assets', lambda *args: [(tmp_path / 'weights', 'weights'),
+                                                              (tmp_path / 'missing-support', 'support-python')])
+    calls = []
+    def archive(argv, **kwargs):
+        calls.append(argv)
+        kwargs['stdout'].write((bundle.source_transfer.source / '.bms-source.tar').read_bytes())
+    monkeypatch.setattr(cache.subprocess, 'run', archive)
+    directory = tmp_path / 'prewarm'
+    directory.mkdir()
+    job = SimpleNamespace(model_id='example', mode='predict')
+    if not identity_matches:
+        with pytest.raises(ValueError, match='source identity'):
+            cache._prewarm_plan(job, [], revision, tree, directory)
+        assert calls == []
+        return
+    planned = cache._prewarm_plan(job, [], revision, tree, directory)
+    assert calls == [['git', 'archive', '--format=tar', revision]]
+    launched = cache_transfer_artifacts(bundle)
+    assert {(a.sha256, a.size_bytes) for a in planned} == {(a.sha256, a.size_bytes) for a in launched}
+    assert all('support-python' not in a.remote_destination for a in planned)
+
+
+@pytest.mark.asyncio
+async def test_fence_prevents_any_transport(monkeypatch):
+    async def fenced():
+        raise RuntimeError('cancelled')
+    async def forbidden(*args, **kwargs):
+        pytest.fail('transport after cancellation')
+    monkeypatch.setattr(cache, 'run_remote', forbidden)
+    with pytest.raises(RuntimeError, match='cancelled'):
+        await cache._cache_artifacts(connection=SimpleNamespace(remote_root='/worker'), artifacts=[],
+                                     operation_id=str(uuid.uuid4()), progress=cache._noop, check_fence=fenced)

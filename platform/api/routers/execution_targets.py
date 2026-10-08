@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_session
 from services.remote_execution.contracts import (
     ExecutionTargetActivateRequest,
+    PreloadRequest,
     ExecutionTargetInventoryResponse,
     ExecutionTargetResponse,
 )
@@ -64,6 +65,22 @@ async def deactivate_execution_target(
         return await deactivate_target(session, execution_target_id)
     except ExecutionTargetError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{execution_target_id}/preload", response_model=ExecutionTargetResponse, status_code=202)
+async def preload_execution_target(
+    execution_target_id: str,
+    request: PreloadRequest,
+    http_request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    controller = getattr(http_request.app.state, "preload_controller", None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail="Preload service is unavailable")
+    try:
+        return await controller.start(session, execution_target_id, request)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/active/telemetry")

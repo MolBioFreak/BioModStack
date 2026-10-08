@@ -122,6 +122,9 @@ async def lifespan(app: FastAPI):
     # Initialize independently owned core, global experiment, MolBio, and MolBio/NGS state stores.
     await init_db()
     from services.remote_execution.targets import AttachmentController, invalidate_vast_inventory, run_vast_inventory_refresh
+    from services.remote_execution.preloading import PreloadController
+    app.state.preload_controller = PreloadController(async_session)
+    await app.state.preload_controller.recover()
     app.state.attachment_controller = AttachmentController(async_session)
     await app.state.attachment_controller.recover()
     async with async_session() as inventory_session:
@@ -247,6 +250,7 @@ async def lifespan(app: FastAPI):
     # Cleanup on shutdown
     remote_telemetry_stop.set()
     await remote_telemetry_task
+    await app.state.preload_controller.close()
     await app.state.attachment_controller.close()
     vast_inventory_stop.set()
     await vast_inventory_task

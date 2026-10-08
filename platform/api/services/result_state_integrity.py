@@ -351,15 +351,19 @@ async def finalize_successful_job(
 ) -> FinalizationResult:
     """Ingest, validate, and commit results before exposing terminal completion."""
     job_id = str(job.id)
+    manual_remote_pull = bool(job.execution_target_id and job.remote_state == "returning")
     remote_authority = (
         [Job.execution_target_id == job.execution_target_id,
          Job.remote_attempt_id == job.remote_attempt_id,
          Job.nextflow_run_id == job.nextflow_run_id,
          Job.remote_state == job.remote_state,
-         select(ExecutionTarget.id).where(
+         Job.execution_source_revision == job.execution_source_revision,
+         Job.execution_source_tree == job.execution_source_tree,
+         Job.execution_bundle_sha256 == job.execution_bundle_sha256,
+         *([] if job.remote_state == "returning" else [select(ExecutionTarget.id).where(
              ExecutionTarget.id == job.execution_target_id,
              ExecutionTarget.leased_job_id == job_id,
-         ).exists()]
+         ).exists()])]
         if job.execution_target_id else []
     )
     if ingest_fn is None:
@@ -454,6 +458,10 @@ async def finalize_successful_job(
             idempotent_prior_results = int(ingested_count or 0) <= 0
     except Exception as exc:
         await session.rollback()
+        if manual_remote_pull:
+            # Explicit-pull controller restores its durable retry gate via attempt CAS.
+            # Do not create failed terminal history or terminalize typed requests.
+            raise
         job = await session.get(Job, job_id)
         if job is None:
             raise RuntimeError(f"job disappeared during result finalization: {job_id}") from exc
