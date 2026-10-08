@@ -51,6 +51,11 @@ from services.restriction_digest import (
     DigestSimulation,
     simulate_digest,
 )
+from services.restriction_digest_save_receipt import (
+    canonical_save_request_receipt,
+    load_canonical_save_request_receipt,
+    save_request_fingerprint,
+)
 
 from services.restriction_catalog import (
     CURSOR_MAX_LENGTH,
@@ -1022,12 +1027,12 @@ async def simulate_restriction_digest(
     return Response(content=simulation.canonical_bytes(), media_type="application/json")
 
 
+def _save_receipt(payload: DigestSaveRequest) -> str:
+    return canonical_save_request_receipt(payload.model_dump(mode="json", by_alias=True))
+
+
 def _save_fingerprint(payload: DigestSaveRequest) -> str:
-    normalized = payload.model_dump(mode="json", by_alias=True)
-    normalized["enzyme_ids"] = list(payload.enzyme_ids)
-    if normalized.get("fragment_name_prefix") is not None:
-        normalized["fragment_name_prefix"] = normalized["fragment_name_prefix"].strip()
-    return hashlib.sha256(rfc8785.dumps(normalized)).hexdigest()
+    return save_request_fingerprint(_save_receipt(payload))
 
 
 def _digest_persistence_stage_hook(_stage: str) -> None:
@@ -1088,6 +1093,9 @@ async def _load_saved_digest(
             operation.parameters if operation is not None and isinstance(operation.parameters, dict)
             else {}
         )
+        save_receipt = load_canonical_save_request_receipt(
+            operation_parameters.get("save_request_receipt")
+        )
         fragment_name_prefix = operation_parameters.get("fragment_name_prefix")
         if fragment_name_prefix is not None and (
             not isinstance(fragment_name_prefix, str) or not fragment_name_prefix.strip()
@@ -1102,6 +1110,7 @@ async def _load_saved_digest(
             "persistence_mode": operation_parameters.get("persistence_mode"),
             "fragment_name_prefix": fragment_name_prefix,
             "simulation_sha256": response.simulation.simulation_sha256,
+            "save_request_receipt": operation_parameters.get("save_request_receipt"),
         }
         expected_operation_provenance = {
             "source_revision_id": response.source_revision_id,
@@ -1142,7 +1151,19 @@ async def _load_saved_digest(
             or not isinstance(operation.idempotency_key, str)
             or not operation.idempotency_key.strip()
             or not isinstance(operation.request_fingerprint, str)
-            or re.fullmatch(r"[0-9a-f]{64}", operation.request_fingerprint) is None
+            or operation.request_fingerprint != save_request_fingerprint(save_receipt)
+            or save_receipt.source.sequence_id != response.simulation.source.sequence_id
+            or save_receipt.source.revision_id != response.source_revision_id
+            or save_receipt.source.expected_content_sha256
+            != response.simulation.source.content_sha256
+            or save_receipt.source.topology not in {None, response.simulation.source.topology}
+            or save_receipt.catalog.catalog_id != response.catalog_id
+            or save_receipt.catalog.expected_catalog_sha256 != response.catalog_sha256
+            or save_receipt.enzyme_ids != tuple(response.simulation.selected_enzyme_ids)
+            or save_receipt.simulation_sha256 != response.result_sha256
+            or save_receipt.idempotency_key != operation.idempotency_key
+            or save_receipt.persistence_mode != persistence_mode
+            or save_receipt.fragment_name_prefix != fragment_name_prefix
             or source_revision is None
             or source_document is None
             or str(source_revision.document_id) != response.simulation.source.sequence_id
@@ -1274,7 +1295,8 @@ async def save_restriction_digest(
     if simulation.simulation_sha256 != payload.simulation_sha256:
         raise _error(409, "simulation_digest_mismatch", "digest simulation digest does not match")
 
-    fingerprint = _save_fingerprint(payload)
+    save_receipt = _save_receipt(payload)
+    fingerprint = save_request_fingerprint(save_receipt)
     existing = (
         await molbio_session.execute(
             select(MolecularOperation).where(
@@ -1309,6 +1331,7 @@ async def save_restriction_digest(
             "persistence_mode": payload.persistence_mode,
             "fragment_name_prefix": normalized_fragment_name_prefix,
             "simulation_sha256": payload.simulation_sha256,
+            "save_request_receipt": save_receipt,
         },
         warnings=list(simulation.warnings),
         provenance={

@@ -20,6 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from molbio_models import IMMUTABLE_TABLES, MolBioBase, MolecularImportBatch, ProjectPlasmidMetadata
 from paths import get_data_root
 from services.ngs_molbio_quiescence import NgsMolBioQuiescedSession
+from services.sqlite_schema_attestation import sqlite_master_sql_identity
 
 
 MOLBIO_BUSY_TIMEOUT_MS = 30_000
@@ -42,9 +43,9 @@ def _immutable_trigger_sql(
 
 
 def _normalize_sql(sql: str) -> str:
-    """Normalize insignificant formatting while retaining every SQL token."""
+    """Retain exact SQL identity with only SQLite storage-edge normalization."""
 
-    return " ".join(sql.strip().rstrip(";").split()).casefold()
+    return sqlite_master_sql_identity(sql)
 
 
 def _expected_immutable_triggers() -> dict[str, tuple[str, str]]:
@@ -398,6 +399,9 @@ def create_molbio_engine(database_url: str | None = None) -> AsyncEngine:
             restriction_digest_json_equal,
             validate_restriction_digest_result,
         )
+        from services.restriction_digest_save_receipt import (
+            validate_persisted_save_request_receipt,
+        )
 
         dbapi_connection.create_function(
             "bms_restriction_digest_result_valid", 7,
@@ -406,6 +410,10 @@ def create_molbio_engine(database_url: str | None = None) -> AsyncEngine:
         dbapi_connection.create_function(
             "bms_restriction_digest_json_equal", 2,
             restriction_digest_json_equal, deterministic=True,
+        )
+        dbapi_connection.create_function(
+            "bms_restriction_digest_save_receipt_valid", 3,
+            validate_persisted_save_request_receipt, deterministic=True,
         )
         cursor = dbapi_connection.cursor()
         try:
