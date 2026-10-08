@@ -25,7 +25,7 @@ include { RunMPNN as ProteinMPNNSeq } from '../modules/proteinmpnn'
 include { ANTIBERTY_SCORE ; ANTIBERTY_FILTER } from '../modules/antiberty'
 include { THERMOMPNN } from '../modules/thermompnn'
 include { IGGM_AFFINITY_MATURATION } from '../modules/iggm'
-include { RunBoltz } from '../modules/boltz'
+include { PrepBoltz ; RunBoltz } from '../modules/boltz'
 include { ANARCI } from '../modules/utils/anarci'
 
 workflow ANTIBODY_DENOVO {
@@ -117,14 +117,22 @@ workflow ANTIBODY_DENOVO {
     log.info("Step 3: Validating structures with Boltz2...")
 
     if (params.run_structure_validation != false) {
-        // Convert sequences to Boltz input format
-        boltz_input = all_sequences.map { meta, seq_file ->
-            // Boltz expects sequence + optional structure context
-            [meta, seq_file, target_pdb_ch.first()]
-        }
-
-        RunBoltz(boltz_input)
-        validated_structures = RunBoltz.out.structures
+        // PrepBoltz expects path(pdb_files) - collect all PDBs
+        // Extract PDB files from sequences (FAMPNN/AntiFold output PDBs)
+        pdb_files_for_boltz = all_sequences.map { meta, files -> files }
+            .collect()
+        
+        // Generate YAML files for Boltz2
+        PrepBoltz(pdb_files_for_boltz)
+        
+        // Batch YAMLs for RunBoltz (expects tuple(batch_id, yamls))
+        boltz_batched = PrepBoltz.out.yamls
+            .flatten()
+            .collate(params.boltz_batch_size ?: 10)
+            .map { yamls -> [1, yamls] }  // batch_id, yamls
+        
+        RunBoltz(boltz_batched)
+        validated_structures = RunBoltz.out.pdbs_jsons
 
         // Filter by ipTM and pLDDT thresholds
         validated_structures = validated_structures.filter { meta, pdb ->
