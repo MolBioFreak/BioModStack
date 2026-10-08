@@ -360,7 +360,9 @@ def test_modern_profiles_remain_nonselectable_candidates_when_assets_are_absent(
     assert modern["states"]["runtime_validated"] is False
     assert modern["states"]["scientifically_validated"] is False
     assert modern["states"]["selectable"] is False
-    assert modern["launch_constraints"] is None
+    assert modern["launch_constraints"]["structure_sha256"] == (
+        "c75d7a689617248cdd92dc6633531d2506fb9bef1e6e21e26c8f579ae6955abb"
+    )
     assert "candidate" in modern["availability_explanation"].lower()
 
 
