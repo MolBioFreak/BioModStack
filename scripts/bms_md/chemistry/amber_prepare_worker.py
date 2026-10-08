@@ -100,6 +100,29 @@ def _composition(structure: Any) -> tuple[int, int, float]:
     return waters, ions, charge
 
 
+def _install_position_restraints(structure: Any, topology_path: Path) -> int:
+    restrained = [
+        atom.idx + 1
+        for atom in structure.atoms
+        if atom.residue.name not in WATER_NAMES | ION_NAMES and int(atom.atomic_number or 0) > 1
+    ]
+    if not restrained:
+        raise RuntimeError("prepared solute has no heavy atoms for position restraints")
+    Path("posre.itp").write_text(
+        "[ position_restraints ]\n; atom  type      fx      fy      fz\n"
+        + "".join(f"{index:8d}     1  1000.0  1000.0  1000.0\n" for index in restrained),
+        encoding="utf-8",
+    )
+    lines = topology_path.read_text(encoding="utf-8").splitlines()
+    molecule_headers = [index for index, line in enumerate(lines) if line.strip() == "[ moleculetype ]"]
+    if len(molecule_headers) < 2:
+        raise RuntimeError("prepared topology does not expose a bounded solute molecule type")
+    insertion = molecule_headers[1]
+    include = ["#ifdef POSRES", '#include "posre.itp"', "#endif", ""]
+    topology_path.write_text("\n".join(lines[:insertion] + include + lines[insertion:]) + "\n", encoding="utf-8")
+    return len(restrained)
+
+
 def _validate_engine_consumption() -> dict[str, Any]:
     from openmm.app import AmberInpcrdFile, AmberPrmtopFile, HBonds, PME
     from openmm import unit
@@ -117,7 +140,7 @@ def _validate_engine_consumption() -> dict[str, Any]:
 
     mdp = Path("bundle-validation.mdp")
     mdp.write_text(
-        "integrator = steep\nnsteps = 500\nemtol = 1000.0\ncutoff-scheme = Verlet\n"
+        "integrator = steep\nnsteps = 500\nemtol = 1000.0\ndefine = -DPOSRES\ncutoff-scheme = Verlet\n"
         "nstlist = 20\nrlist = 1.0\ncoulombtype = PME\nrcoulomb = 1.0\n"
         "vdwtype = Cut-off\nrvdw = 1.0\nconstraints = none\npbc = xyz\n",
         encoding="utf-8",
@@ -168,6 +191,7 @@ def prepare(request_path: Path) -> dict[str, Any]:
     structure = parmed.load_file("system.prmtop", "system.inpcrd")
     structure.save("system.top", overwrite=True)
     structure.save("system.gro", overwrite=True)
+    restrained_heavy_atoms = _install_position_restraints(structure, Path("system.top"))
     waters, ions, net_charge = _composition(structure)
     realized_salt = (salt_pairs / waters * 55.5) if waters else 0.0
     engine_consumption = _validate_engine_consumption()
@@ -184,6 +208,7 @@ def prepare(request_path: Path) -> dict[str, Any]:
         "neutralize": bool(request["neutralize"]),
         "added_salt_pairs": salt_pairs,
         "disulfide_bond_count": len(disulfide_bonds),
+        "restrained_heavy_atom_count": restrained_heavy_atoms,
         "atom_count": len(structure.atoms),
         "residue_count": len(structure.residues),
         "water_count": waters,
