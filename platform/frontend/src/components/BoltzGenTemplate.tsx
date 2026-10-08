@@ -859,6 +859,17 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                                             structureUrl={viewerMode === 'target' ? pdbBlobUrl! : frameworkPdbUrl!}
                                             height={350}
                                             selectedResidues={viewerMode === 'target' ? selectedEpitopeResidues : new Set<string>()}
+                                            onResidueClick={viewerMode === 'target' ? (residueKey) => {
+                                                setSelectedEpitopeResidues(prev => {
+                                                    const next = new Set(prev);
+                                                    if (next.has(residueKey)) {
+                                                        next.delete(residueKey);
+                                                    } else {
+                                                        next.add(residueKey);
+                                                    }
+                                                    return next;
+                                                });
+                                            } : undefined}
                                         />
                                     </div>
                                 )}

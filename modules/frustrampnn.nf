@@ -15,7 +15,7 @@ process FrustrampnnQC {
     
     script:
     """
-    frustrampnn predict --pdb ${pdb} --output ${meta.id}_frustration.csv
+    frustrampnn predict --pdb ${pdb} --checkpoint /opt/frustrampnn_weights/megascale.ckpt --output ${meta.id}_frustration.csv
     python3 -c "
 import pandas as pd, json
 df = pd.read_csv('${meta.id}_frustration.csv')

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { submitJob } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
@@ -33,6 +33,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [boltzNumSamples, setBoltzNumSamples] = useState(initialValues?.boltz_num_samples ?? 1);
     const [boltzUsePotentials, setBoltzUsePotentials] = useState(initialValues?.boltz_use_potentials ?? false);
     const [boltzMethod, setBoltzMethod] = useState(initialValues?.boltz_method || '');
+    const [boltzMaxParallelSamples, setBoltzMaxParallelSamples] = useState(initialValues?.boltz_max_parallel_samples ?? 1);
 
     // RF3 parameters
     const [rf3UseMsa, setRf3UseMsa] = useState(initialValues?.rf3_use_msa ?? true);
@@ -42,11 +43,31 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     // Parallel jobs
     const [numParallelJobs, setNumParallelJobs] = useState(initialValues?.num_parallel_jobs ?? 1);
 
+    // Error handling
+    const [allowRetries, setAllowRetries] = useState(initialValues?.allow_retries ?? false);
+
     // Complex components (ligands, DNA, RNA)
-    const [ligands, setLigands] = useState<LigandEntry[]>([]);
+    // Initialize from cloned job data if present (complex_components array)
+    const [ligands, setLigands] = useState<LigandEntry[]>(() => {
+        const components = initialValues?.complex_components;
+        if (!components || !Array.isArray(components) || components.length <= 1) {
+            return [];
+        }
+        // First component is the primary protein (goes into sequence)
+        // Rest are ligands/DNA/RNA
+        return components.slice(1).map((c: any) => ({
+            id: c.id || '',
+            type: c.type || 'protein',
+            sequence: c.sequence,
+            ccd: c.ccd,
+            smiles: c.smiles,
+            name: c.name || `Chain ${c.id}`
+        }));
+    });
 
     const [showInputModal, setShowInputModal] = useState(false);
     const [inputModalTab, setInputModalTab] = useState<'library' | 'pdb'>('library');
+    const importTargetRef = useRef<'primary' | 'additional'>('primary');  // Use ref to avoid stale closure
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
     const [selectedChainIndices, setSelectedChainIndices] = useState<Set<number>>(new Set());
     const [sequenceToSave, setSequenceToSave] = useState<{ sequence: string; name: string } | null>(null);
@@ -79,6 +100,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             params.boltz_sampling_steps = boltzSamplingSteps;
             params.boltz_num_samples = boltzNumSamples;
             params.boltz_use_potentials = boltzUsePotentials;
+            params.boltz_max_parallel_samples = boltzMaxParallelSamples;
             if (boltzMethod) params.boltz_method = boltzMethod;
         }
 
@@ -106,7 +128,8 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             params: {
                 ...params,
                 pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
-                lock_gpus: lockGpus && pinnedGpus.length > 0
+                lock_gpus: lockGpus && pinnedGpus.length > 0,
+                allow_retries: allowRetries
             },
             pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null
         });
@@ -316,6 +339,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                         <div className="flex gap-2 items-center">
                             <button
                                 onClick={() => {
+                                    importTargetRef.current = 'primary';
                                     setInputModalTab('library');
                                     setShowInputModal(true);
                                 }}
@@ -442,6 +466,18 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 />
                             </div>
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Max Parallel</label>
+                                <input
+                                    type="number"
+                                    value={boltzMaxParallelSamples}
+                                    onChange={(e) => setBoltzMaxParallelSamples(Math.max(1, Math.min(boltzNumSamples, parseInt(e.target.value) || 1)))}
+                                    min={1}
+                                    max={boltzNumSamples}
+                                    title="Max samples to run in parallel (1 = serial, lower VRAM usage)"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                />
+                            </div>
                         </div>
 
                         <div>
@@ -507,10 +543,32 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                 )}
 
                 {/* Complex Components (Ligands, DNA, RNA) */}
-                <LigandSelector ligands={ligands} setLigands={setLigands} showCustomSmiles={true} />
+                <LigandSelector
+                    ligands={ligands}
+                    setLigands={setLigands}
+                    showCustomSmiles={true}
+                    onImportProtein={() => {
+                        importTargetRef.current = 'additional';
+                        setInputModalTab('library');
+                        setShowInputModal(true);
+                    }}
+                />
 
                 {/* Submit */}
-                <div className="flex justify-end pt-6 border-t border-slate-800">
+                <div className="flex justify-between items-center pt-6 border-t border-slate-800">
+                    {/* Left side: Allow Retries checkbox */}
+                    <label className="flex items-center gap-2 cursor-pointer text-slate-400 hover:text-slate-300">
+                        <input
+                            type="checkbox"
+                            checked={allowRetries}
+                            onChange={e => setAllowRetries(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                        />
+                        <span className="text-sm">Allow Retries</span>
+                        <span className="text-xs text-slate-500">(retry OOM errors)</span>
+                    </label>
+
+                    {/* Right side: Submit button */}
                     <button
                         onClick={handleSubmit}
                         disabled={!sequence.trim() || submitMutation.isPending}
@@ -559,8 +617,19 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                 <div className="absolute inset-0 p-5 overflow-auto">
                                     <SequenceManager
                                         onSelect={(seq) => {
-                                            setSequence(seq.sequence);
-                                            setSequenceName(seq.name);
+                                            if (importTargetRef.current === 'additional') {
+                                                // Add as additional protein chain
+                                                setLigands(prev => [...prev, {
+                                                    id: String.fromCharCode(66 + prev.length), // B, C, D...
+                                                    type: 'protein',
+                                                    sequence: seq.sequence,
+                                                    name: seq.name || `Protein Chain (${seq.sequence.length}aa)`
+                                                }]);
+                                            } else {
+                                                // Set as primary sequence
+                                                setSequence(seq.sequence);
+                                                setSequenceName(seq.name);
+                                            }
                                             setShowInputModal(false);
                                         }}
                                         initialSequence={sequenceToSave?.sequence}

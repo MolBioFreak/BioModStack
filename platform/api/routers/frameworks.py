@@ -2,9 +2,10 @@
 Frameworks API Router - SAbDab integration and framework library management.
 
 Provides endpoints for:
-- Searching SAbDab/NanoSAbDab for VHH frameworks
+- Searching local SAbDab VHH database (SQLite-backed, offline-capable)
 - Downloading and caching framework PDBs
 - Managing local framework library
+- Database statistics and filter options
 """
 
 from fastapi import APIRouter, HTTPException, Query
@@ -13,12 +14,14 @@ from pydantic import BaseModel
 from pathlib import Path
 import logging
 
+# Local database for search (offline-capable, fast)
+from services.sabdab_db import get_sabdab_db, VHHStructure
+
+# Remote client for PDB downloads (still needs network)
 from services.sabdab_client import (
-    search_nanobodies,
     download_pdb,
     get_structure_summary,
     convert_sabdab_to_hlt,
-    SAbDabEntry,
     CACHE_DIR
 )
 
@@ -28,14 +31,22 @@ router = APIRouter(prefix="/api/frameworks", tags=["frameworks"])
 
 # Response models
 class SAbDabSearchResult(BaseModel):
+    """Search result with expanded fields from local database."""
     pdb_code: str
     h_chain: str
-    l_chain: Optional[str]
+    model: int = 0
     resolution: Optional[float]
-    method: str
-    species: Optional[str]
+    method: Optional[str]
+    species: Optional[str]  # heavy_species
+    germline: Optional[str]  # heavy_subclass
     cdr_h3_length: Optional[int]
+    cdr_h3_sequence: Optional[str]
     antigen_type: Optional[str]
+    antigen_name: Optional[str]
+    affinity: Optional[float]
+    date: Optional[str]
+    engineered: bool = False
+    has_antigen: bool = False
 
 
 class FrameworkDownloadResponse(BaseModel):
@@ -44,6 +55,12 @@ class FrameworkDownloadResponse(BaseModel):
     cached: bool
     file_path: Optional[str]
     pdb_content: Optional[str]  # Only included if include_content=True
+    # Chain metadata from SAbDab DB for post-download selection
+    h_chain: Optional[str] = None      # Antibody heavy chain ID
+    l_chain: Optional[str] = None      # Antibody light chain ID (None for VHH)
+    antigen_chain: Optional[str] = None  # Antigen chain ID(s) if bound
+    antigen_name: Optional[str] = None   # Antigen name for display
+
 
 
 class CachedFramework(BaseModel):
@@ -59,53 +76,179 @@ class FrameworkLibraryResponse(BaseModel):
     cache_dir: str
 
 
-# Endpoints
-@router.get("/sabdab/search", response_model=List[SAbDabSearchResult])
+class DatabaseStatsResponse(BaseModel):
+    total_entries: int
+    entries_with_cdr_h3: int
+    last_sync: Optional[str]
+    species_distribution: dict
+    db_path: str
+    db_size_mb: float
+
+
+class FilterOptionsResponse(BaseModel):
+    species: List[str]
+    methods: List[str]
+    antigen_types: List[str]
+    germlines: List[str]
+    cdr_h3_length_range: List[int]
+
+
+class SearchResponse(BaseModel):
+    """Paginated search response."""
+    results: List[SAbDabSearchResult]
+    total: int
+    limit: int
+    offset: int
+
+
+class CDRAnnotationResponse(BaseModel):
+    """CDR annotation results from ANARCII for a framework PDB."""
+    pdb_code: str
+    antibody_type: str  # "VHH", "Fab", "scFv", etc.
+    # CDR sequences
+    cdr_h1: Optional[str] = None
+    cdr_h2: Optional[str] = None
+    cdr_h3: Optional[str] = None
+    cdr_l1: Optional[str] = None
+    cdr_l2: Optional[str] = None
+    cdr_l3: Optional[str] = None
+    # CDR IMGT position ranges (start, end)
+    cdr_h1_range: Optional[List[int]] = None
+    cdr_h2_range: Optional[List[int]] = None
+    cdr_h3_range: Optional[List[int]] = None
+    cdr_l1_range: Optional[List[int]] = None
+    cdr_l2_range: Optional[List[int]] = None
+    cdr_l3_range: Optional[List[int]] = None
+
+
+# ============================================================================
+# Search Endpoints (Local Database)
+# ============================================================================
+
+@router.get("/sabdab/search", response_model=SearchResponse)
 async def search_sabdab_frameworks(
     species: Optional[str] = Query(None, description="Filter by species (e.g., 'camel', 'llama')"),
-    resolution_max: float = Query(2.5, description="Maximum resolution in Angstroms"),
+    resolution_min: Optional[float] = Query(None, description="Minimum resolution in Angstroms"),
+    resolution_max: Optional[float] = Query(2.5, description="Maximum resolution in Angstroms"),
     cdr_h3_min: Optional[int] = Query(None, description="Minimum CDR-H3 length"),
     cdr_h3_max: Optional[int] = Query(None, description="Maximum CDR-H3 length"),
     antigen_type: Optional[str] = Query(None, description="Antigen type filter"),
+    has_antigen: Optional[bool] = Query(None, description="True=bound, False=unbound, None=all"),
+    methods: Optional[str] = Query(None, description="Comma-separated methods (e.g., 'X-RAY DIFFRACTION,CRYO-EM')"),
+    germlines: Optional[str] = Query(None, description="Comma-separated germlines (e.g., 'IGHV3,IGHV1')"),
+    has_affinity: Optional[bool] = Query(None, description="True=with affinity data only"),
+    include_scfv: bool = Query(False, description="Include scFv structures (default: VHH only)"),
+    sort_by: str = Query("resolution", description="Sort by: 'resolution', 'cdr_h3_length', 'pdb_code', 'date'"),
+    sort_desc: bool = Query(False, description="Sort descending"),
     limit: int = Query(50, ge=1, le=500, description="Maximum results"),
-    sort_by: Optional[str] = Query(None, description="Sort by: 'resolution', 'cdr_h3_length', 'species', 'pdb_code'"),
-    sort_desc: bool = Query(False, description="Sort descending")
+    offset: int = Query(0, ge=0, description="Pagination offset")
 ):
     """
-    Search NanoSAbDab for VHH nanobody structures.
+    Search local SAbDab VHH database.
     
-    Rate-limited to 1 request every 2 seconds to respect SAbDab servers.
-    Results are filtered by resolution and CDR-H3 length, then sorted.
+    Uses offline SQLite mirror for fast, reliable searches.
+    No rate limiting - queries complete in milliseconds.
     """
     try:
-        entries = await search_nanobodies(
+        db = get_sabdab_db()
+        
+        # Parse comma-separated lists
+        methods_list = [m.strip() for m in methods.split(",")] if methods else None
+        germlines_list = [g.strip() for g in germlines.split(",")] if germlines else None
+        
+        # Execute search
+        entries = db.search(
             species=species,
+            resolution_min=resolution_min,
             resolution_max=resolution_max,
             cdr_h3_min=cdr_h3_min,
             cdr_h3_max=cdr_h3_max,
             antigen_type=antigen_type,
-            limit=limit,
+            has_antigen=has_antigen,
+            methods=methods_list,
+            germlines=germlines_list,
+            has_affinity=has_affinity,
+            include_scfv=include_scfv,
             sort_by=sort_by,
-            sort_desc=sort_desc
+            sort_desc=sort_desc,
+            limit=limit,
+            offset=offset
         )
         
-        return [
+        # Get total count for pagination
+        total = db.count(
+            species=species,
+            resolution_min=resolution_min,
+            resolution_max=resolution_max,
+            cdr_h3_min=cdr_h3_min,
+            cdr_h3_max=cdr_h3_max,
+            antigen_type=antigen_type,
+            has_antigen=has_antigen,
+            methods=methods_list,
+            germlines=germlines_list,
+            has_affinity=has_affinity,
+            include_scfv=include_scfv
+        )
+        
+        results = [
             SAbDabSearchResult(
-                pdb_code=e.pdb_code,
+                pdb_code=e.pdb_code.upper(),
                 h_chain=e.h_chain,
-                l_chain=e.l_chain,
+                model=e.model,
                 resolution=e.resolution,
                 method=e.method,
-                species=e.species,
+                species=e.heavy_species,
+                germline=e.heavy_subclass,
                 cdr_h3_length=e.cdr_h3_length,
-                antigen_type=e.antigen_type
+                cdr_h3_sequence=e.cdr_h3_sequence,
+                antigen_type=e.antigen_type,
+                antigen_name=e.antigen_name,
+                affinity=e.affinity,
+                date=e.date,
+                engineered=e.engineered,
+                has_antigen=e.antigen_chain is not None
             )
             for e in entries
         ]
+        
+        return SearchResponse(
+            results=results,
+            total=total,
+            limit=limit,
+            offset=offset
+        )
     except Exception as e:
         logger.error(f"[SAbDab Search] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/sabdab/stats", response_model=DatabaseStatsResponse)
+async def get_database_stats():
+    """Get local database statistics."""
+    try:
+        db = get_sabdab_db()
+        stats = db.get_stats()
+        return DatabaseStatsResponse(**stats)
+    except Exception as e:
+        logger.error(f"[SAbDab Stats] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sabdab/filters", response_model=FilterOptionsResponse)
+async def get_filter_options():
+    """Get available filter options for UI dropdowns."""
+    try:
+        db = get_sabdab_db()
+        options = db.get_filter_options()
+        return FilterOptionsResponse(**options)
+    except Exception as e:
+        logger.error(f"[SAbDab Filters] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Download Endpoints (Remote SAbDab)
+# ============================================================================
 
 @router.get("/sabdab/{pdb_code}/download", response_model=FrameworkDownloadResponse)
 async def download_framework(
@@ -135,12 +278,31 @@ async def download_framework(
         
         cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
         
+        # Fetch chain metadata from local DB for post-download selection
+        h_chain, l_chain, antigen_chain, antigen_name = None, None, None, None
+        try:
+            db = get_sabdab_db()
+            entries = db.get_by_pdb(pdb_code)
+            if entries:
+                entry = entries[0]  # Use first entry
+                h_chain = entry.h_chain
+                l_chain = None  # VHH don't have L chain
+                antigen_chain = entry.antigen_chain
+                antigen_name = entry.antigen_name
+                logger.info(f"[SAbDab Download] Chain metadata: H={h_chain}, Ag={antigen_chain}")
+        except Exception as db_err:
+            logger.warning(f"[SAbDab Download] Could not fetch chain metadata: {db_err}")
+        
         return FrameworkDownloadResponse(
             pdb_code=pdb_code.upper(),
             scheme=scheme,
             cached=cache_file.exists(),
             file_path=str(cache_file) if cache_file.exists() else None,
-            pdb_content=pdb_content if include_content else None
+            pdb_content=pdb_content if include_content else None,
+            h_chain=h_chain,
+            l_chain=l_chain,
+            antigen_chain=antigen_chain,
+            antigen_name=antigen_name
         )
     except HTTPException:
         raise
@@ -151,8 +313,21 @@ async def download_framework(
 
 @router.get("/sabdab/{pdb_code}/summary")
 async def get_framework_summary(pdb_code: str):
-    """Get metadata summary for a specific structure."""
+    """
+    Get metadata summary for a specific structure.
+    
+    Tries local database first, falls back to remote API.
+    """
     try:
+        # Try local database first
+        db = get_sabdab_db()
+        entries = db.get_by_pdb(pdb_code)
+        
+        if entries:
+            # Return first entry as dict
+            return entries[0].to_dict()
+        
+        # Fall back to remote API
         summary = await get_structure_summary(pdb_code)
         if not summary:
             raise HTTPException(status_code=404, detail=f"Summary not found for {pdb_code}")
@@ -163,6 +338,10 @@ async def get_framework_summary(pdb_code: str):
         logger.error(f"[SAbDab Summary] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ============================================================================
+# Local Library Management
+# ============================================================================
 
 @router.get("/library", response_model=FrameworkLibraryResponse)
 async def list_cached_frameworks():
@@ -231,7 +410,10 @@ async def remove_cached_framework(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Attribution endpoint (CC-BY 4.0 compliance)
+# ============================================================================
+# Attribution (CC-BY 4.0 compliance)
+# ============================================================================
+
 @router.get("/attribution")
 async def get_sabdab_attribution():
     """Get SAbDab attribution information for CC-BY 4.0 compliance."""
@@ -240,5 +422,64 @@ async def get_sabdab_attribution():
         "citation": "Schneider, C. et al. (2022) Nucleic Acids Res. 50(D1):D1368-D1372",
         "license": "CC-BY 4.0",
         "license_url": "https://creativecommons.org/licenses/by/4.0/",
-        "website": "https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/sabdab/"
+        "website": "https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/sabdab/",
+        "local_mirror": "Offline-capable SQLite mirror with pre-computed CDR annotations"
     }
+
+
+# ============================================================================
+# CDR Annotation (ANARCII)
+# ============================================================================
+
+@router.post("/sabdab/{pdb_code}/annotate-cdrs", response_model=CDRAnnotationResponse)
+async def annotate_framework_cdrs(
+    pdb_code: str,
+    scheme: str = Query("imgt", description="Numbering scheme used for framework")
+):
+    """
+    Run ANARCII on a cached SAbDab framework to detect CDR positions.
+    
+    Returns CDR sequences and IMGT position ranges for use in RFantibody design.
+    Requires the framework to be downloaded first via /sabdab/{pdb_code}/download.
+    """
+    from services.cdr_annotator import annotate_pdb
+    
+    # Check cache for framework PDB
+    cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
+    if not cache_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Framework {pdb_code} not found in cache. Download it first via /sabdab/{pdb_code}/download"
+        )
+    
+    try:
+        logger.info(f"[CDR Annotation] Running ANARCII on {pdb_code}")
+        annotation = annotate_pdb(str(cache_file))
+        
+        if not annotation:
+            raise HTTPException(status_code=500, detail="ANARCII returned no results")
+        
+        # Convert CDRAnnotation dataclass to response model
+        # Use getattr() for safe access since VHH may not have light chain fields
+        return CDRAnnotationResponse(
+            pdb_code=pdb_code.upper(),
+            antibody_type=annotation.antibody_type,
+            cdr_h1=getattr(annotation, 'cdr_h1', None),
+            cdr_h2=getattr(annotation, 'cdr_h2', None),
+            cdr_h3=getattr(annotation, 'cdr_h3', None),
+            cdr_l1=getattr(annotation, 'cdr_l1', None),
+            cdr_l2=getattr(annotation, 'cdr_l2', None),
+            cdr_l3=getattr(annotation, 'cdr_l3', None),
+            cdr_h1_range=list(annotation.cdr_h1_range) if getattr(annotation, 'cdr_h1_range', None) else None,
+            cdr_h2_range=list(annotation.cdr_h2_range) if getattr(annotation, 'cdr_h2_range', None) else None,
+            cdr_h3_range=list(annotation.cdr_h3_range) if getattr(annotation, 'cdr_h3_range', None) else None,
+            cdr_l1_range=list(annotation.cdr_l1_range) if getattr(annotation, 'cdr_l1_range', None) else None,
+            cdr_l2_range=list(annotation.cdr_l2_range) if getattr(annotation, 'cdr_l2_range', None) else None,
+            cdr_l3_range=list(annotation.cdr_l3_range) if getattr(annotation, 'cdr_l3_range', None) else None,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[CDR Annotation] Error for {pdb_code}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

@@ -15,7 +15,7 @@ Workflow:
 Usage:
     python3 batch_msa.py --sequences '[{"name": "seq1", "sequence": "MKTAY..."}]' \
                          --output_dir ./msa_outputs \
-                         --db_path /mnt/BioModStack/colabfold_db
+                         --db_path "$BMS_COLABFOLD_DB"
 """
 
 import argparse
@@ -29,8 +29,13 @@ import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-DEFAULT_DB_PATH = os.getenv("BMS_COLABFOLD_DB", "/mnt/BioModStack/colabfold_db")
-DEFAULT_CACHE_DIR = os.getenv("BMS_MSA_CACHE", "/mnt/BioModStack/msa_cache")
+_data_root = os.getenv("BMS_DATA")
+DEFAULT_DB_PATH = os.getenv("BMS_COLABFOLD_DB") or (
+    f"{_data_root}/colabfold_db" if _data_root else "/mnt/BioModStack/colabfold_db"
+)
+DEFAULT_CACHE_DIR = os.getenv("BMS_MSA_CACHE") or (
+    f"{_data_root}/msa_cache" if _data_root else "/mnt/BioModStack/msa_cache"
+)
 
 
 def compute_sequence_hash(sequence: str) -> str:

@@ -17,9 +17,12 @@ instead of spawning new ones.
 import argparse
 import requests
 import json
+import os
 import sys
 from pathlib import Path
 from math import ceil
+DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+
 
 import re
 from collections import defaultdict
@@ -107,7 +110,7 @@ def spawn_children(
     msa_path: str = None,
     params_json: str = None,
     seqs_per_boltz_job: int = 10,
-    api_url: str = "http://localhost:8000"
+    api_url: str = DEFAULT_API_URL
 ):
     """
     Create child validation jobs grouped by seqs_per_boltz_job ratio.
@@ -250,7 +253,7 @@ if __name__ == "__main__":
     parser.add_argument("--msa_path", default="", help="Path to shared MSA file")
     parser.add_argument("--params_json", default="", help="JSON string with quality settings from parent")
     parser.add_argument("--seqs_per_boltz_job", type=int, default=10, help="Sequences per Boltz job (1=no batch, higher=more batch)")
-    parser.add_argument("--api_url", default="http://localhost:8000", help="API URL")
+    parser.add_argument("--api_url", default=DEFAULT_API_URL, help="API URL")
     
     args = parser.parse_args()
     

@@ -42,10 +42,10 @@ From: nvcr.io/nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     . /opt/venv/bin/activate
     
     # Install PyTorch stable (CUDA 12.4 to match PyG wheels)
-    uv pip install torch==2.5.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    uv pip install --compile torch==2.5.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
     
     # Install PyG (PyTorch Geometric) and other core deps
-    uv pip install \
+    uv pip install --compile \
         torch_geometric \
         pyg_lib \
         torch_scatter \
@@ -55,7 +55,7 @@ From: nvcr.io/nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
         -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
         
     # Install RDKit, Biopython, and other utilities
-    uv pip install \
+    uv pip install --compile \
         rdkit \
         biopython \
         scipy \
@@ -81,6 +81,9 @@ From: nvcr.io/nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     # Cleanup
     # rm -rf /root/.cache/uv
     apt-get clean
+
+    # Generate lockfile for reproducibility
+    uv pip freeze > /opt/venv/requirements.lock 2>/dev/null || true
 
 %environment
     export PATH=/opt/venv/bin:$PATH

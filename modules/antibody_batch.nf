@@ -41,6 +41,7 @@ process BatchBoltzValidation {
     boltz predict yamls/ \\
         --output_format pdb \\
         --diffusion_samples 1 \\
+        ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --out_dir . \\
         2>&1 | tee boltz_batch.log
         

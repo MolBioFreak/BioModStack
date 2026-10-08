@@ -16,7 +16,8 @@ process PrepFAMPNN {
     def antibodyChains = params.antibody_chains ?: 'H,L'
     def constraintMode = (params.fampnn_constraint_mode ?: 'generic').toString().trim().toLowerCase()
     def useAntibodyConstraints = ['antibody', 'cdr', 'cdr_only', 'antibody_cdr', 'antibody_constraints'].contains(constraintMode)
-    def constraintCmd = useAntibodyConstraints ? """
+    def constraintCmd = useAntibodyConstraints
+        ? """
     # Generate CDR-aware constraints based on design mode
     python /scripts/prep_antibody_constraints.py \\
         --input_dir "./" \\
@@ -26,13 +27,14 @@ process PrepFAMPNN {
         --design_loops "${designLoops}" \\
         --protect_tetrad "${protectTetrad}" \\
         --antibody_chains "${antibodyChains}"
-    """ : """
+    """
+        : """
     # Generate generic constraints (no fixed residues)
     python /scripts/prep_fampnn_constraints_generic.py \\
         --input_dir "./" \\
         --out_csv "fampnn.csv"
     """
-    
+
     """
     eval "\$(micromamba shell hook --shell bash)"
     micromamba activate pyrosetta
@@ -50,7 +52,7 @@ process RunFAMPNN {
     label 'FAMPNN'
     label 'gpu_light'
     // GPU assignment handled by orchestrator via params.gpu_id -> config's gpu_light containerOptions
-    
+
     publishDir "${params.out_dir}/run/fampnn", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/fampnn/results", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/run/fampnn/results", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
@@ -96,7 +98,7 @@ process RunFAMPNN {
         cp "\$file" "results/\$new_name"
     done
 
-    python /scripts/analyse_fampnn.py \\\\
+    python /scripts/analyse_fampnn.py \\
         --input_dir results \\
         --chain_id ${analysis_chain_id} \\
         --ignore_cbeta \\
@@ -109,7 +111,7 @@ process RunFAMPNN {
     # EXPLICIT SYNC: Ensure files are written to output dir even if publishDir fails
     # This is a fallback for orchestrator-spawned child jobs where Nextflow may not complete publishDir
     if [ -n "${params.out_dir}" ]; then
-        mkdir -p "${params.out_dir}/pdb_files"
+        mkdir -p "${params.out_dir}/pdb_files" 2>/dev/null || true
         cp results/*.pdb "${params.out_dir}/pdb_files/" 2>/dev/null || true
         cp results/*.json "${params.out_dir}/pdb_files/" 2>/dev/null || true
         echo "FAMPNN outputs synced to ${params.out_dir}/pdb_files/"

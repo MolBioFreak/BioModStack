@@ -12,7 +12,7 @@ process ANTIFOLD {
     path "antifold.log"
 
     script:
-    def weightsRoot = params.weights_root ?: "/mnt/BioModStack/weights"
+    def weightsRoot = params.weights_root
     def antifoldModel = "${weightsRoot}/antifold/model.pt"
     """
     # Count number of chains in the PDB file and get chain IDs

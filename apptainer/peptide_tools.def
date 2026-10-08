@@ -4,7 +4,7 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
 %labels
     Author BioModStack
     Description FreeBindCraft peptide design tools
-    Version 1.0.0
+    Version 1.1.0
 
 %post
     apt-get update && apt-get install -y \
@@ -27,19 +27,21 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     export VIRTUAL_ENV=/opt/venv
     export PATH="/opt/venv/bin:$PATH"
 
-    # Install PyTorch
-    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    # Install PyTorch (--compile for faster startup)
+    uv pip install --compile torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
     # Install FreeBindCraft
     git clone https://github.com/cytokineking/FreeBindCraft.git /opt/FreeBindCraft
     cd /opt/FreeBindCraft
 
     # Dependencies for "No PyRosetta" mode
-    # Note: pdbfixer requires conda, using openmm from wheel if available
-    uv pip install openmm || true
-    uv pip install freesasa
-    uv pip install biopython
-    uv pip install numpy pandas scipy
+    uv pip install --compile openmm || true
+    uv pip install --compile freesasa
+    uv pip install --compile biopython
+    uv pip install --compile numpy pandas scipy
+
+    # Generate lockfile for reproducibility
+    uv pip freeze > /opt/venv/requirements.lock
 
     # Cleanup
     rm -rf /root/.cache/uv
@@ -49,3 +51,8 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     export PATH="/opt/venv/bin:/opt/FreeBindCraft:$PATH"
     export FREESASA_QUIET="1"
     export VIRTUAL_ENV=/opt/venv
+
+%help
+    FreeBindCraft peptide design tools container.
+    
+    Lockfile: /opt/venv/requirements.lock

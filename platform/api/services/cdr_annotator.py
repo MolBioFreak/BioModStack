@@ -39,6 +39,9 @@ class CDRAnnotation:
     cdr_h1_range: Optional[tuple] = None
     cdr_h2_range: Optional[tuple] = None
     cdr_h3_range: Optional[tuple] = None
+    cdr_l1_range: Optional[tuple] = None
+    cdr_l2_range: Optional[tuple] = None
+    cdr_l3_range: Optional[tuple] = None
     
     # Framework contact hotspots (Zavrtanik et al. 2018)
     # These FR positions mediate antigen contacts in nanobodies
@@ -110,20 +113,27 @@ def extract_sequence_from_pdb(pdb_path: str, chain_id: Optional[str] = None) -> 
 
 def identify_binder_chains(sequences: Dict[str, str], pdb_path: str) -> Dict[str, str]:
     """
-    Identify which chains are antibody chains (H and/or L).
+    Identify which chains are potential antibody/TCR variable domains.
     
     For VHH/nanobody: Returns only H chain
     For Fab/scFv: Returns both H and L chains
+    For TCR: Returns alpha (as L) and/or beta (as H) chains
     
-    Uses sequence signatures to detect antibody chains:
-    - VHH/VH typically starts with QVQLV, EVQLV, QVKLV (framework 1)
-    - VL/VK typically starts with DIVMT, DIQMT, EIVLT
+    Uses sequence signatures to detect chains:
+    - VHH/VH: QVQLV, EVQLV, etc.
+    - VL/VK: DIVMT, DIQMT, etc.
+    - TCR Beta: NAGVTQ, GAVVSQ, DGVTQ, etc.
+    - TCR Alpha: AQTVT, AQSVE, AQQVT, etc.
     
     Returns dict of {chain_type: chain_id} where chain_type is 'H' or 'L'
+    (H for heavy/beta, L for light/alpha)
     """
     # Common VH/VHH framework 1 signatures
     vh_signatures = ["QVQLV", "EVQLV", "QVKLV", "QVQLQ", "EVQLQ", "QVTLK", "QVQLK"]
-    vl_signatures = ["DIVMT", "DIQMT", "EIVLT", "DIVLT", "EIVMT", "QSVLT"]
+    vl_signatures = ["DIVMT", "DIQMT", "EIVLT", "DIVLT", "EIVMT", "QSVLT", "QSVVS"]
+    # TCR variable region signatures
+    tcr_beta_signatures = ["NAGVT", "GAVVS", "DGVTQ", "LGVTQ", "LGHDT", "GVTQS"]
+    tcr_alpha_signatures = ["AQTVT", "AQSVE", "AQQVT", "AQEVT", "AQKVT", "GQEVE"]
     
     found_chains = {}  # {chain_type: chain_id}
     
@@ -144,18 +154,42 @@ def identify_binder_chains(sequences: Dict[str, str], pdb_path: str) -> Dict[str
                 print(f"[CDR Annotator] Chain {chain_id} identified as VL (signature: {sig})")
                 found_chains['L'] = chain_id
                 break
+        
+        # Check for TCR Beta signature (maps to H)
+        for sig in tcr_beta_signatures:
+            if seq_upper.startswith(sig):
+                print(f"[CDR Annotator] Chain {chain_id} identified as TCR Beta (signature: {sig})")
+                found_chains['H'] = chain_id
+                break
+        
+        # Check for TCR Alpha signature (maps to L)
+        for sig in tcr_alpha_signatures:
+            if seq_upper.startswith(sig):
+                print(f"[CDR Annotator] Chain {chain_id} identified as TCR Alpha (signature: {sig})")
+                found_chains['L'] = chain_id
+                break
     
     # If found at least one chain by signature, return
     if found_chains:
         return found_chains
     
-    # Fallback: check for chain in typical antibody length range
+    # Fallback: select ALL chains in typical variable domain length range
+    # This lets ANARCII auto-detect what they are
+    print(f"[CDR Annotator] No signature match, using length-based selection...")
     for chain_id, seq in sequences.items():
-        if 100 <= len(seq) <= 150:  # VHH/Fab typical range
-            print(f"[CDR Annotator] Chain {chain_id} selected by length ({len(seq)} AA)")
-            return {'H': chain_id}  # Assume heavy if unsure
+        if 80 <= len(seq) <= 150:  # Variable domain typical range
+            # Assign as H if none found yet, else as L
+            if 'H' not in found_chains:
+                print(f"[CDR Annotator] Chain {chain_id} selected as H by length ({len(seq)} AA)")
+                found_chains['H'] = chain_id
+            elif 'L' not in found_chains:
+                print(f"[CDR Annotator] Chain {chain_id} selected as L by length ({len(seq)} AA)")
+                found_chains['L'] = chain_id
     
-    # Last resort: if only two chains, guess smaller is antibody
+    if found_chains:
+        return found_chains
+    
+    # Last resort: if only two chains, guess smaller is antibody/TCR
     if len(sequences) == 2:
         smallest = min(sequences.keys(), key=lambda k: len(sequences[k]))
         return {'H': smallest}
@@ -197,7 +231,7 @@ import json
 from anarcii import Anarcii
 
 seq = "{sequence}"
-numberer = Anarcii()
+numberer = Anarcii(seq_type='unknown')  # Auto-detect antibody vs TCR
 result = numberer.number([seq])
 
 output = {{}}
@@ -209,24 +243,34 @@ for seq_name, data in result.items():
     numbering = data.get("numbering", [])
     
     # Extract CDRs based on IMGT position ranges
+    # Track both residues and position ranges
     cdr1_residues = []
     cdr2_residues = []
     cdr3_residues = []
+    cdr1_positions = []
+    cdr2_positions = []
+    cdr3_positions = []
     
     for (pos, insertion), aa in numbering:
         if aa == "-":
             continue
         if 27 <= pos <= 38:
             cdr1_residues.append(aa)
+            cdr1_positions.append(pos)
         elif 56 <= pos <= 65:
             cdr2_residues.append(aa)
+            cdr2_positions.append(pos)
         elif 105 <= pos <= 117:
             cdr3_residues.append(aa)
+            cdr3_positions.append(pos)
     
     output[chain_type] = {{
         "cdr1": "".join(cdr1_residues),
         "cdr2": "".join(cdr2_residues),
         "cdr3": "".join(cdr3_residues),
+        "cdr1_range": [min(cdr1_positions), max(cdr1_positions)] if cdr1_positions else None,
+        "cdr2_range": [min(cdr2_positions), max(cdr2_positions)] if cdr2_positions else None,
+        "cdr3_range": [min(cdr3_positions), max(cdr3_positions)] if cdr3_positions else None,
         "scheme": data.get("scheme", "imgt"),
     }}
 
@@ -310,26 +354,46 @@ def annotate_pdb(pdb_path: str) -> Optional[CDRAnnotation]:
             continue
         
         # Extract CDRs for this chain type
-        # ANARCII returns chain type based on sequence, but we already know from structure
-        # The result key will be 'H' or 'L' based on what ANARCII detects
-        if "H" in anarcii_result:
-            h_data = anarcii_result["H"]
+        # ANARCII returns chain type: H/K/L for antibodies, A/B/G/D for TCRs
+        # Map TCR chains: B/G -> H fields (heavy-like), A/D -> L fields (light-like)
+        if "H" in anarcii_result or "B" in anarcii_result or "G" in anarcii_result:
+            h_data = anarcii_result.get("H") or anarcii_result.get("B") or anarcii_result.get("G", {})
             annotation.cdr_h1 = h_data.get("cdr1", "")
             annotation.cdr_h2 = h_data.get("cdr2", "")
             annotation.cdr_h3 = h_data.get("cdr3", "")
             annotation.cdr_h1_length = len(annotation.cdr_h1) if annotation.cdr_h1 else None
             annotation.cdr_h2_length = len(annotation.cdr_h2) if annotation.cdr_h2 else None
             annotation.cdr_h3_length = len(annotation.cdr_h3) if annotation.cdr_h3 else None
+            # Extract IMGT position ranges for 3D viewer highlighting
+            if h_data.get("cdr1_range"):
+                annotation.cdr_h1_range = tuple(h_data["cdr1_range"])
+            if h_data.get("cdr2_range"):
+                annotation.cdr_h2_range = tuple(h_data["cdr2_range"])
+            if h_data.get("cdr3_range"):
+                annotation.cdr_h3_range = tuple(h_data["cdr3_range"])
+            # Mark as TCR if detected
+            if "B" in anarcii_result or "G" in anarcii_result:
+                annotation.antibody_type = "tcr"
         
-        if "L" in anarcii_result:
-            l_data = anarcii_result["L"]
+        if "L" in anarcii_result or "K" in anarcii_result or "A" in anarcii_result or "D" in anarcii_result:
+            l_data = anarcii_result.get("L") or anarcii_result.get("K") or anarcii_result.get("A") or anarcii_result.get("D", {})
             annotation.cdr_l1 = l_data.get("cdr1", "")
             annotation.cdr_l2 = l_data.get("cdr2", "")
             annotation.cdr_l3 = l_data.get("cdr3", "")
             annotation.cdr_l1_length = len(annotation.cdr_l1) if annotation.cdr_l1 else None
             annotation.cdr_l2_length = len(annotation.cdr_l2) if annotation.cdr_l2 else None
             annotation.cdr_l3_length = len(annotation.cdr_l3) if annotation.cdr_l3 else None
-            annotation.antibody_type = "fab"  # Has light chain
+            # Extract IMGT position ranges for 3D viewer highlighting
+            if l_data.get("cdr1_range"):
+                annotation.cdr_l1_range = tuple(l_data["cdr1_range"])
+            if l_data.get("cdr2_range"):
+                annotation.cdr_l2_range = tuple(l_data["cdr2_range"])
+            if l_data.get("cdr3_range"):
+                annotation.cdr_l3_range = tuple(l_data["cdr3_range"])
+            if "A" in anarcii_result or "D" in anarcii_result:
+                annotation.antibody_type = "tcr"
+            elif annotation.antibody_type != "tcr":
+                annotation.antibody_type = "fab"  # Has light chain
     
     return annotation
 
@@ -404,7 +468,7 @@ with open("/tmp/sequences.json") as f:
 from anarcii import Anarcii
 
 # Use 24 CPU cores and batch size 500
-numberer = Anarcii(cpu=True, batch_size=500, ncpu=24)
+numberer = Anarcii(seq_type='unknown', cpu=True, batch_size=500, ncpu=24)  # Auto-detect antibody vs TCR
 results = numberer.number(sequences)
 
 # FR contact hotspot IMGT positions (Zavrtanik et al. 2018)
@@ -519,7 +583,8 @@ print(json.dumps(output))
         chain_type = result.get("chain_type", "")
         annotation = annotations[pdb_path]
         
-        if chain_type == "H":
+        # Map chain types: H/B/G -> H fields, L/K/A/D -> L fields
+        if chain_type in ("H", "B", "G"):  # Heavy chain or TCR beta/gamma
             annotation.cdr_h1 = result.get("cdr1", "")
             annotation.cdr_h2 = result.get("cdr2", "")
             annotation.cdr_h3 = result.get("cdr3", "")
@@ -531,13 +596,19 @@ print(json.dumps(output))
             annotation.de_loop = result.get("de_loop", "")
             annotation.fr3_contacts = result.get("fr3_contacts", "")
             annotation.fr4_contacts = result.get("fr4_contacts", "")
-        elif chain_type == "L":
+            # Mark as TCR if detected
+            if chain_type in ("B", "G"):
+                annotation.antibody_type = "tcr"
+        elif chain_type in ("L", "K", "A", "D"):  # Light chain or TCR alpha/delta
             annotation.cdr_l1 = result.get("cdr1", "")
             annotation.cdr_l2 = result.get("cdr2", "")
             annotation.cdr_l3 = result.get("cdr3", "")
             annotation.cdr_l1_length = len(annotation.cdr_l1) if annotation.cdr_l1 else None
             annotation.cdr_l2_length = len(annotation.cdr_l2) if annotation.cdr_l2 else None
             annotation.cdr_l3_length = len(annotation.cdr_l3) if annotation.cdr_l3 else None
-            annotation.antibody_type = "fab"  # Has light chain
+            if chain_type in ("A", "D"):
+                annotation.antibody_type = "tcr"
+            elif annotation.antibody_type != "tcr":
+                annotation.antibody_type = "fab"  # Has light chain
     
     return annotations

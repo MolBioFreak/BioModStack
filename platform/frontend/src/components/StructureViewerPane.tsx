@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import MolstarViewer from './MolstarViewer';
-import type { Design, Job, StructureAnalysis } from '../lib/api';
+import ChainDetailsPanel from './ChainDetailsPanel';
+import type { Design, Job, StructureAnalysis, ChainMetric } from '../lib/api';
 
 interface Selection {
     chain_id?: string;
@@ -536,6 +537,53 @@ export default function StructureViewerPane({
                                 </div>
                             </>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* Chain Details Panel (for multi-chain complexes) */}
+            {selectedDesign && (
+                <ChainDetailsPanel
+                    design={selectedDesign}
+                    chainMetrics={chainMetrics as Record<string, ChainMetric> | null}
+                />
+            )}
+
+            {/* Frustration Analysis (FrustraMPNN) */}
+            {selectedDesign?.frustration_high_count != null && (
+                <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
+                    <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Frustration Analysis</h4>
+                    <div className="space-y-2 text-sm">
+                        <div className="flex justify-between">
+                            <span className="text-slate-500">Highly Frustrated</span>
+                            <span className={`font-mono ${(selectedDesign.frustration_high_count ?? 0) > 5 ? 'text-red-400' : 'text-green-400'}`}>
+                                {selectedDesign.frustration_high_count} residues
+                            </span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span className="text-slate-500">Minimally Frustrated</span>
+                            <span className="text-green-400 font-mono">
+                                {selectedDesign.frustration_min_count} residues
+                            </span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span className="text-slate-500">% Highly Frustrated</span>
+                            <span className={`font-mono ${(selectedDesign.frustration_pct_high ?? 0) > 10 ? 'text-orange-400' : 'text-green-400'}`}>
+                                {selectedDesign.frustration_pct_high?.toFixed(1)}%
+                            </span>
+                        </div>
+                    </div>
+                    {/* Quick legend */}
+                    <div className="flex items-center justify-center gap-3 mt-3 pt-2 border-t border-slate-700/50">
+                        <span className="text-[10px] text-slate-500">
+                            <span className="text-green-400 mr-1">●</span>min (≥0.58)
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                            <span className="text-slate-400 mr-1">●</span>neutral
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                            <span className="text-red-400 mr-1">●</span>high (≤-1.0)
+                        </span>
                     </div>
                 </div>
             )}

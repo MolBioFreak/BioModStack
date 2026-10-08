@@ -72,6 +72,7 @@ process PredictTargetComplex {
         --recycling_steps ${params.target_complex_recycling ?: 3} \\
         --sampling_steps ${params.target_complex_sampling ?: 50} \\
         --diffusion_samples 1 \\
+        ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --cache /boltzcache \\
         2>&1 | tee -a predict_complex.log
     

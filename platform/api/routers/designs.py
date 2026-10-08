@@ -102,6 +102,13 @@ class DesignResponse(BaseModel):
     epitope_contact_count: Optional[int] = None
     epitope_min_distance: Optional[float] = None
     
+    # Frustration analysis (FrustraMPNN)
+    frustration_high_count: Optional[int] = None
+    frustration_min_count: Optional[int] = None
+    frustration_pct_high: Optional[float] = None
+    frustration_residues: Optional[List[dict]] = None  # [{pos, chain, frust, frustClass}]
+    frustration_csv_path: Optional[str] = None
+    
     created_at: datetime
     
     class Config:

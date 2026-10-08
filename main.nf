@@ -511,6 +511,17 @@ workflow {
             .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
             .set { final_pdbs }
 
+        // Optional post-run FrustraMPNN QC for complex prediction
+        if (params.run_frustrampnn == true) {
+            println("Running FrustraMPNN post-analysis on complex predictions")
+            def frustra_input = final_pdbs
+                .flatten()
+                .map { pdb -> tuple([id: pdb.baseName], pdb) }
+            FrustrampnnQC(frustra_input)
+            // Extract just the path from (meta, path) tuples before collecting
+            AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
+        }
+
         // Skip all other stages for complex prediction
         return null
     }
@@ -617,7 +628,8 @@ workflow {
                 .flatten()
                 .map { pdb -> tuple([id: pdb.baseName], pdb) }
             FrustrampnnQC(frustra_input)
-            AggregateFrustrationReports(FrustrampnnQC.out.summary.collect())
+            // Extract just the path from (meta, path) tuples before collecting
+            AggregateFrustrationReports(FrustrampnnQC.out.summary.map { meta, summary -> summary }.collect())
         }
 
         // Skip all other stages for sequence-only prediction

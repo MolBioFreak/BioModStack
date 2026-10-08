@@ -19,16 +19,16 @@ From: mambaorg/micromamba:1.5.8
     micromamba activate pyrosetta
 
     # Install UV package manager (10-100x faster than pip)
-    pip install uv
+    pip install --compile uv
     
-    uv pip install pyrosetta-installer
+    uv pip install --compile pyrosetta-installer
     python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
 
     # Install PyTorch 2.4.1 with CUDA 12.1
     # WARNING: RTX 5090 (sm_120) not officially supported but DOES work (tested)
-    uv pip install torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    uv pip install --compile torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-    uv pip install biopython pandas matplotlib
+    uv pip install --compile biopython pandas matplotlib
 
     apt-get autoremove -y
     apt-get clean

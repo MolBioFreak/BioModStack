@@ -35,6 +35,7 @@ Session Usage Rules
 - Background workers SHOULD use async sessions where possible.
 - If a sync sqlite connection is required (e.g., legacy scripts), it MUST use
   `get_db_path()` and should set a busy timeout.
+- Runtime DB writes should not use direct `sqlite3` unless unavoidable.
 
 Schema & Migrations
 -------------------
@@ -53,15 +54,23 @@ Operational Notes
 - Large jobs can create many rows; DB locks can occur if sync and async
   connections are mixed.
 - Always prefer a single active DB file per installation.
+- WAL/SHM files (`*.db-wal`, `*.db-shm`) are runtime artifacts and should
+  remain untracked.
 
 Sanity Checks
 -------------
 - On startup, log the resolved DB path.
 - Keep `DATABASE_URL` consistent across services (API, workers, scripts).
 - If multiple `.db` files exist, archive or remove non-canonical ones.
+- DB health is visible via `/api/system/db-info` and the launcher UI.
 
 DB Audit Script
 ---------------
 - Audit all DB files and optionally archive extras:
   - Dry run: `python scripts/db_audit.py`
   - Archive extras: `python scripts/db_audit.py --apply`
+
+Related Guidance
+----------------
+- See `docs/ai_guidance/Centralization_and_Standardization.md` for
+  pathing and configuration standardization rules.

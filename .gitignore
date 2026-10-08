@@ -29,8 +29,8 @@ work/
 workdir/
 
 # Project Data
-pdj_results/
-proteindj.db
+bms_results/
+biomodstack.db
 test_*/
 data/
 outputs/
@@ -126,9 +126,8 @@ packages/ove-react19/demo/src/exampleData/*.json
 packages/bio-parsers/test/testData/**/*.dna
 work
 GPU orchestration*.md
-pdj_results
+bms_results
 
 # RFDpoly large assets (local only)
 containers/rfdpoly.sif
-models/rfdpoly/*.pt
 tools/RFDpoly/

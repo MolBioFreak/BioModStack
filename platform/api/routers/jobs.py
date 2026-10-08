@@ -267,6 +267,8 @@ async def create_job(
                 'sequences_json': json_lib.dumps(sequences_for_msa),
                 'reference_sequence': job_data.params.get('msa_reference_sequence'),
                 'msa_force_refresh': job_data.params.get('msa_force_refresh', False),
+                # BATCH-STAGE-GATE: Store FrustraMPNN flag for post-batch execution
+                'run_frustrampnn_batch': job_data.params.get('run_frustrampnn', False),
             },
             output_dir=msa_output_dir,
             status=JobStatus.QUEUED.value,
@@ -300,6 +302,11 @@ async def create_job(
             job_params = {**job_data.params}
             job_params['sequence'] = variant.get('sequence')
             job_params['sequence_name'] = variant.get('name', f'var_{i+1}')
+            
+            # BATCH-STAGE-GATE: Remove per-variant FrustraMPNN
+            # FrustraMPNN runs as a post-batch phase after ALL variants complete
+            # This prevents GPU contention and enables single-model-load optimization
+            job_params.pop('run_frustrampnn', None)
             
             # Construct complex_components for BoltzFromComplex if any non-protein components present
             # The ligands array contains ALL complex components: ligands, ions, DNA, RNA, peptides
@@ -491,7 +498,7 @@ async def delete_job_permanently(
     - Job from database
     - All child jobs from database
     - All designs from database  
-    - Output directory (pdj_results/...)
+    - Output directory (bms_results/...)
     - Work directory (work/...)
     
     This is irreversible!

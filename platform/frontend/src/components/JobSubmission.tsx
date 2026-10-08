@@ -1,7 +1,7 @@
 
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets } from '../lib/api';
 import { SequenceManagerModal } from './SequenceManagerModal';
@@ -263,8 +263,22 @@ function ParamField({
 export function JobSubmission() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [wizardMode, setWizardMode] = useState<'templates' | 'manual'>('templates');
-    const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+
+    // Read template from URL, allows page refresh and bookmarking
+    const urlTemplate = searchParams.get('template');
+    const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(urlTemplate);
+
+    // Wrapper to sync state with URL
+    const setSelectedTemplateId = (id: string | null) => {
+        setSelectedTemplateIdInternal(id);
+        if (id) {
+            setSearchParams({ template: id }, { replace: true });
+        } else {
+            setSearchParams({}, { replace: true });
+        }
+    };
     const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
     const [selectedModeId, setSelectedModeId] = useState<string | null>(null);
     const [jobName, setJobName] = useState('');
@@ -540,24 +554,31 @@ export function JobSubmission() {
         }
     };
 
+    // Dedicated templates that handle their own header/navigation
+    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft', 'oligo_design'];
+    const showMainHeader = !selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId);
+
     return (
         <div className="min-h-screen bg-slate-950 p-6">
-            <header className="mb-8 flex items-center gap-4">
-                <Link
-                    to="/"
-                    className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
-                >
-                    &lt; Back
-                </Link>
-                <div>
-                    <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-                        New Experiment
-                    </h1>
-                    <p className="text-slate-400 text-sm">Configure and launch a new job</p>
-                </div>
-            </header>
+            {/* Main header - hidden when dedicated templates are active */}
+            {showMainHeader && (
+                <header className="mb-8 flex items-center gap-4">
+                    <Link
+                        to="/"
+                        className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
+                    >
+                        &lt; Back
+                    </Link>
+                    <div>
+                        <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+                            New Experiment
+                        </h1>
+                        <p className="text-slate-400 text-sm">Configure and launch a new job</p>
+                    </div>
+                </header>
+            )}
 
-            <main className="w-full max-w-7xl mx-auto space-y-8">
+            <main className="max-w-[104rem] mx-auto space-y-8">
 
                 {/* 2. Mode Toggle: Templates vs Manual */}
                 <section>
@@ -675,12 +696,12 @@ export function JobSubmission() {
                             ) : (
                                 <>
                                     <p className="text-slate-300 text-base font-medium mb-4">Choose a preset workflow for your experiment goal:</p>
-                                    <div className="flex flex-row gap-4 flex-wrap">
+                                    <div className="grid grid-cols-2 gap-3">
                                         {[
                                             // Dynamic templates from API - filter out hidden/removed templates
                                             ...(templatesData?.data ?? []).filter((t: any) =>
-                                                // Remove: boltzgen_ligand (using hardcoded), binder_design, structure_validation
-                                                !['boltzgen_ligand', 'binder_design', 'structure_validation'].includes(t.id) &&
+                                                // Remove: boltzgen_ligand (using hardcoded), binder_design, structure_validation, structure_prediction
+                                                !['boltzgen_ligand', 'binder_design', 'structure_validation', 'structure_prediction'].includes(t.id) &&
                                                 // Hide dna_polymerase unless debug mode
                                                 (t.id !== 'dna_polymerase' || (window as any).__DEBUG_MODE__)
                                             ),
@@ -694,6 +715,17 @@ export function JobSubmission() {
                                                 stages: [
                                                     { tool: 'Library Gen' },
                                                     { tool: 'Structure Prediction' }
+                                                ]
+                                            },
+                                            // Structure Prediction
+                                            {
+                                                id: 'structure_prediction',
+                                                name: 'Structure Prediction',
+                                                description: 'Predict 3D protein, RNA, DNA, or complex structures from sequences using Boltz-2 or RoseTTAFold3.',
+                                                icon: 'microscope',
+                                                color: '#F59E0B', // Amber
+                                                stages: [
+                                                    { tool: 'Boltz-2 / RF3' }
                                                 ]
                                             },
                                             // RFantibody+ (De Novo Antibody Design)
@@ -755,16 +787,16 @@ export function JobSubmission() {
                                                 <div
                                                     key={template.id}
                                                     onClick={() => setSelectedTemplateId(template.id)}
-                                                    className={`cursor-pointer p-6 border-2 transition-all flex-1 min-w-[280px] 
+                                                    className={`cursor-pointer p-4 border-2 transition-all rounded-lg
                                                         ${isSelected ? 'scale-[1.02] shadow-xl border-[var(--accent-primary)]' : 'hover:shadow-lg hover:scale-[1.01] border-[var(--border-primary)] hover:border-[var(--border-secondary)]'}
                                                         bg-[var(--card-bg)] text-[var(--text-primary)]`}
                                                     style={{
                                                         boxShadow: isSelected ? `0 8px 30px color-mix(in srgb, var(--accent-primary) 35%, transparent)` : undefined
                                                     }}
                                                 >
-                                                    <div className="flex items-center gap-4 mb-4">
+                                                    <div className="flex items-center gap-3 mb-2">
                                                         <div
-                                                            className="w-14 h-14 flex items-center justify-center text-xl font-bold"
+                                                            className="w-10 h-10 flex items-center justify-center text-sm font-bold rounded"
                                                             style={{ backgroundColor: `${template.color}20`, color: template.color }}
                                                         >
                                                             {template.icon === 'target' ? 'TG' :
@@ -772,25 +804,23 @@ export function JobSubmission() {
                                                                     template.icon === 'dna' ? 'MU' :
                                                                         template.icon === 'microscope' ? 'SP' :
                                                                             template.icon === 'pill' ? 'BG' :
-                                                                                template.icon === 'binder' ? 'BC' : 'WF'}
+                                                                                template.icon === 'binder' ? 'BC' : 'OL'}
                                                         </div>
-                                                        <div>
-                                                            <h3 className="font-bold text-lg" style={{ color: template.color }}>{template.name}</h3>
-                                                        </div>
+                                                        <h3 className="font-bold text-base" style={{ color: template.color }}>{template.name}</h3>
                                                     </div>
-                                                    <p className="text-sm opacity-70 mb-4 line-clamp-2">{template.description}</p>
-                                                    {/* Stage Pipeline Diagram */}
-                                                    <div className="flex items-center gap-1 flex-wrap">
+                                                    <p className="text-xs opacity-70 mb-2 line-clamp-2">{template.description}</p>
+                                                    {/* Stage Pipeline (compact) */}
+                                                    <div className="flex items-center gap-0.5 flex-wrap text-[10px]">
                                                         {template.stages.map((stage: any, idx: number) => (
                                                             <div key={idx} className="flex items-center">
-                                                                <div
-                                                                    className="px-3 py-1.5 text-xs whitespace-nowrap font-medium"
-                                                                    style={{ backgroundColor: `${template.color}18`, color: template.color }}
+                                                                <span
+                                                                    className="px-1.5 py-0.5 font-medium rounded"
+                                                                    style={{ backgroundColor: `${template.color}15`, color: template.color }}
                                                                 >
                                                                     {stage.tool}
-                                                                </div>
+                                                                </span>
                                                                 {idx < template.stages.length - 1 && (
-                                                                    <span className="mx-1.5 text-lg opacity-50" style={{ color: template.color }}>→</span>
+                                                                    <span className="mx-0.5 opacity-40" style={{ color: template.color }}>→</span>
                                                                 )}
                                                             </div>
                                                         ))}

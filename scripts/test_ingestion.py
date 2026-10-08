@@ -17,6 +17,7 @@ from sqlalchemy import select
 
 from database import Design, Job
 from paths import get_data_root
+from services.result_ingester import extract_pdb_files, find_pdb_path
 
 
 async def ingest_job_results(
@@ -29,7 +30,7 @@ async def ingest_job_results(
     
     Args:
         job_id: The job ID to associate designs with
-        output_dir: Path to the job's output directory (e.g., legacy pdj_results/job_xxx)
+        output_dir: Path to the job's output directory (e.g., legacy bms_results/job_xxx)
         session: Async database session
         
     Returns:
@@ -214,68 +215,6 @@ async def ingest_loose_files(
             return 0
             
     return designs_created
-
-
-def extract_pdb_files(output_path: Path) -> Path:
-    """
-    Extract PDB files from tar.gz archives to a pdb_files directory.
-    Returns the path to the directory containing extracted PDBs.
-    """
-    import tarfile
-    
-    pdb_dir = output_path / "pdb_files"
-    
-    # Skip if already extracted
-    if pdb_dir.exists() and any(pdb_dir.glob("*.pdb")):
-        print(f"[Ingester] PDB files already extracted to {pdb_dir}")
-        return pdb_dir
-    
-    pdb_dir.mkdir(exist_ok=True)
-    
-    # Look for result tar.gz files to extract
-    tar_locations = [
-        output_path / "run" / "af2" / "af2_results.tar.gz",
-        output_path / "run" / "boltz" / "boltz_results.tar.gz", 
-        output_path / "run" / "rf3" / "rf3_results.tar.gz",
-        output_path / "results" / "best_designs.tar.gz",
-    ]
-    
-    for tar_path in tar_locations:
-        if tar_path.exists():
-            try:
-                with tarfile.open(tar_path, 'r:gz') as tar:
-                    for member in tar.getmembers():
-                        if member.name.endswith('.pdb'):
-                            # Extract just the filename
-                            member.name = Path(member.name).name
-                            tar.extract(member, pdb_dir)
-                            print(f"[Ingester] Extracted {member.name}")
-            except Exception as e:
-                print(f"[Ingester] Error extracting {tar_path}: {e}")
-    
-    pdb_count = len(list(pdb_dir.glob("*.pdb")))
-    print(f"[Ingester] Extracted {pdb_count} PDB files to {pdb_dir}")
-    return pdb_dir
-
-
-def find_pdb_path(output_path: Path, design_name: str) -> str:
-    """Find the PDB file path for a design."""
-    # Check in pdb_files directory first (extracted from tar.gz)
-    pdb_files = output_path / "pdb_files"
-    if pdb_files.exists():
-        pdb_file = pdb_files / f"{design_name}.pdb"
-        if pdb_file.exists():
-            return str(pdb_file)
-    
-    # Check in best_designs directory
-    best_designs = output_path / "best_designs"
-    if best_designs.exists():
-        pdb_file = best_designs / f"{design_name}.pdb"
-        if pdb_file.exists():
-            return str(pdb_file)
-    
-    # Fallback - return expected path in pdb_files
-    return str(output_path / "pdb_files" / f"{design_name}.pdb")
 
 
 def safe_float(value) -> Optional[float]:

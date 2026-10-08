@@ -60,18 +60,42 @@ def filter_designs(data_map, max_avg_psce, max_residue_psce):
     return passed
 
 def copy_filtered_designs(filtered_designs, pdb_dir, json_dir, output_dir):
-    """Copy matching PDBs and JSONs to output directory"""
+    """Copy matching PDBs and JSONs to output directory.
+    
+    Now handles mismatched naming between JSON metadata and PDB files:
+    - First tries exact match: {design}.pdb
+    - Falls back to partial match: any PDB containing the design name
+    """
     os.makedirs(output_dir, exist_ok=True)
     copied_count = 0
     
+    # Build index of available PDBs for fuzzy matching
+    available_pdbs = [f for f in os.listdir(pdb_dir) if f.endswith('.pdb')]
+    
     for design in filtered_designs:
-        # Copy PDB file
+        pdb_copied = False
+        
+        # Try exact match first
         pdb_file = os.path.join(pdb_dir, f"{design}.pdb")
         if os.path.exists(pdb_file):
             shutil.copy2(pdb_file, output_dir)
             copied_count += 1
+            pdb_copied = True
+        else:
+            # Fallback: find PDBs containing the design name (handles prefix/suffix mismatches)
+            matching_pdbs = [p for p in available_pdbs if design in p or design.replace('_', '') in p.replace('_', '')]
+            if matching_pdbs:
+                for match_pdb in matching_pdbs:
+                    src = os.path.join(pdb_dir, match_pdb)
+                    shutil.copy2(src, output_dir)
+                    copied_count += 1
+                    pdb_copied = True
+                    print(f"Matched {design} -> {match_pdb}")
             
-        # Copy JSON metadata
+        if not pdb_copied:
+            print(f"Warning: PDB file for {design} not found in {pdb_dir}")
+            
+        # Copy JSON metadata if available
         json_file = os.path.join(json_dir, f"{design}.json")
         if os.path.exists(json_file):
             shutil.copy2(json_file, output_dir)

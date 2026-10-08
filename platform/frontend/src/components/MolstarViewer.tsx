@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { ensureMolstarLoaded, isMolstarLoaded, rgbToHex } from '../lib/molstar-loader';
 
 interface Selection {
     chain_id?: string;  // Will be mapped to struct_asym_id
@@ -17,53 +18,8 @@ interface Props {
     backgroundColor?: string;
     label?: string;  // Optional label to show on viewer
     selections?: Selection[]; // Highlights
-}
-
-// Track if script is loaded globally to avoid multiple loads
-let scriptLoaded = false;
-let scriptLoading = false;
-const loadCallbacks: (() => void)[] = [];
-
-function loadScript(callback: () => void) {
-    if (scriptLoaded) {
-        callback();
-        return;
-    }
-
-    loadCallbacks.push(callback);
-
-    if (scriptLoading) return;
-
-    scriptLoading = true;
-
-    // Load CSS first
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.type = 'text/css';
-    link.href = 'https://cdn.jsdelivr.net/npm/pdbe-molstar@3.4.0/build/pdbe-molstar.css';
-    document.head.appendChild(link);
-
-    // Load JS
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/pdbe-molstar@3.4.0/build/pdbe-molstar-component.js';
-    script.async = true;
-    script.onload = () => {
-        console.log('pdbe-molstar web component script loaded');
-        scriptLoaded = true;
-        scriptLoading = false;
-        loadCallbacks.forEach(cb => cb());
-        loadCallbacks.length = 0;
-    };
-    script.onerror = (e) => {
-        console.error('Failed to load pdbe-molstar script:', e);
-        scriptLoading = false;
-    };
-    document.head.appendChild(script);
-}
-
-// Convert RGB to hex
-function rgbToHex(r: number, g: number, b: number): string {
-    return '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+    /** Per-residue coloring (e.g., frustration maps). Key format: "A45" (chain + residue number) */
+    residueColors?: Map<string, { r: number; g: number; b: number }>;
 }
 
 export default function MolstarViewer({
@@ -74,9 +30,10 @@ export default function MolstarViewer({
     height = 500,
     backgroundColor = '#0f172a',
     label,
-    selections
+    selections,
+    residueColors
 }: Props) {
-    const [isScriptLoaded, setIsScriptLoaded] = useState(scriptLoaded);
+    const [isScriptLoaded, setIsScriptLoaded] = useState(isMolstarLoaded());
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerRef = useRef<HTMLElement | null>(null);
 
@@ -91,7 +48,7 @@ export default function MolstarViewer({
 
     // Load the web component script
     useEffect(() => {
-        loadScript(() => setIsScriptLoaded(true));
+        ensureMolstarLoaded().then(() => setIsScriptLoaded(true));
     }, []);
 
     // Apply selections after viewer loads
@@ -147,6 +104,68 @@ export default function MolstarViewer({
         }
     }, [isScriptLoaded, selections, applySelections, absoluteUrl]);
 
+    // Apply per-residue coloring (for frustration maps, etc.)
+    const applyResidueColors = useCallback(async () => {
+        if (!residueColors || residueColors.size === 0) return;
+        if (!viewerRef.current) return;
+
+        const viewer = viewerRef.current as any;
+
+        // Wait for viewer to be ready
+        const waitForReady = async () => {
+            for (let i = 0; i < 50; i++) {
+                if (viewer.viewerInstance?.visual?.select) {
+                    return true;
+                }
+                await new Promise(r => setTimeout(r, 100));
+            }
+            return false;
+        };
+
+        const ready = await waitForReady();
+        if (!ready) {
+            console.warn('MolstarViewer: viewer not ready for residue coloring');
+            return;
+        }
+
+        try {
+            // Convert residueColors map to pdbe-molstar selection format
+            const colorData = Array.from(residueColors.entries()).map(([key, color]) => {
+                // Parse key like "A45" into chain and residue number
+                const match = key.match(/^([A-Za-z])(-?\d+)$/);
+                if (!match) {
+                    console.warn(`Invalid residue key format: ${key}`);
+                    return null;
+                }
+                return {
+                    struct_asym_id: match[1],
+                    start_residue_number: parseInt(match[2]),
+                    end_residue_number: parseInt(match[2]),
+                    color: rgbToHex(color.r, color.g, color.b),
+                    focus: false
+                };
+            }).filter(Boolean);
+
+            if (colorData.length > 0) {
+                await viewer.viewerInstance.visual.select({
+                    data: colorData,
+                    nonSelectedColor: '#444444'
+                });
+                console.log(`Applied ${colorData.length} residue colors`);
+            }
+        } catch (err) {
+            console.error('Failed to apply residue colors:', err);
+        }
+    }, [residueColors]);
+
+    // Call applyResidueColors when residueColors change
+    useEffect(() => {
+        if (isScriptLoaded && residueColors && residueColors.size > 0) {
+            const timer = setTimeout(applyResidueColors, 1500);
+            return () => clearTimeout(timer);
+        }
+    }, [isScriptLoaded, residueColors, applyResidueColors, absoluteUrl]);
+
     // Parse background color
     const bgColor = useMemo(() => {
         const match = backgroundColor.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
@@ -200,6 +219,7 @@ export default function MolstarViewer({
                 </div>
             )}
             {React.createElement('pdbe-molstar', {
+                key: absoluteUrl, // Force re-mount when URL changes
                 ref: (el: HTMLElement) => { viewerRef.current = el; },
                 'custom-data-url': absoluteUrl,
                 'custom-data-format': format,

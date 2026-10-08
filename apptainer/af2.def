@@ -37,7 +37,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     export PATH="/root/.local/bin:$PATH"
 
     # Upgrade pip
-    uv pip install -q -U --no-cache-dir pip setuptools wheel --system
+    uv pip install --compile -q -U --no-cache-dir pip setuptools wheel --system
 
     # Uninstall any existing JAX to prevent conflicts
     pip uninstall -y jax jaxlib 2>/dev/null || true
@@ -45,11 +45,11 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     # Install JAX 0.6.0+ with CUDA 12 support for Blackwell (sm_120)
     # JAX 0.8.x includes native support for RTX 5090 and other Blackwell GPUs
     # Note: JAX 0.8+ requires NumPy 2.0+
-    uv pip install --upgrade "jax[cuda12]>=0.6.0" --system
+    uv pip install --compile --upgrade "jax[cuda12]>=0.6.0" --system
     
     # Install dm-haiku 0.0.15 (latest version, compatible with JAX 0.8.x)
     # dm-haiku is in maintenance mode but keeps compatibility with latest JAX
-    uv pip install -q --no-cache-dir \
+    uv pip install --compile -q --no-cache-dir \
         "dm-haiku==0.0.15" \
         dm-tree \
         biopython==1.81 \
@@ -59,11 +59,11 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
     # Install TensorFlow 2.18+ (required by dl_binder_design's AlphaFold model imports)
     # TensorFlow 2.18+ is compatible with NumPy 2.0
-    uv pip install -q --no-cache-dir "tensorflow>=2.18" --system
+    uv pip install --compile -q --no-cache-dir "tensorflow>=2.18" --system
 
     # Install PyRosetta (required for AF2 Initial-Guess)
     # Note: UV handles large packages well, no need for extended timeout
-    uv pip install -q --no-cache-dir pyrosetta-installer --system
+    uv pip install --compile -q --no-cache-dir pyrosetta-installer --system
     python3.11 -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
 
     # Clone PapenfussLab fork of dl_binder_design (contains AF2 Initial-Guess modifications)
@@ -98,6 +98,9 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     python3.11 -c "import jax; print('JAX version:', jax.__version__)"
     python3.11 -c "import jaxlib; print('jaxlib version:', jaxlib.__version__)"
     python3.11 -c "import haiku; print('Haiku imported successfully')"
+
+    # Generate lockfile for reproducibility
+    uv pip freeze > /opt/venv/requirements.lock 2>/dev/null || true
 
 %environment
     export PATH=/usr/local/cuda/bin:$PATH
