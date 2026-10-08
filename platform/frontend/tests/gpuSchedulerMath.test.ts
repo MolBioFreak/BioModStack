@@ -31,3 +31,25 @@ test('GPU effective-limit round trip does not apply the safety margin twice', ()
         effectiveLimit,
     );
 });
+
+test('GPU floor-clamped no-op save preserves the configured threshold', () => {
+    const maxVramMb = 4_096;
+    const safetyMarginMb = 2_048;
+    const configuredThreshold = 0.5;
+    const effectiveLimit = effectiveVramLimitMb(maxVramMb, configuredThreshold, safetyMarginMb);
+
+    assert.equal(effectiveLimit, 1_024);
+    assert.equal(
+        thresholdFromEffectiveVramLimit(
+            maxVramMb,
+            effectiveLimit,
+            safetyMarginMb,
+            configuredThreshold,
+        ),
+        configuredThreshold,
+    );
+});
+
+test('GPU floor-aware inverse still honors an edited limit', () => {
+    assert.equal(thresholdFromEffectiveVramLimit(4_096, 1_200, 2_048, 0.5), 0.79296875);
+});
