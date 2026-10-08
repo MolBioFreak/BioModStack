@@ -237,6 +237,7 @@ def test_system_features_endpoint_returns_resolved_addon_flags(monkeypatch) -> N
     assert response.status_code == 200
     assert response.json() == {
         "features": {"bioxp": False, "stats_tools": True, "assay_db": False},
+        "dev_features": {"bioxp": True, "stats_tools": True, "assay_db": True},
     }
 
 
@@ -269,7 +270,10 @@ def test_system_features_put_merges_feature_flags_into_install_profile(monkeypat
     assert saved_payloads == [
         {"data_root": "/srv/biomodstack", "features": {"bioxp": False, "stats_tools": True, "assay_db": True}},
     ]
-    assert response.json() == {"features": {"bioxp": False, "stats_tools": True, "assay_db": True}}
+    assert response.json() == {
+        "features": {"bioxp": False, "stats_tools": True, "assay_db": True},
+        "dev_features": {"bioxp": True, "stats_tools": True, "assay_db": True},
+    }
 
 
 def test_runtime_ports_endpoint_persists_dev_and_prod_ports(monkeypatch) -> None:

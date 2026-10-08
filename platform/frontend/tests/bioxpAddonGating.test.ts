@@ -21,17 +21,17 @@ test('BioXP frontend route is gated by resolved install feature flags', () => {
     assert.match(appSource, /<Route path="\/bioxp" element=\{<BioXpCockpit \/>\} \/>/);
 });
 
-test('topbar add-on controls render only when their install feature is enabled', () => {
-    assert.match(layoutSource, /useBmsFeatures/);
-    assert.match(layoutSource, /const bmsFeatures = useBmsFeatures\(\)/);
+test('topbar add-on controls render only when their install feature is enabled and dev tools are visible', () => {
+    assert.match(layoutSource, /useBmsFeatureState/);
+    assert.match(layoutSource, /isBmsFeatureVisible/);
 
     const utilityBlock = sourceBetween(layoutSource, 'function TopbarUtilityControls', 'function MobileTopbarTools');
-    assert.match(utilityBlock, /bmsFeatures\.bioxp\s*&&\s*<BioXpInterlinkMenu \/>/);
-    assert.match(utilityBlock, /showSystemMenus && bmsFeatures\.assay_db && <DbServiceMenu \/>/);
-    assert.match(utilityBlock, /showSystemMenus && bmsFeatures\.stats_tools && <StatsToolsMenu \/>/);
+    assert.match(utilityBlock, /showBioXpDevFeature && <BioXpInterlinkMenu \/>/);
+    assert.match(utilityBlock, /showSystemMenus && showAssayDbDevFeature && <DbServiceMenu \/>/);
+    assert.match(utilityBlock, /showSystemMenus && showStatsToolsDevFeature && <StatsToolsMenu \/>/);
 
     const navBlock = sourceBetween(layoutSource, 'to="/assay"', '</DragScrollRail>');
-    assert.match(navBlock, /bmsFeatures\.bioxp\s*&&\s*\(/);
+    assert.match(navBlock, /showBioXpDevFeature\s*&&\s*\(/);
     assert.match(navBlock, /to="\/bioxp"/);
     assert.match(navBlock, /BioXP Handler/);
 });
@@ -42,6 +42,8 @@ test('diagnostics menu exposes button-first install add-on toggles', () => {
 
     for (const marker of [
         'Install add-ons',
+        'Show dev tools',
+        'Reveals BioXP, BMS DB, and Stats Tools menus',
         'Remove BioXP',
         'Add BioXP',
         'Remove Stats Tools',

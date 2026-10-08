@@ -18,7 +18,9 @@ import {
 } from '../runtime/runtimeSwitch';
 import {
     type BmsFeatureKey,
+    isBmsFeatureVisible,
     setBmsFeature as putBmsFeature,
+    useBmsFeatureState,
     useBmsFeatures,
 } from '../runtime/installFeatures';
 import { ThemeSelector } from './ThemeSelector';
@@ -127,10 +129,19 @@ async function collectUiDiagnosticsPayload(): Promise<UiDiagnosticsPayload> {
 }
 
 const SHOW_SYSTEM_ANALYTICS_TAB_KEY = 'show_system_analytics_tab';
+const SHOW_DEV_FEATURES_KEY = 'show_dev_features';
 
 function readShowSystemAnalyticsTab(): boolean {
     try {
         return localStorage.getItem(SHOW_SYSTEM_ANALYTICS_TAB_KEY) === 'true';
+    } catch {
+        return false;
+    }
+}
+
+function readShowDevFeatures(): boolean {
+    try {
+        return localStorage.getItem(SHOW_DEV_FEATURES_KEY) === 'true';
     } catch {
         return false;
     }
@@ -331,27 +342,36 @@ function useIsMobileTopbar(): boolean {
 interface TopbarUtilityControlsProps {
     showSystemMenus: boolean;
     showSystemAnalyticsTab: boolean;
+    showDevFeatures: boolean;
     onSetShowSystemAnalyticsTab: (enabled: boolean) => void;
+    onSetShowDevFeatures: (enabled: boolean) => void;
 }
 
 function TopbarUtilityControls({
     showSystemMenus,
     showSystemAnalyticsTab,
+    showDevFeatures,
     onSetShowSystemAnalyticsTab,
+    onSetShowDevFeatures,
 }: TopbarUtilityControlsProps) {
-    const bmsFeatures = useBmsFeatures();
+    const bmsFeatureState = useBmsFeatureState();
+    const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures);
+    const showStatsToolsDevFeature = isBmsFeatureVisible(bmsFeatureState, 'stats_tools', showDevFeatures);
+    const showAssayDbDevFeature = isBmsFeatureVisible(bmsFeatureState, 'assay_db', showDevFeatures);
 
     return (
         <>
             <ThemeSelector />
-            {bmsFeatures.bioxp && <BioXpInterlinkMenu />}
+            {showBioXpDevFeature && <BioXpInterlinkMenu />}
             {showSystemMenus && <PowerControlMenu />}
-            {showSystemMenus && bmsFeatures.assay_db && <DbServiceMenu />}
-            {showSystemMenus && bmsFeatures.stats_tools && <StatsToolsMenu />}
+            {showSystemMenus && showAssayDbDevFeature && <DbServiceMenu />}
+            {showSystemMenus && showStatsToolsDevFeature && <StatsToolsMenu />}
             {showSystemMenus && <MSAServerSettingsMenu />}
             <DebugMenu
                 showSystemAnalyticsTab={showSystemAnalyticsTab}
+                showDevFeatures={showDevFeatures}
                 onSetShowSystemAnalyticsTab={onSetShowSystemAnalyticsTab}
+                onSetShowDevFeatures={onSetShowDevFeatures}
             />
         </>
     );
@@ -360,7 +380,9 @@ function TopbarUtilityControls({
 function MobileTopbarTools({
     showSystemMenus,
     showSystemAnalyticsTab,
+    showDevFeatures,
     onSetShowSystemAnalyticsTab,
+    onSetShowDevFeatures,
 }: TopbarUtilityControlsProps) {
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -434,7 +456,9 @@ function MobileTopbarTools({
                         <TopbarUtilityControls
                             showSystemMenus={showSystemMenus}
                             showSystemAnalyticsTab={showSystemAnalyticsTab}
+                            showDevFeatures={showDevFeatures}
                             onSetShowSystemAnalyticsTab={onSetShowSystemAnalyticsTab}
+                            onSetShowDevFeatures={onSetShowDevFeatures}
                         />
                     </div>
                 </div>
@@ -446,8 +470,10 @@ function MobileTopbarTools({
 export function Layout({ children }: LayoutProps) {
     const location = useLocation();
     const isMobileTopbar = useIsMobileTopbar();
-    const bmsFeatures = useBmsFeatures();
+    const bmsFeatureState = useBmsFeatureState();
     const [showSystemAnalyticsTab, setShowSystemAnalyticsTab] = useState<boolean>(() => readShowSystemAnalyticsTab());
+    const [showDevFeatures, setShowDevFeatures] = useState<boolean>(() => readShowDevFeatures());
+    const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures);
 
     const isActive = (path: string) => location.pathname === path;
     const showSystemMenus = location.pathname !== '/ngs';
@@ -455,12 +481,21 @@ export function Layout({ children }: LayoutProps) {
     useEffect(() => {
         const activeTab = document.querySelector<HTMLElement>('[data-bms-primary-nav-active="true"]');
         activeTab?.scrollIntoView({ block: 'nearest', inline: 'center' });
-    }, [location.pathname, showSystemAnalyticsTab]);
+    }, [location.pathname, showSystemAnalyticsTab, showDevFeatures]);
 
     const handleSetShowSystemAnalyticsTab = (enabled: boolean) => {
         setShowSystemAnalyticsTab(enabled);
         try {
             localStorage.setItem(SHOW_SYSTEM_ANALYTICS_TAB_KEY, String(enabled));
+        } catch {
+            // Ignore localStorage failures and keep UI responsive.
+        }
+    };
+
+    const handleSetShowDevFeatures = (enabled: boolean) => {
+        setShowDevFeatures(enabled);
+        try {
+            localStorage.setItem(SHOW_DEV_FEATURES_KEY, String(enabled));
         } catch {
             // Ignore localStorage failures and keep UI responsive.
         }
@@ -510,7 +545,9 @@ export function Layout({ children }: LayoutProps) {
                                 <MobileTopbarTools
                                     showSystemMenus={showSystemMenus}
                                     showSystemAnalyticsTab={showSystemAnalyticsTab}
+                                    showDevFeatures={showDevFeatures}
                                     onSetShowSystemAnalyticsTab={handleSetShowSystemAnalyticsTab}
+                                    onSetShowDevFeatures={handleSetShowDevFeatures}
                                 />
                             )}
                         </div>
@@ -607,7 +644,7 @@ export function Layout({ children }: LayoutProps) {
                                         System Analytics
                                     </Link>
                                 )}
-                                {bmsFeatures.bioxp && (
+                                {showBioXpDevFeature && (
                                     <Link
                                         to="/bioxp"
                                         data-bms-primary-nav-active={isActive('/bioxp') ? 'true' : undefined}
@@ -632,7 +669,9 @@ export function Layout({ children }: LayoutProps) {
                                 <TopbarUtilityControls
                                     showSystemMenus={showSystemMenus}
                                     showSystemAnalyticsTab={showSystemAnalyticsTab}
+                                    showDevFeatures={showDevFeatures}
                                     onSetShowSystemAnalyticsTab={handleSetShowSystemAnalyticsTab}
+                                    onSetShowDevFeatures={handleSetShowDevFeatures}
                                 />
                             </div>
                         )}
@@ -834,10 +873,14 @@ function DiagnosticsMenu() {
 
 function DebugMenu({
     showSystemAnalyticsTab,
+    showDevFeatures,
     onSetShowSystemAnalyticsTab,
+    onSetShowDevFeatures,
 }: {
     showSystemAnalyticsTab: boolean;
+    showDevFeatures: boolean;
     onSetShowSystemAnalyticsTab: (enabled: boolean) => void;
+    onSetShowDevFeatures: (enabled: boolean) => void;
 }) {
     const [isOpen, setIsOpen] = useState(false);
     const [loading, setLoading] = useState<string | null>(null);
@@ -873,7 +916,14 @@ function DebugMenu({
         setResult(null);
         try {
             const features = await putBmsFeature(feature, enabled);
-            queryClient.setQueryData(['bms-install-features'], features);
+            queryClient.setQueryData(['bms-install-features'], (previous: unknown) => ({
+                ...(
+                    previous && typeof previous === 'object'
+                        ? previous as Record<string, unknown>
+                        : {}
+                ),
+                features,
+            }));
             setResult(`✓ ${feature} ${enabled ? 'added' : 'removed'}; restart required`);
         } catch (error) {
             setResult(`✗ Add-on update failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -921,6 +971,18 @@ function DebugMenu({
                                     type="checkbox"
                                     checked={showSystemAnalyticsTab}
                                     onChange={(event) => onSetShowSystemAnalyticsTab(event.target.checked)}
+                                    className="h-4 w-4"
+                                />
+                            </label>
+                            <label className="flex items-center justify-between gap-3 px-2 py-2 rounded-lg hover:bg-slate-700/40 transition-colors">
+                                <span>
+                                    <span className="block text-sm text-slate-300">Show dev tools</span>
+                                    <span className="block text-[11px] text-slate-500">Reveals BioXP, BMS DB, and Stats Tools menus</span>
+                                </span>
+                                <input
+                                    type="checkbox"
+                                    checked={showDevFeatures}
+                                    onChange={(event) => onSetShowDevFeatures(event.target.checked)}
                                     className="h-4 w-4"
                                 />
                             </label>

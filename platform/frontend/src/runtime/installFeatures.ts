@@ -6,11 +6,23 @@ export const DEFAULT_BMS_FEATURES = {
     assay_db: true,
 } as const;
 
+export const DEFAULT_BMS_DEV_FEATURES = {
+    bioxp: true,
+    stats_tools: true,
+    assay_db: true,
+} as const;
+
 export type BmsFeatureKey = keyof typeof DEFAULT_BMS_FEATURES;
 export type BmsFeatures = Record<BmsFeatureKey, boolean>;
 
+export interface BmsFeatureState {
+    features: BmsFeatures;
+    devFeatures: BmsFeatures;
+}
+
 interface BmsFeaturesEnvelope {
     features?: Partial<Record<BmsFeatureKey, unknown>> | null;
+    dev_features?: Partial<Record<BmsFeatureKey, unknown>> | null;
 }
 
 function coerceFeatureBool(value: unknown, fallback: boolean): boolean {
@@ -47,17 +59,43 @@ export function normalizeBmsFeatures(payload: unknown): BmsFeatures {
     };
 }
 
+function normalizeBmsDevFeatures(payload: unknown): BmsFeatures {
+    const defaults: BmsFeatures = { ...DEFAULT_BMS_DEV_FEATURES };
+    const envelope = payload && typeof payload === 'object' ? payload as BmsFeaturesEnvelope : null;
+    const rawFeatures = envelope?.dev_features;
+    if (!rawFeatures || typeof rawFeatures !== 'object') {
+        return defaults;
+    }
+
+    return {
+        bioxp: coerceFeatureBool(rawFeatures.bioxp, defaults.bioxp),
+        stats_tools: coerceFeatureBool(rawFeatures.stats_tools, defaults.stats_tools),
+        assay_db: coerceFeatureBool(rawFeatures.assay_db, defaults.assay_db),
+    };
+}
+
+export function normalizeBmsFeatureState(payload: unknown): BmsFeatureState {
+    return {
+        features: normalizeBmsFeatures(payload),
+        devFeatures: normalizeBmsDevFeatures(payload),
+    };
+}
+
 export function isBmsFeatureEnabled(features: BmsFeatures, feature: BmsFeatureKey): boolean {
     return features[feature];
 }
 
-async function fetchBmsFeatures(): Promise<BmsFeatures> {
+export function isBmsFeatureVisible(state: BmsFeatureState, feature: BmsFeatureKey, showDevFeatures: boolean): boolean {
+    return state.features[feature] && (showDevFeatures || !state.devFeatures[feature]);
+}
+
+async function fetchBmsFeatureState(): Promise<BmsFeatureState> {
     const response = await fetch('/api/system/features', { cache: 'no-store' });
     if (!response.ok) {
         throw new Error(`install features unavailable (${response.status})`);
     }
     const payload = await response.json().catch(() => null) as unknown;
-    return normalizeBmsFeatures(payload);
+    return normalizeBmsFeatureState(payload);
 }
 
 export async function setBmsFeature(feature: BmsFeatureKey, enabled: boolean): Promise<BmsFeatures> {
@@ -75,10 +113,17 @@ export async function setBmsFeature(feature: BmsFeatureKey, enabled: boolean): P
 }
 
 export function useBmsFeatures(): BmsFeatures {
+    return useBmsFeatureState().features;
+}
+
+export function useBmsFeatureState(): BmsFeatureState {
     const query = useQuery({
         queryKey: ['bms-install-features'],
-        queryFn: fetchBmsFeatures,
+        queryFn: fetchBmsFeatureState,
         staleTime: 60_000,
     });
-    return query.data ?? { ...DEFAULT_BMS_FEATURES };
+    return query.data ?? {
+        features: { ...DEFAULT_BMS_FEATURES },
+        devFeatures: { ...DEFAULT_BMS_DEV_FEATURES },
+    };
 }
