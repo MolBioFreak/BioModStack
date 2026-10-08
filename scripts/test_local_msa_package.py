@@ -21,6 +21,11 @@ NON_TEST_IMPORT_TARGETS = [
     SCRIPT_DIR / "check_protenix_msa_preflight.py",
 ]
 
+ENTRYPOINT_IMPORT_TARGETS = {
+    SCRIPT_DIR / "run_local_msa.py": "lib.local_msa.cli.run_single",
+    SCRIPT_DIR / "batch_msa.py": "lib.local_msa.cli.run_batch",
+}
+
 
 def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -46,6 +51,12 @@ def test_check_protenix_msa_preflight_stops_importing_prepare_protenix_script() 
     imported = _imported_modules(SCRIPT_DIR / "check_protenix_msa_preflight.py")
 
     assert "prepare_protenix_msa" not in imported, "check_protenix_msa_preflight.py still imports prepare_protenix_msa"
+
+
+def test_local_msa_entrypoints_import_cli_helpers() -> None:
+    for path, expected_module in ENTRYPOINT_IMPORT_TARGETS.items():
+        imported = _imported_modules(path)
+        assert expected_module in imported, f"{path.name} should import {expected_module}"
 
 
 def test_local_msa_runtime_package_surface_stops_static_import_of_run_local_msa() -> None:
