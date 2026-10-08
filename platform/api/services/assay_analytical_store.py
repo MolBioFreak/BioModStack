@@ -1026,6 +1026,7 @@ async def load_analytical_dataset(dataset_id: str) -> dict[str, Any] | None:
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                     "completed_at": row.completed_at.isoformat() if row.completed_at else None,
                     "result_summary": row.result_summary_json or {},
+                    "plotly_json": row.plotly_json or {},
                     "has_plotly_json": row.plotly_json is not None,
                 }
                 for row in analysis_rows
@@ -1102,6 +1103,33 @@ async def load_analytical_dataset(dataset_id: str) -> dict[str, Any] | None:
         if chromatography_summary is not None:
             payload["chromatography_summary"] = chromatography_summary
             payload["chromatography_injections"] = chromatography_injections
+            payload["peak_table"] = [
+                {
+                    "analytical_peak_id": peak.id,
+                    "analytical_injection_id": peak.injection_id,
+                    "peak_id": peak.source_peak_index,
+                    "peak_name": peak.peak_name,
+                    "analyte": peak.analyte,
+                    "isoform_class": peak.isoform_class,
+                    "retention_time": peak.rt,
+                    "retention_time_min": peak.rt,
+                    "start_rt": peak.start_rt,
+                    "end_rt": peak.end_rt,
+                    "area": peak.area,
+                    "area_percent": peak.percent_area,
+                    "height": peak.height,
+                    "amount": peak.amount,
+                    "resolution": peak.resolution,
+                    "width": peak.width,
+                    "asymmetry": peak.asymmetry,
+                    "tailing": peak.tailing,
+                    "plates": peak.plates,
+                    "signal_to_noise": peak.signal_to_noise,
+                    "concentration": peak.concentration,
+                    "peak_source": (peak.metadata_json or {}).get("peak_source"),
+                }
+                for peak in sorted(peak_rows, key=lambda item: ((item.injection_id or ""), item.source_peak_index or 0, item.rt or 0.0))
+            ]
         return payload
 
 
