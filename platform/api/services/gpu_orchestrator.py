@@ -15,7 +15,10 @@ Key Features:
 import asyncio
 import logging
 import math
+import os
+import re
 from datetime import datetime
+from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass
 
@@ -85,31 +88,195 @@ VRAM_PROFILES = {
     'thermompnn': {'base': 2000, 'scale': 5},   # ThermoMPNN (stability-focused)
     'frustrampnn': {'base': 2500, 'scale': 8},  # FrustraMPNN (frustration analysis)
     # ──────────────────────────────────────────────────────────────────────────
+    # PROTENIX VARIANTS - measured from docs: 6GB@500tok → 78GB@4000tok
+    # ──────────────────────────────────────────────────────────────────────────
+    'protenix': {'base': 4000, 'scale': 55},          # Protenix base (MSA mode)
+    'protenix_esm': {'base': 6000, 'scale': 60},      # Protenix ESM2-3B (no-MSA, heavier)
+    'protenix_mini_esm': {'base': 5000, 'scale': 50}, # Protenix mini ESM (lighter no-MSA)
+    # ──────────────────────────────────────────────────────────────────────────
     'diffdock': {'base': 4000, 'scale': 12},    # DiffDock
     'unidock': {'base': 3000, 'scale': 8},      # Uni-Dock
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
     'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
     'antibody_denovo': {'base': 6000, 'scale': 25},  # Full antibody pipeline
+    'oligo_design': {'base': 7000, 'scale': 20},     # Oligo Designer (RFDpoly + NA-MPNN)
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
 
 # Models that need heavy GPUs (exclude 5060 Ti)
 HEAVY_MODELS = {'af2', 'rfdiffusion', 'rf3'}
+PROTENIX_MODELS = {'protenix', 'protenix_esm', 'protenix_mini_esm'}
 
 
-def estimate_vram(model_type: str, sequence_length: int) -> int:
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_protenix_profile(params: Dict[str, Any]) -> str:
+    """Map Protenix params to the closest VRAM profile."""
+    use_msa = _coerce_bool(params.get("protenix_use_msa", True), default=True)
+    model_name = str(params.get("protenix_model_weights", "")).strip().lower()
+
+    if "mini" in model_name and ("esm" in model_name or "ism" in model_name):
+        return "protenix_mini_esm"
+    if "esm" in model_name or "ism" in model_name:
+        return "protenix_esm"
+    if not use_msa:
+        # Pipeline auto-switches to mini ESM when MSA is disabled on a base model.
+        return "protenix_mini_esm"
+    return "protenix"
+
+
+def _normalize_msa_preset(value: Any) -> str:
+    preset = str(value).strip().lower() if value is not None else "fast"
+    if preset in {"maximum", "max"}:
+        return "maximum"
+    if preset in {"balanced", "balance", "medium"}:
+        return "balanced"
+    return "fast"
+
+
+def estimate_protenix_tokens(params: Any, fallback_length: int = 300) -> int:
+    """
+    Estimate Protenix total-token load from input payload.
+
+    Protenix memory scales with total tokens across all entities in the complex.
+    """
+    payload: Dict[str, Any] = {}
+    if isinstance(params, dict):
+        payload = params
+    elif isinstance(params, str):
+        try:
+            import json
+            loaded = json.loads(params)
+            if isinstance(loaded, dict):
+                payload = loaded
+        except Exception:
+            payload = {}
+
+    total_tokens = 0
+    components = payload.get("complex_components")
+    if isinstance(components, list):
+        for comp in components:
+            if not isinstance(comp, dict):
+                continue
+            comp_type = str(comp.get("type", "")).strip().lower()
+            count = max(1, _coerce_int(comp.get("count", 1), 1))
+
+            if comp_type in {"protein", "peptide", "dna", "rna"}:
+                sequence = comp.get("sequence")
+                if isinstance(sequence, str) and sequence:
+                    total_tokens += len(sequence) * count
+                continue
+
+            # Ligands/ions are much smaller; approximate using atom count if available.
+            if comp_type in {"ligand", "ion"}:
+                atom_count = _coerce_int(comp.get("atom_count"), 0)
+                if atom_count <= 0:
+                    smiles = comp.get("smiles")
+                    if isinstance(smiles, str) and smiles:
+                        atom_count = max(1, len(re.findall(r"[A-Z][a-z]?", smiles)))
+                    elif comp.get("ccd") or comp.get("ion") or comp.get("element"):
+                        atom_count = 1
+                if atom_count > 0:
+                    total_tokens += atom_count * count
+
+    if total_tokens > 0:
+        return total_tokens
+
+    for key in ("sequence_input", "sequence"):
+        sequence = payload.get(key)
+        if isinstance(sequence, str) and sequence:
+            return len(sequence)
+
+    return max(1, _coerce_int(fallback_length, 300))
+
+
+def _protenix_runtime_multiplier(params: Dict[str, Any]) -> float:
+    """
+    Apply conservative multipliers for Protenix runtime knobs that increase memory.
+    """
+    n_sample = max(1, _coerce_int(params.get("protenix_n_sample", 5), 5))
+    n_cycle = max(1, _coerce_int(params.get("protenix_n_cycle", 10), 10))
+    n_step = max(1, _coerce_int(params.get("protenix_n_step", 200), 200))
+    use_msa = _coerce_bool(params.get("protenix_use_msa", True), default=True)
+    msa_preset = _normalize_msa_preset(params.get("msa_preset", "fast"))
+    msa_max_seqs = _coerce_int(params.get("msa_max_seqs"), 0)
+    use_template = _coerce_bool(params.get("protenix_use_template", False), default=False)
+
+    multiplier = 1.0
+    if n_sample > 1:
+        multiplier += min(0.60, 0.08 * (n_sample - 1))
+    if n_cycle > 8:
+        multiplier += min(0.35, 0.03 * (n_cycle - 8))
+    if n_step > 200:
+        multiplier += min(0.20, 0.0005 * (n_step - 200))
+    if use_msa:
+        if msa_preset == "balanced":
+            multiplier += 0.10
+        elif msa_preset == "maximum":
+            multiplier += 0.20
+        if msa_max_seqs > 8000:
+            multiplier += 0.12
+        elif msa_max_seqs > 4000:
+            multiplier += 0.06
+    if use_template:
+        multiplier += 0.08
+
+    return max(1.0, min(2.5, multiplier))
+
+
+def estimate_vram(model_type: str, sequence_length: int, params: Optional[Any] = None) -> int:
     """
     Estimate VRAM required for a job.
     
     Uses quadratic scaling: base + scale * (length/100)^2
     """
-    profile = VRAM_PROFILES.get(model_type, VRAM_PROFILES['default'])
+    normalized_model = (model_type or "default").strip().lower()
+    effective_length = max(1, _coerce_int(sequence_length, 300))
+    runtime_multiplier = 1.0
+    profile_key = normalized_model
+
+    if normalized_model == "protenix":
+        protenix_params: Dict[str, Any] = {}
+        if isinstance(params, dict):
+            protenix_params = params
+        elif isinstance(params, str):
+            try:
+                import json
+                loaded = json.loads(params)
+                if isinstance(loaded, dict):
+                    protenix_params = loaded
+            except Exception:
+                protenix_params = {}
+        effective_length = estimate_protenix_tokens(protenix_params, effective_length)
+        profile_key = _normalize_protenix_profile(protenix_params)
+        runtime_multiplier = _protenix_runtime_multiplier(protenix_params)
+
+    profile = VRAM_PROFILES.get(profile_key, VRAM_PROFILES['default'])
     base = profile['base']
     scale = profile['scale']
     
     # Quadratic scaling for attention-based models
-    length_factor = (sequence_length / 100) ** 2
-    estimated = int(base + scale * length_factor)
+    length_factor = (effective_length / 100) ** 2
+    estimated = int((base + scale * length_factor) * runtime_multiplier)
     
     return estimated
 
@@ -151,6 +318,27 @@ def _normalize_pinned_gpus(raw_value: Any) -> Optional[List[int]]:
     return normalized or None
 
 
+def _normalize_gpu_id_list(raw_value: Any) -> Optional[List[int]]:
+    """Normalize scheduler-config GPU list (list or comma string) to sorted ints."""
+    if raw_value is None:
+        return None
+    values = []
+    if isinstance(raw_value, list):
+        values = raw_value
+    elif isinstance(raw_value, str):
+        values = [v.strip() for v in raw_value.split(",") if v.strip()]
+    else:
+        return None
+
+    normalized = []
+    for value in values:
+        try:
+            normalized.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(normalized)) or None
+
+
 def _median(values: List[int]) -> Optional[int]:
     if not values:
         return None
@@ -159,6 +347,58 @@ def _median(values: List[int]) -> Optional[int]:
     if len(sorted_vals) % 2 == 1:
         return sorted_vals[mid]
     return int((sorted_vals[mid - 1] + sorted_vals[mid]) / 2)
+
+
+def _read_nextflow_history_statuses(job_ids: List[str]) -> Dict[str, Tuple[str, str]]:
+    """
+    Return latest Nextflow history status for each requested job id.
+
+    Output map: {job_id: (status_token, duration)} where status_token is typically
+    "OK", "ERR", or "-".
+    """
+    if not job_ids:
+        return {}
+
+    try:
+        from paths import get_code_root
+        history_path = get_code_root() / ".nextflow" / "history"
+    except Exception:
+        return {}
+
+    if not history_path.exists():
+        return {}
+
+    target_ids = {str(jid) for jid in job_ids}
+    found: Dict[str, Tuple[str, str]] = {}
+    job_id_pattern = re.compile(r"--job_id\s+([0-9a-fA-F-]{36})")
+
+    try:
+        lines = history_path.read_text(errors="ignore").splitlines()
+    except Exception as history_err:
+        logger.debug(f"[COMPLETION] Could not read Nextflow history: {history_err}")
+        return {}
+
+    # Scan newest-first so we capture the latest status for each job.
+    for line in reversed(lines):
+        if len(found) >= len(target_ids):
+            break
+        if "--job_id" not in line:
+            continue
+
+        match = job_id_pattern.search(line)
+        if not match:
+            continue
+
+        job_id = match.group(1)
+        if job_id not in target_ids or job_id in found:
+            continue
+
+        parts = line.split("\t")
+        status_token = parts[3].strip().upper() if len(parts) > 3 else ""
+        duration = parts[1].strip() if len(parts) > 1 else ""
+        found[job_id] = (status_token, duration)
+
+    return found
 
 
 def _compute_auto_limit(
@@ -273,10 +513,20 @@ def pack_jobs_to_gpus(
         if not is_gpu_disabled(g.index, config)
     ]
     active_gpu_ids = {g.index for g in active_gpus}
+    global_config = config.get("global", {})
+    msa_preferred = _normalize_gpu_id_list(global_config.get("msa_preferred_gpu_ids")) or []
+    msa_preferred_active = [gpu_id for gpu_id in msa_preferred if gpu_id in active_gpu_ids]
+    msa_avoid_heavy = bool(global_config.get("msa_avoid_heavy_gpus", False))
+    non_heavy_active_ids = {
+        g.index for g in active_gpus
+        if not GPU_CAPABILITIES.get(g.index, {'supports_heavy': True}).get('supports_heavy', True)
+    }
     
     if not active_gpus:
         logger.warning("[PACK] No active GPUs available (all disabled)")
         return []
+    if msa_preferred and not msa_preferred_active:
+        logger.warning(f"[PACK] MSA preferred GPUs {msa_preferred} are unavailable; using general GPU selection")
     
     # ═══════════════════════════════════════════════════════════════════════
     # 2. SORT JOBS - Priority first, then VRAM descending, then age
@@ -300,6 +550,15 @@ def pack_jobs_to_gpus(
     for job in sorted_jobs:
         best_gpu = None
         best_score = -float('inf')
+
+        if job.model_type in PROTENIX_MODELS:
+            has_protenix_gpu = any(
+                GPU_CAPABILITIES.get(g.index, {'supports_protenix': True}).get('supports_protenix', True)
+                for g in active_gpus
+            )
+            if not has_protenix_gpu:
+                logger.warning(f"[PACK] {job.name}: No Protenix-compatible GPU available")
+                continue
         
         # Log if this job has a multi-GPU allowlist
         if job.pinned_gpus is not None and len(job.pinned_gpus) > 0:
@@ -370,6 +629,11 @@ def pack_jobs_to_gpus(
             if job.pinned_gpus is not None and len(job.pinned_gpus) > 0:
                 if gpu.index not in job.pinned_gpus:
                     continue  # This GPU is not in the allowlist
+
+            # Check 1c: MSA preferred GPU allowlist from scheduler config (if active)
+            if job.model_type == 'msa_batch' and msa_preferred_active:
+                if gpu.index not in msa_preferred_active:
+                    continue
             
             # Check 2: GPU lock exclusion (skip GPUs locked by other batches)
             job_batch_id = getattr(job, 'batch_id', None)
@@ -379,6 +643,11 @@ def pack_jobs_to_gpus(
             # Check 3: Model compatibility (heavy models skip 5060 Ti)
             if job.model_type in HEAVY_MODELS:
                 if not gpu_caps.get('supports_heavy', True):
+                    continue
+
+            # Check 3b: Protenix compatibility (skip unsupported GPUs, e.g. Blackwell until stack update)
+            if job.model_type in PROTENIX_MODELS:
+                if not gpu_caps.get('supports_protenix', True):
                     continue
             
             # Check 4: VRAM availability (with per-GPU safety margin)
@@ -394,7 +663,6 @@ def pack_jobs_to_gpus(
             # SCORING: Configurable weights for GPU preference
             # ═══════════════════════════════════════════════════════════════
             # Read weights from config
-            global_config = config.get("global", {})
             capacity_weight = global_config.get("capacity_weight", 3.0)
             emptiness_weight = global_config.get("emptiness_weight", 5.0)
             
@@ -419,6 +687,13 @@ def pack_jobs_to_gpus(
                 + emptiness_bonus
                 - gpu.index * 0.001  # Tie-breaker: prefer GPU 0
             )
+
+            # Keep MSA lightweight by favoring non-heavy GPUs when requested.
+            if job.model_type == 'msa_batch' and msa_avoid_heavy and non_heavy_active_ids:
+                if gpu.index in non_heavy_active_ids:
+                    score += 1000.0
+                else:
+                    score -= 1000.0
             
             if score > best_score:
                 best_score = score
@@ -529,7 +804,8 @@ class GPUOrchestrator:
             
             # ═══════════════════════════════════════════════════════════════════
             # CRITICAL: MSA job limiting - only ONE MSA batch at a time
-            # Multiple MSA jobs in parallel cause DRAM OOM (~16GB each)
+            # Multiple MSA jobs in parallel can cause DRAM pressure.
+            # Concurrency is configurable via scheduler global.msa_concurrency_limit.
             # ═══════════════════════════════════════════════════════════════════
             running_msa_count_result = await session.execute(
                 select(func.count()).where(
@@ -538,6 +814,11 @@ class GPUOrchestrator:
                 )
             )
             running_msa_count = running_msa_count_result.scalar() or 0
+            msa_concurrency_limit = config.get("global", {}).get("msa_concurrency_limit", 1)
+            try:
+                msa_concurrency_limit = max(1, int(msa_concurrency_limit))
+            except (TypeError, ValueError):
+                msa_concurrency_limit = 1
             
             # Build the base query for queued jobs
             base_conditions = [
@@ -550,10 +831,13 @@ class GPUOrchestrator:
                 or_(Job.parent_job_id.is_(None), Job.queue_status != "pending_msa")
             ]
             
-            # If MSA job is already running, exclude other MSA jobs from scheduling
-            if running_msa_count > 0:
+            # If MSA concurrency limit is reached, exclude additional MSA jobs.
+            if running_msa_count >= msa_concurrency_limit:
                 base_conditions.append(Job.model_id != 'msa_batch')
-                logger.debug("[ORCHESTRATOR] MSA job running, blocking additional MSA jobs")
+                logger.debug(
+                    "[ORCHESTRATOR] MSA concurrency reached "
+                    f"({running_msa_count}/{msa_concurrency_limit}); blocking additional MSA jobs"
+                )
             
             result = await session.execute(
                 select(Job).where(
@@ -565,23 +849,57 @@ class GPUOrchestrator:
             )
             pending_jobs = result.scalars().all()
             
+            
             if not pending_jobs:
                 return  # Nothing to do
+            
+            # ═══════════════════════════════════════════════════════════════════════
+            # CPU-ONLY FAST PATH: Launch vram_estimate_mb == 0 jobs directly
+            # These jobs (e.g. FASTQ-only nanopore) don't need GPU allocation.
+            # ═══════════════════════════════════════════════════════════════════════
+            cpu_only_jobs = [j for j in pending_jobs if (j.vram_estimate_mb or 0) == 0]
+            gpu_jobs = [j for j in pending_jobs if (j.vram_estimate_mb or 0) > 0]
+            
+            for job in cpu_only_jobs:
+                try:
+                    await self.launch_nextflow_job(
+                        job_id=job.id,
+                        model_id=job.model_id,
+                        mode=job.mode,
+                        params={**job.params},  # No gpu_id injected
+                        output_dir=job.output_dir
+                    )
+                    job.queue_status = "running"
+                    job.assigned_gpu = None
+                    job.started_at = datetime.utcnow()
+                    logger.info(f"[LAUNCH CPU] {job.name} (no GPU, vram_estimate=0)")
+                except Exception as e:
+                    logger.error(f"[LAUNCH CPU FAILED] {job.name}: {e}")
+                    job.queue_status = "failed"
+                    job.error_message = str(e)
+            
+            if cpu_only_jobs:
+                await session.commit()
+            
+            pending_jobs = gpu_jobs
+            if not pending_jobs:
+                return  # Only CPU jobs were queued
             
             # Concurrency limits applied later after GPU stats are available
             
             # Convert to JobInfo for packing
             job_infos = []
             for job in pending_jobs:
+                job_params = _normalize_job_params(job.params)
+
                 # Estimate VRAM if not set
                 vram = job.vram_estimate_mb
                 if vram is None:
                     seq_len = job.sequence_length or 300
                     model = job.model_id or 'default'
-                    vram = estimate_vram(model, seq_len)
+                    vram = estimate_vram(model, seq_len, job_params)
                 
                 # Extract pinned_gpus from job params if present
-                job_params = _normalize_job_params(job.params)
                 pinned_gpus = _normalize_pinned_gpus(job_params.get('pinned_gpus'))
                 
                 job_infos.append(JobInfo(
@@ -763,7 +1081,7 @@ class GPUOrchestrator:
         try:
             async with self.db_session_factory() as session:
                 from sqlalchemy import select, func
-                from database import Job
+                from database import Job, Design
                 
                 # Get jobs that are currently running
                 result = await session.execute(
@@ -775,6 +1093,22 @@ class GPUOrchestrator:
                 
                 if not running_jobs:
                     return
+
+                # Snapshot terminal status from Nextflow history. This lets us
+                # reconcile jobs even when API-side launch monitoring was interrupted.
+                history_status_by_job = _read_nextflow_history_statuses(
+                    [str(job.id) for job in running_jobs]
+                )
+
+                # Cross-check against launcher-tracked Nextflow processes.
+                # This prevents stale "completed" reconciliation when ps parsing
+                # misses a still-active process.
+                active_launch_jobs = set()
+                try:
+                    from services.nextflow import get_running_jobs
+                    active_launch_jobs = set(get_running_jobs().keys())
+                except Exception as proc_err:
+                    logger.debug(f"[COMPLETION] Could not query launcher running jobs: {proc_err}")
                 
                 # Get all running processes once (expensive operation)
                 try:
@@ -794,22 +1128,27 @@ class GPUOrchestrator:
                 for line in all_processes.split('\n'):
                     if 'seq_design.py' in line or 'nextflow' in line:
                         # Try to extract gpu_id from the process args
-                        import re
                         gpu_match = re.search(r'gpu_id[=\s]+(\d+)', line)
                         if gpu_match:
                             gpu_id = int(gpu_match.group(1))
                             gpu_has_activity[gpu_id] = gpu_has_activity.get(gpu_id, 0) + 1
                 
-                completions = 0
+                stale_fail_after_seconds = 300
+                try:
+                    stale_fail_after_seconds = max(
+                        60,
+                        int(os.getenv("BMS_STALE_RECONCILE_FAIL_SECONDS", "300")),
+                    )
+                except Exception:
+                    stale_fail_after_seconds = 300
+
+                reconciled = 0
                 for job in running_jobs:
-                    # CRITICAL: Skip ALL top-level jobs - they complete via their own Nextflow workflow
-                    # Only mark CHILD jobs (spawned by a parent) as complete via process detection
-                    # Top-level jobs run the full pipeline and complete via Nextflow exit
-                    if job.parent_job_id is None:
-                        logger.debug(f"[COMPLETION] Skipping top-level job {job.name}")
-                        continue
-                    
                     job_is_running = False
+
+                    # Method 0: Trust launcher's active process registry.
+                    if job.id in active_launch_jobs:
+                        job_is_running = True
                     
                     # Method 1: Check if job ID appears in any process (Nextflow uses --job_id UUID)
                     # Also check job name as fallback for non-Nextflow processes
@@ -829,21 +1168,126 @@ class GPUOrchestrator:
                             else:
                                 job_is_running = True
                     
-                    # Method 3: If job has been running > 1 minute and no process found, mark complete
+                    # Method 3: If job has been running > 1 minute and no process found, reconcile state
                     if not job_is_running and job.started_at:
-                        from datetime import timezone
                         age_seconds = (datetime.utcnow() - job.started_at).total_seconds()
                         if age_seconds > 60:  # Only mark complete if running > 1 min
-                            job.queue_status = "completed"
-                            if job.status == "running":
-                                job.status = "completed"
-                            job.completed_at = datetime.utcnow()
-                            completions += 1
-                            logger.info(f"[COMPLETION] {job.name} completed (no process found, age: {age_seconds:.0f}s)")
+                            history_status = history_status_by_job.get(str(job.id))
+                            history_outcome = None
+                            history_note = None
+                            if history_status:
+                                status_token, duration = history_status
+                                duration_suffix = f", duration {duration}" if duration else ""
+                                if status_token == "ERR":
+                                    history_outcome = "failed"
+                                    history_note = f"Reconciled from .nextflow/history (ERR{duration_suffix})"
+                                elif status_token == "OK":
+                                    history_outcome = "completed"
+                                    history_note = f"Reconciled from .nextflow/history (OK{duration_suffix})"
+
+                            failure_reason = history_note if history_outcome == "failed" else None
+                            if failure_reason is None and job.error_message:
+                                failure_reason = str(job.error_message)
+                            elif failure_reason is None and history_outcome != "completed" and job.output_dir:
+                                try:
+                                    out_dir = Path(job.output_dir)
+                                    nf_log = out_dir / "nextflow.log"
+                                    if not nf_log.exists():
+                                        nf_log = out_dir / ".nextflow.log"
+                                    if nf_log.exists():
+                                        tail = nf_log.read_text(errors="ignore")[-8000:]
+                                        error_markers = (
+                                            "ERROR ~ Error executing process",
+                                            "terminated with an error exit status",
+                                            "Nextflow exited with code",
+                                            "CUDA out of memory",
+                                        )
+                                        for marker in error_markers:
+                                            if marker in tail:
+                                                failure_reason = f"Reconciled from nextflow.log: {marker}"
+                                                break
+                                except Exception as log_err:
+                                    logger.debug(f"[COMPLETION] Could not inspect nextflow log for {job.name}: {log_err}")
+
+                            if failure_reason:
+                                if job.status == "running":
+                                    job.status = "failed"
+                                job.queue_status = "failed"
+                                job.error_message = failure_reason
+                                job.completed_at = datetime.utcnow()
+                                logger.warning(
+                                    f"[COMPLETION] {job.name} reconciled as failed "
+                                    f"(no process found, age: {age_seconds:.0f}s): {failure_reason}"
+                                )
+                            elif history_outcome == "completed":
+                                job.queue_status = "completed"
+                                if job.status == "running":
+                                    job.status = "completed"
+                                job.current_stage = "Complete"
+                                job.stage_progress = None
+                                job.error_message = None
+                                job.completed_at = datetime.utcnow()
+
+                                # Best-effort safety net: if a top-level workflow completed but
+                                # launch task finalization was missed, ingest outputs so Data Viewer
+                                # is populated instead of showing an empty completed job.
+                                if job.parent_job_id is None and job.output_dir:
+                                    try:
+                                        existing_designs = (
+                                            await session.execute(
+                                                select(func.count(Design.id)).where(Design.job_id == job.id)
+                                            )
+                                        ).scalar() or 0
+                                        if existing_designs == 0:
+                                            from services.result_ingester import ingest_job_results
+
+                                            created = await ingest_job_results(str(job.id), job.output_dir, session)
+                                            logger.info(
+                                                f"[COMPLETION] Ingested {created} designs "
+                                                f"for reconciled top-level job {job.name}"
+                                            )
+                                    except Exception as ingest_err:
+                                        logger.warning(
+                                            f"[COMPLETION] Reconcile ingestion failed for {job.name}: {ingest_err}"
+                                        )
+                                if history_note:
+                                    logger.info(
+                                        f"[COMPLETION] {job.name} completed (no process found, "
+                                        f"age: {age_seconds:.0f}s): {history_note}"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"[COMPLETION] {job.name} completed "
+                                        f"(no process found, age: {age_seconds:.0f}s)"
+                                    )
+                            else:
+                                if age_seconds >= stale_fail_after_seconds:
+                                    unresolved_reason = (
+                                        "Reconciled as failed: no active process and no terminal "
+                                        ".nextflow/history status (expected OK/ERR)"
+                                    )
+                                    if job.status == "running":
+                                        job.status = "failed"
+                                    job.queue_status = "failed"
+                                    job.error_message = unresolved_reason
+                                    job.completed_at = datetime.utcnow()
+                                    logger.warning(
+                                        f"[COMPLETION] {job.name} reconciled as failed "
+                                        f"(no process found, age: {age_seconds:.0f}s): {unresolved_reason}"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"[COMPLETION] {job.name} remains running while waiting "
+                                        f"for terminal .nextflow/history state "
+                                        f"(age: {age_seconds:.0f}s, threshold: {stale_fail_after_seconds}s)"
+                                    )
+                                    continue
+
+                            reconciled += 1
                 
-                if completions > 0:
+                if reconciled > 0:
                     await session.commit()
-                    logger.info(f"[COMPLETION] Marked {completions} jobs as completed")
+                    logger.info(f"[COMPLETION] Reconciled {reconciled} stale running jobs")
                 
         except Exception as e:
             logger.error(f"[COMPLETION] Error checking completions: {e}", exc_info=True)

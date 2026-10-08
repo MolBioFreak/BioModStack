@@ -1,13 +1,20 @@
-import { } from 'react';
-
 interface JobFiltersProps {
     search: string;
     onSearchChange: (value: string) => void;
     status: string;
     onStatusChange: (value: string) => void;
+    showNgsJobs: boolean;
+    onShowNgsJobsChange: (value: boolean) => void;
 }
 
-export function JobFilters({ search, onSearchChange, status, onStatusChange }: JobFiltersProps) {
+export function JobFilters({
+    search,
+    onSearchChange,
+    status,
+    onStatusChange,
+    showNgsJobs,
+    onShowNgsJobsChange,
+}: JobFiltersProps) {
     return (
         <div className="flex flex-col sm:flex-row gap-4 mb-6">
             <div className="flex-1">
@@ -31,11 +38,21 @@ export function JobFilters({ search, onSearchChange, status, onStatusChange }: J
                     <option value="all">All Statuses</option>
                     <option value="running">Running</option>
                     <option value="queued">Queued</option>
+                    <option value="awaiting_input">Awaiting Input</option>
                     <option value="completed">Completed</option>
                     <option value="failed">Failed</option>
                     <option value="cancelled">Cancelled</option>
                 </select>
             </div>
+            <label className="sm:w-44 flex items-center gap-2 px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-slate-200 cursor-pointer select-none">
+                <input
+                    type="checkbox"
+                    checked={showNgsJobs}
+                    onChange={(e) => onShowNgsJobsChange(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-500"
+                />
+                <span className="text-sm">Show NGS Jobs</span>
+            </label>
         </div>
     );
 }

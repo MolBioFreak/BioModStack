@@ -7,8 +7,8 @@ Each child job enters the GPU orchestrator queue and gets
 bin-packed across available GPUs for parallel processing.
 
 Batching Strategy:
-- Uses seqs_per_boltz_job ratio to determine how many sequences per Boltz job
-- Higher ratio = fewer Boltz jobs, fewer model loads
+- Uses seqs_per_validation_job ratio to determine how many sequences per validation job
+- Higher ratio = fewer validation jobs, fewer model loads
 - Lower ratio = more parallelism, more model loads
 
 Supports RESUME: If children already exist and completed, reuses them
@@ -28,13 +28,34 @@ import re
 from collections import defaultdict
 
 
+def _normalize_pinned_gpus(raw_value):
+    if raw_value in (None, "", []):
+        return None
+    if isinstance(raw_value, list):
+        values = raw_value
+    else:
+        text = str(raw_value).strip()
+        if not text:
+            return None
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        values = [part.strip() for part in text.split(",") if part.strip()]
+    normalized = []
+    for value in values:
+        try:
+            normalized.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return normalized or None
+
+
 def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_name: str = None):
     """
     Check if completed children already exist for this parent job and stage.
     
     Args:
         parent_job_id: Parent job ID
-        stage: Child stage filter (e.g., 'boltz2')
+        stage: Child stage filter (e.g., 'structure_validation')
         api_url: API base URL
         batch_name: Optional batch name to search by (for resume scenarios)
     
@@ -109,7 +130,7 @@ def spawn_children(
     batch_name: str,
     msa_path: str = None,
     params_json: str = None,
-    seqs_per_boltz_job: int = 10,
+    seqs_per_validation_job: int = 10,
     api_url: str = DEFAULT_API_URL
 ):
     """
@@ -119,7 +140,7 @@ def spawn_children(
     Boltz model load/unload cycles.
     
     Args:
-        seqs_per_boltz_job: Number of sequences per Boltz child job.
+        seqs_per_validation_job: Number of sequences per validation child job.
             1 = no batching (one job per sequence)
             10 = 10 sequences per job
             500 = heavy batching
@@ -138,11 +159,29 @@ def spawn_children(
             print(f"[SPAWN] Forwarding {len(extra_params)} params from parent workflow")
         except json.JSONDecodeError as e:
             print(f"[SPAWN] Warning: Failed to parse params_json: {e}", file=sys.stderr)
+
+    pinned_gpus = _normalize_pinned_gpus(extra_params.get("pinned_gpus"))
+    if pinned_gpus is not None:
+        extra_params["pinned_gpus"] = pinned_gpus
+    raw_pinned_gpu = extra_params.get("pinned_gpu")
+    pinned_gpu = None
+    if raw_pinned_gpu not in (None, ""):
+        try:
+            pinned_gpu = int(raw_pinned_gpu)
+        except (TypeError, ValueError):
+            pinned_gpu = None
+    if pinned_gpu is None and pinned_gpus and len(pinned_gpus) == 1:
+        pinned_gpu = pinned_gpus[0]
     
     # Calculate number of jobs based on ratio
     total_seqs = len(pdbs)
-    num_jobs = max(1, ceil(total_seqs / seqs_per_boltz_job))
+    num_jobs = max(1, ceil(total_seqs / seqs_per_validation_job))
     chunk_size = ceil(total_seqs / num_jobs)
+    structure_validator = str(extra_params.get("structure_validator", "boltz2")).strip().lower()
+    if structure_validator not in {"boltz2", "protenix"}:
+        structure_validator = "boltz2"
+    child_stage = "structure_validation"
+    validator_label = "Protenix" if structure_validator == "protenix" else "Boltz"
     
     # =========================================================================
     # RESUME CHECK: See if children already exist and completed
@@ -150,15 +189,15 @@ def spawn_children(
     # Pass batch_name to find children from original run if this is a resume
     # =========================================================================
     all_done, existing_children, child_status = check_existing_children(
-        parent_job_id, "boltz2", api_url, batch_name=batch_name
+        parent_job_id, child_stage, api_url, batch_name=batch_name
     )
     
     existing_count = len(existing_children)
     if existing_count > 0:
-        print(f"[SPAWN] Found {existing_count} existing Boltz children for parent {parent_job_id}")
+        print(f"[SPAWN] Found {existing_count} existing {validator_label} validation children for parent {parent_job_id}")
         
         if all_done:
-            print(f"[SPAWN] RESUME: All {existing_count} Boltz children already completed! Skipping spawn.")
+            print(f"[SPAWN] RESUME: All {existing_count} {validator_label} validation children already completed. Skipping spawn.")
             return
         else:
             completed = child_status.get("completed", 0)
@@ -175,7 +214,7 @@ def spawn_children(
     # =========================================================================
     # No existing children or all failed - proceed with fresh spawn
     # =========================================================================
-    print(f"[SPAWN] {total_seqs} sequences → {num_jobs} Boltz jobs ({seqs_per_boltz_job} seqs/job ratio)")
+    print(f"[SPAWN] {total_seqs} sequences → {num_jobs} {validator_label} validation jobs ({seqs_per_validation_job} seqs/job ratio)")
     
     created = 0
     failed = 0
@@ -201,7 +240,7 @@ def spawn_children(
             seq_length = len(sequence)
             
             job_data = {
-                "name": f"{batch_name}_boltz_batch_{job_idx}",
+                "name": f"{batch_name}_{structure_validator}_batch_{job_idx}",
                 "model_id": "antibody_child",
                 "mode": "validation_batch",
                 "params": {
@@ -210,15 +249,18 @@ def spawn_children(
                     "batch_index": job_idx,
                     "design_count": len(chunk_pdbs),
                     "rfd_mode": "antibody_child",
+                    "structure_validator": structure_validator,
                     # Merge all quality settings from parent
                     **extra_params
                 },
                 "batch_id": parent_job_id,
                 "batch_name": batch_name,
                 "parent_job_id": parent_job_id,
-                "child_stage": "boltz2",
+                "child_stage": child_stage,
                 "sequence_length": seq_length,  # Single sequence, not multiplied!
             }
+            if pinned_gpu is not None:
+                job_data["pinned_gpu"] = pinned_gpu
 
             
             resp = requests.post(
@@ -229,7 +271,7 @@ def spawn_children(
             
             if resp.ok:
                 job_id = resp.json().get("id", "unknown")
-                print(f"[SPAWN] Created Boltz batch {job_idx} ({len(chunk_pdbs)} seqs): {job_id}")
+                print(f"[SPAWN] Created {validator_label} batch {job_idx} ({len(chunk_pdbs)} seqs): {job_id}")
                 created += 1
             else:
                 print(f"[SPAWN] Failed to create batch {job_idx}: {resp.status_code} {resp.text}", file=sys.stderr)
@@ -239,7 +281,7 @@ def spawn_children(
             print(f"[SPAWN] Error creating batch {job_idx}: {e}", file=sys.stderr)
             failed += 1
     
-    print(f"[SPAWN] Complete: {created} Boltz batches created, {failed} failed")
+    print(f"[SPAWN] Complete: {created} {validator_label} batches created, {failed} failed")
     
     if failed > 0:
         sys.exit(1)
@@ -252,7 +294,8 @@ if __name__ == "__main__":
     parser.add_argument("--batch_name", required=True, help="Batch name for dashboard")
     parser.add_argument("--msa_path", default="", help="Path to shared MSA file")
     parser.add_argument("--params_json", default="", help="JSON string with quality settings from parent")
-    parser.add_argument("--seqs_per_boltz_job", type=int, default=10, help="Sequences per Boltz job (1=no batch, higher=more batch)")
+    parser.add_argument("--seqs_per_validation_job", type=int, default=None, help="Sequences per validation job (1=no batch, higher=more batch)")
+    parser.add_argument("--seqs_per_boltz_job", type=int, default=None, help="Legacy alias for sequences per validation job")
     parser.add_argument("--api_url", default=DEFAULT_API_URL, help="API URL")
     
     args = parser.parse_args()
@@ -263,6 +306,6 @@ if __name__ == "__main__":
         batch_name=args.batch_name,
         msa_path=args.msa_path,
         params_json=args.params_json if args.params_json else None,
-        seqs_per_boltz_job=args.seqs_per_boltz_job,
+        seqs_per_validation_job=args.seqs_per_validation_job or args.seqs_per_boltz_job or 10,
         api_url=args.api_url
     )

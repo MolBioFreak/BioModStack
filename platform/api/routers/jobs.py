@@ -2,17 +2,24 @@
 Jobs API router - Create, list, cancel pipeline jobs.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import OperationalError
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
+from copy import deepcopy
 import asyncio
 import uuid
 import os
+import hashlib
 import logging
+import json
+import shutil
+import random
+import re
 from datetime import datetime
 from pathlib import Path
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +27,7 @@ from database import get_session, Job, Design
 from paths import (
     get_code_root,
     get_data_root,
+    get_inputs_dir,
     get_results_dir,
     get_work_dir,
     resolve_allowed_path,
@@ -34,6 +42,62 @@ router = APIRouter()
 
 # Project root for resolving code-relative paths
 CODE_ROOT = get_code_root()
+
+
+class ResumeJobRequest(BaseModel):
+    """Optional payload for resume calls that need runtime param overrides."""
+    from_stage: Optional[str] = None
+    param_overrides: Dict[str, Any] = Field(default_factory=dict)
+    name_suffix: Optional[str] = None
+
+
+class OpenStageGateRequest(BaseModel):
+    """Internal workflow request to mark a job as awaiting user input."""
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AntibodyCdrIndelConfig(BaseModel):
+    """Configuration for viewer-launched CDR indel rounds."""
+    loop_ids: List[str] = Field(default_factory=list)
+    variants_per_design: int = Field(default=8, ge=1, le=200)
+    allow_insertions: bool = True
+    allow_deletions: bool = True
+    indel_sizes: List[int] = Field(default_factory=lambda: [1])
+    indel_probability: float = Field(default=1.0, ge=0.0, le=1.0)
+    allowed_aas: List[str] = Field(default_factory=list)
+    blocked_aas: List[str] = Field(default_factory=list)
+    predictor: str = Field(default="protenix")
+    msa_provider: str = Field(default="local")
+
+
+class AntibodyIterationLaunchRequest(BaseModel):
+    """Launch a new antibody round from selected design structures."""
+    source_job_id: str = Field(..., min_length=1)
+    design_ids: List[str] = Field(default_factory=list)
+    action: str = Field(..., min_length=1)
+    name_suffix: Optional[str] = None
+    param_overrides: Dict[str, Any] = Field(default_factory=dict)
+    cdr_indel_config: Optional[AntibodyCdrIndelConfig] = None
+
+
+class AntibodyIterationLaunchResponse(BaseModel):
+    """Response for viewer-driven antibody iteration actions."""
+    message: str
+    action: str
+    source_job_id: str
+    root_job_id: str
+    selection_dir: str
+    selected_design_count: int
+    launched_job: JobResponse
+
+
+NANOPORE_PATH_PARAM_KEYS = {
+    "pod5_dir",
+    "bam_path",
+    "fastq_path",
+    "reference_fasta",
+    "wf_clone_workflow_dir",
+}
 
 
 def resolve_output_dir(output_dir: str) -> Optional[Path]:
@@ -57,6 +121,1311 @@ def count_structure_files(output_dir: str) -> int:
         return pdb_count + cif_count
     except Exception:
         return 0
+
+
+def _to_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(params, dict):
+        return {}
+
+    normalized = dict(params)
+    structure_validator = str(
+        normalized.get("structure_validator")
+        or normalized.get("validation_predictor")
+        or normalized.get("pred_method")
+        or "boltz2"
+    ).strip().lower()
+    if structure_validator == "boltz":
+        structure_validator = "boltz2"
+    if structure_validator not in {"boltz2", "protenix"}:
+        structure_validator = "boltz2"
+    normalized["structure_validator"] = structure_validator
+
+    canonical_post_validation = normalized.get("run_post_validation_maturation")
+    legacy_post_boltz = normalized.get("run_post_boltz_maturation")
+    if canonical_post_validation is None and legacy_post_boltz is not None:
+        canonical_post_validation = _to_bool(legacy_post_boltz)
+    if canonical_post_validation is not None:
+        normalized["run_post_validation_maturation"] = _to_bool(canonical_post_validation)
+        normalized["run_post_boltz_maturation"] = normalized["run_post_validation_maturation"]
+
+    canonical_thermompnn = normalized.get("run_thermompnn")
+    legacy_stability = normalized.get("run_stability_scoring")
+
+    if canonical_thermompnn is None and legacy_stability is not None:
+        canonical_thermompnn = _to_bool(legacy_stability)
+    if canonical_thermompnn is not None:
+        normalized["run_thermompnn"] = _to_bool(canonical_thermompnn)
+        normalized["run_stability_scoring"] = normalized["run_thermompnn"]
+
+    gate_stage = normalized.get("interactive_gate_stage")
+    if isinstance(gate_stage, str):
+        normalized_gate_stage = gate_stage.strip().lower()
+        if normalized_gate_stage == "post_boltz_validation":
+            normalized_gate_stage = "post_structure_validation"
+        if normalized_gate_stage not in {"post_rfantibody", "post_fampnn", "post_structure_validation"}:
+            normalized_gate_stage = "post_fampnn"
+        normalized["interactive_gate_stage"] = normalized_gate_stage
+
+    return normalized
+
+
+def _is_antibody_launch(model_id: str, params: Optional[Dict[str, Any]]) -> bool:
+    model_id_normalized = (model_id or "").strip().lower()
+    params = params if isinstance(params, dict) else {}
+    mode_normalized = str(params.get("rfd_mode") or "").strip().lower()
+    return (
+        model_id_normalized in {
+            "template_antibody_denovo",
+            "antibody_denovo",
+            "antibody_child",
+            "rfantibody_child",
+        }
+        or mode_normalized in {"antibody_denovo_pipeline", "rfantibody_backbone"}
+    )
+
+
+def _normalize_antibody_runtime_paths(model_id: str, params: dict) -> dict:
+    if not _is_antibody_launch(model_id, params) or not isinstance(params, dict):
+        return params
+
+    normalized = dict(params)
+    for key in ("target_pdb", "framework_pdb"):
+        value = normalized.get(key)
+        if isinstance(value, str):
+            normalized[key] = _resolve_alias_path_for_runtime(value)
+    return normalized
+
+
+def _validate_antibody_runtime_paths(model_id: str, params: dict) -> None:
+    if not _is_antibody_launch(model_id, params) or not isinstance(params, dict):
+        return
+
+    target_pdb = str(params.get("target_pdb") or "").strip()
+    if target_pdb and not Path(target_pdb).exists():
+        raise HTTPException(
+            status_code=422,
+            detail=f"Target PDB not found: {target_pdb}",
+        )
+
+    framework_type = str(params.get("framework_type") or "").strip().lower()
+    framework_pdb = str(params.get("framework_pdb") or "").strip()
+    if framework_type == "custom":
+        if not framework_pdb:
+            raise HTTPException(
+                status_code=422,
+                detail="Custom framework selected, but no framework_pdb was provided.",
+            )
+        if not Path(framework_pdb).exists():
+            raise HTTPException(
+                status_code=422,
+                detail=f"Custom framework PDB not found: {framework_pdb}",
+            )
+        try:
+            chains = set()
+            with Path(framework_pdb).open("r") as handle:
+                for line in handle:
+                    if line.startswith(("ATOM", "HETATM")):
+                        chain = line[21:22].strip()
+                        if chain:
+                            chains.add(chain)
+            if not ({"H", "L"} & chains):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Custom framework must be HLT-style with antibody chains labeled H or L. "
+                        f"Found chains: {sorted(chains)} in {framework_pdb}"
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Failed to validate framework PDB {framework_pdb}: {exc}",
+            ) from exc
+
+
+def _validate_fampnn_checkpoint_requirements(model_id: str, params: dict) -> None:
+    if not isinstance(params, dict):
+        return
+
+    model_id_normalized = (model_id or "").strip().lower()
+    runs_fampnn = _to_bool(params.get("seq_design_fampnn")) or model_id_normalized in {
+        "template_antibody_denovo",
+        "fampnn_child",
+    }
+    runs_maturation = (
+        _to_bool(params.get("run_maturation"))
+        or _to_bool(params.get("run_post_validation_maturation"))
+        or _to_bool(params.get("run_post_boltz_maturation"))
+    )
+    needs_fampnn_checkpoint = (
+        runs_fampnn
+        or runs_maturation
+    )
+    if not needs_fampnn_checkpoint:
+        return
+
+    checkpoint = str(params.get("fampnn_checkpoint") or "").strip()
+    checkpoint_path = str(params.get("fampnn_checkpoint_path") or "").strip()
+    if checkpoint or checkpoint_path:
+        return
+
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "FAMPNN weights are required for this job. Set 'fampnn_checkpoint' or "
+            "'fampnn_checkpoint_path' explicitly; no default checkpoint is applied."
+        ),
+    )
+
+
+def _is_meaningful_param_value(value: object) -> bool:
+    """Treat empty/sentinel strings as unset."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return normalized not in {"", "null", "none", "undefined", "n/a", "na"}
+    return bool(value)
+
+
+def _dedupe_preserve_order(values: List[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _looks_like_antibody_job(job: Optional[Job]) -> bool:
+    if job is None:
+        return False
+    model_id = (job.model_id or "").strip().lower()
+    mode = (job.mode or "").strip().lower()
+    params = job.params if isinstance(job.params, dict) else {}
+    rfd_mode = str(params.get("rfd_mode") or "").strip().lower()
+    has_antibody_params = any(_is_meaningful_param_value(params.get(key)) for key in ("framework_type", "antibody_chains", "epitope_residues"))
+    return (
+        model_id in {"template_antibody_denovo", "antibody_denovo", "antibody_child"}
+        or "antibody" in model_id
+        or "antibody" in mode
+        or rfd_mode == "antibody_denovo_pipeline"
+        or has_antibody_params
+    )
+
+
+async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) -> tuple[Job, Job]:
+    source_job = await session.get(Job, source_job_id)
+    if source_job is None:
+        raise HTTPException(status_code=404, detail=f"Source job '{source_job_id}' not found")
+
+    lineage: List[Job] = []
+    visited: set[str] = set()
+    current: Optional[Job] = source_job
+    while current is not None and current.id not in visited:
+        lineage.append(current)
+        visited.add(current.id)
+        if not current.parent_job_id:
+            break
+        current = await session.get(Job, current.parent_job_id)
+
+    antibody_jobs = [job for job in lineage if _looks_like_antibody_job(job)]
+    root_job = antibody_jobs[-1] if antibody_jobs else lineage[-1]
+    if not _looks_like_antibody_job(root_job):
+        raise HTTPException(
+            status_code=422,
+            detail="Selected job is not part of an antibody workflow lineage.",
+        )
+    return source_job, root_job
+
+
+def _resolve_design_structure_path(raw_path: str) -> Path:
+    if not raw_path:
+        raise HTTPException(status_code=422, detail="Selected design is missing a structure path.")
+
+    raw = Path(raw_path)
+    candidates: List[Path] = []
+    if raw.is_absolute():
+        candidates.append(raw)
+    else:
+        candidates.extend([
+            (get_data_root() / raw),
+            (CODE_ROOT / raw),
+            raw.resolve(),
+        ])
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except FileNotFoundError:
+            continue
+        if resolved.exists():
+            return resolved
+
+    raise HTTPException(
+        status_code=422,
+        detail=f"Selected design structure path does not exist: {raw_path}",
+    )
+
+
+def _prune_iteration_params(base_params: Dict[str, Any]) -> Dict[str, Any]:
+    pruned = deepcopy(base_params) if isinstance(base_params, dict) else {}
+    for key in {
+        "job_id",
+        "run_id",
+        "api_url",
+        "out_dir",
+        "output_dir",
+        "interactive_gate_continue",
+        "fampnn_collected_pdbs",
+        "rfantibody_input_pdbs",
+        "skip_rfantibody",
+        "skip_fampnn",
+        "iteration_source_job_id",
+        "iteration_source_root_job_id",
+        "iteration_source_design_ids",
+        "iteration_action",
+        "iteration_selection_dir",
+    }:
+        pruned.pop(key, None)
+    return _normalize_antibody_job_params(pruned)
+
+
+AA_CODES = {
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLN": "Q",
+    "GLU": "E",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+}
+
+STANDARD_AMINO_ACIDS = list("ACDEFGHIKLMNPQRSTVWY")
+DEFAULT_CDR_POSITION_RANGES = {
+    "H1": (27, 38),
+    "H2": (56, 65),
+    "H3": (105, 117),
+    "L1": (27, 38),
+    "L2": (56, 65),
+    "L3": (105, 117),
+}
+
+
+def _parse_chain_list(raw_value: Any) -> List[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, list):
+        values = raw_value
+    else:
+        values = [part.strip() for part in str(raw_value).split(",")]
+    return [str(value).strip().upper() for value in values if str(value).strip()]
+
+
+def _extract_chain_records_from_pdb(pdb_path: Path) -> Dict[str, List[Dict[str, Any]]]:
+    chain_records: Dict[str, List[Dict[str, Any]]] = {}
+    seen_residues: Dict[str, set[tuple[int, str]]] = {}
+    with pdb_path.open() as handle:
+        for line in handle:
+            if not line.startswith("ATOM") or len(line) < 27:
+                continue
+            if line[12:16].strip() != "CA":
+                continue
+            res_name = line[17:20].strip()
+            chain_id = (line[21].strip() or "_").upper()
+            aa = AA_CODES.get(res_name)
+            if aa is None:
+                continue
+            try:
+                resseq = int(line[22:26].strip())
+            except ValueError:
+                continue
+            icode = line[26].strip()
+            residue_key = (resseq, icode)
+            if chain_id not in chain_records:
+                chain_records[chain_id] = []
+                seen_residues[chain_id] = set()
+            if residue_key in seen_residues[chain_id]:
+                continue
+            seen_residues[chain_id].add(residue_key)
+            chain_records[chain_id].append(
+                {
+                    "resseq": resseq,
+                    "icode": icode,
+                    "aa": aa,
+                }
+            )
+    return chain_records
+
+
+def _resolve_loop_region_map(root_job: Job) -> Dict[str, tuple[int, int]]:
+    params = root_job.params if isinstance(root_job.params, dict) else {}
+    region_map: Dict[str, tuple[int, int]] = {}
+
+    manual_defs = params.get("manual_cdr_definitions")
+    if isinstance(manual_defs, list):
+        for entry in manual_defs:
+            if not isinstance(entry, dict):
+                continue
+            loop_id = str(entry.get("id") or "").strip().upper()
+            residues = entry.get("residues") or []
+            residue_numbers: List[int] = []
+            for residue in residues:
+                match = str(residue).strip().upper()
+                parsed = match[1:] if match[:1].isalpha() else match
+                if parsed.isdigit():
+                    residue_numbers.append(int(parsed))
+            if loop_id and residue_numbers:
+                region_map[loop_id] = (min(residue_numbers), max(residue_numbers))
+
+    if region_map:
+        return region_map
+
+    selected_loops_raw = params.get("selected_cdr_loops")
+    if isinstance(selected_loops_raw, list):
+        selected_loops = [str(loop_id).strip().upper() for loop_id in selected_loops_raw if str(loop_id).strip()]
+    else:
+        selected_loops = [str(loop_id).strip().upper() for loop_id in str(params.get("antibody_design_loops") or "").split(",") if str(loop_id).strip()]
+
+    raw_spec = str(params.get("rfantibody_design_loops_custom") or "").strip()
+    if raw_spec.startswith("[") and raw_spec.endswith("]") and selected_loops:
+        tokens = [token.strip() for token in raw_spec[1:-1].split(",") if token.strip()]
+        for loop_id, token in zip(selected_loops, tokens):
+            match = re.match(r"^([A-Za-z])(\d+)-(\d+)$", token)
+            if not match:
+                continue
+            start = int(match.group(2))
+            end = int(match.group(3))
+            if end < start:
+                start, end = end, start
+            region_map[loop_id] = (start, end)
+
+    if region_map:
+        return region_map
+
+    return dict(DEFAULT_CDR_POSITION_RANGES)
+
+
+def _resolve_loop_target_chain(root_job: Job, loop_ids: List[str], available_chain_ids: List[str]) -> str:
+    loop_prefixes = {loop_id[:1].upper() for loop_id in loop_ids if loop_id}
+    if not loop_prefixes:
+        raise HTTPException(status_code=422, detail="At least one CDR loop must be selected for indel generation.")
+    if len(loop_prefixes) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="CDR indel rounds currently require all selected loops to belong to the same chain family (all H or all L).",
+        )
+
+    prefix = next(iter(loop_prefixes))
+    antibody_chains = _parse_chain_list((root_job.params or {}).get("antibody_chains") if isinstance(root_job.params, dict) else None)
+    candidate = None
+    if prefix == "H" and antibody_chains:
+        candidate = antibody_chains[0]
+    elif prefix == "L" and len(antibody_chains) > 1:
+        candidate = antibody_chains[1]
+
+    if candidate and candidate in available_chain_ids:
+        return candidate
+
+    if len(available_chain_ids) == 1:
+        return available_chain_ids[0]
+
+    for chain_id in available_chain_ids:
+        if chain_id.startswith(prefix):
+            return chain_id
+
+    raise HTTPException(
+        status_code=422,
+        detail=f"Could not resolve binder chain for selected loops {', '.join(loop_ids)} from chains {', '.join(available_chain_ids)}.",
+    )
+
+
+def _build_mutation_regions(
+    chain_records: List[Dict[str, Any]],
+    region_map: Dict[str, tuple[int, int]],
+    loop_ids: List[str],
+) -> List[tuple[int, int]]:
+    regions: List[tuple[int, int]] = []
+    for loop_id in loop_ids:
+        loop_key = loop_id.strip().upper()
+        bounds = region_map.get(loop_key) or DEFAULT_CDR_POSITION_RANGES.get(loop_key)
+        if not bounds:
+            continue
+        start_resseq, end_resseq = bounds
+        positions = [
+            index
+            for index, residue in enumerate(chain_records, start=1)
+            if start_resseq <= int(residue["resseq"]) <= end_resseq
+        ]
+        if positions:
+            regions.append((min(positions), max(positions)))
+    return regions
+
+
+def _normalize_aa_pool(allowed_aas: List[str], blocked_aas: List[str]) -> List[str]:
+    allowed = [aa.strip().upper() for aa in allowed_aas if aa and aa.strip().upper() in STANDARD_AMINO_ACIDS]
+    blocked = {aa.strip().upper() for aa in blocked_aas if aa and aa.strip().upper() in STANDARD_AMINO_ACIDS}
+    pool = allowed if allowed else STANDARD_AMINO_ACIDS
+    filtered = [aa for aa in pool if aa not in blocked]
+    return filtered or STANDARD_AMINO_ACIDS
+
+
+def _generate_cdr_indel_variants(
+    base_sequence: str,
+    base_name: str,
+    regions: List[tuple[int, int]],
+    config: AntibodyCdrIndelConfig,
+) -> List[Dict[str, Any]]:
+    if not base_sequence:
+        raise HTTPException(status_code=422, detail=f"Selected design '{base_name}' is missing a binder sequence.")
+    if not regions:
+        raise HTTPException(status_code=422, detail=f"Could not map selected CDR loops onto '{base_name}'.")
+    if not config.allow_insertions and not config.allow_deletions:
+        raise HTTPException(status_code=422, detail="Enable insertions, deletions, or both for a CDR indel round.")
+
+    indel_sizes = sorted({size for size in config.indel_sizes if isinstance(size, int) and size > 0})
+    if not indel_sizes:
+        raise HTTPException(status_code=422, detail="At least one positive indel size is required.")
+
+    position_pool = sorted({pos for start, end in regions for pos in range(start, end + 1)})
+    if not position_pool:
+        raise HTTPException(status_code=422, detail=f"No mutable positions were found in the requested CDR loops for '{base_name}'.")
+
+    aa_pool = _normalize_aa_pool(config.allowed_aas, config.blocked_aas)
+    variants: List[Dict[str, Any]] = []
+    seen_sequences = {base_sequence}
+
+    max_attempts = max(config.variants_per_design * 20, 50)
+    attempts = 0
+    while len(variants) < config.variants_per_design and attempts < max_attempts:
+        attempts += 1
+        seq_chars = list(base_sequence)
+        mutation_meta: Dict[str, Any] | None = None
+        choose_indel = random.random() <= config.indel_probability
+        if not choose_indel:
+            continue
+
+        allowed_ops: List[str] = []
+        if config.allow_insertions:
+            allowed_ops.append("insertion")
+        if config.allow_deletions:
+            allowed_ops.append("deletion")
+        op = random.choice(allowed_ops)
+        size = random.choice(indel_sizes)
+
+        if op == "insertion":
+            pos = random.choice(position_pool)
+            inserted = "".join(random.choice(aa_pool) for _ in range(size))
+            seq_chars[pos:pos] = list(inserted)
+            mutation_meta = {
+                "type": "insertion",
+                "position": pos,
+                "from": "",
+                "to": inserted,
+                "summary": f"ins{pos}{inserted}",
+            }
+        else:
+            delete_candidates = [
+                pos
+                for pos in position_pool
+                if any(start <= pos and (pos + size - 1) <= end for start, end in regions)
+                and (pos + size - 1) <= len(base_sequence)
+            ]
+            if not delete_candidates:
+                continue
+            pos = random.choice(delete_candidates)
+            deleted = "".join(seq_chars[pos - 1:pos - 1 + size])
+            del seq_chars[pos - 1:pos - 1 + size]
+            mutation_meta = {
+                "type": "deletion",
+                "position": pos,
+                "from": deleted,
+                "to": "",
+                "summary": f"del{pos}-{pos + size - 1}" if size > 1 else f"del{pos}{deleted}",
+            }
+
+        variant_sequence = "".join(seq_chars)
+        if not variant_sequence or variant_sequence in seen_sequences:
+            continue
+
+        seen_sequences.add(variant_sequence)
+        variants.append(
+            {
+                "name": f"{base_name}_{mutation_meta['summary']}_{len(variants) + 1}",
+                "sequence": variant_sequence,
+                "mutation": mutation_meta,
+            }
+        )
+
+    if not variants:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not generate unique CDR indel variants for '{base_name}' with the requested settings.",
+        )
+
+    return variants
+
+
+def _build_cdr_indel_iteration_job(
+    root_job: Job,
+    source_job: Job,
+    designs: List[Design],
+    config: AntibodyCdrIndelConfig,
+    name_suffix: Optional[str],
+    param_overrides: Dict[str, Any],
+) -> tuple[JobCreate, int, str]:
+    loop_ids = [loop_id.strip().upper() for loop_id in config.loop_ids if isinstance(loop_id, str) and loop_id.strip()]
+    if not loop_ids:
+        raise HTTPException(status_code=422, detail="Select at least one CDR loop for the indel round.")
+
+    predictor = str(config.predictor or "protenix").strip().lower()
+    if predictor not in {"protenix", "boltz2"}:
+        raise HTTPException(status_code=422, detail="CDR indel rounds currently support predictor='protenix' or 'boltz2'.")
+
+    msa_provider = str(config.msa_provider or "local").strip().lower()
+    if msa_provider not in {"local", "colabfold_api"}:
+        raise HTTPException(status_code=422, detail="msa_provider must be 'local' or 'colabfold_api'.")
+
+    region_map = _resolve_loop_region_map(root_job)
+    variants: List[Dict[str, Any]] = []
+
+    for design in designs:
+        design_path = _resolve_design_structure_path(design.pdb_path)
+        chain_records = _extract_chain_records_from_pdb(design_path)
+        if not chain_records:
+            raise HTTPException(status_code=422, detail=f"Could not extract chain sequences from '{design.name}'.")
+
+        available_chain_ids = list(chain_records.keys())
+        binder_chain_id = _resolve_loop_target_chain(root_job, loop_ids, available_chain_ids)
+        binder_records = chain_records.get(binder_chain_id) or []
+        mutation_regions = _build_mutation_regions(binder_records, region_map, loop_ids)
+        base_sequence = "".join(record["aa"] for record in binder_records)
+
+        design_variants = _generate_cdr_indel_variants(
+            base_sequence=base_sequence,
+            base_name=design.name,
+            regions=mutation_regions,
+            config=config,
+        )
+
+        for variant in design_variants:
+            complex_components = []
+            for chain_id, records in chain_records.items():
+                sequence = variant["sequence"] if chain_id == binder_chain_id else "".join(record["aa"] for record in records)
+                complex_components.append({
+                    "type": "protein",
+                    "id": chain_id,
+                    "sequence": sequence,
+                })
+            variants.append(
+                {
+                    "name": variant["name"],
+                    "sequence": variant["sequence"],
+                    "complex_components": complex_components,
+                    "source_design_id": design.id,
+                    "source_design_name": design.name,
+                    "binder_chain_id": binder_chain_id,
+                    "loop_ids": loop_ids,
+                    "mutation": variant["mutation"],
+                }
+            )
+
+    if not variants:
+        raise HTTPException(status_code=422, detail="No CDR indel variants were generated from the selected designs.")
+
+    effective_msa_provider = msa_provider
+    if len(variants) > 1 and msa_provider == "colabfold_api":
+        effective_msa_provider = "local"
+
+    base_params = _prune_iteration_params(root_job.params if isinstance(root_job.params, dict) else {})
+    launch_params: Dict[str, Any] = {
+        "pred_method": "protenix" if predictor == "protenix" else "boltz",
+        "mutagenesis_variants": variants,
+        "msa_force_refresh": True,
+        "msa_provider": effective_msa_provider,
+        "pinned_gpus": base_params.get("pinned_gpus"),
+        "lock_gpus": base_params.get("lock_gpus"),
+        "iteration_source_job_id": source_job.id,
+        "iteration_source_root_job_id": root_job.id,
+        "iteration_source_design_ids": [design.id for design in designs],
+        "iteration_action": "cdr_indel_round",
+        "cdr_indel_config": config.model_dump(),
+        "run_frustrampnn": False,
+        "openmm_enabled": False,
+    }
+
+    if predictor == "protenix":
+        for key in (
+            "protenix_model_weights",
+            "protenix_seeds",
+            "protenix_n_sample",
+            "protenix_n_step",
+            "protenix_n_cycle",
+            "protenix_use_msa",
+            "protenix_use_template",
+            "protenix_enable_cache",
+            "protenix_enable_fusion",
+            "protenix_msa_backend",
+            "colabfold_api_host",
+            "colabfold_api_min_interval",
+            "colabfold_api_poll_interval",
+        ):
+            if key in base_params:
+                launch_params[key] = base_params[key]
+    else:
+        for key in (
+            "boltz_use_msa",
+            "boltz_sampling_steps",
+            "boltz_recycling_steps",
+            "boltz_num_samples",
+            "boltz_use_potentials",
+            "boltz_step_scale",
+            "boltz_predict_affinity",
+            "boltz_diffusion_samples_affinity",
+            "colabfold_api_host",
+            "colabfold_api_min_interval",
+            "colabfold_api_poll_interval",
+        ):
+            if key in base_params:
+                launch_params[key] = base_params[key]
+
+    if param_overrides:
+        launch_params.update(param_overrides)
+
+    suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else "cdr_indel_round"
+    model_id = "protenix" if predictor == "protenix" else "boltz2"
+    launch_request = JobCreate(
+        name=f"{root_job.name}_{suffix}",
+        model_id=model_id,
+        mode="complex",
+        params=launch_params,
+        pinned_gpu=root_job.pinned_gpu,
+    )
+    message_note = ""
+    if msa_provider == "colabfold_api" and effective_msa_provider == "local":
+        message_note = " ColabFold API was downgraded to local MSA because the indel round generated multiple variants."
+    return launch_request, len(variants), message_note
+
+
+def _materialize_antibody_selection(
+    root_job: Job,
+    source_job: Job,
+    designs: List[Design],
+    action: str,
+) -> Path:
+    selection_root = get_inputs_dir() / "design_selections" / "antibody"
+    selection_root.mkdir(parents=True, exist_ok=True)
+
+    selection_dir = selection_root / (
+        f"{datetime.utcnow():%Y%m%d_%H%M%S}_{action}_{uuid.uuid4().hex[:8]}"
+    )
+    selection_dir.mkdir(parents=True, exist_ok=False)
+
+    manifest_items: List[Dict[str, Any]] = []
+    for idx, design in enumerate(designs, start=1):
+        if not design.pdb_path:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Design '{design.name}' is missing a structure path.",
+            )
+
+        source_path = _resolve_design_structure_path(design.pdb_path)
+        if source_path.suffix.lower() != ".pdb":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Design '{design.name}' is backed by '{source_path.name}', not a PDB file. "
+                    "Antibody iteration actions currently require PDB-backed selections."
+                ),
+            )
+
+        dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
+        try:
+            os.symlink(source_path, dest_path)
+        except OSError:
+            shutil.copy2(source_path, dest_path)
+
+        manifest_items.append({
+            "design_id": design.id,
+            "design_name": design.name,
+            "design_job_id": design.job_id,
+            "source_pdb_path": str(source_path),
+            "selection_pdb_path": str(dest_path),
+        })
+
+    manifest = {
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "action": action,
+        "root_job_id": root_job.id,
+        "source_job_id": source_job.id,
+        "design_count": len(manifest_items),
+        "designs": manifest_items,
+    }
+    (selection_dir / "selection_manifest.json").write_text(json.dumps(manifest, indent=2))
+    return selection_dir
+
+
+def _build_antibody_iteration_job(
+    root_job: Job,
+    source_job: Job,
+    action: str,
+    selection_dir: Path,
+    design_ids: List[str],
+    name_suffix: Optional[str],
+    param_overrides: Dict[str, Any],
+) -> JobCreate:
+    action = action.strip().lower()
+    action_map = {
+        "validate_boltz2": {
+            "suffix": "validate_boltz2",
+            "params": {
+                "skip_rfantibody": True,
+                "fampnn_collected_pdbs": str(selection_dir),
+                "rfantibody_input_pdbs": None,
+                "seq_design_fampnn": True,
+                "seq_design_antifold": False,
+                "seq_design_proteinmpnn": False,
+                "run_structure_validation": True,
+                "structure_validator": "boltz2",
+                "run_post_validation_maturation": False,
+                "run_post_boltz_maturation": False,
+                "run_maturation": False,
+                "run_frustrampnn": False,
+                "run_anarcii_post": False,
+                "run_immunogenicity_scoring": False,
+                "run_thermompnn": False,
+                "run_stability_scoring": False,
+                "run_af2_backprop": False,
+                "openmm_enabled": False,
+                "interactive_swa": True,
+                "interactive_gating": True,
+                "interactive_gate_stage": "post_structure_validation",
+            },
+        },
+        "validate_protenix": {
+            "suffix": "validate_protenix",
+            "params": {
+                "skip_rfantibody": True,
+                "fampnn_collected_pdbs": str(selection_dir),
+                "rfantibody_input_pdbs": None,
+                "seq_design_fampnn": True,
+                "seq_design_antifold": False,
+                "seq_design_proteinmpnn": False,
+                "run_structure_validation": True,
+                "structure_validator": "protenix",
+                "run_post_validation_maturation": False,
+                "run_post_boltz_maturation": False,
+                "run_maturation": False,
+                "run_frustrampnn": False,
+                "run_anarcii_post": False,
+                "run_immunogenicity_scoring": False,
+                "run_thermompnn": False,
+                "run_stability_scoring": False,
+                "run_af2_backprop": False,
+                "openmm_enabled": False,
+                "interactive_swa": True,
+                "interactive_gating": True,
+                "interactive_gate_stage": "post_structure_validation",
+            },
+        },
+        "ppiflow_maturation": {
+            "suffix": "ppiflow_maturation",
+            "params": {
+                "skip_rfantibody": True,
+                "fampnn_collected_pdbs": str(selection_dir),
+                "rfantibody_input_pdbs": None,
+                "seq_design_fampnn": True,
+                "seq_design_antifold": False,
+                "seq_design_proteinmpnn": False,
+                "run_structure_validation": False,
+                "run_post_validation_maturation": True,
+                "run_post_boltz_maturation": True,
+                "run_maturation": True,
+                "run_frustrampnn": False,
+                "run_anarcii_post": False,
+                "run_immunogenicity_scoring": False,
+                "run_thermompnn": False,
+                "run_stability_scoring": False,
+                "run_af2_backprop": False,
+                "openmm_enabled": False,
+                "interactive_swa": False,
+                "interactive_gating": False,
+                "interactive_gate_stage": "post_structure_validation",
+            },
+        },
+        "fampnn_redesign": {
+            "suffix": "fampnn_redesign",
+            "params": {
+                "skip_rfantibody": True,
+                "rfantibody_input_pdbs": str(selection_dir),
+                "fampnn_collected_pdbs": None,
+                "seq_design_fampnn": True,
+                "seq_design_antifold": False,
+                "seq_design_proteinmpnn": False,
+                "run_structure_validation": False,
+                "run_post_validation_maturation": False,
+                "run_post_boltz_maturation": False,
+                "run_maturation": False,
+                "run_frustrampnn": False,
+                "run_anarcii_post": False,
+                "run_immunogenicity_scoring": False,
+                "run_thermompnn": False,
+                "run_stability_scoring": False,
+                "run_af2_backprop": False,
+                "openmm_enabled": False,
+                "interactive_swa": True,
+                "interactive_gating": True,
+                "interactive_gate_stage": "post_fampnn",
+            },
+        },
+        "frustrampnn": {
+            "suffix": "frustrampnn",
+            "params": {
+                "skip_rfantibody": True,
+                "fampnn_collected_pdbs": str(selection_dir),
+                "rfantibody_input_pdbs": None,
+                "seq_design_fampnn": True,
+                "seq_design_antifold": False,
+                "seq_design_proteinmpnn": False,
+                "run_structure_validation": False,
+                "run_post_validation_maturation": False,
+                "run_post_boltz_maturation": False,
+                "run_maturation": False,
+                "run_frustrampnn": True,
+                "run_anarcii_post": False,
+                "run_immunogenicity_scoring": False,
+                "run_thermompnn": False,
+                "run_stability_scoring": False,
+                "run_af2_backprop": False,
+                "openmm_enabled": False,
+                "interactive_swa": False,
+                "interactive_gating": False,
+                "interactive_gate_stage": "post_structure_validation",
+            },
+        },
+    }
+    if action not in action_map:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unsupported antibody iteration action '{action}'. "
+                "Allowed: validate_boltz2, validate_protenix, ppiflow_maturation, fampnn_redesign, frustrampnn, cdr_indel_round."
+            ),
+        )
+
+    launch_params = _prune_iteration_params(root_job.params if isinstance(root_job.params, dict) else {})
+    launch_params.update({
+        "iteration_source_job_id": source_job.id,
+        "iteration_source_root_job_id": root_job.id,
+        "iteration_source_design_ids": design_ids,
+        "iteration_action": action,
+        "iteration_selection_dir": str(selection_dir),
+        "interactive_gate_continue": False,
+    })
+    launch_params.update(action_map[action]["params"])
+
+    for key in ["rfantibody_input_pdbs", "fampnn_collected_pdbs"]:
+        if launch_params.get(key) is None:
+            launch_params.pop(key, None)
+
+    if param_overrides:
+        launch_params.update(param_overrides)
+
+    launch_params = _normalize_antibody_job_params(launch_params)
+    suffix = name_suffix.strip() if isinstance(name_suffix, str) and name_suffix.strip() else action_map[action]["suffix"]
+    job_name = f"{root_job.name}_{suffix}"
+
+    return JobCreate(
+        name=job_name,
+        model_id="template_antibody_denovo",
+        mode="antibody_denovo_pipeline",
+        params=launch_params,
+        pinned_gpu=root_job.pinned_gpu,
+    )
+
+
+def _to_stage_output_path(path: Path) -> str:
+    try:
+        return to_allowed_relative(path)
+    except Exception:
+        return str(path)
+
+
+def _stage_output_exists(output_path: Optional[Path], output_value: str) -> bool:
+    if not output_value or not isinstance(output_value, str):
+        return False
+
+    raw = Path(output_value)
+    candidates: List[Path] = []
+    if raw.is_absolute():
+        candidates.append(raw)
+    else:
+        candidates.append(get_data_root() / output_value)
+        if output_path is not None:
+            candidates.append(output_path / output_value)
+            try:
+                output_rel = to_allowed_relative(output_path)
+                if output_value.startswith(f"{output_rel}/"):
+                    suffix = output_value[len(output_rel) + 1 :]
+                    candidates.append(output_path / suffix)
+            except Exception:
+                pass
+
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _sanitize_nanopore_stage_outputs(
+    stage_outputs: Dict[str, List[str]],
+    output_dir: Optional[str],
+) -> Dict[str, List[str]]:
+    output_path = resolve_output_dir(output_dir or "")
+    cleaned: Dict[str, List[str]] = {}
+    for stage, outputs in (stage_outputs or {}).items():
+        if not isinstance(outputs, list):
+            continue
+        filtered = [
+            value
+            for value in outputs
+            if isinstance(value, str) and _stage_output_exists(output_path, value)
+        ]
+        deduped = _dedupe_preserve_order(filtered)
+        if deduped:
+            cleaned[stage] = deduped
+    return cleaned
+
+
+def _resolve_nanopore_fastq_qc_mode(params: Optional[dict]) -> tuple[bool, bool]:
+    """Return (enabled, use_legacy_multimer_stages)."""
+    if not isinstance(params, dict):
+        return False, False
+
+    run_fastq_qc = params.get("run_fastq_qc")
+    if isinstance(run_fastq_qc, bool):
+        return run_fastq_qc, False
+
+    run_multimer_qc = params.get("run_multimer_qc")
+    if isinstance(run_multimer_qc, bool):
+        return run_multimer_qc, True
+
+    return False, False
+
+
+def _resolve_nanopore_bam_realign(params: Optional[dict]) -> bool:
+    if not isinstance(params, dict):
+        return False
+    return _to_bool(params.get("bam_force_realign"))
+
+
+def _infer_nanopore_stage_outputs(
+    output_dir: Optional[str],
+    params: Optional[dict] = None,
+) -> Dict[str, List[str]]:
+    output_path = resolve_output_dir(output_dir or "")
+    if not output_path or not output_path.exists():
+        return {}
+
+    expected = {
+        "dorado_basecall": [
+            "basecall/calls.bam",
+            "basecall/basecall.log",
+            "basecall/sequencing_summary.tsv",
+        ],
+        "dorado_align": [
+            "align/aligned.bam",
+            "align/aligned.bam.bai",
+            "align/reference.fasta",
+            "align/reference.fasta.fai",
+            "align/align.log",
+        ],
+        "bam_prepare": [
+            "align/aligned.bam",
+            "align/aligned.bam.bai",
+            "align/bam_prepare.log",
+            "align/reference.fasta",
+            "align/reference.fasta.fai",
+            "align/reference_prepare.log",
+        ],
+        "fastq_align": [
+            "align/aligned.bam",
+            "align/aligned.bam.bai",
+            "align/reference.fasta",
+            "align/reference.fasta.fai",
+            "align/fastq_align.log",
+        ],
+        "fastq_qc": [
+            "fastq_qc/read_lengths.tsv",
+            "fastq_qc/fastq_qc_summary.tsv",
+            "fastq_qc/fastq_alignment_stats.tsv",
+            "fastq_qc/fastq_coverage.tsv",
+            "fastq_qc/igv_coverage_depth.bedgraph",
+            "fastq_qc/igv_position_gradient.bedgraph",
+            "fastq_qc/igv_gc_content.bedgraph",
+            "fastq_qc/igv_gc_zscore.bedgraph",
+            "fastq_qc/igv_split_read_density.bedgraph",
+            "fastq_qc/igv_softclip_density.bedgraph",
+            "fastq_qc/igv_junction_hotspots.bed",
+            "fastq_qc/igv_report_sites.bed",
+            "fastq_qc/igv_report_sites.tsv",
+            "fastq_qc/igv_track_config.json",
+            "fastq_qc/igv_report.html",
+            "fastq_qc/igv_report.log",
+            "fastq_qc/fastq_consensus.fasta",
+            "fastq_qc/fastq_consensus.fasta.fai",
+            "fastq_qc/fastq_consensus.log",
+            "fastq_qc/fastq_qc.log",
+        ],
+        "modkit": [
+            "methylation/methylation.bed",
+            "methylation/pileup.log",
+            "methylation/modkit_summary.tsv",
+            "methylation/summary.log",
+        ],
+        "multimer_qc": [
+            "multimer_qc/read_lengths.tsv",
+            "multimer_qc/multimer_summary.tsv",
+            "multimer_qc/multimer_candidates.tsv",
+            "multimer_qc/multimer_qc.log",
+        ],
+        "dimer_analysis": [
+            "multimer_qc/dimer_candidates.fastq",
+            "multimer_qc/dimer_candidates.fasta",
+            "multimer_qc/dimer_read_lengths.tsv",
+            "multimer_qc/dimer_analysis_summary.tsv",
+            "multimer_qc/dimer_analysis.log",
+            "multimer_qc/dimer_breakpoint_call.tsv",
+            "multimer_qc/dimer_evidence_by_position.tsv",
+            "multimer_qc/dimer_read_events.tsv",
+            "multimer_qc/dimer_breakpoint_sequences.tsv",
+            "multimer_qc/dimer_secondary_anomalies.tsv",
+            "multimer_qc/dimer_secondary_summary.tsv",
+            "multimer_qc/dimer_diagnostics.tar.gz",
+            "multimer_qc/dimer_candidates.aligned.bam",
+            "multimer_qc/dimer_candidates.aligned.bam.bai",
+            "multimer_qc/dimer_reference.fasta",
+            "multimer_qc/dimer_reference.fasta.fai",
+            "multimer_qc/dominant_dimer_consensus.fasta",
+            "multimer_qc/dominant_dimer_consensus.log",
+            "multimer_qc/dominant_dimer_consensus_metadata.tsv",
+            # Legacy fallback artifacts (older runs)
+            "multimer_qc/dimer_breakpoint_screen.tsv",
+            "multimer_qc/dimer_junction_clusters.tsv",
+            "multimer_qc/dimer_junction_events.tsv",
+            "multimer_qc/dimer_read_junctions.tsv",
+            "multimer_qc/dimer_read_ledger.tsv",
+            "multimer_qc/dimer_single_ref_split_profile.tsv",
+        ],
+        "wf_clone_validation": [
+            "assembly/wf_clone.log",
+            "assembly/wf_clone_out",
+            "assembly/wf_clone_out/wf-clone-validation-report.html",
+            "assembly/wf_clone_out/sample_status.txt",
+        ],
+    }
+
+    allowed_stages = set(expected.keys())
+    if isinstance(params, dict):
+        has_pod5 = _is_meaningful_param_value(params.get("pod5_dir"))
+        has_bam = _is_meaningful_param_value(params.get("bam_path"))
+        has_fastq = _is_meaningful_param_value(params.get("fastq_path"))
+        has_reference = _is_meaningful_param_value(params.get("reference_fasta"))
+        fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(params)
+        bam_force_realign = _resolve_nanopore_bam_realign(params)
+
+        allowed_stages = set()
+        if has_pod5:
+            allowed_stages.add("dorado_basecall")
+        if has_pod5 and has_reference:
+            allowed_stages.add("dorado_align")
+        if has_bam and has_reference and bam_force_realign:
+            allowed_stages.add("dorado_align")
+        if has_bam:
+            allowed_stages.add("bam_prepare")
+        if has_pod5 and not has_reference:
+            allowed_stages.add("bam_prepare")
+        if has_fastq and has_reference:
+            allowed_stages.add("fastq_align")
+        if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
+            allowed_stages.add("fastq_qc")
+        if params.get("run_modkit") is not False and (has_pod5 or has_bam):
+            allowed_stages.add("modkit")
+        if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
+            allowed_stages.add("multimer_qc")
+        if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
+            allowed_stages.add("dimer_analysis")
+        if params.get("run_assembly") is True and (has_pod5 or has_bam):
+            allowed_stages.add("wf_clone_validation")
+
+    inferred: Dict[str, List[str]] = {}
+    for stage, rel_paths in expected.items():
+        if stage not in allowed_stages:
+            continue
+        found: List[str] = []
+        for rel in rel_paths:
+            p = output_path / rel
+            if p.exists():
+                found.append(_to_stage_output_path(p))
+        if found:
+            inferred[stage] = _dedupe_preserve_order(found)
+    return inferred
+
+
+def _resolve_stage_state_for_response(job: Job) -> tuple[List[str], Dict[str, List[str]]]:
+    completed = _dedupe_preserve_order(list(job.completed_stages or []))
+    stage_outputs = dict(job.stage_outputs or {})
+
+    if job.mode in ["methylation_analysis", "nanopore_methylation"]:
+        stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
+        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params)
+        for stage, outputs in inferred_outputs.items():
+            existing = stage_outputs.get(stage)
+            if isinstance(existing, list):
+                merged = _dedupe_preserve_order([*existing, *outputs])
+            else:
+                merged = outputs
+            stage_outputs[stage] = merged
+            if merged and stage not in completed:
+                completed.append(stage)
+
+    return completed, stage_outputs
+
+
+def _has_protenix_template_db(mmcif_dir: Path) -> bool:
+    if not mmcif_dir.is_dir():
+        return False
+    patterns = ("*.cif", "*.mmcif", "*.cif.gz", "*.mmcif.gz")
+    for pattern in patterns:
+        try:
+            next(mmcif_dir.rglob(pattern))
+            return True
+        except StopIteration:
+            continue
+    return False
+
+
+def _validate_protenix_template_requirements(model_id: str, params: dict) -> None:
+    if model_id != "protenix":
+        return
+    if not _to_bool(params.get("protenix_use_template", False)):
+        return
+
+    code_root_raw = params.get("code_root") or os.getenv("BMS_HOME")
+    code_root = Path(code_root_raw).expanduser() if code_root_raw else get_code_root()
+    mmcif_dir = code_root / ".protenix_cache" / "mmcif"
+
+    if _has_protenix_template_db(mmcif_dir):
+        return
+
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "validation_errors": [
+                (
+                    "Protenix template mode requires an mmCIF database, but none was found at "
+                    f"{mmcif_dir}. Disable protenix_use_template or populate that directory "
+                    "before submitting."
+                )
+            ]
+        },
+    )
+
+
+def _resolve_alias_path_for_runtime(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return raw
+    expanded = os.path.expanduser(raw)
+    if Path(expanded).is_absolute():
+        return expanded
+    try:
+        return str(resolve_allowed_path(raw))
+    except ValueError:
+        return raw
+
+
+def _normalize_nanopore_runtime_paths(model_id: str, params: dict) -> dict:
+    if model_id != "nanopore" or not isinstance(params, dict):
+        return params
+    normalized = dict(params)
+    for key in NANOPORE_PATH_PARAM_KEYS:
+        value = normalized.get(key)
+        if isinstance(value, str):
+            normalized[key] = _resolve_alias_path_for_runtime(value)
+    return normalized
+
+
+def _normalize_nanopore_modbase_for_validation(
+    registry,
+    model_id: str,
+    params: dict,
+) -> dict:
+    """
+    Normalize known modbase aliases before schema validation.
+
+    This prevents launcher/API 422 regressions when frontend and backend are on
+    slightly different nanopore enum revisions (e.g. canonical vs legacy alias).
+    """
+    if model_id != "nanopore" or not isinstance(params, dict):
+        return params
+
+    raw_value = params.get("modified_bases")
+    if not isinstance(raw_value, str):
+        return params
+
+    cleaned_value = " ".join(raw_value.strip().split())
+    normalized = dict(params)
+    normalized["modified_bases"] = cleaned_value
+
+    model = registry.get_model(model_id)
+    if not model:
+        return normalized
+
+    modbase_param = next((p for p in model.params if p.name == "modified_bases"), None)
+    if not modbase_param or not modbase_param.enum:
+        return normalized
+
+    enum_values = set(modbase_param.enum)
+    canonical = "6mA 4mC_5mC"
+    legacy = "6mA 5mC"
+
+    if cleaned_value == canonical and canonical not in enum_values and legacy in enum_values:
+        normalized["modified_bases"] = legacy
+    elif cleaned_value == legacy and legacy not in enum_values and canonical in enum_values:
+        normalized["modified_bases"] = canonical
+
+    return normalized
 
 
 @router.get("", response_model=JobList)
@@ -105,8 +1474,9 @@ async def list_jobs(
     
     job_responses = []
     for job, design_count in rows:
+        completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
         # Fallback for structure/PDB jobs that don't have Design entries
-        if design_count == 0 and job.status == JobStatus.COMPLETED.value and job.output_dir:
+        if design_count == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and job.output_dir:
             # Note: This file system check is still "slow" per job, but only runs for 
             # jobs with 0 designs in DB. For pure design jobs, it's skipped.
             design_count = count_structure_files(job.output_dir)
@@ -127,8 +1497,12 @@ async def list_jobs(
             batch_id=job.batch_id,
             batch_name=job.batch_name,
             current_stage=job.current_stage,
-            completed_stages=job.completed_stages,
-            stage_outputs=job.stage_outputs,
+            completed_stages=completed_stages,
+            stage_outputs=stage_outputs,
+            awaiting_input=job.awaiting_input,
+            awaiting_stage=job.awaiting_stage,
+            awaiting_payload=job.awaiting_payload,
+            decision_history=job.decision_history,
         ))
     
     return JobList(jobs=job_responses, total=total)
@@ -142,6 +1516,23 @@ async def create_job(
 ):
     """Create and queue a new pipeline job."""
     registry = get_registry()
+
+    # Keep model schema in sync with disk changes during long-lived API sessions.
+    try:
+        registry.reload()
+    except Exception as e:
+        logger.warning(f"Failed to reload model registry before validation: {e}")
+
+    if isinstance(job_data.params, dict):
+        job_data.params = _normalize_nanopore_modbase_for_validation(
+            registry,
+            job_data.model_id,
+            job_data.params,
+        )
+        # Convert browse-alias paths (e.g. downloads/...) to host absolute paths for runtime.
+        job_data.params = _normalize_nanopore_runtime_paths(job_data.model_id, job_data.params)
+        job_data.params = _normalize_antibody_runtime_paths(job_data.model_id, job_data.params)
+        job_data.params = _normalize_antibody_job_params(job_data.params)
     
     # Skip validation for template jobs and mutagenesis batches
     # Mutagenesis uses mutagenesis_variants array instead of top-level sequence
@@ -151,11 +1542,29 @@ async def create_job(
         errors = registry.validate_job_params(job_data.model_id, job_data.mode, job_data.params)
         if errors:
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
+
+    _validate_protenix_template_requirements(job_data.model_id, job_data.params)
+    _validate_fampnn_checkpoint_requirements(job_data.model_id, job_data.params)
+    _validate_antibody_runtime_paths(job_data.model_id, job_data.params)
     
     # Detect complex components for logging (info level)
     if 'complex_components' in job_data.params:
         logger.info(f"Job contains {len(job_data.params['complex_components'])} complex components")
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # FORCE FLAGS FOR RFANTIBODY BACKBONE MODE
+    # ═══════════════════════════════════════════════════════════════════════════
+    if job_data.params.get('rfd_mode') == 'rfantibody_backbone':
+        job_data.params['seq_design_fampnn'] = False
+        job_data.params['seq_design_antifold'] = False
+        job_data.params['seq_design_proteinmpnn'] = False
+        job_data.params['run_structure_validation'] = False
+        job_data.params['run_immunogenicity_scoring'] = False
+        job_data.params['run_thermompnn'] = False
+        job_data.params['run_stability_scoring'] = False
+        job_data.params['run_maturation'] = False
+        logger.info("[QUEUE] rfantibody_backbone mode detected. Silencing downstream validation flags.")
+
     # ═══════════════════════════════════════════════════════════════════════════
     # JOB MULTIPLIER: Create N separate jobs for multi-GPU distribution
     # ═══════════════════════════════════════════════════════════════════════════
@@ -173,6 +1582,36 @@ async def create_job(
         logger.info(f"[MUTAGENESIS] Detected {num_jobs} variants in batch submission")
     elif num_jobs is None or num_jobs < 1:
         num_jobs = 1
+
+    # ColabFold API mode is currently scoped to single structure-prediction jobs.
+    msa_provider = str(job_data.params.get("msa_provider", "local") or "local").strip().lower()
+    if msa_provider not in {"local", "colabfold_api"}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid msa_provider '{msa_provider}'. Allowed: local, colabfold_api",
+        )
+
+    if msa_provider == "colabfold_api":
+        is_structure_model = job_data.model_id in {"boltz2", "rf3", "protenix"}
+        is_structure_mode = job_data.mode in {"predict", "complex"}
+        if not is_structure_model or not is_structure_mode:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "msa_provider=colabfold_api is currently supported only for "
+                    "single structure_prediction jobs (boltz2/rf3/protenix predict|complex)."
+                ),
+            )
+        if mutagenesis_variants:
+            raise HTTPException(
+                status_code=422,
+                detail="msa_provider=colabfold_api is not yet supported for mutagenesis batch jobs.",
+            )
+        if num_jobs > 1:
+            raise HTTPException(
+                status_code=422,
+                detail="msa_provider=colabfold_api currently requires num_parallel_jobs=1.",
+            )
     
     # Create output directory (base for all jobs in batch)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -200,8 +1639,20 @@ async def create_job(
         sequence_length = 300  # Default fallback
     
     # Estimate VRAM based on model type
-    from services.gpu_orchestrator import estimate_vram
-    vram_estimate = estimate_vram(job_data.model_id, sequence_length)
+    from services.gpu_orchestrator import estimate_vram, estimate_protenix_tokens
+    if job_data.model_id == "protenix":
+        sequence_length = estimate_protenix_tokens(job_data.params, sequence_length)
+    vram_estimate = estimate_vram(job_data.model_id, sequence_length, job_data.params)
+
+    # ─── CPU-only override: FASTQ-only nanopore jobs don't need a GPU ─────
+    if job_data.model_id == "nanopore" and isinstance(job_data.params, dict):
+        has_pod5 = bool((job_data.params.get("pod5_dir") or "").strip())
+        has_bam = bool((job_data.params.get("bam_path") or "").strip())
+        has_fastq = bool((job_data.params.get("fastq_path") or "").strip())
+        if has_fastq and not has_pod5 and not has_bam:
+            vram_estimate = 0
+            job_data.pinned_gpu = None
+            logger.info(f"[QUEUE] FASTQ-only nanopore job '{job_data.name}': CPU-only, vram_estimate=0")
     
     # Generate batch_id if creating multiple jobs
     batch_id = str(uuid.uuid4()) if num_jobs > 1 else None
@@ -267,6 +1718,27 @@ async def create_job(
                 'sequences_json': json_lib.dumps(sequences_for_msa),
                 'reference_sequence': job_data.params.get('msa_reference_sequence'),
                 'msa_force_refresh': job_data.params.get('msa_force_refresh', False),
+                'msa_cache_only': job_data.params.get('msa_cache_only', False),
+                'msa_use_gpu': job_data.params.get('msa_use_gpu', True),
+                'msa_max_seqs': job_data.params.get('msa_max_seqs'),
+                'msa_preset': job_data.params.get('msa_preset', 'fast'),
+                'msa_use_expand': job_data.params.get('msa_use_expand'),
+                'msa_use_env': job_data.params.get('msa_use_env'),
+                'msa_num_iterations': job_data.params.get('msa_num_iterations'),
+                'msa_evalue': job_data.params.get('msa_evalue'),
+                'msa_min_seq_id': job_data.params.get('msa_min_seq_id'),
+                'msa_min_coverage': job_data.params.get('msa_min_coverage'),
+                'msa_taxon_list': job_data.params.get('msa_taxon_list'),
+                'msa_min_depth_warning': job_data.params.get('msa_min_depth_warning'),
+                'msa_min_depth_fail': job_data.params.get('msa_min_depth_fail'),
+                'msa_gpu_mode': job_data.params.get('msa_gpu_mode'),
+                'msa_gpu_threshold': job_data.params.get('msa_gpu_threshold'),
+                'msa_preferred_gpus': job_data.params.get('msa_preferred_gpus'),
+                'msa_excluded_gpus': job_data.params.get('msa_excluded_gpus'),
+                'msa_gpu_server_mode': job_data.params.get('msa_gpu_server_mode'),
+                'msa_gpu_server_wait_timeout': job_data.params.get('msa_gpu_server_wait_timeout'),
+                'msa_gpu_server_db_load_mode': job_data.params.get('msa_gpu_server_db_load_mode'),
+                'msa_gpu_server_startup_wait': job_data.params.get('msa_gpu_server_startup_wait'),
                 # BATCH-STAGE-GATE: Store FrustraMPNN flag for post-batch execution
                 'run_frustrampnn_batch': job_data.params.get('run_frustrampnn', False),
             },
@@ -308,12 +1780,19 @@ async def create_job(
             # This prevents GPU contention and enables single-model-load optimization
             job_params.pop('run_frustrampnn', None)
             
+            variant_complex_components = variant.get('complex_components')
             # Construct complex_components for BoltzFromComplex if any non-protein components present
             # The ligands array contains ALL complex components: ligands, ions, DNA, RNA, peptides
             ligand_components = job_params.pop('ligands', [])
             
+            if variant_complex_components:
+                job_params['complex_components'] = variant_complex_components
+                logger.info(
+                    f"[MUTAGENESIS] Using variant-specific complex_components with "
+                    f"{len(variant_complex_components)} entries for variant {variant.get('name')}"
+                )
             # Check if any components need the complex workflow (DNA, RNA, ligands, ions, peptides)
-            if ligand_components:
+            elif ligand_components:
                 # Build complex_components array: protein + all other components
                 complex_comps = [
                     {'type': 'protein', 'id': 'A', 'sequence': variant.get('sequence')}
@@ -346,7 +1825,17 @@ async def create_job(
             job_name = job_data.name
             output_dir = base_output_dir
             job_params = job_data.params
-        
+
+        if msa_job:
+            sequence_for_hash = str(job_params.get('sequence') or job_params.get('sequence_input') or '')
+            reference_for_hash = str(job_data.params.get('msa_reference_sequence') or '')
+            hash_source = reference_for_hash or sequence_for_hash
+            if hash_source:
+                job_params = {
+                    **job_params,
+                    'msa_sequence_hash': hashlib.sha256(hash_source.encode()).hexdigest(),
+                }
+
         os.makedirs(output_dir, exist_ok=True)
         
         # Determine queue status: if MSA job exists, this job waits for it
@@ -421,7 +1910,77 @@ async def create_job(
         completed_at=first_job.completed_at,
         output_dir=first_job.output_dir,
         error_message=first_job.error_message,
-        design_count=0
+        design_count=0,
+        awaiting_input=first_job.awaiting_input,
+        awaiting_stage=first_job.awaiting_stage,
+        awaiting_payload=first_job.awaiting_payload,
+        decision_history=first_job.decision_history,
+    )
+
+
+@router.post("/antibody-iteration/from-designs", response_model=AntibodyIterationLaunchResponse, status_code=201)
+async def launch_antibody_iteration_from_designs(
+    request: AntibodyIterationLaunchRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+):
+    """Launch a focused antibody iteration round from selected design structures."""
+    design_ids = [design_id.strip() for design_id in request.design_ids if isinstance(design_id, str) and design_id.strip()]
+    if not design_ids:
+        raise HTTPException(status_code=422, detail="At least one design must be selected.")
+
+    source_job, root_job = await _resolve_antibody_root_job(session, request.source_job_id)
+
+    result = await session.execute(select(Design).where(Design.id.in_(design_ids)))
+    found_designs = result.scalars().all()
+    design_by_id = {design.id: design for design in found_designs}
+    missing_designs = [design_id for design_id in design_ids if design_id not in design_by_id]
+    if missing_designs:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Some selected designs were not found: {', '.join(missing_designs[:10])}",
+        )
+
+    ordered_designs = [design_by_id[design_id] for design_id in design_ids]
+    selection_dir = _materialize_antibody_selection(root_job, source_job, ordered_designs, request.action)
+    action = request.action.strip().lower()
+    variant_note = ""
+    variant_count = len(ordered_designs)
+    if action == "cdr_indel_round":
+        if request.cdr_indel_config is None:
+            raise HTTPException(status_code=422, detail="cdr_indel_config is required for action 'cdr_indel_round'.")
+        launch_request, variant_count, variant_note = _build_cdr_indel_iteration_job(
+            root_job=root_job,
+            source_job=source_job,
+            designs=ordered_designs,
+            config=request.cdr_indel_config,
+            name_suffix=request.name_suffix,
+            param_overrides=request.param_overrides,
+        )
+    else:
+        launch_request = _build_antibody_iteration_job(
+            root_job=root_job,
+            source_job=source_job,
+            action=action,
+            selection_dir=selection_dir,
+            design_ids=design_ids,
+            name_suffix=request.name_suffix,
+            param_overrides=request.param_overrides,
+        )
+    launched_job = await create_job(launch_request, background_tasks, session)
+
+    return AntibodyIterationLaunchResponse(
+        message=(
+            f"Launched antibody iteration action '{action}' from {len(ordered_designs)} selected designs."
+            + (f" Generated {variant_count} indel variants." if action == "cdr_indel_round" else "")
+            + variant_note
+        ),
+        action=action,
+        source_job_id=source_job.id,
+        root_job_id=root_job.id,
+        selection_dir=str(selection_dir),
+        selected_design_count=len(ordered_designs),
+        launched_job=launched_job,
     )
 
 
@@ -440,6 +1999,9 @@ async def get_job(
     # Get design count
     design_count_query = select(func.count(Design.id)).where(Design.job_id == job.id)
     design_count = (await session.execute(design_count_query)).scalar()
+    if (design_count or 0) == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and job.output_dir:
+        design_count = count_structure_files(job.output_dir)
+    completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
     
     return JobResponse(
         id=job.id,
@@ -453,7 +2015,14 @@ async def get_job(
         completed_at=job.completed_at,
         output_dir=job.output_dir,
         error_message=job.error_message,
-        design_count=design_count or 0
+        design_count=design_count or 0,
+        current_stage=job.current_stage,
+        completed_stages=completed_stages,
+        stage_outputs=stage_outputs,
+        awaiting_input=job.awaiting_input,
+        awaiting_stage=job.awaiting_stage,
+        awaiting_payload=job.awaiting_payload,
+        decision_history=job.decision_history,
     )
 
 
@@ -618,12 +2187,39 @@ async def resubmit_job(
     output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
     
+    resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
+    resubmit_params = _normalize_nanopore_runtime_paths(original_job.model_id, resubmit_params)
+    resubmit_params = _normalize_antibody_runtime_paths(original_job.model_id, resubmit_params)
+    resubmit_params = _normalize_antibody_job_params(resubmit_params)
+    if resubmit_params.get("msa_force_refresh") is True:
+        # Resubmits should reuse cache by default unless user explicitly
+        # starts a fresh job with force-refresh enabled.
+        resubmit_params["msa_force_refresh"] = False
+        logger.info(f"[RESUBMIT] Cleared msa_force_refresh for resubmitted job {job_id}")
+
+    _validate_protenix_template_requirements(original_job.model_id, resubmit_params)
+    _validate_fampnn_checkpoint_requirements(original_job.model_id, resubmit_params)
+    _validate_antibody_runtime_paths(original_job.model_id, resubmit_params)
+
+    from services.gpu_orchestrator import estimate_vram, estimate_protenix_tokens
+    resubmit_sequence_length = original_job.sequence_length or 300
+    if original_job.model_id == "protenix":
+        resubmit_sequence_length = estimate_protenix_tokens(
+            resubmit_params,
+            resubmit_sequence_length,
+        )
+    resubmit_vram_estimate = estimate_vram(
+        original_job.model_id,
+        resubmit_sequence_length,
+        resubmit_params,
+    )
+
     new_job = Job(
         id=str(uuid.uuid4()),
         name=new_name,
         model_id=original_job.model_id,
         mode=original_job.mode,
-        params=original_job.params or {},
+        params=resubmit_params,
         status=JobStatus.QUEUED.value,
         created_at=datetime.utcnow(),
         output_dir=output_dir,
@@ -632,8 +2228,8 @@ async def resubmit_job(
         batch_name=original_job.batch_name,
         # GPU Orchestrator fields - let orchestrator pick it up
         queue_status='queued',
-        vram_estimate_mb=original_job.vram_estimate_mb,
-        sequence_length=original_job.sequence_length,
+        vram_estimate_mb=resubmit_vram_estimate,
+        sequence_length=resubmit_sequence_length,
         priority=0,
         paused=False,
         retry_count=0,
@@ -858,6 +2454,60 @@ async def report_stage_complete(
     }
 
 
+@router.post("/{job_id}/stage-gates/{stage}/open")
+async def open_stage_gate(
+    job_id: str,
+    stage: str,
+    request: Optional[OpenStageGateRequest] = Body(default=None),
+    session: AsyncSession = Depends(get_session)
+):
+    """Mark a job as awaiting user input at a named workflow gate."""
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    payload = dict(request.payload or {}) if request else {}
+    payload["stage"] = stage
+
+    job.awaiting_input = True
+    job.awaiting_stage = stage
+    job.awaiting_payload = payload
+    job.current_stage = stage
+    await session.commit()
+
+    logger.info("Job %s opened interactive gate '%s'", job_id, stage)
+
+    return {
+        "message": f"Stage gate '{stage}' opened",
+        "job_id": job_id,
+        "awaiting_stage": stage,
+        "awaiting_payload": payload,
+    }
+
+
+@router.get("/{job_id}/stage-gates")
+async def get_stage_gates(
+    job_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """Return the current interactive gate state for a job."""
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return {
+        "job_id": job_id,
+        "awaiting_input": bool(job.awaiting_input),
+        "awaiting_stage": job.awaiting_stage,
+        "awaiting_payload": job.awaiting_payload or {},
+        "decision_history": job.decision_history or [],
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CHILD JOB TRACKING (Spawn-Wait-Aggregate Pattern)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -892,26 +2542,21 @@ async def get_children_status(
         - child_output_dirs: List of output directories for aggregation
         - success_rate: Percentage of children that completed successfully
     """
-    from sqlalchemy import or_
-    
-    # Build query for children - match by parent_id OR batch_name
-    if batch_name:
-        # Resume mode: search by batch_name to find children from original run
-        query = select(Job).where(
-            or_(
-                Job.parent_job_id == parent_id,
-                Job.batch_name == batch_name
-            )
-        )
-    else:
-        # Normal mode: just search by parent_id
-        query = select(Job).where(Job.parent_job_id == parent_id)
-    
+    # Prefer exact parent matches. Only fall back to batch_name for resume cases
+    # where the current parent has no children of its own yet.
+    query = select(Job).where(Job.parent_job_id == parent_id)
     if stage:
         query = query.where(Job.child_stage == stage)
-    
+
     result = await session.execute(query)
     children = result.scalars().all()
+
+    if not children and batch_name:
+        fallback_query = select(Job).where(Job.batch_name == batch_name)
+        if stage:
+            fallback_query = fallback_query.where(Job.child_stage == stage)
+        fallback_result = await session.execute(fallback_query)
+        children = fallback_result.scalars().all()
     
     if not children:
         return {
@@ -920,42 +2565,78 @@ async def get_children_status(
             "total": 0,
             "completed": 0,
             "failed": 0,
+            "cancelled": 0,
             "running": 0,
             "pending": 0,
             "all_done": True,
             "child_output_dirs": [],
+            "child_output_dirs_all": [],
             "success_rate": 100.0
         }
-    
-    completed = [c for c in children if c.status == "completed"]
-    failed = [c for c in children if c.status == "failed"]
-    running = [c for c in children if c.status == "running"]
-    pending = [c for c in children if c.status in ["queued", "pending"]]
-    
-    all_done = all(c.status in ["completed", "failed", "cancelled"] for c in children)
-    
-    # Collect output directories from completed children
-    output_dirs = [
-        c.child_output_dir or c.output_dir 
-        for c in completed 
-        if (c.child_output_dir or c.output_dir) and not c.aggregated_by_parent
-    ]
-    
-    total = len(children)
+
+    # Guard against duplicate records and make resume behavior deterministic.
+    child_map = {child.id: child for child in children}
+    deduped_children = list(child_map.values())
+
+    completed = [c for c in deduped_children if c.status == "completed"]
+    failed = [c for c in deduped_children if c.status == "failed"]
+    cancelled = [c for c in deduped_children if c.status == "cancelled"]
+    running = [c for c in deduped_children if c.status == "running"]
+    pending = [c for c in deduped_children if c.status in ["queued", "pending"]]
+
+    all_done = all(c.status in ["completed", "failed", "cancelled"] for c in deduped_children)
+
+    def _dedupe_preserve_order(values: List[str]) -> List[str]:
+        seen = set()
+        out: List[str] = []
+        for value in values:
+            if value not in seen:
+                seen.add(value)
+                out.append(value)
+        return out
+
+    all_output_dirs = _dedupe_preserve_order(
+        [
+            c.child_output_dir or c.output_dir
+            for c in completed
+            if (c.child_output_dir or c.output_dir)
+        ]
+    )
+    # Default collection set excludes already-aggregated children.
+    output_dirs = _dedupe_preserve_order(
+        [
+            c.child_output_dir or c.output_dir
+            for c in completed
+            if (c.child_output_dir or c.output_dir) and not c.aggregated_by_parent
+        ]
+    )
+
+    total = len(deduped_children)
     success_rate = (len(completed) / total * 100) if total > 0 else 0
-    
+
     return {
         "parent_id": parent_id,
         "stage": stage,
         "total": total,
         "completed": len(completed),
         "failed": len(failed),
+        "cancelled": len(cancelled),
         "running": len(running),
         "pending": len(pending),
         "all_done": all_done,
         "child_output_dirs": output_dirs,
+        "child_output_dirs_all": all_output_dirs,
         "success_rate": round(success_rate, 1),
-        "child_ids": [c.id for c in children]
+        "child_ids": [c.id for c in deduped_children],
+        "children": [
+            {
+                "job_id": c.id,
+                "status": c.status,
+                "output_dir": c.child_output_dir or c.output_dir,
+                "aggregated_by_parent": bool(c.aggregated_by_parent),
+            }
+            for c in deduped_children
+        ],
     }
 
 
@@ -963,17 +2644,30 @@ async def get_children_status(
 async def mark_children_aggregated(
     parent_id: str,
     stage: Optional[str] = None,
+    batch_name: Optional[str] = None,
     session: AsyncSession = Depends(get_session)
 ):
     """
     Mark all completed children as aggregated by parent.
     Prevents double-collection when polling multiple times.
     """
-    query = select(Job).where(
-        Job.parent_job_id == parent_id,
-        Job.status == "completed",
-        Job.aggregated_by_parent == False
-    )
+    from sqlalchemy import or_
+
+    if batch_name:
+        query = select(Job).where(
+            or_(
+                Job.parent_job_id == parent_id,
+                Job.batch_name == batch_name
+            ),
+            Job.status == "completed",
+            Job.aggregated_by_parent == False
+        )
+    else:
+        query = select(Job).where(
+            Job.parent_job_id == parent_id,
+            Job.status == "completed",
+            Job.aggregated_by_parent == False
+        )
     
     if stage:
         query = query.where(Job.child_stage == stage)
@@ -989,7 +2683,8 @@ async def mark_children_aggregated(
     return {
         "marked_count": len(children),
         "parent_id": parent_id,
-        "stage": stage
+        "stage": stage,
+        "batch_name": batch_name,
     }
 
 
@@ -1039,7 +2734,7 @@ async def get_job_stages(
         display_stages.append("rfantibody")
         
         # Check params for sequence design steps (default to true if not present, matching nextflow logic)
-        params = job.params or {}
+        params = _normalize_antibody_job_params(job.params or {})
         
         # Note: In nextflow 'null' means true for these flags due to how they are processed
         run_fampnn = params.get("seq_design_fampnn")
@@ -1053,37 +2748,109 @@ async def get_job_stages(
         run_proteinmpnn = params.get("seq_design_proteinmpnn")
         if run_proteinmpnn is None or run_proteinmpnn is True:
             display_stages.append("proteinmpnn")
+
+        if params.get("run_maturation") is True:
+            display_stages.append("maturation")
             
         # Validation stages
         if params.get("run_structure_validation") is not False:
-            display_stages.append("boltz2")
+            display_stages.append("structure_validation")
+
+        if params.get("run_post_validation_maturation") is True:
+            display_stages.append("maturation_post_validation")
             
         if params.get("run_immunogenicity_scoring") is not False:
              display_stages.append("antiberty")
              
-        if params.get("run_stability_scoring") is not False:
+        if params.get("run_thermompnn") is not False:
              display_stages.append("thermompnn")
              
     else:
-        # Fallback for other modes
-        all_stages_map = {
-            "binder_denovo": ["rfdiffusion", "proteinmpnn", "boltz2"],
-            "monomer_denovo": ["rfdiffusion", "proteinmpnn", "af2"],
-        }
-        display_stages = all_stages_map.get(job.mode, [])
+        # Nanopore stage list is dynamic based on params.
+        if job.mode in ["methylation_analysis", "nanopore_methylation"]:
+            np_params = job.params or {}
+            display_stages = []
+            has_pod5 = _is_meaningful_param_value(np_params.get("pod5_dir"))
+            has_bam = _is_meaningful_param_value(np_params.get("bam_path"))
+            has_fastq = _is_meaningful_param_value(np_params.get("fastq_path"))
+            has_reference = _is_meaningful_param_value(np_params.get("reference_fasta"))
+            fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(np_params)
+            bam_force_realign = _resolve_nanopore_bam_realign(np_params)
 
-    all_stages = display_stages
-    completed = job.completed_stages or []
-    
+            if has_pod5:
+                display_stages.append("dorado_basecall")
+
+            if has_pod5 and has_reference:
+                display_stages.append("dorado_align")
+
+            if has_bam and has_reference:
+                if bam_force_realign:
+                    display_stages.append("dorado_align")
+                else:
+                    display_stages.append("bam_prepare")
+
+            if (has_bam and not has_reference) or (has_pod5 and not has_reference):
+                display_stages.append("bam_prepare")
+
+            if has_fastq and has_reference:
+                display_stages.append("fastq_align")
+            if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
+                display_stages.append("fastq_qc")
+
+            # Modkit only for POD5/BAM — FASTQ lacks methylation tags (MM/ML)
+            if np_params.get("run_modkit") is not False and (has_pod5 or has_bam):
+                display_stages.append("modkit")
+
+            # Legacy multimer/dimer stage labels for old runs.
+            if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
+                display_stages.append("multimer_qc")
+            if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
+                display_stages.append("dimer_analysis")
+
+            if np_params.get("run_assembly") is True and (has_pod5 or has_bam):
+                display_stages.append("wf_clone_validation")
+        else:
+            # Fallback for other modes
+            all_stages_map = {
+                "binder_denovo": ["rfdiffusion", "proteinmpnn", "boltz2"],
+                "monomer_denovo": ["rfdiffusion", "proteinmpnn", "af2"],
+                "oligo_design": ["rfdpoly", "nampnn"],
+            }
+            display_stages = all_stages_map.get(job.mode, [])
+
+    all_stages = _dedupe_preserve_order(display_stages)
+    completed = _dedupe_preserve_order(list(job.completed_stages or []))
+    stage_outputs = dict(job.stage_outputs or {})
+    if job.awaiting_input and job.awaiting_stage and job.awaiting_stage not in all_stages:
+        all_stages.append(job.awaiting_stage)
+
+    if job.mode in ["methylation_analysis", "nanopore_methylation"]:
+        stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
+        # Merge filesystem-derived outputs so UI remains useful even when stage-report calls fail.
+        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params)
+        for stage, outputs in inferred_outputs.items():
+            existing = stage_outputs.get(stage)
+            if isinstance(existing, list):
+                merged = _dedupe_preserve_order([*existing, *outputs])
+            else:
+                merged = outputs
+            stage_outputs[stage] = merged
+            if merged and stage not in completed:
+                completed.append(stage)
+
+        # If pipeline exited successfully, remaining planned stages are considered complete.
+        if job.status == JobStatus.COMPLETED.value:
+            completed = _dedupe_preserve_order([*completed, *all_stages])
+
     return {
         "job_id": job_id,
         "mode": job.mode,
         "all_stages": all_stages,
-        "current_stage": job.current_stage,
+        "current_stage": job.awaiting_stage if job.awaiting_input and job.awaiting_stage else job.current_stage,
         "completed_stages": completed,
-        "stage_outputs": job.stage_outputs or {},
+        "stage_outputs": stage_outputs,
         # Allow resume if failed/cancelled, even if no stages fully completed (rely on cache)
-        "can_resume": job.status in ["failed", "cancelled"]
+        "can_resume": job.status in ["failed", "cancelled", JobStatus.AWAITING_INPUT.value] or bool(job.awaiting_input)
     }
 
 
@@ -1091,13 +2858,14 @@ async def get_job_stages(
 async def resume_job(
     job_id: str,
     from_stage: str = None,
+    request: Optional[ResumeJobRequest] = Body(default=None),
     session: AsyncSession = Depends(get_session)
 ):
     """
     Resume a failed job from a checkpoint.
     
-    If from_stage is specified, restarts from that stage using existing outputs.
-    If not specified, resumes from the last completed stage.
+    If from_stage is specified, it is recorded as a stage hint for cache-based
+    resume behavior. The underlying Nextflow resume remains cache-driven.
     """
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
@@ -1105,7 +2873,7 @@ async def resume_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    if job.status not in ["failed", "cancelled"]:
+    if job.status not in ["failed", "cancelled", JobStatus.AWAITING_INPUT.value] and not job.awaiting_input:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot resume job with status: {job.status}"
@@ -1113,6 +2881,38 @@ async def resume_job(
     
     completed = job.completed_stages or []
     # Relaxed restriction: Allow resume even if no stages completed (start from scratch with cache)
+
+    # Allow body payload to override query-provided from_stage.
+    effective_from_stage = (request.from_stage if request and request.from_stage else from_stage)
+    if isinstance(effective_from_stage, str):
+        effective_from_stage = effective_from_stage.strip() or None
+    requested_overrides = dict(request.param_overrides) if request else {}
+    requested_name_suffix = request.name_suffix if request else None
+
+    # Prevent callers from overriding resume control fields directly.
+    reserved_resume_keys = {"resume_job_id", "resume_work_dir", "resume_source_dir"}
+    param_overrides = {
+        key: value
+        for key, value in requested_overrides.items()
+        if key not in reserved_resume_keys
+    }
+
+    if job.awaiting_input:
+        awaiting_payload = dict(job.awaiting_payload or {})
+        candidate_dir = awaiting_payload.get("candidate_dir")
+        if candidate_dir and job.awaiting_stage == "post_rfantibody":
+            param_overrides.setdefault("rfantibody_input_pdbs", candidate_dir)
+        if candidate_dir and job.awaiting_stage == "post_fampnn":
+            param_overrides.setdefault("fampnn_collected_pdbs", candidate_dir)
+        param_overrides.setdefault("interactive_gate_continue", True)
+        param_overrides.setdefault("interactive_swa", _to_bool((job.params or {}).get("interactive_swa")))
+        param_overrides.setdefault("interactive_gating", _to_bool((job.params or {}).get("interactive_gating")))
+        if not effective_from_stage and job.awaiting_stage == "post_rfantibody":
+            effective_from_stage = "rfantibody"
+        elif not effective_from_stage and job.awaiting_stage == "post_fampnn":
+            effective_from_stage = "fampnn"
+        elif not effective_from_stage and job.awaiting_stage == "post_structure_validation":
+            effective_from_stage = "structure_validation"
     
     # Determine work directory for resumption
     # We use the shared 'work' directory in project root by default
@@ -1123,13 +2923,24 @@ async def resume_job(
     import uuid
     new_job_id = str(uuid.uuid4())
     base_name = job.name.replace("_resubmit", "").replace("_resumed", "")
-    new_name = f"{base_name}_resumed"
+    suffix = requested_name_suffix.strip() if requested_name_suffix else "_resumed"
+    if not suffix.startswith("_"):
+        suffix = f"_{suffix}"
+    new_name = f"{base_name}{suffix}"
     
     # Generate output directory for the resumed job
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
     
+    merged_params = {
+        **_normalize_antibody_job_params(job.params or {}),
+        **param_overrides,
+    }
+    merged_params = _normalize_antibody_runtime_paths(job.model_id, merged_params)
+    merged_params = _normalize_antibody_job_params(merged_params)
+    _validate_antibody_runtime_paths(job.model_id, merged_params)
+
     new_job = Job(
         id=new_job_id,
         name=new_name,
@@ -1137,9 +2948,11 @@ async def resume_job(
         model_id=job.model_id,
         mode=job.mode,
         params={
-            **job.params,
+            **merged_params,
             "resume_job_id": job_id,
             "resume_work_dir": resume_work_dir,
+            "resume_source_dir": job.output_dir,  # For NXF_CACHE_DIR session isolation
+            "resume_requested_stage": effective_from_stage,
             # We don't need manual stage skipping params because we use -resume
         },
         output_dir=output_dir,
@@ -1156,19 +2969,36 @@ async def resume_job(
         sequence_length=job.sequence_length,
         priority=job.priority,
     )
+
+    history = list(job.decision_history or [])
+    if job.awaiting_input:
+        history.append({
+            "stage": job.awaiting_stage,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "new_job_id": new_job_id,
+            "from_stage": effective_from_stage,
+            "applied_overrides": sorted(param_overrides.keys()),
+        })
+        job.decision_history = history
     
     session.add(new_job)
     await session.commit()
     
-    logger.info(f"Job {job_id} resumed as {new_job_id} using work dir '{resume_work_dir}'")
+    logger.info(
+        f"Job {job_id} resumed as {new_job_id} using work dir '{resume_work_dir}'"
+        + (f" (requested_stage_hint={effective_from_stage})" if effective_from_stage else "")
+    )
     
     return {
         "message": f"Job resumed. Checking cache in '{resume_work_dir}'",
         "original_job_id": job_id,
         "new_job_id": new_job_id,
         "new_job_name": new_name,
-        "resume_from_stage": from_stage or "auto",
-        "preserved_stages": []
+        "resume_from_stage": effective_from_stage or "auto",
+        "resume_stage_mode": "hint",
+        "resume_stage_note": "Stage selection is advisory; cache hits determine exact task reuse.",
+        "preserved_stages": [],
+        "applied_overrides": sorted(param_overrides.keys())
     }
 
 
@@ -1230,9 +3060,15 @@ async def get_job_logs(
     """
     Get log output for a job.
     
-    Searches for Nextflow work directory logs (.command.log, .command.err)
-    and returns structured log data with error extraction.
+    Strategy:
+    1. Read the saved nextflow.log from job's output_dir (most reliable)
+    2. Parse work directory hashes from that log to find .command.log/.command.err
+    3. Fallback to CODE_ROOT/.nextflow.log if no saved log exists
+    
+    Work dir resolution is wrapped in a timeout to prevent hanging on slow filesystems.
     """
+    import asyncio
+    import concurrent.futures
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     
@@ -1250,90 +3086,132 @@ async def get_job_logs(
         "parsed_error": None,
     }
     
-    # Try to find work directory logs
-    work_dir = get_work_dir()
+    # --- Step 1: Find the nextflow log for THIS job ---
+    nf_log_content = None
+    nf_log_candidates = []
     
-    if work_dir.exists():
-        # Find most recent .command.log files (search by modification time)
-        import subprocess
-        try:
-            # Find command logs modified in last hour, sorted by time
-            result = subprocess.run(
-                ["find", str(work_dir), "-name", ".command.log", "-mmin", "-60", 
-                 "-exec", "stat", "--format=%Y %n", "{}", ";"],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                # Parse output and get most recent log
-                logs_with_time = []
-                for line in result.stdout.strip().split('\n'):
-                    parts = line.split(' ', 1)
-                    if len(parts) == 2:
-                        try:
-                            mtime = int(parts[0])
-                            path = parts[1]
-                            logs_with_time.append((mtime, path))
-                        except ValueError:
-                            continue
-                
-                # Sort by time descending (most recent first)
-                logs_with_time.sort(reverse=True)
-                
-                # Read most recent log that might belong to this job
-                # For now, just take most recent - could match by job name in future
-                if logs_with_time:
-                    log_path = Path(logs_with_time[0][1])
-                    log_dir = log_path.parent
-                    
-                    # Read .command.log
-                    if log_path.exists():
-                        with open(log_path, 'r') as f:
-                            lines = f.readlines()
-                            logs_data["command_log"] = "".join(lines[-tail:])
-                    
-                    # Read .command.err if exists
-                    err_path = log_dir / ".command.err"
-                    if err_path.exists():
-                        with open(err_path, 'r') as f:
-                            logs_data["command_err"] = f.read()
-                    
-                    # Read exit code
-                    exit_path = log_dir / ".exitcode"
-                    if exit_path.exists():
-                        with open(exit_path, 'r') as f:
-                            try:
-                                logs_data["exit_code"] = int(f.read().strip())
-                            except ValueError:
-                                pass
-                    
-                    # Parse error from logs
-                    logs_data["parsed_error"] = extract_error_from_logs(
-                        logs_data["command_log"], 
-                        logs_data["command_err"]
-                    )
-        except subprocess.TimeoutExpired:
-            pass
-        except Exception as e:
-            logger.warning(f"Error searching work dir: {e}")
-    
-    # Fallback: Read .nextflow.log from output_dir
     if job.output_dir:
-        # Check for explicitly saved nextflow.log first (from nextflow.py update)
-        nf_log_path = Path(job.output_dir) / "nextflow.log"
-        
-        if not nf_log_path.exists():
-            nf_log_path = Path(job.output_dir) / ".nextflow.log"
-            
-        if not nf_log_path.exists():
-            nf_log_path = CODE_ROOT / ".nextflow.log"
-        
-        if nf_log_path.exists():
+        output_path = resolve_output_dir(job.output_dir)
+        if output_path:
+            nf_log_candidates.append(output_path / "nextflow.log")
+            nf_log_candidates.append(output_path / ".nextflow.log")
+    
+    # Fallback: global .nextflow.log (may be from a different job)
+    nf_log_candidates.append(CODE_ROOT / ".nextflow.log")
+    
+    for nf_path in nf_log_candidates:
+        if nf_path and nf_path.exists():
             try:
-                with open(nf_log_path, 'r') as f:
-                    lines = f.readlines()
-                    logs_data["nextflow_log"] = "".join(lines[-50:])
+                with open(nf_path, 'r') as f:
+                    nf_log_content = f.read()
+                    lines = nf_log_content.split('\n')
+                    logs_data["nextflow_log"] = "\n".join(lines[-tail:])
+                break
             except Exception:
-                pass
+                continue
+    
+    # --- Step 2: Extract work dir hashes and read command logs ---
+    # This touches the filesystem which may be slow, so wrap in a timeout.
+    def _resolve_work_dir_logs(nf_content: str, tail_lines: int) -> dict:
+        """Blocking function to resolve work dir logs. Runs in executor with timeout."""
+        result = {"command_log": None, "command_err": None, "exit_code": None}
+        if not nf_content:
+            return result
+        
+        import re
+        work_dir = get_work_dir()
+        
+        # Match Nextflow task hash patterns: [xx/yyyyyy]
+        hash_pattern = re.compile(r'\[([0-9a-f]{2}/[0-9a-f]{6,})\]')
+        workdir_pattern = re.compile(r'work[Dd]ir[:\s]+\S*?/work/([0-9a-f]{2}/[0-9a-f]{6,})')
+        
+        found_hashes = set()
+        for match in hash_pattern.finditer(nf_content):
+            found_hashes.add(match.group(1))
+        for match in workdir_pattern.finditer(nf_content):
+            found_hashes.add(match.group(1))
+        
+        # Resolve full paths from hashes
+        work_dirs_found = []
+        for hash_prefix in found_hashes:
+            parts = hash_prefix.split('/')
+            if len(parts) == 2:
+                candidate_dir = work_dir / parts[0]
+                try:
+                    if candidate_dir.exists():
+                        for entry in candidate_dir.iterdir():
+                            if entry.name.startswith(parts[1]) and entry.is_dir():
+                                work_dirs_found.append(entry)
+                except OSError:
+                    continue
+        
+        # Sort by modification time (most recent first)
+        try:
+            work_dirs_found.sort(
+                key=lambda d: d.stat().st_mtime if d.exists() else 0,
+                reverse=True
+            )
+        except OSError:
+            pass
+        
+        # Read command logs from the most recent work dir
+        for task_dir in work_dirs_found:
+            try:
+                cmd_log = task_dir / ".command.log"
+                cmd_err = task_dir / ".command.err"
+                exit_file = task_dir / ".exitcode"
+                
+                if cmd_log.exists():
+                    with open(cmd_log, 'r') as f:
+                        lines = f.readlines()
+                        result["command_log"] = "".join(lines[-tail_lines:])
+                
+                if cmd_err.exists():
+                    with open(cmd_err, 'r') as f:
+                        err_content = f.read()
+                        if err_content.strip():
+                            result["command_err"] = err_content
+                
+                if exit_file.exists():
+                    with open(exit_file, 'r') as f:
+                        try:
+                            result["exit_code"] = int(f.read().strip())
+                        except ValueError:
+                            pass
+                
+                if result["command_log"] or result["command_err"]:
+                    break
+            except OSError:
+                continue
+        
+        return result
+    
+    # Run the blocking filesystem operations with a 3-second timeout
+    try:
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            work_dir_result = await asyncio.wait_for(
+                loop.run_in_executor(pool, _resolve_work_dir_logs, nf_log_content, tail),
+                timeout=3.0
+            )
+        logs_data["command_log"] = work_dir_result["command_log"]
+        logs_data["command_err"] = work_dir_result["command_err"]
+        logs_data["exit_code"] = work_dir_result["exit_code"]
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning(f"Work dir log resolution timed out or failed for job {job_id}: {e}")
+    
+    # --- Step 3: Parse error summary ---
+    # Try command logs first, then fall back to nextflow log for error extraction
+    logs_data["parsed_error"] = extract_error_from_logs(
+        logs_data["command_log"],
+        logs_data["command_err"]
+    )
+    
+    # If no error from command logs but we have nextflow log, extract from there
+    if not logs_data["parsed_error"] and nf_log_content:
+        logs_data["parsed_error"] = extract_error_from_logs(
+            nf_log_content, None
+        )
     
     return logs_data
 

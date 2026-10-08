@@ -40,8 +40,57 @@ const getPtmColor = (ptm: number | null | undefined): string => {
     return 'text-red-400';
 };
 
+const normalizeChainsPtm = (raw: Design['chains_ptm']): Record<string, number> => {
+    if (!raw) return {};
+    const normalized: Record<string, number> = {};
+    if (Array.isArray(raw)) {
+        raw.forEach((value, idx) => {
+            const num = Number(value);
+            if (Number.isFinite(num)) normalized[String(idx)] = num;
+        });
+        return normalized;
+    }
+    Object.entries(raw).forEach(([idx, value]) => {
+        const num = Number(value);
+        if (Number.isFinite(num)) normalized[idx] = num;
+    });
+    return normalized;
+};
+
+const normalizePairChainsIptm = (raw: Design['pair_chains_iptm']): Record<string, Record<string, number>> => {
+    if (!raw) return {};
+    const normalized: Record<string, Record<string, number>> = {};
+
+    if (Array.isArray(raw)) {
+        raw.forEach((row, rowIdx) => {
+            const rowKey = String(rowIdx);
+            normalized[rowKey] = {};
+            if (Array.isArray(row)) {
+                row.forEach((value, colIdx) => {
+                    const num = Number(value);
+                    if (Number.isFinite(num)) normalized[rowKey][String(colIdx)] = num;
+                });
+            }
+        });
+        return normalized;
+    }
+
+    Object.entries(raw).forEach(([rowKey, rowValue]) => {
+        normalized[rowKey] = {};
+        if (rowValue && typeof rowValue === 'object') {
+            Object.entries(rowValue as Record<string, unknown>).forEach(([colKey, value]) => {
+                const num = Number(value);
+                if (Number.isFinite(num)) normalized[rowKey][colKey] = num;
+            });
+        }
+    });
+    return normalized;
+};
+
 export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDetailsPanelProps) {
     const [expanded, setExpanded] = useState(true);
+    const chainsPtm = useMemo(() => normalizeChainsPtm(design.chains_ptm), [design.chains_ptm]);
+    const pairChainsIptm = useMemo(() => normalizePairChainsIptm(design.pair_chains_iptm), [design.pair_chains_iptm]);
 
     // Build chain list from chains_ptm and/or chainMetrics
     const chains = useMemo(() => {
@@ -55,8 +104,8 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
         }> = [];
 
         // Use chains_ptm as primary source (from Boltz confidence JSON)
-        if (design.chains_ptm) {
-            Object.entries(design.chains_ptm).forEach(([idx, ptm]) => {
+        if (Object.keys(chainsPtm).length > 0) {
+            Object.entries(chainsPtm).forEach(([idx, ptm]) => {
                 const letter = indexToLetter(idx);
                 const metric = chainMetrics?.[letter];
                 result.push({
@@ -64,7 +113,7 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
                     letter,
                     type: metric?.type || 'protein',
                     length: metric?.length || 0,
-                    ptm: ptm as number,
+                    ptm,
                     avgPlddt: metric?.avg_plddt ?? null,
                 });
             });
@@ -83,7 +132,7 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
         }
 
         return result;
-    }, [design.chains_ptm, chainMetrics]);
+    }, [chainsPtm, chainMetrics]);
 
     // Only show for multi-chain complexes
     if (chains.length <= 1) return null;
@@ -158,7 +207,7 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
                     </div>
 
                     {/* Inter-chain iPTM matrix (if available) */}
-                    {design.pair_chains_iptm && Object.keys(design.pair_chains_iptm).length > 1 && (
+                    {Object.keys(pairChainsIptm).length > 1 && (
                         <div className="mt-4 pt-3 border-t border-slate-700/30">
                             <div className="flex items-center justify-between mb-2">
                                 <div className="text-xs font-medium text-slate-300">Inter-chain iPTM Matrix</div>
@@ -180,7 +229,7 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
                                     <thead>
                                         <tr>
                                             <th className="px-2 py-1"></th>
-                                            {Object.keys(design.pair_chains_iptm).map(idx => (
+                                            {Object.keys(pairChainsIptm).map(idx => (
                                                 <th key={idx} className="px-2 py-1 text-slate-400">
                                                     {indexToLetter(idx)}
                                                 </th>
@@ -188,12 +237,12 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {Object.entries(design.pair_chains_iptm).map(([rowIdx, contacts]) => (
+                                        {Object.entries(pairChainsIptm).map(([rowIdx, contacts]) => (
                                             <tr key={rowIdx}>
                                                 <td className="px-2 py-1 text-slate-400 font-semibold">
                                                     {indexToLetter(rowIdx)}
                                                 </td>
-                                                {Object.entries(contacts as Record<string, number>).map(([colIdx, iptm]) => {
+                                                {Object.entries(contacts).map(([colIdx, iptm]) => {
                                                     const isOnDiagonal = rowIdx === colIdx;
                                                     const bgOpacity = isOnDiagonal ? 0 : Math.min(iptm * 0.8, 0.6);
                                                     return (

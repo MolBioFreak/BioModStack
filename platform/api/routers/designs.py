@@ -9,10 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel
 from datetime import datetime
 from pathlib import Path
+import math
 
 from database import get_session, Design, Job
 
@@ -54,8 +55,10 @@ class DesignResponse(BaseModel):
     # Prediction metrics
     plddt_overall: Optional[float]
     plddt_binder: Optional[float]
+    plddt_target: Optional[float]
     pae_interaction: Optional[float]
     pae_overall: Optional[float]
+    rmsd_overall: Optional[float]
     rmsd_binder: Optional[float]
     
     # Boltz-2 specific
@@ -70,8 +73,12 @@ class DesignResponse(BaseModel):
     protein_iptm: Optional[float] = None
     complex_iplddt: Optional[float] = None
     complex_ipde: Optional[float] = None
-    chains_ptm: Optional[dict] = None  # {"0": 0.76, "1": 0.51}
-    pair_chains_iptm: Optional[dict] = None  # NxN chain matrix
+    disorder: Optional[float] = None
+    num_recycles: Optional[int] = None
+    has_clash: Optional[bool] = None
+    chains_ptm: Optional[Union[Dict[str, float], List[float]]] = None  # {"0":0.76} or [0.76, ...]
+    pair_chains_iptm: Optional[Union[Dict[str, Dict[str, float]], List[List[float]]]] = None  # matrix
+    confidence_metrics: Optional[Dict[str, Any]] = None
     
     # Per-residue metrics (for charts)
     residue_plddt: Optional[List[float]] = None
@@ -109,6 +116,11 @@ class DesignResponse(BaseModel):
     frustration_residues: Optional[List[dict]] = None  # [{pos, chain, frust, frustClass}]
     frustration_csv_path: Optional[str] = None
     
+    # PPIFlow Maturation
+    maturation_delta_interface: Optional[float] = None
+    maturation_interface_score: Optional[float] = None
+    maturation_rmsd: Optional[float] = None
+    
     created_at: datetime
     
     class Config:
@@ -126,6 +138,186 @@ class FavoriteUpdate(BaseModel):
 
 class NotesUpdate(BaseModel):
     notes: str
+
+
+class PlotlyMetricPoint(BaseModel):
+    id: str
+    name: str
+    metrics: Dict[str, float]
+
+
+class PlotlyMetricsResponse(BaseModel):
+    job_id: str
+    metric_keys: List[str]
+    points: List[PlotlyMetricPoint]
+    total: int
+
+
+def _append_numeric_values(value: Any, out: List[float]) -> None:
+    """Recursively collect finite numeric values from nested JSON-like structures."""
+    if isinstance(value, bool):
+        out.append(1.0 if value else 0.0)
+        return
+    if isinstance(value, (int, float)):
+        val = float(value)
+        if math.isfinite(val):
+            out.append(val)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _append_numeric_values(item, out)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _append_numeric_values(item, out)
+
+
+def _inject_metric(metrics: Dict[str, float], key: str, value: Any) -> None:
+    """Insert a scalar metric, or summarize nested metric values for plotting."""
+    if isinstance(value, bool):
+        metrics[key] = 1.0 if value else 0.0
+        return
+    if isinstance(value, (int, float)):
+        val = float(value)
+        if math.isfinite(val):
+            metrics[key] = val
+        return
+
+    flattened: List[float] = []
+    _append_numeric_values(value, flattened)
+    if not flattened:
+        return
+
+    metrics[f"{key}_mean"] = float(sum(flattened) / len(flattened))
+    metrics[f"{key}_min"] = float(min(flattened))
+    metrics[f"{key}_max"] = float(max(flattened))
+    metrics[f"{key}_n"] = float(len(flattened))
+
+
+def _build_plotly_metrics(design: Design) -> Dict[str, float]:
+    """Build a dense, plot-ready numeric metric map for a design."""
+    metrics: Dict[str, float] = {}
+
+    base_metrics = {
+        "plddt_overall": design.plddt_overall,
+        "plddt_binder": design.plddt_binder,
+        "plddt_target": design.plddt_target,
+        "pae_interaction": design.pae_interaction,
+        "pae_overall": design.pae_overall,
+        "rmsd_overall": design.rmsd_overall,
+        "rmsd_binder": design.rmsd_binder,
+        "fampnn_psce": design.fampnn_psce,
+        "conf_score": design.conf_score,
+        "ptm": design.ptm,
+        "iptm": design.iptm,
+        "protein_iptm": design.protein_iptm,
+        "ligand_iptm": design.ligand_iptm,
+        "complex_iplddt": design.complex_iplddt,
+        "complex_ipde": design.complex_ipde,
+        "disorder": design.disorder,
+        "num_recycles": design.num_recycles,
+        "affinity_score": design.affinity_score,
+        "binder_probability": design.binder_probability,
+        "rog": design.rog,
+        "rfd_rog": design.rfd_rog,
+        "mpnn_score": design.mpnn_score,
+        "cdr_h1_length": design.cdr_h1_length,
+        "cdr_h2_length": design.cdr_h2_length,
+        "cdr_h3_length": design.cdr_h3_length,
+        "binder_length": design.binder_length,
+        "epitope_contact_count": design.epitope_contact_count,
+        "epitope_min_distance": design.epitope_min_distance,
+        "frustration_high_count": design.frustration_high_count,
+        "frustration_min_count": design.frustration_min_count,
+        "frustration_pct_high": design.frustration_pct_high,
+        "maturation_delta_interface": design.maturation_delta_interface,
+        "maturation_interface_score": design.maturation_interface_score,
+        "maturation_rmsd": design.maturation_rmsd,
+    }
+    for key, value in base_metrics.items():
+        _inject_metric(metrics, key, value)
+    if design.has_clash is not None:
+        metrics["has_clash"] = 1.0 if design.has_clash else 0.0
+
+    raw_conf = design.confidence_metrics if isinstance(design.confidence_metrics, dict) else {}
+    for key, value in raw_conf.items():
+        _inject_metric(metrics, key, value)
+
+    return metrics
+
+
+def _normalize_chain_scalar_map(raw: Any) -> Dict[str, float]:
+    """Normalize dict/list chain scalar maps (e.g. chains_ptm) into string-keyed dicts."""
+    normalized: Dict[str, float] = {}
+    if isinstance(raw, list):
+        for idx, value in enumerate(raw):
+            try:
+                val = float(value)
+                if math.isfinite(val):
+                    normalized[str(idx)] = val
+            except (TypeError, ValueError):
+                continue
+        return normalized
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            try:
+                val = float(value)
+                if math.isfinite(val):
+                    normalized[str(key)] = val
+            except (TypeError, ValueError):
+                continue
+    return normalized
+
+
+def _normalize_chain_matrix(raw: Any) -> Dict[str, Dict[str, float]]:
+    """Normalize dict/list chain matrices into nested string-keyed dicts."""
+    normalized: Dict[str, Dict[str, float]] = {}
+
+    if isinstance(raw, list):
+        for row_idx, row in enumerate(raw):
+            if not isinstance(row, list):
+                continue
+            row_key = str(row_idx)
+            normalized[row_key] = {}
+            for col_idx, value in enumerate(row):
+                try:
+                    val = float(value)
+                    if math.isfinite(val):
+                        normalized[row_key][str(col_idx)] = val
+                except (TypeError, ValueError):
+                    continue
+        return normalized
+
+    if isinstance(raw, dict):
+        for row_key, row in raw.items():
+            row_dict: Dict[str, float] = {}
+            if isinstance(row, dict):
+                for col_key, value in row.items():
+                    try:
+                        val = float(value)
+                        if math.isfinite(val):
+                            row_dict[str(col_key)] = val
+                    except (TypeError, ValueError):
+                        continue
+            elif isinstance(row, list):
+                for col_idx, value in enumerate(row):
+                    try:
+                        val = float(value)
+                        if math.isfinite(val):
+                            row_dict[str(col_idx)] = val
+                    except (TypeError, ValueError):
+                        continue
+            normalized[str(row_key)] = row_dict
+    return normalized
+
+
+def _chain_label(chain_idx: str) -> str:
+    """Render numeric chain indices as A/B/C labels for readability."""
+    if chain_idx.isdigit():
+        idx = int(chain_idx)
+        if 0 <= idx < 26:
+            return f"Chain {chr(65 + idx)}"
+    return f"Chain {chain_idx}"
 
 
 # --- Endpoints ---
@@ -173,6 +365,8 @@ async def list_designs(
         'backbone': Design.backbone_id,
         'rog': Design.rog,
         'rfd_rog': Design.rfd_rog,
+        'frustration_high_count': Design.frustration_high_count,
+        'frustration_pct_high': Design.frustration_pct_high,
     }
     
     order_col = sort_field_map.get(sort_by, Design.created_at)
@@ -470,6 +664,58 @@ async def get_designs_for_job(
     return DesignList(
         designs=[DesignResponse.model_validate(d) for d in designs],
         total=total
+    )
+
+
+@router.get("/by-job/{job_id}/plotly-metrics", response_model=PlotlyMetricsResponse)
+async def get_plotly_metrics_for_job(
+    job_id: str,
+    include_children: bool = Query(True, description="Include child jobs when collecting metrics"),
+    limit: int = Query(10000, ge=1, le=50000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_session)
+):
+    """Return flattened numeric metrics for Plotly charting (including raw confidence metrics)."""
+    job_result = await session.execute(select(Job).where(Job.id == job_id))
+    if not job_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job_ids = [job_id]
+    if include_children:
+        child_result = await session.execute(select(Job.id).where(Job.parent_job_id == job_id))
+        job_ids.extend([row[0] for row in child_result.all()])
+
+    query = (
+        select(Design)
+        .where(Design.job_id.in_(job_ids))
+        .order_by(Design.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await session.execute(query)
+    designs = result.scalars().all()
+
+    count_query = select(func.count(Design.id)).where(Design.job_id.in_(job_ids))
+    total = (await session.execute(count_query)).scalar() or 0
+
+    points: List[PlotlyMetricPoint] = []
+    metric_keys: set[str] = set()
+    for design in designs:
+        metrics = _build_plotly_metrics(design)
+        metric_keys.update(metrics.keys())
+        points.append(
+            PlotlyMetricPoint(
+                id=design.id,
+                name=design.name,
+                metrics=metrics
+            )
+        )
+
+    return PlotlyMetricsResponse(
+        job_id=job_id,
+        metric_keys=sorted(metric_keys),
+        points=points,
+        total=int(total)
     )
 
 
@@ -902,15 +1148,19 @@ async def get_chain_pair_iptm(
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
     
-    if not design.pair_chains_iptm:
+    pair_data = _normalize_chain_matrix(design.pair_chains_iptm)
+    chains_ptm = _normalize_chain_scalar_map(design.chains_ptm)
+
+    if not pair_data and not chains_ptm:
         raise HTTPException(status_code=404, detail="No chain-pair iPTM data for this design")
-    
-    # pair_chains_iptm is stored as dict: {"0": {"1": 0.85}, "1": {"0": 0.85}} etc.
-    # Convert to matrix form
-    pair_data = design.pair_chains_iptm
-    
-    # Get all chain indices
-    chain_indices = sorted(pair_data.keys(), key=lambda x: int(x) if x.isdigit() else x)
+
+    # Get all chain indices from matrix rows/cols and diagonal chain pTM entries.
+    chain_idx_set = set(chains_ptm.keys())
+    for row_idx, row in pair_data.items():
+        chain_idx_set.add(row_idx)
+        chain_idx_set.update(row.keys())
+
+    chain_indices = sorted(chain_idx_set, key=lambda x: int(x) if x.isdigit() else x)
     n = len(chain_indices)
     
     # Build symmetric matrix
@@ -920,8 +1170,8 @@ async def get_chain_pair_iptm(
         for j in chain_indices:
             if i == j:
                 # Diagonal: use chains_ptm if available
-                if design.chains_ptm and i in design.chains_ptm:
-                    row.append(design.chains_ptm.get(i))
+                if i in chains_ptm:
+                    row.append(chains_ptm.get(i))
                 else:
                     row.append(None)
             else:
@@ -935,7 +1185,7 @@ async def get_chain_pair_iptm(
         iptm_matrix.append(row)
     
     # Convert chain indices to friendly names if possible
-    chain_labels = [f"Chain {c}" for c in chain_indices]
+    chain_labels = [_chain_label(c) for c in chain_indices]
     
     return ChainPairIptmData(
         design_id=design.id,

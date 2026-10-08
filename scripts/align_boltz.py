@@ -4,12 +4,11 @@ import os
 import re
 import json
 import logging
+import math
 from pathlib import Path
 import argparse
 from multiprocessing import Pool
 from Bio.PDB import PDBParser, PDBIO, Superimposer
-from Bio.PDB.Selection import unfold_entities
-from copy import deepcopy
 
 def setup_logging():
     """Configure logging"""
@@ -27,36 +26,71 @@ def setup_logging():
 
 logger = setup_logging()
 
-def get_all_ca_atoms(structure):
-    """Collect all CA atoms from all chains in structure"""
-    ca_atoms = []
+def get_chain_ids(structure):
+    chain_ids = []
     for model in structure:
         for chain in model:
+            chain_ids.append(chain.id)
+    return sorted(set(chain_ids))
+
+
+def get_ca_atoms_by_key(structure, chains=None):
+    """
+    Collect CA atoms keyed by (chain_id, resseq, insertion_code).
+    Using keyed intersections avoids misalignment when residue lists differ.
+    """
+    ca_atoms = {}
+    for model in structure:
+        for chain in model:
+            if chains is not None and chain.id not in chains:
+                continue
             for residue in chain:
-                if 'CA' in residue:
-                    ca_atoms.append(residue['CA'])
-    if not ca_atoms:
-        raise ValueError("No CA atoms found in structure")
+                if 'CA' not in residue:
+                    continue
+                _, resseq, icode = residue.id
+                key = (chain.id, int(resseq), str(icode).strip())
+                ca_atoms[key] = residue['CA']
     return ca_atoms
 
-def get_chain_ca_atoms(structure, chain_id):
-    """Collect CA atoms from specific chain in structure"""
-    ca_atoms = []
-    for model in structure:
-        # Get all chains in the model
-        for chain in model.get_chains():
-            if chain.id == chain_id:
-                for residue in chain:
-                    if 'CA' in residue:
-                        ca_atoms.append(residue['CA'])
-    if not ca_atoms:
-        raise ValueError(f"No CA atoms found in chain {chain_id}")
-    return ca_atoms
+
+def get_matched_ca_atoms(ref_structure, mobile_structure, chains=None):
+    """
+    Match CA atoms by residue identifiers so RMSD can be computed robustly even
+    when one structure has missing residues.
+    """
+    ref_map = get_ca_atoms_by_key(ref_structure, chains=chains)
+    mobile_map = get_ca_atoms_by_key(mobile_structure, chains=chains)
+    common_keys = sorted(set(ref_map.keys()) & set(mobile_map.keys()), key=lambda k: (k[0], k[1], k[2]))
+
+    if len(common_keys) < 3:
+        region = f"chains {chains}" if chains is not None else "all chains"
+        raise ValueError(
+            f"Insufficient matched CA atoms in {region}: "
+            f"matched={len(common_keys)} ref={len(ref_map)} mobile={len(mobile_map)}"
+        )
+
+    ref_atoms = [ref_map[key] for key in common_keys]
+    mobile_atoms = [mobile_map[key] for key in common_keys]
+    return ref_atoms, mobile_atoms
+
+
+def rmsd_without_refit(ref_atoms, mobile_atoms):
+    """Compute RMSD between atom lists in their current coordinates."""
+    if len(ref_atoms) != len(mobile_atoms):
+        raise ValueError(f"RMSD atom count mismatch: {len(ref_atoms)} vs {len(mobile_atoms)}")
+    if not ref_atoms:
+        raise ValueError("No atoms provided for RMSD computation")
+
+    squared = 0.0
+    for ref_atom, mobile_atom in zip(ref_atoms, mobile_atoms):
+        diff = ref_atom.coord - mobile_atom.coord
+        squared += float(diff[0] ** 2 + diff[1] ** 2 + diff[2] ** 2)
+    return math.sqrt(squared / len(ref_atoms))
 
 def align_structures(args):
     """Align Boltz structure to Design template with chain-specific handling"""
     (design_path, boltz_path, out_pdb, src_json, dst_json, 
-     fold_id, seq_id, design_type) = args  # Added design_type
+     fold_id, seq_id, design_type, binder_chains_arg, target_chains_arg) = args  # Added multi-chain args
     
     try:
         parser = PDBParser(QUIET=True)
@@ -64,28 +98,43 @@ def align_structures(args):
         boltz_structure = parser.get_structure("boltz", boltz_path)
 
         if design_type == 'binder':
-            # 1. Align chain B (target) for final structure
-            ref_chainB = get_chain_ca_atoms(ref_structure, 'B')
-            boltz_chainB = get_chain_ca_atoms(boltz_structure, 'B')
+            binder_chains = [c.strip() for c in binder_chains_arg.split(',')] if binder_chains_arg else ['A']
+            target_chains = [c.strip() for c in target_chains_arg.split(',')] if target_chains_arg else ['B']
+
+            ref_chain_ids = set(get_chain_ids(ref_structure))
+            boltz_chain_ids = set(get_chain_ids(boltz_structure))
+            if not (set(binder_chains + target_chains) <= ref_chain_ids and set(binder_chains + target_chains) <= boltz_chain_ids):
+                shared = sorted(ref_chain_ids & boltz_chain_ids)
+                if len(shared) >= 2:
+                    binder_chains, target_chains = [shared[0]], [shared[1]]
+                    logger.warning(
+                        "Expected binder/target chains were not found for %s. "
+                        "Falling back to shared chains: binder=%s target=%s",
+                        boltz_path.name,
+                        binder_chains,
+                        target_chains,
+                    )
+                else:
+                    raise ValueError(
+                        f"Could not find two shared chains for binder alignment. "
+                        f"design_chains={sorted(ref_chain_ids)} boltz_chains={sorted(boltz_chain_ids)}"
+                    )
+
+            # 1. Align target chain for final structure transform
+            ref_target, boltz_target = get_matched_ca_atoms(ref_structure, boltz_structure, target_chains)
             
             superimposer = Superimposer()
-            superimposer.set_atoms(ref_chainB, boltz_chainB)
+            superimposer.set_atoms(ref_target, boltz_target)
             superimposer.apply(boltz_structure.get_atoms())
             rmsd_target = superimposer.rms 
 
-            # 2. Calculate overall RMSD (all CA atoms)
-            ref_all_ca = get_all_ca_atoms(ref_structure)
-            boltz_all_ca = get_all_ca_atoms(boltz_structure)
-            superimposer_all = Superimposer()
-            superimposer_all.set_atoms(ref_all_ca, boltz_all_ca)
-            rmsd_overall = superimposer_all.rms
+            # 2. Calculate overall RMSD after target-based alignment
+            ref_all_ca, boltz_all_ca = get_matched_ca_atoms(ref_structure, boltz_structure, chains=None)
+            rmsd_overall = rmsd_without_refit(ref_all_ca, boltz_all_ca)
 
-            # 3. Calculate binder RMSD (chain A)
-            ref_chainA = get_chain_ca_atoms(ref_structure, 'A')
-            boltz_chainA = get_chain_ca_atoms(boltz_structure, 'A')
-            superimposer_a = Superimposer()
-            superimposer_a.set_atoms(ref_chainA, boltz_chainA)
-            rmsd_binder = superimposer_a.rms
+            # 3. Calculate binder RMSD after target-based alignment
+            ref_binder, boltz_binder = get_matched_ca_atoms(ref_structure, boltz_structure, binder_chains)
+            rmsd_binder = rmsd_without_refit(ref_binder, boltz_binder)
 
             rmsd_data = {
                 "boltz_overall_rmsd": round(rmsd_overall, 2),
@@ -94,8 +143,7 @@ def align_structures(args):
             }
 
         else:  # Monomer design
-            ref_atoms = get_all_ca_atoms(ref_structure)
-            boltz_atoms = get_all_ca_atoms(boltz_structure)
+            ref_atoms, boltz_atoms = get_matched_ca_atoms(ref_structure, boltz_structure, chains=None)
             
             superimposer = Superimposer()
             superimposer.set_atoms(ref_atoms, boltz_atoms)
@@ -110,42 +158,47 @@ def align_structures(args):
         io.set_structure(boltz_structure)
         io.save(str(out_pdb))
 
-        # Write new JSON with only the requested fields
+        # Build output JSON even when confidence JSON is missing.
+        data = {}
         if src_json.exists():
-            with open(src_json, 'r') as f:
-                data = json.load(f)
+            try:
+                with open(src_json, 'r') as f:
+                    data = json.load(f)
+            except Exception as e:
+                logger.warning(f"Could not parse confidence JSON {src_json}: {e}")
+        else:
+            logger.warning(f"Confidence JSON not found for {boltz_path.name}: expected {src_json}")
 
-            # Build output dictionary
-            if design_type == 'binder':
-                out_json = {
-                    "fold_id": fold_id,
-                    "seq_id": seq_id,
-                    "description": boltz_path.name,
-                    "boltz_overall_rmsd": round(data.get("boltz_overall_rmsd", rmsd_data.get("boltz_overall_rmsd", 0)), 2),
-                    "boltz_target_rmsd": round(rmsd_data.get("boltz_target_rmsd", 0), 2),
-                    "boltz_binder_rmsd": round(rmsd_data.get("boltz_binder_rmsd", 0), 2),
-                    "boltz_conf_score": round(data.get("confidence_score", 0), 3),
-                    "boltz_ptm": round(data.get("ptm", 0), 3),
-                    "boltz_ptm_interface": round(data.get("iptm", 0), 3),
-                    "boltz_plddt": round(data.get("complex_plddt", 0), 3),
-                    "boltz_plddt_interface": round(data.get("complex_iplddt", 0), 3),
-                    "boltz_pde": round(data.get("complex_pde", 0), 2),
-                    "boltz_pde_interface": round(data.get("complex_ipde", 0), 2)
-                }
-            else:
-                out_json = {
-                    "fold_id": fold_id,
-                    "seq_id": seq_id,
-                    "description": boltz_path.name,
-                    "boltz_overall_rmsd": round(data.get("boltz_overall_rmsd", rmsd_data.get("boltz_overall_rmsd", 0)), 2),
-                    "boltz_conf_score": round(data.get("confidence_score", 0), 3),
-                    "boltz_ptm": round(data.get("ptm", 0), 3),
-                    "boltz_plddt": round(data.get("complex_plddt", 0), 3),
-                    "boltz_pde": round(data.get("complex_pde", 0), 2),
-                }
+        if design_type == 'binder':
+            out_json = {
+                "fold_id": fold_id,
+                "seq_id": seq_id,
+                "description": boltz_path.name,
+                "boltz_overall_rmsd": round(rmsd_data.get("boltz_overall_rmsd", 0), 2),
+                "boltz_target_rmsd": round(rmsd_data.get("boltz_target_rmsd", 0), 2),
+                "boltz_binder_rmsd": round(rmsd_data.get("boltz_binder_rmsd", 0), 2),
+                "boltz_conf_score": round(data.get("confidence_score", 0), 3),
+                "boltz_ptm": round(data.get("ptm", 0), 3),
+                "boltz_ptm_interface": round(data.get("iptm", 0), 3),
+                "boltz_plddt": round(data.get("complex_plddt", 0), 3),
+                "boltz_plddt_interface": round(data.get("complex_iplddt", 0), 3),
+                "boltz_pde": round(data.get("complex_pde", 0), 2),
+                "boltz_pde_interface": round(data.get("complex_ipde", 0), 2)
+            }
+        else:
+            out_json = {
+                "fold_id": fold_id,
+                "seq_id": seq_id,
+                "description": boltz_path.name,
+                "boltz_overall_rmsd": round(rmsd_data.get("boltz_overall_rmsd", 0), 2),
+                "boltz_conf_score": round(data.get("confidence_score", 0), 3),
+                "boltz_ptm": round(data.get("ptm", 0), 3),
+                "boltz_plddt": round(data.get("complex_plddt", 0), 3),
+                "boltz_pde": round(data.get("complex_pde", 0), 2),
+            }
 
-            with open(dst_json, 'w') as f:
-                json.dump(out_json, f, indent=2)
+        with open(dst_json, 'w') as f:
+            json.dump(out_json, f, indent=2)
 
         return (boltz_path.name, rmsd_data.get('boltz_overall_rmsd'), None)
 
@@ -163,6 +216,10 @@ def main():
                       help="Output directory for results")
     parser.add_argument("--design_type", choices=['binder', 'monomer'], required=True,
                       help="Design type: 'binder' (A/B chains) or 'monomer (A chain)'")
+    parser.add_argument("--binder_chains", type=str, default="",
+                      help="Comma separated list of binder chains (e.g. H,L or A)")
+    parser.add_argument("--target_chains", type=str, default="",
+                      help="Comma separated list of target chains (e.g. T or B)")
     parser.add_argument("--ncpus", type=int, default=1,
                       help="Number of CPUs for parallel processing")
     args = parser.parse_args()
@@ -226,8 +283,14 @@ def main():
             dst_json,
             fold_id,
             seq_id,
-            args.design_type
+            args.design_type,
+            args.binder_chains,
+            args.target_chains
         ))
+
+    if not tasks:
+        logger.error("No Boltz prediction files matched design files for RMSD alignment")
+        sys.exit(1)
     
     # Log processing start
     logger.info(f"Starting alignment of {len(tasks)} Boltz structures")
@@ -252,6 +315,9 @@ def main():
         for name, _, error in results:
             if error:
                 logger.info(f"  {name}: {error}")
+    if successes == 0:
+        logger.error("RMSD alignment produced zero successful outputs")
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:

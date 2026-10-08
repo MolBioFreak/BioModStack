@@ -111,39 +111,33 @@ bash scripts/download_models.sh
 
 ### 3. Container Strategy
 
-**RECOMMENDED: Build Containers Locally (Much Faster)**
+**RECOMMENDED: Build Containers Locally**
 
-Building containers locally avoids slow downloads from the Australian server and uses your fast internet to pull base images from global CDNs.
+Build containers from the definition files in `apptainer/` so runtime versions are pinned and auditable.
 
-**Quick Build (Recommended):**
+**Build RFantibody container (required for antibody workflows):**
 ```bash
-# From project root directory
-./build_containers.sh
-
-# This will:
-# - Download base images from NVIDIA/Docker Hub (fast global CDNs)
-# - Build all 5 containers in parallel (3 at a time)
-# - Validate each container after build
-# - Save to containers/ directory
-# - Time: 30-60 minutes one-time
+# From project root
+apptainer build --fakeroot /mnt/BioModStack/apptainer/rfantibody.sif apptainer/rfantibody.def
 ```
 
-**Advanced Build Options:**
+**Verify RFantibody runtime manifest after build:**
 ```bash
-# Build sequentially (slower but uses less resources)
-./build_containers.sh --sequential
-
-# Build specific container only
-./build_containers.sh --container rfdiffusion
-
-# Build with 2 parallel processes (less resource intensive)
-./build_containers.sh --parallel 2
-
-# See all options
-./build_containers.sh --help
+apptainer exec --nv /mnt/BioModStack/apptainer/rfantibody.sif \
+  python3 -c "import torch,dgl; print(torch.__version__, torch.version.cuda, dgl.__version__)"
+apptainer exec /mnt/BioModStack/apptainer/rfantibody.sif \
+  bash -lc 'cat /opt/RFantibody/.build_manifest; echo; head -n 20 /opt/venv/requirements.lock'
 ```
 
-**Alternative: Auto-Download from Server (Not Recommended)**
+**Build additional containers as needed:**
+```bash
+apptainer build --fakeroot /mnt/BioModStack/apptainer/fampnn.sif apptainer/fampnn.def
+apptainer build --fakeroot /mnt/BioModStack/apptainer/boltz2.sif apptainer/boltz2.def
+apptainer build --fakeroot /mnt/BioModStack/apptainer/antibody_tools.sif apptainer/antibody_tools.def
+apptainer build --fakeroot /mnt/BioModStack/apptainer/stability_tools.sif apptainer/stability_tools.def
+```
+
+**Alternative: Auto-download from server (not recommended for RFantibody debugging)**
 
 If you skip local building, containers will auto-download from Australian server on first run:
 ```bash
@@ -156,19 +150,11 @@ If you skip local building, containers will auto-download from Australian server
 # - dl_binder_design.sif (~5 GB) - includes ProteinMPNN, PyRosetta, AF2
 # - fampnn.sif (~1.5 GB)
 # - boltz2.sif (~3 GB)
+# - rfantibody.sif (size depends on build; includes pinned torch + source-built DGL)
 # - pyrosetta_tools.sif (~4 GB)
 ```
 
-**Container Build Details:**
-
-The build script (`apptainer/build_containers_workstation.sh`) provides:
-- Pre-build validation (Apptainer, disk space, etc.)
-- Parallel building with resource management
-- Post-build container testing
-- Clear progress reporting
-- Automatic error handling
-
-Containers are built from definition files (`.def`) in `apptainer/` directory that:
+Containers are built from definition files (`.def`) in `apptainer/` that:
 - Pull base images from NVIDIA container registry (fast)
 - Clone repositories and install dependencies
 - Are fully compatible with Nextflow/BioModStack

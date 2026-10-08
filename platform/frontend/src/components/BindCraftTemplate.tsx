@@ -1231,6 +1231,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                 }}
                 currentModelId="bindcraft"
                 currentMode="minibinder"
+                baseTemplateId="bindcraft"
                 onSelect={(template) => {
                     if (template.params.target_pdb) setTargetPdbPath(template.params.target_pdb);
                     if (template.params.hotspot_residues) setHotspotResidues(template.params.hotspot_residues);

@@ -64,6 +64,9 @@ temp/
 
 # Large Data & Models
 models/
+!platform/api/config/models/
+platform/api/config/models/*
+!platform/api/config/models/nanopore.yaml
 apptainer/
 *.sif
 *.pt
@@ -89,6 +92,7 @@ verify_parsing.nf
 # GPU state files (transient)
 .gpu_*.json
 .gpu_*.lock
+.cctv.generated.json
 *.lock
 
 # Debug outputs
@@ -131,3 +135,17 @@ bms_results
 # RFDpoly large assets (local only)
 containers/rfdpoly.sif
 tools/RFDpoly/
+
+# Protenix model cache (large, local only)
+.protenix_cache/
+*.pdf
+img/
+backups/
+
+# Transient local directories
+output/
+platform/api/inputs/
+
+# Scratch test scripts
+test_*.nf
+spawn_result.json

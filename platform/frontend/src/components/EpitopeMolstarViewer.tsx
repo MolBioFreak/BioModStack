@@ -228,6 +228,7 @@ export default function EpitopeMolstarViewer({
             )}
 
             {React.createElement('pdbe-molstar', {
+                key: effectiveUrl,
                 ref: (el: HTMLElement) => { viewerRef.current = el; },
                 'custom-data-url': effectiveUrl,
                 'custom-data-format': format,

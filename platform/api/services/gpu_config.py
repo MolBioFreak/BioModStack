@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict
 import json
 import logging
+import os
+import tempfile
 
 from paths import get_code_root
 
@@ -27,6 +29,8 @@ DEFAULT_SCHEDULER_CONFIG: Dict[str, Any] = {
         "emptiness_weight": 5.0,
         "max_launches_per_cycle": 3,
         "msa_concurrency_limit": 1,
+        "msa_preferred_gpu_ids": [],
+        "msa_avoid_heavy_gpus": False,
     },
     "overrides": {},
     "workflow_pins": {},
@@ -61,9 +65,27 @@ def read_scheduler_config() -> Dict[str, Any]:
 def write_scheduler_config(config: Dict[str, Any]) -> bool:
     """Write scheduler config to file."""
     try:
-        with open(GPU_CONFIG_PATH, "w") as f:
+        GPU_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = None
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=str(GPU_CONFIG_PATH.parent),
+            prefix=".gpu_config.",
+            suffix=".tmp",
+            delete=False,
+            encoding="utf-8",
+        ) as f:
+            tmp_path = Path(f.name)
             json.dump(config, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, GPU_CONFIG_PATH)
         return True
     except Exception as exc:
         logger.error(f"Failed to write scheduler config: {exc}")
+        try:
+            if 'tmp_path' in locals() and tmp_path and tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
         return False

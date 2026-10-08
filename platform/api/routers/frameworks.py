@@ -119,6 +119,13 @@ class CDRAnnotationResponse(BaseModel):
     cdr_l1_range: Optional[List[int]] = None
     cdr_l2_range: Optional[List[int]] = None
     cdr_l3_range: Optional[List[int]] = None
+    # CDR sequence-index ranges (0-based indices into chain sequence)
+    cdr_h1_seq_range: Optional[List[int]] = None
+    cdr_h2_seq_range: Optional[List[int]] = None
+    cdr_h3_seq_range: Optional[List[int]] = None
+    cdr_l1_seq_range: Optional[List[int]] = None
+    cdr_l2_seq_range: Optional[List[int]] = None
+    cdr_l3_seq_range: Optional[List[int]] = None
 
 
 # ============================================================================
@@ -267,17 +274,6 @@ async def download_framework(
         raise HTTPException(status_code=400, detail="Invalid scheme. Use 'imgt', 'chothia', or 'original'")
     
     try:
-        pdb_content = await download_pdb(pdb_code, scheme=scheme, cache=True)
-        
-        if not pdb_content:
-            raise HTTPException(status_code=404, detail=f"PDB {pdb_code} not found in SAbDab")
-        
-        # Convert to HLT if requested
-        if convert_hlt:
-            pdb_content = convert_sabdab_to_hlt(pdb_content)
-        
-        cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
-        
         # Fetch chain metadata from local DB for post-download selection
         h_chain, l_chain, antigen_chain, antigen_name = None, None, None, None
         try:
@@ -286,12 +282,30 @@ async def download_framework(
             if entries:
                 entry = entries[0]  # Use first entry
                 h_chain = entry.h_chain
-                l_chain = None  # VHH don't have L chain
+                l_chain = entry.l_chain
                 antigen_chain = entry.antigen_chain
                 antigen_name = entry.antigen_name
                 logger.info(f"[SAbDab Download] Chain metadata: H={h_chain}, Ag={antigen_chain}")
         except Exception as db_err:
             logger.warning(f"[SAbDab Download] Could not fetch chain metadata: {db_err}")
+
+        pdb_content = await download_pdb(pdb_code, scheme=scheme, cache=True)
+        
+        if not pdb_content:
+            raise HTTPException(status_code=404, detail=f"PDB {pdb_code} not found in SAbDab")
+
+        cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
+
+        # Convert to HLT if requested and persist the converted artifact for workflow use.
+        if convert_hlt:
+            pdb_content = convert_sabdab_to_hlt(
+                pdb_content,
+                heavy_chain=h_chain,
+                light_chain=l_chain,
+                antigen_chain=antigen_chain,
+            )
+            cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}_hlt.pdb"
+            cache_file.write_text(pdb_content)
         
         return FrameworkDownloadResponse(
             pdb_code=pdb_code.upper(),
@@ -443,6 +457,15 @@ async def annotate_framework_cdrs(
     Requires the framework to be downloaded first via /sabdab/{pdb_code}/download.
     """
     from services.cdr_annotator import annotate_pdb
+
+    def _first_chain(chain_value: Optional[str]) -> Optional[str]:
+        if not chain_value:
+            return None
+        for delimiter in [",", ";", "|", " "]:
+            if delimiter in chain_value:
+                token = chain_value.split(delimiter)[0].strip()
+                return token or None
+        return chain_value.strip() or None
     
     # Check cache for framework PDB
     cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}.pdb"
@@ -454,7 +477,25 @@ async def annotate_framework_cdrs(
     
     try:
         logger.info(f"[CDR Annotation] Running ANARCII on {pdb_code}")
-        annotation = annotate_pdb(str(cache_file))
+        preferred_chains = {}
+        try:
+            db = get_sabdab_db()
+            entries = db.get_by_pdb(pdb_code)
+            if entries:
+                entry = entries[0]
+                h_chain = _first_chain(entry.h_chain)
+                l_chain = _first_chain(entry.l_chain)
+                if h_chain:
+                    preferred_chains["H"] = h_chain
+                if l_chain:
+                    preferred_chains["L"] = l_chain
+        except Exception as chain_err:
+            logger.warning(f"[CDR Annotation] Could not load chain metadata for {pdb_code}: {chain_err}")
+
+        annotation = annotate_pdb(
+            str(cache_file),
+            preferred_chains=preferred_chains or None,
+        )
         
         if not annotation:
             raise HTTPException(status_code=500, detail="ANARCII returned no results")
@@ -476,10 +517,15 @@ async def annotate_framework_cdrs(
             cdr_l1_range=list(annotation.cdr_l1_range) if getattr(annotation, 'cdr_l1_range', None) else None,
             cdr_l2_range=list(annotation.cdr_l2_range) if getattr(annotation, 'cdr_l2_range', None) else None,
             cdr_l3_range=list(annotation.cdr_l3_range) if getattr(annotation, 'cdr_l3_range', None) else None,
+            cdr_h1_seq_range=list(annotation.cdr_h1_seq_range) if getattr(annotation, 'cdr_h1_seq_range', None) else None,
+            cdr_h2_seq_range=list(annotation.cdr_h2_seq_range) if getattr(annotation, 'cdr_h2_seq_range', None) else None,
+            cdr_h3_seq_range=list(annotation.cdr_h3_seq_range) if getattr(annotation, 'cdr_h3_seq_range', None) else None,
+            cdr_l1_seq_range=list(annotation.cdr_l1_seq_range) if getattr(annotation, 'cdr_l1_seq_range', None) else None,
+            cdr_l2_seq_range=list(annotation.cdr_l2_seq_range) if getattr(annotation, 'cdr_l2_seq_range', None) else None,
+            cdr_l3_seq_range=list(annotation.cdr_l3_seq_range) if getattr(annotation, 'cdr_l3_seq_range', None) else None,
         )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"[CDR Annotation] Error for {pdb_code}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-

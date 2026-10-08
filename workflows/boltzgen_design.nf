@@ -46,10 +46,10 @@ workflow BOLTZGEN_DESIGN {
             params.boltzgen_cdr_h1_length ?: '5-8',
             params.boltzgen_cdr_h2_length ?: '6-10',
             params.boltzgen_cdr_h3_length ?: '12-18',
-            params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : file("${projectDir}/lib/NO_INPUT_PDB"),
-            params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : file("${projectDir}/lib/NO_LIGAND_PDB"),
-            params.boltzgen_dna_structure ? file(params.boltzgen_dna_structure) : file("${projectDir}/lib/NO_DNA_STRUCT"),
-            params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${projectDir}/lib/NO_TARGET_PDB"),
+            params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : file("${params.code_root}/lib/NO_INPUT_PDB"),
+            params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : file("${params.code_root}/lib/NO_LIGAND_PDB"),
+            params.boltzgen_dna_structure ? file(params.boltzgen_dna_structure) : file("${params.code_root}/lib/NO_DNA_STRUCT"),
+            params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${params.code_root}/lib/NO_TARGET_PDB"),
         )
         
         // Determine execution mode
@@ -64,7 +64,7 @@ workflow BOLTZGEN_DESIGN {
             
             def target_pdb = params.boltzgen_target_pdb_path 
                 ? file(params.boltzgen_target_pdb_path) 
-                : file("${projectDir}/lib/NO_TARGET_PDB")
+                : file("${params.code_root}/lib/NO_TARGET_PDB")
             
             SpawnBoltzGenJobs(
                 params.job_id ?: 'unknown',

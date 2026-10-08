@@ -43,11 +43,17 @@ export const MODE_DISPLAY_NAMES: Record<string, string> = {
 
     // DNA Polymerase
     'dna_polymerase': 'DNA Polymerase Design',
+
+    // Oligo Designer
+    'oligo_design': 'Oligo Designer',
+    'methylation_analysis': 'Nanopore Methylation',
+    'nanopore_methylation': 'Nanopore Methylation',
 };
 
 // Model display names (job.model_id -> human readable)
 export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'boltz2': 'Boltz-2',
+    'protenix': 'Protenix',
     'rf3': 'RoseTTAFold3',
     'af2': 'AlphaFold2',
     'fampnn': 'FAMPNN',
@@ -64,21 +70,49 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'iggm': 'IgGM',
     'antibody_denovo': 'Antibody Pipeline',
     'antibody_child': 'Antibody Validation',
+    'rfdpoly': 'RFDpoly',
+    'nampnn': 'NA-MPNN',
+    'oligo_design': 'Oligo Designer',
+    'nanopore': 'Nanopore Sequencing',
 };
 
 // Pipeline stage display names
 export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'rfantibody': 'RFantibody',
+    'post_rfantibody': 'RFantibody Review',
     'fampnn': 'FAMPNN',
     'antifold': 'AntiFold',
     'proteinmpnn': 'ProteinMPNN',
+    'maturation': 'PPIFlow',
+    'maturation_post_validation': 'PPIFlow Repair',
+    'maturation_post_boltz': 'PPIFlow Repair',
+    'post_fampnn': 'FAMPNN Review',
+    'post_structure_validation': 'Structure Review',
+    'structure_validation': 'Structure Validation',
     'boltz2': 'Boltz-2',
     'boltz': 'Boltz-2',
+    'protenix': 'Protenix',
     'antiberty': 'AntiBERTy',
     'thermompnn': 'ThermoMPNN',
     'iggm': 'IgGM',
     'rfdiffusion': 'RFdiffusion',
     'msa': 'MSA Generation',
+    'rfdpoly': 'RFDpoly',
+    'nampnn': 'NA-MPNN',
+    'pyrosetta_rebuild': 'PyRosetta Rebuild',
+    'dorado': 'Dorado Basecall',
+    'dorado_basecall': 'Dorado Basecall',
+    'dorado_align': 'Dorado Align',
+    'bam_prepare': 'BAM Prepare',
+    'preparebamforanalysis': 'BAM Prepare',
+    'fastq_align': 'FASTQ Align',
+    'fastq_qc': 'FASTQ Plasmid QC',
+    'fastqplasmidqc': 'FASTQ Plasmid QC',
+    'modkit': 'modkit',
+    'multimer_qc': 'Multimer QC',
+    'fastqmultimerqc': 'Multimer QC',
+    'wf_clone_validation': 'wf-clone-validation',
+    'wf-clone-validation': 'wf-clone-validation',
 };
 
 /**

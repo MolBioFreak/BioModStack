@@ -20,6 +20,10 @@ def migrate():
         ("current_stage", "VARCHAR(50)"),
         ("completed_stages", "JSON"),
         ("stage_outputs", "JSON"),
+        ("awaiting_input", "BOOLEAN DEFAULT 0"),
+        ("awaiting_stage", "VARCHAR(50)"),
+        ("awaiting_payload", "JSON"),
+        ("decision_history", "JSON"),
     ]
     
     for col_name, col_type in columns:

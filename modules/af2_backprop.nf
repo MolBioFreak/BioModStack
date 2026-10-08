@@ -15,7 +15,7 @@ process MergeComplex {
     script:
     def antibody_chains = params.framework_type == 'nanobody' ? 'H' : 'HL'
     """
-    python3 ${projectDir}/scripts/merge_complex.py \
+    python3 ${params.code_root}/scripts/merge_complex.py \
         --target ${target_pdb} \
         --antibody ${antibody_pdb} \
         --output ${meta.id}_complex.pdb \
@@ -72,7 +72,7 @@ process AF2_BACKPROP {
     echo "Model: recycles=${num_recycles}, lr=${learning_rate}, models=${num_models}, multimer=${use_multimer}" | tee -a af2_backprop_${meta.id}.log
     echo "Loss weights: pLDDT=${loss_plddt}, PAE=${loss_pae}, Contact=${loss_contact}" | tee -a af2_backprop_${meta.id}.log
 
-    python3 ${projectDir}/scripts/run_af2_backprop.py \\
+    python3 ${params.code_root}/scripts/run_af2_backprop.py \\
         --complex_pdb ${complex_pdb} \\
         --params_dir /af2_params \\
         --binder_chain ${binder_chain} \\

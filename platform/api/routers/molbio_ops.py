@@ -436,6 +436,7 @@ async def auto_annotate(request: AutoAnnotateRequest):
     import tempfile
     import csv
     import os
+    from pathlib import Path
     
     # Validate sequence
     sequence = request.sequence.upper().replace(" ", "").replace("\n", "")
@@ -457,15 +458,26 @@ async def auto_annotate(request: AutoAnnotateRequest):
             for i in range(0, len(sequence), 60):
                 f.write(sequence[i:i+60] + "\n")
         
-        # Build plannotate command
-        cmd = [
-            "/home/dalab/bin/micromamba",
-            "run", "-n", "plannotate", "--root-prefix", "/home/dalab/micromamba",
+        # Build plannotate command with optional sensitive search config.
+        sensitive_yaml = os.getenv(
+            "BMS_PLANNOTATE_SENSITIVE_YAML",
+            str(Path.home() / ".plannotate_sensitive.yml"),
+        )
+        micromamba_bin = os.getenv("BMS_MICROMAMBA_BIN", "micromamba")
+        micromamba_root_prefix = os.getenv("BMS_MICROMAMBA_ROOT_PREFIX")
+        plannotate_env = os.getenv("BMS_PLANNOTATE_ENV", "plannotate")
+
+        cmd = [micromamba_bin, "run", "-n", plannotate_env]
+        if micromamba_root_prefix:
+            cmd.extend(["--root-prefix", micromamba_root_prefix])
+        cmd.extend([
             "plannotate", "batch",
             "-i", input_file,
             "-o", output_dir,
-            "--csv"
-        ]
+            "--csv",
+        ])
+        if os.path.exists(sensitive_yaml):
+            cmd.extend(["-y", sensitive_yaml])
         
         if request.is_linear:
             cmd.append("-l")  # --linear flag

@@ -166,6 +166,10 @@ export default function MolstarViewer({
         }
     }, [isScriptLoaded, residueColors, applyResidueColors, absoluteUrl]);
 
+    // NOTE: Postprocessing settings (shadow, outline, etc) are managed via
+    // Molstar's built-in settings panel. Programmatic setProps calls cause
+    // WebGL shader corruption after extended use. Do not attempt to override.
+
     // Parse background color
     const bgColor = useMemo(() => {
         const match = backgroundColor.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);

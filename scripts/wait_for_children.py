@@ -70,15 +70,38 @@ def wait_for_children(
             total = data.get("total", 0)
             completed = data.get("completed", 0)
             failed = data.get("failed", 0)
+            cancelled = data.get("cancelled", 0)
             running = data.get("running", 0)
             pending = data.get("pending", 0)
             all_done = data.get("all_done", False)
             
-            print(f"[WAIT] Progress: {completed}/{total} done, {running} running, {pending} pending, {failed} failed")
+            print(
+                f"[WAIT] Progress: {completed}/{total} done, {running} running, "
+                f"{pending} pending, {failed} failed, {cancelled} cancelled"
+            )
             
             if all_done:
                 success_rate = data.get("success_rate", 0)
                 output_dirs = data.get("child_output_dirs", [])
+
+                # Resume fallback: if all completed children are already marked aggregated,
+                # collect from the full completed set so downstream can still continue.
+                if not output_dirs and completed > 0:
+                    output_dirs = data.get("child_output_dirs_all", [])
+
+                if completed == 0 and (failed > 0 or cancelled > 0):
+                    print("[WAIT] All children are failed/cancelled. No usable outputs.", file=sys.stderr)
+                    return {
+                        "status": "failed",
+                        "total": total,
+                        "completed": completed,
+                        "failed": failed,
+                        "cancelled": cancelled,
+                        "success_rate": success_rate,
+                        "child_output_dirs": [],
+                        "child_ids": data.get("child_ids", []),
+                        "elapsed_seconds": elapsed
+                    }
                 
                 print(f"[WAIT] All children complete! Success rate: {success_rate}%")
                 print(f"[WAIT] Output directories: {len(output_dirs)}")
@@ -95,6 +118,7 @@ def wait_for_children(
                     "total": total,
                     "completed": completed,
                     "failed": failed,
+                    "cancelled": cancelled,
                     "success_rate": success_rate,
                     "child_output_dirs": output_dirs,
                     "child_ids": data.get("child_ids", []),
@@ -138,8 +162,12 @@ def main():
     # Exit non-zero if all children failed
     if result.get("status") == "timeout":
         sys.exit(2)
-    elif result.get("completed", 0) == 0 and result.get("failed", 0) > 0:
-        print("[WAIT] All children failed!", file=sys.stderr)
+    elif result.get("status") == "failed":
+        sys.exit(1)
+    elif result.get("completed", 0) == 0 and (
+        result.get("failed", 0) > 0 or result.get("cancelled", 0) > 0
+    ):
+        print("[WAIT] No completed children (failed/cancelled only).", file=sys.stderr)
         sys.exit(1)
 
 

@@ -219,23 +219,48 @@ export function SequenceViewer({
     }, [sequenceData.features, sequenceData.primers, visibility.features, visibility.primers]);
 
     // Build translations array if visible - filter by selected reading frames
+    // Also filter overlapping ORFs to prevent visual chaos
     const translations = useMemo(() => {
         if (!visibility.translations || !sequenceData.translations) return [];
 
-        return sequenceData.translations
-            .filter(t => {
-                // Compute reading frame: frame is 1, 2, or 3 based on start position mod 3
-                // Combined with strand direction to get -3/-2/-1 or +1/+2/+3
-                const baseFrame = (t.frame ?? ((t.start % 3) + 1)) as 1 | 2 | 3;
-                const combinedFrame = (t.strand === 1 ? baseFrame : -baseFrame) as 1 | 2 | 3 | -1 | -2 | -3;
-                return visibleFrames.has(combinedFrame);
-            })
-            .map((t, i) => ({
-                name: `ORF ${i + 1}`,
-                start: t.start,
-                end: t.end,
-                direction: t.strand
-            }));
+        // First filter by visible frames
+        const frameFiltered = sequenceData.translations.filter(t => {
+            // Compute reading frame: frame is 1, 2, or 3 based on start position mod 3
+            // Combined with strand direction to get -3/-2/-1 or +1/+2/+3
+            const baseFrame = (t.frame ?? ((t.start % 3) + 1)) as 1 | 2 | 3;
+            const combinedFrame = (t.strand === 1 ? baseFrame : -baseFrame) as 1 | 2 | 3 | -1 | -2 | -3;
+            return visibleFrames.has(combinedFrame);
+        });
+
+        // Sort by length (longest first) and filter out overlapping ORFs
+        // This prevents the visual overload when many ORFs overlap
+        const sorted = [...frameFiltered].sort((a, b) => (b.end - b.start) - (a.end - a.start));
+        const nonOverlapping: typeof sorted = [];
+
+        for (const orf of sorted) {
+            // Check if this ORF overlaps with any already selected
+            const overlaps = nonOverlapping.some(existing => {
+                // Same strand and positions overlap by more than 50%
+                if (existing.strand !== orf.strand) return false;
+                const overlapStart = Math.max(existing.start, orf.start);
+                const overlapEnd = Math.min(existing.end, orf.end);
+                if (overlapEnd <= overlapStart) return false;
+                const overlapLen = overlapEnd - overlapStart;
+                const shorterLen = Math.min(existing.end - existing.start, orf.end - orf.start);
+                return (overlapLen / shorterLen) > 0.5;
+            });
+
+            if (!overlaps && nonOverlapping.length < 6) {
+                nonOverlapping.push(orf);
+            }
+        }
+
+        return nonOverlapping.map((t, i) => ({
+            name: `ORF ${i + 1}`,
+            start: t.start,
+            end: t.end,
+            direction: t.strand
+        }));
     }, [sequenceData.translations, visibility.translations, visibleFrames]);
 
     // Handle RNA display - convert T → U

@@ -22,7 +22,32 @@ params.epitope_residues = ''
 params.rfantibody_num_designs = 10
 params.gpu_id = null  // Optional: orchestrator may pass, otherwise uses Nextflow GPU assignment
 params.framework_pdb = null
+params.framework_type = params.framework_type ?: 'standard-fv'
 params.sequence_name = 'rfantibody_child'
+params.antigen_chains = params.antigen_chains ?: ''
+params.rfantibody_design_loops_custom = params.containsKey('rfantibody_design_loops_custom') ? params.rfantibody_design_loops_custom : null
+params.rfantibody_loop_length_ranges = params.containsKey('rfantibody_loop_length_ranges') ? params.rfantibody_loop_length_ranges : null
+
+process NormalizeTargetPDB {
+    label 'process_low'
+
+    input:
+        path target_pdb
+
+    output:
+        path "normalized_target.pdb", emit: normalized
+
+    script:
+        def chainArg = params.antigen_chains ? "--chains \"${params.antigen_chains}\" \\\n        " : ""
+        """
+        python3 ${params.code_root}/scripts/normalize_target_pdb.py \\
+            --input "\$(readlink -f ${target_pdb})" \\
+            --output normalized_target.pdb \\
+            --first-model-only \\
+            ${chainArg}\
+            2>&1 | tee normalize_target.log
+        """
+}
 
 workflow RFANTIBODY_BACKBONE {
     take:
@@ -33,20 +58,21 @@ workflow RFANTIBODY_BACKBONE {
     
     main:
         def meta = [id: params.sequence_name ?: 'rfantibody_child']
+        NormalizeTargetPDB(target_pdb)
         
         // GPU assigned by orchestrator via params, or default to 0 for local runs
         def gpu_id_val = params.gpu_id ?: 0
         
         // Prepare input tuple: [meta, target_pdb, hotspots, gpu_id, num_designs]
-        def rfantibody_input = channel.of(
-            tuple(meta, target_pdb, epitope_residues, gpu_id_val, num_designs)
-        )
+        def rfantibody_input = NormalizeTargetPDB.out.normalized.map { normalized_target ->
+            tuple(meta, normalized_target, epitope_residues, gpu_id_val, num_designs)
+        }
         
         RFANTIBODY(rfantibody_input, framework_pdb)
     
     emit:
-        backbones = RFANTIBODY.out.backbones
-        metrics = RFANTIBODY.out.metrics
+        backbones = RFANTIBODY.out.designs
+        metrics = RFANTIBODY.out.log
 }
 
 // Entry point for direct invocation
@@ -63,7 +89,7 @@ workflow {
     // Use framework from params or dummy file for default
     def framework = params.framework_pdb
         ? file(params.framework_pdb)
-        : file("${projectDir}/lib/NO_FRAMEWORK")
+        : file("${params.code_root}/lib/NO_FRAMEWORK")
     
     println("=" * 60)
     println("RFantibody Backbone Workflow")

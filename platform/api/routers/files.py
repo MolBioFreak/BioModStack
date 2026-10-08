@@ -2,17 +2,124 @@
 File serving and directory browsing API router.
 """
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
 from datetime import datetime
-import os
+import mimetypes
 import shutil
+from typing import Iterator
 
 from schemas import DirectoryListing, DirectoryEntry
-from paths import get_allowed_roots, resolve_allowed_path, to_allowed_relative
+from paths import (
+    get_allowed_roots,
+    resolve_allowed_path,
+    to_allowed_relative,
+)
 
 router = APIRouter()
+
+
+def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
+    """
+    Parse a single HTTP Range header value.
+    Supports `bytes=start-end`, `bytes=start-`, and `bytes=-suffix`.
+    """
+    if not range_header or not range_header.startswith("bytes="):
+        raise ValueError("Invalid range header")
+
+    first_range = range_header.replace("bytes=", "", 1).split(",")[0].strip()
+    if "-" not in first_range:
+        raise ValueError("Invalid range syntax")
+
+    start_raw, end_raw = first_range.split("-", 1)
+    if start_raw == "":
+        # Suffix range: bytes=-N
+        suffix_len = int(end_raw)
+        if suffix_len <= 0:
+            raise ValueError("Invalid suffix length")
+        start = max(file_size - suffix_len, 0)
+        end = file_size - 1
+    else:
+        start = int(start_raw)
+        end = int(end_raw) if end_raw else file_size - 1
+
+    if start < 0 or end < start or start >= file_size:
+        raise ValueError("Range out of bounds")
+    end = min(end, file_size - 1)
+    return start, end
+
+
+def _iter_file_range(path: Path, start: int, end: int, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+    remaining = end - start + 1
+    with path.open("rb") as handle:
+        handle.seek(start)
+        while remaining > 0:
+            read_len = min(chunk_size, remaining)
+            chunk = handle.read(read_len)
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+def _guess_media_type(path: Path) -> str:
+    # Keep BAM/BAM index binary.
+    suffix = path.suffix.lower()
+    if suffix in {".bam", ".bai", ".csi"}:
+        return "application/octet-stream"
+    guessed, _ = mimetypes.guess_type(str(path))
+    return guessed or "application/octet-stream"
+
+
+def _serve_file_response(full_path: Path, request: Request, as_attachment: bool):
+    file_size = full_path.stat().st_size
+    media_type = _guess_media_type(full_path)
+    range_header = request.headers.get("range")
+    cache_headers = {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
+    if range_header:
+        try:
+            start, end = _parse_byte_range(range_header, file_size)
+        except ValueError:
+            raise HTTPException(status_code=416, detail="Invalid or unsatisfiable byte range")
+
+        content_length = end - start + 1
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(content_length),
+            **cache_headers,
+        }
+        if as_attachment:
+            headers["Content-Disposition"] = f'attachment; filename="{full_path.name}"'
+        return StreamingResponse(
+            _iter_file_range(full_path, start, end),
+            status_code=206,
+            headers=headers,
+            media_type=media_type,
+        )
+
+    if as_attachment:
+        response = FileResponse(
+            path=full_path,
+            filename=full_path.name,
+            media_type=media_type,
+        )
+    else:
+        response = FileResponse(
+            path=full_path,
+            media_type=media_type,
+        )
+    response.headers["Accept-Ranges"] = "bytes"
+    for key, value in cache_headers.items():
+        response.headers[key] = value
+    return response
+
 
 def is_path_allowed(path: Path) -> bool:
     """Check if path is within allowed roots."""
@@ -104,7 +211,7 @@ async def upload_file(
 
 
 @router.get("/download/{file_path:path}")
-async def download_file(file_path: str):
+async def download_file(file_path: str, request: Request):
     """Download a file from allowed directories."""
     try:
         full_path = resolve_allowed_path(file_path)
@@ -117,11 +224,24 @@ async def download_file(file_path: str):
     if not full_path.is_file():
         raise HTTPException(status_code=400, detail="Path is not a file")
     
-    return FileResponse(
-        path=full_path,
-        filename=full_path.name,
-        media_type="application/octet-stream"
-    )
+    return _serve_file_response(full_path, request, as_attachment=True)
+
+
+@router.get("/stream/{file_path:path}")
+async def stream_file(file_path: str, request: Request):
+    """Stream a file from allowed directories with range support and inline disposition."""
+    try:
+        full_path = resolve_allowed_path(file_path)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied to this file")
+
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not full_path.is_file():
+        raise HTTPException(status_code=400, detail="Path is not a file")
+
+    return _serve_file_response(full_path, request, as_attachment=False)
 
 
 @router.get("/pdb/{file_path:path}")
@@ -201,4 +321,3 @@ async def extract_chain(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chain extraction failed: {str(e)}")
-

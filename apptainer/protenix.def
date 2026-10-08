@@ -1,0 +1,205 @@
+# Protenix - Blackwell-compatible rebuild
+# Rebuild strategy:
+# - Start from the currently deployed Protenix image to preserve official stack deps.
+# - Bake Protenix + cu128 Torch directly into the image (no runtime user-site installs).
+# - Patch layernorm extension flags for sm_120 and install a baked fallback when nvcc
+#   in the base image cannot target compute_120.
+Bootstrap: localimage
+From: /mnt/BioModStack/apptainer/protenix.sif
+
+%post
+    set -eu
+
+    PYTHON_BIN="/root/miniconda3/bin/python3"
+    if [ ! -x "$PYTHON_BIN" ]; then
+        PYTHON_BIN="$(command -v python3)"
+    fi
+
+    export PATH="/root/miniconda3/bin:${PATH}"
+    export PIP_DISABLE_PIP_VERSION_CHECK=1
+    export PIP_INDEX_URL="https://pypi.org/simple"
+
+    # Blackwell-capable torch runtime (sm_120 support).
+    "$PYTHON_BIN" -m pip install --no-cache-dir \
+        torch==2.7.1+cu128 \
+        torchvision==0.22.1+cu128 \
+        torchaudio==2.7.1+cu128 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+    # Install Protenix CLI in the image itself (avoid host/user-site dependency).
+    # The base image already contains most heavy dependencies from official Docker.
+    "$PYTHON_BIN" -m pip install --no-cache-dir --no-deps \
+        --index-url https://pypi.org/simple \
+        protenix==1.0.2
+
+    # Patch Protenix CUDA extension build flags for Blackwell.
+    "$PYTHON_BIN" - << 'PY'
+import site
+from pathlib import Path
+
+targets = [Path(p) for p in site.getsitepackages()]
+patched = False
+for base in targets:
+    path = base / "protenix" / "model" / "layer_norm" / "torch_ext_compile.py"
+    if not path.exists():
+        continue
+    text = path.read_text()
+    updated = text.replace(
+        'os.environ["TORCH_CUDA_ARCH_LIST"] = "7.0;8.0"',
+        'os.environ["TORCH_CUDA_ARCH_LIST"] = "7.0;8.0;8.6;9.0;12.0"',
+    )
+    marker = '            "-gencode",\n            "arch=compute_90,code=sm_90",\n'
+    if 'arch=compute_120,code=sm_120' not in updated and marker in updated:
+        updated = updated.replace(
+            marker,
+            marker + '            "-gencode",\n            "arch=compute_120,code=sm_120",\n',
+        )
+    if updated != text:
+        path.write_text(updated)
+        print(f"Patched Blackwell CUDA flags in {path}")
+    else:
+        print(f"Blackwell CUDA flags already present in {path}")
+    patched = True
+    break
+
+if not patched:
+    raise SystemExit("Could not locate protenix/model/layer_norm/torch_ext_compile.py")
+PY
+
+    # If nvcc in this base image cannot compile sm_120, bake in a safe fallback
+    # so Blackwell runs do not fail at runtime.
+    "$PYTHON_BIN" - << 'PY'
+import subprocess
+import site
+from pathlib import Path
+
+nvcc_has_120 = False
+try:
+    out = subprocess.check_output(
+        ["/usr/local/cuda/bin/nvcc", "--list-gpu-arch"],
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    nvcc_has_120 = "compute_120" in out
+except Exception:
+    pass
+
+if nvcc_has_120:
+    print("nvcc supports compute_120; not forcing LayerNorm fallback.")
+    raise SystemExit(0)
+
+fallback_code = '''# [BMS-BLACKWELL-FALLBACK]
+import numbers
+from typing import Union
+
+import torch
+from torch.nn.parameter import Parameter
+
+
+class FusedLayerNorm(torch.nn.Module):
+    def __init__(
+        self,
+        normalized_shape: Union[int, list[int], torch.Size],
+        create_scale: bool = True,
+        create_offset: bool = True,
+        eps: float = 1e-5,
+    ) -> None:
+        super().__init__()
+        if isinstance(normalized_shape, numbers.Integral):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = torch.Size(normalized_shape)
+        self.eps = eps
+        self.weight = Parameter(torch.ones(*normalized_shape)) if create_scale else None
+        self.bias = Parameter(torch.zeros(*normalized_shape)) if create_offset else None
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        if self.weight is not None:
+            torch.nn.init.ones_(self.weight)
+        if self.bias is not None:
+            torch.nn.init.zeros_(self.bias)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        weight = self.weight.to(dtype=input.dtype, device=input.device) if self.weight is not None else None
+        bias = self.bias.to(dtype=input.dtype, device=input.device) if self.bias is not None else None
+        return torch.nn.functional.layer_norm(
+            input,
+            self.normalized_shape,
+            weight,
+            bias,
+            self.eps,
+        )
+'''
+
+updated_any = False
+for base in [Path(p) for p in site.getsitepackages()]:
+    layer_dir = base / "protenix" / "model" / "layer_norm"
+    layer_norm_py = layer_dir / "layer_norm.py"
+    if not layer_norm_py.exists():
+        continue
+    for so in layer_dir.glob("fast_layer_norm_cuda_v2*.so"):
+        so.unlink(missing_ok=True)
+    layer_norm_py.write_text(fallback_code)
+    print(f"Installed Blackwell-safe LayerNorm fallback at {layer_norm_py}")
+    updated_any = True
+    break
+
+if not updated_any:
+    raise SystemExit("Could not locate protenix/model/layer_norm/layer_norm.py")
+PY
+
+%environment
+    export PATH="/root/miniconda3/bin:$PATH"
+    export PYTHONNOUSERSITE=1
+    export PIP_NO_USER=1
+    export XDG_CACHE_HOME=/tmp
+    export TRITON_CACHE_DIR=/tmp/triton
+
+%test
+    set -eu
+    export PATH="/root/miniconda3/bin:$PATH"
+    export PYTHONNOUSERSITE=1
+
+    protenix --help | head -3
+    hmmsearch -h | head -3
+    python3 - << 'PY'
+import inspect
+import site
+import torch
+import protenix
+from pathlib import Path
+from protenix.model.layer_norm import layer_norm
+
+print("protenix", getattr(protenix, "__version__", "unknown"))
+print("torch", torch.__version__, "cuda", torch.version.cuda)
+print("arch_list", torch.cuda.get_arch_list())
+arch_list = torch.cuda.get_arch_list()
+if arch_list:
+    assert "sm_120" in arch_list, "sm_120 not present in torch CUDA arch list"
+else:
+    print("CUDA arch list unavailable in build-time test environment; skipping sm_120 assert")
+assert "/home/" not in str(Path(protenix.__file__)), f"protenix imported from user/home path: {protenix.__file__}"
+
+src = inspect.getsource(layer_norm.FusedLayerNorm)
+assert "BMS-BLACKWELL-FALLBACK" in src or "fast_layer_norm_cuda_v2" in src
+print("Protenix import path:", protenix.__file__)
+print("LayerNorm implementation verified")
+PY
+    echo "Protenix container tests passed"
+
+%labels
+    Author BioModStack
+    Version 2.0-blackwell
+    Description "Protenix container rebuilt for Blackwell compatibility with baked-in runtime stack"
+
+%help
+    Protenix structure prediction container with Blackwell-safe runtime.
+
+    Key properties:
+    - Protenix 1.0.2 installed in-image
+    - PyTorch 2.7.1 + CUDA 12.8 wheels (sm_120 support)
+    - No dependency on host/user-site Python packages
+    - LayerNorm fallback baked when base nvcc cannot target compute_120
+
+    Usage:
+      apptainer exec --nv protenix.sif protenix pred --input input.json --out_dir results

@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import MolstarViewer from './MolstarViewer';
 import ChainDetailsPanel from './ChainDetailsPanel';
+import { useThemeColors } from './useThemeColors';
 import type { Design, Job, StructureAnalysis, ChainMetric } from '../lib/api';
 
 interface Selection {
@@ -16,8 +17,8 @@ interface Props {
     setSelectedDesignId: (id: string) => void;
     designs: Design[];
     selectedDesign: Design | null | undefined;
-    colorMode: 'default' | 'plddt' | 'cdr';
-    setColorMode: (mode: 'default' | 'plddt' | 'cdr') => void;
+    colorMode: 'default' | 'plddt' | 'cdr' | 'frustration';
+    setColorMode: (mode: 'default' | 'plddt' | 'cdr' | 'frustration') => void;
     structureFormat: 'pdb' | 'cif';
     antibodySelections?: Selection[];
     structureAnalysis: StructureAnalysis | null | undefined;
@@ -26,6 +27,38 @@ interface Props {
 }
 
 type OverlayView = 'metrics' | 'plddt' | 'pae';
+
+function getDesignOriginLabel(design: Design | null | undefined): string | null {
+    const path = design?.pdb_path || '';
+    const metrics = design?.confidence_metrics || {};
+
+    if (path.includes('/validated_designs/')) {
+        if (typeof metrics === 'object' && metrics && ('gpde' in metrics || 'ranking_score' in metrics || 'chain_pair_iptm' in metrics)) {
+            return 'Protenix Validation';
+        }
+        return 'Validated Structure';
+    }
+    if (path.includes('/collected/fampnn/') || path.includes('/collected/fampnn_filtered/') || path.includes('/fampnn_filtered/')) {
+        return 'FAMPNN Candidate';
+    }
+    if (path.includes('/collected/rfantibody/') || path.includes('/collected/rfantibody_raw/') || path.includes('/collected/rfantibody_filtered/') || path.includes('/rfantibody/')) {
+        return 'RFantibody Backbone';
+    }
+    return null;
+}
+
+function plddtColor(value: number): { r: number; g: number; b: number } {
+    if (value >= 90) return { r: 59, g: 130, b: 246 };
+    if (value >= 70) return { r: 34, g: 211, b: 238 };
+    if (value >= 50) return { r: 250, g: 204, b: 21 };
+    return { r: 249, g: 115, b: 22 };
+}
+
+function frustrationColor(value: number): { r: number; g: number; b: number } {
+    if (value <= -1.0) return { r: 239, g: 68, b: 68 };
+    if (value >= 0.58) return { r: 34, g: 197, b: 94 };
+    return { r: 148, g: 163, b: 184 };
+}
 
 export default function StructureViewerPane({
     selectedDesignId,
@@ -42,13 +75,21 @@ export default function StructureViewerPane({
 }: Props) {
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
+
+    // For oligo_design jobs: B-factors are NA-MPNN design confidence, not AlphaFold pLDDT
+    const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
+    const bfactorLabel = isOligoJob ? 'Design Conf.' : 'pLDDT';
     const [plddtProfile, setPlddtProfile] = useState<number[]>([]);
     const [paeMatrix, setPaeMatrix] = useState<number[][] | null>(null);
-    const [chainMetrics, setChainMetrics] = useState<Record<string, { length: number; plddt: number[]; avg_plddt: number }>>({});
+    const [chainMetrics, setChainMetrics] = useState<Record<string, { length: number; plddt: number[]; avg_plddt: number; residue_numbers?: number[] }>>({});
     const [selectedChain, setSelectedChain] = useState<string | null>(null);  // null = all chains
     const [chainBoundaries, setChainBoundaries] = useState<{ id: string; start: number; end: number }[]>([]);
     const containerRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
+
+    // Theme-aware colors for Molstar viewer
+    const themeColors = useThemeColors();
+    const designOrigin = getDesignOriginLabel(selectedDesign);
 
     // Fetch all structure metrics in parallel when design changes
     // (Consolidated from 3 separate useEffects to reduce network round-trips)
@@ -106,6 +147,56 @@ export default function StructureViewerPane({
 
         fetchAllMetrics();
     }, [selectedDesignId]);
+
+    const plddtResidueColors = (() => {
+        if (colorMode !== 'plddt') return undefined;
+        const colorMap = new Map<string, { r: number; g: number; b: number }>();
+        for (const [chainId, metric] of Object.entries(chainMetrics)) {
+            const plddt = metric?.plddt || [];
+            const residueNumbers = metric?.residue_numbers || plddt.map((_, idx) => idx + 1);
+            for (let idx = 0; idx < plddt.length; idx++) {
+                const residueNumber = residueNumbers[idx];
+                if (residueNumber == null) continue;
+                colorMap.set(`${chainId}${residueNumber}`, plddtColor(plddt[idx]));
+            }
+        }
+        return colorMap.size > 0 ? colorMap : undefined;
+    })();
+
+    const frustrationResidueColors = (() => {
+        if (colorMode !== 'frustration' || !selectedDesign?.frustration_residues?.length) return undefined;
+        const colorMap = new Map<string, { r: number; g: number; b: number }>();
+        for (const residue of selectedDesign.frustration_residues) {
+            const chainId = residue.chain;
+            if (!chainId) continue;
+            const residueNumbers = chainMetrics[chainId]?.residue_numbers || [];
+            const actualResidueNumber =
+                residueNumbers[residue.pos] ??
+                residueNumbers[residue.pos - 1] ??
+                (typeof residue.pos === 'number' ? residue.pos + 1 : null);
+            if (actualResidueNumber == null) continue;
+            colorMap.set(`${chainId}${actualResidueNumber}`, frustrationColor(residue.frust));
+        }
+        return colorMap.size > 0 ? colorMap : undefined;
+    })();
+
+    const topFrustratedResidues = (() => {
+        if (!selectedDesign?.frustration_residues?.length) return [];
+        return [...selectedDesign.frustration_residues]
+            .sort((a, b) => a.frust - b.frust)
+            .slice(0, 8)
+            .map((residue) => {
+                const residueNumbers = chainMetrics[residue.chain]?.residue_numbers || [];
+                const actualResidueNumber =
+                    residueNumbers[residue.pos] ??
+                    residueNumbers[residue.pos - 1] ??
+                    (typeof residue.pos === 'number' ? residue.pos + 1 : residue.pos);
+                return {
+                    ...residue,
+                    actualResidueNumber,
+                };
+            });
+    })();
 
     // Draw PAE heatmap on canvas
     useEffect(() => {
@@ -169,7 +260,7 @@ export default function StructureViewerPane({
             <div className="flex border-b border-slate-700/50">
                 {[
                     { id: 'metrics', label: 'Metrics' },
-                    { id: 'plddt', label: 'pLDDT' },
+                    { id: 'plddt', label: bfactorLabel },
                     { id: 'pae', label: 'PAE' },
                 ].map(tab => (
                     <button
@@ -193,8 +284,13 @@ export default function StructureViewerPane({
                         {selectedDesign && (
                             <div>
                                 <h3 className="font-medium text-white/90 truncate text-sm">{selectedDesign.name}</h3>
-                                <div className="text-xs text-slate-400/80">
+                                <div className="text-xs text-slate-400/80 flex items-center gap-2 flex-wrap">
                                     {activeJob?.model_id} • {new Date(selectedDesign.created_at).toLocaleDateString()}
+                                    {designOrigin && (
+                                        <span className="px-1.5 py-0.5 rounded bg-slate-700/70 border border-slate-600/60 text-[10px] uppercase tracking-wider text-slate-300">
+                                            {designOrigin}
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -206,7 +302,7 @@ export default function StructureViewerPane({
                                     <div className={`text-lg font-bold ${getMetricColor('plddt_overall', selectedDesign.plddt_overall ?? null)}`}>
                                         {selectedDesign.plddt_overall?.toFixed(1) ?? '—'}
                                     </div>
-                                    <div className="text-[10px] text-slate-500">pLDDT</div>
+                                    <div className="text-[10px] text-slate-500">{bfactorLabel}</div>
                                 </div>
                                 <div className="bg-slate-800/40 rounded p-2 text-center">
                                     <div className={`text-lg font-bold ${getMetricColor('pae_overall', selectedDesign.pae_overall ?? null)}`}>
@@ -362,7 +458,7 @@ export default function StructureViewerPane({
                             </div>
                         ) : (
                             <div className="h-36 flex items-center justify-center text-slate-500 text-xs bg-slate-800/40 rounded">
-                                No pLDDT profile data available
+                                No {bfactorLabel} profile data available
                             </div>
                         )}
                         <div className="text-[10px] text-slate-500 mt-1 text-center">
@@ -473,8 +569,13 @@ export default function StructureViewerPane({
             {selectedDesign && (
                 <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
                     <h3 className="font-medium text-white truncate mb-2">{selectedDesign.name}</h3>
-                    <div className="text-xs text-slate-400">
+                    <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap">
                         {activeJob?.model_id} • {new Date(selectedDesign.created_at).toLocaleDateString()}
+                        {designOrigin && (
+                            <span className="px-1.5 py-0.5 rounded bg-slate-700/70 border border-slate-600/60 text-[10px] uppercase tracking-wider text-slate-300">
+                                {designOrigin}
+                            </span>
+                        )}
                     </div>
                 </div>
             )}
@@ -488,7 +589,7 @@ export default function StructureViewerPane({
                             <div className={`text-2xl font-bold ${getMetricColor('plddt_overall', selectedDesign.plddt_overall ?? null)}`}>
                                 {selectedDesign.plddt_overall?.toFixed(1) ?? '—'}
                             </div>
-                            <div className="text-xs text-slate-500 mt-1">pLDDT</div>
+                            <div className="text-xs text-slate-500 mt-1">{bfactorLabel}</div>
                         </div>
                         <div className="bg-slate-900/50 rounded-lg p-3 text-center">
                             <div className={`text-2xl font-bold ${getMetricColor('pae_overall', selectedDesign.pae_overall ?? null)}`}>
@@ -585,6 +686,24 @@ export default function StructureViewerPane({
                             <span className="text-red-400 mr-1">●</span>high (≤-1.0)
                         </span>
                     </div>
+                    {topFrustratedResidues.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-slate-700/50">
+                            <div className="text-[11px] uppercase tracking-wider text-slate-500 mb-2">Most Frustrated Positions</div>
+                            <div className="grid grid-cols-2 gap-2 text-[11px]">
+                                {topFrustratedResidues.map((residue) => (
+                                    <div
+                                        key={`${residue.chain}-${residue.actualResidueNumber}`}
+                                        className="flex items-center justify-between rounded bg-slate-900/50 px-2 py-1"
+                                    >
+                                        <span className="text-slate-300">
+                                            {residue.chain}{residue.actualResidueNumber}
+                                        </span>
+                                        <span className="font-mono text-red-300">{residue.frust.toFixed(2)}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -625,143 +744,119 @@ export default function StructureViewerPane({
         </div>
     );
 
+    // Shared toolbar for design/color selection
+    const ViewerToolbar = ({ isCompact = false }: { isCompact?: boolean }) => (
+        <div className={`flex items-center gap-2 ${isCompact ? 'flex-wrap' : 'mb-3 flex-wrap'}`}>
+            {/* Design Selector */}
+            <div className="relative">
+                <select
+                    value={selectedDesignId ?? ''}
+                    onChange={(e) => setSelectedDesignId(e.target.value)}
+                    className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white cursor-pointer hover:bg-slate-700 transition-colors min-w-[200px] ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
+                >
+                    {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
+                        <option key={d.id} value={d.id}>
+                            {`${getDesignOriginLabel(d) ? `[${getDesignOriginLabel(d)}] ` : ''}${d.name}${d.plddt_overall ? ` (${d.plddt_overall.toFixed(0)})` : ''}`}
+                        </option>
+                    ))}
+                </select>
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▾</div>
+            </div>
+
+            {/* Color Mode */}
+            <select
+                value={colorMode}
+                onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr' | 'frustration')}
+                className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700 ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
+            >
+                <option value="default">Chain Colors</option>
+                <option value="plddt">{bfactorLabel}</option>
+                <option value="frustration" disabled={!selectedDesign?.frustration_residues?.length}>
+                    Frustration
+                </option>
+                <option value="cdr" disabled={!((designs.find(d => d.id === selectedDesignId) as any)?.cdr_h1_length)}>
+                    CDR Regions
+                </option>
+            </select>
+
+            {/* Color Legend */}
+            {colorMode === 'plddt' && !isCompact && (
+                <div className="flex items-center gap-1 text-xs text-slate-400">
+                    <span className="text-blue-400">■</span>≥90
+                    <span className="text-cyan-400 ml-1">■</span>≥70
+                    <span className="text-yellow-400 ml-1">■</span>≥50
+                    <span className="text-orange-400 ml-1">■</span>&lt;50
+                </div>
+            )}
+            {colorMode === 'frustration' && !isCompact && (
+                <div className="flex items-center gap-1 text-xs text-slate-400">
+                    <span className="text-red-400">■</span>high
+                    <span className="text-slate-400 ml-1">■</span>neutral
+                    <span className="text-green-400 ml-1">■</span>minimal
+                </div>
+            )}
+
+            {/* Fullscreen Toggle */}
+            <button
+                onClick={toggleFullscreen}
+                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${isCompact
+                    ? 'bg-red-500/80 hover:bg-red-500 text-white backdrop-blur-sm'
+                    : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+            >
+                {isCompact ? '✕ Exit Fullscreen' : '⛶ Fullscreen'}
+            </button>
+        </div>
+    );
+
     return (
         <div
             ref={containerRef}
             className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950' : 'p-4'}`}
         >
-            {isFullscreen ? (
-                /* FULLSCREEN LAYOUT */
-                <>
-                    {/* Main Viewer (bottom layer) */}
-                    <div className="absolute inset-0">
+            {/* Main layout container - always present */}
+            <div className={isFullscreen ? 'h-full w-full relative' : 'flex gap-4'}>
+                {/* Left Column / Fullscreen: Viewer Area */}
+                <div className={isFullscreen ? 'absolute inset-0' : 'flex-[2] min-w-0'}>
+                    {/* Toolbar - positioned differently based on mode */}
+                    <div className={isFullscreen ? 'absolute top-3 left-3 z-40' : ''}>
+                        <ViewerToolbar isCompact={isFullscreen} />
+                    </div>
+
+                    {/* Main Viewer - ALWAYS at this exact tree position */}
+                    <div
+                        className={isFullscreen
+                            ? 'absolute inset-0'
+                            : 'relative rounded-lg overflow-hidden border border-slate-700'
+                        }
+                        style={isFullscreen ? undefined : { height: 450 }}
+                    >
                         <MolstarViewer
                             key={selectedDesignId + '_' + colorMode}
                             structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
                             format={structureFormat}
-                            alphafoldView={colorMode === 'plddt'}
+                            alphafoldView={colorMode === 'plddt' && !plddtResidueColors}
                             selections={colorMode === 'cdr' ? antibodySelections : undefined}
+                            residueColors={
+                                colorMode === 'plddt'
+                                    ? plddtResidueColors
+                                    : colorMode === 'frustration'
+                                        ? frustrationResidueColors
+                                        : undefined
+                            }
                             height="100%"
-                            backgroundColor="#0f172a"
+                            backgroundColor={themeColors.bgPrimary}
                         />
                     </div>
+                </div>
 
-                    {/* Toolbar (top-left, z-40) */}
-                    <div className="absolute top-3 left-3 z-40 flex items-center gap-2 flex-wrap">
-                        {/* Design Selector */}
-                        <div className="relative">
-                            <select
-                                value={selectedDesignId ?? ''}
-                                onChange={(e) => setSelectedDesignId(e.target.value)}
-                                className="appearance-none bg-slate-800/90 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white cursor-pointer hover:bg-slate-700 transition-colors min-w-[200px]"
-                            >
-                                {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
-                                    <option key={d.id} value={d.id}>
-                                        {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
-                                    </option>
-                                ))}
-                            </select>
-                            <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▾</div>
-                        </div>
+                {/* Right Column: Analytics Sidebar - hidden in fullscreen */}
+                {!isFullscreen && <AnalyticsSidebar />}
+            </div>
 
-                        {/* Color Mode */}
-                        <select
-                            value={colorMode}
-                            onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr')}
-                            className="appearance-none bg-slate-800/90 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700"
-                        >
-                            <option value="default">Chain Colors</option>
-                            <option value="plddt">pLDDT</option>
-                            <option value="cdr" disabled={!((designs.find(d => d.id === selectedDesignId) as any)?.cdr_h1_length)}>
-                                CDR Regions
-                            </option>
-                        </select>
-
-                        {/* Exit Fullscreen */}
-                        <button
-                            onClick={toggleFullscreen}
-                            className="px-3 py-1.5 text-xs rounded-lg bg-red-500/80 hover:bg-red-500 text-white backdrop-blur-sm transition-colors"
-                        >
-                            ✕ Exit Fullscreen
-                        </button>
-                    </div>
-
-                    {/* Toggleable Analytics Panel (bottom-right, z-40) */}
-                    <div className="absolute bottom-4 right-4 z-40">
-                        <FullscreenOverlay />
-                    </div>
-                </>
-            ) : (
-                /* NORMAL LAYOUT - YouTube-style grid */
-                <div className="flex gap-4">
-                    {/* Left Column: Viewer */}
-                    <div className="flex-[2] min-w-0">
-                        {/* Toolbar */}
-                        <div className="flex items-center gap-2 mb-3 flex-wrap">
-                            {/* Design Selector */}
-                            <div className="relative">
-                                <select
-                                    value={selectedDesignId ?? ''}
-                                    onChange={(e) => setSelectedDesignId(e.target.value)}
-                                    className="appearance-none bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white cursor-pointer hover:bg-slate-700 transition-colors min-w-[200px]"
-                                >
-                                    {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
-                                        <option key={d.id} value={d.id}>
-                                            {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
-                                        </option>
-                                    ))}
-                                </select>
-                                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▾</div>
-                            </div>
-
-                            {/* Color Mode */}
-                            <select
-                                value={colorMode}
-                                onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr')}
-                                className="appearance-none bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700"
-                            >
-                                <option value="default">Chain Colors</option>
-                                <option value="plddt">pLDDT</option>
-                                <option value="cdr" disabled={!((designs.find(d => d.id === selectedDesignId) as any)?.cdr_h1_length)}>
-                                    CDR Regions
-                                </option>
-                            </select>
-
-                            {/* Color Legend */}
-                            {colorMode === 'plddt' && (
-                                <div className="flex items-center gap-1 text-xs text-slate-400">
-                                    <span className="text-blue-400">■</span>≥90
-                                    <span className="text-cyan-400 ml-1">■</span>≥70
-                                    <span className="text-yellow-400 ml-1">■</span>≥50
-                                    <span className="text-orange-400 ml-1">■</span>&lt;50
-                                </div>
-                            )}
-
-                            {/* Fullscreen Toggle */}
-                            <button
-                                onClick={toggleFullscreen}
-                                className="px-3 py-1.5 text-xs rounded-lg bg-slate-700 text-slate-400 hover:bg-slate-600 transition-colors"
-                            >
-                                ⛶ Fullscreen
-                            </button>
-                        </div>
-
-                        {/* Main Viewer */}
-                        <div className="relative rounded-lg overflow-hidden border border-slate-700">
-                            <MolstarViewer
-                                key={selectedDesignId + '_' + colorMode}
-                                structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
-                                format={structureFormat}
-                                alphafoldView={colorMode === 'plddt'}
-                                selections={colorMode === 'cdr' ? antibodySelections : undefined}
-                                height={450}
-                                backgroundColor="#0f172a"
-                            />
-                        </div>
-                    </div>
-
-                    {/* Right Column: Analytics Sidebar */}
-                    <AnalyticsSidebar />
+            {/* Fullscreen overlay panel - only in fullscreen mode */}
+            {isFullscreen && (
+                <div className="absolute bottom-4 right-4 z-40">
+                    <FullscreenOverlay />
                 </div>
             )}
         </div>

@@ -1,7 +1,7 @@
 process FREEBINDCRAFT {
     tag "${meta.id}"
     label 'process_gpu'
-    container 'apptainer/peptide_tools.sif'
+    container "${params.container_dir}/peptide_tools.sif"
 
     input:
     tuple val(meta), path(target_pdb), val(bind_site)
