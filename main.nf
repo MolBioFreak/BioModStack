@@ -78,49 +78,91 @@ workflow {
         if (!params.rfd_num_designs) {
             error("Please provide the number of designs for RFdiffusion to generate")
         }
-        def rfdParams = new RFDiffusionParams(params)
-        // Generate the command string
-        def rfdCommand = rfdParams.generateCommandString()
-        log.info("RFdiffusion command: ${rfdCommand} inference.num_designs=${batch_size}")
 
-        // Collect input files
-        def inputFiles = collectInputFiles(params)
+        // Route based on diffusion method
+        if (params.diffusion_method == "rfd3") {
+            // RFdiffusion3 via Foundry container
+            println("Using RFdiffusion3 (Foundry) for structure generation")
+            
+            // Collect input files
+            def inputFiles = collectInputFiles(params)
+            inputFiles.each { inputFile ->
+                "rsync -r ${inputFile} ${inputsDir}/.".execute()
+            }
 
-        // Copy input files to output directory
-        inputFiles.each { inputFile ->
-            "rsync -r ${inputFile} ${inputsDir}/.".execute()
-        }
+            // Create JSON input for RFD3
+            def rfd3_input_ch = Channel.of([
+                params.rfd_mode,
+                params.rfd_contigs ?: '[100-100]',
+                params.rfd_input_pdb ? file(params.rfd_input_pdb) : file("${projectDir}/lib/NO_FILE"),
+                params.rfd_hotspots ?: '',
+                params.rfd_num_designs,
+                0  // design_startnum
+            ])
+            
+            // Prepare RFD3 JSON input
+            PrepRFD3Input(rfd3_input_ch)
+            
+            // Run RFD3 in batches
+            RunRFD3(PrepRFD3Input.out.input_json)
+            
+            // Set output channels (RFD3 outputs CIF, downstream expects PDB - may need conversion)
+            RunRFD3.out.structures_metadata.set { rfd_pdbs_jsons }
+            
+            // Batch for CPU filtering
+            Utils
+                .rebatchTuples(rfd_pdbs_jsons, 200)
+                .set { rfd_tuples }
+            
+            // Filter RFD3 outputs
+            FilterRFD3(rfd_tuples)
 
-        // Launch RFDiffusion Workflow
-        RFDiffusionWorkflow(
-            rfdCommand,
-            params.rfd_num_designs,
-            batch_size,
-            params.rfd_mode,
-            inputFiles,
-        )
-
-        RFDiffusionWorkflow.out.pdbs_jsons.set { rfd_pdbs_jsons }
-        // Compress output files
-        CompressRFD("rfd", rfd_pdbs_jsons.flatten().collect())
-
-        // Batch RFD PDBs and JSONS for CPU tasks
-        Utils
-            .rebatchTuples(rfd_pdbs_jsons, 200)
-            .set { rfd_tuples }
-        // RFdiffusion filtering - secondary structure and radius of gyration
-        FilterRFD(rfd_tuples)
-
-        // If Running RFD only these are the final pdbs
-        if (params.run_rfd_only) {
-            FilterRFD.out.pdbs_jsons
-                .flatten()
-                .collect()
-                .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
-                .set { final_pdbs }
+            if (params.run_rfd_only) {
+                FilterRFD3.out.structures_metadata
+                    .flatten()
+                    .collect()
+                    .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+                    .set { final_pdbs }
+            } else {
+                FilterRFD3.out.structures_metadata.set { filt_rfd_pdbs_jsons }
+            }
         }
         else {
-            FilterRFD.out.pdbs_jsons.set { filt_rfd_pdbs_jsons }
+            // Standard RFdiffusion path (default)
+            def rfdParams = new RFDiffusionParams(params)
+            def rfdCommand = rfdParams.generateCommandString()
+            log.info("RFdiffusion command: ${rfdCommand} inference.num_designs=${batch_size}")
+
+            def inputFiles = collectInputFiles(params)
+            inputFiles.each { inputFile ->
+                "rsync -r ${inputFile} ${inputsDir}/.".execute()
+            }
+
+            RFDiffusionWorkflow(
+                rfdCommand,
+                params.rfd_num_designs,
+                batch_size,
+                params.rfd_mode,
+                inputFiles,
+            )
+
+            RFDiffusionWorkflow.out.pdbs_jsons.set { rfd_pdbs_jsons }
+            CompressRFD("rfd", rfd_pdbs_jsons.flatten().collect())
+
+            Utils
+                .rebatchTuples(rfd_pdbs_jsons, 200)
+                .set { rfd_tuples }
+            FilterRFD(rfd_tuples)
+
+            if (params.run_rfd_only) {
+                FilterRFD.out.pdbs_jsons
+                    .flatten()
+                    .collect()
+                    .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+                    .set { final_pdbs }
+            } else {
+                FilterRFD.out.pdbs_jsons.set { filt_rfd_pdbs_jsons }
+            }
         }
     }
     else if (params.skip_rfd & !params.skip_rfd_seq & !params.skip_rfd_seq_pred) {
