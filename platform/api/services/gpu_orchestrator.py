@@ -571,6 +571,16 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
     for candidate in list(session.dirty):
         if not isinstance(candidate, Job):
             continue
+        if (
+            candidate.model_id == "molecular_dynamics"
+            and candidate.mode == "molecular_dynamics"
+        ):
+            # The durable MD state machine owns top-level parent projection. Its
+            # historical coordinator may already be terminal while a retry child
+            # is actively running, so generic Nextflow recovery must not publish
+            # that stale coordinator result over the lifecycle parent.
+            session.expunge(candidate)
+            continue
         state = inspect(candidate)
         values = {
             attribute.key: attribute.value
