@@ -110,6 +110,38 @@ are never treated as fresh installs, and normal application startup remains
 attest-only. A process-scoped file lock serializes initialization/migrations and
 is released on process death; redirected/nonregular locks are rejected.
 
+## Reproducible isolated acceptance
+
+The committed harness is `scripts/acceptance/run_kvm.py`; its guest helper is not
+an alternate installer. It invokes the supported commands above on a tracked Git
+export inside a fresh rootless QEMU/KVM guest, then exercises actual user-systemd
+services, HTTP endpoints, repeated startup, stop, and fail-closed provisioning.
+It verifies tracked file hashes before/after and exports digest-checked evidence.
+
+```sh
+python3 scripts/acceptance/run_kvm.py \
+  --source "$PWD" --ref HEAD --base /absolute/task-owned/base.img
+```
+
+Prerequisites: existing rootless Podman, QEMU/KVM access, qemu-img, Git, and modern
+Python stdlib. No host installation, privilege escalation, host service launch,
+Docker socket or HOME/tool/cache/SIF mount is performed. The seed builder uses a
+digest-pinned public Python image (downloaded if absent). Guest-only OS tooling is
+installed through the distro package manager; guest Node 22.16.0 is checked against
+its official SHA256 manifest. The VM is powered down and evidence is retained.
+
+The base is the official Ubuntu 24.04 image at
+`https://cloud-images.ubuntu.com/releases/noble/release-20260826/ubuntu-24.04-server-cloudimg-amd64.img`,
+SHA256 `d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30`.
+Obtain it in a task-owned directory; the harness refuses a digest mismatch and
+never changes the base. It does not require any existing BMS installation.
+
+An absent optional scientific container backend blocks that worker's recovery
+and dispatch—not API startup. Persisted scientific work is left untouched until
+an explicit restart can complete recovery. Model readiness still requires its
+actual acquisition, license and qualification authorities; control-plane health
+is not substituted for them.
+
 ## Readiness is checked, not inferred
 
 Development start starts and waits for its workflow adapter, then API and frontend.

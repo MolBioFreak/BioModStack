@@ -20,10 +20,7 @@ from lib.shared_runtime_images import verify_image
 def support_image(project_root: Path) -> Path | None:
     container_dir = Path(str(resolve_runtime_paths(project_root=project_root)["container_dir"]))
     root = Path(os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip() or container_dir / ".image-store")
-    try:
-        path = select_probe_image(containers=container_dir)
-    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-        raise ValueError(f"workflow adapter Protenix probe image is unavailable: {exc}") from exc
+    path = select_probe_image(containers=container_dir)
     if path != container_dir / "protenix.sif":
         return path  # shared selector already verified retained identity/bytes
 
@@ -69,5 +66,6 @@ if __name__ == "__main__":
         else:
             raise ValueError("unknown support-runtime operation")
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-        print(f"CM support runtime is blocked: {exc}", file=sys.stderr)
+        label = "workflow adapter Protenix probe image is unavailable" if sys.argv[1] == "image" else "CM support runtime is blocked"
+        print(f"{label}: {exc}", file=sys.stderr)
         sys.exit(78)
