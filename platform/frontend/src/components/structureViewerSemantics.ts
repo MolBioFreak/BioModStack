@@ -500,9 +500,9 @@ const buildConforNetsSummaryCards = (selectedDesign: SummaryMetricDesign): Struc
     if (!isConforNetsDesign(selectedDesign)) return [];
     const confidenceMetrics = asRecord(selectedDesign.confidence_metrics);
     const sample = asRecord(confidenceMetrics?.confornets_sample);
-    const confidence = asRecord(sample?.confidence);
-    const referenceEvaluation = asRecord(sample?.reference_evaluation);
-    const pairwiseDiversity = asRecord(sample?.pairwise_diversity);
+    const confidence = asRecord(confidenceMetrics?.confornets_confidence) ?? asRecord(sample?.confidence);
+    const referenceEvaluation = asRecord(confidenceMetrics?.confornets_reference_evaluation) ?? asRecord(sample?.reference_evaluation);
+    const pairwiseDiversity = asRecord(confidenceMetrics?.confornets_pairwise_diversity) ?? asRecord(sample?.pairwise_diversity);
 
     const cards: StructureViewerSummaryCardSpec[] = [];
     const scalarPlddt = finiteNumericValue(confidence?.plddt) ?? finiteNumericValue(selectedDesign.plddt_overall);
@@ -538,7 +538,7 @@ const buildConforNetsSummaryCards = (selectedDesign: SummaryMetricDesign): Struc
     const minReferenceRmsd = finiteNumericValue(referenceEvaluation?.min_reference_rmsd);
     if (minReferenceRmsd !== null) {
         cards.push({
-            label: 'Reference RMSD',
+            label: 'Staged-reference Cα RMSD',
             value: minReferenceRmsd,
             decimals: 2,
             suffix: ' Å',
@@ -549,7 +549,7 @@ const buildConforNetsSummaryCards = (selectedDesign: SummaryMetricDesign): Struc
     const meanPairwiseRmsd = finiteNumericValue(pairwiseDiversity?.mean_pairwise_rmsd);
     if (meanPairwiseRmsd !== null) {
         cards.push({
-            label: 'Pairwise RMSD',
+            label: 'Pairwise sample RMSD',
             value: meanPairwiseRmsd,
             decimals: 2,
             suffix: ' Å',
