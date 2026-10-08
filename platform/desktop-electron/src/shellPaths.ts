@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -15,6 +16,7 @@ export type ShellPathOptions = {
   homeDir?: string;
   projectRoot?: string;
   pathExists?: (target: string) => boolean;
+  readText?: (target: string) => string;
 };
 
 export type ShellPaths = {
@@ -31,6 +33,10 @@ export type ShellPaths = {
   appIconPath: string;
 };
 
+type InstallProfile = {
+  data_root?: string;
+};
+
 function expandUser(value: string, homeDir: string): string {
   if (value === '~') {
     return homeDir;
@@ -43,6 +49,33 @@ function expandUser(value: string, homeDir: string): string {
 
 function resolveUserPath(value: string, homeDir: string): string {
   return path.resolve(expandUser(value, homeDir));
+}
+
+function resolveConfigDir(options: ShellPathOptions = {}): string {
+  const homeDir = options.homeDir ?? os.homedir();
+  const env = options.env ?? process.env;
+  if (env.XDG_CONFIG_HOME?.trim()) {
+    return path.join(resolveUserPath(env.XDG_CONFIG_HOME, homeDir), 'biomodstack');
+  }
+  return path.join(homeDir, '.config', 'biomodstack');
+}
+
+function loadInstallProfile(options: ShellPathOptions = {}): InstallProfile {
+  const pathExists = options.pathExists ?? fs.existsSync;
+  const readText = options.readText ?? ((target: string) => fs.readFileSync(target, 'utf8'));
+  const installProfilePath = path.join(resolveConfigDir(options), 'install_profile.json');
+  if (!pathExists(installProfilePath)) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(readText(installProfilePath));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed as InstallProfile;
+  } catch {
+    return {};
+  }
 }
 
 export function resolveProjectRoot(options: ShellPathOptions = {}): string {
@@ -86,6 +119,11 @@ export function resolveDataRoot(options: ShellPathOptions = {}): string {
     return resolveUserPath(env.BMS_DATA, homeDir);
   }
 
+  const installProfile = loadInstallProfile(options);
+  if (installProfile.data_root?.trim()) {
+    return resolveUserPath(installProfile.data_root, homeDir);
+  }
+
   const pathExists = options.pathExists ?? (() => false);
   for (const candidate of candidateDataRoots(homeDir)) {
     if (looksLikeDataRoot(candidate, pathExists)) {
@@ -97,7 +135,6 @@ export function resolveDataRoot(options: ShellPathOptions = {}): string {
 }
 
 export function resolveShellPaths(options: ShellPathOptions = {}): ShellPaths {
-  const homeDir = options.homeDir ?? os.homedir();
   const projectRoot = resolveProjectRoot(options);
   const dataRoot = resolveDataRoot({
     ...options,
@@ -105,12 +142,13 @@ export function resolveShellPaths(options: ShellPathOptions = {}): ShellPaths {
   });
   const stateDir = path.join(resolveStateHome(options), 'biomodstack');
   const logsDir = path.join(stateDir, 'logs');
+  const configDir = resolveConfigDir(options);
 
   return {
     projectRoot,
     dataRoot,
     resultsDir: path.join(dataRoot, 'bms_results'),
-    configDir: path.join(homeDir, '.config', 'biomodstack'),
+    configDir,
     stateDir,
     logsDir,
     apiLog: path.join(logsDir, 'api.log'),
