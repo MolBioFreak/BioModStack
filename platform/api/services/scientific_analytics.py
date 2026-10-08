@@ -126,10 +126,13 @@ def projection(design, *, records=(), invalid_reason=None, model_id=None):
                 'affinity_probability': ('fraction', 'native_affinity_binary1_complex'),
                 'filter_rmsd': ('angstrom', 'native_filter_complex_alignment'),
             }
+        if model_id == 'protenix':
+            from services.protenix_scientific_consumer import SCALAR_DESCRIPTORS
+            expected = {d['metric_key']: (d['unit'], d['scope']) for d in SCALAR_DESCRIPTORS}
         for key, (unit, scope) in expected.items():
             states[key] = MetricState(state='invalid', value=None, reason_code=invalid_reason)
             descriptors[key] = MetricDescriptor(metric_id=key, source='canonical_artifact', scope=scope,
-                unit=unit, direction='lower' if key == 'filter_rmsd' else 'higher',
+                unit=unit, direction='lower' if key in ('filter_rmsd', 'gpde') else 'higher',
                 producer_version='unverified', derivation_version='unverified')
             sources[key] = None
     signature = json.dumps({k:d.model_dump() for k,d in sorted(descriptors.items())}, sort_keys=True, separators=(',',':'))
@@ -160,6 +163,9 @@ async def persisted_projection(design, session):
                 from services.boltzgen_candidate_publication import verified_boltzgen_design
                 selected = await verified_boltzgen_design(session, design)
                 return projection(design, records=selected['block']['metrics'].values())
+            if job.model_id == 'protenix':
+                from services.protenix_scientific_consumer import verified_scalar_metrics
+                return projection(design, records=await verified_scalar_metrics(design, session))
             # Other model adapters must independently validate native source
             # bytes before contributing canonical scalar records here.
             return projection(design, invalid_reason='missing_canonical_publication', model_id=job.model_id)
