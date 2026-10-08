@@ -71,6 +71,8 @@ export interface MolstarViewerProps {
     onControllerReady?: (controller: StructureSceneController | null) => void;
     /** Runtime-only job scope for authorized viewer artifacts; never enters scene state. */
     artifactJobId?: string;
+    /** Governed primary structure identity used for cross-artifact registration. */
+    structureDocumentId?: string;
 }
 
 type ViewerStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -112,6 +114,7 @@ export default function MolstarViewer({
     molecularDynamics,
     onControllerReady,
     artifactJobId,
+    structureDocumentId = 'primary',
 }: MolstarViewerProps) {
     const mountRef = useRef<HTMLDivElement>(null);
     const adapterRef = useRef<MolstarDirectAdapter | null>(null);
@@ -150,7 +153,7 @@ export default function MolstarViewer({
     const documents = useMemo<readonly MolstarDirectDocument[]>(() => {
         if (!absoluteUrl) return [];
         const primary: MolstarDirectDocument = {
-            id: 'primary',
+            id: structureDocumentId,
             url: absoluteUrl,
             format: toMolstarLoadFormat(format),
         };
@@ -163,7 +166,7 @@ export default function MolstarViewer({
             } satisfies MolstarDirectDocument] : [];
         });
         return [primary, ...overlays];
-    }, [absoluteUrl, format, overlayStructures]);
+    }, [absoluteUrl, format, overlayStructures, structureDocumentId]);
 
     const buildRequestedScene = useCallback(() => {
         const primaryDocument = documents[0];
