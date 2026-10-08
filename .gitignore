@@ -1,0 +1,22 @@
+.gemini/
+gha-creds-*.json
+
+# Large directories and build artifacts
+containers/
+models/
+apptainer/
+work/
+containers_backup_*/
+binderscaffolds/
+test_results/
+test_af2_results/
+
+# Cache and Logs
+.nextflow*
+test_run/
+pdj_results/
+true/
+*.log
+__pycache__/
+tmp/
+.ipynb_checkpoints/
