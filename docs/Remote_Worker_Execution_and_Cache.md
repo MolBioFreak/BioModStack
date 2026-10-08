@@ -39,6 +39,14 @@ Required invariants:
 - Cache status and preload progress persist on the target. They do not imply GPU/model readiness or scientific success.
 - No unrequested cache eviction, instance destruction, price filter, GPU choice or disk allocation is introduced.
 
+### Verification happens once, at publication
+
+`tools/bms_artifact_cache.py` hashes bytes where they are published — the copy publisher hashes what it writes, the ingest path hashes the uploaded object, the weight-layout walk hashes what it installs — and records the result as a durable receipt under `<worker_root>/cache/artifacts/v1/receipts/`. A receipt carries the digest, the size, the identity of the helper generation that wrote it, the verification epoch, and the published file's device, inode, size, mode, mtime and ctime. Warm paths — a probe, a materialization, a source extraction, and the weight layout resolved at the use boundary of `execute_runtime` — consume that receipt instead of re-reading the same bytes, so a warm staging run no longer re-hashes every object three times (and a weight layout is no longer re-read on every launch).
+
+A receipt is derived data, never an authority. A receipt that is absent, unreadable, oversized, malformed, written by another helper generation, or that no longer matches the requested digest, size or the file's own signature is ignored, and the bytes are verified in full before anything is published or executed. A read that disproves a receipt discards it, so damage is never blessed by a receipt that survived the damage. Publication paths never consume a receipt: the publisher's pre/post-copy hashing and the structural weight-layout validation are unchanged and stay mandatory.
+
+Integrity sweeps remain available explicitly. `action=sweep` re-reads every published object and every installed weight layout, re-derives their receipts from the bytes, and reports damage by name without repairing, replacing or deleting anything (`include` may restrict the sweep to `objects` or `weights`). The one deliberate narrowing is that a receipt proves the bytes are the verified publication only while the file's inode, size, mode and times are untouched — a rewrite or replacement always moves ctime — so silent media corruption that preserves all of those is bounded by the explicit sweep rather than by every read. Worker-local write access to the cache root already implies the ability to replace the helper itself, so the receipt adds no new authority.
+
 ### Vast template instructions
 
 Official references:

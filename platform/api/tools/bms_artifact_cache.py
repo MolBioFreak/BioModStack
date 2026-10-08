@@ -4,6 +4,20 @@
 Roots and destinations are trusted controller configuration, never operator input.
 Every directory is pinned with O_NOFOLLOW; published bytes are never written in
 place. Copies, rather than hardlinks, isolate writable execution materializations.
+
+Verification happens once, where bytes are published: the publisher hashes what
+it writes, the layout walk hashes what it installs, and each result is recorded
+as a durable receipt (digest, size, helper generation, verification epoch and
+the published file's device/inode/size/mode/mtime/ctime). Warm read paths - a
+probe, a materialization, a source extraction, a weight layout at the use
+boundary - consume that receipt instead of re-reading the same bytes, which
+removes the duplicated multi-gigabyte hashing of a staging run. A receipt is
+never an authority: an absent, stale, foreign or mismatched one falls back to
+full verification of the bytes, and `action=sweep` re-derives every receipt from
+the bytes on demand. The trade is deliberate and bounded: a receipt proves the
+bytes are the verified publication as long as the file's inode, times and size
+are untouched (a rewrite always moves ctime), while silent media corruption that
+preserves all of that is caught by the explicit sweep rather than by every read.
 """
 from __future__ import annotations
 
@@ -106,6 +120,101 @@ def verified(fd, item, progress=lambda **kw: None):
     return done == item['size_bytes'] and digest.hexdigest() == item['sha256']
 
 
+# Durable verification receipts. One is written whenever bytes are verified at
+# publication, and warm read paths consume it instead of re-reading the same
+# bytes. A receipt never replaces the verification a publication performs, and
+# the explicit integrity sweep re-derives every receipt from bytes on demand.
+RECEIPT_SCHEMA = 'bms.artifact-cache-receipt.v1'
+LAYOUT_RECEIPT_SCHEMA = 'bms.artifact-cache-layout-receipt.v1'
+MAX_RECEIPT_BYTES = 64 * 1024 * 1024
+
+_HELPER_IDENTITY: list = []
+
+
+def helper_identity():
+    """Identity of the running helper generation: the digest of its own source.
+
+    Receipts are honoured only by the exact generation that wrote them, so a
+    helper change re-verifies every object once instead of trusting a receipt
+    written under different verification semantics. An unidentifiable helper
+    writes no receipt at all, which keeps every warm path on full verification.
+    """
+    if not _HELPER_IDENTITY:
+        try:
+            source = Path(__file__)
+            raw = source.read_bytes() if source.is_file() else b''
+        except OSError:
+            raw = b''
+        _HELPER_IDENTITY.append(hashlib.sha256(raw).hexdigest() if raw else None)
+    return _HELPER_IDENTITY[0]
+
+
+def signature(info):
+    """Compact published-file identity: device, inode, size, mode, mtime, ctime.
+
+    Any in-place rewrite or replacement of the bytes moves at least one of these
+    (ctime is not settable by an unprivileged writer), so a matching signature
+    means the file still holds exactly the publication that was verified.
+    """
+    return [info.st_dev, info.st_ino, info.st_size, stat.S_IMODE(info.st_mode),
+            info.st_mtime_ns, info.st_ctime_ns]
+
+
+def read_receipt(path):
+    """Best-effort durable receipt read.
+
+    An absent, unreadable, oversized or malformed document is simply "no
+    receipt": every caller then verifies the bytes instead of trusting one.
+    """
+    try:
+        payload = read_document(path, MAX_RECEIPT_BYTES)
+    except (OSError, ValueError, RequestBudgetError):
+        return None
+    try:
+        document = json.loads(payload)
+    except ValueError:
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def write_receipt(path, document):
+    """Atomically publish one immutable receipt.
+
+    A receipt is an optimisation, never an authority: a failed write is reported
+    to the caller and costs one future verification, so it is never fatal.
+    """
+    path = PurePosixPath(str(path))
+    payload = json.dumps(document, sort_keys=True, separators=(',', ':')).encode()
+    if not payload or len(payload) > MAX_RECEIPT_BYTES:
+        return False
+    try:
+        with directory(path.parent, create=True) as parent:
+            temporary = '.partial-' + uuid.uuid4().hex
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+            try:
+                view = memoryview(payload)
+                while view:
+                    view = view[os.write(fd, view):]
+                os.fchmod(fd, 0o444)
+                os.fsync(fd)
+                os.replace(temporary, path.name, src_dir_fd=parent, dst_dir_fd=parent)
+                os.fsync(parent)
+            finally:
+                os.close(fd)
+                try:
+                    os.unlink(temporary, dir_fd=parent)
+                except FileNotFoundError:
+                    pass
+    except OSError:
+        return False
+    return True
+
+
+def receipted_member(receipt, name, info):
+    """True when one verified layout generation still covers this member."""
+    return receipt is not None and receipt['members'].get(name) == signature(info)
+
+
 def weight_layout(entries):
     """Named, immutable projection of existing CAS bytes, not another cache.
 
@@ -206,7 +315,7 @@ class Cache:
     def __init__(self, root, events=None):
         self.root = PurePosixPath(str(root))
         self.events = events or (lambda value: None)
-        for name in ('objects/sha256', 'incoming', 'locks', 'weights'):
+        for name in ('objects/sha256', 'incoming', 'locks', 'weights', 'receipts/objects', 'receipts/weights'):
             with directory(self.root / name, create=True):
                 pass
 
@@ -300,19 +409,25 @@ class Cache:
             return {**item, 'state': 'ready'}
         return self.materialize(row['artifact'], row['destination'], destination_root, row.get('mode', 0o644))
 
-    def weights(self, entries, *, install=False, full=False):
+    def weights(self, entries, *, install=False, full=False, refresh=False):
         """Resolve an immutable named view of the existing content objects.
 
         The only durable bytes are still CAS objects. Read-only aliases are
-        never exposed as writable task binds. A warm lookup reads metadata;
-        execute_runtime verifies the selected bytes at the use boundary.
+        never exposed as writable task binds. A warm lookup reads metadata, and
+        the use boundary consumes the durable receipt the publisher wrote rather
+        than re-reading the same bytes. `install=True` republishes from verified
+        CAS objects and `refresh=True` re-reads every member and rewrites the
+        receipt, which is the explicit integrity sweep for one generation.
         """
         digest, rows, payload = weight_layout(entries)
         root = Path(self.root) / 'weights' / digest
         expected = {r['name']: r for r in rows}
         dirs = {str(p) for n in expected for p in PurePosixPath(n).parents if str(p) != '.'}
+        # A publication always re-verifies; a warm read may consume the receipt
+        # the last publication wrote for exactly this generation.
+        receipt = None if (install or refresh) else self.layout_receipt(digest)
 
-        def check(path, content=False):
+        def check(path, content=False, record=None):
             seen, before = set(), {}
             def walk(parent, prefix=''):
                 info = os.fstat(parent)
@@ -330,7 +445,9 @@ class Cache:
                             os.close(child)
                         continue
                     if rel == '.bms-weights.json':
-                        item = dict(sha256=hashlib.sha256(payload).hexdigest(), size_bytes=len(payload), mode=0o444)
+                        # The layout digest is the same digest weight_layout()
+                        # just derived; never re-hash the 12 MB payload here.
+                        item = dict(sha256=digest, size_bytes=len(payload), mode=0o444)
                     else:
                         item = expected.get(rel)
                         if item is None:
@@ -343,19 +460,23 @@ class Cache:
                         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
                         try:
                             first = regular(fd)
-                            signature = (first.st_dev, first.st_ino, first.st_size, first.st_mode,
-                                         first.st_mtime_ns, first.st_ctime_ns)
                             if first.st_size != item['size_bytes'] or stat.S_IMODE(first.st_mode) != item['mode']:
                                 raise ValueError('weight_identity_changed')
-                            if (content or rel == '.bms-weights.json') and not verified(fd, item):
+                            # Member bytes are re-read only when no durable
+                            # receipt covers exactly this published file, or when
+                            # a publication/sweep asked for them to be read.
+                            if ((content or rel == '.bms-weights.json')
+                                    and not receipted_member(receipt, rel, first)
+                                    and not verified(fd, item)):
                                 raise ValueError('weight_hash_mismatch')
                             last = regular(fd)
-                            if signature != (last.st_dev, last.st_ino, last.st_size, last.st_mode,
-                                             last.st_mtime_ns, last.st_ctime_ns):
+                            if signature(first) != signature(last):
                                 raise ValueError('weight_changed_during_read')
                             current = os.stat(name, dir_fd=parent, follow_symlinks=False)
                             if (current.st_dev, current.st_ino) != (first.st_dev, first.st_ino):
                                 raise ValueError('weight_path_changed')
+                            if record is not None:
+                                record[rel] = signature(first)
                         finally:
                             os.close(fd)
                 after = os.fstat(parent)
@@ -371,8 +492,9 @@ class Cache:
                 raise ValueError('missing_weight_member')
 
         with self.locked(dict(sha256='weights-' + digest, size_bytes=0)):
+            members = {}
             try:
-                check(root, full)
+                check(root, full, record=members)
             except FileNotFoundError:
                 # A damaged published generation is never repaired in place.
                 if root.exists() or root.is_symlink():
@@ -422,11 +544,99 @@ class Cache:
                 with directory(stage) as fd:
                     os.fchmod(fd, 0o555)
                     os.fsync(fd)
-                check(stage)
+                check(stage, record=members)
                 with directory(root.parent) as parent:
                     os.rename(stage.name, root.name, src_dir_fd=parent, dst_dir_fd=parent)
                     os.fsync(parent)
+                # Member signatures are path-independent, so the receipt the
+                # staged tree just proved is the receipt for the published
+                # generation: warm lookups no longer re-read these bytes.
+                self.record_layout_receipt(digest, members)
+            else:
+                if refresh or (full and receipt is None):
+                    # Every member above was read and verified in this pass, so
+                    # the receipt is re-derived from bytes: a sweep refreshes it,
+                    # and a store whose receipt is missing (or was written by an
+                    # older helper) heals in one pass instead of re-reading every
+                    # layout at every use boundary from then on.
+                    self.record_layout_receipt(digest, members)
         return dict(state='ready', root=str(root), sha256=digest)
+
+    def sweep(self, include=('objects',)):
+        """Explicit integrity sweep: re-read every published byte in the store.
+
+        Warm paths consume durable receipts; this re-derives them from the bytes
+        instead, so an operator can prove a store without trusting a receipt.
+        Published bytes are never repaired, replaced or deleted - a damaged
+        identity is reported by name - only derived receipts are rewritten, and
+        a receipt that a read disproved is dropped so it cannot authorise a
+        later warm path.
+        """
+        report = {'state': 'ready', 'objects': 0, 'verified': 0,
+                  'layouts': 0, 'layouts_verified': 0, 'damaged': []}
+        if 'objects' in include:
+            prefixes = self.root / 'objects/sha256'
+            with directory(prefixes) as root_fd:
+                names = sorted(name for name in os.listdir(root_fd) if re.fullmatch('[0-9a-f]{2}', name))
+            for prefix in names:
+                with directory(prefixes / prefix) as parent:
+                    for name in sorted(os.listdir(parent)):
+                        label = 'objects/' + prefix + '/' + name
+                        if not re.fullmatch('[0-9a-f]{64}', name):
+                            report['damaged'].append(label)
+                            continue
+                        item = dict(sha256=name, size_bytes=0)
+                        with self.locked(item):
+                            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+                            try:
+                                item['size_bytes'] = regular(fd).st_size
+                                report['objects'] += 1
+                                if self.confirm(fd, item):
+                                    report['verified'] += 1
+                                else:
+                                    # The read disproved any receipt covering
+                                    # these bytes; it must not survive to bless
+                                    # them on a warm path.
+                                    self.discard_receipt(item)
+                                    report['damaged'].append(label)
+                            except (OSError, ValueError):
+                                self.discard_receipt(item)
+                                report['damaged'].append(label)
+                            finally:
+                                os.close(fd)
+        if 'weights' in include:
+            swept = self.sweep_weights()
+            report['layouts'] = swept['layouts']
+            report['layouts_verified'] = swept['layouts_verified']
+            report['damaged'] += swept['damaged']
+        report['damaged'] = sorted(set(report['damaged']))
+        return report
+
+    def sweep_weights(self):
+        """Re-read and re-receipt every published weight-layout generation."""
+        result = {'layouts': 0, 'layouts_verified': 0, 'damaged': []}
+        directory_path = self.root / 'weights'
+        with directory(directory_path) as parent:
+            names = sorted(os.listdir(parent))
+        for name in names:
+            if not re.fullmatch('[0-9a-f]{64}', name):
+                result['damaged'].append('weights/' + name)
+                continue
+            result['layouts'] += 1
+            listing = directory_path / name / '.bms-weights.json'
+            try:
+                # The stored listing is the canonical row document itself: its
+                # own bytes must re-derive the generation digest under it.
+                rows = json.loads(read_document(listing))
+                if weight_layout(rows)[0] != name:
+                    raise ValueError('damaged_weight_layout')
+                if self.weights(rows, full=True, refresh=True)['state'] != 'ready':
+                    raise ValueError('damaged_weight_layout')
+            except (OSError, ValueError, RequestBudgetError):
+                result['damaged'].append('weights/' + name)
+                continue
+            result['layouts_verified'] += 1
+        return result
 
     def execute_runtime(self, manifest, command, expected_sha256):
         path = Path(manifest)
@@ -481,6 +691,101 @@ class Cache:
         with directory(self.root / 'objects/sha256' / item['sha256'][:2], create=True) as fd:
             yield fd
 
+    def object_receipt_path(self, item):
+        digest = item['sha256']
+        return self.root / 'receipts/objects' / digest[:2] / (digest + '.json')
+
+    def layout_receipt_path(self, digest):
+        return self.root / 'receipts/weights' / (digest + '.json')
+
+    def receipted(self, fd, item):
+        """True when a durable receipt already covers exactly these bytes.
+
+        The receipt must be this helper's own generation and describe this
+        digest and size, and the object's device, inode, size, mode, mtime and
+        ctime must be unchanged since it was written. Anything else - absent,
+        unreadable, stale, foreign or mismatched - returns False, and the caller
+        reads and verifies the bytes instead.
+        """
+        identity = helper_identity()
+        if identity is None:
+            return False
+        info = regular(fd)
+        document = read_receipt(self.object_receipt_path(item))
+        return bool(document is not None
+                    and document.get('schema') == RECEIPT_SCHEMA
+                    and document.get('verifier') == identity
+                    and document.get('sha256') == item['sha256']
+                    and document.get('size_bytes') == item['size_bytes']
+                    and document.get('object') == signature(info))
+
+    def record_receipt(self, item, info):
+        """Publish the durable receipt for bytes that were just verified."""
+        identity = helper_identity()
+        if identity is None or info.st_size != item['size_bytes']:
+            return False
+        return write_receipt(self.object_receipt_path(item),
+            {'schema': RECEIPT_SCHEMA, 'sha256': item['sha256'], 'size_bytes': item['size_bytes'],
+             'verifier': identity, 'verified_ns': time.time_ns(), 'object': signature(info)})
+
+    def discard_receipt(self, item):
+        """Drop a receipt for bytes that failed verification.
+
+        A receipt is derived data, never evidence: once a read disproves one it
+        must not survive to authorise a warm path. The damaged bytes themselves
+        are left exactly as found and reported by the caller.
+        """
+        try:
+            with directory(self.object_receipt_path(item).parent) as parent:
+                os.unlink(self.object_receipt_path(item).name, dir_fd=parent)
+        except (OSError, ValueError):
+            return False
+        return True
+
+    def layout_receipt(self, digest):
+        """Durable receipt for one published weight-layout generation.
+
+        Returns None unless the document is this helper's own generation and
+        describes this exact layout digest; the walk then matches each member's
+        name and recorded signature. Anything else re-reads the member bytes.
+        """
+        identity = helper_identity()
+        if identity is None:
+            return None
+        document = read_receipt(self.layout_receipt_path(digest))
+        if (document is None or document.get('schema') != LAYOUT_RECEIPT_SCHEMA
+                or document.get('verifier') != identity or document.get('sha256') != digest
+                or not isinstance(document.get('members'), dict)):
+            return None
+        return document
+
+    def record_layout_receipt(self, digest, members):
+        """Publish the durable receipt for a layout whose members were verified."""
+        identity = helper_identity()
+        if identity is None or not members:
+            return False
+        return write_receipt(self.layout_receipt_path(digest),
+            {'schema': LAYOUT_RECEIPT_SCHEMA, 'sha256': digest, 'verifier': identity,
+             'verified_ns': time.time_ns(), 'members': members})
+
+    def confirm(self, fd, item, *, progress=None):
+        """Read the bytes once, verify them, and record the receipt for them.
+
+        The single verification site for objects that have no usable receipt.
+        A size or digest mismatch returns False and publishes nothing, so a
+        damaged object is never silently promoted by a stale receipt.
+        """
+        before = regular(fd)
+        if before.st_size != item['size_bytes']:
+            return False
+        if not verified(fd, item, progress or (lambda **kw: None)):
+            return False
+        after = regular(fd)
+        if signature(before) != signature(after):
+            return False
+        self.record_receipt(item, after)
+        return True
+
     def state(self, parent, item):
         try:
             fd = os.open(item['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
@@ -489,7 +794,9 @@ class Cache:
         except OSError:
             return 'corrupt'
         try:
-            return 'cache_hit' if verified(fd, item) else 'corrupt'
+            if self.receipted(fd, item):
+                return 'cache_hit'
+            return 'cache_hit' if self.confirm(fd, item) else 'corrupt'
         except ValueError:
             return 'corrupt'
         finally:
@@ -552,6 +859,9 @@ class Cache:
                     self._publish_copy(fd, parent, item['sha256'], item, 0o444)
                 finally:
                     os.close(fd)
+                # The publisher hashed the bytes it wrote; record that verified
+                # publication so warm paths do not re-read them.
+                self.record_receipt(item, os.stat(item['sha256'], dir_fd=parent, follow_symlinks=False))
         self.emit(item, 'ready', cache_hit=state == 'cache_hit')
         return {**item, 'state': 'ready', 'cache_hit': state == 'cache_hit'}
 
@@ -638,7 +948,9 @@ class Cache:
         with self.locked(item), self.objects(item) as parent:
             fd = os.open(item['sha256'], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
             with os.fdopen(fd, 'rb') as source:
-                if not verified(source.fileno(), item):
+                # The archive bytes are the verified publication, so a receipt
+                # covers them here exactly as it does on the other warm paths.
+                if not self.receipted(source.fileno(), item) and not self.confirm(source.fileno(), item):
                     raise ValueError('corrupt_source_archive')
                 source.seek(0)
                 # Autodetection also permits retained uncompressed attempts. The
@@ -718,7 +1030,11 @@ class Cache:
         with self.locked(item), self.objects(item) as objects:
             fd = os.open(item['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=objects)
             try:
-                if not verified(fd, item, lambda **kw: self.emit(item, **kw)):
+                # A receipt covers a publication that was already verified; the
+                # copy still hashes every byte it writes, so the destination is
+                # never published unverified.
+                if not self.receipted(fd, item) and not self.confirm(
+                        fd, item, progress=lambda **kw: self.emit(item, **kw)):
                     raise ValueError('corrupt_object')
                 self.emit(item, 'materializing')
                 with directory(destination.parent, create=True) as parent:
@@ -821,6 +1137,15 @@ def main():
         result = {'artifacts': [cache.materialize_entry(row, request['destination_root']) for row in request['entries']]}
     elif action == 'materialize':
         result = cache.materialize(request['artifact'], request['destination'], request['destination_root'], request.get('mode', 0o644))
+    elif action == 'sweep':
+        # Explicit integrity sweep of the published store: re-reads bytes and
+        # re-derives receipts instead of trusting them. Operator action only;
+        # the controller never sends it.
+        include = request.get('include') or ['objects']
+        if (not isinstance(include, list) or not all(isinstance(name, str) for name in include)
+                or set(include) - {'objects', 'weights'}):
+            raise ValueError('invalid_sweep_request')
+        result = cache.sweep(tuple(include))
     else:
         raise ValueError('unsupported_action')
     print(json.dumps(result, sort_keys=True))

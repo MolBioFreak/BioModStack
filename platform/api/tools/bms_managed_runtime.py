@@ -670,7 +670,9 @@ def install(root, manifest, expected_boot, cache):
                     source = os.open(row['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                      dir_fd=objects)
                     try:
-                        if not cache.verified(source, row):
+                        # Consume the receipt the publication wrote; a missing,
+                        # stale or foreign one re-reads the CAS bytes here.
+                        if not storage.receipted(source, row) and not storage.confirm(source, row):
                             raise ValueError('corrupt_object')
                         # Copy through the already-open destination descriptor.
                         # The complete directory map is checked once before activation.
