@@ -51,15 +51,20 @@ def appendExistingStructureCandidates(List candidates, raw) {
 
 def parsePpiFlowBackboneManifest(manifestFile) {
     if (manifestFile == null) {
-        return []
+        throw new IllegalArgumentException('PPIFlow producer manifest is required')
     }
     def parsed = new groovy.json.JsonSlurper().parse(new File(manifestFile.toString()))
-    if (!(parsed instanceof List)) {
-        return []
+    if (!(parsed instanceof List) || parsed.isEmpty() || parsed.any { !(it instanceof Map) || !it.path || it.sample_index == null }) {
+        throw new IllegalArgumentException('PPIFlow producer manifest must declare every sample identity and path')
     }
-    return parsed
-        .findAll { entry -> entry instanceof Map && entry.path }
-        .collect { entry -> [file(entry.path.toString()), entry] }
+    if (parsed.collect { it.path }.toSet().size() != parsed.size() || parsed.collect { it.sample_index }.toSet().size() != parsed.size()) {
+        throw new IllegalArgumentException('Duplicate PPIFlow producer sample identity')
+    }
+    return parsed.collect { entry ->
+        def artifact = file(entry.path.toString())
+        if (!artifact.exists()) throw new IllegalArgumentException('Missing declared PPIFlow backbone: ' + artifact)
+        [artifact, entry]
+    }
 }
 
 def resolveAnchorCount(anchorsJson) {
@@ -94,43 +99,7 @@ def resolveSeedStructureFiles() {
     return normalized
 }
 
-process OpenInteractiveGate {
-    label 'process_low'
-
-    publishDir "${params.out_dir}/gates", mode: 'copy', pattern: "*.json"
-
-    input:
-    val job_id
-    val stage_name
-    val gate_trigger
-    val candidate_dir
-    val raw_dir
-    val filtered_dir
-    val framework_type
-    val antibody_chains
-    val structure_validator
-
-    output:
-    path "gate_${stage_name}.json", emit: report
-
-    script:
-    def filteredArg = filtered_dir ? "--filtered_dir \"${filtered_dir}\"" : ""
-    def rawArg = raw_dir ? "--raw_dir \"${raw_dir}\"" : ""
-    """
-    echo "Gate trigger ready: ${gate_trigger}" >&2
-    python3 ${params.code_root}/scripts/open_stage_gate.py \\
-        --job_id "${job_id}" \\
-        --stage "${stage_name}" \\
-        --candidate_dir "${candidate_dir}" \\
-        ${rawArg} \\
-        ${filteredArg} \\
-        --framework_type "${framework_type ?: ''}" \\
-        --antibody_chains "${antibody_chains ?: ''}" \\
-        --structure_validator "${structure_validator ?: ''}" \\
-        --api_url "${params.api_url}" \\
-        --output "gate_${stage_name}.json"
-    """
-}
+include { OpenInteractiveGate } from '../modules/interactive_checkpoint.nf'
 
 process CollectPPIFlowGeneratorRaw {
     label 'process_low'
@@ -151,14 +120,14 @@ process CollectPPIFlowGeneratorRaw {
     output:
     path "raw_output/*.pdb", emit: pdbs, optional: true
     path "raw_output/*.json", emit: jsons, optional: true
+    path "raw_output/*", emit: review_files
 
     script:
     """
     mkdir -p raw_output
     for file in ${raw_pdbs} ${score_jsons} ${anchor_jsons} ${interface_jsons} ${rotamer_jsons} ${enriched_pdbs} ${ppiflow_positions_files} ${cdr_positions_files} ${cdr_positions_by_loop_jsons}; do
-        if [ -f "\$file" ]; then
-            cp -f "\$file" raw_output/
-        fi
+        test -f "\$file" || { printf 'Missing declared review artifact: %s\\n' "\$file" >&2; exit 1; }
+        cp -f "\$file" raw_output/
     done
     """
 }
@@ -183,14 +152,14 @@ process CollectPPIFlowGeneratorFiltered {
     output:
     path "filtered_output/*.pdb", emit: pdbs, optional: true
     path "filtered_output/*.json", emit: jsons, optional: true
+    path "filtered_output/*", emit: review_files
 
     script:
     """
     mkdir -p filtered_output
     for file in ${filtered_pdbs} ${filter_reports} ${score_jsons} ${anchor_jsons} ${interface_jsons} ${rotamer_jsons} ${enriched_pdbs} ${ppiflow_positions_files} ${cdr_positions_files} ${cdr_positions_by_loop_jsons}; do
-        if [ -f "\$file" ]; then
-            cp -f "\$file" filtered_output/
-        fi
+        test -f "\$file" || { printf 'Missing declared review artifact: %s\\n' "\$file" >&2; exit 1; }
+        cp -f "\$file" filtered_output/
     done
     """
 }
@@ -198,6 +167,16 @@ process CollectPPIFlowGeneratorFiltered {
 workflow PPIFLOW_GENERATOR_DESIGN {
     main:
         applyPpiFlowGeneratorDefaults()
+        def continuation = InteractiveCheckpoint.continuation(params)
+        def checkpointRaw
+        def checkpointFiltered
+        if (continuation) {
+            if (continuation.stage != 'post_ppiflow_generator') error('Wrong checkpoint workflow')
+            // Generator science and mandatory scoring/filtering already ran. Review
+            // approval finishes this generator, it never runs the generator again.
+            checkpointRaw = Channel.of(continuation.review_paths.findAll { it.endsWith('.pdb') }.collect { file(it) })
+            checkpointFiltered = Channel.of(continuation.selected_paths.collect { file(it) })
+        } else {
         def seedStructures = resolveSeedStructureFiles()
         if (seedStructures.isEmpty()) {
             error("PPIFlow generator requires --ppiflow_seed_complex_path or --ppiflow_seed_input_dir")
@@ -288,7 +267,7 @@ workflow PPIFLOW_GENERATOR_DESIGN {
         )
 
         CollectPPIFlowGeneratorFiltered(
-            FilterByMaturation.out.pdbs.collect(),
+            FilterByMaturation.out.pdbs.map { meta, pdbs -> pdbs }.collect(),
             FilterByMaturation.out.filter_reports.collect(),
             ScorePartialFlowImprovement.out.scores.map { meta, score_json -> score_json }.collect(),
             usable_anchor_inputs.map { meta, original_pdb, enriched_pdb, anchors_json, ppiflow_positions, cdr_positions, cdr_positions_by_loop_json -> anchors_json }.collect(),
@@ -301,23 +280,23 @@ workflow PPIFLOW_GENERATOR_DESIGN {
         )
 
         if (shouldPauseAfterGenerator) {
-            ppiflow_gate_trigger = partial_backbones.collect().map { items -> items instanceof Collection ? items.size() : 0 }
             OpenInteractiveGate(
-                params.job_id ?: "unknown",
-                "post_ppiflow_generator",
-                ppiflow_gate_trigger,
-                params.out_dir ? "${params.out_dir}/collected/ppiflow_generator_filtered" : "",
-                params.out_dir ? "${params.out_dir}/collected/ppiflow_generator_raw" : "",
-                params.out_dir ? "${params.out_dir}/collected/ppiflow_generator_filtered" : "",
-                params.get('framework_type') ?: "nanobody",
-                params.get('antibody_chains') ?: "H",
-                params.get('structure_validator') ?: "boltz2",
+                'post_ppiflow_generator',
+                // Preserve the existing candidate directory's exact PDB set,
+                // including its native enriched seed structures.
+                CollectPPIFlowGeneratorFiltered.out.pdbs.collect().map { paths -> InteractiveCheckpoint.reviewCandidates(paths) },
+                CollectPPIFlowGeneratorRaw.out.review_files.collect().combine(CollectPPIFlowGeneratorFiltered.out.review_files.collect()).map { values -> values.flatten() },
+                [framework_type: params.get('framework_type'), antibody_chains: params.get('antibody_chains')]
             )
         }
 
+        checkpointRaw = CollectPPIFlowGeneratorRaw.out.pdbs
+        checkpointFiltered = CollectPPIFlowGeneratorFiltered.out.pdbs
+        }
+
     emit:
-        raw_pdbs = CollectPPIFlowGeneratorRaw.out.pdbs
-        filtered_pdbs = CollectPPIFlowGeneratorFiltered.out.pdbs
+        raw_pdbs = checkpointRaw
+        filtered_pdbs = checkpointFiltered
 }
 
 workflow {

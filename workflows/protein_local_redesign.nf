@@ -29,25 +29,6 @@ def parseProteinLocalValidators(raw) {
     return supported.findAll { values.contains(it) }
 }
 
-def loadProteinLocalDesignArtifacts(rawDir) {
-    def resolvedDir = file(rawDir.toString())
-    def pdbs = resolvedDir.exists()
-        ? (resolvedDir.listFiles()?.findAll { candidate -> candidate.name.toLowerCase().endsWith('.pdb') }?.sort { left, right -> left.name <=> right.name }?.collect { candidate -> file(candidate.toString()) } ?: [])
-        : []
-    def jsons = resolvedDir.exists()
-        ? (resolvedDir.listFiles()?.findAll { candidate -> candidate.name.toLowerCase().endsWith('.json') }?.sort { left, right -> left.name <=> right.name }?.collect { candidate -> file(candidate.toString()) } ?: [])
-        : []
-    return channel.of([pdbs, jsons])
-}
-
-def loadProteinLocalPdbCollection(rawDir) {
-    def resolvedDir = file(rawDir.toString())
-    def pdbs = resolvedDir.exists()
-        ? (resolvedDir.listFiles()?.findAll { candidate -> candidate.name.toLowerCase().endsWith('.pdb') }?.sort { left, right -> left.name <=> right.name }?.collect { candidate -> file(candidate.toString()) } ?: [])
-        : []
-    return channel.of(pdbs)
-}
-
 def partitionProteinLocalGpuBatches(allPdbs, gpus) {
     def totalSize = allPdbs.size()
     if (totalSize == 0) {
@@ -193,43 +174,7 @@ process StageProteinLocalValidatedCandidates {
     """
 }
 
-process OpenInteractiveGate {
-    label 'process_low'
-
-    publishDir "${params.out_dir}/gates", mode: 'copy', pattern: "*.json"
-
-    input:
-    val job_id
-    val stage_name
-    val gate_trigger
-    val candidate_dir
-    val raw_dir
-    val filtered_dir
-    val framework_type
-    val antibody_chains
-    val structure_validator
-
-    output:
-    path "gate_${stage_name}.json", emit: report
-
-    script:
-    def filteredArg = filtered_dir ? "--filtered_dir \"${filtered_dir}\"" : ""
-    def rawArg = raw_dir ? "--raw_dir \"${raw_dir}\"" : ""
-    """
-    echo "Gate trigger ready: ${gate_trigger}" >&2
-    python3 ${params.code_root}/scripts/open_stage_gate.py \\
-        --job_id "${job_id}" \\
-        --stage "${stage_name}" \\
-        --candidate_dir "${candidate_dir}" \\
-        ${rawArg} \\
-        ${filteredArg} \\
-        --framework_type "${framework_type ?: ''}" \\
-        --antibody_chains "${antibody_chains ?: ''}" \\
-        --structure_validator "${structure_validator ?: ''}" \\
-        --api_url "${params.api_url}" \\
-        --output "gate_${stage_name}.json"
-    """
-}
+include { OpenInteractiveGate } from '../modules/interactive_checkpoint.nf'
 
 process ResolveProteinLocalRegion {
     label 'pyrosetta_tools'
@@ -526,10 +471,15 @@ workflow PROTEIN_LOCAL_REDESIGN {
         error('manual_ranges mode requires plr_redesign_ranges')
     }
 
+    def continuation = InteractiveCheckpoint.continuation(params)
+    if (continuation && continuation.stage == 'post_ppiflow_generator') {
+        error('PPIFlow checkpoint cannot continue local redesign')
+    }
+    def resumeParams = continuation ? continuation.params : [:]
     def interactiveGateEnabled = params.interactive_gating == true
-    def resumeFromValidation = params.plr_validation_input_pdbs ? true : false
-    def resumeFromSequences = !resumeFromValidation && params.plr_sequence_input_pdbs ? true : false
-    def resumeFromBackbones = !resumeFromValidation && !resumeFromSequences && params.plr_backbone_input_pdbs ? true : false
+    def resumeFromValidation = resumeParams.plr_validation_input_pdbs ? true : false
+    def resumeFromSequences = !resumeFromValidation && resumeParams.plr_sequence_input_pdbs ? true : false
+    def resumeFromBackbones = !resumeFromValidation && !resumeFromSequences && resumeParams.plr_backbone_input_pdbs ? true : false
 
     def inputPdbForResolve = params.plr_input_pdb ? Channel.of(file(params.plr_input_pdb)) : Channel.empty()
     def inputPdbForMerge = params.plr_input_pdb ? Channel.of(file(params.plr_input_pdb)) : Channel.empty()
@@ -542,10 +492,10 @@ workflow PROTEIN_LOCAL_REDESIGN {
     def manifestChannel
 
     if (resumeFromBackbones) {
-        if (!params.plr_region_manifest) {
+        if (!resumeParams.plr_region_manifest) {
             error('plr_backbone_input_pdbs resume requires plr_region_manifest')
         }
-        manifestChannel = Channel.of(file(params.plr_region_manifest))
+        manifestChannel = Channel.of(file(resumeParams.plr_region_manifest))
     } else if (resumeFromSequences || resumeFromValidation) {
         manifestChannel = Channel.empty()
     } else if (nativeRfd3Request) {
@@ -592,35 +542,29 @@ workflow PROTEIN_LOCAL_REDESIGN {
         mergedBackboneArtifacts = MergeProteinLocalComplexes.out.structures_metadata
     }
 
-    if (params.get('core_protein_scientific_contract') == 1) {
+    if (params.get('core_protein_scientific_contract') == 1 && !continuation) {
         PublishProteinLocalRFD3Stage('protein_local_redesign', 'rfd3_backbone_filter', rfd3StageRole, rfd3StageExpected, rfd3StageTasks.toList(), Channel.value([]))
     }
 
     if (resumeFromBackbones) {
-        mergedBackboneArtifacts = loadProteinLocalDesignArtifacts(params.plr_backbone_input_pdbs)
+        mergedBackboneArtifacts = Channel.of([
+            continuation.selected_paths.collect { file(it) },
+            continuation.review_paths.findAll { it.endsWith('.json') && !it.endsWith('/region_manifest.json') && !it.endsWith('/review_artifact_bindings.json') }.collect { file(it) }
+        ])
     }
 
     def shouldPauseAfterBackboneRemodel = interactiveGateEnabled &&
         (params.interactive_gate_stage ?: 'post_structure_validation') == 'post_rfantibody' &&
-        params.interactive_gate_continue != true &&
+        resumeParams.interactive_gate_continue != true &&
         !resumeFromSequences &&
         !resumeFromValidation
 
     if (shouldPauseAfterBackboneRemodel) {
-        def backboneGateDir = params.out_dir ? "${params.out_dir}/collected/protein_local_redesign_backbones" : null
-        def backboneGateTrigger = mergedBackboneArtifacts.map { pdbFiles, jsonFiles ->
-            (pdbFiles instanceof Collection ? pdbFiles.size() : 0) as Integer
-        }
         OpenInteractiveGate(
-            params.job_id ?: "unknown",
-            "post_rfantibody",
-            backboneGateTrigger,
-            backboneGateDir ?: "",
-            backboneGateDir ?: "",
-            "",
-            "protein_local_redesign",
-            params.plr_design_chains ?: "",
-            params.pred_method ?: "boltz"
+            'post_rfantibody',
+            mergedBackboneArtifacts.map { pdbFiles, jsonFiles -> InteractiveCheckpoint.reviewCandidates(pdbFiles) },
+            mergedBackboneArtifacts.map { pdbFiles, jsonFiles -> jsonFiles }.combine(manifestChannel).map { values -> values.flatten() },
+            [framework_type: 'protein_local_redesign', antibody_chains: params.plr_design_chains ?: '']
         )
         return
     }
@@ -632,12 +576,9 @@ workflow PROTEIN_LOCAL_REDESIGN {
     }
 
     def finalDesignPdbs
-    def rawSequenceDir = null
-    def filteredSequenceDir = null
 
     if (resumeFromSequences || resumeFromValidation) {
-        finalDesignPdbs = loadProteinLocalPdbCollection(params.plr_sequence_input_pdbs ?: params.plr_validation_input_pdbs)
-        rawSequenceDir = params.plr_sequence_input_pdbs ?: params.plr_validation_input_pdbs
+        finalDesignPdbs = Channel.of(continuation.selected_paths.collect { file(it) })
     } else if (sequenceMethod == 'mpnn') {
         PrepProteinLocalMPNN(mergedBackboneArtifacts, manifestChannel)
 
@@ -663,7 +604,6 @@ workflow PROTEIN_LOCAL_REDESIGN {
         finalDesignPdbs = FilterMPNN.out.pdbs
             .flatten()
             .collect()
-        rawSequenceDir = params.out_dir ? "${params.out_dir}/run/mpnn/results" : null
     }
     else {
         PrepProteinLocalFAMPNN(mergedBackboneArtifacts, manifestChannel)
@@ -688,30 +628,30 @@ workflow PROTEIN_LOCAL_REDESIGN {
         finalDesignPdbs = FilterFAMPNN.out.pdbs
             .flatten()
             .collect()
-        rawSequenceDir = params.out_dir ? "${params.out_dir}/run/fampnn/results" : null
-        filteredSequenceDir = params.out_dir ? "${params.out_dir}/collected/fampnn_filtered" : null
     }
 
     def shouldPauseAfterSequenceDesign = interactiveGateEnabled &&
         (params.interactive_gate_stage ?: 'post_structure_validation') == 'post_fampnn' &&
-        params.interactive_gate_continue != true &&
+        resumeParams.interactive_gate_continue != true &&
         !resumeFromValidation
 
     if (shouldPauseAfterSequenceDesign) {
-        def sequenceGateDir = filteredSequenceDir ?: rawSequenceDir
-        def sequenceGateTrigger = finalDesignPdbs.map { pdbs ->
-            (pdbs instanceof Collection ? pdbs.size() : 0) as Integer
+        // Preserve the legacy review candidate contract: MPNN reviews its raw
+        // native result directory; FAMPNN reviews its filtered directory. The
+        // filter must still finish before either review can open.
+        def sequenceReviewCandidates = finalDesignPdbs
+        if (sequenceMethod == 'mpnn') {
+            sequenceReviewCandidates = RunMPNN.out.pdbs_jsons
+                .map { pdbs, jsons -> [candidates: (pdbs instanceof Collection ? pdbs : [pdbs])] }
+                .collect(flat: false)
+                .map { batches -> [candidates: batches.collectMany { it.candidates }] }
+                .combine(finalDesignPdbs.map { pdbs -> [filter_finished: true] })
+                .map { raw, filter -> raw.candidates }
         }
         OpenInteractiveGate(
-            params.job_id ?: "unknown",
-            "post_fampnn",
-            sequenceGateTrigger,
-            sequenceGateDir ?: "",
-            rawSequenceDir ?: "",
-            filteredSequenceDir ?: "",
-            "protein_local_redesign",
-            params.plr_design_chains ?: "",
-            params.pred_method ?: "boltz"
+            'post_fampnn', sequenceReviewCandidates.map { paths -> InteractiveCheckpoint.reviewCandidates(paths) },
+            sequenceMethod == 'mpnn' ? RunMPNN.out.pdbs_jsons.map { pdbs, jsons -> jsons }.collect() : RunFAMPNN.out.pdbs_jsons.map { pdbs, jsons -> jsons }.collect(),
+            [framework_type: 'protein_local_redesign', antibody_chains: params.plr_design_chains ?: '']
         )
         return
     }
@@ -720,6 +660,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
 
     if (!resumeFromValidation) {
         def validatorSummaryChannels = []
+        def validatorReviewChannels = []
         def expectedCandidateCount = finalDesignPdbs.map { pdbs -> (pdbs instanceof Collection ? pdbs.size() : 0) as Integer }
 
         if (selectedValidators.contains('boltz2')) {
@@ -732,6 +673,8 @@ workflow PROTEIN_LOCAL_REDESIGN {
                 .set { boltzInput }
             RunBoltz(boltzInput)
             ExportProteinLocalBoltzPredictions(RunBoltz.out.pdbs_jsons)
+            validatorReviewChannels << RunBoltz.out.pdbs_jsons.map { pdbs, jsons -> [pdbs, jsons].flatten() }
+            validatorReviewChannels << RunBoltz.out.pae_npz
             validatorSummaryChannels << RunBoltz.out.completion
                 .map { completionReceipt ->
                     def payload = new groovy.json.JsonSlurper().parse(completionReceipt.toFile())
@@ -752,6 +695,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
                 }
                 .set { validatorCandidateInputs }
             PrepareProteinLocalValidatorInput(validatorCandidateInputs)
+            validatorReviewChannels << PrepareProteinLocalValidatorInput.out.prepared.map { meta, pdb, contract, input -> [contract, input] }
         }
 
         if (selectedValidators.contains('esmfold2')) {
@@ -761,6 +705,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
                 }
                 .set { esmfold2ValidatorInputs }
             ESMFold2FromPdb(esmfold2ValidatorInputs)
+            validatorReviewChannels << ESMFold2FromPdb.out.typed_results.map { meta, validator, cifs, metrics -> [cifs, metrics].flatten() }
             validatorSummaryChannels << ESMFold2FromPdb.out.typed_results
                 .map { producerMeta, validator, cifs, metrics -> producerMeta.candidate_id }
                 .collect()
@@ -773,6 +718,9 @@ workflow PROTEIN_LOCAL_REDESIGN {
                 .map { producerMeta, sourcePdb, contract, protenixJson -> [producerMeta, protenixJson] }
                 .set { protenixValidatorInputs }
             ProtenixFromComplex(protenixValidatorInputs)
+            validatorReviewChannels << ProtenixFromComplex.out.canonical_structures.map { meta, candidates, cifs -> [candidates, cifs].flatten() }
+            validatorReviewChannels << ProtenixFromComplex.out.confidence
+            validatorReviewChannels << ProtenixFromComplex.out.full_confidence
             validatorSummaryChannels << ProtenixFromComplex.out.canonical_structures
                 .map { producerMeta, producerCandidates, cifs -> producerMeta.candidate_id }
                 .collect()
@@ -803,21 +751,13 @@ workflow PROTEIN_LOCAL_REDESIGN {
 
         def shouldPauseAfterValidation = interactiveGateEnabled &&
             (params.interactive_gate_stage ?: 'post_structure_validation') == 'post_structure_validation' &&
-            params.interactive_gate_continue != true
+            resumeParams.interactive_gate_continue != true
 
         if (shouldPauseAfterValidation) {
-            def validationGateDir = params.out_dir ? "${params.out_dir}/validation" : null
-            def validationReviewDir = params.out_dir ? "${params.out_dir}/validation/review_candidates" : null
             OpenInteractiveGate(
-                params.job_id ?: "unknown",
-                "post_structure_validation",
-                StageProteinLocalValidatedCandidates.out.candidates.map { 1 },
-                validationReviewDir ?: "",
-                validationGateDir ?: "",
-                "",
-                "protein_local_redesign",
-                params.plr_design_chains ?: "",
-                selectedValidators.join(',')
+                'post_structure_validation', StageProteinLocalValidatedCandidates.out.candidates.map { paths -> InteractiveCheckpoint.reviewCandidates(paths) },
+                validatorReviewChannels.inject(FinalizeProteinLocalValidatorSuite.out.receipt) { acc, channel -> acc.mix(channel) }.collect(),
+                [framework_type: 'protein_local_redesign', structure_validators: selectedValidators]
             )
             return
         }
