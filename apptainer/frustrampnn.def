@@ -1,0 +1,86 @@
+Bootstrap: docker
+From: nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+%labels
+    Author BioModStack
+    Version 1.3
+    Description FrustraMPNN with bundled weights (Blackwell sm_120 compatible)
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get -q update
+    apt-get install -y python3.10 python3.10-venv python3-pip curl git
+    
+    # Install UV (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+    
+    # Create virtualenv with UV
+    uv venv /opt/venv
+    export VIRTUAL_ENV=/opt/venv
+    export PATH="/opt/venv/bin:$PATH"
+    
+    # Install PyTorch nightly with CUDA 12.8 (Blackwell sm_120 support)
+    uv pip install --compile torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128
+    
+    # Install pytorch-lightning and dependencies
+    uv pip install --compile pytorch-lightning omegaconf click pandas tqdm
+    
+    # Install FrustraMPNN from GitHub
+    uv pip install --compile git+https://github.com/schoederlab/frustraMPNN.git
+    
+    # Download pretrained weights
+    mkdir -p /opt/frustrampnn_weights
+    
+    # Main checkpoint (megascale trained)
+    curl -L https://github.com/schoederlab/frustraMPNN/raw/main/weights/megascale_train_weights.ckpt \
+        -o /opt/frustrampnn_weights/megascale.ckpt
+    
+    # Also get vanilla_model_weights (required for ProteinMPNN base)
+    git clone --depth 1 https://github.com/schoederlab/frustraMPNN.git /tmp/frustrampnn_repo
+    cp -r /tmp/frustrampnn_repo/weights/vanilla_model_weights /opt/frustrampnn_weights/
+    rm -rf /tmp/frustrampnn_repo
+    
+    # Verify weights exist
+    ls -la /opt/frustrampnn_weights/
+    
+    # Test import
+    python -c "from frustrampnn import FrustraMPNN; print('FrustraMPNN imported successfully')"
+    
+    # Generate lockfile for reproducibility
+    uv pip freeze > /opt/venv/requirements.lock
+    
+    echo 'export PATH="/opt/venv/bin:$PATH"' >> $APPTAINER_ENVIRONMENT
+
+%environment
+    export PATH="/opt/venv/bin:$PATH"
+    export VIRTUAL_ENV=/opt/venv
+    export FRUSTRAMPNN_CHECKPOINT=/opt/frustrampnn_weights/megascale.ckpt
+
+%runscript
+    exec frustrampnn "$@"
+
+%help
+    FrustraMPNN container for per-residue energetic frustration analysis.
+    
+    Bundled checkpoint: /opt/frustrampnn_weights/megascale.ckpt
+    
+    Usage:
+        apptainer run --nv frustrampnn.sif predict \
+            --pdb protein.pdb \
+            --checkpoint /opt/frustrampnn_weights/megascale.ckpt \
+            --output results.csv
+    
+    Output columns:
+        - frustration_pred: Predicted frustration index
+        - position: 0-indexed residue position
+        - wildtype: Original amino acid
+        - mutation: Mutant amino acid being scored
+        - chain: Chain identifier
+    
+    Frustration thresholds:
+        - highly frustrated: <= -1.0 (red)
+        - neutral: -1.0 to 0.58 (gray)
+        - minimally frustrated: >= 0.58 (green)
+    
+    Lockfile: /opt/venv/requirements.lock

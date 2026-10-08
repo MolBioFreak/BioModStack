@@ -1,0 +1,28 @@
+# Protenix - AF3-level structure prediction (ByteDance)
+# Built on top of the official ByteDance Docker image which includes:
+#   CUDA 12.6, PyTorch 2.7, CUTLASS, cuEquivariance, HMMER, Kalign, Python 3.11
+# This def installs the protenix PyPI package on top.
+Bootstrap: localimage
+From: /mnt/BioModStack/apptainer/protenix_base.sif
+
+%post
+    # Install Protenix from PyPI (v1.0.2)
+    pip install --no-cache-dir protenix
+
+    # Pre-compile CUDA kernels (fast_layer_norm) so they don't compile at runtime
+    python3 -c "from protenix.model.layer_norm import FastLayerNorm; print('CUDA kernels compiled')" || true
+
+%test
+    protenix --help | head -3
+    python3 -c "import protenix; print('Protenix imported successfully')"
+    hmmsearch -h | head -3
+    echo "Protenix container tests passed"
+
+%help
+    Protenix structure prediction container (ByteDance AF3-level predictor)
+    Based on official protenix:1.0.0.4 Docker image + protenix PyPI package
+    CUDA 12.6, Python 3.11, PyTorch 2.7, CUTLASS, cuEquivariance, HMMER
+
+    Usage:
+      protenix pred --input input.json --out_dir results --seeds 42 --n_sample 5
+      protenix prep --input input.json --out_dir msa_results

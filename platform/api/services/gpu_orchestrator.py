@@ -16,6 +16,7 @@ import asyncio
 import logging
 import math
 from datetime import datetime
+from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass
 
@@ -96,6 +97,7 @@ VRAM_PROFILES = {
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
     'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
     'antibody_denovo': {'base': 6000, 'scale': 25},  # Full antibody pipeline
+    'oligo_design': {'base': 7000, 'scale': 20},     # Oligo Designer (RFDpoly + NA-MPNN)
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
 
@@ -857,7 +859,7 @@ class GPUOrchestrator:
                             gpu_id = int(gpu_match.group(1))
                             gpu_has_activity[gpu_id] = gpu_has_activity.get(gpu_id, 0) + 1
                 
-                completions = 0
+                reconciled = 0
                 for job in running_jobs:
                     job_is_running = False
                     
@@ -879,46 +881,79 @@ class GPUOrchestrator:
                             else:
                                 job_is_running = True
                     
-                    # Method 3: If job has been running > 1 minute and no process found, mark complete
+                    # Method 3: If job has been running > 1 minute and no process found, reconcile state
                     if not job_is_running and job.started_at:
-                        from datetime import timezone
                         age_seconds = (datetime.utcnow() - job.started_at).total_seconds()
                         if age_seconds > 60:  # Only mark complete if running > 1 min
-                            job.queue_status = "completed"
-                            if job.status == "running":
-                                job.status = "completed"
-                            job.current_stage = "Complete"
-                            job.stage_progress = None
-                            job.completed_at = datetime.utcnow()
-
-                            # Best-effort safety net: if a top-level workflow completed but
-                            # launch task finalization was missed, ingest outputs so Data Viewer
-                            # is populated instead of showing an empty completed job.
-                            if job.parent_job_id is None and job.output_dir:
+                            failure_reason = None
+                            if job.error_message:
+                                failure_reason = str(job.error_message)
+                            elif job.output_dir:
                                 try:
-                                    existing_designs = (
-                                        await session.execute(
-                                            select(func.count(Design.id)).where(Design.job_id == job.id)
+                                    out_dir = Path(job.output_dir)
+                                    nf_log = out_dir / "nextflow.log"
+                                    if not nf_log.exists():
+                                        nf_log = out_dir / ".nextflow.log"
+                                    if nf_log.exists():
+                                        tail = nf_log.read_text(errors="ignore")[-8000:]
+                                        error_markers = (
+                                            "ERROR ~ Error executing process",
+                                            "terminated with an error exit status",
+                                            "Nextflow exited with code",
                                         )
-                                    ).scalar() or 0
-                                    if existing_designs == 0:
-                                        from services.result_ingester import ingest_job_results
+                                        for marker in error_markers:
+                                            if marker in tail:
+                                                failure_reason = f"Reconciled from nextflow.log: {marker}"
+                                                break
+                                except Exception as log_err:
+                                    logger.debug(f"[COMPLETION] Could not inspect nextflow log for {job.name}: {log_err}")
 
-                                        created = await ingest_job_results(str(job.id), job.output_dir, session)
-                                        logger.info(
-                                            f"[COMPLETION] Ingested {created} designs "
-                                            f"for reconciled top-level job {job.name}"
+                            if failure_reason:
+                                if job.status == "running":
+                                    job.status = "failed"
+                                job.queue_status = "failed"
+                                job.completed_at = datetime.utcnow()
+                                logger.warning(
+                                    f"[COMPLETION] {job.name} reconciled as failed "
+                                    f"(no process found, age: {age_seconds:.0f}s): {failure_reason}"
+                                )
+                            else:
+                                job.queue_status = "completed"
+                                if job.status == "running":
+                                    job.status = "completed"
+                                job.current_stage = "Complete"
+                                job.stage_progress = None
+                                job.completed_at = datetime.utcnow()
+
+                                # Best-effort safety net: if a top-level workflow completed but
+                                # launch task finalization was missed, ingest outputs so Data Viewer
+                                # is populated instead of showing an empty completed job.
+                                if job.parent_job_id is None and job.output_dir:
+                                    try:
+                                        existing_designs = (
+                                            await session.execute(
+                                                select(func.count(Design.id)).where(Design.job_id == job.id)
+                                            )
+                                        ).scalar() or 0
+                                        if existing_designs == 0:
+                                            from services.result_ingester import ingest_job_results
+
+                                            created = await ingest_job_results(str(job.id), job.output_dir, session)
+                                            logger.info(
+                                                f"[COMPLETION] Ingested {created} designs "
+                                                f"for reconciled top-level job {job.name}"
+                                            )
+                                    except Exception as ingest_err:
+                                        logger.warning(
+                                            f"[COMPLETION] Reconcile ingestion failed for {job.name}: {ingest_err}"
                                         )
-                                except Exception as ingest_err:
-                                    logger.warning(
-                                        f"[COMPLETION] Reconcile ingestion failed for {job.name}: {ingest_err}"
-                                    )
-                            completions += 1
-                            logger.info(f"[COMPLETION] {job.name} completed (no process found, age: {age_seconds:.0f}s)")
+                                logger.info(f"[COMPLETION] {job.name} completed (no process found, age: {age_seconds:.0f}s)")
+
+                            reconciled += 1
                 
-                if completions > 0:
+                if reconciled > 0:
                     await session.commit()
-                    logger.info(f"[COMPLETION] Marked {completions} jobs as completed")
+                    logger.info(f"[COMPLETION] Reconciled {reconciled} stale running jobs")
                 
         except Exception as e:
             logger.error(f"[COMPLETION] Error checking completions: {e}", exc_info=True)

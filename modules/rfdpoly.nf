@@ -232,10 +232,11 @@ process NAMPNNDesign {
     mkdir -p designed input_converted nampnn_out
     
     # Convert RFDpoly residue names to NA-MPNN format
-    # RFDpoly: RG, RC, RU, RA -> NA-MPNN: G, C, U, A
+    # RNA: RG, RC, RU, RA -> G, C, U, A
+    # DNA: DG, DC, DT, DA -> G, C, T, A
     for pdb in *.pdb; do
         if [ -f "\$pdb" ]; then
-            sed 's/ RG / G  /g; s/ RC / C  /g; s/ RU / U  /g; s/ RA / A  /g' "\$pdb" > "input_converted/\$pdb"
+            sed 's/ RG / G  /g; s/ RC / C  /g; s/ RU / U  /g; s/ RA / A  /g; s/ DG / G  /g; s/ DC / C  /g; s/ DT / T  /g; s/ DA / A  /g' "\$pdb" > "input_converted/\$pdb"
         fi
     done
     
