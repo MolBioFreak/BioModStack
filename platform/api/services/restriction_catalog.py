@@ -36,6 +36,15 @@ DEFAULT_PAGE_LIMIT = 50
 MAX_PAGE_LIMIT = 250
 QUERY_MAX_LENGTH = 128
 CURSOR_MAX_LENGTH = 4096
+ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH = 5_000_000
+ANALYSIS_EXPLICIT_ENZYME_MAXIMUM = 256
+ANALYSIS_REGION_MAXIMUM = 128
+ANALYSIS_PATTERN_MAXIMUM = 619
+ANALYSIS_SCAN_WORK_MAXIMUM = 100_000_000
+ANALYSIS_OCCURRENCE_MAXIMUM = 25_000
+ANALYSIS_EVENT_MAXIMUM = 50_000
+ANALYSIS_RESPONSE_MAXIMUM_BYTES = 32 * 1024 * 1024
+ANALYSIS_CACHE_MAXIMUM_ENTRIES = 32
 SOURCE_YEAR = 2024
 SOURCE_RELEASE = "REBASE_EMBOSS_404_2024"
 SOURCE_DICTIONARY_SHA256 = "2a79099295dbad6061ea67a11e053787c591fcb2eb10fc8c0f89ead908dfa02b"
@@ -514,12 +523,15 @@ class CatalogAuthority:
                         "default_limit": DEFAULT_PAGE_LIMIT,
                         "maximum_limit": MAX_PAGE_LIMIT,
                         "query_max_length": QUERY_MAX_LENGTH,
-                        "analysis_inline_sequence_max_length": 5_000_000,
-                        "analysis_explicit_enzyme_maximum": 256,
-                        "analysis_region_maximum": 128,
-                        "analysis_occurrence_maximum": 25_000,
-                        "analysis_event_maximum": 50_000,
-                        "analysis_response_maximum_bytes": 32 * 1024 * 1024,
+                        "analysis_inline_sequence_max_length": ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH,
+                        "analysis_explicit_enzyme_maximum": ANALYSIS_EXPLICIT_ENZYME_MAXIMUM,
+                        "analysis_region_maximum": ANALYSIS_REGION_MAXIMUM,
+                        "analysis_pattern_maximum": ANALYSIS_PATTERN_MAXIMUM,
+                        "analysis_scan_work_maximum": ANALYSIS_SCAN_WORK_MAXIMUM,
+                        "analysis_occurrence_maximum": ANALYSIS_OCCURRENCE_MAXIMUM,
+                        "analysis_event_maximum": ANALYSIS_EVENT_MAXIMUM,
+                        "analysis_response_maximum_bytes": ANALYSIS_RESPONSE_MAXIMUM_BYTES,
+                        "analysis_cache_maximum_entries": ANALYSIS_CACHE_MAXIMUM_ENTRIES,
                     }
                 ),
                 "analysis_enabled": True,

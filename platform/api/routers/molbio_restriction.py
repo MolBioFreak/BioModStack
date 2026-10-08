@@ -144,9 +144,12 @@ class CatalogBounds(StrictResponse):
     analysis_inline_sequence_max_length: int
     analysis_explicit_enzyme_maximum: int
     analysis_region_maximum: int
+    analysis_pattern_maximum: int
+    analysis_scan_work_maximum: int
     analysis_occurrence_maximum: int
     analysis_event_maximum: int
     analysis_response_maximum_bytes: int
+    analysis_cache_maximum_entries: int
 
 
 class CatalogReceipt(StrictResponse):
