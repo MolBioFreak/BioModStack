@@ -1743,26 +1743,25 @@ export function ResultsViewer() {
 
     // Fetch jobs list (include children for aggregation)
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
-        queryKey: ['jobs', 'include_children'],
-        queryFn: () => fetchJobs({ include_children: true, limit: 2000 }),
+        queryKey: ['jobs', 'include_children', 'summary'],
+        queryFn: () => fetchJobs({ include_children: true, limit: 2000, summary: true }),
     });
-    const jobFromList = useMemo(
-        () => (jobId ? (jobsData?.data.jobs ?? []).find((job: Job) => job.id === jobId) : undefined),
-        [jobId, jobsData?.data.jobs],
-    );
     const { data: routedJobData, isLoading: routedJobLoading } = useQuery({
         queryKey: ['job', jobId, 'direct'],
         queryFn: () => fetchJobById(jobId!),
-        enabled: Boolean(jobId) && !jobFromList,
+        enabled: Boolean(jobId),
         retry: false,
     });
     const routedJob = routedJobData?.data;
     const jobs = useMemo(() => {
         const baseJobs = jobsData?.data.jobs ?? [];
-        if (!routedJob || baseJobs.some((job: Job) => job.id === routedJob.id)) {
+        if (!routedJob) {
             return baseJobs;
         }
-        return [routedJob, ...baseJobs];
+        if (!baseJobs.some((job: Job) => job.id === routedJob.id)) {
+            return [routedJob, ...baseJobs];
+        }
+        return baseJobs.map((job: Job) => job.id === routedJob.id ? routedJob : job);
     }, [jobsData?.data.jobs, routedJob]);
     const nonNgsJobs = useMemo(() => jobs.filter((j: Job) => !isNgsJob(j)), [jobs]);
     const jobsById = useMemo(

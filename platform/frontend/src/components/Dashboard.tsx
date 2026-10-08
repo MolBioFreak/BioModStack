@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchJobs, cancelJob, resubmitJob, fetchJobLogs, resumeJob, deleteJobPermanently, forceRunJob } from '../lib/api';
+import { fetchJobs, fetchJobById, cancelJob, resubmitJob, fetchJobLogs, resumeJob, deleteJobPermanently, forceRunJob } from '../lib/api';
 import type { JobLogs, Job } from '../lib/api';
 
 import { QuickViewer } from './QuickViewer';
@@ -171,8 +171,8 @@ export function Dashboard() {
     };
 
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
-        queryKey: ['jobs'],
-        queryFn: () => fetchJobs(),
+        queryKey: ['jobs', 'dashboard-summary'],
+        queryFn: () => fetchJobs({ limit: 100, summary: true }),
         refetchInterval: 3000,
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
@@ -247,22 +247,31 @@ export function Dashboard() {
         }
     });
 
-    const handleResume = (job: Job) => {
-        if (job.status === 'awaiting_input' && job.awaiting_payload?.resume_direct) {
+    const hydrateJobForDetail = async (job: Job): Promise<Job> => {
+        if (job.params && Object.keys(job.params).length > 0) {
+            return job;
+        }
+        const response = await fetchJobById(job.id);
+        return response.data;
+    };
+
+    const handleResume = async (job: Job) => {
+        const detailedJob = await hydrateJobForDetail(job);
+        if (detailedJob.status === 'awaiting_input' && detailedJob.awaiting_payload?.resume_direct) {
             setResumeDialogMode('resume');
-            resumeMutation.mutate({ jobId: job.id });
+            resumeMutation.mutate({ jobId: detailedJob.id });
             return;
         }
-        if (job.status === 'awaiting_input') {
-            handleResumeWithSettings(job);
+        if (detailedJob.status === 'awaiting_input') {
+            handleResumeWithSettings(detailedJob);
             return;
         }
-        const completed = job.completed_stages || [];
+        const completed = detailedJob.completed_stages || [];
         const resumePoint = completed.length > 0 ? `after ${completed[completed.length - 1]}` : 'from start (using cache)';
 
-        if (confirm(`Resume job "${job.name}" ${resumePoint}?`)) {
+        if (confirm(`Resume job "${detailedJob.name}" ${resumePoint}?`)) {
             setResumeDialogMode('resume');
-            resumeMutation.mutate({ jobId: job.id });
+            resumeMutation.mutate({ jobId: detailedJob.id });
         }
     };
 
@@ -392,13 +401,14 @@ export function Dashboard() {
 
     const navigate = useNavigate();
 
-    const handleClone = (job: Job) => {
+    const handleClone = async (job: Job) => {
+        const detailedJob = await hydrateJobForDetail(job);
         // Store job params in localStorage for the submit form to pick up
         const cloneData = {
-            name: `${job.name}_clone`,
-            model_id: job.model_id,
-            mode: job.mode,
-            params: job.params || {}
+            name: `${detailedJob.name}_clone`,
+            model_id: detailedJob.model_id,
+            mode: detailedJob.mode,
+            params: detailedJob.params || {}
         };
         localStorage.setItem('clonedJobData', JSON.stringify(cloneData));
         // Navigate to submit page
