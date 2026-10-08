@@ -71,7 +71,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Manage BioModStack desktop services")
     parser.add_argument(
         "action",
-        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status", "discover", "plan", "provision-plan", "provision", "verify", "configure-preview", "configure", "recover", "resume"],
+        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status", "python-plan", "python-bootstrap", "python-verify", "discover", "plan", "provision-plan", "provision", "verify", "configure-preview", "configure", "recover", "resume"],
     )
     parser.add_argument(
         "--runtime",
@@ -89,6 +89,26 @@ def main() -> int:
     parser.add_argument("--accept-license", action="append", default=[], help="explicit acceptance of a reviewed license ID; repeatable, recorded durably")
     parser.add_argument("--runtime-attestation", type=Path, help="existing Protenix observed attestation for offline verify; not approval")
     args = parser.parse_args()
+    from biomodstack_python_prerequisites import (
+        ACTIONS, SETUP_ACTIONS, prerequisite_report, dispatch_setup,
+    )
+    if args.action in ACTIONS:
+        if any((args.runtime, args.notify, args.target, args.model, args.document,
+                args.operation_id, args.expect_document_sha256, args.expect_plan_sha256,
+                args.accept_license, args.runtime_attestation)):
+            parser.error("Python prerequisites accept only --json; use BMS_PYTHON_ROOT for an external environment")
+        report = prerequisite_report(args.action, project_root=REPO_ROOT)
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0 if report["status"] in {"planned", "installed", "already-installed", "verified"} else 3
+    if args.action in SETUP_ACTIONS:
+        try:
+            dispatch_setup(REPO_ROOT)
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            print(json.dumps({"schema_version": "bms.python-prerequisites.v1",
+                              "action": args.action, "status": "blocked", "ready": False,
+                              "errors": [{"code": getattr(exc, "code", "prerequisite_failed"),
+                                          "message": str(exc)}]}, indent=2))
+            return 3
     if args.runtime_attestation and (args.action != "verify" or args.model != ["protenix"]):
         parser.error("runtime-attestation requires verify with exactly one --model protenix")
     if args.action == "verify" and args.accept_license:
