@@ -35,6 +35,23 @@ HEADER_PREFIXES = (
 )
 
 ATOMISH_PREFIXES = ("ATOM  ", "HETATM", "ANISOU")
+WATER_RESIDUES = {"HOH", "WAT", "H2O", "DOD"}
+
+
+def atom_element(line: str) -> str:
+    """Return an uppercase PDB element, with an atom-name fallback."""
+    if len(line) >= 78:
+        element = line[76:78].strip().upper()
+        if element:
+            return element
+    atom_name = line[12:16].strip().upper() if len(line) >= 16 else ""
+    atom_name = atom_name.lstrip("0123456789")
+    return atom_name[:1]
+
+
+def clear_altloc(line: str) -> str:
+    """Clear the PDB alternate-location column after selecting one conformer."""
+    return f"{line[:16]} {line[17:]}" if len(line) > 16 else line
 
 
 def parse_chain_set(chains_arg: str | None) -> set[str]:
@@ -49,11 +66,24 @@ def normalize_pdb(
     keep_chains: set[str],
     first_model_only: bool,
     model_number: int | None = None,
+    selected_altloc: str = "A",
+    keep_hydrogens: bool = False,
+    keep_water: bool = False,
+    keep_hetero: bool = False,
 ) -> dict:
     header_lines: list[str] = []
     body_lines: list[str] = []
     atom_count = 0
     kept_models = 0
+    retained_altlocs: set[str] = set()
+    dropped_altloc_records = 0
+    dropped_hydrogen_records = 0
+    dropped_water_records = 0
+    dropped_hetero_records = 0
+
+    selected_altloc = selected_altloc.strip().upper()
+    if len(selected_altloc) > 1:
+        raise ValueError("selected_altloc must be blank or one character")
 
     inside_model = False
     keep_current_model = not first_model_only and model_number is None
@@ -110,6 +140,28 @@ def normalize_pdb(
                 chain_id = line[21].upper() if len(line) > 21 else ""
                 if keep_chains and chain_id not in keep_chains:
                     continue
+                altloc = line[16].upper() if len(line) > 16 else ""
+                if altloc not in {"", " ", selected_altloc}:
+                    dropped_altloc_records += 1
+                    continue
+                if line.startswith("ANISOU"):
+                    # Coordinate normalization intentionally emits coordinates only.
+                    continue
+                residue_name = line[17:20].strip().upper() if len(line) >= 20 else ""
+                if not keep_hydrogens and atom_element(line) in {"H", "D"}:
+                    dropped_hydrogen_records += 1
+                    continue
+                if line.startswith("HETATM"):
+                    if residue_name in WATER_RESIDUES:
+                        if not keep_water:
+                            dropped_water_records += 1
+                            continue
+                    elif not keep_hetero:
+                        dropped_hetero_records += 1
+                        continue
+                if altloc not in {"", " "}:
+                    retained_altlocs.add(altloc)
+                    line = clear_altloc(line)
                 body_lines.append(f"{line}\n")
                 if line.startswith(("ATOM  ", "HETATM")):
                     atom_count += 1
@@ -150,6 +202,15 @@ def normalize_pdb(
         "kept_models": kept_models,
         "first_model_only": first_model_only,
         "model_number": model_number,
+        "selected_altloc": selected_altloc,
+        "retained_altlocs": sorted(retained_altlocs),
+        "dropped_altloc_records": dropped_altloc_records,
+        "dropped_hydrogen_records": dropped_hydrogen_records,
+        "dropped_water_records": dropped_water_records,
+        "dropped_hetero_records": dropped_hetero_records,
+        "keep_hydrogens": keep_hydrogens,
+        "keep_water": keep_water,
+        "keep_hetero": keep_hetero,
     }
 
 
@@ -158,6 +219,14 @@ def main() -> int:
     parser.add_argument("--input", required=True, help="Input PDB path")
     parser.add_argument("--output", required=True, help="Output normalized PDB path")
     parser.add_argument("--chains", default="", help="Comma-separated chain IDs to retain")
+    parser.add_argument(
+        "--altloc",
+        default="A",
+        help="Alternate location to retain alongside blank records (default: A)",
+    )
+    parser.add_argument("--keep-hydrogens", action="store_true", help="Retain hydrogen/deuterium atoms")
+    parser.add_argument("--keep-water", action="store_true", help="Retain water HETATM records")
+    parser.add_argument("--keep-hetero", action="store_true", help="Retain non-water HETATM records")
     parser.add_argument(
         "--first-model-only",
         action="store_true",
@@ -184,6 +253,10 @@ def main() -> int:
             keep_chains=parse_chain_set(args.chains),
             first_model_only=args.first_model_only,
             model_number=args.model_number,
+            selected_altloc=args.altloc,
+            keep_hydrogens=args.keep_hydrogens,
+            keep_water=args.keep_water,
+            keep_hetero=args.keep_hetero,
         )
     except Exception as exc:
         print(f"Failed to normalize {input_path}: {exc}", file=sys.stderr)

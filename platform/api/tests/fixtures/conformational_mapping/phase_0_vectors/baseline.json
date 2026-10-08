@@ -1,0 +1,13 @@
+{
+  "schema_name":"cm_phase0_baseline",
+  "schema_version":1,
+  "case_key":"P0-BASELINE-001",
+  "runtime_status":"unmeasured",
+  "commands":[
+    "PYTHONPATH=platform/api python -m pytest -q \\\n  platform/api/tests/test_confornets_experimental.py \\\n  platform/api/tests/test_experimental_nextflow_entrypoint.py",
+    "PYTHONPATH=platform/api python -m pytest -q \\\n  platform/api/tests/test_confornets_result_ingester.py \\\n  platform/api/tests/test_result_contracts.py \\\n  platform/api/tests/test_nextflow_entrypoint_registry.py",
+    "PYTHONPATH=platform/api python -m pytest -q platform/api/tests",
+    "pnpm --dir platform/frontend test"
+  ],
+  "results":[null,null,null,null]
+}

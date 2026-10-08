@@ -1,0 +1,8 @@
+{
+  "schema_name":"cm_phase0_normalize",
+  "schema_version":1,
+  "case_key":"P0-NORMALIZE-001",
+  "original_cif_sha256":null,
+  "features":{"insertion_code":"A","label_asym_id":"CHAIN_LONG","auth_asym_id":"A","altlocs":["A","B"],"selected_altloc":"A","instance_ids":["copy1","copy2"],"models":[1,2],"selected_model":1},
+  "runtime_status":"unmeasured"
+}
