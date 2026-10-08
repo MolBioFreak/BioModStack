@@ -67,7 +67,6 @@ export function BioXpCockpit() {
     const executeCommand = useBioXpCommand();
     const emergencyStop = useBioXpEmergencyStop();
     const [protocolName, setProtocolName] = useState('BioXP offline validation');
-    const [oemStartupAck, setOemStartupAck] = useState('');
     const [nowMs, setNowMs] = useState(() => Date.now());
 
     useEffect(() => {
@@ -100,8 +99,15 @@ export function BioXpCockpit() {
             idempotency_key: crypto.randomUUID(),
         };
         return command === 'initialize_oem_environment'
-            ? { ...base, mode: 'live', operator_ack: oemStartupAck }
+            ? { ...base, mode: 'live', operator_ack: 'INITIALIZE' }
             : base;
+    };
+
+    const runCommissioningCommand = (command: CommissioningCommandName) => {
+        if (command === 'initialize_oem_environment' && !window.confirm(
+            'Run the complete OEM non-motion startup sequence? This initializes and verifies all four pipettes, configures controllers and thermal boards, and runs initialCheck. It stops before initializeSystem, homing, or axis motion.',
+        )) return;
+        executeCommand.mutate(commandPayload(command));
     };
 
     return (
@@ -185,7 +191,6 @@ export function BioXpCockpit() {
                     {COMMISSIONING_COMMANDS.map(({ command, label, detail, tone, lifecycleStage }) => {
                         const available = mutationAccessEnabled
                             && isBioXpCommandAvailable(status?.available_commands, command, derived?.label);
-                        const ackReady = command !== 'initialize_oem_environment' || oemStartupAck === 'INITIALIZE';
                         const stage = lifecycleStage ? connection?.startup_lifecycle?.stages[lifecycleStage] : undefined;
                         const blockedReason = status?.unavailable_commands?.[command]
                             ?? (statusQuery.isError ? 'Status is unavailable.' : 'Command is not admitted by the server.');
@@ -194,15 +199,10 @@ export function BioXpCockpit() {
                                 <h3 className="font-semibold">{label}</h3>
                                 <p className="mt-1 text-sm text-slate-300">{detail}</p>
                                 {stage && <p className="mt-2 text-xs text-cyan-300">stage={stage.state} · attempts={stage.attempt_count ?? 0}</p>}
-                                {command === 'initialize_oem_environment' && (
-                                    <label className="mt-3 block text-xs text-amber-200">Type INITIALIZE to acknowledge the complete OEM non-motion startup sequence
-                                        <input value={oemStartupAck} onChange={(event) => setOemStartupAck(event.target.value)} autoComplete="off" className="mt-1 w-full rounded border border-amber-700 bg-slate-950 px-2 py-1.5 text-sm" />
-                                    </label>
-                                )}
                                 <button
                                     type="button"
-                                    disabled={!available || !ackReady || executeCommand.isPending}
-                                    onClick={() => executeCommand.mutate(commandPayload(command))}
+                                    disabled={!available || executeCommand.isPending}
+                                    onClick={() => runCommissioningCommand(command)}
                                     className={`mt-3 rounded px-3 py-2 text-sm font-semibold disabled:opacity-40 ${tone === 'query' ? 'bg-cyan-700' : 'bg-amber-700'}`}
                                 >{label}</button>
                                 {!available && <p className="mt-2 text-xs text-slate-500">Blocked: {blockedReason}</p>}
