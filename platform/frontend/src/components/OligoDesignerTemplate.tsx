@@ -268,8 +268,17 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // ============================================================================
     // State: Validation & Filtering
     // ============================================================================
-    const [validateWithBoltz, setValidateWithBoltz] = useState(true);
+    const [validateWithBoltz, setValidateWithBoltz] = useState(false);
+    const [boltzValidationMode, setBoltzValidationMode] = useState<'structure_only' | 'complex'>('structure_only');
     const [filterPreset, setFilterPreset] = useState<FilterPreset>('default');
+    const [customMinPlddt, setCustomMinPlddt] = useState(70.0);
+    const [customMinPtm, setCustomMinPtm] = useState(0.5);
+    const [customMaxPae, setCustomMaxPae] = useState(15.0);
+    // Boltz-2 model params
+    const [boltzSamplingSteps, setBoltzSamplingSteps] = useState(200);
+    const [boltzRecyclingSteps, setBoltzRecyclingSteps] = useState(3);
+    const [boltzNumSamples, setBoltzNumSamples] = useState(1);
+    const [showBoltzAdvanced, setShowBoltzAdvanced] = useState(false);
     const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
 
     // ============================================================================
@@ -418,7 +427,6 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // ============================================================================
     const submitMutation = useMutation({
         mutationFn: async () => {
-            const filterSettings = FILTER_PRESETS[filterPreset];
             const storageSettings = STORAGE_PRESETS[storagePreset];
 
             const effectiveNumDesigns = useSwa ? totalDesigns : numDesigns;
@@ -450,9 +458,15 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     ...(chainSequences && { chain_sequences: chainSequences }),
                     // Validation & filtering
                     oligo_validate_boltz: validateWithBoltz,
-                    oligo_min_plddt: filterSettings.min_plddt,
-                    oligo_min_ptm: filterSettings.min_ptm,
-                    boltz_min_plddt: filterSettings.min_plddt,
+                    boltz_validation_mode: boltzValidationMode,
+                    oligo_min_plddt: customMinPlddt,
+                    oligo_min_ptm: customMinPtm,
+                    oligo_max_pae: customMaxPae,
+                    boltz_min_plddt: customMinPlddt,
+                    // Boltz-2 model parameters
+                    boltz_sampling_steps: boltzSamplingSteps,
+                    boltz_recycling_steps: boltzRecyclingSteps,
+                    boltz_num_samples: boltzNumSamples,
                     // Physics refinement
                     openmm_enabled: physicsSettings.enabled,
                     openmm_compute_tier: physicsSettings.computeTier,
@@ -1012,18 +1026,146 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                 </div>
             </div>
 
-            {/* Validation Settings */}
+            {/* Boltz-2 Validation Settings */}
             <div className="bg-slate-800 rounded-lg p-4">
-                <label className="block text-sm font-medium text-slate-300 mb-3">Validation</label>
-                <label className="flex items-center gap-2">
-                    <input
-                        type="checkbox"
-                        checked={validateWithBoltz}
-                        onChange={(e) => setValidateWithBoltz(e.target.checked)}
-                        className="rounded"
-                    />
-                    <span className="text-white">Validate with Boltz-2 (Structural Refolding)</span>
-                </label>
+                <label className="block text-sm font-medium text-slate-300 mb-3">Boltz-2 Validation</label>
+
+                {/* Enable/Disable Toggle */}
+                <div className="space-y-3">
+                    <label className="flex items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={() => setValidateWithBoltz(!validateWithBoltz)}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${validateWithBoltz ? 'bg-purple-600' : 'bg-slate-600'
+                                }`}
+                        >
+                            <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${validateWithBoltz ? 'translate-x-6' : 'translate-x-1'
+                                    }`}
+                            />
+                        </button>
+                        <span className="text-white">
+                            {validateWithBoltz ? 'Validation Enabled' : 'Validation Disabled'}
+                        </span>
+                    </label>
+
+                    {validateWithBoltz && (
+                        <div className="space-y-3 pl-4 border-l-2 border-purple-600">
+                            {/* Validation Mode Selector */}
+                            <div>
+                                <label className="text-xs text-slate-400 mb-1 block">Validation Mode</label>
+                                <select
+                                    value={boltzValidationMode}
+                                    onChange={(e) => setBoltzValidationMode(e.target.value as 'structure_only' | 'complex')}
+                                    className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                                >
+                                    <option value="structure_only">Structure Only (RNA/DNA fold validation)</option>
+                                    {selectedTarget && (
+                                        <option value="complex">Complex (nucleotide + target protein)</option>
+                                    )}
+                                </select>
+                                <p className="text-xs text-slate-500 mt-1">
+                                    {boltzValidationMode === 'structure_only'
+                                        ? 'Validates nucleic acid structure independently'
+                                        : 'Validates nucleic acid binding to target protein'}
+                                </p>
+                            </div>
+
+                            {/* Filter Thresholds */}
+                            <div className="grid grid-cols-3 gap-3">
+                                <div>
+                                    <label className="text-xs text-slate-400 mb-1 block">Min pLDDT</label>
+                                    <input
+                                        type="number"
+                                        value={customMinPlddt}
+                                        onChange={(e) => setCustomMinPlddt(parseFloat(e.target.value))}
+                                        min={0}
+                                        max={100}
+                                        step={5}
+                                        className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-xs text-slate-400 mb-1 block">Min pTM</label>
+                                    <input
+                                        type="number"
+                                        value={customMinPtm}
+                                        onChange={(e) => setCustomMinPtm(parseFloat(e.target.value))}
+                                        min={0}
+                                        max={1}
+                                        step={0.05}
+                                        className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-xs text-slate-400 mb-1 block">Max PAE</label>
+                                    <input
+                                        type="number"
+                                        value={customMaxPae}
+                                        onChange={(e) => setCustomMaxPae(parseFloat(e.target.value))}
+                                        min={0}
+                                        max={50}
+                                        step={1}
+                                        className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Boltz-2 Model Parameters (Collapsible) */}
+                            <button
+                                type="button"
+                                onClick={() => setShowBoltzAdvanced(!showBoltzAdvanced)}
+                                className="text-xs text-slate-400 hover:text-white flex items-center gap-1"
+                            >
+                                {showBoltzAdvanced ? '▼' : '▸'} Model Parameters
+                            </button>
+                            {showBoltzAdvanced && (
+                                <div className="grid grid-cols-3 gap-3">
+                                    <div>
+                                        <label className="text-xs text-slate-400 mb-1 block">Sampling Steps</label>
+                                        <input
+                                            type="number"
+                                            value={boltzSamplingSteps}
+                                            onChange={(e) => setBoltzSamplingSteps(parseInt(e.target.value))}
+                                            min={50}
+                                            max={500}
+                                            step={50}
+                                            className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-slate-400 mb-1 block">Recycling Steps</label>
+                                        <input
+                                            type="number"
+                                            value={boltzRecyclingSteps}
+                                            onChange={(e) => setBoltzRecyclingSteps(parseInt(e.target.value))}
+                                            min={1}
+                                            max={10}
+                                            step={1}
+                                            className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-slate-400 mb-1 block">Samples/Design</label>
+                                        <input
+                                            type="number"
+                                            value={boltzNumSamples}
+                                            onChange={(e) => setBoltzNumSamples(parseInt(e.target.value))}
+                                            min={1}
+                                            max={10}
+                                            step={1}
+                                            className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                                        />
+                                    </div>
+                                </div>
+                            )}
+
+                            <p className="text-xs text-amber-500">
+                                ⚠️ Boltz-2 validation is GPU-intensive (~2-5 min per design)
+                            </p>
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* Physics Refinement Panel */}
