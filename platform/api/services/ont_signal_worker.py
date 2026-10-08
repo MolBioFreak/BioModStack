@@ -24,6 +24,7 @@ from sqlalchemy import or_, select, update
 from database import (
     InputFile,
     Job,
+    OntExternalMoveBamRegistrationReceipt,
     OntMoveTableSource,
     OntRawSignalRepresentation,
     OntSignalCalibrationArtifact,
@@ -36,7 +37,7 @@ from database import (
 )
 from molbio_ngs_models import MolBioNGSReferenceArtifact, MolBioNGSReferenceRevision
 from paths import get_allowed_roots, get_molbio_ngs_reference_root, get_results_dir
-from services import ngs_alignment_sessions, ont_raw_signal
+from services import ngs_alignment_sessions, ont_raw_signal, ont_signal_workbench
 from services.file_lease_signals import lease_break_generation
 
 logger = logging.getLogger(__name__)
@@ -194,12 +195,21 @@ class RetainedParent:
     identity: tuple[int, int, int, int]
 
 
+@dataclass(frozen=True)
+class MoveBamAuthority:
+    path: Path | None
+    receipt: OntExternalMoveBamRegistrationReceipt | None
+    root_fd: int | None = None
+    relative: Path | None = None
+
+
 class RetainedParentSet:
     """Own read-leased descriptors until OCI cleanup and publication finish."""
 
     def __init__(self, governed_roots: tuple[Path, ...] | None = None) -> None:
         self._opened_at_generation = lease_break_generation()
         self._parents: list[RetainedParent] = []
+        self._root_descriptors: list[tuple[int, tuple[int, int]]] = []
         self._closed = False
         self._governed_roots = governed_roots
 
@@ -295,6 +305,78 @@ class RetainedParentSet:
             os.close(descriptor)
             raise
 
+    async def pin_beneath_root_async(
+        self,
+        root_fd: int,
+        relative: Path,
+        *,
+        alias: str,
+        expected_sha256: str,
+        expected_size: int,
+    ) -> RetainedParent:
+        if self._closed or not relative.parts or relative.is_absolute() or any(
+            part in {"", ".", ".."} for part in relative.parts
+        ):
+            os.close(root_fd)
+            raise RuntimeError("external retained-parent selector is invalid")
+        if (
+            not alias
+            or alias in {".", ".."}
+            or "/" in alias
+            or "\\" in alias
+            or len(alias) > 128
+            or any(parent.alias == alias for parent in self._parents)
+        ):
+            os.close(root_fd)
+            raise RuntimeError("retained-parent alias is invalid or duplicated")
+        root_info = os.fstat(root_fd)
+        if not stat.S_ISDIR(root_info.st_mode):
+            os.close(root_fd)
+            raise RuntimeError("external retained-parent root is not a directory")
+        root_identity = (root_info.st_dev, root_info.st_ino)
+        self._root_descriptors.append((root_fd, root_identity))
+        descriptor: int | None = None
+        parent_fd = os.dup(root_fd)
+        leased = False
+        try:
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+            for component in relative.parts[:-1]:
+                child_fd = os.open(component, flags, dir_fd=parent_fd)
+                os.close(parent_fd)
+                parent_fd = child_fd
+            descriptor = os.open(
+                relative.parts[-1],
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
+            if not hasattr(fcntl, "F_SETLEASE"):
+                raise RuntimeError("Linux file leases are unavailable")
+            fcntl.fcntl(descriptor, fcntl.F_SETOWN, os.getpid())
+            fcntl.fcntl(descriptor, fcntl.F_SETLEASE, fcntl.F_RDLCK)
+            leased = True
+            digest, size, identity = await asyncio.to_thread(
+                _identity_from_descriptor, descriptor
+            )
+            if digest != expected_sha256 or size != expected_size:
+                raise RuntimeError("retained parent diverged from immutable hash/size authority")
+            parent = RetainedParent(descriptor, alias, digest, size, identity)
+            self._parents.append(parent)
+            self.assert_unbroken()
+            return parent
+        except BaseException:
+            if descriptor is not None:
+                if leased:
+                    try:
+                        fcntl.fcntl(descriptor, fcntl.F_SETLEASE, fcntl.F_UNLCK)
+                    except OSError:
+                        pass
+                os.close(descriptor)
+            self._root_descriptors.remove((root_fd, root_identity))
+            os.close(root_fd)
+            raise
+        finally:
+            os.close(parent_fd)
+
     def assert_unbroken(self) -> None:
         if self._closed or lease_break_generation() != self._opened_at_generation:
             raise RuntimeError("retained-parent read lease was broken")
@@ -302,6 +384,10 @@ class RetainedParentSet:
             current = os.fstat(parent.fd)
             if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) != parent.identity:
                 raise RuntimeError("retained-parent descriptor identity changed")
+        for descriptor, identity in self._root_descriptors:
+            current = os.fstat(descriptor)
+            if (current.st_dev, current.st_ino) != identity:
+                raise RuntimeError("retained-parent root descriptor identity changed")
 
     def metadata(self, operation_argv: list[str]) -> dict[str, Any]:
         self.assert_unbroken()
@@ -324,6 +410,11 @@ class RetainedParentSet:
                 pass
             try:
                 os.close(parent.fd)
+            except OSError:
+                pass
+        for descriptor, _identity in reversed(self._root_descriptors):
+            try:
+                os.close(descriptor)
             except OSError:
                 pass
         self._closed = True
@@ -1185,6 +1276,7 @@ class OntSignalWorker:
                     values["reason_code"] = "move_source_retry_requested"
                 else:
                     values["reason_code"] = "runtime_validation_failed_retry_exhausted"
+                    values["validated_at"] = self._now()
             if isinstance(row, OntSignalCalibrationJob):
                 values["stage_receipts"] = {**(row.stage_receipts or {}), "failure": {"failed_at": self._now().isoformat(), "failure_code": exc.__class__.__name__, "message_sha256": hashlib.sha256(str(exc).encode()).hexdigest()}}
             conditions = [table.id == item_id, table.claim_token == token, getattr(table, state_field) == "running"]
@@ -1202,6 +1294,131 @@ class OntSignalWorker:
     def _raw_paths(representation: OntRawSignalRepresentation) -> list[Path]:
         pairs, _identities = OntSignalWorker._resolve_selected_raw_partitions(representation, None)
         return [path for path, _index in pairs]
+
+    @staticmethod
+    def _governed_parent_roots() -> tuple[Path, ...]:
+        roots = [Path(value) for value in get_allowed_roots().values()]
+        raw_signal_root = _lexical_absolute(
+            Path(
+                os.getenv(
+                    ont_raw_signal.BLOW5_STAGING_ROOT_ENV,
+                    ont_raw_signal.BLOW5_DEFAULT_STAGING_ROOT,
+                )
+            ).parent
+            / "ont-raw-signal"
+        )
+        if raw_signal_root not in roots:
+            roots.append(raw_signal_root)
+        configured = os.getenv(ont_signal_workbench.EXTERNAL_MOVE_BAM_ROOT_ENV, "").strip()
+        external_root = ont_signal_workbench._lexical_absolute_path(configured)
+        if external_root is not None and external_root not in roots:
+            roots.append(external_root)
+        return tuple(roots)
+
+    @staticmethod
+    async def _resolve_move_bam_authority(
+        session: Any, source: OntMoveTableSource
+    ) -> MoveBamAuthority:
+        if source.external_registration_receipt_id is None:
+            tracked = await session.get(InputFile, source.input_file_id)
+            if tracked is None or source.source_job_id is None:
+                raise RuntimeError("original move BAM authority disappeared")
+            return MoveBamAuthority(path=Path(tracked.directory) / tracked.filename, receipt=None)
+        if source.source_job_id is not None:
+            raise RuntimeError("move source has conflicting producer authorities")
+        receipt = await session.get(
+            OntExternalMoveBamRegistrationReceipt,
+            source.external_registration_receipt_id,
+        )
+        if receipt is None:
+            raise RuntimeError("external move-BAM registration receipt disappeared")
+        if (
+            receipt.run_id != source.run_id
+            or receipt.observed_generation != source.observed_generation
+            or receipt.raw_representation_id != source.raw_representation_id
+            or receipt.artifact_sha256 != source.artifact_sha256
+            or receipt.artifact_size_bytes != source.artifact_size_bytes
+            or receipt.molecule_type != source.molecule_type
+        ):
+            raise RuntimeError("external move-BAM receipt does not bind the exact move-source tuple")
+        relative = Path(receipt.server_relative_path)
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or any(component in {"", ".", ".."} for component in relative.parts)
+            or not relative.name.lower().endswith(".bam")
+        ):
+            raise RuntimeError("external move-BAM receipt path authority is invalid")
+        _root, root_fd, root_info = ont_signal_workbench._open_external_move_bam_root()
+        if (root_info.st_dev, root_info.st_ino) != (receipt.root_device, receipt.root_inode):
+            os.close(root_fd)
+            raise RuntimeError("external move BAM identity diverged from registration receipt")
+        return MoveBamAuthority(
+            path=None,
+            receipt=receipt,
+            root_fd=root_fd,
+            relative=relative,
+        )
+
+    @staticmethod
+    async def _pin_move_bam_authority(
+        parents: RetainedParentSet,
+        authority: MoveBamAuthority,
+        *,
+        alias: str,
+        expected_sha256: str,
+        expected_size: int,
+    ) -> RetainedParent:
+        if authority.root_fd is not None and authority.relative is not None:
+            return await parents.pin_beneath_root_async(
+                authority.root_fd,
+                authority.relative,
+                alias=alias,
+                expected_sha256=expected_sha256,
+                expected_size=expected_size,
+            )
+        if authority.path is None:
+            raise RuntimeError("move BAM authority has no retained source")
+        return await OntSignalWorker._pin_parent_async(
+            parents,
+            authority.path,
+            alias=alias,
+            expected_sha256=expected_sha256,
+            expected_size=expected_size,
+        )
+
+    @staticmethod
+    def _assert_external_move_bam_identity(
+        retained: RetainedParent,
+        authority: MoveBamAuthority,
+    ) -> None:
+        receipt = authority.receipt
+        if receipt is None:
+            return
+        if authority.root_fd is None:
+            raise RuntimeError("external move BAM root descriptor authority disappeared")
+        root_info = os.fstat(authority.root_fd)
+        current = os.fstat(retained.fd)
+        if (
+            root_info.st_dev,
+            root_info.st_ino,
+            current.st_dev,
+            current.st_ino,
+            current.st_size,
+            current.st_mtime_ns,
+            current.st_ctime_ns,
+            retained.sha256,
+        ) != (
+            receipt.root_device,
+            receipt.root_inode,
+            receipt.file_device,
+            receipt.file_inode,
+            receipt.artifact_size_bytes,
+            receipt.file_mtime_ns,
+            receipt.file_ctime_ns,
+            receipt.artifact_sha256,
+        ):
+            raise RuntimeError("external move BAM identity diverged from registration receipt")
 
     @staticmethod
     def _validate_move_source_producer_authority(
@@ -1284,7 +1501,7 @@ class OntSignalWorker:
         )
 
     async def _process_move(self, item_id: str, token: str) -> None:
-        with RetainedParentSet(tuple(Path(value) for value in get_allowed_roots().values())) as parents:
+        with RetainedParentSet(self._governed_parent_roots()) as parents:
             await self._process_move_retained(item_id, token, parents)
 
     async def _process_move_retained(
@@ -1295,16 +1512,16 @@ class OntSignalWorker:
             if source is None or source.claim_token != token: return
             registration_authority = self._move_registration_authority(source)
             representation = await session.get(OntRawSignalRepresentation, source.raw_representation_id)
-            tracked = await session.get(InputFile, source.input_file_id)
-            if representation is None or tracked is None: raise RuntimeError("move-source parents disappeared")
-            bam = Path(tracked.directory) / tracked.filename
-            retained_bam = await self._pin_parent_async(
+            if representation is None: raise RuntimeError("move-source parents disappeared")
+            bam_authority = await self._resolve_move_bam_authority(session, source)
+            retained_bam = await self._pin_move_bam_authority(
                 parents,
-                bam,
+                bam_authority,
                 alias="moves.bam",
                 expected_sha256=source.artifact_sha256,
                 expected_size=source.artifact_size_bytes,
             )
+            self._assert_external_move_bam_identity(retained_bam, bam_authority)
             raw_manifest_sha = (source.validation_receipt or {}).get("raw_manifest_sha256")
             self._require_hash_contract("raw manifest", raw_manifest_sha, representation.manifest_sha256)
             raw_pairs, raw_identities = await self._resolve_selected_raw_partitions_async(representation, None)
@@ -1346,7 +1563,7 @@ class OntSignalWorker:
             await session.commit()
 
     async def _process_calibration(self, item_id: str, token: str) -> None:
-        with RetainedParentSet(tuple(Path(value) for value in get_allowed_roots().values())) as parents:
+        with RetainedParentSet(self._governed_parent_roots()) as parents:
             await self._process_calibration_retained(item_id, token, parents)
 
     async def _process_calibration_retained(
@@ -1360,20 +1577,19 @@ class OntSignalWorker:
             representation = await session.get(OntRawSignalRepresentation, job.raw_representation_id)
             if source is None or representation is None or source.validation_state != "ready" or representation.state != "ready":
                 raise RuntimeError("calibration parents are not ready")
-            tracked = await session.get(InputFile, source.input_file_id)
-            if tracked is None: raise RuntimeError("original move BAM authority disappeared")
-            original_bam = Path(tracked.directory) / tracked.filename
+            original_bam_authority = await self._resolve_move_bam_authority(session, source)
             outputs = source.validation_receipt.get("managed_outputs", {}) if isinstance(source.validation_receipt, dict) else {}
             filtered_bam = Path(str(outputs.get("filtered_move_bam", "")))
             inventory = Path(str(outputs.get("read_inventory", "")))
             managed_hashes = source.validation_receipt.get("managed_output_sha256s", {})
-            retained_original = await self._pin_parent_async(
+            retained_original = await self._pin_move_bam_authority(
                 parents,
-                original_bam,
+                original_bam_authority,
                 alias="original_moves.bam",
                 expected_sha256=source.artifact_sha256,
                 expected_size=source.artifact_size_bytes,
             )
+            self._assert_external_move_bam_identity(retained_original, original_bam_authority)
             retained_filtered = await self._pin_parent_async(
                 parents,
                 filtered_bam,
@@ -1478,7 +1694,7 @@ class OntSignalWorker:
         return {key: str(value) for key, value in values.items()}
 
     async def _process_mapping(self, item_id: str, token: str) -> None:
-        with RetainedParentSet(tuple(Path(value) for value in get_allowed_roots().values())) as parents:
+        with RetainedParentSet(self._governed_parent_roots()) as parents:
             await self._process_mapping_retained(item_id, token, parents)
 
     async def _process_mapping_retained(
@@ -1492,19 +1708,18 @@ class OntSignalWorker:
             profile = await session.get(OntSignalMappingProfile, job.mapping_profile_id)
             representation = await session.get(OntRawSignalRepresentation, job.raw_representation_id)
             if source is None or profile is None or representation is None or source.validation_state != "ready": raise RuntimeError("mapping parents are not ready")
-            tracked = await session.get(InputFile, source.input_file_id)
-            if tracked is None: raise RuntimeError("original move BAM authority disappeared")
-            original_bam = Path(tracked.directory) / tracked.filename
+            original_bam_authority = await self._resolve_move_bam_authority(session, source)
             outputs = source.validation_receipt.get("managed_outputs", {})
             filtered_bam = Path(str(outputs.get("filtered_move_bam", ""))); inventory = Path(str(outputs.get("read_inventory", "")))
             managed_hashes = source.validation_receipt.get("managed_output_sha256s", {})
-            retained_original = await self._pin_parent_async(
+            retained_original = await self._pin_move_bam_authority(
                 parents,
-                original_bam,
+                original_bam_authority,
                 alias="original_moves.bam",
                 expected_sha256=source.artifact_sha256,
                 expected_size=source.artifact_size_bytes,
             )
+            self._assert_external_move_bam_identity(retained_original, original_bam_authority)
             retained_filtered = await self._pin_parent_async(
                 parents,
                 filtered_bam,
