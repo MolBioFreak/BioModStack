@@ -79,6 +79,9 @@ export interface SelectedFramework {
     sequence?: string;
     filePath?: string;
     cdrH3Length?: number;
+    // Chain info for frameworks with antigens (from SAbDab)
+    hChain?: string;      // Antibody heavy chain ID
+    antigenChain?: string;  // Antigen chain ID (set if user chose to include)
 }
 
 interface FrameworkBrowserProps {
@@ -122,6 +125,11 @@ export function FrameworkBrowser({
     const pageSize = 50;
 
     const [downloadingPdb, setDownloadingPdb] = useState<string | null>(null);
+    // Chain selector state for frameworks with antigens
+    const [pendingDownload, setPendingDownload] = useState<{
+        data: any;
+        cdrH3Length?: number | null;
+    } | null>(null);
 
     const queryClient = useQueryClient();
 
@@ -201,20 +209,47 @@ export function FrameworkBrowser({
         },
         onSuccess: (data) => {
             queryClient.invalidateQueries({ queryKey: ['cached-frameworks'] });
-            onSelect({
-                type: 'sabdab',
-                id: data.pdb_code,
-                name: `SAbDab: ${data.pdb_code}`,
-                pdbCode: data.pdb_code,
-                filePath: data.file_path || undefined,
-                cdrH3Length: data.cdrH3Length ?? undefined
-            });
             setDownloadingPdb(null);
+
+            // If framework has antigen chain, show chain selector
+            if (data.antigen_chain) {
+                setPendingDownload({ data, cdrH3Length: data.cdrH3Length });
+            } else {
+                // No antigen - select directly
+                onSelect({
+                    type: 'sabdab',
+                    id: data.pdb_code,
+                    name: `SAbDab: ${data.pdb_code}`,
+                    pdbCode: data.pdb_code,
+                    filePath: data.file_path || undefined,
+                    cdrH3Length: data.cdrH3Length ?? undefined
+                });
+            }
         },
         onError: () => {
             setDownloadingPdb(null);
         }
     });
+
+    // Confirm chain selection for frameworks with antigens
+    const handleConfirmChainSelection = useCallback((useFullComplex: boolean) => {
+        if (!pendingDownload) return;
+        const { data, cdrH3Length } = pendingDownload;
+
+        onSelect({
+            type: 'sabdab',
+            id: data.pdb_code,
+            name: `SAbDab: ${data.pdb_code}`,
+            pdbCode: data.pdb_code,
+            filePath: data.file_path || undefined,
+            cdrH3Length: cdrH3Length ?? undefined,
+            // Pass chain info for downstream processing
+            hChain: data.h_chain,
+            antigenChain: useFullComplex ? data.antigen_chain : undefined
+        });
+
+        setPendingDownload(null);
+    }, [pendingDownload, onSelect]);
 
     const handlePresetSelect = useCallback((preset: typeof FRAMEWORK_PRESETS[0]) => {
         onSelect({
@@ -610,6 +645,65 @@ export function FrameworkBrowser({
                     </div>
                 )}
             </div>
+
+            {/* Chain Selector Dialog for frameworks with antigens */}
+            {pendingDownload && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-slate-800 border border-slate-600 rounded-xl p-5 max-w-md shadow-2xl">
+                        <h3 className="text-lg font-semibold text-white mb-2">
+                            Framework Contains Antigen
+                        </h3>
+                        <p className="text-sm text-slate-400 mb-4">
+                            <span className="font-mono text-purple-400">{pendingDownload.data.pdb_code}</span>
+                            {' '}contains both antibody and antigen chains.
+                        </p>
+
+                        <div className="bg-slate-900/50 rounded-lg p-3 mb-4 space-y-1 text-sm">
+                            <div className="flex justify-between">
+                                <span className="text-slate-500">Antibody Chain:</span>
+                                <span className="font-mono text-emerald-400">
+                                    {pendingDownload.data.h_chain || '?'}
+                                </span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-slate-500">Antigen Chain(s):</span>
+                                <span className="font-mono text-amber-400">
+                                    {pendingDownload.data.antigen_chain || '?'}
+                                </span>
+                            </div>
+                            {pendingDownload.data.antigen_name && (
+                                <div className="flex justify-between">
+                                    <span className="text-slate-500">Antigen:</span>
+                                    <span className="text-slate-300 truncate max-w-48">
+                                        {pendingDownload.data.antigen_name}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => handleConfirmChainSelection(false)}
+                                className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium"
+                            >
+                                Antibody Only
+                            </button>
+                            <button
+                                onClick={() => handleConfirmChainSelection(true)}
+                                className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm font-medium"
+                            >
+                                Include Antigen
+                            </button>
+                        </div>
+                        <button
+                            onClick={() => setPendingDownload(null)}
+                            className="w-full mt-2 px-4 py-1.5 text-slate-400 hover:text-slate-200 text-sm"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
