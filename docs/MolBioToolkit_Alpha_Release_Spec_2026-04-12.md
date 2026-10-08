@@ -690,7 +690,7 @@ This is not a single ticket. It is a structured verification and fix pass.
 - GenBank import correctness
 - FASTA import correctness
 - SnapGene import correctness
-- demo construct sequence realism and restriction-site artifact audit
+- demo construct sequence realism, repeated-region/low-complexity artifact detection, and restriction-site artifact audit
 - RNA type preservation
 - circularity preservation
 - feature and primer round-tripping

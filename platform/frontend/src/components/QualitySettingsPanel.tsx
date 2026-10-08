@@ -1663,13 +1663,14 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                             onChange={(e) => updateSetting('protenix_model_weights', e.target.value)}
                                             className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
                                         >
-                                            <option value="protenix_base_20250630_v1.0.0">Base 2025-06-30 v1.0.0</option>
+                                            <option value="protenix_base_20250630_v1.0.0">Base 2025-06-30 v1.0.0 (Default)</option>
+                                            <option value="protenix-v2">Protenix v2 (Local weights required)</option>
                                             <option value="protenix_base_default_v1.0.0">Base Default v1.0.0</option>
                                             <option value="protenix_mini_esm_v0.5.0">Mini ESM v0.5.0</option>
                                             <option value="protenix_mini_default_v0.5.0">Mini Default v0.5.0</option>
                                         </select>
                                         <p className="mt-1 text-[10px] text-slate-600">
-                                            Base + MSA is the highest-fidelity option. Mini ESM is the lighter fallback for faster smoke tests and memory pressure.
+                                            The stable default remains the 2025-06-30 v1 checkpoint. Protenix v2 stays selectable when its local checkpoint has been staged.
                                         </p>
                                     </div>
 
