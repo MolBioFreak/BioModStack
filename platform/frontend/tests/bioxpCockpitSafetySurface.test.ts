@@ -31,6 +31,18 @@ test('motion power actions are gated behind the commissioning toggle', () => {
     assert.match(motionPowerPanel, /Actuating power, interlock, lock-clear, and reset buttons are hidden/);
 });
 
+test('manual movement tab exposes API movement buttons outside legacy motor connection controls', () => {
+    const manualTab = sourceBetween("{activeTab === 'manual'", "{activeTab === 'controls'");
+
+    assert.match(manualTab, /API Manual Movement/);
+    assert.match(manualTab, /new BMS → robot-local BioXP API proxy/);
+    assert.match(manualTab, /<AxisControls axis="x" label="Gantry X"/);
+    assert.match(manualTab, /<AxisControls axis="y" label="Gantry Y"/);
+    assert.match(manualTab, /<AxisControls axis="z" label="Pipette Z"/);
+    assert.match(manualTab, /<AxisControls axis="g" label="Gripper"/);
+    assert.doesNotMatch(manualTab, /Reconnect USB Runtime/);
+});
+
 test('camera overlaid jog controls are commissioning-only', () => {
     const cameraMotionPanel = sourceBetween('const cameraMotionPanel = (', 'const motionPowerPanel = (');
 
@@ -48,6 +60,7 @@ test('default operator controls preserve readback and thermal surfaces while dir
     assert.match(controlsTab, /Thermal Cycler/);
     assert.match(controlsTab, /Chiller System/);
     assert.match(controlsTab, /Commissioning Tools/);
+    assert.match(cockpitSource, /Manual Movement/);
     assert.match(liquidPanel, /showCommissioningControls && \(/);
     assert.match(liquidPanel, />\s*Aspirate\s*</);
     assert.match(liquidPanel, />\s*Dispense\s*</);
