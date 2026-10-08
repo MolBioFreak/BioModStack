@@ -16,6 +16,7 @@ import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
+import { getDedicatedTemplateInitialValues, isDedicatedLauncherTemplate } from './jobSubmissionTemplateState.js';
 import { isAntibodyPipelineMode } from '../lib/antibodyModes';
 
 interface FileBrowserProps {
@@ -299,6 +300,23 @@ export function JobSubmission() {
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [clonedValues, setClonedValues] = useState<Record<string, any> | undefined>(undefined);
+    const [dedicatedTemplateVersion, setDedicatedTemplateVersion] = useState(0);
+    const [templateManagerContext, setTemplateManagerContext] = useState<{
+        currentParams?: Record<string, any>;
+        currentModelId?: string;
+        currentMode?: string;
+        baseTemplateId?: string;
+    }>({});
+
+    const openTemplateManager = (context: {
+        currentParams?: Record<string, any>;
+        currentModelId?: string;
+        currentMode?: string;
+        baseTemplateId?: string;
+    }) => {
+        setTemplateManagerContext(context);
+        setShowTemplateManager(true);
+    };
 
     // Dedicated templates should not retain stale clone params once user navigates away.
     const handleDedicatedTemplateBack = () => {
@@ -307,7 +325,10 @@ export function JobSubmission() {
     };
 
     const handleTemplateCardSelect = (templateId: string) => {
-        setClonedValues(undefined);
+        setClonedValues(getDedicatedTemplateInitialValues(templateId));
+        if (isDedicatedLauncherTemplate(templateId)) {
+            setDedicatedTemplateVersion((prev) => prev + 1);
+        }
         setSelectedTemplateId(templateId);
     };
 
@@ -372,8 +393,7 @@ export function JobSubmission() {
         queryFn: () => fetchTemplates(),
     });
 
-    // Hardcoded templates that use dedicated components instead of API-driven config
-    const hardcodedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft', 'oligo_design', 'protein_local_redesign'];
+    // Dedicated launcher templates that use specialized components instead of API-driven config
     const dedicatedTemplateByModelId: Record<string, string> = {
         template_antibody_denovo: 'antibody_denovo',
         boltzgen: 'boltzgen_design',
@@ -471,14 +491,25 @@ export function JobSubmission() {
 
     const routeUserTemplate = (template: any) => {
         const dedicatedTemplateId =
-            (template.base_template_id && hardcodedTemplates.includes(template.base_template_id) && template.base_template_id) ||
+            (isDedicatedLauncherTemplate(template.base_template_id) && template.base_template_id) ||
             (template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
 
         if (dedicatedTemplateId) {
+            const loadedJobName = template.params?.job_name || template.params?.name || template.name || '';
+            const templateModelId = template.model_id || template.params?.template_model_id;
             setWizardMode(dedicatedTemplateId === 'boltz_cp_experimental' ? 'experimental' : 'templates');
             setSelectedTemplateId(dedicatedTemplateId);
-            setClonedValues({ ...template.params, name: template.name, template_model_id: template.model_id || template.params?.template_model_id });
-            setJobName(template.params?.job_name || template.name || '');
+            setDedicatedTemplateVersion((prev) => prev + 1);
+            setClonedValues({
+                ...template.params,
+                name: loadedJobName,
+                job_name: loadedJobName,
+                template_model_id: templateModelId,
+                structure_launch_variant: dedicatedTemplateId === 'boltz_cp_experimental'
+                    ? (template.params?.structure_launch_variant || 'boltz_cp_experimental')
+                    : template.params?.structure_launch_variant,
+            });
+            setJobName(loadedJobName);
             setSelectedModelId(null);
             setSelectedModeId(null);
             setParams({});
@@ -498,7 +529,7 @@ export function JobSubmission() {
         queryKey: ['template', selectedTemplateId],
         queryFn: () => selectedTemplateId ? fetchTemplateById(selectedTemplateId) : null,
         // Skip fetch for hardcoded templates - they don't exist in the API
-        enabled: !!selectedTemplateId && !hardcodedTemplates.includes(selectedTemplateId),
+        enabled: !!selectedTemplateId && !isDedicatedLauncherTemplate(selectedTemplateId),
     });
     const templateDetail = selectedTemplateData?.data?.data ?? selectedTemplateData?.data;
 
@@ -552,7 +583,7 @@ export function JobSubmission() {
     }, [templateDetail]);
 
     useEffect(() => {
-        if (!selectedTemplateId || hardcodedTemplates.includes(selectedTemplateId)) {
+        if (!selectedTemplateId || isDedicatedLauncherTemplate(selectedTemplateId)) {
             return;
         }
         const matchedTemplate = visibleApiTemplates.find((template: any) => template.id === selectedTemplateId);
@@ -961,9 +992,15 @@ export function JobSubmission() {
                                 />
                             ) : selectedTemplateId === 'structure_prediction' || selectedTemplateId === 'boltz_cp_experimental' ? (
                                 <StructurePredictionTemplate
+                                    key={`${selectedTemplateId}:${dedicatedTemplateVersion}`}
                                     onBack={handleDedicatedTemplateBack}
+                                    onOpenTemplateManager={openTemplateManager}
                                     initialValues={selectedTemplateId === 'boltz_cp_experimental'
-                                        ? { ...(templateDetail?.preset_params || {}), ...(clonedValues || {}) }
+                                        ? {
+                                            ...(getDedicatedTemplateInitialValues('boltz_cp_experimental') || {}),
+                                            ...(templateDetail?.preset_params || {}),
+                                            ...(clonedValues || {}),
+                                        }
                                         : clonedValues}
                                 />
                             ) : selectedTemplateId === 'boltzgen_design' ? (
@@ -1053,7 +1090,7 @@ export function JobSubmission() {
                 </section>
 
                 {/* 3. Template Configuration - Only show if template selected and NOT a dedicated template */}
-                {selectedTemplateId && selectedTemplateId !== 'mutagenesis' && selectedTemplateId !== 'antibody_denovo' && selectedTemplateId !== 'structure_prediction' && templateDetail && (
+                {selectedTemplateId && !isDedicatedLauncherTemplate(selectedTemplateId) && templateDetail && (
                     <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
                         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6">
                             <h2 className="text-lg font-semibold text-slate-200 mb-4 flex items-center gap-2">
@@ -1330,12 +1367,17 @@ export function JobSubmission() {
                 )}
 
                 {/* Submit Button - Hide if Mutagenesis, Antibody De Novo, or Structure Prediction Template is active (they have their own) */}
-                {selectedTemplateId !== 'mutagenesis' && selectedTemplateId !== 'antibody_denovo' && selectedTemplateId !== 'structure_prediction' && (
+                {!isDedicatedLauncherTemplate(selectedTemplateId) && (
                     <div className="flex justify-end gap-3 pt-4 pb-12">
                         {/* Save as Template Button */}
                         {(isTemplateMode || (wizardMode === 'manual' && selectedModelId)) && (
                             <button
-                                onClick={() => setShowTemplateManager(true)}
+                                onClick={() => openTemplateManager({
+                                    currentParams: params,
+                                    currentModelId: selectedModelId || undefined,
+                                    currentMode: selectedModeId || undefined,
+                                    baseTemplateId: selectedTemplateId || undefined,
+                                })}
                                 className="inline-flex min-w-[12rem] items-center justify-center rounded-xl border border-slate-600 bg-slate-900/60 px-6 py-3.5 text-sm font-semibold text-slate-100 transition-all hover:bg-slate-800"
                             >
                                 Template Manager
@@ -1396,12 +1438,15 @@ export function JobSubmission() {
             {/* Template Manager Modal */}
             <TemplateManagerModal
                 isOpen={showTemplateManager}
-                onClose={() => setShowTemplateManager(false)}
+                onClose={() => {
+                    setShowTemplateManager(false);
+                    setTemplateManagerContext({});
+                }}
                 onSelect={routeUserTemplate}
-                currentParams={params}
-                currentModelId={selectedModelId || undefined}
-                currentMode={selectedModeId || undefined}
-                baseTemplateId={selectedTemplateId || undefined}
+                currentParams={templateManagerContext.currentParams}
+                currentModelId={templateManagerContext.currentModelId}
+                currentMode={templateManagerContext.currentMode}
+                baseTemplateId={templateManagerContext.baseTemplateId}
             />
         </div>
     );

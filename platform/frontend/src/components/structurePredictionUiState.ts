@@ -83,8 +83,10 @@ export interface BoltzCpSubmitParamsInput {
 
 const COMPLEX_RF3_DISABLED_REASON = 'RF3 is predict-only and cannot be launched in complex mode.';
 const TARGET_PREVIEW_HIGHLIGHT = { r: 59, g: 130, b: 246 };
+type StructureInitialValues = Record<string, unknown>;
+type BoltzCpSubmitParams = Record<string, string | number | boolean>;
 
-const toStructureLaunchVariant = (initialValues?: Record<string, any> | null): StructureLaunchVariant => {
+const toStructureLaunchVariant = (initialValues?: StructureInitialValues | null): StructureLaunchVariant => {
     const normalized = String(
         initialValues?.structure_launch_variant
         || initialValues?.template_model_id
@@ -94,7 +96,7 @@ const toStructureLaunchVariant = (initialValues?: Record<string, any> | null): S
     return normalized === 'boltz_cp_experimental' ? 'boltz_cp_experimental' : 'default';
 };
 
-const parseBoltzCpGpuIds = (value: unknown): number[] => {
+export const parseBoltzCpGpuIds = (value: unknown): number[] => {
     const rawValues = Array.isArray(value)
         ? value
         : String(value || '')
@@ -137,7 +139,7 @@ const getLargestSquareDivisor = (gpuCount: number, requestedSizeCp?: number | nu
     return best;
 };
 
-export const resolveStructureLaunchConfig = (initialValues?: Record<string, any> | null): StructureLaunchConfig => {
+export const resolveStructureLaunchConfig = (initialValues?: StructureInitialValues | null): StructureLaunchConfig => {
     const variant = toStructureLaunchVariant(initialValues);
     if (variant === 'boltz_cp_experimental') {
         return {
@@ -147,7 +149,7 @@ export const resolveStructureLaunchConfig = (initialValues?: Record<string, any>
             allowPredictorSelection: false,
             showParallelJobs: false,
             showSequenceBatch: false,
-            showMsaControls: false,
+            showMsaControls: true,
             forcedPredictor: 'boltz',
         };
     }
@@ -207,8 +209,8 @@ export const buildBoltzCpSubmitParams = ({
     seed,
     gpuIds,
     sizeCp,
-}: BoltzCpSubmitParamsInput): Record<string, any> => {
-    const params: Record<string, any> = {
+}: BoltzCpSubmitParamsInput): BoltzCpSubmitParams => {
+    const params: BoltzCpSubmitParams = {
         structure_launch_variant: 'boltz_cp_experimental',
         num_parallel_jobs: 1,
         bcp_input_format: 'config_files',

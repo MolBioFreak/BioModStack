@@ -1,7 +1,10 @@
 import type { Job } from '../../lib/api.js';
 import {
+    buildBoltzCpSubmitParams,
+    deriveBoltzCpGpuLaunchSettings,
     getBoltzQualityPresetValues,
     getPredictorFamiliesForSelection,
+    parseBoltzCpGpuIds,
     type StructurePredictionMode,
     type StructurePredictorFamily,
 } from '../structurePredictionUiState.js';
@@ -9,6 +12,7 @@ import {
 export type StructurePredictor = StructurePredictorFamily;
 export type StructureMsaProvider = 'local' | 'colabfold_api';
 export type StructureMsaPreset = 'maximum' | 'balanced' | 'fast';
+export type StructureBoltzCpOutputFormat = 'mmcif' | 'pdb';
 
 type StructureRetryJob = Pick<Job, 'model_id' | 'mode' | 'params'>;
 
@@ -25,6 +29,15 @@ export interface StructureReorchestrateSettings {
         numSamples: number;
         maxParallelSamples: number;
         usePotentials: boolean;
+    };
+    boltzCp: {
+        enabled: boolean;
+        pinnedGpus: number[];
+        lockGpus: boolean;
+        requestedSizeCp: number;
+        outputFormat: StructureBoltzCpOutputFormat;
+        writeFullPae: boolean;
+        seed: string;
     };
     rf3: {
         useMsa: boolean;
@@ -54,6 +67,15 @@ const DEFAULTS: StructureReorchestrateSettings = {
         numSamples: 1,
         maxParallelSamples: 1,
         usePotentials: false,
+    },
+    boltzCp: {
+        enabled: false,
+        pinnedGpus: [],
+        lockGpus: false,
+        requestedSizeCp: 4,
+        outputFormat: 'mmcif',
+        writeFullPae: false,
+        seed: '',
     },
     rf3: {
         useMsa: true,
@@ -97,6 +119,16 @@ const normalizeMsaPreset = (value: unknown): StructureMsaPreset => {
     return 'fast';
 };
 
+const normalizeBoltzCpOutputFormat = (value: unknown): StructureBoltzCpOutputFormat => (
+    String(value || '').trim().toLowerCase() === 'pdb' ? 'pdb' : 'mmcif'
+);
+
+const normalizeBoltzCpSeed = (value: unknown): string => {
+    if (value === null || value === undefined) return '';
+    const normalized = String(value).trim();
+    return normalized;
+};
+
 const normalizeProtenixModel = (model?: string): string => {
     if (!model) return DEFAULTS.protenix.modelWeights;
     if (model === 'protenix_base_20241211_v0.2.1') return 'protenix_base_default_v1.0.0';
@@ -104,7 +136,7 @@ const normalizeProtenixModel = (model?: string): string => {
     return model;
 };
 
-const hasPredictorHints = (params: Record<string, any>, predictor: StructurePredictor): boolean => {
+const hasPredictorHints = (params: Record<string, unknown>, predictor: StructurePredictor): boolean => {
     if (predictor === 'boltz') {
         return [
             'boltz_use_msa',
@@ -126,6 +158,30 @@ const hasPredictorHints = (params: Record<string, any>, predictor: StructurePred
         'protenix_n_step',
         'protenix_n_cycle',
     ].some((key) => key in params);
+};
+
+const isBoltzCpLaunch = (job: StructureRetryJob): boolean => {
+    const params = job.params || {};
+    const modelId = String(job.model_id || '').trim().toLowerCase();
+    const launchVariant = String(params.structure_launch_variant || '').trim().toLowerCase();
+    return modelId === 'boltz_cp_experimental' || launchVariant === 'boltz_cp_experimental';
+};
+
+const resolveBoltzCpAutoFallbackGpuIds = (job: StructureRetryJob): string => {
+    const params = job.params || {};
+    const explicitPinned = parseBoltzCpGpuIds(params.pinned_gpus);
+    if (explicitPinned.length > 0) {
+        return '0,1,2,3';
+    }
+    const rawFallback = String(params.gpu_ids ?? params.bcp_gpu_ids ?? '0,1,2,3').trim();
+    return rawFallback || '0,1,2,3';
+};
+
+const sameValue = (left: unknown, right: unknown): boolean => {
+    if (Array.isArray(left) && Array.isArray(right)) {
+        return left.length === right.length && left.every((value, index) => value === right[index]);
+    }
+    return left === right;
 };
 
 const resolvePredictors = (job: StructureRetryJob): StructurePredictor[] => {
@@ -166,6 +222,8 @@ export const isStructureReorchestrateJob = (job: StructureRetryJob): boolean => 
 export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): StructureReorchestrateSettings => {
     const params = job.params || {};
     const predictors = resolvePredictors(job);
+    const boltzCpEnabled = isBoltzCpLaunch(job);
+    const boltzCpPinnedGpus = boltzCpEnabled ? parseBoltzCpGpuIds(params.pinned_gpus) : [];
 
     const settings: StructureReorchestrateSettings = {
         predictors: predictors.length > 0 ? predictors : DEFAULTS.predictors,
@@ -180,6 +238,15 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
             numSamples: toInteger(params.boltz_num_samples, DEFAULTS.boltz.numSamples),
             maxParallelSamples: toInteger(params.boltz_max_parallel_samples, DEFAULTS.boltz.maxParallelSamples),
             usePotentials: toBoolean(params.boltz_use_potentials, DEFAULTS.boltz.usePotentials),
+        },
+        boltzCp: {
+            enabled: boltzCpEnabled,
+            pinnedGpus: boltzCpPinnedGpus,
+            lockGpus: boltzCpPinnedGpus.length > 0 && toBoolean(params.lock_gpus, DEFAULTS.boltzCp.lockGpus),
+            requestedSizeCp: toInteger(params.bcp_size_cp ?? params.size_cp, DEFAULTS.boltzCp.requestedSizeCp),
+            outputFormat: normalizeBoltzCpOutputFormat(params.bcp_output_format ?? params.output_format),
+            writeFullPae: toBoolean(params.bcp_write_full_pae ?? params.write_full_pae, DEFAULTS.boltzCp.writeFullPae),
+            seed: normalizeBoltzCpSeed(params.bcp_seed ?? params.seed),
         },
         rf3: {
             useMsa: toBoolean(params.rf3_use_msa, DEFAULTS.rf3.useMsa),
@@ -214,7 +281,7 @@ export const buildStructureReorchestrateOverrides = (
     const overrides: Record<string, unknown> = {};
 
     const maybeSet = (key: string, value: unknown, prior: unknown) => {
-        if (value !== prior) {
+        if (!sameValue(value, prior)) {
             overrides[key] = value;
         }
     };
@@ -230,6 +297,50 @@ export const buildStructureReorchestrateOverrides = (
         maybeSet('boltz_num_samples', next.boltz.numSamples, previous.boltz.numSamples);
         maybeSet('boltz_max_parallel_samples', next.boltz.maxParallelSamples, previous.boltz.maxParallelSamples);
         maybeSet('boltz_use_potentials', next.boltz.usePotentials, previous.boltz.usePotentials);
+    }
+
+    if (next.boltzCp.enabled) {
+        const fallbackGpuIds = resolveBoltzCpAutoFallbackGpuIds(job);
+        const previousLaunch = deriveBoltzCpGpuLaunchSettings({
+            pinnedGpus: previous.boltzCp.pinnedGpus,
+            requestedSizeCp: previous.boltzCp.requestedSizeCp,
+            fallbackGpuIds,
+        });
+        const nextLaunch = deriveBoltzCpGpuLaunchSettings({
+            pinnedGpus: next.boltzCp.pinnedGpus,
+            requestedSizeCp: next.boltzCp.requestedSizeCp,
+            fallbackGpuIds,
+        });
+        const previousParams = buildBoltzCpSubmitParams({
+            outputFormat: previous.boltzCp.outputFormat,
+            writeFullPae: previous.boltzCp.writeFullPae,
+            seed: previous.boltzCp.seed,
+            gpuIds: previousLaunch.gpuIds,
+            sizeCp: previousLaunch.sizeCp,
+        });
+        const nextParams = buildBoltzCpSubmitParams({
+            outputFormat: next.boltzCp.outputFormat,
+            writeFullPae: next.boltzCp.writeFullPae,
+            seed: next.boltzCp.seed,
+            gpuIds: nextLaunch.gpuIds,
+            sizeCp: nextLaunch.sizeCp,
+        });
+
+        maybeSet(
+            'pinned_gpus',
+            next.boltzCp.pinnedGpus.length > 0 ? next.boltzCp.pinnedGpus : null,
+            previous.boltzCp.pinnedGpus.length > 0 ? previous.boltzCp.pinnedGpus : null,
+        );
+        maybeSet(
+            'lock_gpus',
+            next.boltzCp.pinnedGpus.length > 0 ? next.boltzCp.lockGpus : false,
+            previous.boltzCp.pinnedGpus.length > 0 ? previous.boltzCp.lockGpus : false,
+        );
+        maybeSet('bcp_gpu_ids', nextParams.bcp_gpu_ids ?? null, previousParams.bcp_gpu_ids ?? null);
+        maybeSet('bcp_size_cp', nextParams.bcp_size_cp, previousParams.bcp_size_cp);
+        maybeSet('bcp_output_format', nextParams.bcp_output_format, previousParams.bcp_output_format);
+        maybeSet('bcp_write_full_pae', nextParams.bcp_write_full_pae, previousParams.bcp_write_full_pae);
+        maybeSet('bcp_seed', nextParams.bcp_seed ?? null, previousParams.bcp_seed ?? null);
     }
 
     if (next.predictors.includes('rf3')) {

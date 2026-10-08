@@ -130,3 +130,98 @@ test('uses the 200-step Boltz default when retry metadata omitted sampling steps
     assert.equal(settings.boltz.samplingSteps, 200);
     assert.equal(settings.boltz.recyclingSteps, 3);
 });
+
+test('derives Boltz-CP re-orchestrate settings from a prior CP launch', () => {
+    const job = {
+        model_id: 'boltz_cp_experimental',
+        mode: 'design',
+        params: {
+            structure_launch_variant: 'boltz_cp_experimental',
+            pinned_gpus: [2, 3],
+            lock_gpus: true,
+            bcp_size_cp: 1,
+            bcp_output_format: 'pdb',
+            bcp_write_full_pae: true,
+            bcp_seed: 17,
+            boltz_sampling_steps: 200,
+        },
+    };
+
+    const settings = deriveStructureReorchestrateSettings(job);
+    assert.equal(settings.boltzCp.enabled, true);
+    assert.deepEqual(settings.boltzCp.pinnedGpus, [2, 3]);
+    assert.equal(settings.boltzCp.lockGpus, true);
+    assert.equal(settings.boltzCp.requestedSizeCp, 1);
+    assert.equal(settings.boltzCp.outputFormat, 'pdb');
+    assert.equal(settings.boltzCp.writeFullPae, true);
+    assert.equal(settings.boltzCp.seed, '17');
+});
+
+test('builds Boltz-CP overrides using launcher-consistent square-divisor sizing', () => {
+    const job = {
+        model_id: 'boltz_cp_experimental',
+        mode: 'design',
+        params: {
+            structure_launch_variant: 'boltz_cp_experimental',
+            pinned_gpus: [0, 1, 2, 3],
+            lock_gpus: true,
+            bcp_gpu_ids: '0,1,2,3',
+            bcp_size_cp: 4,
+            bcp_output_format: 'mmcif',
+            bcp_write_full_pae: false,
+        },
+    };
+
+    const settings = deriveStructureReorchestrateSettings(job);
+    const overrides = buildStructureReorchestrateOverrides(job, {
+        ...settings,
+        boltzCp: {
+            ...settings.boltzCp,
+            pinnedGpus: [2, 3],
+            requestedSizeCp: 4,
+        },
+    });
+
+    assert.deepEqual(overrides.pinned_gpus, [2, 3]);
+    assert.equal(overrides.bcp_gpu_ids, '2,3');
+    assert.equal(overrides.bcp_size_cp, 1);
+});
+
+test('clears Boltz-CP pinning and seed overrides when switching back to auto GPU mode', () => {
+    const job = {
+        model_id: 'boltz_cp_experimental',
+        mode: 'design',
+        params: {
+            structure_launch_variant: 'boltz_cp_experimental',
+            pinned_gpus: [2, 3],
+            lock_gpus: true,
+            bcp_gpu_ids: '2,3',
+            bcp_size_cp: 1,
+            bcp_output_format: 'pdb',
+            bcp_write_full_pae: true,
+            bcp_seed: 17,
+        },
+    };
+
+    const settings = deriveStructureReorchestrateSettings(job);
+    const overrides = buildStructureReorchestrateOverrides(job, {
+        ...settings,
+        boltzCp: {
+            ...settings.boltzCp,
+            pinnedGpus: [],
+            lockGpus: false,
+            requestedSizeCp: 4,
+            outputFormat: 'mmcif',
+            writeFullPae: false,
+            seed: '',
+        },
+    });
+
+    assert.equal(overrides.pinned_gpus, null);
+    assert.equal(overrides.lock_gpus, false);
+    assert.equal(overrides.bcp_gpu_ids, '0,1,2,3');
+    assert.equal(overrides.bcp_size_cp, 4);
+    assert.equal(overrides.bcp_output_format, 'mmcif');
+    assert.equal(overrides.bcp_write_full_pae, false);
+    assert.equal(overrides.bcp_seed, null);
+});
