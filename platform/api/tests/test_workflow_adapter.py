@@ -56,6 +56,42 @@ def test_workflow_adapter_enabled_when_base_url_is_set(monkeypatch: pytest.Monke
     assert workflow_adapter.workflow_adapter_enabled() is True
 
 
+def test_native_nextflow_process_identity_requires_exact_roots(tmp_path: Path) -> None:
+    project_root = tmp_path / "code"
+    results_root = tmp_path / "results"
+    out_dir = results_root / "job"
+    job_id = "12345678-1234-1234-1234-123456789abc"
+    nextflow_bin = tmp_path / "nextflow"
+    argv = [
+        "/usr/bin/java", "-jar", str(nextflow_bin), "run", "workflow.nf",
+        "--out_dir", str(out_dir), "--job_id", job_id,
+    ]
+
+    assert nextflow._managed_nextflow_identity(
+        argv=argv,
+        cwd=project_root,
+        project_root=project_root,
+        results_root=results_root,
+        nextflow_bin=nextflow_bin,
+    ) == job_id
+    assert nextflow._managed_nextflow_identity(
+        argv=argv,
+        cwd=tmp_path / "other-code",
+        project_root=project_root,
+        results_root=results_root,
+        nextflow_bin=nextflow_bin,
+    ) is None
+    escaped = list(argv)
+    escaped[escaped.index(str(out_dir))] = str(tmp_path / "escaped")
+    assert nextflow._managed_nextflow_identity(
+        argv=escaped,
+        cwd=project_root,
+        project_root=project_root,
+        results_root=results_root,
+        nextflow_bin=nextflow_bin,
+    ) is None
+
+
 
 def test_workflow_launch_mode_is_adapter_in_core_runtime_when_url_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
