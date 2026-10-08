@@ -641,12 +641,15 @@ async def test_rcsb_mmcif_bridge_streams_success_into_normal_registration(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path)
+    rcsb_mmcif = MMCIF.replace(b"data_minimal", b"data_1UBQ").replace(
+        b"_entry.id minimal", b"_entry.id 1UBQ"
+    )
     captured: dict[str, object] = {}
     source = SimpleNamespace(
         source_id="cm_src_rcsb",
         source_kind="structure_upload",
         metadata_json={"name": "RCSB 1UBQ"},
-        content_sha256=hashlib.sha256(b"  \n" + MMCIF).hexdigest(),
+        content_sha256="",
         principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
     )
 
@@ -662,26 +665,39 @@ async def test_rcsb_mmcif_bridge_streams_success_into_normal_registration(
     async def fake_register_source(**kwargs):
         captured.update(kwargs)
         captured["payload"] = await kwargs["file"].read()
+        source.content_sha256 = hashlib.sha256(captured["payload"]).hexdigest()
         return {"source_id": "cm_src_rcsb", "source_kind": "structure_upload"}
 
     monkeypatch.setattr(
         cm_router,
         "_rcsb_http_client",
-        _mock_rcsb_client(lambda request: httpx.Response(200, request=request, content=b"  \n" + MMCIF)),
+        _mock_rcsb_client(lambda request: httpx.Response(200, request=request, content=b"  \n" + rcsb_mmcif)),
     )
     monkeypatch.setattr(cm_router, "register_source", fake_register_source)
     receipt = await cm_router.register_rcsb_mmcif_source("1ubq", _rcsb_request(), FakeSession())  # type: ignore[arg-type]
     assert receipt["source_id"] == "cm_src_rcsb"
-    assert captured["payload"] == b"  \n" + MMCIF
+    assert captured["payload"] != b"  \n" + rcsb_mmcif
+    parsed = cm_router.resolve_and_materialize_rcsb_selection(
+        "1UBQ", b"  \n" + rcsb_mmcif, {"accession": "1UBQ"}
+    )
+    assert captured["payload"] == parsed[2]
     assert captured["source_kind"] == "structure_upload"
     metadata = json.loads(str(captured["metadata_json"]))
-    assert metadata == {"name": "RCSB 1UBQ"}
+    assert metadata["name"] == "RCSB 1UBQ"
+    assert metadata["model_id"] == "1"
+    assert metadata["sample_id"] == "asymmetric-unit"
+    assert metadata["chain_ids"] == ["A"]
+    assert metadata["entity_ids"] == ["1"]
     authority_receipt = receipt["authority_receipt"]
     assert authority_receipt["authority_kind"] == "rcsb_download"
     assert authority_receipt["content_sha256"] == source.content_sha256
     assert authority_receipt["payload"]["provider"] == "RCSB"
     assert authority_receipt["payload"]["accession"] == "1UBQ"
     assert authority_receipt["payload"]["retrieved_at"].endswith("+00:00")
+    assert authority_receipt["payload"]["source_sha256"] == source.content_sha256
+    assert authority_receipt["payload"]["download_sha256"] == hashlib.sha256(
+        b"  \n" + rcsb_mmcif
+    ).hexdigest()
     assert cm_router._read_source_authority(source) == authority_receipt  # type: ignore[arg-type]
 
 

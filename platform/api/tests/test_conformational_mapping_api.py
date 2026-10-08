@@ -329,7 +329,20 @@ def test_cm_run_record_trusts_only_content_bound_provider_receipts(
     receipt = cm_router._publish_source_authority(
         source,  # type: ignore[arg-type]
         authority_kind="rcsb_download",
-        payload={"provider": "RCSB", "accession": "1UBQ"},
+        payload={
+            "provider": "RCSB",
+            "accession": "1UBQ",
+            "selection": {
+                "accession": "1UBQ",
+                "model_id": "1",
+                "sample_id": "asymmetric-unit",
+                "chain_ids": ["A"],
+                "entity_ids": ["1"],
+            },
+            "source_sha256": "a" * 64,
+            "download_sha256": "b" * 64,
+            "materialization": "selected_asymmetric_unit_context_v1",
+        },
     )
     selected = cm_router._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
     assert selected["provider"] == "RCSB"
