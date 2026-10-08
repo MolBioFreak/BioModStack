@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
 import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
@@ -8,6 +9,7 @@ import { useThemeColors } from './useThemeColors';
 import {
     buildFileDownloadUrl,
     buildFileStreamUrl,
+    fetchViewerVolumes,
     type ChainMetric,
     type ChainPairIptmData,
     type ContactMapData,
@@ -29,6 +31,7 @@ import { buildMetricLayerFromExplicitMaps } from '../lib/molstar-metrics';
 import type { MolstarResidueMetricLayer } from '../lib/molstar-metrics';
 import type { MetricLayer } from '../structureViewer/metrics/metricContracts.js';
 import type { DerivedStructureComponent } from '../structureViewer/contracts/complexAnalysis.js';
+import { resolveGovernedStructureWorkbenchContext } from '../structureViewer/contracts/governedStructureWorkbenchContext.js';
 import {
     buildConforNetsConformerNavigation,
     buildConforNetsConformerSet,
@@ -362,6 +365,26 @@ export default function StructureViewerPane({
         viewportHeight,
     }), [viewportWidth, viewportHeight]);
     const designOrigin = getDesignOriginLabel(selectedDesign);
+    const governedVolumeInventoryQuery = useQuery({
+        queryKey: ['viewer-volume-inventory', activeJob?.id],
+        queryFn: () => fetchViewerVolumes(activeJob!.id).then((response) => response.data),
+        enabled: Boolean(activeJob?.id && activeJob.status === 'completed'),
+        retry: false,
+        staleTime: 30_000,
+    });
+    const governedWorkbenchContext = useMemo(
+        () => resolveGovernedStructureWorkbenchContext({
+            activeJobId: activeJob?.id,
+            design: selectedDesign,
+            inventory: governedVolumeInventoryQuery.data,
+        }),
+        [activeJob?.id, governedVolumeInventoryQuery.data, selectedDesign],
+    );
+    const awaitingGovernedWorkbenchIdentity = Boolean(
+        activeJob?.status === 'completed'
+        && activeJob.params?.ui_contract === 'generic_structure_viewer'
+        && governedVolumeInventoryQuery.isPending,
+    );
     const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as UntypedApiValue) : null;
     const selectedDesignPpiflowRecord = asRecord(asRecord(selectedDesign?.provenance)?.ppiflow);
     const fampnnPayload = useMemo(() => getFampnnPayload(selectedDesign), [selectedDesign]);
@@ -2849,25 +2872,31 @@ export default function StructureViewerPane({
                         }
                         style={isFullscreen ? undefined : { height: viewerLayout.viewerHeight }}
                     >
-                        <StructureWorkbench
-                            mode="standard"
-                            structureUrl={viewerStructureUrl}
-                            format={viewerStructureFormat}
-                            alphafoldView={effectiveColorMode === 'plddt' && !plddtResidueColors}
-                            selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
-                            overlayStructures={conforNetsOverlayStructures}
-                            residueMetricLayer={residueMetricLayer}
-                            metricLayers={allMetricLayers}
-                            showComplexWorkbench={false}
-                            jobId={activeJob?.id}
-                            derivedComponents={derivedComponents}
-                            activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
-                            showMetricWorkbench={metricWorkbenchOpen}
-                            onMetricWorkbenchVisibilityChange={setMetricWorkbenchOpen}
-                            showSequenceTrack
-                            height="100%"
-                            backgroundColor={themeColors.bgPrimary}
-                        />
+                        {awaitingGovernedWorkbenchIdentity ? (
+                            <div className="flex h-full items-center justify-center text-sm text-slate-400">Preparing governed structure resources…</div>
+                        ) : (
+                            <StructureWorkbench
+                                mode="standard"
+                                structureUrl={viewerStructureUrl}
+                                format={viewerStructureFormat}
+                                alphafoldView={effectiveColorMode === 'plddt' && !plddtResidueColors}
+                                selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
+                                overlayStructures={conforNetsOverlayStructures}
+                                residueMetricLayer={residueMetricLayer}
+                                metricLayers={allMetricLayers}
+                                showComplexWorkbench={false}
+                                jobId={governedWorkbenchContext?.jobId ?? activeJob?.id}
+                                artifactJobId={governedWorkbenchContext?.artifactJobId ?? activeJob?.id}
+                                structureDocumentId={governedWorkbenchContext?.structureDocumentId}
+                                derivedComponents={derivedComponents}
+                                activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
+                                showMetricWorkbench={metricWorkbenchOpen}
+                                onMetricWorkbenchVisibilityChange={setMetricWorkbenchOpen}
+                                showSequenceTrack
+                                height="100%"
+                                backgroundColor={themeColors.bgPrimary}
+                            />
+                        )}
 
                         {showReferenceDock && (
                             <div
