@@ -350,6 +350,12 @@ async def finalize_successful_job(
 ) -> FinalizationResult:
     """Ingest, validate, and commit results before exposing terminal completion."""
     job_id = str(job.id)
+    remote_authority = (
+        [Job.execution_target_id == job.execution_target_id,
+         Job.remote_attempt_id == job.remote_attempt_id,
+         Job.nextflow_run_id == job.nextflow_run_id]
+        if job.execution_target_id else []
+    )
     if ingest_fn is None:
         from services.result_ingester import ingest_job_results
 
@@ -366,6 +372,7 @@ async def finalize_successful_job(
         update(Job)
         .where(
             Job.id == job_id,
+            *remote_authority,
             Job.status == "running",
             Job.queue_status == "running",
             Job.awaiting_input.is_(False),
@@ -444,6 +451,7 @@ async def finalize_successful_job(
             update(Job)
             .where(
                 Job.id == job_id,
+                *remote_authority,
                 Job.status == "running",
                 Job.queue_status == "running",
                 Job.awaiting_input.is_(False),
@@ -472,6 +480,10 @@ async def finalize_successful_job(
 
         await terminalize_failed_request_for_job(session, job_id=job_id)
         await terminalize_failed_cm_request(session, job_id=job_id)
+        if job.execution_target_id:
+            from services.remote_execution.executor import _release_remote_target_lease
+
+            await _release_remote_target_lease(session, job)
         await session.commit()
         await session.refresh(job)
         return FinalizationResult(False, count, "no_candidates" if no_candidates else "ingestion_failed")
@@ -494,6 +506,7 @@ async def finalize_successful_job(
         update(Job)
         .where(
             Job.id == job_id,
+            *remote_authority,
             Job.status == "running",
             Job.queue_status == "running",
             Job.awaiting_input.is_(False),
@@ -521,6 +534,10 @@ async def finalize_successful_job(
         if not await terminalize_completed_request_for_job(session, job_id=job_id):
             await session.rollback()
             raise RuntimeError("validated RFD3 completion has no generated native request projection")
+    if job.execution_target_id:
+        from services.remote_execution.executor import _release_remote_target_lease
+
+        await _release_remote_target_lease(session, job)
     await session.commit()
     await session.refresh(job)
     return FinalizationResult(True, count, "validated")
