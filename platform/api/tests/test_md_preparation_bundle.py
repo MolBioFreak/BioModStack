@@ -166,3 +166,13 @@ def test_position_restraints_are_bound_to_the_first_solute_molecule(tmp_path: Pa
     assert (tmp_path / "posre.itp").read_text(encoding="utf-8").count("1000.0") == 3
     rendered = topology.read_text(encoding="utf-8")
     assert rendered.index('#include "posre.itp"') < rendered.rindex("[ moleculetype ]")
+
+
+def test_preparation_validation_supplies_restraint_reference_coordinates() -> None:
+    from scripts.bms_md.chemistry.amber_prepare_worker import _grompp_validation_command
+
+    command = _grompp_validation_command(Path("/runtime/bin/gmx"))
+
+    assert command[command.index("-r") + 1] == "system.gro"
+    assert command[command.index("-c") + 1] == "system.gro"
+    assert command[command.index("-maxwarn") + 1] == "0"
