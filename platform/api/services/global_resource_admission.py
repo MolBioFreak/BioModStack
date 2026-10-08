@@ -168,6 +168,8 @@ def _recover(db, target, machine):
     # live work. Only a same-host independently acquired exclusive lock does.
     for row in db.execute("SELECT * FROM derived_resource_reservations WHERE target_id=? "
                           "AND machine_id=? AND state IN ('active','retained')", (target, machine)):
+        if row["owner"].startswith("remote-attempt:"):
+            continue
         descriptor = _owner_lock(row["reservation_id"])
         try:
             try:
@@ -533,6 +535,11 @@ def publish_execution_target_readiness(*, target_id, remote_root, readiness):
     Never infer remote capacity from the controller, provider marketing, or GPU
     telemetry. Publication does not admit work or copy the experiment database.
     """
+    capability = readiness.get("owned_boundary") if isinstance(readiness, dict) else None
+    if (not isinstance(capability, dict) or capability.get("schema") != "bms.remote-owned-capability.v1"
+            or capability.get("backend") != "systemd-delegated-cgroup-v2"
+            or capability.get("idle_reservation") is not False or capability.get("quiescence") is not True):
+        raise ResourceCapacityUnavailable("authenticated owned boundary capability is unavailable")
     value = readiness.get("resources") if isinstance(readiness, dict) else None
     keys = {"cpu_threads", "dram_bytes", "disk_bytes", "free_disk_bytes", "storage_root",
             "storage_device", "machine_id"}
@@ -546,6 +553,8 @@ def publish_execution_target_readiness(*, target_id, remote_root, readiness):
             or re.fullmatch(r"[0-9a-f]{32}", value["machine_id"]) is None
             or not isinstance(value["storage_device"], str) or not value["storage_device"].isdigit()):
         raise ResourceCapacityUnavailable("remote readiness resource identity is invalid")
+    if capability.get("machine_id") != value["machine_id"]:
+        raise ResourceCapacityUnavailable("owned boundary belongs to another machine")
     policy = {"target_id": target_id, **value}
     version = hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     configure_execution_target_policy(target_id=target_id, cpu_thread_limit=value["cpu_threads"],
@@ -585,3 +594,110 @@ def configure_execution_target_policy(*, target_id, cpu_thread_limit, dram_byte_
                    "dram_byte_limit=excluded.dram_byte_limit,disk_byte_limit=excluded.disk_byte_limit,"
                    "lock_generation=resource_admission_policy.lock_generation+1,updated_at=excluded.updated_at",
                    (policy_id, policy_version, cpu_thread_limit, dram_byte_limit, disk_byte_limit, _now()))
+
+
+def reserve_remote_attempt(*, target_id, policy, attempt_id, job_id, storage_path):
+    """Controller-side admission in the existing owner transaction.
+
+    No controller flock can release this row. Remote quiescence must be supplied
+    separately; the remote experiment database is never copied or consulted.
+    """
+    if (not isinstance(policy, dict) or policy.get("target_id") != target_id
+            or policy.get("policy_id") != "execution-target:" + target_id
+            or storage_path != policy.get("storage_root", "").rstrip("/") + "/attempts/" + attempt_id):
+        raise ResourceCapacityUnavailable("remote allocation target/path mismatch")
+    identifier = uuid.uuid4().hex
+    with _transaction() as db:
+        current = db.execute("SELECT * FROM resource_admission_policy WHERE policy_id=?",
+                             (policy["policy_id"],)).fetchone()
+        if current is None or current["policy_version"] != policy.get("policy_version"):
+            raise ResourceCapacityUnavailable("remote allocation policy version changed")
+        db.execute("UPDATE resource_admission_policy SET lock_generation=lock_generation+1,updated_at=? WHERE policy_id=?",
+                   (_now(), policy["policy_id"]))
+        used = db.execute("SELECT COALESCE(SUM(cpu_threads),0),COALESCE(SUM(dram_bytes),0),COALESCE(SUM(disk_bytes),0) "
+                          "FROM derived_resource_reservations WHERE policy_id=? AND state!='released'",
+                          (policy["policy_id"],)).fetchone()
+        # This executor owns an exclusive target execution slot. Allocate the
+        # remaining global capacity, co-accounting all existing derived owners.
+        cpu = min(current["cpu_thread_limit"], policy["cpu_threads"]) - used[0]
+        ram = min(current["dram_byte_limit"], policy["dram_bytes"]) - used[1]
+        disk = min(current["disk_byte_limit"] or policy["disk_bytes"], policy["disk_bytes"]) - used[2]
+        pending = db.execute("SELECT COALESCE(SUM(disk_bytes),0) FROM derived_resource_reservations "
+            "WHERE machine_id=? AND storage_device=? AND state='active'",
+            (policy["machine_id"], policy["storage_device"])).fetchone()[0]
+        disk = min(disk, policy["free_disk_bytes"] - pending)
+        if min(cpu, ram, disk) <= 0:
+            raise ResourceCapacityUnavailable("remote global allocation capacity unavailable")
+        receipt = {"schema": SCHEMA, "reservation_id": identifier, "target_id": target_id,
+            "machine_id": policy["machine_id"], "policy_id": policy["policy_id"],
+            "policy_version": policy["policy_version"], "policy_generation": current["lock_generation"] + 1,
+            "requested": {"cpu_threads": cpu, "dram_bytes": ram, "disk_bytes": disk},
+            "effective": {"cpu_threads": cpu, "dram_bytes": ram, "disk_bytes": disk},
+            "storage_device": policy["storage_device"], "storage_path": storage_path,
+            "owner": "remote-attempt:" + job_id + ":" + attempt_id}
+        stamp = _now()
+        db.execute("INSERT INTO derived_resource_reservations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (identifier, policy["policy_id"], policy["policy_version"], target_id, policy["machine_id"],
+             receipt["owner"], uuid.uuid4().hex, "active", cpu, ram, disk, policy["storage_device"], storage_path,
+             json.dumps(receipt, sort_keys=True, separators=(",", ":")), stamp, stamp, "remote_quiescence_required"))
+    return receipt
+
+
+def retain_remote_attempt(allocation, *, quiescence_receipt, resident_disk_bytes):
+    """Idempotent compute release, retaining measured disk even above admission.
+
+    Caller supplies authenticated, envelope-bound worker evidence. A disk
+    observation overrun is not permission to lose ownership of actual bytes.
+    """
+    validate_receipt(allocation)
+    proof = quiescence_receipt
+    if (not isinstance(proof, dict) or proof.get("allocation") != allocation
+            or proof.get("quiescent") is not True
+            or proof.get("execution", {}).get("machine_id") != allocation["machine_id"]):
+        raise ResourceCapacityUnavailable("remote quiescence authority mismatch")
+    disk = _positive(resident_disk_bytes, "resident disk", zero=True)
+    disk = max(disk, proof.get("disk", {}).get("resident_bytes", 0))
+    with _transaction() as db:
+        row = db.execute("SELECT * FROM derived_resource_reservations WHERE reservation_id=?",
+                         (allocation["reservation_id"],)).fetchone()
+        if row is None or json.loads(row["receipt_json"]) != allocation:
+            raise ResourceCapacityUnavailable("remote allocation ownership changed")
+        if row["state"] == "retained":
+            return
+        if row["state"] != "active":
+            raise ResourceCapacityUnavailable("remote allocation lifecycle mismatch")
+        if disk > row["disk_bytes"]:
+            # Existing immutable reservations only shrink. Record unavoidable
+            # observed overage as separate retained liability, NOT admission.
+            excess = disk - row["disk_bytes"]
+            overage = dict(allocation)
+            overage.update(reservation_id=uuid.uuid4().hex,
+                owner=allocation["owner"] + ":observed-overage",
+                requested={"cpu_threads": 0, "dram_bytes": 0, "disk_bytes": excess},
+                effective={"cpu_threads": 0, "dram_bytes": 0, "disk_bytes": excess})
+            stamp = _now()
+            db.execute("INSERT INTO derived_resource_reservations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (overage["reservation_id"], row["policy_id"], row["policy_version"], row["target_id"],
+                 row["machine_id"], overage["owner"], uuid.uuid4().hex, "retained", 0, 0, excess,
+                 row["storage_device"], row["storage_path"], json.dumps(overage, sort_keys=True, separators=(",", ":")),
+                 stamp, stamp, "observed_remote_disk_overage:not_admission"))
+        db.execute("UPDATE derived_resource_reservations SET state='retained',cpu_threads=0,dram_bytes=0,"
+            "disk_bytes=?,updated_at=?,release_reason=? WHERE reservation_id=?",
+            (min(disk, row["disk_bytes"]), _now(), "remote_quiescent:" + proof["receipt_sha256"], allocation["reservation_id"]))
+
+
+def abandon_unstaged_remote_attempt(allocation):
+    """Launch owner only: no remote staging/start command has been issued.
+
+    Never call on a transport exception after staging began. This operation is
+    not recovery by heartbeat/lease age and is not exposed to API callers.
+    """
+    validate_receipt(allocation)
+    with _transaction() as db:
+        row = db.execute("SELECT * FROM derived_resource_reservations WHERE reservation_id=?",
+                         (allocation["reservation_id"],)).fetchone()
+        if row is None or json.loads(row["receipt_json"]) != allocation:
+            raise ResourceCapacityUnavailable("unstaged remote allocation ownership changed")
+        db.execute("UPDATE derived_resource_reservations SET state='released',cpu_threads=0,dram_bytes=0,"
+            "disk_bytes=0,updated_at=?,release_reason=? WHERE reservation_id=? AND state='active'",
+            (_now(), "remote_launch_owner_no_staging_issued", allocation["reservation_id"]))

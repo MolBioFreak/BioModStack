@@ -74,7 +74,7 @@ class OntNgsResultError(RuntimeError):
 def _validated_resource_receipts(job: Job) -> list[dict[str, Any]]:
     params = job.params if isinstance(job.params, dict) else {}
     expected_handoff = params.get(GLOBAL_RESOURCE_ADMISSION_PARAM)
-    if not isinstance(expected_handoff, Mapping):
+    if not isinstance(expected_handoff, Mapping) and not job.remote_attempt_id:
         raise OntNgsResultError("producer resource admission handoff is unavailable")
     try:
         return [
@@ -214,6 +214,23 @@ def _execution_resources(job: Job, authority: Mapping[str, Any]) -> dict[str, An
     if len(matches) != 1:
         raise OntNgsResultError("accepted producer resource receipt is not unique")
     receipt = matches[0]
+    if receipt.get("schema") == "bms.remote-resource-usage.v1":
+        if job.assigned_gpu is not None or params.get("dorado_device") is not None:
+            raise OntNgsResultError("FASTQ-QC remote resource projection is not CPU-only")
+        # Explicit projection from the remote schema, not a forged local receipt.
+        return {
+            "evidence_status": "accepted", "receipt_schema": receipt["schema"],
+            "receipt_id": receipt["admission_id"], "receipt_sha256": digest,
+            "run_attempt_id": receipt["run_attempt_id"],
+            "execution_invocation_id": receipt["execution"]["invocation_id"],
+            "outcome": receipt["outcome"],
+            "admitted_cpu_threads": receipt["allocation"]["effective"]["cpu_threads"],
+            "observed_memory_peak_bytes": receipt["observed"]["memory_peak_bytes"],
+            "observed_pids_peak": receipt["observed"]["pids_peak"],
+            "gpu_index": None, "gpu_uuid": None, "admitted_vram_bytes": 0,
+            **common, "reason": "Accepted remote owned CPU/DRAM kernel evidence; disk is observed, not quota-enforced",
+            "scheduler_gpu_assignment": None, "configured_dorado_device_ignored": None,
+        }
     execution = receipt.get("execution")
     admission = receipt.get("admission")
     observed = receipt.get("observed")

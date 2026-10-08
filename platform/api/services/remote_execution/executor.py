@@ -310,6 +310,7 @@ def _remote_receipt(
         "execution_envelope_sha256": bundle.envelope_sha256,
         "runtime_identity_sha256": bundle.runtime_identity_sha256,
         "native_execution_authority": getattr(bundle.envelope, "native_execution_authority", None),
+        "resource_allocation": bundle.envelope.resource_allocation,
         "expected_result_contract_sha256": hashlib.sha256(
             json.dumps(
                 bundle.envelope.expected_result_contract,
@@ -331,6 +332,18 @@ def _remote_receipt(
     }
 
 
+def _remote_compute_released(job: Job) -> bool:
+    authority = (job.provenance or {}).get("remote_execution_receipt") or {}
+    if authority.get("compute_released") is not True:
+        return False
+    from services.remote_resource_evidence import validate_for_job
+    try:
+        validate_for_job(job, authority.get("resource_receipt"), require_complete=False)
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
 async def _publish_remote_transition(
     session: AsyncSession, job: Job, values: dict[str, Any], *, release_lease: bool = False,
 ) -> bool:
@@ -339,6 +352,8 @@ async def _publish_remote_transition(
         ExecutionTarget.id == job.execution_target_id,
         ExecutionTarget.leased_job_id == str(job.id),
     ).exists()]
+    if _remote_compute_released(job):
+        lease_authority = []  # Delivery CAS is attempt/provenance-owned, not a compute lease.
     with session.no_autoflush:
         result = await session.execute(
             update(Job).where(
@@ -456,6 +471,8 @@ async def _launch_remote_job_owned(
     bundle: PreparedRemoteBundle | None = None
     requested_attempt_id = str(uuid.uuid4())
     start_requested = False
+    remote_staging_started = False
+    allocation = None
     fenced = False
     try:
         target = await get_ready_target(session, str(job.execution_target_id))
@@ -465,6 +482,26 @@ async def _launch_remote_job_owned(
             prepare_remote_bundle, job=job, target=target, command=command,
             environment=environment, attempt_id=requested_attempt_id,
         )
+        from dataclasses import replace
+        from services.global_resource_admission import reserve_remote_attempt
+        from .transport import probe_readiness
+        actual = await probe_readiness(connection)
+        policy = dict((target.capabilities or {}).get("resource_policy") or {})
+        measured = actual.get("resources", {})
+        if any(measured.get(key) != policy.get(key) for key in ("machine_id", "storage_device", "storage_root")):
+            raise RemoteExecutionError("Remote admitted machine/storage identity changed; repeat readiness")
+        for key in ("cpu_threads", "dram_bytes", "free_disk_bytes"):
+            policy[key] = measured[key]
+        allocation = reserve_remote_attempt(
+            target_id=str(target.id), policy=policy, attempt_id=bundle.attempt_id,
+            job_id=str(job.id), storage_path=bundle.remote_attempt_dir)
+        if sum(record.size_bytes for record in bundle.envelope.files) > allocation["effective"]["disk_bytes"]:
+            raise RemoteExecutionError("Remote staged inputs/runtime exceed admitted disk")
+        envelope = bundle.envelope.model_copy(update={"resource_allocation": allocation})
+        payload = json.dumps(envelope.model_dump(mode="json", by_alias=True),
+            sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        (bundle.local_attempt_dir / "execution-envelope.json").write_bytes(payload)
+        bundle = replace(bundle, envelope=envelope, envelope_sha256=hashlib.sha256(payload).hexdigest())
         run_id = f"{REMOTE_RUN_PREFIX}{bundle.attempt_id}"
         provenance = dict(job.provenance or {})
         provenance["remote_execution_receipt"] = _remote_receipt(bundle, target, state="staging")
@@ -477,6 +514,7 @@ async def _launch_remote_job_owned(
             fenced = True
             raise RemoteExecutionError("Remote preparing claim was superseded")
         await asyncio.to_thread(_archive_envelope, bundle)
+        remote_staging_started = True
         await _stage_bundle(connection, bundle)
         await _stage_secret_environment(connection, bundle, secret_environment)
         await run_remote(connection, _worker_argv(connection, "prepare", bundle.remote_attempt_dir), timeout=300)
@@ -515,6 +553,9 @@ async def _launch_remote_job_owned(
             raise
         raise RemoteExecutionError(str(exc)) from exc
     finally:
+        if allocation is not None and not remote_staging_started:
+            from services.global_resource_admission import abandon_unstaged_remote_attempt
+            abandon_unstaged_remote_attempt(allocation)
         if bundle is not None:
             await asyncio.to_thread(_cleanup_local_bundle, bundle)
         else:
@@ -566,7 +607,7 @@ async def _acquire_remote_terminal_fence(session: AsyncSession, job: Job) -> boo
             Job.queue_status == "running",
             Job.execution_target_id == job.execution_target_id,
             Job.remote_state == job.remote_state,
-            select(ExecutionTarget.id).where(
+            (Job.provenance == job.provenance) if _remote_compute_released(job) else select(ExecutionTarget.id).where(
                 ExecutionTarget.id == job.execution_target_id,
                 ExecutionTarget.leased_job_id == str(job.id),
             ).exists(),
@@ -671,6 +712,23 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _validate_remote_resource_binding(job, manifest, status):
+    from services.remote_resource_evidence import validate_for_job
+    try:
+        proof = validate_for_job(job, status.resource_receipt, require_complete=False)
+    except (ValueError, TypeError) as exc:
+        raise RemoteExecutionError("Returned remote resource evidence is invalid") from exc
+    payload = json.dumps(proof, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode() + b"\n"
+    expected = hashlib.sha256(payload).hexdigest()
+    records = [a for a in manifest.artifacts if a.relative_path == "_remote/resource-usage.json"]
+    if (manifest.resource_receipt_sha256 != expected or len(records) != 1
+            or records[0].sha256 != expected or records[0].size_bytes != len(payload)):
+        raise RemoteExecutionError("Remote producer receipt bytes are not manifest-bound")
+    artifacts = {record.relative_path for record in manifest.artifacts}
+    if any(path not in artifacts for state in proof["stage_terminal_states"].values() for path in state["outputs"]):
+        raise RemoteExecutionError("Remote terminal stage references an undeclared returned artifact")
+
+
 def _validate_native_execution_binding(job: Job, manifest: RemoteResultManifest) -> None:
     if str(getattr(job, "model_id", "") or "").lower() != "nanopore":
         return
@@ -728,6 +786,7 @@ def _verify_result_package(
     if actual != declared:
         raise RemoteExecutionError("Remote result package contains undeclared or missing files")
     _validate_native_execution_binding(job, manifest)
+    _validate_remote_resource_binding(job, manifest, status)
     return manifest
 
 
@@ -771,6 +830,7 @@ async def _fetch_result_manifest(
     if len(manifest.artifacts) > MAX_RESULT_ARTIFACTS:
         raise RemoteExecutionError("Remote result manifest exceeds the artifact-count limit")
     _validate_native_execution_binding(job, manifest)
+    _validate_remote_resource_binding(job, manifest, status)
     # Parsing is bounded; disk admission belongs to the global resource owner,
     # on the receiving API target, before a single incoming file is written.
     return manifest, manifest_bytes
@@ -951,6 +1011,21 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job, *, pull_r
         return False
     if job.status in {"cancelled", "completed", "failed"}:
         return False
+    if status.state in TERMINAL_REMOTE_STATES and not _remote_compute_released(job):
+        from services.remote_resource_evidence import validate_for_job
+        from services.global_resource_admission import retain_remote_attempt
+        try:
+            proof = validate_for_job(job, status.resource_receipt, require_complete=False)
+        except (ValueError, TypeError) as exc:
+            # Lost supervisor/PID/transport is not evidence of empty descendants.
+            raise RemoteCollectionPending("Remote execution quiescence is not proven") from exc
+        await asyncio.to_thread(retain_remote_attempt, proof["allocation"], quiescence_receipt=proof,
+                                resident_disk_bytes=status.resident_disk_bytes)
+        provenance = dict(job.provenance or {})
+        receipt = dict(provenance.get("remote_execution_receipt") or {})
+        receipt.update(resource_receipt=proof, compute_released=True)
+        provenance["remote_execution_receipt"] = receipt
+        return await _publish_remote_transition(session, job, {"provenance": provenance}, release_lease=True)
     if job.queue_status == "cancelling":
         if status.state in TERMINAL_REMOTE_STATES:
             return await _finish_remote_cancellation(session, job)
@@ -1093,6 +1168,13 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job, *, pull_r
         provenance["remote_execution_receipt"] = receipt
         job.provenance = provenance
         if job.model_id == "nanopore":
+            from services.remote_resource_evidence import validate_for_job
+            from services.resource_usage_evidence import attach_resource_usage_receipt
+            producer = validate_for_job(job, status.resource_receipt)
+            job.params = attach_resource_usage_receipt(job.params, producer)
+            provenance = dict(job.provenance or {})
+            provenance["stage_terminal_states"] = producer["stage_terminal_states"]
+            job.provenance = provenance
             # Delivery is durable, not scientific acceptance. Native validation
             # may roll back staged intents without losing returned identity.
             await session.commit()

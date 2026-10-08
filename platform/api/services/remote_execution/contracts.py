@@ -134,6 +134,7 @@ class RemoteExecutionEnvelope(StrictModel):
     output_directory: str
     expected_result_contract: dict[str, Any]
     native_execution_authority: dict[str, Any] | None = None
+    resource_allocation: dict[str, Any] | None = None
     path_map: dict[str, str]
     files: list[RemoteFileRecord]
     created_at: datetime
@@ -157,6 +158,8 @@ class RemoteAttemptStatus(StrictModel):
     completed_at: datetime | None = None
     result_manifest_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
     error: str | None = Field(default=None, max_length=4000)
+    resource_receipt: dict[str, Any] | None = None
+    resident_disk_bytes: int | None = Field(default=None, ge=0, strict=True)
 
 
 class RemoteResultManifest(StrictModel):
@@ -172,6 +175,7 @@ class RemoteResultManifest(StrictModel):
     source_tree: str
     execution_envelope_sha256: str = Field(pattern=SHA256_PATTERN)
     native_execution_authority_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    resource_receipt_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
 
     @model_validator(mode="after")
     def validate_unique_artifacts(self) -> "RemoteResultManifest":

@@ -547,14 +547,16 @@ def prepare_remote_bundle(
     archive_copy = source_root / ".bms-source.tar"
     archive_path.replace(archive_copy)
 
-    remote_source = f"{remote_root}/revisions/{tree}"
+    # Scientific staging is attempt-owned, including source/runtime bytes.
+    # Existing shared generations remain untouched; no automatic cleanup.
+    remote_source = f"{remote_attempt}/source"
     command, effective_params = compile_remote_dependencies(str(job.model_id), str(job.mode), command)
     runtime_assets = _runtime_assets(str(job.model_id), str(job.mode), effective_params)
     runtime_paths = {path.resolve() for path, _ in runtime_assets}
     runtime_records: list[RemoteFileRecord] = []
     runtime_transfers: list[TransferPlan] = []
     runtime_path_map: dict[str, str] = {}
-    remote_runtime = f"{remote_root}/lineages/{safe_root_job_id}/runtime"
+    remote_runtime = f"{remote_attempt}/runtime"
     for path, relative in runtime_assets:
         destination = f"{remote_runtime}/{relative}"
         source = path
@@ -630,6 +632,8 @@ def prepare_remote_bundle(
         "BMS_API_PYTHON": f"{remote_runtime}/support-python/venv/bin/python",
         "BMS_MSA_CACHE": f"{remote_attempt}/msa-cache",
         "BMS_REMOTE_EXECUTION": "1",
+        "BMS_REMOTE_JOB_ID": str(job.id),
+        "BMS_REMOTE_OUTPUT_ROOT": remote_results,
         "BMS_EXECUTION_TARGET_ID": str(target.id),
         "BMS_WORK": f"{remote_attempt}/work",
         "NXF_CACHE_DIR": f"{remote_attempt}/.nextflow",

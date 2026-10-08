@@ -289,11 +289,210 @@ def build_result_manifest(attempt_dir: Path, envelope: dict[str, Any], exit_code
         "source_revision": str(envelope["source_revision"]),
         "source_tree": str(envelope["source_tree"]),
         "execution_envelope_sha256": sha256_file(envelope_path(attempt_dir)),
+        "resource_receipt_sha256": sha256_file(output_root / "_remote" / "resource-usage.json"),
         "native_execution_authority_sha256": (
             hashlib.sha256(canonical_bytes(envelope["native_execution_authority"])).hexdigest()
             if envelope.get("native_execution_authority") is not None else None
         ),
     }
+
+
+class OwnedBoundary:
+    """Transient delegated service, with an emptyable scientific child.
+
+    Only this freshly created unit is modified. No slice quotas, cpusets,
+    memory protection, persistent unit, or idle resource reservation is used.
+    The trusted worker owns delegation; this is not an adversarial sandbox.
+    """
+
+    def __init__(self, attempt_id: str, limits: dict[str, Any]):
+        import uuid
+        identifier = str(uuid.UUID(attempt_id))
+        self.unit = "bms-attempt-" + identifier + ".service"
+        self.priv = [] if os.geteuid() == 0 else ["sudo", "-n"]
+        self.path = None
+        self.identity = None
+        self.limits = limits
+
+    def control(self, *args: str) -> str:
+        return subprocess.run(self.priv + ["systemctl", *args], check=True,
+                              capture_output=True, text=True, timeout=30).stdout.strip()
+
+    def create(self) -> dict[str, Any]:
+        for name in ("cpu_threads", "dram_bytes"):
+            if type(self.limits.get(name)) is not int or self.limits[name] < 1:
+                raise RuntimeError("invalid owned boundary allocation")
+        # systemd refuses a pre-existing unit. Never adopt by name alone.
+        subprocess.run(self.priv + ["systemd-run", "--quiet", "--unit=" + self.unit,
+            "--property=Type=exec", "--property=Delegate=cpu memory pids",
+            "--property=User=" + str(os.getuid()), "--property=Group=" + str(os.getgid()),
+            "--property=KillMode=control-group", "--property=TasksMax=infinity",
+            "/bin/sleep", "infinity"], check=True, capture_output=True, timeout=30)
+        try:
+            group = self.control("show", self.unit, "--property=ControlGroup", "--value")
+            invocation = self.control("show", self.unit, "--property=InvocationID", "--value")
+            anchor = int(self.control("show", self.unit, "--property=MainPID", "--value"))
+            if not group.startswith("/") or ".." in PurePosixPath(group).parts or not invocation or anchor <= 0:
+                raise RuntimeError("systemd delegation identity unavailable")
+            parent = Path("/sys/fs/cgroup") / group.lstrip("/")
+            # Move only our own anchor, never an SSH session or sibling process.
+            leaf = parent / "anchor"
+            leaf.mkdir()
+            (leaf / "cgroup.procs").write_text(str(anchor))
+            (parent / "cgroup.subtree_control").write_text("+cpu +memory +pids")
+            self.path = parent / "science"
+            self.path.mkdir()
+            (self.path / "cpu.max").write_text(f"{self.limits['cpu_threads'] * 100000} 100000")
+            (self.path / "memory.max").write_text(str(self.limits["dram_bytes"]))
+            (self.path / "memory.swap.max").write_text("0")
+            (self.path / "memory.oom.group").write_text("1")
+            for name in ("cpu.stat", "memory.peak", "memory.events", "pids.peak", "cgroup.events", "cgroup.kill"):
+                if not (self.path / name).exists():
+                    raise RuntimeError("required owned cgroup counter/control unavailable: " + name)
+            self.identity = {"unit": self.unit, "invocation_id": invocation,
+                "control_group": str(self.path), "inode": self.path.stat().st_ino,
+                "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                "machine_id": Path("/etc/machine-id").read_text().strip()}
+            self.sample()
+            return self.identity
+        except BaseException:
+            self.control("stop", self.unit)
+            raise
+
+    def sample(self) -> dict[str, Any]:
+        if self.path is None or self.path.stat().st_ino != self.identity["inode"]:
+            raise RuntimeError("owned boundary identity changed")
+        group = self.control("show", self.unit, "--property=ControlGroup", "--value")
+        if str(Path("/sys/fs/cgroup") / group.lstrip("/") / "science") != str(self.path):
+            raise RuntimeError("owned systemd control group changed")
+        if self.control("show", self.unit, "--property=InvocationID", "--value") != self.identity["invocation_id"]:
+            raise RuntimeError("owned systemd invocation changed")
+        def pairs(name):
+            return {k: int(v) for k, v in (line.split() for line in (self.path / name).read_text().splitlines())}
+        quota, period = map(int, (self.path / "cpu.max").read_text().split())
+        memory = int((self.path / "memory.max").read_text())
+        if quota != self.limits["cpu_threads"] * period or memory != self.limits["dram_bytes"]:
+            raise RuntimeError("owned boundary enforcement drift")
+        if (self.path / "memory.swap.max").read_text().strip() != "0":
+            raise RuntimeError("owned boundary swap enforcement drift")
+        return {"cpu_usage_usec": pairs("cpu.stat")["usage_usec"],
+            "memory_peak_bytes": int((self.path / "memory.peak").read_text()),
+            "pids_peak": int((self.path / "pids.peak").read_text()),
+            "memory_events": pairs("memory.events"),
+            "populated": pairs("cgroup.events")["populated"],
+            "cpu_max": [quota, period], "memory_max_bytes": memory, "swap_max_bytes": 0}
+
+    def quiesce(self) -> dict[str, Any]:
+        # Kills only this attempt's descendants, including reparented/set-session
+        # children. Process-group absence is never used as quiescence proof.
+        self.sample()  # Verify invocation/inode before any destructive control.
+        (self.path / "cgroup.kill").write_text("1")
+        deadline = time.monotonic() + 30
+        while True:
+            observed = self.sample()
+            if observed["populated"] == 0:
+                return observed
+            if time.monotonic() >= deadline:
+                raise RuntimeError("owned scientific boundary did not quiesce")
+            time.sleep(0.1)
+
+    def close(self):
+        self.control("stop", self.unit)
+
+
+def owned_disk_bytes(root: Path) -> int:
+    # Logical resident bytes, not allocated blocks or a kernel quota. Do not
+    # follow bundle aliases into shared storage or count hard links twice.
+    seen = set()
+    total = 0
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = [name for name in dirs if not (Path(directory) / name).is_symlink()]
+        for name in files:
+            info = (Path(directory) / name).lstat()
+            key = (info.st_dev, info.st_ino)
+            if stat.S_ISREG(info.st_mode) and key not in seen:
+                seen.add(key)
+                total += info.st_size
+    return total
+
+
+def resource_capability() -> dict[str, Any]:
+    import uuid
+    boundary = OwnedBoundary(str(uuid.uuid4()), {"cpu_threads": 1, "dram_bytes": 16777216})
+    boundary.create()
+    try:
+        observed = boundary.quiesce()
+        return {"schema": "bms.remote-owned-capability.v1", "backend": "systemd-delegated-cgroup-v2",
+            "cpu": "kernel-quota", "dram": "kernel-memory-max-no-swap",
+            "disk": "observed-logical-bytes-not-quota", "idle_reservation": False,
+            "machine_id": boundary.identity["machine_id"], "boot_id": boundary.identity["boot_id"],
+            "quiescence": observed["populated"] == 0}
+    finally:
+        boundary.close()
+
+
+def spawn_owned(boundary, envelope, environment, log):
+    """Enrollment ACK then launch gate; parent death before ACK cannot run science.
+
+    This closes the Popen-to-cgroup race without preexec_fn in a multithreaded
+    controller. EOF at the gate aborts the launcher, never authorizes execution.
+    """
+    import select
+    gate_read, gate_write = os.pipe()
+    ack_read, ack_write = os.pipe()
+    process = None
+    try:
+        process = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "exec-owned",
+             "--cgroup", str(boundary.path), "--gate-fd", str(gate_read), "--ack-fd", str(ack_write),
+             "--", *[str(value) for value in envelope["command"]]],
+            cwd=str(envelope["working_directory"]), env=environment,
+            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+            pass_fds=(gate_read, ack_write), start_new_session=True)
+        os.close(gate_read); gate_read = -1
+        os.close(ack_write); ack_write = -1
+        if not select.select([ack_read], [], [], 30)[0] or os.read(ack_read, 1) != b"E":
+            raise RuntimeError("scientific launcher did not acknowledge cgroup enrollment")
+        boundary.sample()
+        os.write(gate_write, b"G")
+        return process
+    except BaseException:
+        if process is not None:
+            process.kill()
+            process.wait()
+        raise
+    finally:
+        for descriptor in (gate_read, gate_write, ack_read, ack_write):
+            if descriptor >= 0:
+                os.close(descriptor)
+
+
+def make_resource_receipt(attempt_dir, envelope, boundary, observed, *, exit_code, complete):
+    allocation = envelope["resource_allocation"]
+    proof = {
+        "schema": "bms.remote-resource-usage.v1", "job_id": envelope["job_id"],
+        "run_attempt_id": envelope["attempt_id"], "admission_id": allocation["reservation_id"],
+        "execution_envelope_sha256": sha256_file(envelope_path(attempt_dir)),
+        "producer_source_revision": envelope["source_revision"], "producer_source_tree": envelope["source_tree"],
+        "allocation": allocation, "execution": boundary.identity,
+        "observed": {**observed, "finished_at": utc_now(),
+                     "started_at": load_json(status_path(attempt_dir)).get("started_at")}, "quiescent": True,
+        "disk": {"scope": "attempt-tree-logical-bytes", "enforcement": "sampled-abort-not-quota",
+                 "resident_bytes": owned_disk_bytes(attempt_dir), "sample_interval_seconds": 2},
+        "complete": complete and observed["memory_events"].get("oom_kill", 0) == 0, "outcome": "completed" if exit_code == 0 else "failed",
+        "stage_terminal_states": {},
+    }
+    if (attempt_dir / CANCEL_REQUEST_FILE).exists():
+        proof["outcome"] = "cancelled"
+    stage_journal = Path(envelope["output_directory"]) / "_remote" / "stage-terminal.json"
+    if stage_journal.exists():
+        proof["stage_terminal_states"] = load_json(stage_journal)
+    proof["receipt_sha256"] = hashlib.sha256(canonical_bytes(proof)).hexdigest()
+    if proof["disk"]["resident_bytes"] > allocation["effective"]["disk_bytes"]:
+        proof["complete"] = False
+        proof.pop("receipt_sha256")
+        proof["receipt_sha256"] = hashlib.sha256(canonical_bytes(proof)).hexdigest()
+    return proof
 
 
 def supervise(attempt_dir: Path) -> int:
@@ -317,6 +516,17 @@ def supervise(attempt_dir: Path) -> int:
         }
     )
     atomic_json(status_path(attempt_dir), current)
+    allocation = envelope.get("resource_allocation")
+    if (not isinstance(allocation, dict)
+            or allocation.get("target_id") != envelope.get("execution_target_id")
+            or allocation.get("storage_path") != str(attempt_dir)
+            or allocation.get("owner") != "remote-attempt:" + envelope["job_id"] + ":" + envelope["attempt_id"]
+            or allocation.get("machine_id") != Path("/etc/machine-id").read_text().strip()
+            or allocation.get("storage_device") != str(attempt_dir.stat().st_dev)):
+        raise RuntimeError("remote resource admission identity mismatch")
+    boundary = OwnedBoundary(envelope["attempt_id"], allocation["effective"])
+    boundary.create()
+    atomic_json(attempt_dir / "resource-boundary.json", {"execution": boundary.identity, "allocation": allocation})
     environment = os.environ.copy()
     log_path = attempt_dir / "nextflow.log"
     exit_code = 1
@@ -343,16 +553,7 @@ def supervise(attempt_dir: Path) -> int:
             exit_code = -15
         else:
             with log_path.open("ab", buffering=0) as log:
-                process = subprocess.Popen(
-                    [str(value) for value in envelope["command"]],
-                    cwd=str(envelope["working_directory"]),
-                    env=environment,
-                    stdin=subprocess.DEVNULL,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    close_fds=True,
-                    start_new_session=True,
-                )
+                process = spawn_owned(boundary, envelope, environment, log)
                 latest = load_json(status_path(attempt_dir))
                 latest.update(
                     {
@@ -364,7 +565,13 @@ def supervise(attempt_dir: Path) -> int:
                     latest["state"] = "cancelling"
                 atomic_json(status_path(attempt_dir), latest)
                 terminate_deadline: float | None = None
+                next_disk_observation = 0.0
                 while process.poll() is None:
+                    boundary.sample()
+                    if time.monotonic() >= next_disk_observation:
+                        if owned_disk_bytes(attempt_dir) > allocation["effective"]["disk_bytes"]:
+                            raise RuntimeError("observed attempt disk allocation exceeded (not a kernel quota)")
+                        next_disk_observation = time.monotonic() + 2.0
                     if (attempt_dir / CANCEL_REQUEST_FILE).exists():
                         if terminate_deadline is None:
                             try:
@@ -382,6 +589,19 @@ def supervise(attempt_dir: Path) -> int:
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"[:4000]
         exit_code = 1
+    # Receipt/release remains possible for failures and cancellation. Failure to
+    # prove cgroup emptiness is deliberately nonterminal; a later poll retries.
+    observed = boundary.quiesce()
+    proof = make_resource_receipt(attempt_dir, envelope, boundary, observed,
+                                  exit_code=exit_code, complete=error is None)
+    resource_path = Path(envelope["output_directory"]) / "_remote" / "resource-usage.json"
+    atomic_json(resource_path, proof)
+    # Persist proof before destroying the kernel counters. Recovery can use this
+    # exact immutable receipt after a supervisor/controller restart.
+    latest = load_json(status_path(attempt_dir))
+    latest["resource_receipt"] = proof
+    atomic_json(status_path(attempt_dir), latest)
+    boundary.close()
     manifest_sha: str | None = None
     try:
         remote_logs = Path(str(envelope["output_directory"])) / "_remote"
@@ -435,7 +655,30 @@ def status(attempt_dir: Path) -> dict[str, Any]:
         if value.get("state") in {"running", "cancelling"}:
             workflow_alive = process_matches(value.get("workflow_pid"), value.get("workflow_start_ticks"))
             supervisor_alive = process_matches(value.get("supervisor_pid"), value.get("supervisor_start_ticks"))
-            if not workflow_alive and not supervisor_alive:
+            if not supervisor_alive and not value.get("resource_receipt"):
+                record_path = attempt_dir / "resource-boundary.json"
+                if record_path.is_file():
+                    record = load_json(record_path)
+                    envelope = load_json(envelope_path(attempt_dir))
+                    if record.get("allocation") != envelope.get("resource_allocation"):
+                        raise RuntimeError("recovered boundary admission changed")
+                    boundary = OwnedBoundary(envelope["attempt_id"], record["allocation"]["effective"])
+                    boundary.identity = record["execution"]
+                    boundary.path = Path(boundary.identity["control_group"])
+                    if (boundary.identity["unit"] != boundary.unit
+                            or boundary.identity["boot_id"] != Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+                            or boundary.path.name != "science" or boundary.path.parent.name != boundary.unit):
+                        raise RuntimeError("recovered boundary identity mismatch")
+                    observed = boundary.quiesce() if cancellation_requested else boundary.sample()
+                    if observed["populated"] == 0:
+                        proof = make_resource_receipt(attempt_dir, envelope, boundary, observed,
+                                                      exit_code=1, complete=False)
+                        atomic_json(Path(envelope["output_directory"]) / "_remote" / "resource-usage.json", proof)
+                        value["resource_receipt"] = proof
+                        _write_atomic_json(status_path(attempt_dir), value)
+                        boundary.close()
+                        workflow_alive = False
+            if not workflow_alive and not supervisor_alive and value.get("resource_receipt", {}).get("quiescent") is True:
                 value.update(
                     {
                         "state": "cancelled" if cancellation_requested else "lost",
@@ -449,6 +692,8 @@ def status(attempt_dir: Path) -> dict[str, Any]:
                     }
                 )
             _write_atomic_json(status_path(attempt_dir), value)
+        if value.get("resource_receipt", {}).get("quiescent") is True:
+            value["resident_disk_bytes"] = owned_disk_bytes(attempt_dir)
         return value
 
 
@@ -499,6 +744,12 @@ def parser() -> argparse.ArgumentParser:
     for name in ("prepare", "run", "status", "collect", "supervise"):
         command = sub.add_parser(name)
         command.add_argument("--attempt-dir", required=True)
+    sub.add_parser("resource-capability")
+    enter = sub.add_parser("exec-owned")
+    enter.add_argument("--cgroup", required=True)
+    enter.add_argument("--gate-fd", required=True, type=int)
+    enter.add_argument("--ack-fd", required=True, type=int)
+    enter.add_argument("argv", nargs=argparse.REMAINDER)
     cancel_command = sub.add_parser("cancel")
     cancel_command.add_argument("--attempt-dir", required=True)
     cancel_command.add_argument("--timeout-seconds", type=float, default=30.0)
@@ -507,6 +758,19 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = parser().parse_args()
+    if args.command == "resource-capability":
+        print(json.dumps(resource_capability(), sort_keys=True))
+        return 0
+    if args.command == "exec-owned":
+        (Path(args.cgroup) / "cgroup.procs").write_text(str(os.getpid()))
+        os.write(args.ack_fd, b"E")
+        os.close(args.ack_fd)
+        authorized = os.read(args.gate_fd, 1) == b"G"
+        os.close(args.gate_fd)
+        if not authorized:
+            raise RuntimeError("supervisor disappeared before scientific launch authorization")
+        argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+        os.execvpe(argv[0], argv, os.environ)
     attempt_dir = Path(args.attempt_dir).resolve()
     if not attempt_dir.is_dir():
         raise RuntimeError("attempt directory is unavailable")

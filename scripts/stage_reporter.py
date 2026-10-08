@@ -9,7 +9,6 @@ import os
 import sys
 from pathlib import Path
 
-import requests
 
 # Allow importing platform/api/paths.py when run from workflow sandboxes.
 CODE_ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +71,39 @@ def main() -> None:
         if args.job_root_relative
         else normalize_output_path
     )
+    if os.environ.get("BMS_REMOTE_EXECUTION") == "1":
+        import fcntl
+        import json
+        import tempfile
+        if args.job_id != os.environ.get("BMS_REMOTE_JOB_ID"):
+            raise RuntimeError("remote stage Job identity mismatch")
+        root = Path(os.environ["BMS_REMOTE_OUTPUT_ROOT"]).resolve(strict=True)
+        outputs = []
+        for value in args.outputs:
+            path = root / normalize_job_root_relative_output(value) if args.job_root_relative else Path(value)
+            outputs.append(path.resolve(strict=True).relative_to(root).as_posix())
+        journal = root / "_remote" / "stage-terminal.json"
+        journal.parent.mkdir(parents=True, exist_ok=True)
+        with journal.with_suffix(".lock").open("a+b") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            states = json.loads(journal.read_text()) if journal.exists() else {}
+            if args.status != "start":
+                record = {"status": args.status, "outputs": outputs}
+                if args.stage in states and states[args.stage] != record:
+                    raise RuntimeError("conflicting remote terminal stage report")
+                states[args.stage] = record
+                fd, name = tempfile.mkstemp(dir=journal.parent)
+                with os.fdopen(fd, "w") as handle:
+                    json.dump(states, handle, sort_keys=True, separators=(",", ":"))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(name, journal)
+                descriptor = os.open(journal.parent, os.O_DIRECTORY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+        return
     cleaned_outputs = [normalizer(p) for p in args.outputs]
     if not API_BASE_URL:
         print("Failed to report stage: missing environment-owned API_BASE_URL", file=sys.stderr)
@@ -79,6 +111,8 @@ def main() -> None:
     if not STAGE_REPORT_TOKEN:
         print("Failed to report stage: missing launch-scoped stage credential", file=sys.stderr)
         sys.exit(1)
+    import requests
+
     headers = {"Authorization": f"Bearer {STAGE_REPORT_TOKEN}"}
 
     try:

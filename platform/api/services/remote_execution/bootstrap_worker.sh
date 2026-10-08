@@ -12,6 +12,11 @@ command -v unshare >/dev/null || fail 'Namespace support cannot be checked (unsh
 "${priv[@]}" unshare -m true || fail 'Mount namespaces unavailable; use a compatible VM'
 "${priv[@]}" unshare -Ur true || fail 'User namespaces unavailable; use a compatible VM'
 "${priv[@]}" unshare -pf true || fail 'PID namespaces unavailable; use a compatible VM'
+# Require the supported manager, not merely the systemd executable. Capability
+# preparation creates no persistent unit, limits, protection or CPU partition.
+command -v systemd-run >/dev/null && command -v systemctl >/dev/null || fail 'A running systemd cgroup-v2 manager is required for automatic owned boundaries'
+[ -f /sys/fs/cgroup/cgroup.controllers ] || fail 'cgroup v2 is required for owned boundaries'
+"${priv[@]}" systemctl show --property=Version --value >/dev/null || fail 'The systemd manager is not reachable; expose the supported delegated manager to this worker'
 nvidia-smi >/dev/null || fail 'NVIDIA driver unavailable; automatic setup does not change drivers'
 [ "$(uname -m)" = x86_64 ] || fail 'Automatic setup supports x86_64 only'
 . /etc/os-release

@@ -12,7 +12,9 @@ from services.remote_execution.contracts import RemoteAttemptStatus
 
 
 def remote_readiness(root):
-    return {"gpus": ["fixture"], "resources": {
+    return {"owned_boundary": {"schema": "bms.remote-owned-capability.v1",
+        "backend": "systemd-delegated-cgroup-v2", "idle_reservation": False, "quiescence": True,
+        "machine_id": "a" * 32}, "gpus": ["fixture"], "resources": {
         "cpu_threads": 48, "dram_bytes": 192000000000, "disk_bytes": 4000000000000,
         "free_disk_bytes": 3000000000000, "storage_root": root,
         "storage_device": "19", "machine_id": "a" * 32,

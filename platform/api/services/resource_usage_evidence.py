@@ -905,6 +905,12 @@ class WorkflowResourceMonitor:
 
 
 def _validate_pre_spawn_nonexecution_receipt(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    if candidate.get("schema") == "bms.remote-resource-usage.v1":
+        from services.remote_resource_evidence import validate_document
+        try:
+            return validate_document(candidate)
+        except ValueError as exc:
+            raise ResourceUsageEvidenceError(str(exc)) from exc
     receipt = {str(key): value for key, value in candidate.items()}
     base_fields = {
         "schema", "producer", "producer_source_revision", "producer_source_tree",
@@ -1191,6 +1197,12 @@ def attach_pre_spawn_nonexecution_receipt(
 
 
 def _validate_resource_usage_receipt_document(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    if candidate.get("schema") == "bms.remote-resource-usage.v1":
+        from services.remote_resource_evidence import validate_document
+        try:
+            return validate_document(candidate)
+        except ValueError as exc:
+            raise ResourceUsageEvidenceError(str(exc)) from exc
     receipt = {str(key): value for key, value in candidate.items()}
     base_fields = {
         "schema", "producer", "producer_source_revision", "producer_source_tree",
@@ -1275,6 +1287,14 @@ def attach_resource_usage_receipt(params: object, receipt: Mapping[str, Any]) ->
     identity = candidate.get("execution")
     if not isinstance(identity, Mapping):
         raise ResourceUsageEvidenceError("resource usage receipt execution identity is invalid")
+    if candidate.get("schema") == "bms.remote-resource-usage.v1":
+        matches = [item for item in receipts if item.get("schema") == candidate["schema"]
+                   and item.get("run_attempt_id") == candidate["run_attempt_id"]]
+        if matches and (len(matches) != 1 or dict(matches[0]) != candidate):
+            raise ResourceUsageEvidenceError("conflicting remote producer receipt")
+        if not matches:
+            normalized[RESOURCE_USAGE_RECEIPTS_PARAM] = [dict(item) for item in receipts] + [candidate]
+        return normalized
     key = (candidate.get("job_id"), identity.get("generation"), identity.get("attempt"))
     for existing in receipts:
         existing_execution = existing.get("execution")
@@ -1466,6 +1486,18 @@ def validate_producer_resource_usage_receipt(
 ) -> dict[str, Any]:
     """Validate one terminal producer receipt against source admission authority."""
 
+    if getattr(job, "remote_attempt_id", None):
+        from services.remote_resource_evidence import validate_for_job
+        receipts = params_mapping(getattr(job, "params", {})).get(RESOURCE_USAGE_RECEIPTS_PARAM, [])
+        matches = [item for item in receipts if isinstance(item, Mapping)
+                   and item.get("schema") == "bms.remote-resource-usage.v1"
+                   and item.get("run_attempt_id") == str(job.remote_attempt_id)]
+        if len(matches) != 1:
+            raise ResourceUsageEvidenceError("remote producer receipt cardinality is not exact")
+        try:
+            return validate_for_job(job, matches[0])
+        except ValueError as exc:
+            raise ResourceUsageEvidenceError(str(exc)) from exc
     handoff = validate_resource_admission_handoff(expected_handoff)
     if handoff is None:
         raise ResourceUsageEvidenceError("expected resource admission handoff is required")

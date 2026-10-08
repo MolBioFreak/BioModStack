@@ -532,6 +532,12 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         ], "CUDA container verification failed", timeout=3600)
         if "BMS_CUDA_OK" not in cuda.stdout.splitlines():
             raise RemoteTransportError("CUDA container verification failed")
+        owned_probe = await checked_io(run_remote, connection,
+            ["python3", f"{connection.remote_root}/runner/bms_remote_worker.py", "resource-capability"], timeout=90)
+        try:
+            probe["owned_boundary"] = json.loads(owned_probe.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError) as exc:
+            raise RemoteTransportError("Remote owned boundary capability is incomplete") from exc
         resource_policy = await asyncio.to_thread(publish_execution_target_readiness,
             target_id=str(target.id), remote_root=connection.remote_root, readiness=probe)
     except (RemoteTransportError, ResourceCapacityUnavailable, OSError) as exc:
