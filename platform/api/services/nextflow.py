@@ -3397,6 +3397,7 @@ def compile_job_nextflow_invocation(job, params, output_dir):
     from component_runtime import canonical_bytes, SourceIdentity
     from paths import get_code_root
     from services.core_protein_scientific_contract import workflow_params
+    from schemas import ExecutionPolicy
     source = SourceIdentity.from_checkout(get_code_root())
     pinned_revision = getattr(job, 'execution_source_revision', None)
     pinned_tree = getattr(job, 'execution_source_tree', None)
@@ -3410,10 +3411,11 @@ def compile_job_nextflow_invocation(job, params, output_dir):
         output_dir, job_id=job.id, requested_params=requested)
     command = list(invocation.command)
     native_parameters = invocation.native_parameters
+    model_contracts = list(invocation.model_contracts)
     if uses_native_parent_components(command) and params.get('run_frustrampnn') is True:
         from paths import get_container_dir
         from services.remote_execution.images import resolve_image
-        from model_registry import model_runtime_dependencies
+        from model_registry import model_runtime_dependencies, model_contract_reference
         images = [ref for ref in model_runtime_dependencies('frustrampnn', include_internal=True)
                   if ref.kind == 'image']
         if len(images) != 1:
@@ -3421,6 +3423,11 @@ def compile_job_nextflow_invocation(job, params, output_dir):
         image = resolve_image(images[0].relative_path, get_container_dir())
         command.extend(['--frustrampnn_container_path', str(image)])
         native_parameters['frustrampnn_container_path'] = str(image)
+        contract = model_contract_reference('frustrampnn')
+        if contract is None:
+            raise ValueError('Selected native FrustraMPNN contract is undeclared')
+        if contract.model_id not in {item.model_id for item in model_contracts}:
+            model_contracts.append(contract)
     for key in ('protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256'):
         if params.get(key):
             command.extend(['--' + key, str(params[key])])
@@ -3428,7 +3435,9 @@ def compile_job_nextflow_invocation(job, params, output_dir):
     if SourceIdentity.from_checkout(get_code_root()) != source:
         raise ValueError('Source identity changed during native compilation')
     return replace(invocation, command=tuple(command), source_identity=source,
-                   native_parameters_json=canonical_bytes(native_parameters))
+                   native_parameters_json=canonical_bytes(native_parameters),
+                   model_contracts=tuple(model_contracts),
+                   execution_policy_json=canonical_bytes(ExecutionPolicy.from_params(job.params).model_dump(mode='json')))
 
 
 def build_nextflow_command(
@@ -3478,10 +3487,13 @@ def compile_nextflow_invocation(
         generated_inputs.append(GeneratedInput(relative, payload))
 
     def finish_command(command):
+        from model_registry import model_contract_reference
+        contract = model_contract_reference(model_id)
         return NativeInvocation.capture(model_id=model_id, mode=mode,
             command=[os.fspath(value) if isinstance(value, os.PathLike) else value for value in command],
             requested=requested_snapshot, effective=params,
             native_parameters=native_parameters, entrypoint=workflow_entrypoint,
+            model_contracts=() if contract is None else (contract,),
             generated_inputs=generated_inputs)
 
     from services.msa_policy import apply_msa_policy

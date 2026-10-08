@@ -250,6 +250,21 @@ class GeneratedInput:
 
 
 @dataclass(frozen=True)
+class ModelContractReference:
+    """Commitment to an existing registry definition, not a second schema."""
+    model_id: str
+    version: str
+    definition_sha256: str
+
+    def __post_init__(self) -> None:
+        if any(type(value) is not str or not value or '\x00' in value
+               for value in (self.model_id, self.version, self.definition_sha256)):
+            raise ValueError('model contract reference requires nonempty text')
+        if not re.fullmatch(r'[0-9a-f]{64}', self.definition_sha256):
+            raise ValueError('model contract definition digest is invalid')
+
+
+@dataclass(frozen=True)
 class NativeInvocation:
     """Immutable output of the existing scientific command compiler.
 
@@ -266,6 +281,8 @@ class NativeInvocation:
     generated_inputs: tuple[GeneratedInput, ...] = ()
     source_identity: SourceIdentity | None = None
     entrypoint: str | None = None
+    model_contracts: tuple[ModelContractReference, ...] = ()
+    execution_policy_json: bytes = b'{}'
 
     def __post_init__(self) -> None:
         if (type(self.model_id) is not str or not self.model_id
@@ -284,6 +301,11 @@ class NativeInvocation:
                     or '\\' in self.entrypoint or entrypoint.as_posix() != self.entrypoint
                     or entrypoint.suffix != '.nf'):
                 raise ValueError('native workflow entrypoint must be a contained Nextflow source path')
+        if (type(self.model_contracts) is not tuple
+                or any(not isinstance(item, ModelContractReference) for item in self.model_contracts)):
+            raise ValueError('model contract references must be immutable and typed')
+        if len({item.model_id for item in self.model_contracts}) != len(self.model_contracts):
+            raise ValueError('model contract references contain duplicate model identities')
         if type(self.generated_inputs) is not tuple or any(not isinstance(item, GeneratedInput) for item in self.generated_inputs):
             raise ValueError('generated input roster must be immutable and typed')
         paths = [item.relative_path for item in self.generated_inputs]
@@ -293,7 +315,8 @@ class NativeInvocation:
         if any(parent.as_posix() in path_set for path in paths
                for parent in PurePosixPath(path).parents if parent.as_posix() != '.'):
             raise ValueError('generated input files cannot also be parent directories')
-        for payload in (self.requested_json, self.effective_json, self.native_parameters_json):
+        for payload in (self.requested_json, self.effective_json, self.native_parameters_json,
+                        self.execution_policy_json):
             if type(payload) is not bytes:
                 raise ValueError('native invocation snapshots must be immutable bytes')
             value = json.loads(payload)
@@ -305,10 +328,12 @@ class NativeInvocation:
                 requested: Mapping[str, Any], effective: Mapping[str, Any],
                 native_parameters: Mapping[str, Any],
                 entrypoint: str,
+                model_contracts: Sequence[ModelContractReference] = (),
                 generated_inputs: Sequence[GeneratedInput] = ()) -> NativeInvocation:
         return cls(model_id, mode, tuple(command), canonical_bytes(dict(requested)),
                    canonical_bytes(dict(effective)), canonical_bytes(dict(native_parameters)),
-                   generated_inputs=tuple(generated_inputs), entrypoint=entrypoint)
+                   generated_inputs=tuple(generated_inputs), entrypoint=entrypoint,
+                   model_contracts=tuple(model_contracts))
 
     @property
     def native_parameters(self) -> dict[str, Any]:
@@ -317,10 +342,13 @@ class NativeInvocation:
     @property
     def payload(self) -> dict[str, Any]:
         return {
-            'schema_name': 'bms.native-invocation.v1', 'schema_version': 1,
+            'schema_name': 'bms.native-invocation.v2', 'schema_version': 2,
             'model_id': self.model_id, 'mode': self.mode,
             'source_identity': asdict(self.source_identity) if self.source_identity is not None else None,
             'entrypoint': self.entrypoint,
+            'model_contracts': [asdict(item) for item in self.model_contracts],
+            'execution_policy': json.loads(self.execution_policy_json),
+            'execution_policy_sha256': hashlib.sha256(self.execution_policy_json).hexdigest(),
             'command': list(self.command),
             'requested': json.loads(self.requested_json),
             'requested_sha256': hashlib.sha256(self.requested_json).hexdigest(),

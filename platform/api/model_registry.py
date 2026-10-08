@@ -91,6 +91,16 @@ class RuntimeDependencyRef(BaseModel):
         return value
 
 
+def model_contract_reference(model_id: str):
+    """Pin an existing definition without inferring support for unknown aliases."""
+    from component_runtime import ModelContractReference, digest
+    definition = get_registry().get_internal_model_definition(model_id)
+    if definition is None:
+        return None
+    return ModelContractReference(model_id=definition.id, version=definition.version,
+        definition_sha256=digest(definition.model_dump(mode='json')))
+
+
 def independent_runtime_model_ids() -> tuple[str, ...]:
     """Discover declared closures from the existing public model registry."""
     return tuple(sorted(model.id for model in get_registry().list_models()
