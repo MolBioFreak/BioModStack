@@ -27,8 +27,10 @@ SABDAB_BASE = "https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred"
 RATE_LIMIT_SECONDS = 2.0
 _last_request_time = 0.0
 
+from paths import get_sabdab_cache_dir
+
 # Cache directory
-CACHE_DIR = Path("/mnt/BioModStack/sabdab_cache")
+CACHE_DIR = get_sabdab_cache_dir()
 
 
 @dataclass
@@ -109,7 +111,9 @@ async def search_nanobodies(
     cdr_h3_max: Optional[int] = None,
     antigen_type: Optional[str] = None,
     non_redundant: bool = False,
-    limit: int = 100
+    limit: int = 100,
+    sort_by: Optional[str] = None,
+    sort_desc: bool = False
 ) -> List[SAbDabEntry]:
     """
     Search NanoSAbDab for VHH structures.
@@ -122,35 +126,14 @@ async def search_nanobodies(
         antigen_type: Filter by antigen type (e.g., "protein", "peptide")
         non_redundant: Return non-redundant set (clustered by sequence)
         limit: Maximum number of results
+        sort_by: Sort field - "resolution", "cdr_h3_length", "species", "pdb_code"
+        sort_desc: Sort descending if True
     
     Returns:
         List of SAbDabEntry objects
     """
-    # Build search URL
-    # SAbDab search endpoint: /sabdab/search?ABtype=VHH&...
-    params = {
-        "ABtype": "VHH",
-        "method": "All",
-        "species": species or "All",
-        "antigen": antigen_type or "All",
-        "ltype": "All",
-        "constantregion": "All",
-        "affinity": "All",
-        "chothiapos": "",
-        "restype": "ALA"
-    }
-    
-    if resolution_max:
-        params["resolution"] = str(resolution_max)
-    
-    search_url = f"{SABDAB_BASE}/sabdab/search"
-    
     async with aiohttp.ClientSession() as session:
-        # Note: SAbDab returns HTML, not JSON. We need to parse the summary CSV
-        # For programmatic access, download the summary file
-        # Actually, let's use the summary download endpoint instead
-        
-        # First, get the summary CSV for VHH structures
+        # Download VHH summary from SAbDab
         summary_url = f"{SABDAB_BASE}/sabdab/summary/all/"
         
         response = await _rate_limited_request(session, summary_url, {"ABtype": "VHH"})
@@ -167,38 +150,68 @@ async def search_nanobodies(
             return []
         
         headers = lines[0].split("\t")
-        entries = []
+        all_entries: List[SAbDabEntry] = []
         
-        for line in lines[1:limit+1]:
+        # Parse ALL entries first, then filter
+        for line in lines[1:]:
             values = line.split("\t")
             if len(values) != len(headers):
                 continue
             
             row = dict(zip(headers, values))
-            
-            # Apply filters
             entry = SAbDabEntry.from_summary_row(row)
             
-            # Resolution filter
-            if resolution_max and entry.resolution and entry.resolution > resolution_max:
-                continue
+            # --- Apply filters (fixed logic) ---
             
-            # CDR-H3 length filter
-            if cdr_h3_min and entry.cdr_h3_length and entry.cdr_h3_length < cdr_h3_min:
-                continue
-            if cdr_h3_max and entry.cdr_h3_length and entry.cdr_h3_length > cdr_h3_max:
-                continue
+            # Resolution filter: skip if resolution exceeds max
+            # Note: entries with None resolution PASS the filter (unknown = might be good)
+            if resolution_max is not None:
+                if entry.resolution is not None and entry.resolution > resolution_max:
+                    continue
             
-            # Species filter (case-insensitive)
-            if species and entry.species and species.lower() not in entry.species.lower():
-                continue
+            # CDR-H3 length filter: entries with None CDR-H3 are EXCLUDED
+            if cdr_h3_min is not None:
+                if entry.cdr_h3_length is None or entry.cdr_h3_length < cdr_h3_min:
+                    continue
+            if cdr_h3_max is not None:
+                if entry.cdr_h3_length is None or entry.cdr_h3_length > cdr_h3_max:
+                    continue
             
-            entries.append(entry)
+            # Species filter (case-insensitive substring match)
+            # Entries with None species are EXCLUDED when species filter is active
+            if species:
+                if entry.species is None or species.lower() not in entry.species.lower():
+                    continue
             
-            if len(entries) >= limit:
-                break
+            # Antigen type filter
+            if antigen_type:
+                if entry.antigen_type is None or antigen_type.lower() not in entry.antigen_type.lower():
+                    continue
+            
+            all_entries.append(entry)
         
-        logger.info(f"[SAbDab] Found {len(entries)} VHH structures")
+        logger.info(f"[SAbDab] Filtered to {len(all_entries)} VHH structures (before sort/limit)")
+        
+        # --- Apply sorting ---
+        if sort_by:
+            def sort_key(e: SAbDabEntry):
+                val = getattr(e, sort_by, None)
+                # Handle None values - put them at end
+                if val is None:
+                    return (1, "")  # Tuple: (is_none, value)
+                if isinstance(val, str):
+                    return (0, val.lower())
+                return (0, val)
+            
+            all_entries.sort(key=sort_key, reverse=sort_desc)
+        else:
+            # Default sort: best resolution first
+            all_entries.sort(key=lambda e: (e.resolution is None, e.resolution or 999))
+        
+        # Apply limit after filtering and sorting
+        entries = all_entries[:limit]
+        
+        logger.info(f"[SAbDab] Returning {len(entries)} VHH structures")
         return entries
 
 

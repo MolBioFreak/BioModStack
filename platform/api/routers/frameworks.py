@@ -67,13 +67,15 @@ async def search_sabdab_frameworks(
     cdr_h3_min: Optional[int] = Query(None, description="Minimum CDR-H3 length"),
     cdr_h3_max: Optional[int] = Query(None, description="Maximum CDR-H3 length"),
     antigen_type: Optional[str] = Query(None, description="Antigen type filter"),
-    limit: int = Query(50, ge=1, le=500, description="Maximum results")
+    limit: int = Query(50, ge=1, le=500, description="Maximum results"),
+    sort_by: Optional[str] = Query(None, description="Sort by: 'resolution', 'cdr_h3_length', 'species', 'pdb_code'"),
+    sort_desc: bool = Query(False, description="Sort descending")
 ):
     """
     Search NanoSAbDab for VHH nanobody structures.
     
     Rate-limited to 1 request every 2 seconds to respect SAbDab servers.
-    Results are filtered by resolution and CDR-H3 length.
+    Results are filtered by resolution and CDR-H3 length, then sorted.
     """
     try:
         entries = await search_nanobodies(
@@ -82,7 +84,9 @@ async def search_sabdab_frameworks(
             cdr_h3_min=cdr_h3_min,
             cdr_h3_max=cdr_h3_max,
             antigen_type=antigen_type,
-            limit=limit
+            limit=limit,
+            sort_by=sort_by,
+            sort_desc=sort_desc
         )
         
         return [
