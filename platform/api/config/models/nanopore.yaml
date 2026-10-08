@@ -22,6 +22,23 @@ outputs:
   - bam
   - bed
   - tsv
+  - json
+  - html
+  - fasta
+
+sequence_qc_contract:
+  manifest: qc_manifest.json
+  manifest_schema: sequence_qc.manifest.v1
+  fastq_qc_artifacts:
+    - fastq_qc_summary.tsv
+    - fastq_alignment_stats.tsv
+    - fastq_coverage.tsv
+    - per_base_support.tsv
+    - qc_manifest.json
+    - fastq_consensus.fasta
+    - fastq_consensus.fasta.fai
+    - igv_track_config.json
+    - igv_report.html
 
 modes:
   - id: methylation_analysis
@@ -205,12 +222,11 @@ params:
 
   - name: fastq_minimap2_preset
     type: string
-    description: minimap2 preset used for FASTQ-to-reference alignment (docs-first default targets modern high-accuracy ONT)
+    description: minimap2 preset used for FASTQ-to-reference alignment (bundled-runtime default is map-ont for minimap2 2.24 compatibility)
     required: false
-    default: lr:hq
+    default: map-ont
     enum:
       - map-ont
-      - lr:hq
       - map-hifi
       - map-pb
       - sr
