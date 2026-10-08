@@ -26,11 +26,13 @@ let renderer: ReactTestRenderer;
 let client: QueryClient;
 let posts: any[];
 let reads: string[];
+let cacheReads: string[];
+let cacheHits: string[];
 const adapter = api.defaults.adapter;
 const fixture = { pred_method: 'fold_cp', sequence: 'MKTIIALSYIFCLVFADYKDDDDA', bcp_size_cp: 4,
     boltz_num_samples: 1, boltz_use_msa: false, run_frustrampnn: false };
 async function mount(initialValues: any = fixture, target: string | null = null) {
-    posts = []; reads = [];
+    posts = []; reads = []; cacheReads = [];
     window.history.replaceState({}, '', '/submit');
     if (target) sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, target); else sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
     vi.spyOn(window, 'alert').mockImplementation(() => {});
@@ -40,6 +42,9 @@ async function mount(initialValues: any = fixture, target: string | null = null)
         if (config.url === '/api/execution-targets') data = targets;
         else if (config.url === '/api/execution-targets/active/telemetry') {
             reads.push(config.params.execution_target_id); data = telemetry(config.params.execution_target_id);
+        } else if (config.url === '/api/msa/cache-info') {
+            cacheReads.push(config.params.sequence);
+            data = { cache_entries: cacheHits.includes(config.params.sequence) ? 1 : 0 };
         } else if (config.url?.includes('msa')) data = { providers: {}, cache_entries: 0 };
         else throw new Error(`Unexpected fixture GET ${config.url}`);
         return { data, status: 200, statusText: 'OK', headers: {}, config };
@@ -59,7 +64,77 @@ async function click(label: string) {
 async function sample(data: any) {
     await act(async () => { client.setQueryData(['active-remote-gpu-telemetry', 'vast:one'], { data }); }); await flush();
 }
-afterEach(async () => { if (renderer) await act(async () => renderer.unmount()); client?.clear(); api.defaults.adapter = adapter; sessionStorage.clear(); vi.restoreAllMocks(); });
+afterEach(async () => { if (renderer) await act(async () => renderer.unmount()); client?.clear(); api.defaults.adapter = adapter; sessionStorage.clear(); cacheHits = []; vi.restoreAllMocks(); });
+
+it('admits a saved local MSA provider when Fold-CP MSA is disabled', async () => {
+    await mount({ ...fixture, bcp_size_cp: 1, msa_provider: 'local' });
+    expect(preview().params.boltz_use_msa).toBe(false);
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(1);
+    expect(cacheReads).toEqual([]);
+});
+
+it('refuses local MSA only when Fold-CP actually needs an MSA', async () => {
+    await mount({ ...fixture, bcp_size_cp: 1, msa_provider: 'local', boltz_use_msa: true });
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(0);
+    expect(window.alert).toHaveBeenCalledWith(expect.stringMatching(/local.*disabled|disabled.*local/i));
+});
+
+it('requires cache hits for every protein chain, not only the primary sequence', async () => {
+    cacheHits = [fixture.sequence];
+    await mount({ ...fixture, bcp_size_cp: 1, boltz_use_msa: true, msa_cache_only: true, complex_components: [
+        { id: 'A', type: 'protein', sequence: fixture.sequence },
+        { id: 'B', type: 'protein', sequence: 'AAAAKLL' },
+        { id: 'C', type: 'ligand', ccd: 'ATP' },
+    ] });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 330)); }); await flush();
+    expect(cacheReads).toEqual(expect.arrayContaining([fixture.sequence, 'AAAAKLL']));
+    expect(text(renderer.root)).toContain('Cache: missing B');
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(0);
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('missing: B'));
+});
+
+it('allows cache-only after all protein chains have verified hits', async () => {
+    cacheHits = [fixture.sequence, 'AAAAKLL'];
+    await mount({ ...fixture, bcp_size_cp: 1, boltz_use_msa: true, msa_cache_only: true, complex_components: [
+        { id: 'A', type: 'protein', sequence: fixture.sequence },
+        { id: 'B', type: 'protein', sequence: 'AAAAKLL' },
+    ] });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 330)); }); await flush();
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].params.msa_cache_only).toBe(true);
+});
+
+it('checks batch replacements rather than the displaced protein sequence', async () => {
+    cacheHits = [fixture.sequence, 'VVVVVV', 'LLLLLL'];
+    await mount({ ...fixture, bcp_size_cp: 1, boltz_use_msa: true, msa_cache_only: true,
+        sequence_batch_input: 'variant1: VVVVVV\nvariant2: LLLLLL', sequence_batch_component_id: 'B',
+        complex_components: [
+            { id: 'A', type: 'protein', sequence: fixture.sequence },
+            { id: 'B', type: 'protein', sequence: 'DISPLACED' },
+        ],
+    });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 330)); }); await flush();
+    expect(cacheReads).toEqual(expect.arrayContaining([fixture.sequence, 'VVVVVV', 'LLLLLL']));
+    expect(cacheReads).not.toContain('DISPLACED');
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(1);
+});
+
+it('names stale remote telemetry, refuses launch, and refreshes without stale-capacity bypass', async () => {
+    await mount(fixture, 'vast:one');
+    await sample({ ...telemetry('vast:one'), observed_at: new Date(Date.now() - 60_000).toISOString() });
+    expect(preview()).toBeNull();
+    expect(text(renderer.root)).toContain('Worker GPU telemetry is stale or unavailable');
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(0);
+    await click('Refresh GPU telemetry');
+    expect(reads.filter(id => id === 'vast:one').length).toBeGreaterThan(1);
+    expect(preview().params.bcp_gpu_ids).toBe('0,1,2,3');
+});
 
 it('actual Structure picker replaces local saved placement and sends four remote devices unchanged in preview/submit', async () => {
     await mount({ ...fixture, pinned_gpus: [8, 9], bcp_gpu_ids: '8,9', lock_gpus: true });

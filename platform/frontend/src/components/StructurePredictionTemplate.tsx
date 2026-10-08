@@ -153,7 +153,7 @@ const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
 export function StructurePredictionTemplate({ onBack, initialValues, onDraftChange, onOpenTemplateManager, sourceSequenceId = null, mdDraftId = null, returnTemplate = null }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const { gpuOptions, executionTargetId } = useLiveGpuCatalog({ followExecutionTarget: true });
+    const { gpuOptions, executionTargetId, telemetryRefusal, refreshGpuTelemetry } = useLiveGpuCatalog({ followExecutionTarget: true, requireFresh: true });
     const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn', fetchFrustraMpnnIntegration);
     const normalizeProtenixModel = (_model?: string) => 'protenix-v2';
     const initialPrimaryProteinComponent = resolveInitialPrimaryProteinComponent(initialValues);
@@ -320,9 +320,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const [msaForceRefresh, setMsaForceRefresh] = useState(false);  // Purge cache for this sequence
     const [msaCacheOnly, setMsaCacheOnly] = useState(initialValues?.msa_cache_only ?? false);  // Skip generation, require cache hit
     const [msaAllowEmptyFallback, setMsaAllowEmptyFallback] = useState(initialValues?.msa_allow_empty_fallback ?? false);
-    const [msaCacheInfo, setMsaCacheInfo] = useState<MsaCacheInfo | null>(null);
-    const [msaCacheLoading, setMsaCacheLoading] = useState(false);
-    const [msaCacheError, setMsaCacheError] = useState<string | null>(null);
+    const [msaCacheResult, setMsaCacheResult] = useState<{
+        key: string; infos: Record<string, MsaCacheInfo>; error: string | null;
+    } | null>(null);
     // NEW: Expansion, EnvDB, and Iterations controls
     const [msaUseExpand, setMsaUseExpand] = useState<boolean | undefined>(initialValues?.msa_use_expand);
     const [msaUseEnv, setMsaUseEnv] = useState<boolean | undefined>(initialValues?.msa_use_env);
@@ -716,10 +716,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         fallbackGpuIds: boltzCpFallbackGpuIds,
     });
     const boltzCpPlacementError = isBoltzCpLaunch ? (
-        executionTargetId && (!gpuOptions.length || boltzCpGpuSettings.gpuIds.split(',')
+        telemetryRefusal || (executionTargetId && (!gpuOptions.length || boltzCpGpuSettings.gpuIds.split(',')
             .some(id => !gpuOptions.some(gpu => gpu.index === Number(id))))
-            ? 'Selected worker GPU telemetry is unavailable or does not contain the selected GPUs. Refresh or select compatible GPUs.'
-            : boltzCpGpuSettings.error
+            ? 'Selected worker GPU telemetry does not contain the selected GPUs. Refresh GPU telemetry or select compatible GPUs.'
+            : boltzCpGpuSettings.error)
     ) : undefined;
     const boltzQualityState = getBoltzQualitySliderState({
         samplingSteps: boltzSamplingSteps,
@@ -943,53 +943,50 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         setParsedChains(activeModel?.chains ?? modalParsedStructure.chains ?? []);
     }, [modalParsedStructure, modalSelectedModel]);
 
-    useEffect(() => {
-        const normalizedSequence = sequence.replace(/\s+/g, '').trim();
-
-        if (!msaNeeded || !normalizedSequence) {
-            setMsaCacheInfo(null);
-            setMsaCacheError(null);
-            setMsaCacheLoading(false);
-            return;
+    // Fold-CP prepares an MSA for each protein sequence in the submitted complex.
+    // Batch variants replace the selected chain; the placeholder is not a real input.
+    const msaCacheChains = (() => {
+        const components = complexMode ? buildComplexComponents(batchEntriesPreview).components
+            : [{ id: primaryChainId || 'A', type: 'protein', sequence }];
+        const chains = components.filter(component => isProteinComponent(component)
+            && !(batchEntriesPreview.length && component.id === resolvedSequenceBatchComponentId))
+            .map(component => ({ id: String(component.id), sequence: String(component.sequence || '').replace(/\s+/g, '').toUpperCase() }));
+        if (batchEntriesPreview.length) {
+            chains.push(...batchEntriesPreview.map((entry, index) => ({
+                id: `${resolvedSequenceBatchComponentId} variant ${index + 1}`,
+                sequence: entry.sequence.replace(/\s+/g, '').toUpperCase(),
+            })));
         }
+        return chains;
+    })();
+    const msaCacheKey = JSON.stringify(msaNeeded ? msaCacheChains : []);
+    const msaCacheLoading = msaNeeded && msaCacheChains.length > 0 && msaCacheResult?.key !== msaCacheKey;
+    const msaCacheError = msaCacheResult?.key === msaCacheKey ? msaCacheResult.error : null;
+    const msaCacheMissing = msaCacheResult?.key === msaCacheKey && !msaCacheError
+        ? msaCacheChains.filter(chain => !msaCacheResult.infos[chain.sequence]?.cache_entries)
+        : [];
+    const msaCacheReady = msaNeeded && msaCacheChains.length > 0 && !msaCacheLoading && !msaCacheError && !msaCacheMissing.length;
 
+    useEffect(() => {
+        if (!msaNeeded || !msaCacheChains.length) return;
         let active = true;
-        setMsaCacheLoading(true);
-        setMsaCacheError(null);
-
         const timer = setTimeout(() => {
-            fetchMsaCacheInfo(normalizedSequence)
-                .then((resp) => {
-                    if (!active) return;
-                    setMsaCacheInfo(resp.data);
-
+            const sequences = [...new Set(msaCacheChains.map(chain => chain.sequence).filter(Boolean))];
+            Promise.all(sequences.map(async (entry) => [entry, (await fetchMsaCacheInfo(entry)).data] as const))
+                .then(entries => {
+                    if (active) setMsaCacheResult({ key: msaCacheKey, infos: Object.fromEntries(entries), error: null });
                 })
                 .catch((err: UntypedApiValue) => {
-                    if (!active) return;
-                    setMsaCacheInfo(null);
-                    setMsaCacheError(err?.response?.data?.detail || err?.message || 'Failed to read MSA cache');
-
-                })
-                .finally(() => {
-                    if (active) {
-                        setMsaCacheLoading(false);
-                    }
+                    if (active) setMsaCacheResult({ key: msaCacheKey, infos: {}, error: err?.response?.data?.detail || err?.message || 'Failed to read MSA cache' });
                 });
         }, 300);
+        return () => { active = false; clearTimeout(timer); };
+    }, [msaCacheKey, msaNeeded]);
 
-        return () => {
-            active = false;
-            clearTimeout(timer);
-        };
-    }, [sequence, msaNeeded, msaCacheOnly]);
-
-    const msaCacheSummary = msaCacheLoading
-        ? 'Cache: checking...'
-        : msaCacheError
-            ? 'Cache: unavailable'
-            : (msaCacheInfo && msaCacheInfo.cache_entries > 0)
-                ? `Cache: ${msaCacheInfo.cache_entries} entr${msaCacheInfo.cache_entries === 1 ? 'y' : 'ies'}`
-                : 'Cache: none';
+    const msaCacheSummary = msaCacheLoading ? 'Cache: checking...'
+        : msaCacheError ? 'Cache: unavailable'
+        : msaCacheReady ? `Cache: ready for ${msaCacheChains.length} protein chain(s)`
+        : `Cache: missing ${msaCacheMissing.map(chain => chain.id).join(', ') || 'protein sequence'}`;
 
     const buildSubmission = (resolvedSourcePath: string | null, requireSource = true) => {
         if (placementOwner.current !== executionTargetId) throw new Error('Execution target changed; GPU placement is being refreshed.');
@@ -1070,15 +1067,19 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             params.protenix_target_geometry_mode = protenixTargetGeometryMode;
         }
 
-        if (msaProvider === 'local') {
+        if (msaNeeded && msaProvider === 'local') {
             throw new Error(MSA_POLICY.local_disabled);
         }
         if (msaNeeded && msaProvider === 'colabfold_api' && numParallelJobs > 1) {
             throw new Error('ColabFold API MSA provider currently supports only single-job submissions (num_parallel_jobs=1).');
         }
 
-        if (msaNeeded && msaCacheOnly && (!msaCacheInfo || msaCacheInfo.cache_entries < 1)) {
-            throw new Error('Use Cache Only is enabled, but no cached MSA exists for this sequence.');
+        if (msaNeeded && msaCacheOnly && !msaCacheReady) {
+            throw new Error(msaCacheError
+                ? `Use Cache Only requires verified cache entries for every protein chain; cache lookup failed: ${msaCacheError}`
+                : msaCacheLoading
+                    ? 'Use Cache Only requires verified cache entries for every protein chain; cache lookup is still in progress.'
+                    : `Use Cache Only requires cached MSA for every protein chain; missing: ${msaCacheMissing.map(chain => chain.id).join(', ') || 'protein sequence'}.`);
         }
 
         // MSA Quality parameters (when MSA is enabled for unknown predictor)
@@ -1504,6 +1505,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                             </label>
                         )}
                         {boltzCpPlacementError && <p role="alert" className="mt-2 text-xs text-amber-200">{boltzCpPlacementError}</p>}
+                        {isBoltzCpLaunch && <button type="button" onClick={() => { void refreshGpuTelemetry(); }} className="mt-2 rounded border border-slate-600 px-2 py-1 text-xs text-slate-200">Refresh GPU telemetry</button>}
                     </div>
                     )}
                 </div>
@@ -2581,17 +2583,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                         <p className="text-xs text-[var(--text-muted)]">Checking local MSA cache...</p>
                                     ) : msaCacheError ? (
                                         <p className="text-xs text-[var(--error)]">{msaCacheError}</p>
-                                    ) : msaCacheInfo && msaCacheInfo.cache_entries > 0 ? (
-                                        <div className="space-y-1">
-                                            <p className="text-sm text-[var(--text-primary)] font-medium">
-                                                Cached MSA found: {msaCacheInfo.cache_entries} entr{msaCacheInfo.cache_entries === 1 ? 'y' : 'ies'}
-                                            </p>
-                                            <p className="text-xs text-[var(--text-muted)]">
-                                                Canonical cache: {msaCacheInfo.canonical_exists ? 'yes' : 'no'} | Best depth: {msaCacheInfo.best_depth ?? 'unknown'}
-                                            </p>
-                                        </div>
+                                    ) : msaCacheReady ? (
+                                        <p className="text-sm text-[var(--text-primary)] font-medium">Cached MSA verified for {msaCacheChains.length} protein chain(s).</p>
                                     ) : (
-                                        <p className="text-xs text-[var(--text-muted)]">No cached MSA found for this sequence.</p>
+                                        <p className="text-xs text-[var(--text-muted)]">Missing cached MSA for: {msaCacheMissing.map(chain => chain.id).join(', ') || 'protein sequence'}.</p>
                                     )}
                                 </div>
                                 <label className="flex items-center gap-3 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg cursor-pointer hover:bg-emerald-500/20 transition-colors">
@@ -2605,7 +2600,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                                 setMsaForceRefresh(false);
                                             }
                                         }}
-                                        disabled={!msaCacheLoading && (!msaCacheInfo || msaCacheInfo.cache_entries < 1)}
+                                        disabled={!msaCacheReady && !msaCacheOnly}
                                         className="w-4 h-4 rounded bg-[var(--bg-primary)] border-emerald-500 text-emerald-400 focus:ring-emerald-500 disabled:opacity-50"
                                     />
                                     <div>
