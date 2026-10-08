@@ -1,8 +1,8 @@
 # MolBio Toolkit: OVE to Seqviz Migration Plan
 
 **Date**: 2026-01-31  
-**Status**: Approved for implementation (Audit Complete)  
-**Estimated Effort**: 4-5 days (revised after gap analysis)
+**Status**: ✅ COMPLETE - All phases implemented  
+**Actual Effort**: 4 days (Jan 28-31, 2026)
 
 ---
 
@@ -624,20 +624,20 @@ Remove OVE-specific components (if any leaked in).
 ## Verification Checklist
 
 ### Functional Tests
-- [ ] Import GenBank file → renders in circular/linear view
-- [ ] Import FASTA file → renders correctly
-- [ ] Click feature → highlights in viewer
-- [ ] Select region → returns correct coordinates
-- [ ] Run digest → fragments displayed, click highlights
-- [ ] Run PCR → product preview shown
-- [ ] Add primer → binding sites detected
-- [ ] Save sequence → persists to database
-- [ ] Load sequence from library → displays correctly
+- [x] Import GenBank file → renders in circular/linear view
+- [x] Import FASTA file → renders correctly
+- [x] Click feature → highlights in viewer
+- [x] Select region → returns correct coordinates
+- [x] Run digest → fragments displayed, click highlights
+- [x] Run PCR → product preview shown
+- [x] Add primer → binding sites detected
+- [x] Save sequence → persists to database
+- [x] Load sequence from library → displays correctly
 
 ### Regression Tests
-- [ ] File parsing still works (bio-parsers unchanged)
-- [ ] Backend APIs still work (unchanged)
-- [ ] Sequence library CRUD works (unchanged)
+- [x] File parsing still works (bio-parsers unchanged)
+- [x] Backend APIs still work (unchanged)
+- [x] Sequence library CRUD works (unchanged)
 
 ---
 
@@ -951,14 +951,14 @@ sequence_type: str = "dna"  # Can be "dna" or "rna"
 
 | Your Requirement | Phase | Status |
 |------------------|-------|--------|
-| Primers on sequences with Tm display | Phase 5.1 | ✅ Planned |
-| Full restriction enzyme filtering | Phase 5.2 | ✅ Planned |
-| GC content by base (heat map) | Phase 5.3 | ✅ Planned |
-| Save primers to library | Phase 5.4 | ✅ Planned |
+| Primers on sequences with Tm display | Phase 5.1 | ✅ Complete |
+| Full restriction enzyme filtering | Phase 5.2 | ✅ Complete (80+ enzymes) |
+| GC content by base (heat map) | Phase 5.3 | ✅ Complete |
+| Save primers to library | Phase 5.4 | ✅ Complete |
 | Save sequences / plasmid library | Existing | ✅ Already works |
-| RNA view | Phase 6.1-6.2 | ✅ Planned |
+| RNA view | Phase 6.1-6.2 | ✅ Complete |
 | RNA secondary structure | Phase 7+ | Deferred |
-| **Auto-annotation (FASTA)** | **Phase 7** | ✅ Planned |
+| **Auto-annotation (FASTA)** | **Phase 7** | ✅ Complete (pLannotate) |
 
 If seqviz doesn't work out:
 1. Keep bio-parsers, sequence-utils (they're standalone)
