@@ -476,6 +476,42 @@ def test_metadata_only_runtime_projection_preserves_plan(roots, monkeypatch, mod
         bundle._runtime_assets(model, mode, {}, selected_plan=incomplete)
 
 
+def _generated_cp_invocation(roots, *, source_owner=None):
+    """Ordinary Structure Fold-CP: compiler-generated config, no request path.
+
+    The operator request names no config at all; the native owner exists only as
+    the compiler-generated ``output_dir/boltz_cp_input.yaml``, which the
+    controller records in the package it prepares from it.
+    """
+    import json
+    import yaml
+    output = roots['results'] / 'job'
+    output.mkdir(parents=True, exist_ok=True)
+    generated = output / 'boltz_cp_input.yaml'
+    generated.write_text(yaml.safe_dump({'version': 1, 'sequences': [
+        {'protein': {'id': 'A', 'sequence': 'AAAA', 'msa': 'empty'}}],
+        'templates': [{'cif': 'template.cif'}]}))
+    (output / 'template.cif').write_bytes(b'generated template fixture')
+    packaged = output / 'prepared-msa'
+    packaged.mkdir()
+    packaged_config = packaged / 'boltz_cp_input.yaml'
+    packaged_config.write_bytes(generated.read_bytes())
+    manifest = packaged / 'msa-inputs.json'
+    manifest.write_text(json.dumps({
+        'schema': 'bms.boltz-cp-msa-inputs.v1',
+        'source_owner': str(generated) if source_owner is None else source_owner,
+        'configs': [{'path': 'boltz_cp_input.yaml',
+                     'sha256': bundle._sha256_file(packaged_config),
+                     'source_sha256': bundle._sha256_file(generated), 'chains': []}]}))
+    params = {'bcp_input_path': str(packaged), 'out_dir': str(output),
+              'boltz_prepared_msa_sha256': bundle._sha256_file(manifest)}
+    invocation = NativeInvocation.capture(model_id='boltz_cp_experimental', mode='design',
+        command=['nextflow'], requested={'sequence': 'AAAA'}, effective=params,
+        native_parameters=params, entrypoint='boltz_cp_experimental.nf',
+        generated_inputs=(GeneratedInput('boltz_cp_input.yaml', generated.read_bytes()),))
+    return invocation, generated, packaged
+
+
 def test_prepared_cp_template_keeps_original_native_owner(roots, tmp_path, monkeypatch, portable):
     import json
     import yaml
@@ -501,3 +537,67 @@ def test_prepared_cp_template_keeps_original_native_owner(roots, tmp_path, monke
     derived = portable.bind_native_document(yaml.safe_load(owner.read_bytes()), 'boltz-yaml', owner=owner)
     assert Path(derived['templates'][0]['cif']).read_bytes() == template.read_bytes()
     assert owner.read_bytes() == original == packaged.read_bytes() == native.read_bytes()
+
+    # The ordinary Structure Fold-CP request names no config path. The same
+    # closure must resolve through the owner the preparing controller recorded.
+    generated_invocation, generated, packaged_dir = _generated_cp_invocation(roots)
+    remote, refs, _ = _place_closure(roots, tmp_path, monkeypatch, generated_invocation)
+    transferred = {path.relative_to(remote/'bundle'/'inputs').as_posix()
+                   for path in (remote/'bundle'/'inputs').rglob('*') if path.is_file()}
+    assert any(name.endswith('boltz_cp_input.yaml') for name in transferred)
+    assert any(name.endswith('prepared-msa/boltz_cp_input.yaml') for name in transferred)
+    assert any(name.endswith('prepared-msa/msa-inputs.json') for name in transferred)
+    # The prepared config's own relative template reference resolves to the
+    # compiler-generated config's sibling, not to a path inside the package.
+    template_refs = [ref for ref in refs if ref['role'] == 'template']
+    assert template_refs
+    assert {ref['source_path'] for ref in template_refs} == {str(generated.parent/'template.cif')}
+
+
+@pytest.mark.parametrize('mutation,message', [
+    ('relative', 'is not a trusted native path'),
+    ('escaping', 'no trusted native source owner'),
+    ('symlink', 'source owner traverses a symlink'),
+    ('changed', 'source owner identity changed'),
+])
+def test_prepared_cp_recorded_owner_stays_verified(roots, tmp_path, mutation, message):
+    output = roots['results']/'job'
+    output.mkdir(parents=True, exist_ok=True)
+    if mutation == 'relative':
+        owner = 'boltz_cp_input.yaml'
+    elif mutation == 'escaping':
+        outside = tmp_path/'outside.yaml'
+        outside.write_text('version: 1\nsequences: []\n')
+        owner = str(outside)
+    elif mutation == 'symlink':
+        link = output/'alias.yaml'
+        link.symlink_to(output/'boltz_cp_input.yaml')
+        owner = str(link)
+    else:
+        other = output/'other.yaml'
+        other.write_text('version: 1\nsequences: []\n')
+        owner = str(other)
+    invocation, _, _ = _generated_cp_invocation(roots, source_owner=owner)
+    with pytest.raises(bundle.RemoteBundleError, match=message):
+        bundle._input_assets(invocation.native_parameters, native_invocation=invocation,
+            repo_root=roots['repo'], runtime_paths=set(), output_dir=output)
+
+
+def test_prepared_cp_package_without_recorded_owner_still_needs_the_request(roots, tmp_path):
+    """Pre-fix/legacy package: no record, no request-named owner, no closure."""
+    import json
+    invocation, _, packaged = _generated_cp_invocation(roots)
+    manifest = packaged/'msa-inputs.json'
+    payload = json.loads(manifest.read_text())
+    payload.pop('source_owner')
+    manifest.write_text(json.dumps(payload))
+    invocation = NativeInvocation.capture(model_id='boltz_cp_experimental', mode='design',
+        command=['nextflow'], requested={'sequence': 'AAAA'},
+        effective={**invocation.native_parameters, 'boltz_prepared_msa_sha256': bundle._sha256_file(manifest)},
+        native_parameters={**invocation.native_parameters,
+                           'boltz_prepared_msa_sha256': bundle._sha256_file(manifest)},
+        entrypoint='boltz_cp_experimental.nf',
+        generated_inputs=invocation.generated_inputs)
+    with pytest.raises(bundle.RemoteBundleError, match='no trusted native source owner'):
+        bundle._input_assets(invocation.native_parameters, native_invocation=invocation,
+            repo_root=roots['repo'], runtime_paths=set(), output_dir=roots['results']/'job')

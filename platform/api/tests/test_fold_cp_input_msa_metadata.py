@@ -80,6 +80,9 @@ def test_fold_cp_input_msa_producer_plan_and_portable_consumer(tmp_path, monkeyp
     worker = tmp_path / 'worker'
     shutil.move(prepared['bcp_input_path'], worker)
     manifest = json.loads((worker / 'msa-inputs.json').read_text())
+    # The package records the compiled owner the operator request never names,
+    # so remote bundle preparation does not re-derive it from the request.
+    assert manifest['source_owner'] == str(Path(inv.native_parameters['bcp_input_path']).resolve())
     for config in manifest['configs']:
         native = resolve_boltz_config(worker / config['path'], root=worker,
             manifest_sha256=prepared['boltz_prepared_msa_sha256'])
@@ -89,7 +92,7 @@ def test_fold_cp_input_msa_producer_plan_and_portable_consumer(tmp_path, monkeyp
                 assert Path(row['protein']['msa']).is_relative_to(worker)
 
 
-@pytest.mark.parametrize('failure', ['digest', 'settings', 'source', 'config', 'alignment', 'extra'])
+@pytest.mark.parametrize('failure', ['digest', 'settings', 'source', 'config', 'alignment', 'extra', 'owner'])
 def test_fold_cp_binding_rejects_changed_inputs(tmp_path, monkeypatch, failure):
     provider_double(monkeypatch, tmp_path)
     inv = compiled(tmp_path)
@@ -104,6 +107,12 @@ def test_fold_cp_binding_rejects_changed_inputs(tmp_path, monkeypatch, failure):
             manifest['settings']['msa_provider'] = 'colabfold_api'
         else:
             manifest['configs'][0]['source_sha256'] = '0' * 64
+        path.write_text(json.dumps(manifest))
+        prepared['boltz_prepared_msa_sha256'] = digest(path.read_bytes())
+    elif failure == 'owner':
+        # The package's own recorded owner cannot replace the compiled native
+        # input the launch actually read.
+        manifest['source_owner'] = str(tmp_path / 'out' / 'foreign.yaml')
         path.write_text(json.dumps(manifest))
         prepared['boltz_prepared_msa_sha256'] = digest(path.read_bytes())
     elif failure == 'config':

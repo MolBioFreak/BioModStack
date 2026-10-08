@@ -504,6 +504,31 @@ def verify_approved_native_inputs(job: Any, runtime_references: dict[str, dict[s
                 raise RemoteBundleError('Approved native input changed during bundle inventory')
 
 
+def _prepared_cp_source_owner(manifest: dict[str, Any],
+                              native_invocation: NativeInvocation) -> Path:
+    """Return the trusted native owner of the prepared Fold-CP configs.
+
+    The preparing controller records the owner it actually read (for an ordinary
+    Structure Fold-CP launch that is the compiler-generated
+    ``output_dir/boltz_cp_input.yaml``, which the operator request never names).
+    A request-named owner remains the fallback for packages without that record.
+    Containment in managed input storage and per-config ``source_sha256``
+    identity stay with the caller, so every existing check still applies.
+    """
+    recorded = manifest.get("source_owner")
+    if recorded is not None:
+        if not isinstance(recorded, str) or not recorded:
+            raise RemoteBundleError("Prepared Fold-CP source owner is not a native path")
+        owner = Path(recorded)
+        if not owner.is_absolute():
+            raise RemoteBundleError("Prepared Fold-CP source owner is not a trusted native path")
+        if any(part.is_symlink() for part in (owner, *owner.parents)):
+            raise RemoteBundleError("Prepared Fold-CP source owner traverses a symlink")
+        return owner
+    requested = json.loads(native_invocation.requested_json)
+    return Path(requested.get("bcp_input_path") or requested.get("input_path") or "")
+
+
 def _input_assets(
     params: dict[str, Any],
     *,
@@ -581,8 +606,7 @@ def _input_assets(
             raise RemoteBundleError("Prepared Fold-CP manifest identity changed")
         manifest = json.loads(manifest_path.read_bytes())
         if manifest.get("schema") == "bms.boltz-cp-msa-inputs.v1":
-            requested = json.loads(native_invocation.requested_json)
-            original = Path(requested.get("bcp_input_path") or requested.get("input_path") or "")
+            original = _prepared_cp_source_owner(manifest, native_invocation)
             if not original.is_absolute() or not any(_under(original, root) for root in input_roots):
                 raise RemoteBundleError("Prepared Fold-CP configs have no trusted native source owner")
             for config in manifest["configs"]:

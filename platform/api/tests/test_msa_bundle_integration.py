@@ -180,6 +180,70 @@ runpy.run_path(script,run_name='__main__')
         hydrate_prepared_protenix_task(payload, source, sha)
 
 
+def test_fold_cp_generated_config_prepared_msa_bundles_offline(offline_bundle, monkeypatch):
+    """Remote Fold-CP whose MSA is prepared on the controller must bundle.
+
+    The ordinary Structure Fold-CP request names no config path (the native one
+    is compiler-generated), so bundle preparation has to consume the owner the
+    preparing controller recorded in the package instead of re-deriving it.
+    """
+    from services.model_msa_handoff import prepare_launch_msa
+    roots, _, target, _ = offline_bundle
+    output = roots['results']/'foldcp-job'
+    job = SimpleNamespace(id='foldcp-offline', model_id='boltz_cp_experimental', mode='design',
+        child_output_dir=None, output_dir=str(output), lineage_root_job_id=None, parent_job_id=None,
+        execution_source_revision='a'*40, execution_source_tree='b'*40,
+        provenance={'remote_execution_assignment': {'lease_id': 'fixture-lease',
+                                                    'gpu_indices': [0, 1, 2, 3]}},
+        assigned_gpu=0,
+        params=dict(sequence=SEQUENCE, sequence_name='native', pred_method='fold_cp',
+            boltz_use_msa=True, msa_provider='colabfold_api', bcp_size_cp=4,
+            pinned_gpus=[0, 1, 2, 3], gpu_id=0, bcp_gpu_ids='0,1,2,3',
+            boltz_sampling_steps=200, boltz_recycling_steps=3, boltz_num_samples=1,
+            container_dir=str(roots['containers']), weights_root=str(roots['weights'])))
+    invocation = nextflow.compile_job_nextflow_invocation(job, job.params, job.output_dir)
+    invocation.materialize_inputs(Path(job.output_dir))
+    generated = output/'boltz_cp_input.yaml'
+    assert generated.is_file()
+    assert 'bcp_input_path' not in job.params
+    calls = []
+    def provider(*, sequences, params):
+        calls.append((list(sequences), dict(params)))
+        artifacts = []
+        for index, sequence in enumerate(sequences):
+            path = output/f'fixture-{index}.a3m'
+            path.write_bytes(A3M)
+            artifacts.append(dict(chain_index=index, role='unpaired', path=str(path),
+                                  sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+        return dict(provider='colabfold_api', request_digest='offline-fixture', cache_hit=False,
+                    provenance={'fixture': True}, artifacts=artifacts)
+    monkeypatch.setattr(msa_preparation, 'prepare_model_msa', provider)
+    prepared = prepare_launch_msa(job.model_id, {**job.params, **invocation.native_parameters},
+                                  output/'prepared-msa')
+    assert [call[0] for call in calls] == [[SEQUENCE]]
+    manifest = json.loads((Path(prepared['bcp_input_path'])/'msa-inputs.json').read_text())
+    assert manifest['source_owner'] == str(generated.resolve())
+    bound = nextflow._bind_protenix_msa_transport(invocation, prepared)
+    # The selected Fold-CP image and weights are declared runtime dependencies of
+    # this plan; fixture bytes keep the real runtime-asset/placement projection
+    # offline without weakening it.
+    image = Path(invocation.native_parameters['bcp_container_path'])
+    image.write_bytes(b'offline Fold-CP image fixture, not executable\n')
+    weights = Path(invocation.native_parameters['boltz_models'])
+    weights.mkdir(parents=True)
+    (weights/'fixture-weight').write_bytes(b'fixture, not scientific weights\n')
+    monkeypatch.setattr(bundle, '_runtime_assets',
+        lambda *_, include_support=False, native_invocation=None:
+            [(image, 'containers/fold-cp.sif'), (weights, 'weights/boltz')])
+    sealed = bundle.prepare_remote_bundle(job=job, target=target, command=list(bound.command),
+                                          native_invocation=bound)
+    inputs = [record for record in sealed.envelope.files if record.role == 'input']
+    msa_inputs = [record for record in inputs if 'prepared-msa/' in record.relative_path]
+    assert msa_inputs
+    assert not Path(target.remote_root).exists()  # preparation only, no transfer performed
+    assert generated.read_bytes() == Path(manifest['source_owner']).read_bytes()
+
+
 def test_provider_failure_blocks_bundle_ready(offline_bundle, monkeypatch):
     roots, job, target, cached = offline_bundle
     cached.unlink()

@@ -523,6 +523,20 @@ def bind_prepared_fold_cp_plan(invocation, supplied):
     if (manifest.get('schema') != 'bms.boltz-cp-msa-inputs.v1'
             or manifest.get('settings') != fold_cp_msa_settings(native)):
         raise ValueError('Prepared Fold-CP MSA schema/scientific settings mismatch')
+    recorded = manifest.get('source_owner')
+    if recorded is not None:
+        # Verify the producer's recorded owner against the once-compiled native
+        # input instead of trusting the package's own prose. A retained package
+        # is re-consumed from its own root, where the original is not derivable.
+        if not isinstance(recorded, str) or not recorded:
+            raise ValueError('Prepared Fold-CP source owner must be a native path')
+        owner = Path(recorded)
+        if not owner.is_absolute() or any(p.is_symlink() for p in (owner, *owner.parents)):
+            raise ValueError('Prepared Fold-CP source owner is not a trusted native path')
+        compiled = Path(native['bcp_input_path']) if native.get('bcp_input_path') else None
+        if (compiled is not None and compiled.resolve() != root.resolve()
+                and owner.resolve() != compiled.resolve()):
+            raise ValueError('Prepared Fold-CP source owner is not the compiled native config')
     services = [s for s in plan.metadata.external_services if s.logical_id == 'boltz_cp_experimental:msa']
     identity = 'sha256:' + sha
     if len(services) != 1 or services[0].state == 'disabled':
@@ -602,8 +616,12 @@ def prepare_boltz_cp_bundle(params: dict, destination: Path) -> dict:
         target.write_text(yaml.safe_dump(payload, sort_keys=False))
         records.append({'path': str(relative), 'source_sha256': digest(path.read_bytes()),
                         'sha256': digest(target.read_bytes()), 'chains': chains, 'provenance': receipt})
+    # The prepared package carries its own verified source-owner identity. An
+    # ordinary Structure Fold-CP request never names it: its native config
+    # (``boltz_cp_input.yaml``) is compiler-generated into the job output, so the
+    # consumer must not have to re-derive the owner from the operator request.
     manifest = {'schema': 'bms.boltz-cp-msa-inputs.v1', 'configs': records,
-                'settings': fold_cp_msa_settings(params)}
+                'source_owner': str(source), 'settings': fold_cp_msa_settings(params)}
     manifest_path = destination / 'msa-inputs.json'
     manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2))
     return {**params, 'bcp_input_path': str(destination.resolve()),
