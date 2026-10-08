@@ -123,7 +123,10 @@ Absent a selected installation release, the image owner reads the immutable
 filename/SHA from `apptainer/protonpottsmpnn-runtime.lock.json`. Selected managed
 releases still take precedence. This one self-contained image is in the selected
 stage's dependency closure and uses the existing HF delivery/cache owner; no
-separate checkpoint or unrelated prediction/MSA download is needed.
+separate checkpoint or unrelated prediction/MSA download is needed. The pinned
+image is CUDA 13.0-capable and CPU-compatible; its real CPU example/sweep match
+the CPU reference exactly. Actual GPU inference has not been exercised on this
+host. Remote drivers must be compatible with the image's CUDA 13 build.
 
 ## Results and optional follow-on prediction
 

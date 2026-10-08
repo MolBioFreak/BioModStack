@@ -1,9 +1,9 @@
 {
   "contract": "protonpottsmpnn_design.v1",
   "source_revision": "09682abfa7d20e0abcdeea0490b7a4b1c190aee3",
-  "image_filename": "protonpottsmpnn-09682ab-cpu-locked-20261003.sif",
-  "image_sha256": "9e1c6762b39c509983015f4f860a03cf414a8ec08982c12bf07db7ae7a7aeb5d",
-  "image_bytes": 1442050048,
+  "image_filename": "protonpottsmpnn-09682ab-cuda-locked-20261003.sif",
+  "image_sha256": "58b2c612d20a5712dbc578c31b7a4883297f6297245fb14c3e1f51859c7c6efa",
+  "image_bytes": 4030926848,
   "checkpoint": {
     "relative_path": "checkpoints/potts_v6_afdb_edge_his0.3_acid0.06/epoch-0125.ckpt",
     "sha256": "a39872250c0b8eb4c0b4cb6472a6edad0d6f6134a50c28b611386e83c592fe7b"
@@ -15,11 +15,16 @@
     "hbplus_source_revision": "0bd4df6aab49054322c23c4dcfcc07075a84bc05",
     "hbplus_binary_sha256": "692341a3eadf45733dc0e702e2e6dc63e8afbae56e4257a0706243a042231ae9",
     "attribution_patch_sha256": "549d6b99c8b59001e1c56a0cc69e9ec6c28780e293da96b8121f1e39f91712aa",
-    "requirements_lock_sha256": "3aec43f8ec789a8a01a15d74280b8904b1dde08c43eb8117d0bc79eba0ae3233",
-    "native_module_sha256": "0b2e6fe045fe1644a1f4bb5d68ac31679b403b727609e723c674712cc6afd233"
+    "requirements_lock_sha256": "136a76de77e3d51b88018278cf646398fbf633a9b174560971b81cd4a079f52e",
+    "native_module_sha256": "0b2e6fe045fe1644a1f4bb5d68ac31679b403b727609e723c674712cc6afd233",
+    "runtime_variant": "cuda-cu130-cpu-compatible",
+    "torch_version": "2.14.1+cu130",
+    "torch_cuda_build": "13.0",
+    "torch_cuda_arch_flags": "sm_75 sm_80 sm_86 sm_90 sm_100 sm_120"
   },
   "owned_sources_sha256": {
-    "apptainer/protonpottsmpnn.def": "e4061bf6ba551eb7a1c69e8758f556f31e02fc257ee41212fe2c369f2fa378eb",
-    "scripts/run_protonpottsmpnn_design.py": "504d4cf8c0d53b384fb45622ed9f52845a9cc7805aa55059f57549ad883e67f4"
+    "apptainer/protonpottsmpnn-cuda.def": "ba8bdb2c352a81567ba2c7995756e3d6a7689cc0874495fdb35cae71cb0651b8",
+    "apptainer/protonpottsmpnn-cuda-requirements.lock": "136a76de77e3d51b88018278cf646398fbf633a9b174560971b81cd4a079f52e",
+    "scripts/run_protonpottsmpnn_design.py": "d6699c6a1d8337f270ef288d37442384a90308e6b73d414cdb11dd716e926462"
   }
 }

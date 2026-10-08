@@ -1,0 +1,92 @@
+Bootstrap: docker
+From: python@sha256:6e13e65c55e33adf203d77ee371cf8bf5d81bd4902ef07565721f46bf44917af
+
+%files
+    apptainer/protonpottsmpnn-cuda-requirements.lock /opt/protonpottsmpnn-requirements.lock
+    apptainer/patches/protonpottsmpnn/criteria-attribution.patch /opt/criteria-attribution.patch
+    scripts/run_protonpottsmpnn_design.py /opt/run_protonpottsmpnn_design.py
+
+%post
+    set -eu
+    # Immutable Debian snapshot, rather than floating package repository contents.
+    rm -f /etc/apt/sources.list.d/debian.sources
+    printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260805T000000Z bookworm main\n' > /etc/apt/sources.list
+    apt-get update
+    apt-get install -y --no-install-recommends build-essential patch libgomp1 ca-certificates
+    rm -rf /var/lib/apt/lists/*
+    python - <<'PY'
+import hashlib, pathlib, urllib.request
+assets = [
+ ('https://codeload.github.com/christian-creator/ProtonPottsMPNN/tar.gz/09682abfa7d20e0abcdeea0490b7a4b1c190aee3', '/opt/native.tar.gz', 'abb4a54484360e5ec6f88039bb46267177a239a1d670e50a5ba1d34f140a93ca'),
+ ('https://codeload.github.com/RomanLas/HBPLUS/tar.gz/0bd4df6aab49054322c23c4dcfcc07075a84bc05', '/opt/hbplus.tar.gz', '5d7018578f29b83c24a92f674843838a2f8a057493673dfafb60dd4248dbf8d7'),
+]
+for url, dest, digest in assets:
+    urllib.request.urlretrieve(url, dest)
+    assert hashlib.sha256(pathlib.Path(dest).read_bytes()).hexdigest() == digest
+assert hashlib.sha256(pathlib.Path('/opt/criteria-attribution.patch').read_bytes()).hexdigest() == '549d6b99c8b59001e1c56a0cc69e9ec6c28780e293da96b8121f1e39f91712aa'
+PY
+    mkdir /opt/ProtonPottsMPNN /opt/HBPLUS
+    tar -xzf /opt/native.tar.gz --strip-components=1 -C /opt/ProtonPottsMPNN
+    tar -xzf /opt/hbplus.tar.gz --strip-components=1 -C /opt/HBPLUS
+    cd /opt/HBPLUS
+    printf '937467447bd2e429630cc9a226d7d967f728ca2d39bac3ffc70eb378f498fa20  hbplus.tar.gz\n' | sha256sum -c -
+    tar -xzf hbplus.tar.gz
+    make -C hbplus hbplus
+    # Keep the original copyright and terms bundled with the executable.
+    cd /opt/ProtonPottsMPNN
+    patch -p1 < /opt/criteria-attribution.patch
+    printf 'a39872250c0b8eb4c0b4cb6472a6edad0d6f6134a50c28b611386e83c592fe7b  checkpoints/potts_v6_afdb_edge_his0.3_acid0.06/epoch-0125.ckpt\n' | sha256sum -c -
+    python -m venv /opt/proton-venv
+    # Bootstrap the locked setuptools backend before any sdist metadata/build;
+    # otherwise pip's isolated build env would resolve floating backend versions.
+    python - <<'PY'
+import pathlib, re
+text = pathlib.Path('/opt/protonpottsmpnn-requirements.lock').read_text()
+blocks = re.split(r'(?=^[A-Za-z0-9_-]+==)', text, flags=re.M)
+selected = [b for b in blocks if b.startswith(('setuptools==', 'packaging=='))]
+assert len(selected) == 2
+pathlib.Path('/opt/protonpottsmpnn-build-backend.lock').write_text(''.join(selected))
+PY
+    /opt/proton-venv/bin/pip install --require-hashes --no-deps --only-binary=:all: -r /opt/protonpottsmpnn-build-backend.lock
+    /opt/proton-venv/bin/pip install --require-hashes --no-build-isolation --extra-index-url https://download.pytorch.org/whl/cu130 -r /opt/protonpottsmpnn-requirements.lock
+    # Editable installation retains native EV6 pickle/assets that the wheel omits.
+    /opt/proton-venv/bin/pip install --no-deps --no-build-isolation -e /opt/ProtonPottsMPNN/foundry
+    /opt/proton-venv/bin/python - <<'PY'
+import hashlib, json, pathlib, torch
+root = pathlib.Path('/opt/ProtonPottsMPNN')
+identity = {
+ 'torch_version': torch.__version__,
+ 'torch_cuda_build': torch.version.cuda,
+ 'torch_cuda_arch_flags': torch._C._cuda_getArchFlags(),
+ 'runtime_variant': 'cuda-cu130-cpu-compatible',
+ 'source_revision': '09682abfa7d20e0abcdeea0490b7a4b1c190aee3',
+ 'source_archive_sha256': 'abb4a54484360e5ec6f88039bb46267177a239a1d670e50a5ba1d34f140a93ca',
+ 'base_oci_digest': 'sha256:6e13e65c55e33adf203d77ee371cf8bf5d81bd4902ef07565721f46bf44917af',
+ 'debian_snapshot': '20260805T000000Z',
+ 'hbplus_source_revision': '0bd4df6aab49054322c23c4dcfcc07075a84bc05',
+ 'hbplus_binary_sha256': hashlib.sha256(pathlib.Path('/opt/HBPLUS/hbplus/hbplus').read_bytes()).hexdigest(),
+ 'attribution_patch_sha256': hashlib.sha256(pathlib.Path('/opt/criteria-attribution.patch').read_bytes()).hexdigest(),
+ 'requirements_lock_sha256': hashlib.sha256(pathlib.Path('/opt/protonpottsmpnn-requirements.lock').read_bytes()).hexdigest(),
+}
+(root / 'bms-runtime-identity.json').write_text(json.dumps(identity, indent=2) + '\n')
+PY
+    rm /opt/native.tar.gz /opt/hbplus.tar.gz
+    rm -rf /root/.cache/pip
+
+%environment
+    export PATH=/opt/proton-venv/bin:$PATH
+    export PROTONPOTTSMPNN_ROOT=/opt/ProtonPottsMPNN
+    export HBPLUS_PATH=/opt/HBPLUS/hbplus/hbplus
+
+%test
+    /opt/proton-venv/bin/python -c 'import torch; assert torch.__version__ == "2.14.1+cu130"; assert torch.version.cuda == "13.0"; assert torch.ones(1, device="cpu").item() == 1'
+    /opt/proton-venv/bin/python -c 'from mpnn.inference_engines.potts_mpnn_ph import PHDesignCriteria, PottsMPNNPHEngine; from mpnn.transforms.ev6.predictor import EV6Predictor; p=EV6Predictor(); assert len(p._his_folds)==len(p._acid_folds)==5; assert "criteria_index" in __import__("mpnn.inference_engines.potts_mpnn_ph", fromlist=["PHDesignOutput"]).PHDesignOutput.__dataclass_fields__'
+
+%runscript
+    exec /opt/proton-venv/bin/python /opt/run_protonpottsmpnn_design.py "$@"
+
+%labels
+    org.opencontainers.image.source https://github.com/christian-creator/ProtonPottsMPNN
+    org.opencontainers.image.revision 09682abfa7d20e0abcdeea0490b7a4b1c190aee3
+    bms.contract protonpottsmpnn_design.v1
+    bms.science native-unchanged-observational-attribution-patch
