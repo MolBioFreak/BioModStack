@@ -303,6 +303,12 @@ export interface Design {
     de_loop: string | null;       // IMGT 72-75
     fr3_contacts: string | null;  // IMGT 82-87
     fr4_contacts: string | null;  // IMGT 101-103
+    // Frustration analysis (FrustraMPNN)
+    frustration_high_count: number | null;
+    frustration_min_count: number | null;
+    frustration_pct_high: number | null;
+    frustration_residues: Array<{ pos: number; chain: string; frust: number; frustClass: string }> | null;
+    frustration_csv_path: string | null;
     is_favorite: boolean;
     notes: string | null;
     created_at: string;
