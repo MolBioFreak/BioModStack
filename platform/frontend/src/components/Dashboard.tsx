@@ -354,13 +354,27 @@ export function Dashboard() {
     return (
         <div className="min-h-screen bg-slate-950 px-6 pt-3 pb-6">
             {/* System Overview & GPU Status */}
-            <DashboardTelemetry />
+            <section className="mb-6">
+                <DashboardTelemetry />
+            </section>
 
-            {/* GPU Scheduler */}
-            <GpuSchedulerControls />
-
-            {/* GPU Orchestrator Job Queue */}
-            <JobQueuePanel />
+            <section className="relative mb-8">
+                <div className="pointer-events-none absolute inset-x-3 bottom-0 top-4 rounded-[2rem] border border-slate-800/80 bg-slate-900/70 shadow-[0_30px_90px_rgba(2,6,23,0.45)]" />
+                <div className="relative rounded-[2rem] border border-[var(--border-primary)] bg-[var(--bg-secondary)]/74 p-3 shadow-2xl shadow-black/10 md:p-4">
+                    <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
+                        <div className="order-2 xl:order-1">
+                            <QuickViewer
+                                selectedJobId={quickViewJobId}
+                                onJobChange={setQuickViewJobId}
+                            />
+                        </div>
+                        <div className="order-1 space-y-4 xl:order-2">
+                            <GpuSchedulerControls className="m-0" />
+                            <JobQueuePanel className="m-0" />
+                        </div>
+                    </div>
+                </div>
+            </section>
 
             {/* Logs Modal - Full screen popup */}
             {logsModalJobId && (
@@ -740,14 +754,6 @@ export function Dashboard() {
                     </div>
                 </div>
             )}
-
-            {/* Quick Viewer - Compact structure preview */}
-            <section className="mb-8">
-                <QuickViewer
-                    selectedJobId={quickViewJobId}
-                    onJobChange={setQuickViewJobId}
-                />
-            </section>
 
             {/* Jobs Section */}
             <section>
