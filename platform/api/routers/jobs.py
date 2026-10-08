@@ -744,7 +744,7 @@ def _review_candidate_count(job: Job) -> Optional[int]:
     if stage not in REVIEWABLE_STAGES:
         return None
     payload = refresh_gate_payload(job.awaiting_payload or {}, job.output_dir)
-    if stage in {"post_fampnn", "post_boltzgen", "post_ppiflow_generator"}:
+    if stage in {"post_fampnn", "post_boltzgen", "post_ppiflow_generator", "post_caliby"}:
         filtered_count = payload.get("filtered_candidate_count")
         if isinstance(filtered_count, int) and filtered_count > 0:
             return filtered_count
@@ -761,7 +761,7 @@ def _review_candidate_count_cached(job: Job) -> Optional[int]:
     if stage not in REVIEWABLE_STAGES:
         return None
     payload = job.awaiting_payload if isinstance(job.awaiting_payload, dict) else {}
-    if stage in {"post_fampnn", "post_boltzgen", "post_ppiflow_generator"}:
+    if stage in {"post_fampnn", "post_boltzgen", "post_ppiflow_generator", "post_caliby"}:
         filtered_count = payload.get("filtered_candidate_count")
         if isinstance(filtered_count, int) and filtered_count > 0:
             return filtered_count
@@ -839,7 +839,7 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
         normalized_gate_stage = gate_stage.strip().lower()
         if normalized_gate_stage == "post_boltz_validation":
             normalized_gate_stage = "post_structure_validation"
-        if normalized_gate_stage not in {"post_rfantibody", "post_boltzgen", "post_ppiflow_generator", "post_fampnn", "post_structure_validation"}:
+        if normalized_gate_stage not in {"post_rfantibody", "post_boltzgen", "post_ppiflow_generator", "post_fampnn", "post_caliby", "post_structure_validation"}:
             normalized_gate_stage = "post_fampnn"
         normalized["interactive_gate_stage"] = normalized_gate_stage
 
@@ -1334,6 +1334,8 @@ def _derive_iteration_stage_metadata(action: str, params: Dict[str, Any]) -> tup
         return "ppiflow", "maturation"
     if action_normalized == "fampnn_redesign":
         return "fampnn", "redesign"
+    if action_normalized == "caliby_redesign":
+        return "caliby", "redesign"
     if action_normalized in {"validate_boltz2", "validate_protenix"}:
         return "validation", action_normalized.replace("validate_", "")
     if action_normalized == "frustrampnn":
@@ -1368,6 +1370,8 @@ def _review_stage_to_canonical_stage(stage: Any) -> tuple[Optional[str], Optiona
         return "ppiflow", "generator_backbone_refine"
     if normalized == "post_fampnn":
         return "fampnn", "post_fampnn"
+    if normalized == "post_caliby":
+        return "caliby", "post_caliby"
     if normalized == "post_structure_validation":
         return "validation", "post_structure_validation"
     return None, None
@@ -1383,6 +1387,8 @@ def _awaiting_stage_to_resume_hint(stage: Any) -> Optional[str]:
         return "ppiflow"
     if normalized == "post_fampnn":
         return "fampnn"
+    if normalized == "post_caliby":
+        return "caliby"
     if normalized in {"post_structure_validation", "pre_protenix_msa"}:
         return "structure_validation"
     return None
@@ -1444,6 +1450,7 @@ def _requires_direct_ppiflow_maturation(action: str, params: Dict[str, Any]) -> 
         _to_bool(params.get("seq_design_fampnn"))
         or _to_bool(params.get("seq_design_antifold"))
         or _to_bool(params.get("seq_design_proteinmpnn"))
+        or _to_bool(params.get("seq_design_caliby"))
     )
 
 
@@ -1543,6 +1550,29 @@ def _derive_job_stage_tags(model_id: str, mode: str, params: Dict[str, Any], chi
             or ""
         ).strip().lower()
         return "ppiflow", ppiflow_mode or "generator_backbone_refine"
+    if model_normalized == "caliby_experimental":
+        caliby_mode = str(
+            params.get("stage_mode")
+            or params.get("caliby_task")
+            or mode_normalized
+            or ""
+        ).strip().lower()
+        return "caliby", caliby_mode or "sequence_design"
+    if model_normalized == "protein_hunter_experimental":
+        protein_hunter_backend = str(
+            params.get("ph_backend")
+            or params.get("backend")
+            or ""
+        ).strip().lower()
+        protein_hunter_task = str(
+            params.get("stage_mode")
+            or params.get("ph_task")
+            or params.get("task")
+            or mode_normalized
+            or ""
+        ).strip().lower()
+        joined_mode = "_".join(part for part in (protein_hunter_backend, protein_hunter_task) if part)
+        return "protein_hunter", joined_mode or "generation"
     if "fampnn" in model_normalized:
         return "fampnn", mode_normalized or "sequence_design"
     if model_normalized in {"protenix", "boltz2", "rf3"} and mode_normalized in {"predict", "complex"}:
@@ -1706,6 +1736,7 @@ def _looks_like_antibody_job(job: Optional[Job]) -> bool:
             or framework_type == "nanobody"
         )
     )
+    is_caliby_antibody = model_id == "caliby_experimental" and has_antibody_params
     return (
         model_id in {"template_antibody_denovo", "antibody_denovo", "antibody_child"}
         or "antibody" in model_id
@@ -1713,6 +1744,7 @@ def _looks_like_antibody_job(job: Optional[Job]) -> bool:
         or is_antibody_pipeline_mode(rfd_mode)
         or has_antibody_params
         or is_boltzgen_nanobody
+        or is_caliby_antibody
     )
 
 
@@ -3659,6 +3691,7 @@ def _build_antibody_iteration_job(
             launch_params.get("seq_design_fampnn")
             or launch_params.get("seq_design_antifold")
             or launch_params.get("seq_design_proteinmpnn")
+            or launch_params.get("seq_design_caliby")
             or requests_backbone_refine
         ):
             launch_params["rfantibody_input_pdbs"] = str(selection_dir)
@@ -4346,6 +4379,7 @@ async def create_job(
         job_data.params['seq_design_fampnn'] = False
         job_data.params['seq_design_antifold'] = False
         job_data.params['seq_design_proteinmpnn'] = False
+        job_data.params['seq_design_caliby'] = False
         job_data.params['run_structure_validation'] = False
         job_data.params['run_immunogenicity_scoring'] = False
         job_data.params['run_thermompnn'] = False
@@ -5965,6 +5999,10 @@ async def get_job_stages(
         if run_proteinmpnn is None or run_proteinmpnn is True:
             display_stages.append("proteinmpnn")
 
+        run_caliby = params.get("seq_design_caliby")
+        if run_caliby is True:
+            display_stages.append("caliby")
+
         if params.get("run_maturation") is True:
             display_stages.append("maturation")
             ppiflow_mode = str(params.get("ppiflow_stage_mode") or "").strip().lower()
@@ -6166,7 +6204,13 @@ async def resume_job(
                 param_overrides.setdefault("rfantibody_input_pdbs", candidate_dir)
             if candidate_dir and job.awaiting_stage == "post_fampnn":
                 param_overrides.setdefault("fampnn_collected_pdbs", candidate_dir)
-        if job.awaiting_stage in {"post_rfantibody", "post_ppiflow_generator", "post_fampnn", "post_structure_validation"}:
+            if candidate_dir and job.awaiting_stage == "post_caliby":
+                param_overrides.setdefault("selected_input_dir", candidate_dir)
+                param_overrides.setdefault("selected_input_stage_family", "caliby")
+                param_overrides.setdefault("selected_input_stage_mode", "post_caliby")
+                param_overrides.setdefault("selected_input_artifact_class", SEQUENCE_DESIGNED_COMPLEX)
+                param_overrides.setdefault("selected_input_schema_version", ANTIBODY_PIPELINE_CONTRACT_VERSION)
+        if job.awaiting_stage in {"post_rfantibody", "post_ppiflow_generator", "post_fampnn", "post_caliby", "post_structure_validation"}:
             param_overrides.setdefault("interactive_gate_continue", True)
             param_overrides.setdefault("interactive_swa", _to_bool((job.params or {}).get("interactive_swa")))
             param_overrides.setdefault("interactive_gating", _to_bool((job.params or {}).get("interactive_gating")))

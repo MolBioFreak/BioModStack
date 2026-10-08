@@ -37,6 +37,8 @@ Every model integration usually touches some subset of:
   constrained remodel + redesign workflow
 - `protein_cad_experimental`
   experimental La-Proteina / DISCO non-binder design workflow
+- `caliby_experimental`
+  experimental structure-conditioned sequence design workflow
 
 ### Generic prediction / design / docking
 
@@ -54,6 +56,7 @@ Every model integration usually touches some subset of:
 - `oligo_design`
 - `mutagenesis`
 - `protein_cad_experimental`
+- `caliby_experimental`
 
 ### Sequencing
 
@@ -76,6 +79,7 @@ Every model integration usually touches some subset of:
 - FAMPNN
 - AntiFold
 - ProteinMPNN
+- Caliby
 - FrustraMPNN
 - IgGM
 
@@ -113,6 +117,16 @@ as the live validator backends.
 RF3 exists in the codebase as a generic predictor, but should not be documented
 as a production antibody validator surface unless the workflow and control-plane
 integration explicitly say so.
+
+### Caliby is both standalone and nanobody-facing
+
+`Caliby` is wired in two ways:
+
+- as `caliby_experimental`, a standalone experimental workflow family
+- as an experimental sequence-design option in the main nanobody workflow
+
+Document it as an experimental sequence-design backend, not as a backbone
+generator or validator.
 
 ### OpenMM is live
 

@@ -2024,6 +2024,8 @@ def build_nextflow_command(
         # Protein local redesign with constrained RFD3 remodeling
         ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
         ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
+        ('caliby_experimental', 'design'): 'caliby_experimental',
+        ('protein_hunter_experimental', 'design'): 'protein_hunter_experimental',
         # Nanopore basecalling + methylation analysis
         ('nanopore', 'methylation_analysis'): 'nanopore_methylation',
         # Protenix structure prediction
@@ -2538,6 +2540,85 @@ def build_nextflow_command(
             params['rfd_num_designs'] = params['pcad_num_designs']
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'protein_cad_experimental'
+    elif model_id == 'caliby_experimental':
+        caliby_mappings = {
+            'task': 'caliby_task',
+            'input_pdb_dir': 'caliby_input_pdb_dir',
+            'conformer_dir': 'caliby_conformer_dir',
+            'pdb_name_list': 'caliby_pdb_name_list',
+            'pos_constraint_csv': 'caliby_pos_constraint_csv',
+            'model_name': 'caliby_model_name',
+            'packer_model_name': 'caliby_packer_model_name',
+            'num_seqs_per_pdb': 'caliby_num_seqs_per_pdb',
+            'batch_size': 'caliby_batch_size',
+            'num_workers': 'caliby_num_workers',
+            'clean_num_workers': 'caliby_clean_num_workers',
+            'temperature': 'caliby_temperature',
+            'omit_aas': 'caliby_omit_aas',
+            'run_self_consistency_eval': 'caliby_run_self_consistency_eval',
+            'self_consistency_num_models': 'caliby_self_consistency_num_models',
+            'self_consistency_num_recycles': 'caliby_self_consistency_num_recycles',
+            'self_consistency_use_multimer': 'caliby_self_consistency_use_multimer',
+            'sampling_overrides_json': 'caliby_sampling_overrides_json',
+        }
+        for src_key, dest_key in caliby_mappings.items():
+            if src_key == dest_key:
+                continue
+            if src_key in params:
+                if dest_key not in params:
+                    params[dest_key] = params[src_key]
+                params.pop(src_key, None)
+
+        if 'caliby_num_seqs_per_pdb' in params and 'rfd_num_designs' not in params:
+            params['rfd_num_designs'] = params['caliby_num_seqs_per_pdb']
+        if not params.get('rfd_mode'):
+            params['rfd_mode'] = 'caliby_experimental'
+    elif model_id == 'protein_hunter_experimental':
+        protein_hunter_mappings = {
+            'backend': 'ph_backend',
+            'task': 'ph_task',
+            'num_designs': 'ph_num_designs',
+            'num_cycles': 'ph_num_cycles',
+            'min_protein_length': 'ph_min_protein_length',
+            'max_protein_length': 'ph_max_protein_length',
+            'percent_x': 'ph_percent_x',
+            'seed_binder_sequence': 'ph_seed_binder_sequence',
+            'target_protein_sequences': 'ph_target_protein_sequences',
+            'target_pdb': 'ph_target_pdb',
+            'target_pdb_chain': 'ph_target_pdb_chain',
+            'target_template_path': 'ph_target_template_path',
+            'target_template_chain_id': 'ph_target_template_chain_id',
+            'ligand_smiles': 'ph_ligand_smiles',
+            'ligand_ccd': 'ph_ligand_ccd',
+            'nucleic_sequence': 'ph_nucleic_sequence',
+            'nucleic_type': 'ph_nucleic_type',
+            'contact_residues': 'ph_contact_residues',
+            'cyclic': 'ph_cyclic',
+            'alanine_bias': 'ph_alanine_bias',
+            'temperature': 'ph_temperature',
+            'high_iptm_threshold': 'ph_high_iptm_threshold',
+            'high_plddt_threshold': 'ph_high_plddt_threshold',
+            'msa_mode': 'ph_msa_mode',
+            'boltz_model_version': 'ph_boltz_model_version',
+            'boltz_model_path': 'ph_boltz_model_path',
+            'boltz_ccd_path': 'ph_boltz_ccd_path',
+            'chai_hysteresis_mode': 'ph_chai_hysteresis_mode',
+            'chai_num_recycles': 'ph_chai_num_recycles',
+            'chai_num_diff_steps': 'ph_chai_num_diff_steps',
+            'chai_repredict': 'ph_chai_repredict',
+        }
+        for src_key, dest_key in protein_hunter_mappings.items():
+            if src_key == dest_key:
+                continue
+            if src_key in params:
+                if dest_key not in params:
+                    params[dest_key] = params[src_key]
+                params.pop(src_key, None)
+
+        if 'ph_num_designs' in params and 'rfd_num_designs' not in params:
+            params['rfd_num_designs'] = params['ph_num_designs']
+        if not params.get('rfd_mode'):
+            params['rfd_mode'] = 'protein_hunter_experimental'
     elif model_id == 'bindcraft':
         # BindCraft YAML schema uses unprefixed keys, but Nextflow expects bindcraft_*.
         bindcraft_mappings = {

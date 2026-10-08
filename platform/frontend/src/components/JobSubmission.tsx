@@ -513,7 +513,7 @@ export function JobSubmission() {
         }
     });
 
-    const models = (modelsData?.data ?? []).filter((model: any) => !['protein_cad_experimental', 'protein_local_redesign'].includes(model.id));
+    const models = (modelsData?.data ?? []).filter((model: any) => !['protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental'].includes(model.id));
     const selectedModel = models.find((m: any) => m.id === selectedModelId);
     const selectedMode = selectedModel?.modes.find((m: any) => m.id === selectedModeId);
 
@@ -556,6 +556,8 @@ export function JobSubmission() {
 
     const getTemplateIconLabel = (template: any) => {
         if (template.id === 'protein_cad_experimental') return 'PC';
+        if (template.id === 'caliby_experimental') return 'CB';
+        if (template.id === 'protein_hunter_experimental') return 'PH';
         return template.icon === 'target' ? 'TG'
             : template.icon === 'flask' ? 'RF'
                 : template.icon === 'dna' ? 'MU'
