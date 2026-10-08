@@ -5,6 +5,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets } from '../lib/api';
 import { SequenceManagerModal } from './SequenceManagerModal';
+import { SequenceManager } from './SequenceManager';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { MutagenesisTemplate } from './MutagenesisTemplate';
 import { AntibodyDenovoTemplate } from './AntibodyDenovoTemplate';
@@ -16,6 +17,8 @@ import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
+import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
+import { parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { ModelDocumentationLinks, getModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
 import { getDedicatedTemplateInitialValues, isDedicatedLauncherTemplate } from './jobSubmissionTemplateState.js';
 import { getWorkflowModelTopics } from './workflowModelInventory.js';
@@ -153,6 +156,14 @@ const ESMFOLD2_QUALITY_PRESETS: Record<string, { num_loops: number; num_sampling
 };
 
 // Reusable param field component for grouped rendering
+const canonicalStructureSourceName = (target: SelectedTarget): string => {
+    const base = (target.name || target.pdbId || 'structure_input')
+        .replace(/[^\w.-]+/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    return /\.(pdb|cif|mmcif)$/i.test(base) ? base : `${base}.pdb`;
+};
+
 function ParamField({
     param,
     params,
@@ -198,6 +209,72 @@ function ParamField({
     })();
     const numericStep = param.step ?? (param.type === 'integer' ? 1 : 0.01);
     const pathPlaceholder = param.ui_placeholder || param.placeholder || (param.type === 'directory' ? '/path/to/directory' : '/path/to/file');
+    const [showSequenceImportModal, setShowSequenceImportModal] = useState(false);
+    const [sequenceImportTab, setSequenceImportTab] = useState<'library' | 'pdb'>('library');
+    const [pdbImportTarget, setPdbImportTarget] = useState<SelectedTarget | null>(null);
+    const [pdbParsedStructure, setPdbParsedStructure] = useState<ParsedPDB | null>(null);
+    const [pdbParsedChains, setPdbParsedChains] = useState<Chain[]>([]);
+    const [pdbImportError, setPdbImportError] = useState<string | null>(null);
+    const applySequenceImport = (sequence: string, name?: string, chainId?: string) => {
+        updateParam(param.name, normalizeSequenceInput(sequence));
+        if (name) {
+            updateParam('sequence_name', name.replace(/\.(pdb|cif|mmcif)$/i, ''));
+        }
+        if (chainId) {
+            updateParam('chain_id', chainId);
+            updateParam('primary_chain_id', chainId);
+        }
+    };
+    const resetPdbImportState = () => {
+        setPdbImportTarget(null);
+        setPdbParsedStructure(null);
+        setPdbParsedChains([]);
+        setPdbImportError(null);
+    };
+    const openSequenceImport = (tab: 'library' | 'pdb') => {
+        setSequenceImportTab(tab);
+        if (tab === 'pdb') resetPdbImportState();
+        setShowSequenceImportModal(true);
+    };
+    const handlePdbSequenceImportSelect = async (target: SelectedTarget | null) => {
+        if (!target) return;
+        setPdbImportError(null);
+        try {
+            let file: File;
+            if (target.type === 'upload' && target.file) {
+                file = target.file;
+            } else if (target.url) {
+                const response = await fetch(target.url);
+                const blob = await response.blob();
+                file = new File([blob], canonicalStructureSourceName(target), { type: blob.type || 'chemical/x-pdb' });
+            } else {
+                setPdbImportError('Selected structure has no downloadable source.');
+                return;
+            }
+            const parsed = await parsePDBFile(file);
+            if (parsed.chains.length === 0) {
+                setPdbImportError('No protein chains found in selected PDB/mmCIF.');
+                return;
+            }
+            setPdbImportTarget(target);
+            setPdbParsedStructure(parsed);
+            setPdbParsedChains(parsed.chains);
+            if (parsed.chains.length === 1) {
+                const chain = parsed.chains[0];
+                applySequenceImport(chain.sequence, target.name || target.pdbId || `Chain ${chain.id}`, chain.id || 'A');
+                setShowSequenceImportModal(false);
+                resetPdbImportState();
+            }
+        } catch (err) {
+            console.error('Failed to import PDB sequence:', err);
+            setPdbImportError('Failed to parse PDB/mmCIF sequence.');
+        }
+    };
+    const importPdbChain = (chain: Chain) => {
+        applySequenceImport(chain.sequence, pdbImportTarget?.name || pdbImportTarget?.pdbId || `Chain ${chain.id}`, chain.id || 'A');
+        setShowSequenceImportModal(false);
+        resetPdbImportState();
+    };
     const updateNumeric = (raw: string) => {
         const parsed = param.type === 'integer' ? Number.parseInt(raw, 10) : Number.parseFloat(raw);
         if (Number.isFinite(parsed)) {
@@ -324,14 +401,17 @@ function ParamField({
                     <div className="flex gap-2 items-center flex-wrap">
                         <button
                             type="button"
-                            onClick={() => {
-                                setSequenceToSave?.(null);
-                                setActiveSequenceField(param.name);
-                                setShowSequenceManager(true);
-                            }}
+                            onClick={() => openSequenceImport('library')}
                             className="rounded-lg border border-emerald-600/30 bg-emerald-600/12 px-3 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-600/20"
                         >
                             Sequence Library
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => openSequenceImport('pdb')}
+                            className="rounded-lg border border-blue-600/30 bg-blue-600/12 px-3 py-2 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-600/20"
+                        >
+                            Import from PDB
                         </button>
                         <span className="text-xs text-slate-500 bg-slate-800/50 px-2 py-1 rounded">
                             {String(value || '').length} {sequenceUnit}
@@ -367,6 +447,100 @@ function ParamField({
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
                         placeholder={param.ui_placeholder || param.placeholder || 'Enter amino acid sequence...'}
                     />
+                    {showSequenceImportModal && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" data-bms-sequence-pdb-import-modal="true">
+                            <div className="flex h-[80vh] max-h-[85vh] w-full max-w-4xl flex-col rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+                                <div className="flex border-b border-slate-700 bg-slate-800/50 rounded-t-xl">
+                                    <button
+                                        type="button"
+                                        onClick={() => setSequenceImportTab('library')}
+                                        className={`flex-1 border-b-2 py-4 text-sm font-medium transition-colors ${sequenceImportTab === 'library' ? 'border-emerald-500 bg-slate-800 text-emerald-400' : 'border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'}`}
+                                    >
+                                        Sequence Library
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setSequenceImportTab('pdb')}
+                                        className={`flex-1 border-b-2 py-4 text-sm font-medium transition-colors ${sequenceImportTab === 'pdb' ? 'border-blue-500 bg-slate-800 text-blue-400' : 'border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'}`}
+                                    >
+                                        Import from PDB
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setShowSequenceImportModal(false);
+                                            resetPdbImportState();
+                                        }}
+                                        className="rounded-tr-xl px-5 text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                                <div className="relative flex-1 overflow-hidden">
+                                    {sequenceImportTab === 'library' && (
+                                        <div className="absolute inset-0 overflow-auto p-5">
+                                            <SequenceManager
+                                                onSelect={(seq) => {
+                                                    applySequenceImport(seq.sequence, seq.name, params['chain_id'] || 'A');
+                                                    setShowSequenceImportModal(false);
+                                                }}
+                                                initialSequence={String(value || '')}
+                                                initialName={String(params['sequence_name'] || params['job_name'] || '')}
+                                                onClose={() => setShowSequenceImportModal(false)}
+                                            />
+                                        </div>
+                                    )}
+                                    {sequenceImportTab === 'pdb' && (
+                                        <div className="absolute inset-0 overflow-auto p-5">
+                                            {pdbImportError && (
+                                                <div className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                                                    {pdbImportError}
+                                                </div>
+                                            )}
+                                            {pdbParsedChains.length > 0 ? (
+                                                <div className="space-y-4">
+                                                    <div className="flex items-center justify-between">
+                                                        <div>
+                                                            <h3 className="text-lg font-medium text-slate-200">Select PDB Chain</h3>
+                                                            <p className="text-sm text-slate-500">
+                                                                {pdbParsedStructure?.models?.length ? `${pdbParsedStructure.models.length} model(s); ` : ''}
+                                                                import one monomer chain into this workflow.
+                                                            </p>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={resetPdbImportState}
+                                                            className="text-sm text-slate-400 hover:text-white"
+                                                        >
+                                                            ← Back to PDB connector
+                                                        </button>
+                                                    </div>
+                                                    <div className="grid gap-2">
+                                                        {pdbParsedChains.map((chain, idx) => (
+                                                            <button
+                                                                key={`${chain.id}-${idx}`}
+                                                                type="button"
+                                                                onClick={() => importPdbChain(chain)}
+                                                                className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800 p-3 text-left transition-colors hover:border-blue-500 hover:bg-blue-600/15"
+                                                            >
+                                                                <span className="font-medium text-slate-200">Chain {chain.id}</span>
+                                                                <span className="rounded bg-slate-900/70 px-2 py-1 font-mono text-xs text-slate-400">{chain.sequence.length} aa</span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <TargetAntigenSelector
+                                                    onSelect={handlePdbSequenceImportSelect}
+                                                    selectedTarget={pdbImportTarget}
+                                                />
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             ) : isPathField ? (
                 <div className="flex gap-2">
@@ -495,13 +669,6 @@ const getCompactModelDescription = (model: UntypedApiValue): string => {
     }
 };
 
-const getExperimentalStatusSummary = (template: UntypedApiValue): string => {
-    if (template.id === 'confornets_experimental') return 'Monomer-only alpha; ConforNets is first backend.';
-    if (template.id === 'esmfold2_experimental') return 'Local-only protein/complex alpha; PDB sequence-source, MSA, DNA/RNA, ligand controls.';
-    if (template.id === 'boltz_cp_experimental') return 'Alpha data-plane; logical shard plan plus current GPU bridge.';
-    return template.status_short || 'Active alpha; backend wired, review carefully.';
-};
-
 export function JobSubmission() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
@@ -611,7 +778,20 @@ export function JobSubmission() {
                         structure_launch_variant: data.params?.structure_launch_variant || 'esmfold2_experimental',
                     });
                 }
-                // 5. Manual Mode
+                // 5. Conformational Mapping is API-template driven; retry/resume must reload the template form, not the hidden raw model picker.
+                else if (data.model_id === 'confornets_experimental' || data.params?.template_model_id === 'confornets_experimental') {
+                    setWizardMode('templates');
+                    setSelectedTemplateId('confornets_experimental');
+                    setClonedValues({
+                        ...data.params,
+                        name: data.name,
+                        template_model_id: 'confornets_experimental',
+                        template_mode_id: 'design',
+                        workflow_model_topic: data.params?.workflow_model_topic || 'confornets',
+                    });
+                    setJobName(data.name || data.params?.job_name || data.params?.sequence_name || '');
+                }
+                // 6. Manual Mode
                 else {
                     setWizardMode('manual');
                     setSelectedModelId(data.model_id);
@@ -735,6 +915,27 @@ export function JobSubmission() {
     );
 
     const routeUserTemplate = (template: UntypedApiValue) => {
+        const apiTemplateId = typeof template.base_template_id === 'string' ? template.base_template_id : null;
+        const matchedApiTemplate = apiTemplateId
+            ? visibleApiTemplates.find((candidate: UntypedApiValue) => candidate.id === apiTemplateId)
+            : null;
+        if (matchedApiTemplate) {
+            const loadedJobName = template.params?.job_name || template.params?.name || template.name || '';
+            setWizardMode(matchedApiTemplate.experimental ? 'experimental' : 'templates');
+            setSelectedTemplateId(apiTemplateId);
+            setClonedValues({
+                ...(matchedApiTemplate.preset_params || {}),
+                ...(template.params || {}),
+                job_name: loadedJobName,
+                name: loadedJobName,
+            });
+            setParams({ ...(matchedApiTemplate.preset_params || {}), ...(template.params || {}) });
+            setJobName(loadedJobName);
+            setSelectedModelId(null);
+            setSelectedModeId(null);
+            return;
+        }
+
         const dedicatedTemplateId =
             (isDedicatedLauncherTemplate(template.base_template_id) && template.base_template_id) ||
             (template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
@@ -825,13 +1026,14 @@ export function JobSubmission() {
             templateDetail.user_params.forEach((p: UntypedApiValue) => {
                 if (p.default !== undefined) defaults[p.name] = p.default;
             });
-            setParams(defaults);
-            const defaultTemplateName = defaults.job_name || defaults.sequence_name || templateDetail.name || selectedTemplateId || '';
+            const nextParams = { ...defaults, ...(clonedValues || {}) };
+            setParams(nextParams);
+            const defaultTemplateName = nextParams.job_name || nextParams.name || nextParams.sequence_name || templateDetail.name || selectedTemplateId || '';
             if (defaultTemplateName) {
-                setJobName(prev => prev.trim() ? prev : String(defaultTemplateName));
+                setJobName(prev => (clonedValues?.name || clonedValues?.job_name) ? String(defaultTemplateName) : (prev.trim() ? prev : String(defaultTemplateName)));
             }
         }
-    }, [templateDetail, selectedTemplateId]);
+    }, [templateDetail, selectedTemplateId, clonedValues]);
 
     useEffect(() => {
         if (!selectedTemplateId || isDedicatedLauncherTemplate(selectedTemplateId)) {
@@ -1026,6 +1228,43 @@ export function JobSubmission() {
     // Check if ready to submit - works for both template mode and manual mode
     const isTemplateMode = wizardMode === 'templates' || wizardMode === 'experimental';
     const templateLaunchName = String(jobName || params.job_name || params.sequence_name || templateDetail?.name || selectedTemplateId || '').trim();
+
+    const visibleTemplateParams = useMemo(() => {
+        if (!templateDetail?.user_params) return [];
+        return templateDetail.user_params.filter((param: UntypedApiValue) => {
+            if (!param.condition) return true;
+            const controllingParam = templateDetail.user_params.find((p: UntypedApiValue) => p.name === param.condition.param);
+            const controllingValue = params[param.condition.param] !== undefined
+                ? params[param.condition.param]
+                : controllingParam?.default;
+            return param.condition.values.includes(controllingValue);
+        });
+    }, [templateDetail, params]);
+
+    const groupedTemplateParams = useMemo(() => {
+        const groups: Record<string, UntypedApiValue[]> = {};
+        visibleTemplateParams.forEach((p: UntypedApiValue) => {
+            const group = p.ui_group || 'General';
+            if (!groups[group]) groups[group] = [];
+            groups[group].push(p);
+        });
+        Object.values(groups).forEach(grp => {
+            grp.sort((a, b) => (a.ui_order ?? 99) - (b.ui_order ?? 99));
+        });
+        return groups;
+    }, [visibleTemplateParams]);
+
+    const templateManagerParams = useMemo(() => {
+        if (isTemplateMode && templateDetail) {
+            return {
+                ...(templateDetail.preset_params || {}),
+                ...params,
+                job_name: templateLaunchName,
+            };
+        }
+        return params;
+    }, [isTemplateMode, params, templateDetail, templateLaunchName]);
+
     const missingRequiredTemplateParams = isTemplateMode && templateDetail?.user_params
         ? templateDetail.user_params
             .filter((param: UntypedApiValue) => param.required)
@@ -1343,6 +1582,10 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
+                            ) : selectedTemplateId === 'confornets_experimental' ? (
+                                <div className="rounded-xl border border-slate-700 bg-slate-900/40 px-4 py-3 text-sm text-slate-400">
+                                    Conformational Mapping selected. Configure the workflow below.
+                                </div>
                             ) : (
                                 <>
                                     <p className="text-slate-300 text-base font-medium mb-4">
@@ -1375,7 +1618,9 @@ export function JobSubmission() {
                         <div>
                             <label className="block text-sm font-medium text-slate-400 mb-2">Select Model</label>
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {models.map((model: UntypedApiValue) => (
+                                {models.map((model: UntypedApiValue) => {
+                                    const modelDocLinks = getModelDocumentationLinks(getModelDocumentationTopics(model));
+                                    return (
                                     <div
                                         key={model.id}
                                         onClick={() => {
@@ -1402,13 +1647,36 @@ export function JobSubmission() {
                                         </div>
                                         <h3 className="font-semibold text-slate-200 mb-1">{model.name}</h3>
                                         <p className="text-xs text-slate-500 line-clamp-2">{getCompactModelDescription(model)}</p>
-                                        {getModelDocumentationLinks(getModelDocumentationTopics(model)).length > 0 && (
-                                            <div className="mt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                                                Docs ({getModelDocumentationLinks(getModelDocumentationTopics(model)).length})
+                                        {modelDocLinks.length > 0 && (
+                                            <div className="group/docs relative mt-2 inline-block" onClick={(event) => event.stopPropagation()}>
+                                                <span
+                                                    className="inline-flex rounded-md border border-slate-600/80 bg-slate-900/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300 transition-colors group-hover/docs:border-blue-400/60 group-hover/docs:text-blue-200"
+                                                    aria-haspopup="true"
+                                                >
+                                                    Docs ({modelDocLinks.length})
+                                                </span>
+                                                <div
+                                                    data-bms-model-doc-hover="true"
+                                                    className="pointer-events-none absolute left-0 top-full z-30 mt-1 hidden min-w-56 max-w-[min(28rem,80vw)] flex-wrap gap-1 rounded-lg border border-slate-700/80 bg-slate-950/95 p-2 shadow-2xl group-hover/docs:flex group-hover/docs:pointer-events-auto"
+                                                >
+                                                    {modelDocLinks.map((link) => (
+                                                        <a
+                                                            key={link.href}
+                                                            href={link.href}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            onClick={(event) => event.stopPropagation()}
+                                                            className="inline-flex rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-[10px] font-medium text-slate-200 transition-colors hover:border-blue-400/60 hover:text-blue-200"
+                                                        >
+                                                            {link.label}
+                                                        </a>
+                                                    ))}
+                                                </div>
                                             </div>
                                         )}
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
                     )}
@@ -1416,88 +1684,93 @@ export function JobSubmission() {
 
                 {/* 3. Template Configuration - Only show if template selected and NOT a dedicated template */}
                 {selectedTemplateId && !isDedicatedLauncherTemplate(selectedTemplateId) && templateDetail && (
-                    <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                        <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6">
-                            <h2 className="text-lg font-semibold text-slate-200 mb-4 flex items-center gap-2">
-                                <span className={`w-1.5 h-6 rounded-full ${templateDetail.experimental ? 'bg-orange-400' : 'bg-green-500'}`} />
-                                {templateDetail.name} - Configuration
-                                {templateDetail.experimental && (
-                                    <span className="rounded-full border border-orange-400/25 bg-orange-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-orange-300">
-                                        Experimental Alpha
-                                    </span>
-                                )}
-                            </h2>
+                    <section className="animate-in fade-in slide-in-from-bottom-4 duration-500" data-bms-template-config-shell="true">
+                        <div className="rounded-2xl border border-slate-700 bg-slate-900/45 p-6 shadow-xl">
+                            <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+                                <div>
+                                    <button
+                                        type="button"
+                                        onClick={handleDedicatedTemplateBack}
+                                        className="mb-3 inline-flex items-center rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
+                                    >
+                                        ← Back to workflows
+                                    </button>
+                                    <h2 className="flex items-center gap-2 text-xl font-semibold text-slate-100">
+                                        <span className={`h-6 w-1.5 rounded-full ${templateDetail.experimental ? 'bg-orange-400' : 'bg-emerald-500'}`} />
+                                        {templateDetail.name}
+                                        {templateDetail.experimental && (
+                                            <span className="rounded-full border border-orange-400/25 bg-orange-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-orange-300">
+                                                Experimental Alpha
+                                            </span>
+                                        )}
+                                    </h2>
+                                    <p className="mt-1 max-w-3xl text-sm text-slate-400">
+                                        {compactUiCopy(templateDetail.description || templateDetail.goal || '', 170)}
+                                    </p>
+                                </div>
+                                <ModelDocumentationLinks
+                                    topics={getTemplateDocumentationTopics(templateDetail, params)}
+                                    summary="Model docs update from the selected workflow model; launch controls stay here."
+                                    compact
+                                    className="min-w-[18rem] flex-1 md:max-w-xl"
+                                />
+                            </div>
 
-                            {templateDetail.experimental && (
-                                <div className="mb-4 space-y-3 rounded-xl border border-orange-400/20 bg-orange-500/8 p-4">
-                                    <div className="flex flex-wrap items-center gap-3 text-sm">
-                                        <span className="rounded-full border border-orange-400/25 bg-orange-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-orange-300">
-                                            Active alpha
+                            <div className="mb-6 flex flex-wrap items-center gap-2 border-y border-slate-800 py-3 text-[11px]">
+                                {templateDetail.stages.map((stage: UntypedApiValue, idx: number) => (
+                                    <div key={idx} className="flex items-center gap-2">
+                                        <span className="rounded-md bg-slate-800 px-2 py-1 font-medium text-slate-300">
+                                            {stage.tool}
                                         </span>
-                                        <span className="text-slate-300">{getExperimentalStatusSummary(templateDetail)}</span>
+                                        {idx < templateDetail.stages.length - 1 && (
+                                            <span className="text-slate-600">→</span>
+                                        )}
                                     </div>
-                                </div>
-                            )}
+                                ))}
+                            </div>
 
-                            <ModelDocumentationLinks
-                                topics={getTemplateDocumentationTopics(templateDetail, params)}
-                                summary="Model docs update from the selected workflow model; launch controls stay here."
-                                compact
-                                className="mb-6"
-                            />
-
-                            {/* Stage Explanation */}
-                            <div className="mb-6 p-4 bg-slate-900/50 rounded-lg">
-                                <p className="text-sm text-slate-400 mb-3">Stages:</p>
-                                <div className="flex flex-wrap items-center gap-2">
-                                    {templateDetail.stages.map((stage: UntypedApiValue, idx: number) => (
-                                        <div key={idx} className="flex items-center">
-                                            <div className="bg-slate-700 px-3 py-1.5 rounded-lg">
-                                                <span className="text-sm font-medium text-slate-200">{idx + 1}. {stage.name}</span>
-                                                <span className="text-xs text-slate-400 ml-2">({stage.tool})</span>
+                            <div className="space-y-6">
+                                {['Inputs', 'Mapping Mode', 'Model Orchestration', 'Outputs', 'Advanced'].filter(group => groupedTemplateParams[group]).map((groupName) => (
+                                    <div key={groupName} className={groupName === 'Advanced' ? 'rounded-xl border border-slate-700/60' : ''}>
+                                        {groupName === 'Advanced' ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowAdvanced(!showAdvanced)}
+                                                className="flex w-full items-center justify-between rounded-xl bg-slate-800/45 px-4 py-3 text-left transition-colors hover:bg-slate-800/70"
+                                            >
+                                                <span className="flex items-center gap-2 text-sm font-medium text-slate-300">
+                                                    <span className="h-4 w-1 rounded-full bg-slate-500" />
+                                                    Advanced / Runtime Paths
+                                                </span>
+                                                <span className="text-xs text-slate-500">{showAdvanced ? '▲' : '▼'}</span>
+                                            </button>
+                                        ) : (
+                                            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-300">
+                                                <span className={`h-4 w-1 rounded-full ${groupName === 'Inputs' ? 'bg-emerald-500' : groupName === 'Outputs' ? 'bg-purple-500' : 'bg-blue-500'}`} />
+                                                {groupName}
+                                            </h3>
+                                        )}
+                                        {(groupName !== 'Advanced' || showAdvanced) && (
+                                            <div className={`${groupName === 'Advanced' ? 'p-4 ' : ''}grid grid-cols-1 gap-4 md:grid-cols-2`}>
+                                                {groupedTemplateParams[groupName].map((param: UntypedApiValue) => (
+                                                    <ParamField
+                                                        key={param.name}
+                                                        param={param}
+                                                        params={params}
+                                                        updateParam={updateParam}
+                                                        setShowFileBrowser={setShowFileBrowser}
+                                                        setActiveSequenceField={setActiveSequenceField}
+                                                        setShowSequenceManager={setShowSequenceManager}
+                                                        setSequenceToSave={setSequenceToSave}
+                                                        ligandPresets={ligandPresets}
+                                                    />
+                                                ))}
                                             </div>
-                                            {idx < templateDetail.stages.length - 1 && (
-                                                <span className="text-blue-400 mx-2 text-lg">→</span>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
+                                        )}
+                                    </div>
+                                ))}
                             </div>
 
-                            {/* User Parameters */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                {templateDetail.user_params.map((param: UntypedApiValue) => {
-                                    // Conditional Rendering Logic
-                                    if (param.condition) {
-                                        const controllingParam = templateDetail.user_params.find((p: UntypedApiValue) => p.name === param.condition.param);
-                                        // Use params value if set, otherwise fall back to the controlling param's default
-                                        const controllingValue = params[param.condition.param] !== undefined
-                                            ? params[param.condition.param]
-                                            : controllingParam?.default;
-
-                                        // Hide this field if the controlling value doesn't match allowed values
-                                        if (!param.condition.values.includes(controllingValue)) {
-                                            return null;
-                                        }
-                                    }
-
-                                    return (
-                                        <ParamField
-                                            key={param.name}
-                                            param={param}
-                                            params={params}
-                                            updateParam={updateParam}
-                                            setShowFileBrowser={setShowFileBrowser}
-                                            setActiveSequenceField={setActiveSequenceField}
-                                            setShowSequenceManager={setShowSequenceManager}
-                                            setSequenceToSave={setSequenceToSave}
-                                            ligandPresets={ligandPresets}
-                                        />
-                                    );
-                                })}
-                            </div>
-
-                            {/* Ligand Selector - Show for structure prediction templates */}
                             {(templateDetail?.preset_params?.pred_method ||
                                 selectedTemplateId?.includes('structure') ||
                                 selectedTemplateId?.includes('predict')) && (
@@ -1621,9 +1894,9 @@ export function JobSubmission() {
                         {(isTemplateMode || (wizardMode === 'manual' && selectedModelId)) && (
                             <button
                                 onClick={() => openTemplateManager({
-                                    currentParams: params,
-                                    currentModelId: selectedModelId || undefined,
-                                    currentMode: selectedModeId || undefined,
+                                    currentParams: templateManagerParams,
+                                    currentModelId: selectedModelId || templateDetail?.preset_params?.template_model_id || undefined,
+                                    currentMode: selectedModeId || templateDetail?.preset_params?.template_mode_id || undefined,
                                     baseTemplateId: selectedTemplateId || undefined,
                                 })}
                                 className="inline-flex min-w-[12rem] items-center justify-center rounded-xl border border-slate-600 bg-slate-900/60 px-6 py-3.5 text-sm font-semibold text-slate-100 transition-all hover:bg-slate-800"

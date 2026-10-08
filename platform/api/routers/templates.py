@@ -77,6 +77,8 @@ async def get_template(template_id: str):
                 "maximum": p.maximum,
                 "step": p.step,
                 "ui_control": p.ui_control,
+                "ui_group": p.ui_group,
+                "ui_order": p.ui_order,
                 "ui_placeholder": p.ui_placeholder,
                 "placeholder": p.placeholder,
                 "preset_type": p.preset_type,

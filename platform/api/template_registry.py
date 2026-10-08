@@ -29,6 +29,8 @@ class TemplateParam(BaseModel):
     maximum: Optional[float] = None
     step: Optional[float] = None
     ui_control: Optional[str] = None
+    ui_group: Optional[str] = None
+    ui_order: Optional[int] = None
     ui_placeholder: Optional[str] = None
     placeholder: Optional[str] = None
     preset_type: Optional[str] = None
