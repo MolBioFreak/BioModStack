@@ -16,6 +16,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [seqDesigner, setSeqDesigner] = useState<'fampnn' | 'antifold' | 'proteinmpnn'>('fampnn');
     const [useAntiberty, setUseAntiberty] = useState(true);
     const [useThermoMPNN, setUseThermoMPNN] = useState(true);
+    const [explorationMode, setExplorationMode] = useState(true); // Parallel GPU distribution
 
     // Framework selection - preset or custom
     const [frameworkType, setFrameworkType] = useState<'standard-fv' | 'nanobody' | 'custom'>('standard-fv');
@@ -148,6 +149,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     run_immunogenicity_scoring: useAntiberty,
                     run_stability_scoring: useThermoMPNN,
                     run_structure_validation: true, // Boltz2 is always run
+                    exploration_mode: explorationMode, // Parallel vs serial GPU processing
                 }
             };
 
@@ -410,6 +412,38 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             <span className="text-sm text-slate-300">ThermoMPNN (Stability)</span>
                         </label>
                     </div>
+                </div>
+
+                {/* GPU Processing Mode */}
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">GPU Processing Mode</label>
+                    <div className="flex gap-3">
+                        <button
+                            onClick={() => setExplorationMode(true)}
+                            className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${explorationMode
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                }`}
+                        >
+                            <span className="text-lg">🚀</span>
+                            Exploration
+                        </button>
+                        <button
+                            onClick={() => setExplorationMode(false)}
+                            className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${!explorationMode
+                                ? 'bg-purple-600 text-white'
+                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                }`}
+                        >
+                            <span className="text-lg">🔬</span>
+                            Refinement
+                        </button>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-2">
+                        {explorationMode
+                            ? "Parallel: Distribute jobs across 4 GPUs (~1 hour for 100 designs)"
+                            : "Serial: Sequential validation on one GPU (thorough analysis)"}
+                    </p>
                 </div>
             </div>
 

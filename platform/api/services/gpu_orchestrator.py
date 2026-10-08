@@ -72,6 +72,7 @@ VRAM_PROFILES = {
     'mpnn': {'base': 1000, 'scale': 3},        # ProteinMPNN (very light)
     'diffdock': {'base': 3000, 'scale': 10},   # DiffDock
     'msa_batch': {'base': 3000, 'scale': 2},   # MSA Generation (GPU streaming, LOW VRAM)
+    'antibody_child': {'base': 8000, 'scale': 45},  # Antibody validation (Boltz + scoring)
     'default': {'base': 6000, 'scale': 30},    # Fallback
 }
 
