@@ -1233,6 +1233,144 @@ export const BioXpCockpit = () => {
             <CameraAxisQuickControls axis="g" label="Gripper" enabled={isConnected} />
         </div>
     );
+    const motionPowerPanel = (
+        <SectionCard
+            title="Motion Power & Recovery"
+            subtitle="Explicit motor bring-up and recovery primitives from the BioXp runtime."
+        >
+            <div className="grid grid-cols-2 xl:grid-cols-3 gap-2 text-[11px] font-mono text-content-muted">
+                <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-content-muted">24V Rail</div>
+                    <div className={`mt-1 font-semibold ${motion24vState === 'OK' ? 'text-success' : motion24vState === 'NO_24V' ? 'text-error' : 'text-warning'}`}>
+                        {motion24vState}
+                    </div>
+                    <div className="mt-1">raw {motionPowerRail?.raw ?? 'n/a'}</div>
+                </div>
+                <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Motion Arm</div>
+                    <div className="mt-1 font-semibold text-content">
+                        {motionPowerStatus.data?.motion_arm?.armed ? 'ARMED' : 'DISARMED'}
+                    </div>
+                    <div className="mt-1">seq {motionPowerStatus.data?.motion_arm?.seq ?? 'n/a'}</div>
+                </div>
+                <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Latch Override</div>
+                    <div className="mt-1 font-semibold text-content">
+                        {motionPowerStatus.data?.latch_override?.enabled ? 'ENABLED' : 'OFF'}
+                    </div>
+                    <div className="mt-1 truncate">{motionPowerStatus.data?.latch_override?.note ?? 'default lock path'}</div>
+                </div>
+                <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Solenoid</div>
+                    <div className="mt-1 font-semibold text-content">
+                        {motionIoSnapshot?.['2'] === 1 ? 'LOCKED' : motionIoSnapshot?.['2'] === 0 ? 'UNLOCKED' : 'UNKNOWN'}
+                    </div>
+                    <div className="mt-1">raw {motionIoSnapshot?.['2'] ?? 'n/a'}</div>
+                </div>
+                <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Door Sensor</div>
+                    <div className="mt-1 font-semibold text-content">{motionIoSnapshot?.['1'] ?? 'n/a'}</div>
+                    <div className="mt-1">Latch sensor {motionIoSnapshot?.['3'] ?? 'n/a'}</div>
+                </div>
+                <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-content-muted">Boards</div>
+                    <div className="mt-1 leading-relaxed break-words">{getBoardAckSummary(motionPowerStatus.data?.board_status)}</div>
+                </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+                <button
+                    onClick={() =>
+                        motionPowerEnable.mutate(undefined, {
+                            onSuccess: (data) => recordMotionInfraAction('enable', data),
+                            onError: (error) => recordMotionInfraError('enable', error),
+                        })
+                    }
+                    disabled={motionPowerEnable.isPending}
+                    className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
+                >
+                    {motionPowerEnable.isPending ? 'ENABLING...' : 'Enable 24V / Prep Axes'}
+                </button>
+                <button
+                    onClick={() =>
+                        prepareInterlock.mutate(undefined, {
+                            onSuccess: (data) => recordMotionInfraAction('interlock', data),
+                            onError: (error) => recordMotionInfraError('interlock', error),
+                        })
+                    }
+                    disabled={prepareInterlock.isPending}
+                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                >
+                    {prepareInterlock.isPending ? 'PREPPING...' : 'Prepare Interlock'}
+                </button>
+                <button
+                    onClick={() =>
+                        clearLock.mutate(undefined, {
+                            onSuccess: (data) => recordMotionInfraAction('clear_lock', data),
+                            onError: (error) => recordMotionInfraError('clear_lock', error),
+                        })
+                    }
+                    disabled={clearLock.isPending}
+                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                >
+                    {clearLock.isPending ? 'CLEARING...' : 'Clear Head Lock'}
+                </button>
+                <button
+                    onClick={() =>
+                        motionPowerDiag.mutate(undefined, {
+                            onSuccess: (data) => recordMotionInfraAction('diag', data),
+                            onError: (error) => recordMotionInfraError('diag', error),
+                        })
+                    }
+                    disabled={motionPowerDiag.isPending}
+                    className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                >
+                    {motionPowerDiag.isPending ? 'CHECKING...' : 'Driver Power Diag'}
+                </button>
+                <div className="flex items-center gap-2">
+                    <input
+                        type="number"
+                        min={1}
+                        max={5}
+                        value={motionHardResetRounds}
+                        onChange={(e) => setMotionHardResetRounds(Number(e.target.value))}
+                        className="w-16 bg-surface border border-accent/10 rounded-lg px-2 py-2 text-content text-xs font-mono"
+                    />
+                    <button
+                        onClick={() =>
+                            motionHardReset.mutate(
+                                { rounds: Math.max(1, Math.min(5, motionHardResetRounds || 2)) },
+                                {
+                                    onSuccess: (data) => recordMotionInfraAction('hard_reset', data),
+                                    onError: (error) => recordMotionInfraError('hard_reset', error),
+                                },
+                            )
+                        }
+                        disabled={motionHardReset.isPending}
+                        className="px-4 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors disabled:opacity-40"
+                    >
+                        {motionHardReset.isPending ? 'RESETTING...' : 'Hard Reset'}
+                    </button>
+                </div>
+            </div>
+
+            {latestMotionInfraSummary && (
+                <div className="rounded border border-border-primary bg-surface-tertiary px-3 py-2 text-[11px] font-mono text-content-muted break-words">
+                    {latestMotionInfraSummary}
+                </div>
+            )}
+
+            {motionActionError && (
+                <div className="text-xs text-error">{motionActionError}</div>
+            )}
+
+            <JsonBlock
+                title="Latest Motion Infra Result"
+                data={latestMotionInfraResult ?? motionPowerStatus.data}
+                fallback="Motion power snapshot pending."
+            />
+        </SectionCard>
+    );
 
     return (
         <div className="flex flex-col h-full overflow-y-auto p-8 space-y-6 bg-surface">
@@ -1486,38 +1624,25 @@ export const BioXpCockpit = () => {
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                        <SectionCard
-                            title="Motion Control System"
-                            subtitle="All five documented BioXP axes are now surfaced, including the gripper and thermal door."
-                        >
-                            <div className="text-[11px] font-mono text-content-muted">
-                                Safety profile: speed 100, acc 50, abort if speed is nonzero with no position delta for 2s.
-                                {motionBusy ? ' Background polling is paused while a motion command is in flight.' : null}
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                                <button
-                                    onClick={() => prepareInterlock.mutate()}
-                                    disabled={prepareInterlock.isPending}
-                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
-                                >
-                                    Prepare Interlock
-                                </button>
-                                <button
-                                    onClick={() => clearLock.mutate()}
-                                    disabled={clearLock.isPending}
-                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
-                                >
-                                    Clear Head Lock
-                                </button>
-                            </div>
-                            <div className="space-y-4">
-                                <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                <AxisControls axis="y" label="Gantry Y" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                <AxisControls axis="z" label="Pipette Z" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                <AxisControls axis="g" label="Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                                <AxisControls axis="door" label="Thermal Door" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
-                            </div>
-                        </SectionCard>
+                        <div className="space-y-6">
+                            {motionPowerPanel}
+                            <SectionCard
+                                title="Motion Control System"
+                                subtitle="All five documented BioXP axes are now surfaced, including the gripper and thermal door."
+                            >
+                                <div className="text-[11px] font-mono text-content-muted">
+                                    Safety profile: speed 100, acc 50, abort if speed is nonzero with no position delta for 2s.
+                                    {motionBusy ? ' Background polling is paused while a motion command is in flight.' : null}
+                                </div>
+                                <div className="space-y-4">
+                                    <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                    <AxisControls axis="y" label="Gantry Y" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                    <AxisControls axis="z" label="Pipette Z" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                    <AxisControls axis="g" label="Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                    <AxisControls axis="door" label="Thermal Door" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                </div>
+                            </SectionCard>
+                        </div>
 
                         <div className="space-y-6">
                             <SectionCard
