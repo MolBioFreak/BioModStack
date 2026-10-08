@@ -2,6 +2,7 @@ import type { ResidueRef } from '../contracts/structureIdentity.js';
 import type { StructureSceneState } from '../contracts/sceneState.js';
 import type { MDPlaybackState, MDSourceFrameRef } from '../contracts/mdTrajectory.js';
 import type { ViewerResult } from '../contracts/viewerResults.js';
+import type { SpatialVolumeDescriptorV1, VolumePresentationStateV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../contracts/spatialVolumes.js';
 
 export interface EngineResidueClick {
     readonly residue: ResidueRef;
@@ -27,5 +28,13 @@ export interface MolstarEngineAdapter {
     diagnostics(): MolstarEngineDiagnostics;
     selectMDSourceFrame?(frame: MDSourceFrameRef, signal: AbortSignal): Promise<ViewerResult<void>>;
     setMDPlayback?(playback: MDPlaybackState, signal: AbortSignal): Promise<ViewerResult<void>>;
+    loadVolume?(descriptor: SpatialVolumeDescriptorV1, signal: AbortSignal): Promise<ViewerResult<void>>;
+    setVolumePresentation?(state: VolumePresentationStateV1, signal: AbortSignal): Promise<ViewerResult<void>>;
+    removeVolume?(volumeId: string, signal: AbortSignal): Promise<ViewerResult<void>>;
+    applyVolumeRegistration?(registration: VolumeRegistrationV1, signal: AbortSignal): Promise<ViewerResult<void>>;
+    applyVolumeSegmentation?(segmentation: VolumeSegmentationV1, signal: AbortSignal): Promise<ViewerResult<void>>;
+    capturePng?(signal: AbortSignal): Promise<ViewerResult<Blob>>;
+    exportSelectionMmcif?(signal: AbortSignal): Promise<ViewerResult<Blob>>;
+    getCanvasElement?(): ViewerResult<HTMLCanvasElement>;
     dispose(): Promise<void>;
 }

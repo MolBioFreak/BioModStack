@@ -1,4 +1,6 @@
 import axios from 'axios';
+import type { ViewerSnapshotV2 } from '../structureViewer/contracts/m6Reproducibility';
+import type { SpatialVolumeDescriptorV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../structureViewer/contracts/spatialVolumes';
 
 // Use relative path - Vite's proxy handles /api -> localhost:8000
 const API_BASE = '';
@@ -3160,3 +3162,51 @@ export const fetchOntInstrumentRun = (runId: string) =>
 
 export const stopOntInstrumentRun = (runId: string, payload: { confirm_stop: boolean }) =>
     api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/stop`, payload);
+
+export interface ViewerVolumeInventoryV1 {
+    readonly schema: 'bms.viewer.volume-list.v1';
+    readonly jobId: string;
+    readonly volumes: readonly SpatialVolumeDescriptorV1[];
+    readonly segmentations: readonly VolumeSegmentationV1[];
+    readonly registrations: readonly VolumeRegistrationV1[];
+}
+
+export interface ViewerSnapshotRecordV2 {
+    readonly schema: 'bms.viewer.snapshot-record.v2';
+    readonly snapshotId: string;
+    readonly jobId: string;
+    readonly label: string;
+    readonly createdBy: string;
+    readonly createdAt: string;
+    readonly schemaVersion: 2;
+    readonly snapshotSha256: string;
+    readonly snapshot?: ViewerSnapshotV2;
+}
+
+export const fetchViewerVolumes = (jobId: string) =>
+    api.get<ViewerVolumeInventoryV1>(`/api/jobs/${encodeURIComponent(jobId)}/viewer/volumes`);
+
+export const viewerArtifactContentUrl = (jobId: string, artifactId: string): string =>
+    `/api/jobs/${encodeURIComponent(jobId)}/viewer/artifacts/${encodeURIComponent(artifactId)}/content`;
+
+export const fetchViewerSnapshots = (jobId: string) =>
+    api.get<{ schema: 'bms.viewer.snapshot-list.v2'; jobId: string; snapshots: ViewerSnapshotRecordV2[]; nextCursor: string | null }>(
+        `/api/jobs/${encodeURIComponent(jobId)}/viewer/snapshots`,
+    );
+
+export const fetchViewerSnapshot = (jobId: string, snapshotId: string) =>
+    api.get<ViewerSnapshotRecordV2>(
+        `/api/jobs/${encodeURIComponent(jobId)}/viewer/snapshots/${encodeURIComponent(snapshotId)}`,
+    );
+
+export const createViewerSnapshot = (
+    jobId: string,
+    label: string,
+    snapshot: ViewerSnapshotV2,
+    snapshotSha256: string,
+) => api.post<ViewerSnapshotRecordV2>(`/api/jobs/${encodeURIComponent(jobId)}/viewer/snapshots`, {
+    schema: 'bms.viewer.snapshot-create.v2', label, snapshot, snapshotSha256,
+});
+
+export const deleteViewerSnapshot = (jobId: string, snapshotId: string) =>
+    api.delete(`/api/jobs/${encodeURIComponent(jobId)}/viewer/snapshots/${encodeURIComponent(snapshotId)}`);

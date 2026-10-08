@@ -2858,6 +2858,8 @@ export default function StructureViewerPane({
                             overlayStructures={conforNetsOverlayStructures}
                             residueMetricLayer={residueMetricLayer}
                             metricLayers={allMetricLayers}
+                            showComplexWorkbench={false}
+                            jobId={activeJob?.id}
                             derivedComponents={derivedComponents}
                             activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
                             showMetricWorkbench={metricWorkbenchOpen}

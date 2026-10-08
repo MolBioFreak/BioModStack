@@ -1,4 +1,4 @@
-import { CustomTooltipsProvider } from 'molstar/lib/extensions/mvs/components/custom-tooltips-prop';
+import type { Loci } from 'molstar/lib/mol-model/loci';
 import {
     Queries,
     StructureElement,
@@ -6,6 +6,8 @@ import {
     StructureSelection,
 } from 'molstar/lib/mol-model/structure';
 import type { Structure } from 'molstar/lib/mol-model/structure';
+import { to_mmCIF } from 'molstar/lib/mol-model/structure/export/mmcif';
+import { Grid, Volume } from 'molstar/lib/mol-model/volume';
 import { StructureQuery } from 'molstar/lib/mol-model/structure/query/query';
 import { getElementMoleculeType } from 'molstar/lib/mol-model/structure/util';
 import {
@@ -14,17 +16,27 @@ import {
 } from 'molstar/lib/mol-plugin-state/helpers/structure-overpaint';
 import { clearStructureTransparency, setStructureTransparency } from 'molstar/lib/mol-plugin-state/helpers/structure-transparency';
 import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms';
+import { createVolumeRepresentationParams } from 'molstar/lib/mol-plugin-state/helpers/volume-representation-params';
+import type { LociLabelProvider } from 'molstar/lib/mol-plugin-state/manager/loci-label';
 import { Asset } from 'molstar/lib/mol-util/assets';
 import { Color } from 'molstar/lib/mol-util/color/color';
-import { Vec3 } from 'molstar/lib/mol-math/linear-algebra';
+import { Mat4, Vec3 } from 'molstar/lib/mol-math/linear-algebra';
+import { Box3D } from 'molstar/lib/mol-math/geometry';
 import { PluginCommands } from 'molstar/lib/mol-plugin/commands';
 import type { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
-import { StateSelection } from 'molstar/lib/mol-state';
+
 
 import { createDirectMolstarEngineOwner } from '../runtime/createDirectMolstarEngineOwner';
 import type { MolstarEngineOwner } from '../runtime/MolstarEngineOwner';
 import { assessMeasurement, type ViewerMeasurement } from '../contracts/measurements';
 import type { StructureCameraState, StructureComponentType } from '../contracts/scenePresentation';
+import {
+    absoluteContourValue,
+    type SpatialVolumeDescriptorV1,
+    type VolumePresentationStateV1,
+    type VolumeRegistrationV1,
+    type VolumeSegmentationV1,
+} from '../contracts/spatialVolumes';
 import {
     viewerCancelled,
     viewerError,
@@ -206,6 +218,25 @@ const normalizeColor = (
     return fallback;
 };
 
+const VIEWER_RANGE_BYTES = 64 * 1024 * 1024;
+
+const fetchVerifiedArtifactBytes = async (url: string, byteLength: number, expectedSha256: string, signal: AbortSignal): Promise<Uint8Array> => {
+    const bytes = new Uint8Array(byteLength);
+    for (let start = 0; start < byteLength; start += VIEWER_RANGE_BYTES) {
+        const end = Math.min(byteLength - 1, start + VIEWER_RANGE_BYTES - 1);
+        const response = await fetch(url, { credentials: 'same-origin', signal, headers: { Range: `bytes=${start}-${end}` } });
+        if (response.status !== 206) throw new Error(`Bounded artifact delivery required HTTP 206, received ${response.status}`);
+        if (response.headers.get('content-range') !== `bytes ${start}-${end}/${byteLength}`) throw new Error('Volume artifact Content-Range mismatch');
+        const chunk = new Uint8Array(await response.arrayBuffer());
+        if (chunk.byteLength !== end - start + 1) throw new Error('Volume artifact range length mismatch');
+        bytes.set(chunk, start);
+    }
+    const digest = await crypto.subtle.digest('SHA-256', bytes.slice().buffer);
+    const actual = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    if (actual !== expectedSha256) throw new Error('Volume artifact SHA-256 mismatch');
+    return bytes;
+};
+
 export interface MolstarDirectProbe { readonly diagnostics: MolstarDirectAdapterDiagnostics; }
 export const getMolstarDirectProbeForElement = (element: HTMLElement): MolstarDirectProbe | undefined => {
     const adapter = adapterRegistry.get(element);
@@ -216,6 +247,17 @@ export interface MolstarDirectAdapterOptions {
     readonly hideControls?: boolean;
     readonly alphafoldView?: boolean;
     readonly backgroundColor?: string;
+    /** Runtime-only authorized artifact transport; never persisted in scene state. */
+    readonly resolveViewerArtifactUrl?: (artifactId: string) => string;
+}
+
+interface DirectVolumeEntry {
+    readonly descriptor: SpatialVolumeDescriptorV1;
+    readonly sourceRef: string;
+    activeRef: string;
+    transformRef?: string;
+    representationRef?: string;
+    segmentation?: VolumeSegmentationV1;
 }
 
 export class MolstarDirectAdapterCancelledError extends Error {
@@ -228,6 +270,7 @@ export class MolstarDirectAdapterCancelledError extends Error {
 export class MolstarDirectAdapter {
     private readonly owner: MolstarEngineOwner<PluginUIContext>;
     private readonly backgroundColor: string;
+    private readonly resolveViewerArtifactUrl?: (artifactId: string) => string;
     private plugin: PluginUIContext | undefined;
     private disposedPlugin: PluginUIContext | undefined;
     private target: HTMLElement | undefined;
@@ -236,7 +279,10 @@ export class MolstarDirectAdapter {
     private presentationGeneration = 0;
     private disposed = false;
     private hasSelection = false;
+    private hasOverpaint = false;
+    private hasTransparency = false;
     private hasTooltips = false;
+    private tooltipProvider: LociLabelProvider | undefined;
     private residueClickHandler: ((residue: MolstarDirectResidueClick) => void) | undefined;
     private clickSubscription: { unsubscribe(): void } | undefined;
     private documentStructures = new WeakMap<Structure, string>();
@@ -245,13 +291,16 @@ export class MolstarDirectAdapter {
     private sceneQueue: Promise<void> = Promise.resolve();
     private presentationQueue: Promise<void> = Promise.resolve();
     private measurementQueue: Promise<void> = Promise.resolve();
+    private readonly volumes = new Map<string, DirectVolumeEntry>();
 
     constructor({
         hideControls = true,
         alphafoldView = false,
         backgroundColor = '#0f172a',
+        resolveViewerArtifactUrl,
     }: MolstarDirectAdapterOptions = {}) {
         this.backgroundColor = backgroundColor;
+        this.resolveViewerArtifactUrl = resolveViewerArtifactUrl;
         this.owner = createDirectMolstarEngineOwner({ hideControls, alphafoldView });
     }
 
@@ -313,14 +362,19 @@ export class MolstarDirectAdapter {
         this.presentationGeneration += 1;
         this.measurementGeneration += 1;
         this.hasSelection = false;
+        this.hasOverpaint = false;
+        this.hasTransparency = false;
         this.hasTooltips = false;
 
         const task = this.sceneQueue.then(async () => {
             if (!this.isSceneCurrent(generation)) throw new MolstarDirectAdapterCancelledError();
             const plugin = this.requirePlugin();
             try {
+                if (this.tooltipProvider) plugin.managers.lociLabels.removeProvider(this.tooltipProvider);
+                this.tooltipProvider = undefined;
                 await plugin.clear();
                 this.assertSceneCurrent(generation);
+                this.volumes.clear();
                 this.documentStructures = new WeakMap<Structure, string>();
                 this.measurementSelectionRefs = [];
 
@@ -343,7 +397,7 @@ export class MolstarDirectAdapter {
                             ? { name: 'assembly', params: { id: document.assemblyId } }
                             : { name: 'model', params: {} },
                         showUnitcell: false,
-                        representationPreset: 'auto',
+                        representationPreset: 'atomic-detail',
                     });
                     this.assertSceneCurrent(generation);
                     for (const entry of plugin.managers.structure.hierarchy.current.structures) {
@@ -524,6 +578,248 @@ export class MolstarDirectAdapter {
         return viewerOk(undefined);
     }
 
+    async loadVolume(descriptor: SpatialVolumeDescriptorV1, signal: AbortSignal): Promise<ViewerResult<void>> {
+        if (signal.aborted) return viewerCancelled('Mol* operation was cancelled');
+        const plugin = this.requirePlugin();
+        const resolveUrl = this.resolveViewerArtifactUrl;
+        if (!resolveUrl) return viewerUnsupported('No authorized viewer-artifact resolver is configured', 'volume-ccp4-v1');
+        if (this.volumes.has(descriptor.volumeId)) {
+            const removed = await this.removeVolume(descriptor.volumeId, signal);
+            if (removed.status !== 'ok') return removed;
+        }
+        let dataRef: string | undefined;
+        try {
+            const bytes = await fetchVerifiedArtifactBytes(
+                resolveUrl(descriptor.artifactId), descriptor.byteLength, descriptor.artifactSha256, signal,
+            );
+            if (signal.aborted) throw new MolstarDirectAdapterCancelledError();
+
+            const data = await plugin.builders.data.rawData({
+                data: bytes,
+                label: `${descriptor.semanticKind} (${descriptor.volumeId})`,
+            }, { state: { isGhost: true } });
+            dataRef = data.ref;
+            const format = plugin.build().to(data).apply(StateTransforms.Data.ParseCcp4, {}, { state: { isGhost: true } });
+            const parsedVolume = format.apply(StateTransforms.Volume.VolumeFromCcp4, { entryId: descriptor.volumeId });
+            await format.commit({ revertOnError: true });
+            const parsed = parsedVolume.selector.data;
+            const parsedFormat = format.selector.data as { header?: { MAPC: number; MAPR: number; MAPS: number } } | undefined;
+            if (!parsed || !parsedFormat?.header) throw new Error('Mol* CCP4 parser returned incomplete volume state');
+            const actualDimensions = [...parsed.grid.cells.space.dimensions];
+            if (actualDimensions.some((value, index) => value !== descriptor.dimensions[index])) throw new Error('CCP4 grid dimensions do not match the governed descriptor');
+            const actualAxisOrder = [parsedFormat.header.MAPC - 1, parsedFormat.header.MAPR - 1, parsedFormat.header.MAPS - 1];
+            if (actualAxisOrder.some((value, index) => value !== descriptor.axisOrder[index])) throw new Error('CCP4 axis order does not match the governed descriptor');
+            const actualTransform = [...Grid.getGridToCartesianTransform(parsed.grid)];
+            const actualTransformRowMajor = [
+                actualTransform[0], actualTransform[4], actualTransform[8], actualTransform[12],
+                actualTransform[1], actualTransform[5], actualTransform[9], actualTransform[13],
+                actualTransform[2], actualTransform[6], actualTransform[10], actualTransform[14],
+                actualTransform[3], actualTransform[7], actualTransform[11], actualTransform[15],
+            ];
+            if (actualTransformRowMajor.some((value, index) => Math.abs(value! - descriptor.gridToWorldRowMajor4x4[index]!) > 1e-5)) {
+                throw new Error('CCP4 grid-to-world transform does not match the governed descriptor');
+            }
+            this.volumes.set(descriptor.volumeId, {
+                descriptor,
+                sourceRef: parsedVolume.ref,
+                activeRef: parsedVolume.ref,
+            });
+            return viewerOk(undefined);
+        } catch (error) {
+            if (dataRef) {
+                try {
+                    await PluginCommands.State.RemoveObject(plugin, { state: plugin.state.data, ref: dataRef, removeParentGhosts: true });
+                } catch { /* best-effort rollback */ }
+            }
+            return error instanceof MolstarDirectAdapterCancelledError || signal.aborted
+                ? viewerCancelled('Mol* operation was cancelled')
+                : viewerError(error);
+        }
+    }
+
+    async applyVolumeSegmentation(segmentation: VolumeSegmentationV1, signal: AbortSignal): Promise<ViewerResult<void>> {
+        if (signal.aborted) return viewerCancelled('Mol* operation was cancelled');
+        const plugin = this.requirePlugin();
+        const entry = this.volumes.get(segmentation.volumeId);
+        if (!entry || entry.descriptor.semanticKind !== 'segmentation') {
+            return viewerUnsupported(`Supplied segmentation volume ${segmentation.volumeId} is not loaded`, 'volume-segmentation-v1');
+        }
+        const volume = plugin.state.data.cells.get(entry.sourceRef)?.obj?.data as Volume | undefined;
+        if (!volume) return viewerUnsupported('Loaded segmentation volume state is unavailable', 'volume-segmentation-v1');
+        const [x, y, z] = volume.grid.cells.space.dimensions;
+        const segments = new Map<number, Set<number>>();
+        const sets = new Map<number, Set<number>>();
+        const bounds: Record<number, Box3D> = {};
+        const labels: Record<number, string> = {};
+        const extents = new Map<number, [number, number, number, number, number, number]>();
+        for (const label of segmentation.labels) {
+            segments.set(label.segmentId, new Set([label.segmentId]));
+            sets.set(label.segmentId, new Set([label.segmentId]));
+            extents.set(label.segmentId, [x, y, z, -1, -1, -1]);
+            if (label.label !== null) labels[label.segmentId] = label.label;
+        }
+        const coordinates: [number, number, number] = [0, 0, 0];
+        const values = volume.grid.cells.data;
+        for (let index = 0; index < values.length; index += 1) {
+            if ((index & 0xFFFFF) === 0) {
+                if (signal.aborted) return viewerCancelled('Mol* operation was cancelled');
+                await Promise.resolve();
+            }
+            const segmentId = values[index]!;
+            if (segmentId === 0) continue;
+            if (!Number.isInteger(segmentId) || !extents.has(segmentId)) {
+                return viewerUnsupported(`Segmentation voxel value ${segmentId} has no exact supplied label`, 'volume-segmentation-v1');
+            }
+            volume.grid.cells.space.getCoords(index, coordinates);
+            const extent = extents.get(segmentId)!;
+            extent[0] = Math.min(extent[0], coordinates[0]); extent[1] = Math.min(extent[1], coordinates[1]); extent[2] = Math.min(extent[2], coordinates[2]);
+            extent[3] = Math.max(extent[3], coordinates[0]); extent[4] = Math.max(extent[4], coordinates[1]); extent[5] = Math.max(extent[5], coordinates[2]);
+        }
+        for (const [segmentId, extent] of extents) {
+            if (extent[3] < 0) return viewerUnsupported(`Supplied segment ${segmentId} has no voxels`, 'volume-segmentation-v1');
+            bounds[segmentId] = Box3D.create(Vec3.create(extent[0], extent[1], extent[2]), Vec3.create(extent[3], extent[4], extent[5]));
+        }
+        const segmentationData = { segments, sets, bounds, labels };
+        Volume.PickingGranularity.set(volume, 'object');
+        Volume.Segmentation.set(volume, segmentationData);
+        const activeVolume = plugin.state.data.cells.get(entry.activeRef)?.obj?.data as Volume | undefined;
+        if (activeVolume && activeVolume !== volume) {
+            Volume.PickingGranularity.set(activeVolume, 'object');
+            Volume.Segmentation.set(activeVolume, segmentationData);
+        }
+        entry.segmentation = segmentation;
+        return viewerOk(undefined);
+    }
+
+    async setVolumePresentation(state: VolumePresentationStateV1, signal: AbortSignal): Promise<ViewerResult<void>> {
+        if (signal.aborted) return viewerCancelled('Mol* operation was cancelled');
+        const plugin = this.requirePlugin();
+        const entry = this.volumes.get(state.volumeId);
+        if (!entry) return viewerUnsupported(`Volume ${state.volumeId} is not loaded`, 'volume-ccp4-v1');
+        try {
+            if (entry.representationRef) {
+                await PluginCommands.State.RemoveObject(plugin, { state: plugin.state.data, ref: entry.representationRef });
+                entry.representationRef = undefined;
+            }
+            if (!state.visible) return viewerOk(undefined);
+            if (signal.aborted) return viewerCancelled('Mol* operation was cancelled');
+            const volume = plugin.state.data.cells.get(entry.activeRef)?.obj?.data;
+            if (!volume) return viewerUnsupported('Loaded volume state is unavailable', 'volume-ccp4-v1');
+            const isSegmentation = state.visibleSegmentIds.length > 0;
+            if (isSegmentation && !entry.segmentation) return viewerUnsupported('Supplied segmentation metadata has not been applied', 'volume-segmentation-v1');
+            const isoValue = Volume.IsoValue.absolute(absoluteContourValue(state, entry.descriptor));
+            const typeParams = state.representation === 'slice'
+                ? {
+                    alpha: state.opacity,
+                    isoValue,
+                    dimension: {
+                        name: state.slice!.axis === 0 ? 'x' as const : state.slice!.axis === 1 ? 'y' as const : 'z' as const,
+                        params: state.slice!.index,
+                    },
+                }
+                : { alpha: state.opacity, isoValue };
+            const params = isSegmentation
+                ? createVolumeRepresentationParams(plugin, volume, {
+                    type: 'segment', typeParams: { segments: [...state.visibleSegmentIds] }, color: 'volume-segment',
+                })
+                : createVolumeRepresentationParams(plugin, volume, {
+                    type: state.representation, typeParams, color: 'uniform', colorParams: { value: normalizeColor(state.color) },
+                });
+            const representation = await plugin.build()
+                .to(entry.activeRef)
+                .apply(StateTransforms.Representation.VolumeRepresentation3D, params)
+                .commit();
+            entry.representationRef = representation.ref;
+            return signal.aborted ? viewerCancelled('Mol* operation was cancelled') : viewerOk(undefined);
+        } catch (error) {
+            return signal.aborted ? viewerCancelled('Mol* operation was cancelled') : viewerError(error);
+        }
+    }
+
+    async removeVolume(volumeId: string, signal: AbortSignal): Promise<ViewerResult<void>> {
+        const plugin = this.requirePlugin();
+        const entry = this.volumes.get(volumeId);
+        if (!entry) return viewerOk(undefined);
+        try {
+            await PluginCommands.State.RemoveObject(plugin, { state: plugin.state.data, ref: entry.sourceRef, removeParentGhosts: true });
+            this.volumes.delete(volumeId);
+            return signal.aborted ? viewerCancelled('Mol* operation was cancelled') : viewerOk(undefined);
+        } catch (error) {
+            return signal.aborted ? viewerCancelled('Mol* operation was cancelled') : viewerError(error);
+        }
+    }
+
+    async applyVolumeRegistration(registration: VolumeRegistrationV1, signal: AbortSignal): Promise<ViewerResult<void>> {
+        if (signal.aborted) return viewerCancelled('Mol* operation was cancelled');
+        const plugin = this.requirePlugin();
+        const entry = this.volumes.get(registration.volumeId);
+        if (!entry) return viewerUnsupported(`Volume ${registration.volumeId} is not loaded`, 'volume-segmentation-v1');
+        try {
+            if (entry.representationRef) {
+                await PluginCommands.State.RemoveObject(plugin, { state: plugin.state.data, ref: entry.representationRef });
+                entry.representationRef = undefined;
+            }
+            if (entry.transformRef) {
+                await PluginCommands.State.RemoveObject(plugin, { state: plugin.state.data, ref: entry.transformRef });
+                entry.transformRef = undefined;
+                entry.activeRef = entry.sourceRef;
+            }
+            const supplied = registration.transformRowMajor4x4;
+            const matrix = Mat4.ofRows([
+                [supplied[0]!, supplied[1]!, supplied[2]!, supplied[3]!],
+                [supplied[4]!, supplied[5]!, supplied[6]!, supplied[7]!],
+                [supplied[8]!, supplied[9]!, supplied[10]!, supplied[11]!],
+                [supplied[12]!, supplied[13]!, supplied[14]!, supplied[15]!],
+            ]);
+            const transformed = await plugin.build().to(entry.sourceRef).apply(
+                StateTransforms.Volume.VolumeTransform,
+                { transform: { name: 'matrix', params: { data: matrix, transpose: false } } },
+            ).commit();
+            entry.transformRef = transformed.ref;
+            entry.activeRef = transformed.ref;
+            return signal.aborted ? viewerCancelled('Mol* operation was cancelled') : viewerOk(undefined);
+        } catch (error) {
+            return signal.aborted ? viewerCancelled('Mol* operation was cancelled') : viewerError(error);
+        }
+    }
+
+    async capturePng(signal: AbortSignal): Promise<ViewerResult<Blob>> {
+        if (signal.aborted) return viewerCancelled('Mol* operation was cancelled');
+        const plugin = this.requirePlugin();
+        const viewportScreenshot = plugin.helpers.viewportScreenshot;
+        if (!viewportScreenshot) return viewerUnsupported('Mol* screenshot helper is unavailable', 'export-png-v1');
+        try {
+            const dataUri = await viewportScreenshot.getImageDataUri();
+            if (signal.aborted) return viewerCancelled('Mol* operation was cancelled');
+            const response = await fetch(dataUri);
+            return viewerOk(await response.blob());
+        } catch (error) {
+            return signal.aborted ? viewerCancelled('Mol* operation was cancelled') : viewerError(error);
+        }
+    }
+
+    async exportSelectionMmcif(signal: AbortSignal): Promise<ViewerResult<Blob>> {
+        if (signal.aborted) return viewerCancelled('Mol* operation was cancelled');
+        const plugin = this.requirePlugin();
+        const root = plugin.managers.structure.hierarchy.current.structures[0]?.cell.obj?.data;
+        if (!root) return viewerUnsupported('No structure is loaded for mmCIF export', 'export-mmcif-v1');
+        try {
+            const selected = plugin.managers.structure.selection.getStructure(root) ?? root;
+            const encoded = to_mmCIF('BMS_SELECTION', selected, false, { copyAllCategories: false });
+            if (typeof encoded !== 'string') throw new Error('Mol* returned binary mmCIF for a text export request');
+            return viewerOk(new Blob([encoded], { type: 'chemical/x-mmcif' }));
+        } catch (error) {
+            return signal.aborted ? viewerCancelled('Mol* operation was cancelled') : viewerError(error);
+        }
+    }
+
+    getCanvasElement(): ViewerResult<HTMLCanvasElement> {
+        const canvas = this.plugin?.canvas3dContext?.canvas;
+        return canvas instanceof HTMLCanvasElement
+            ? viewerOk(canvas)
+            : viewerUnsupported('Mol* canvas element is unavailable', 'export-webm-v1');
+    }
+
     dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
@@ -533,7 +829,10 @@ export class MolstarDirectAdapter {
         this.disposedPlugin = this.plugin;
         this.clickSubscription?.unsubscribe();
         this.clickSubscription = undefined;
+        if (this.plugin && this.tooltipProvider) this.plugin.managers.lociLabels.removeProvider(this.tooltipProvider);
+        this.tooltipProvider = undefined;
         this.residueClickHandler = undefined;
+        this.volumes.clear();
         this.owner.dispose();
         if (this.target) adapterRegistry.delete(this.target);
         this.plugin = undefined;
@@ -567,9 +866,11 @@ export class MolstarDirectAdapter {
 
     private async clearColorSelections(plugin: PluginUIContext): Promise<void> {
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
-            await clearStructureOverpaint(plugin, structureRef.components);
-            await clearStructureTransparency(plugin, structureRef.components);
+            if (this.hasOverpaint) await clearStructureOverpaint(plugin, structureRef.components);
+            if (this.hasTransparency) await clearStructureTransparency(plugin, structureRef.components);
         }
+        this.hasOverpaint = false;
+        this.hasTransparency = false;
     }
 
     private async applyColorSelections(
@@ -592,6 +893,7 @@ export class MolstarDirectAdapter {
                     normalizeColor(nonSelectedColor),
                     async (root) => queryLoci([{}], root),
                 );
+                this.hasOverpaint = true;
             }
             for (const selection of documentSelections) {
                 if (selection.color !== null) {
@@ -601,6 +903,7 @@ export class MolstarDirectAdapter {
                         normalizeColor(selection.color),
                         async (root) => queryLoci([selection], root),
                     );
+                    this.hasOverpaint = true;
                 }
                 if (selection.opacity !== undefined && selection.opacity < 1) {
                     await setStructureTransparency(
@@ -609,6 +912,7 @@ export class MolstarDirectAdapter {
                         Math.max(0, Math.min(1, 1 - selection.opacity)),
                         async (root) => queryLoci([selection], root),
                     );
+                    this.hasTransparency = true;
                 }
                 if (selection.focus) focusLoci.push(queryLoci([selection], structure));
             }
@@ -633,6 +937,7 @@ export class MolstarDirectAdapter {
                     1,
                     async (root) => queryLoci([selection], root),
                 );
+                this.hasTransparency = true;
             }
         }
     }
@@ -641,51 +946,40 @@ export class MolstarDirectAdapter {
         plugin: PluginUIContext,
         selections: readonly MolstarDirectQuery[],
     ): Promise<void> {
+        if (this.tooltipProvider) plugin.managers.lociLabels.removeProvider(this.tooltipProvider);
+        this.tooltipProvider = undefined;
+
+        const entries: Array<{ text: string; loci: StructureElement.Loci }> = [];
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
             const structure = structureRef.cell.obj?.data;
             if (!structure) continue;
             const documentId = this.documentStructures.get(structure);
             const documentSelections = selections.filter((selection) => !selection.document_id || selection.document_id === documentId);
-            const customTooltipProps = {
-                tooltips: documentSelections.map((selection) => ({
-                    text: selection.tooltip ?? '',
-                    selector: {
-                        name: 'bundle' as const,
-                        params: StructureElement.Bundle.fromLoci(queryLoci([selection], structure)),
-                    },
-                })),
-            };
-            const structureTransformRef = structureRef.cell.transform.ref;
-            let propertyCells = plugin.state.data.select(
-                StateSelection.Generators.ofTransformer(
-                    StateTransforms.Model.CustomStructureProperties,
-                    structureTransformRef,
-                ),
-            );
-            if (propertyCells.length === 0) {
-                await plugin.build()
-                    .to(structureTransformRef)
-                    .apply(StateTransforms.Model.CustomStructureProperties)
-                    .commit();
-                propertyCells = plugin.state.data.select(
-                    StateSelection.Generators.ofTransformer(
-                        StateTransforms.Model.CustomStructureProperties,
-                        structureTransformRef,
-                    ),
-                );
+            for (const selection of documentSelections) {
+                if (!selection.tooltip) continue;
+                entries.push({ text: selection.tooltip, loci: queryLoci([selection], structure) });
             }
-            const propertyCell = propertyCells[0];
-            if (!propertyCell) continue;
-            await plugin.build().to(propertyCell).update((old) => ({
-                properties: {
-                    ...old.properties,
-                    [CustomTooltipsProvider.descriptor.name]: customTooltipProps,
-                },
-                autoAttach: old.autoAttach.includes(CustomTooltipsProvider.descriptor.name)
-                    ? old.autoAttach
-                    : [...old.autoAttach, CustomTooltipsProvider.descriptor.name],
-            })).commit();
         }
+        if (entries.length === 0) return;
+
+        const escapeLabel = (value: string) => value
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
+        const provider: LociLabelProvider = {
+            priority: 100,
+            label: (loci: Loci) => {
+                if (!StructureElement.Loci.is(loci)) return undefined;
+                const labels = entries
+                    .filter((entry) => StructureElement.Loci.areIntersecting(entry.loci, loci))
+                    .map((entry) => escapeLabel(entry.text));
+                return labels.length > 0 ? labels.join('<br/>') : undefined;
+            },
+        };
+        plugin.managers.lociLabels.addProvider(provider);
+        this.tooltipProvider = provider;
     }
 
     private requirePlugin(): PluginUIContext {

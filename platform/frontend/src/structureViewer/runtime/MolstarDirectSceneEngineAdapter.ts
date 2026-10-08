@@ -7,6 +7,7 @@ import {
 import type { StructureComponentType, StructurePresentationQuery } from '../contracts/scenePresentation.js';
 import type { StructureSceneState } from '../contracts/sceneState.js';
 import type { MDPlaybackState, MDSourceFrameRef } from '../contracts/mdTrajectory.js';
+import type { SpatialVolumeDescriptorV1, VolumePresentationStateV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../contracts/spatialVolumes.js';
 import {
     viewerCancelled,
     viewerError,
@@ -149,6 +150,38 @@ export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
 
     async dispose(): Promise<void> {
         this.adapter.dispose();
+    }
+
+    async loadVolume(descriptor: SpatialVolumeDescriptorV1, signal: AbortSignal): Promise<ViewerResult<void>> {
+        return this.adapter.loadVolume(descriptor, signal);
+    }
+
+    async setVolumePresentation(state: VolumePresentationStateV1, signal: AbortSignal): Promise<ViewerResult<void>> {
+        return this.adapter.setVolumePresentation(state, signal);
+    }
+
+    async removeVolume(volumeId: string, signal: AbortSignal): Promise<ViewerResult<void>> {
+        return this.adapter.removeVolume(volumeId, signal);
+    }
+
+    async applyVolumeRegistration(registration: VolumeRegistrationV1, signal: AbortSignal): Promise<ViewerResult<void>> {
+        return this.adapter.applyVolumeRegistration(registration, signal);
+    }
+
+    async applyVolumeSegmentation(segmentation: VolumeSegmentationV1, signal: AbortSignal): Promise<ViewerResult<void>> {
+        return this.adapter.applyVolumeSegmentation(segmentation, signal);
+    }
+
+    async capturePng(signal: AbortSignal): Promise<ViewerResult<Blob>> {
+        return this.adapter.capturePng(signal);
+    }
+
+    async exportSelectionMmcif(signal: AbortSignal): Promise<ViewerResult<Blob>> {
+        return this.adapter.exportSelectionMmcif(signal);
+    }
+
+    getCanvasElement(): ViewerResult<HTMLCanvasElement> {
+        return this.adapter.getCanvasElement();
     }
 
     async selectMDSourceFrame(_frame: MDSourceFrameRef, signal: AbortSignal): Promise<ViewerResult<void>> {
