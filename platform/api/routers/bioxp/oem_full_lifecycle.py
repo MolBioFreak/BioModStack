@@ -276,7 +276,7 @@ def _validate_planned_run(
     expected_machine_serial: int,
     expected_registry_sha256: str,
     expected_evidence_lock_sha256: str,
-) -> None:
+) -> _LifecycleRun:
     run = _parse_lifecycle_run(response)
     canonical_echo = run.request.model_dump(exclude={"inputs"})
     if canonical_echo != outbound:
@@ -311,6 +311,7 @@ def _validate_planned_run(
         )
     ):
         raise HTTPException(status_code=502, detail="BioXP robot returned an unsafe full-lifecycle plan")
+    return run
 
 
 async def _leased_robot_request(
@@ -376,14 +377,32 @@ async def plan_full_lifecycle(
         expected_generation=request.expected_generation,
         json_data=payload,
     )
-    _validate_planned_run(
+    planned = _validate_planned_run(
         response,
         outbound=payload,
         expected_machine_serial=request.expected_machine_serial,
         expected_registry_sha256=request.expected_registry_sha256,
         expected_evidence_lock_sha256=request.expected_evidence_lock_sha256,
     )
-    return response
+    persisted_response = await _leased_robot_request(
+        runtime,
+        "get_oem_full_lifecycle_run",
+        expected_generation=request.expected_generation,
+        path_params={"run_id": planned.run_id},
+    )
+    persisted = _validate_planned_run(
+        persisted_response,
+        outbound=payload,
+        expected_machine_serial=request.expected_machine_serial,
+        expected_registry_sha256=request.expected_registry_sha256,
+        expected_evidence_lock_sha256=request.expected_evidence_lock_sha256,
+    )
+    if persisted.model_dump() != planned.model_dump():
+        raise HTTPException(
+            status_code=502,
+            detail="BioXP robot plan response differs from the durable canonical lifecycle run",
+        )
+    return persisted_response
 
 
 _RUN_ID = Path(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -471,6 +490,7 @@ async def cancel_full_lifecycle_run(
         or run.run_state != "cancelled"
         or run.terminal_state != "cancelled"
         or run.expected_next_stage is not None
+        or run.sequence != admitted.sequence + 1
         or cancelled_canonical != admitted_canonical
         or run.source_authority_verified is not False
         or run.configuration_verified is not False
