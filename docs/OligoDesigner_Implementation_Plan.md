@@ -511,3 +511,39 @@ This addendum lists concerns found while cross‑checking the plan against the R
 - https://github.com/RosettaCommons/RFDpoly
 - https://github.com/jwohlwend/boltz
 - https://docs.openmm.org/
+
+---
+
+## Addendum 2: Implementation Notes (Agent Feedback)
+
+Additional technical concerns identified during integration of Addendum 1:
+
+### 9) **IGSO3 Cache Cold Start**
+**Concern:** RFDpoly README notes first run takes extra time to "precompute the IGSO3 cache."  
+**Impact:** Initial test runs may timeout or appear hung; users may report false failures.  
+**Recommendation:** Document expected first-run delay (~2-3 min extra). Consider pre-warming cache during container setup.
+
+### 10) **RNA vs DNA Residue Detection Ambiguity**
+**Concern:** `prep_boltz_oligo.py` must detect polymer type from residue names. RNA residues vary by convention:
+- Standard: `A`, `U`, `G`, `C`
+- Explicit: `RA`, `RU`, `RG`, `RC`  
+- DNA is more reliable: `DA`, `DT`, `DG`, `DC`  
+**Impact:** Misclassification → wrong Boltz-2 YAML blocks → failed validation.  
+**Recommendation:** Implement robust detection with fallback heuristics (phosphate backbone check, C2' hydroxyl).
+
+### 11) **OpenMM Nucleic Acid Force Field Selection**
+**Concern:** Plan stated `ff14SB` for NA, but this is protein-only.  
+**Correct options:**
+- RNA/DNA: `ff99bsc0` (older) or `OL15` (recommended for DNA), `OL3` (RNA)
+- AMBER14SB is for proteins only  
+**Impact:** Using wrong force field → nonsensical energies or crashes.  
+**Recommendation:** Add `oligo_force_field` param with NA-aware defaults; disable MM-GBSA for pure NA runs until validated.
+
+### 12) **Symmetry Support Unverified**
+**Concern:** Plan includes `rfdpoly_symmetry` param, but RFDpoly docs don't explicitly confirm symmetry support.  
+**Impact:** May be non-functional or require undocumented Hydra keys.  
+**Recommendation:** Mark as "experimental" in UI; test before exposing. May require checking RFDpoly source code.
+
+### 13) **Output Format Toggle (Deferred from #5)**
+**Concern:** RFDpoly likely supports output format via Hydra config (inherited from RFdiffusion) but isn't documented.  
+**Recommendation:** Leave disabled until confirmed; low priority.
