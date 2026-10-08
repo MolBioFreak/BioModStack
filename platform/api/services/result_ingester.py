@@ -2705,7 +2705,8 @@ async def ingest_job_results(
                     "records", "structure_maps", "landscapes", "analysis", "lineage",
                     "support", "missingness", "resampling",
                 }
-                if set(derived) != required_index_fields:
+                allowed_index_fields = required_index_fields | {"state_landscape_analyses"}
+                if not required_index_fields.issubset(derived) or set(derived) - allowed_index_fields:
                     raise ConformationalPersistenceError("canonical derived index fields are incomplete or unknown")
                 if derived["schema_name"] != "cm_derived_index" or derived["schema_version"] != 1:
                     raise ConformationalPersistenceError("canonical derived index schema is unsupported")
@@ -2740,6 +2741,7 @@ async def ingest_job_results(
                 bundle["cm_structure_maps"] = derived.get("structure_maps", [])
                 bundle["cm_frustration_landscapes"] = derived.get("landscapes", [])
                 bundle["cm_analysis_v1"] = derived.get("analysis")
+                bundle["cm_state_landscape_analyses"] = derived.get("state_landscape_analyses")
                 bundle["cm_lineage"] = derived.get("lineage")
                 bundle["cm_support"] = derived.get("support")
                 bundle["cm_missingness"] = derived.get("missingness")

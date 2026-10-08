@@ -231,6 +231,15 @@ function SavedGibsonWorkupLibrary({
     );
 }
 
+function workupPreparation(fragment: SavedWorkupRecord): string {
+    const metadata = asWorkupRecord(fragment.metadata);
+    const preparation = fragment.preparation ?? metadata?.preparation;
+    if (preparation === 'ready_linear') {
+        return metadata?.vendor_purchase === 'full_fragment' ? 'Vendor-ready linear' : 'Ready linear';
+    }
+    return preparation === 'pcr' ? 'PCR' : 'Unspecified preparation';
+}
+
 function SavedGibsonWorkup({ operationParams }: { operationParams?: Record<string, unknown> | null }) {
     if (operationParams?.mode !== 'gibson') return null;
     const fragments = asWorkupRecords(operationParams.source_fragments ?? operationParams.fragments);
@@ -269,7 +278,7 @@ function SavedGibsonWorkup({ operationParams }: { operationParams?: Record<strin
                 <summary className="cursor-pointer text-xs font-medium text-slate-200">Source fragments ({fragments.length})</summary>
                 <div className="mt-2 max-h-64 space-y-1 overflow-auto text-xs">
                     {fragments.map((fragment, index) => <div key={`${workupText(fragment.fragment_id)}-${index}`} className="flex flex-wrap justify-between gap-2 border-b border-slate-800 py-1 text-slate-300">
-                        <span>{workupText(fragment.name, workupText(fragment.fragment_id))} • {workupText(fragment.preparation, 'PCR')}</span>
+                        <span>{workupText(fragment.name, workupText(fragment.fragment_id))} • {workupPreparation(fragment)}</span>
                         <span className="font-mono text-slate-500">{workupText(fragment.source_start)}–{workupText(fragment.source_end)}{fragment.source_wraps_origin === true ? ' ↻' : ''}</span>
                     </div>)}
                 </div>
@@ -311,7 +320,7 @@ export function AssemblyPanel({
 }: AssemblyPanelProps) {
     const [mode, setMode] = useState<AssemblyMode>('ligation');
     const [fragments, setFragments] = useState<AssemblyFragmentInput[]>([]);
-    const [gibsonWorkflow, setGibsonWorkflow] = useState<'design' | 'validate'>('design');
+    const [gibsonWorkflow, setGibsonWorkflow] = useState<'design' | 'validate'>('validate');
     const [gibsonPreparations, setGibsonPreparations] = useState<Record<string, 'pcr' | 'ready_linear'>>({});
     const [saveName, setSaveName] = useState('');
     const [saveDescription, setSaveDescription] = useState('');
@@ -567,22 +576,27 @@ export function AssemblyPanel({
             </div>
 
             {mode === 'gibson' && (
-                <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-700 bg-slate-900/50 p-1.5">
-                    <button
-                        type="button"
-                        onClick={() => { setGibsonWorkflow('design'); setResult(null); setError(null); }}
-                        className={`rounded-lg px-3 py-2 text-xs font-medium ${gibsonWorkflow === 'design' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
-                    >
-                        Design from raw fragments
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => { setGibsonWorkflow('validate'); setResult(null); setError(null); }}
-                        className={`rounded-lg px-3 py-2 text-xs font-medium ${gibsonWorkflow === 'validate' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
-                    >
-                        Validate pre-overlapped
-                    </button>
-                </div>
+                <>
+                    <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-700 bg-slate-900/50 p-1.5">
+                        <button
+                            type="button"
+                            onClick={() => { setGibsonWorkflow('design'); setResult(null); setError(null); }}
+                            className={`rounded-lg px-3 py-2 text-xs font-medium ${gibsonWorkflow === 'design' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                        >
+                            PCR template route (optional)
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => { setGibsonWorkflow('validate'); setResult(null); setError(null); }}
+                            className={`rounded-lg px-3 py-2 text-xs font-medium ${gibsonWorkflow === 'validate' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                        >
+                            Vendor fragments — validate pre-overlapped
+                        </button>
+                    </div>
+                    <p className="rounded-lg border border-cyan-900/60 bg-cyan-950/20 px-3 py-2 text-xs leading-5 text-cyan-100/80">
+                        Standard workup: order complete, pre-overlapped DNA fragments externally and assemble them in-house. Paste the exact purchased sequences here to validate every Gibson junction. Use the PCR route only when deliberately amplifying from physical template DNA.
+                    </p>
+                </>
             )}
 
             <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3">

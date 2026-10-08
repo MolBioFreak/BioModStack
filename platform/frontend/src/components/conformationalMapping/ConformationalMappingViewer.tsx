@@ -14,8 +14,12 @@ import {
     getCmLogs,
     getCmProgress,
     getCmResults,
+    getCmStateLandscapeAnalysis,
+    getCmStateLandscapeAnalysisRows,
     getCmStatus,
     retryCmRequest,
+    type CmStateLandscapeAnalysisRowsPage,
+    type CmStateLandscapeRow,
     type CmSubmitReceipt,
 } from './conformationalMappingApi';
 import {
@@ -33,6 +37,21 @@ import {
     requireApprovedCmResults,
     type CmAnalysisResult,
 } from './conformationalMappingSemantics';
+import { canonicalStateLandscapeAnalysis } from './stateLandscapeSemantics';
+import { StateLandscapeStatusAlert, StateLandscapeWorkspacePanel, type StateLandscapeMetricName } from './StateLandscapeWorkspacePanel';
+import {
+    initialStateLandscapeWorkspaceState,
+    clearStateLandscapeResidueSelectionForCandidate,
+    resolveStateLandscapeResidueRef,
+    selectStateLandscapeWorkspacePair,
+    stateLandscapeSummaryEnabled,
+    stateLandscapeWorkspaceEnabled,
+    stateLandscapeRowKey,
+    stateLandscapeWorkspaceTabs,
+    validateStateLandscapeWorkspaceRowsPage,
+    validateStateLandscapeWorkspaceSummary,
+    type StateLandscapeWorkspaceTab,
+} from './stateLandscapeWorkspace';
 import {
     collectCompleteFrustraMpnnLandscape,
     createFrustraMpnnViewerMetrics,
@@ -40,7 +59,7 @@ import {
 } from './frustraMpnnViewerMetrics';
 
 interface Props { requestId: string; title?: string }
-type DetailTab = 'ensemble' | 'mapping' | 'landscape' | 'analysis' | 'evidence' | 'downloads';
+type DetailTab = StateLandscapeWorkspaceTab;
 type LifecycleTab = 'progress' | 'logs' | 'failures';
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
@@ -76,6 +95,15 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const [mappingFilter, setMappingFilter] = useState<'all' | 'mapped' | 'issues'>('all');
     const [expandedAnalysis, setExpandedAnalysis] = useState<string | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
+    const [selectedPairId, setSelectedPairId] = useState('');
+    const [selectedStateRowKey, setSelectedStateRowKey] = useState<string | null>(null);
+    const [stateAnalysisOffset, setStateAnalysisOffset] = useState(0);
+    const [selectedStateMetric, setSelectedStateMetric] = useState<StateLandscapeMetricName>('native_score');
+    const [stateInspectorMinimized, setStateInspectorMinimized] = useState(false);
+    const [stateAnalysisRows, setStateAnalysisRows] = useState<CmStateLandscapeAnalysisRowsPage | null>(null);
+    const [stateAnalysisResidueSelections, setStateAnalysisResidueSelections] = useState<ResidueRef[]>([]);
+    const [pendingStateResidue, setPendingStateResidue] = useState<{ candidateId: string; row: CmStateLandscapeRow } | null>(null);
+    const [stateResidueSelectionReason, setStateResidueSelectionReason] = useState<string | null>(null);
 
     const locationReceipt = (location.state as { cmSubmissionReceipt?: CmSubmitReceipt } | null)?.cmSubmissionReceipt;
     const receipt = locationReceipt?.request_id === requestId ? locationReceipt : null;
@@ -121,19 +149,103 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
         }
     }, [results.data]);
 
+    const stateLandscapeAuthority = useMemo(() => {
+        if (!parsed.data) return { data: null, error: null as string | null };
+        if (!parsed.data.value.records.some((record) => record.type === 'state_landscape_analysis')) return { data: null, error: null as string | null };
+        try { return { data: canonicalStateLandscapeAnalysis(parsed.data.value), error: null as string | null }; }
+        catch (value) { return { data: null, error: value instanceof Error ? value.message : 'Canonical state-analysis authority is malformed.' }; }
+    }, [parsed.data]);
+    const stateAnalysisSummary = useQuery({
+        queryKey: ['cm-state-landscape-analysis', requestId],
+        queryFn: () => getCmStateLandscapeAnalysis(requestId),
+        enabled: stateLandscapeSummaryEnabled(stateLandscapeAuthority.data),
+        retry: false,
+    });
+    const stateAnalysisSummaryParsed = useMemo(() => {
+        if (!stateAnalysisSummary.data || stateLandscapeAuthority.error) return { data: null, error: stateLandscapeAuthority.error };
+        try { return { data: validateStateLandscapeWorkspaceSummary(stateAnalysisSummary.data, stateLandscapeAuthority.data), error: null as string | null }; }
+        catch (value) { return { data: null, error: value instanceof Error ? value.message : 'State-analysis projection is malformed.' }; }
+    }, [stateAnalysisSummary.data, stateLandscapeAuthority.data, stateLandscapeAuthority.error]);
+    const stateAnalysisSummaryError = stateAnalysisSummaryParsed.error
+        || (stateAnalysisSummary.isError ? cmApiError(stateAnalysisSummary.error, 'State-analysis summary is unavailable.') : null);
+    const stateAnalysisPage = useQuery({
+        queryKey: ['cm-state-landscape-analysis-rows', requestId, stateAnalysisSummaryParsed.data?.analysis_id, selectedPairId, stateAnalysisOffset],
+        queryFn: () => getCmStateLandscapeAnalysisRows(requestId, stateAnalysisSummaryParsed.data!.analysis_id, selectedPairId, stateAnalysisOffset, 50),
+        enabled: stateLandscapeWorkspaceEnabled(stateAnalysisSummaryParsed.data) && Boolean(selectedPairId),
+        retry: false,
+    });
+    const stateAnalysisPageParsed = useMemo(() => {
+        if (!stateAnalysisPage.data || !stateAnalysisSummaryParsed.data || !selectedPairId) return { data: null, error: null as string | null };
+        try { return { data: validateStateLandscapeWorkspaceRowsPage(stateAnalysisPage.data, stateAnalysisSummaryParsed.data, selectedPairId, stateAnalysisOffset), error: null as string | null }; }
+        catch (value) { return { data: null, error: value instanceof Error ? value.message : 'State-analysis rows are malformed.' }; }
+    }, [selectedPairId, stateAnalysisOffset, stateAnalysisPage.data, stateAnalysisSummaryParsed.data]);
+
     const selected = parsed.data?.candidates.find((candidate) => candidate.candidate_id === selectedCandidateId)
         || parsed.data?.candidates[0] || null;
+    const clearStateAnalysisResidueSelection = (candidateId: string) => {
+        const reset = clearStateLandscapeResidueSelectionForCandidate(candidateId);
+        setStateAnalysisResidueSelections(reset.residueSelections);
+        setPendingStateResidue(null);
+        setStateResidueSelectionReason(reset.residueSelectionReason);
+        return reset.selectedCandidateId;
+    };
+    const selectCandidateForStateAnalysis = (candidateId: string) => {
+        setSelectedCandidateId(clearStateAnalysisResidueSelection(candidateId));
+    };
     useEffect(() => {
-        if (selected && selectedCandidateId !== selected.candidate_id) setSelectedCandidateId(selected.candidate_id);
+        if (selected && selectedCandidateId !== selected.candidate_id) setSelectedCandidateId(clearStateAnalysisResidueSelection(selected.candidate_id));
     }, [selected, selectedCandidateId]);
     useEffect(() => {
         setLandscapeOffset(0);
         setFrustraMpnnSelection(null);
         setOverlayIds((current) => current.filter((id) => id !== selected?.candidate_id));
     }, [selected?.candidate_id]);
+    useEffect(() => {
+        setSelectedPairId('');
+        setSelectedStateRowKey(null);
+        setStateAnalysisOffset(0);
+        setStateAnalysisRows(null);
+        setStateAnalysisResidueSelections([]);
+        setPendingStateResidue(null);
+        setStateResidueSelectionReason(null);
+    }, [requestId]);
+    useEffect(() => {
+        if (!stateAnalysisSummaryParsed.data) return;
+        const initial = initialStateLandscapeWorkspaceState(stateAnalysisSummaryParsed.data);
+        setSelectedPairId(initial.selectedPairId);
+        setSelectedStateRowKey(initial.selectedStateRowKey);
+        setStateAnalysisOffset(initial.pageOffset);
+        setStateAnalysisRows(null);
+        setStateAnalysisResidueSelections([]);
+        setPendingStateResidue(null);
+        setStateResidueSelectionReason(null);
+    }, [stateAnalysisSummaryParsed.data]);
+    useEffect(() => {
+        const page = stateAnalysisPageParsed.data;
+        if (!page) return;
+        setStateAnalysisRows((current) => {
+            if (page.offset === 0 || !current || current.selected_analysis_id !== page.selected_analysis_id || current.applied_filters.pair_id !== page.applied_filters.pair_id) return page;
+            return { ...page, rows: [...current.rows, ...page.rows] };
+        });
+    }, [stateAnalysisPageParsed.data]);
 
     const selectedArtifact = selected && parsed.data ? candidateStructureArtifact(selected, parsed.data.value.artifacts) : null;
     const structureMap = selected && parsed.data ? candidateStructureMap(parsed.data.value, selected.candidate_id) : null;
+    useEffect(() => {
+        if (!pendingStateResidue || selected?.candidate_id !== pendingStateResidue.candidateId) return;
+        const residue = resolveStateLandscapeResidueRef(pendingStateResidue.row.identity, structureMap);
+        if (!residue) {
+            setStateAnalysisResidueSelections([]);
+            setStateResidueSelectionReason('Exact author/entity/sequence identity is not mapped in this candidate structure.');
+            return;
+        }
+        setStateAnalysisResidueSelections([residue]);
+        setFrustraMpnnSelection({ metricId: 'frustrampnn-native-index', identities: [residue], origin: 'table' });
+        setStateResidueSelectionReason(null);
+    }, [pendingStateResidue, selected?.candidate_id, structureMap]);
+    useEffect(() => {
+        if (pendingStateResidue && selected?.candidate_id !== pendingStateResidue.candidateId) clearStateAnalysisResidueSelection(selected?.candidate_id || '');
+    }, [pendingStateResidue, selected?.candidate_id]);
     const overlays = useMemo(() => {
         if (!parsed.data || !selected) return [];
         return overlayIds.filter((id) => id !== selected.candidate_id).map((id) => {
@@ -251,7 +363,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
 
                 {!statusContractError && parsed.data && selected && selectedArtifact && <>
                     <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-                        <aside className="max-h-[760px] overflow-auto rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Canonical candidates in API order"><div className="sticky top-0 z-10 mb-2 bg-slate-900 pb-2"><h2 className="text-sm font-semibold text-white">Candidates in API order</h2><p className="mt-1 text-[11px] text-slate-500">Identity and ordering come only from the canonical ensemble record.</p></div>{parsed.data.candidates.map((candidate, index) => <div key={candidate.candidate_id} className={`mb-2 rounded-lg border p-2 ${candidate.candidate_id === selected.candidate_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800'}`}><button type="button" onClick={() => setSelectedCandidateId(candidate.candidate_id)} className="w-full text-left"><div className="text-xs font-medium text-white">Candidate {index + 1}</div><div className="mt-1 text-[11px] leading-4 text-slate-400">{candidateLabel(candidate)}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{candidate.candidate_id}</div></button><label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={overlayIds.includes(candidate.candidate_id)} disabled={candidate.candidate_id === selected.candidate_id || (!overlayIds.includes(candidate.candidate_id) && overlayIds.length >= 5)} onChange={(event) => setOverlayIds((current) => event.target.checked ? [...current, candidate.candidate_id] : current.filter((id) => id !== candidate.candidate_id))} />Overlay hypothesis</label></div>)}</aside>
+                        <aside className="max-h-[760px] overflow-auto rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Canonical candidates in API order"><div className="sticky top-0 z-10 mb-2 bg-slate-900 pb-2"><h2 className="text-sm font-semibold text-white">Candidates in API order</h2><p className="mt-1 text-[11px] text-slate-500">Identity and ordering come only from the canonical ensemble record.</p></div>{parsed.data.candidates.map((candidate, index) => <div key={candidate.candidate_id} className={`mb-2 rounded-lg border p-2 ${candidate.candidate_id === selected.candidate_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800'}`}><button type="button" onClick={() => selectCandidateForStateAnalysis(candidate.candidate_id)} className="w-full text-left"><div className="text-xs font-medium text-white">Candidate {index + 1}</div><div className="mt-1 text-[11px] leading-4 text-slate-400">{candidateLabel(candidate)}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{candidate.candidate_id}</div></button><label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={overlayIds.includes(candidate.candidate_id)} disabled={candidate.candidate_id === selected.candidate_id || (!overlayIds.includes(candidate.candidate_id) && overlayIds.length >= 5)} onChange={(event) => setOverlayIds((current) => event.target.checked ? [...current, candidate.candidate_id] : current.filter((id) => id !== candidate.candidate_id))} />Overlay hypothesis</label></div>)}</aside>
                         <div className="space-y-3">
                             <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70">
                                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3">
@@ -274,10 +386,11 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                                         activeMetricId="frustrampnn-native-index"
                                         showMetricWorkbench
                                         showSequenceTrack
+                                        residueSelections={stateAnalysisResidueSelections}
                                         onMetricSelection={setFrustraMpnnSelection}
                                     />
                                 ) : (
-                                    <MolstarViewer structureUrl={cmArtifactUrl(requestId, selectedArtifact.artifact_id)} format="cif" height={650} label={candidateLabel(selected)} overlayStructures={overlays} />
+                                    <MolstarViewer structureUrl={cmArtifactUrl(requestId, selectedArtifact.artifact_id)} format="cif" height={650} label={candidateLabel(selected)} overlayStructures={overlays} residueSelections={stateAnalysisResidueSelections} />
                                 )}
                             </section>
                             {(completeLandscape.isError || frustraMpnnMetricsResult.error) && (
@@ -311,9 +424,42 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                         </div>
                     </section>
 
-                    <nav className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Conformational mapping result lenses">{(['ensemble', 'mapping', 'landscape', 'analysis', 'evidence', 'downloads'] as DetailTab[]).map((tab) => <button type="button" key={tab} onClick={() => setDetailTab(tab)} className={tabClass(detailTab === tab)}>{tab === 'mapping' ? 'Residue mapping' : tab === 'landscape' ? 'Exact-20 landscape' : tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
+                    <nav className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Conformational mapping result lenses">{stateLandscapeWorkspaceTabs(stateLandscapeWorkspaceEnabled(stateAnalysisSummaryParsed.data)).map((tab) => <button type="button" key={tab} onClick={() => setDetailTab(tab)} className={tabClass(detailTab === tab)}>{tab === 'mapping' ? 'Residue mapping' : tab === 'landscape' ? 'Exact-20 landscape' : tab === 'state-analysis' ? 'State analysis' : tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
+                    {stateAnalysisSummaryError && <StateLandscapeStatusAlert error={stateAnalysisSummaryError} />}
 
                     {detailTab === 'ensemble' && <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Canonical ensemble and provenance</h2><div className="mt-4 grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4"><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Backend</span><div className="mt-1 font-mono text-white">{parsed.data.ensemble.backend}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Runtime identity</span><div className="mt-1 break-words text-white">{parsed.data.ensemble.runtime_identity}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Expected candidates</span><div className="mt-1 text-white">{parsed.data.ensemble.expected_cardinality}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Terminal contract state</span><div className="mt-1 text-white">{parsed.data.ensemble.terminal_status}</div></div>{[['Request SHA-256', parsed.data.ensemble.request_sha256], ['Snapshot SHA-256', parsed.data.ensemble.source_snapshot_sha256], ['Feature policy SHA-256', parsed.data.ensemble.feature_policy_sha256], ['Native manifest SHA-256', parsed.data.ensemble.native_manifest_sha256], ['Container digest', parsed.data.ensemble.container_digest], ['Checkpoint SHA-256', parsed.data.ensemble.checkpoint_sha256]].map(([label, value]) => <div key={label} className="rounded-lg border border-slate-800 p-3" title={value}><span className="text-slate-500">{label}</span><div className="mt-1 font-mono text-white">{shortHash(value)}</div></div>)}</div><div className="mt-4 grid gap-3 lg:grid-cols-2"><div className="rounded-xl border border-amber-500/20 p-3"><h3 className="text-sm font-medium text-amber-100">Producer warnings</h3>{parsed.data.ensemble.warnings.length ? <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-200">{parsed.data.ensemble.warnings.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No producer warning recorded.</p>}</div><div className="rounded-xl border border-slate-800 p-3"><h3 className="text-sm font-medium text-white">Explicit omissions</h3>{parsed.data.ensemble.omissions.length ? <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-400">{parsed.data.ensemble.omissions.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No omission recorded.</p>}</div></div></section>}
+
+                    {detailTab === 'state-analysis' && stateAnalysisSummaryParsed.data && <StateLandscapeWorkspacePanel
+                        summary={stateAnalysisSummaryParsed.data}
+                        page={stateAnalysisRows}
+                        selectedPairId={selectedPairId}
+                        selectedStateRowKey={selectedStateRowKey}
+                        selectedMetric={selectedStateMetric}
+                        inspectorMinimized={stateInspectorMinimized}
+                        loading={stateAnalysisPage.isLoading}
+                        error={stateAnalysisPageParsed.error || (stateAnalysisPage.isError ? cmApiError(stateAnalysisPage.error, 'Bounded state-analysis rows are unavailable.') : null)}
+                        residueSelectionReason={stateResidueSelectionReason}
+                        onSelectPair={(pairId) => {
+                            const next = selectStateLandscapeWorkspacePair({ selectedPairId, selectedStateRowKey, pageOffset: stateAnalysisOffset }, pairId);
+                            setSelectedPairId(next.selectedPairId);
+                            setSelectedStateRowKey(next.selectedStateRowKey);
+                            setStateAnalysisOffset(next.pageOffset);
+                            setStateAnalysisRows(null);
+                            setStateAnalysisResidueSelections([]);
+                            setPendingStateResidue(null);
+                            setStateResidueSelectionReason(null);
+                        }}
+                        onSelectRow={(row) => {
+                            setSelectedStateRowKey(stateLandscapeRowKey(row));
+                            clearStateAnalysisResidueSelection(row.candidate_a_id);
+                            setPendingStateResidue({ candidateId: row.candidate_a_id, row });
+                            setSelectedCandidateId(row.candidate_a_id);
+                        }}
+                        onInspectCandidate={selectCandidateForStateAnalysis}
+                        onSelectMetric={setSelectedStateMetric}
+                        onToggleInspector={() => setStateInspectorMinimized((current) => !current)}
+                        onLoadMore={() => { if (stateAnalysisRows?.next_offset != null) setStateAnalysisOffset(stateAnalysisRows.next_offset); }}
+                    />}
 
                     {detailTab === 'mapping' && structureMap && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4"><div><h2 className="font-semibold text-white">Structure-map identity and residue mapping</h2><p className="mt-1 text-xs text-slate-500">{structureMap.source_format} · source model {structureMap.selected_source_model} · {structureMap.normalizer_version} · {structureMap.altloc_policy}</p></div><select value={mappingFilter} onChange={(event) => setMappingFilter(event.target.value as typeof mappingFilter)} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs"><option value="all">All rows</option><option value="mapped">Mapped</option><option value="issues">Issues only</option></select></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Original CIF: <span className="font-mono">{shortHash(structureMap.original_cif_sha256)}</span></div><div>Source: <span className="font-mono">{shortHash(structureMap.source_sha256)}</span></div><div>Normalized PDB: <span className="font-mono">{shortHash(structureMap.normalized_pdb_sha256)}</span></div></div><div className="max-h-[560px] overflow-auto"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Sequence</th><th className="p-2">Source identity</th><th className="p-2">Author identity</th><th className="p-2">Normalized PDB</th><th className="p-2">Backbone</th><th className="p-2">Status / reason</th></tr></thead><tbody>{filteredMapRows.map((row) => <tr key={`${row.entity_instance_id}:${row.sequence_index}`} className="border-t border-slate-800 align-top"><td className="p-2">{row.sequence_index} · {row.residue_name}</td><td className="p-2">{row.source_entity_id} · {row.label_asym_id}:{row.label_seq_id}</td><td className="p-2">{row.auth_asym_id}:{row.auth_seq_id}{row.insertion_code}</td><td className="p-2">{row.pdb_chain_id}:{row.pdb_residue_id}{row.pdb_insertion_code}</td><td className="p-2 font-mono text-[10px]">{Object.entries(row.backbone_atoms).map(([atom, value]) => `${atom}:${value || 'missing'}`).join(' ')}</td><td className="p-2"><span className={row.status === 'mapped' ? 'text-emerald-300' : 'text-amber-200'}>{row.status}</span>{row.reason && <div className="mt-1 text-slate-500">{row.reason}</div>}</td></tr>)}</tbody></table></div>{!filteredMapRows.length && <p className="p-4 text-sm text-slate-500">No mapping rows match this filter.</p>}</section>}
 

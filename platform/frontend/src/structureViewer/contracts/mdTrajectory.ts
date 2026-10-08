@@ -12,8 +12,12 @@ export interface MDTrajectoryArtifactRef {
 
 export interface MDSourceFrameRef {
     readonly replica: number;
+    /** Index into the bounded, immutable trajectory-frame map; this is the Mol* XTC model index. */
+    readonly displayFrame: number;
+    /** Original producer frame; shown to the operator and never used as a local decoder index. */
     readonly sourceFrame: number;
     readonly timePs: number;
+    readonly step: number;
 }
 
 export interface MDPlaybackState {

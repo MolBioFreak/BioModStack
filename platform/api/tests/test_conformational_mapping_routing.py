@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
+import hashlib
 from pathlib import Path
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks, HTTPException, Request, Response
+from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +22,7 @@ if str(API_ROOT) not in sys.path:
 
 from model_registry import ModelRegistry  # noqa: E402
 from routers import jobs as jobs_router  # noqa: E402
+from routers import conformational_mapping as cm_router  # noqa: E402
 from schemas import JobCreate  # noqa: E402
 from services import nextflow  # noqa: E402
 from services.conformational_mapping import request_builder  # noqa: E402
@@ -32,6 +39,11 @@ from services.conformational_mapping.request_builder import (  # noqa: E402
     materialize_trusted_internal_request,
     validate_request_params,
 )
+from services.conformational_mapping.state_landscape_analysis import (  # noqa: E402
+    MAX_STATE_LANDSCAPE_COMPARISONS,
+)
+from database import Base, ConformationalMappingRequest, ConformationalMappingSource  # noqa: E402
+from routers.conformational_mapping import SubmitRequest  # noqa: E402
 from template_registry import TemplateRegistry  # noqa: E402
 
 
@@ -248,6 +260,29 @@ def _request_params(backend: str = "protenix_v2_ensemble") -> dict[str, object]:
 
 def _flag_value(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
+
+
+def _configure_state_comparison_candidate_count(
+    params: dict[str, object], *, mode: str, candidate_count: int
+) -> None:
+    seeds = list(range(1, candidate_count + 1))
+    params["ordered_seeds"] = seeds
+    params["generated_json_ordered_seeds"] = seeds
+    params["cli_ordered_seeds"] = seeds
+    params["samples_per_seed"] = 1
+    authority: dict[str, object] = {
+        "mode": mode,
+        "target_id": "target-a",
+        "scope": "all_within_target" if mode == "pairwise" else "all_other_within_target",
+    }
+    if mode == "reference":
+        authority["reference_backend_coordinates"] = {
+            "backend": "protenix_v2_ensemble",
+            "target_id": "target-a",
+            "ordered_seed": 1,
+            "sample_index": 0,
+        }
+    params["state_landscape_comparison"] = authority
 
 
 def test_cm3_001_model_and_template_discoverable() -> None:
@@ -507,6 +542,280 @@ def test_cm3_004d_future_backend_controls_are_hash_bound(tmp_path: Path) -> None
         assert request["request_sha256"] == canonical_sha256(
             {key: item for key, item in request.items() if key != "request_sha256"}
         )
+
+
+def test_cm3_004da_state_comparison_authority_is_admitted_and_hash_bound(tmp_path: Path) -> None:
+    absent = materialize_trusted_internal_request(
+        _request_params("protenix_v2_ensemble"),
+        output_dir=tmp_path / "absent",
+        request_id="00000000-0000-4000-8000-000000000018",
+    )
+    absent_request = json.loads(absent.request_path.read_text(encoding="utf-8"))
+    assert "state_landscape_comparison" not in absent_request
+
+    authority = {
+        "mode": "pairwise",
+        "target_id": "target-a",
+        "scope": "all_within_target",
+    }
+    params = _request_params("protenix_v2_ensemble")
+    params.update(
+        ordered_seeds=[101, 202],
+        generated_json_ordered_seeds=[101, 202],
+        cli_ordered_seeds=[101, 202],
+        samples_per_seed=1,
+    )
+    params["state_landscape_comparison"] = authority
+
+    validated = validate_request_params(params)
+    assert validated.request_fields["state_landscape_comparison"] == authority
+    materialized = materialize_trusted_internal_request(
+        params,
+        output_dir=tmp_path,
+        request_id="00000000-0000-4000-8000-000000000019",
+    )
+    request = json.loads(materialized.request_path.read_text(encoding="utf-8"))
+    assert request["state_landscape_comparison"] == authority
+    assert request["request_sha256"] == canonical_sha256(
+        {key: item for key, item in request.items() if key != "request_sha256"}
+    )
+
+    invalid_target = _request_params("protenix_v2_ensemble")
+    invalid_target["state_landscape_comparison"] = {**authority, "target_id": "not-a-request-target"}
+    with pytest.raises(ConformationalMappingRequestError, match="state landscape comparison target"):
+        validate_request_params(invalid_target)
+
+    unknown_authority_field = _request_params("protenix_v2_ensemble")
+    unknown_authority_field["state_landscape_comparison"] = {**authority, "silently_drop_me": True}
+    with pytest.raises(ConformationalMappingRequestError, match="state_landscape_comparison"):
+        validate_request_params(unknown_authority_field)
+
+    invalid_scope = _request_params("protenix_v2_ensemble")
+    invalid_scope["state_landscape_comparison"] = {**authority, "scope": "all_other_within_target"}
+    with pytest.raises(ConformationalMappingRequestError, match="state_landscape_comparison"):
+        validate_request_params(invalid_scope)
+
+    incomplete_reference = _request_params("protenix_v2_ensemble")
+    incomplete_reference["state_landscape_comparison"] = {
+        "mode": "reference",
+        "target_id": "target-a",
+        "scope": "all_other_within_target",
+        "reference_backend_coordinates": {
+            "backend": "protenix_v2_ensemble",
+            "target_id": "target-a",
+            "ordered_seed": 101,
+        },
+    }
+    with pytest.raises(ConformationalMappingRequestError, match="state_landscape_comparison"):
+        validate_request_params(incomplete_reference)
+
+
+@pytest.mark.parametrize(
+    ("ordered_seeds", "authority", "message"),
+    [
+        (
+            [101],
+            {"mode": "pairwise", "target_id": "target-a", "scope": "all_within_target"},
+            "at least two planned coordinates",
+        ),
+        (
+            [101, 202],
+            {
+                "mode": "reference", "target_id": "target-a", "scope": "all_other_within_target",
+                "reference_backend_coordinates": {
+                    "backend": "protenix_v2_ensemble", "target_id": "target-a",
+                    "ordered_seed": 999, "sample_index": 0,
+                },
+            },
+            "does not match exactly one planned coordinate",
+        ),
+        (
+            [101],
+            {
+                "mode": "reference", "target_id": "target-a", "scope": "all_other_within_target",
+                "reference_backend_coordinates": {
+                    "backend": "protenix_v2_ensemble", "target_id": "target-a",
+                    "ordered_seed": 101, "sample_index": 0,
+                },
+            },
+            "requires another planned coordinate",
+        ),
+    ],
+)
+def test_cm3_004daa_impossible_state_comparison_authority_is_rejected_at_admission(
+    ordered_seeds: list[int], authority: dict[str, object], message: str
+) -> None:
+    params = _request_params("protenix_v2_ensemble")
+    params["ordered_seeds"] = ordered_seeds
+    params["generated_json_ordered_seeds"] = ordered_seeds
+    params["cli_ordered_seeds"] = ordered_seeds
+    params["samples_per_seed"] = 1
+    params["state_landscape_comparison"] = authority
+
+    with pytest.raises(ConformationalMappingRequestError, match=message):
+        validate_request_params(params)
+
+
+def test_cm3_004dab_reference_state_comparison_authority_with_two_planned_coordinates_is_admitted() -> None:
+    params = _request_params("protenix_v2_ensemble")
+    params["ordered_seeds"] = [101, 202]
+    params["generated_json_ordered_seeds"] = [101, 202]
+    params["cli_ordered_seeds"] = [101, 202]
+    params["samples_per_seed"] = 1
+    params["state_landscape_comparison"] = {
+        "mode": "reference", "target_id": "target-a", "scope": "all_other_within_target",
+        "reference_backend_coordinates": {
+            "backend": "protenix_v2_ensemble", "target_id": "target-a",
+            "ordered_seed": 101, "sample_index": 0,
+        },
+    }
+
+    assert validate_request_params(params).coordinate_plan
+
+
+@pytest.mark.parametrize(
+    ("mode", "candidate_count", "admitted"),
+    [
+        (
+            "pairwise",
+            3,
+            True,
+        ),
+        (
+            "pairwise",
+            4,
+            False,
+        ),
+        ("reference", 6, True),
+        ("reference", 7, False),
+    ],
+)
+def test_cm3_004dac_state_comparison_work_cap_is_enforced_at_admission(
+    mode: str, candidate_count: int, admitted: bool
+) -> None:
+    params = _request_params("protenix_v2_ensemble")
+    _configure_state_comparison_candidate_count(
+        params, mode=mode, candidate_count=candidate_count,
+    )
+
+    if admitted:
+        assert len(validate_request_params(params).coordinate_plan) == candidate_count
+    else:
+        with pytest.raises(ConformationalMappingRequestError, match="comparison rows"):
+            validate_request_params(params)
+
+
+@pytest.mark.parametrize(
+    ("candidate_count", "admitted"),
+    [
+        (6, True),  # Five reference pairs × the 20,000-residue backend envelope.
+        (7, False),
+    ],
+)
+def test_cm3_004dacb_state_comparison_row_work_envelope_is_enforced_at_admission(
+    candidate_count: int, admitted: bool
+) -> None:
+    params = _request_params("protenix_v2_ensemble")
+    _configure_state_comparison_candidate_count(
+        params, mode="reference", candidate_count=candidate_count,
+    )
+
+    if admitted:
+        assert len(validate_request_params(params).coordinate_plan) == candidate_count
+    else:
+        with pytest.raises(ConformationalMappingRequestError, match="comparison rows"):
+            validate_request_params(params)
+
+
+def test_cm3_004db_typed_submit_request_accepts_only_declared_state_comparison_authority() -> None:
+    authority = {
+        "mode": "pairwise",
+        "target_id": "target-a",
+        "scope": "all_within_target",
+    }
+    body = SubmitRequest(
+        name="state authority",
+        backend="protenix_v2_ensemble",
+        ordered_seeds=[101],
+        samples_per_seed=1,
+        feature_policy={"mode": "regenerate_mutated_protein_v1"},
+        runtime_policy={"use_default_params": True},
+        analysis_policy={},
+        state_landscape_comparison=authority,
+    )
+    assert body.state_landscape_comparison == authority
+
+    with pytest.raises(ValidationError, match="unexpected"):
+        SubmitRequest(
+            name="state authority",
+            backend="protenix_v2_ensemble",
+            ordered_seeds=[101],
+            samples_per_seed=1,
+            feature_policy={"mode": "regenerate_mutated_protein_v1"},
+            runtime_policy={"use_default_params": True},
+            analysis_policy={},
+            state_landscape_comparison=authority,
+            unexpected=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_cm3_004dc_submit_route_persists_state_comparison_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the real submit handler through request materialization and persistence."""
+
+    fixture = json.loads(
+        (API_ROOT / "tests" / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json").read_text()
+    )
+    snapshot_bytes = canonical_json_bytes([fixture["cm_complex_snapshot_v1"]])
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "snapshot.json").write_bytes(snapshot_bytes)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'submit.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)()
+    try:
+        session.add(ConformationalMappingSource(
+            source_id="snapshot", principal_id="alice", source_kind="complex_snapshot",
+            storage_root=str(source_root), relative_path="snapshot.json",
+            content_sha256=hashlib.sha256(snapshot_bytes).hexdigest(), size_bytes=len(snapshot_bytes),
+            metadata_json={}, immutable=True,
+        ))
+        await session.commit()
+        monkeypatch.setattr(cm_router, "get_results_dir", lambda: tmp_path / "results")
+        monkeypatch.setattr(cm_router, "_runtime_registry", lambda _backend: {"test_runtime": True})
+        request = Request({
+            "type": "http", "method": "POST", "scheme": "http", "path": "/api/conformational-mapping/requests",
+            "headers": [], "client": ("testclient", 50000), "server": ("testserver", 80),
+        })
+        request.state.authenticated_principal = {"id": "alice", "roles": ["scientist"]}
+        authority = {"mode": "pairwise", "target_id": "target-a", "scope": "all_within_target"}
+        response = await cm_router.submit_request(
+            SubmitRequest(
+                name="state authority route",
+                backend="protenix_v2_ensemble",
+                ordered_seeds=[101, 202], samples_per_seed=1,
+                feature_policy=_request_params("protenix_v2_ensemble")["feature_policy"],
+                runtime_policy={"use_default_params": True},
+                analysis_policy=_request_params("protenix_v2_ensemble")["analysis_policy"],
+                registered_snapshot_id="snapshot",
+                state_landscape_comparison=authority,
+            ),
+            request,
+            Response(),
+            session,
+        )
+        persisted = await session.scalar(select(ConformationalMappingRequest).where(
+            ConformationalMappingRequest.request_id == response["request_id"]
+        ))
+        assert persisted is not None
+        assert persisted.request_json["state_landscape_comparison"] == authority
+    finally:
+        await session.close()
+        await engine.dispose()
 
 
 def test_cm3_004e_unknown_raw_cn_flags_fail_closed() -> None:

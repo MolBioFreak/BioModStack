@@ -210,7 +210,8 @@ export default function MolstarViewer({
         effectiveAlphafoldView,
         normalizedBackgroundColor,
         artifactJobId,
-    }), [artifactJobId, effectiveAlphafoldView, hideControls, normalizedBackgroundColor]);
+        hasGovernedMDPlayback: molecularDynamics?.playbackCapability.supported === true,
+    }), [artifactJobId, effectiveAlphafoldView, hideControls, molecularDynamics?.playbackCapability.supported, normalizedBackgroundColor]);
     const [adapterEpoch, setAdapterEpoch] = useState(0);
 
     useEffect(() => {
@@ -230,6 +231,7 @@ export default function MolstarViewer({
             effectiveAlphafoldView: boolean;
             normalizedBackgroundColor: string;
             artifactJobId?: string;
+            hasGovernedMDPlayback: boolean;
         };
         let cancelled = false;
         const adapter = new MolstarDirectAdapter({
@@ -237,7 +239,7 @@ export default function MolstarViewer({
             alphafoldView: options.effectiveAlphafoldView,
             backgroundColor: options.normalizedBackgroundColor,
             resolveViewerArtifactUrl: options.artifactJobId
-                ? (artifactId) => `/api/jobs/${encodeURIComponent(options.artifactJobId!)}/viewer/artifacts/${encodeURIComponent(artifactId)}/content`
+                ? (artifactId) => `/api/jobs/${encodeURIComponent(options.artifactJobId!)}/${options.hasGovernedMDPlayback ? 'md' : 'viewer'}/artifacts/${encodeURIComponent(artifactId)}/content`
                 : undefined,
         });
         const controller = new StructureSceneController(new MolstarDirectSceneEngineAdapter(adapter));

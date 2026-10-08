@@ -14,10 +14,16 @@ from .contracts import (
     ContractValidationError,
     canonical_json_bytes,
     canonical_sha256,
+    parse_backend_coordinates,
     validate_schema,
     validate_seed_sources,
 )
 from .clash import CLASH_DETECTOR_ID, CLASH_DETECTOR_VERSION
+from .state_landscape_analysis import (
+    MAX_STATE_LANDSCAPE_COMPARISON_ROWS,
+    MAX_STATE_LANDSCAPE_COMPARISONS,
+    MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE,
+)
 
 
 BACKENDS = frozenset({"protenix_v2_ensemble", "confornets", "external_import"})
@@ -32,6 +38,7 @@ _TOP_LEVEL_FIELDS = frozenset(
         "feature_policy",
         "runtime_policy",
         "analysis_policy",
+        "state_landscape_comparison",
         "confornets",
         "protenix_snapshot_id",
         "import_receipt_id",
@@ -409,6 +416,77 @@ def build_confornets_coordinate_plan(
     return coordinates
 
 
+def _validate_state_landscape_comparison_plan(
+    request_fields: Mapping[str, Any], coordinate_plan: list[dict[str, Any]]
+) -> None:
+    """Reject comparison authorities that cannot resolve against planned coordinates."""
+
+    authority = request_fields.get("state_landscape_comparison")
+    if not isinstance(authority, Mapping):
+        return
+    mode = authority.get("mode")
+    target_id = authority.get("target_id")
+    if not isinstance(mode, str) or not isinstance(target_id, str):
+        return
+    try:
+        planned = [
+            parse_backend_coordinates(coordinate).model_dump(mode="json")
+            for coordinate in coordinate_plan
+        ]
+    except Exception as exc:  # pragma: no cover - plan construction is local authority
+        raise ConformationalMappingRequestError("canonical coordinate plan is invalid") from exc
+    selected = [coordinate for coordinate in planned if coordinate["target_id"] == target_id]
+
+    def validate_comparison_work(comparison_count: int) -> None:
+        if comparison_count > MAX_STATE_LANDSCAPE_COMPARISONS:
+            raise ConformationalMappingRequestError(
+                "state landscape comparison resolves "
+                f"{comparison_count} comparisons, exceeding configured maximum "
+                f"{MAX_STATE_LANDSCAPE_COMPARISONS}"
+            )
+        estimated_rows = comparison_count * MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE
+        if estimated_rows > MAX_STATE_LANDSCAPE_COMPARISON_ROWS:
+            raise ConformationalMappingRequestError(
+                "state landscape comparison reserves "
+                f"{estimated_rows} comparison rows at the "
+                f"{MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE}-residue candidate envelope, "
+                f"exceeding configured maximum {MAX_STATE_LANDSCAPE_COMPARISON_ROWS}"
+            )
+
+    if mode == "pairwise":
+        if len(selected) < 2:
+            raise ConformationalMappingRequestError(
+                "pairwise state landscape comparison requires at least two planned coordinates"
+            )
+        comparison_count = len(selected) * (len(selected) - 1) // 2
+        validate_comparison_work(comparison_count)
+        return
+    if mode != "reference":
+        return
+    selector = authority.get("reference_backend_coordinates")
+    if not isinstance(selector, Mapping):
+        return
+    try:
+        reference = parse_backend_coordinates(selector).model_dump(mode="json")
+    except Exception:
+        return
+    if reference["target_id"] != target_id:
+        raise ConformationalMappingRequestError(
+            "reference state landscape comparison target does not match the selected target"
+        )
+    matching = [coordinate for coordinate in selected if coordinate == reference]
+    if len(matching) != 1:
+        raise ConformationalMappingRequestError(
+            "reference state landscape comparison does not match exactly one planned coordinate"
+        )
+    if not any(coordinate != reference for coordinate in selected):
+        raise ConformationalMappingRequestError(
+            "reference state landscape comparison requires another planned coordinate"
+        )
+    comparison_count = len(selected) - 1
+    validate_comparison_work(comparison_count)
+
+
 def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
     """Validate API controls without writing files or scheduling work."""
 
@@ -460,6 +538,8 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         "runtime_policy": values["runtime_policy"],
         "analysis_policy": values["analysis_policy"],
     }
+    if "state_landscape_comparison" in values:
+        request_fields["state_landscape_comparison"] = values["state_landscape_comparison"]
     analysis_policy = values["analysis_policy"]
     if (
         not isinstance(analysis_policy, Mapping)
@@ -593,6 +673,7 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         validate_schema("cm_request_v1", preview)
     except ContractValidationError as exc:
         raise ConformationalMappingRequestError(str(exc)) from exc
+    _validate_state_landscape_comparison_plan(request_fields, coordinate_plan)
     return ValidatedRequest(
         request_fields=request_fields,
         coordinate_plan=tuple(coordinate_plan),

@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Mapping, Sequence
 
 from jsonschema import Draft202012Validator, FormatChecker
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, computed_field, model_validator
 
 
 AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
@@ -29,6 +29,7 @@ SCHEMA_FILENAMES = {
     "cm_ensemble_v1": "cm_ensemble_v1.schema.json",
     "cm_structure_map_v1": "cm_structure_map_v1.schema.json",
     "cm_frustration_landscape_v1": "cm_frustration_landscape_v1.schema.json",
+    "cm_state_landscape_analysis_v1": "cm_state_landscape_analysis_v1.schema.json",
     "cm_analysis_v1": "cm_analysis_v1.schema.json",
     "cm_mutagenesis_handoff_v1": "cm_mutagenesis_handoff_v1.schema.json",
 }
@@ -244,6 +245,8 @@ def validate_schema(schema_key: str, instance: Any) -> None:
             raise ContractValidationError("request target orders must be unique")
         if target_orders != list(range(len(target_orders))):
             raise ContractValidationError("request target orders must be contiguous and ordered")
+        if "state_landscape_comparison" in instance:
+            validate_state_landscape_comparison_request(instance, instance["state_landscape_comparison"])
         expected_request_hash = request_sha256(instance)
         if instance["request_sha256"] != expected_request_hash:
             raise ContractValidationError("request_sha256 does not match canonical request bytes")
@@ -269,6 +272,8 @@ def validate_schema(schema_key: str, instance: Any) -> None:
             if key in residue_keys:
                 raise ContractValidationError("duplicate landscape residue identity")
             residue_keys.add(key)
+    elif schema_key == "cm_state_landscape_analysis_v1":
+        validate_state_landscape_analysis(instance)
     elif schema_key == "cm_analysis_v1":
         validate_analysis(instance)
     elif schema_key == "cm_mutagenesis_handoff_v1":
@@ -591,6 +596,27 @@ def candidate_id(coordinates: Mapping[str, Any] | BackendCoordinates) -> str:
     return f"cm_imp_{slug}_{parsed.staged_index:06d}_{parsed.source_content_sha256[:16]}"
 
 
+def validate_state_landscape_comparison_request(
+    request: Mapping[str, Any], comparison: Mapping[str, Any],
+) -> None:
+    """Bind optional state-analysis authority to this request's targets and backend."""
+
+    target_id = comparison["target_id"]
+    if target_id not in {target["target_id"] for target in request["targets"]}:
+        raise ContractValidationError("state landscape comparison target is not a request target")
+    if comparison["mode"] != "reference":
+        return
+    coordinates = comparison["reference_backend_coordinates"]
+    try:
+        parsed = parse_backend_coordinates(coordinates)
+    except ValidationError as exc:
+        raise ContractValidationError("state landscape reference coordinates are invalid") from exc
+    if parsed.target_id != target_id:
+        raise ContractValidationError("state landscape reference target does not match comparison target")
+    if parsed.backend != request["backend"]:
+        raise ContractValidationError("state landscape reference backend does not match request backend")
+
+
 def ensure_candidate_id_uniqueness(records: Sequence[Mapping[str, Any]]) -> None:
     seen_ids: dict[str, bytes] = {}
     seen_coordinates: set[bytes] = set()
@@ -818,6 +844,94 @@ def validate_ensemble(instance: Mapping[str, Any]) -> None:
     duplicates = sorted(path for path, count in Counter(paths).items() if count != 1)
     if duplicates:
         raise ContractValidationError(f"ensemble shares or duplicates artifact paths: {duplicates}")
+
+
+def validate_state_landscape_analysis(instance: Mapping[str, Any]) -> None:
+    """Fail closed on state-comparison missingness and stable row identities."""
+
+    comparison = {
+        "mode": instance["comparison_mode"],
+        "comparison_target_id": instance["comparison_target_id"],
+        "comparison_scope": instance["comparison_scope"],
+        "reference_backend_coordinates": instance["reference_backend_coordinates"],
+        "reference_candidate_id": instance["reference_candidate_id"],
+        "resolved_pairs": instance["resolved_pairs"],
+    }
+    if instance["comparison_sha256"] != canonical_sha256(comparison):
+        raise ContractValidationError("state landscape comparison hash does not bind authority and resolved pairs")
+    if instance["comparison_mode"] == "reference" and not instance["reference_candidate_id"]:
+        raise ContractValidationError("reference state comparison requires an explicit reference candidate")
+    if instance["comparison_mode"] == "pairwise" and instance["reference_candidate_id"] is not None:
+        raise ContractValidationError("pairwise state comparison cannot claim a reference candidate")
+    resolved_pairs = instance["resolved_pairs"]
+    if resolved_pairs != sorted(resolved_pairs, key=lambda pair: pair["pair_id"]):
+        raise ContractValidationError("state landscape resolved pairs must have stable pair-id order")
+    pair_identities = [
+        (pair["pair_id"], pair["candidate_a_id"], pair["candidate_b_id"])
+        for pair in resolved_pairs
+    ]
+    if len({pair[0] for pair in pair_identities}) != len(pair_identities):
+        raise ContractValidationError("state landscape resolved pair IDs must be unique")
+    if any(pair[1] == pair[2] for pair in pair_identities):
+        raise ContractValidationError("state landscape resolved pair candidates must differ")
+    if instance["comparison_mode"] == "reference":
+        selector = instance["reference_backend_coordinates"]
+        try:
+            parsed = parse_backend_coordinates(selector)
+        except ValidationError as exc:
+            raise ContractValidationError("reference state comparison coordinates are invalid") from exc
+        if parsed.target_id != instance["comparison_target_id"]:
+            raise ContractValidationError("reference state comparison target does not match comparison target")
+        if any(pair[1] != instance["reference_candidate_id"] for pair in pair_identities):
+            raise ContractValidationError("reference state comparison pairs must begin with the reference candidate")
+        if len({pair[2] for pair in pair_identities}) != len(pair_identities) or any(
+            pair[2] == instance["reference_candidate_id"] for pair in pair_identities
+        ):
+            raise ContractValidationError("reference state comparison candidates must be unique and exclude reference")
+    resolved_pair_set = set(pair_identities)
+    support_pairs = {
+        (entry["pair_id"], entry["candidate_a_id"], entry["candidate_b_id"])
+        for entry in instance["support_ledger"]
+    }
+    if support_pairs != resolved_pair_set or len(instance["support_ledger"]) != len(resolved_pair_set):
+        raise ContractValidationError("state landscape support ledger must cover exactly the resolved pair ledger")
+    for row in [*instance["rows"], *instance["exclusion_ledger"]]:
+        if (row["pair_id"], row["candidate_a_id"], row["candidate_b_id"]) not in resolved_pair_set:
+            raise ContractValidationError("state landscape rows and exclusions must belong to resolved pairs")
+    row_keys: set[tuple[Any, ...]] = set()
+    for row in instance["rows"]:
+        identity = row["identity"]
+        key = (
+            row["pair_id"], identity["target_id"], identity["entity_instance_id"],
+            identity["auth_asym_id"], identity["auth_seq_id"], identity["insertion_code"],
+            identity["sequence_index"], identity["validated_wt"],
+        )
+        if key in row_keys:
+            raise ContractValidationError("state landscape analysis rows must have unique pair identities")
+        row_keys.add(key)
+        for metric_name in (
+            "native_score", "high_non_native_highly_frustrated_fraction",
+            "maximum_non_native_substitution_delta_relative_to_native",
+        ):
+            metric = row["metrics"][metric_name]
+            values = (metric["a"], metric["b"], metric["delta_b_minus_a"])
+            if metric["status"] == "ok":
+                if metric["reason"] is not None or any(
+                    isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value))
+                    for value in values
+                ):
+                    raise ContractValidationError("available state numeric metric must be finite and reason-free")
+            elif any(value is not None for value in values) or not isinstance(metric["reason"], str) or not metric["reason"]:
+                raise ContractValidationError("unavailable state numeric metric must not fabricate values")
+        native_class = row["metrics"]["native_class"]
+        if native_class["status"] == "ok":
+            if native_class["reason"] is not None or not all(
+                isinstance(native_class[field], str) and native_class[field]
+                for field in ("a", "b", "transition")
+            ):
+                raise ContractValidationError("available state class metric is incomplete")
+        elif any(native_class[field] is not None for field in ("a", "b", "transition")) or not isinstance(native_class["reason"], str) or not native_class["reason"]:
+            raise ContractValidationError("unavailable state class metric must not fabricate values")
 
 
 def validate_analysis(instance: Mapping[str, Any]) -> None:
