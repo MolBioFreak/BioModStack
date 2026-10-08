@@ -142,25 +142,49 @@ process BoltzFromSequence {
         fi
     fi
     
-    # Write sequence to YAML format expected by Boltz-2
-    if [ -n "\${MSA_PATH}" ] && [ -f "\${MSA_PATH}" ]; then
-        cat > yamls/${sequence_name}.yaml << EOF
-version: 1
-sequences:
-  - protein:
-      id: ['A']
-      sequence: ${sequence}
-      msa: \${MSA_PATH}
-EOF
-    else
-        cat > yamls/${sequence_name}.yaml << 'EOF'
-version: 1
-sequences:
-  - protein:
-      id: ['A']
-      sequence: ${sequence}
-EOF
-    fi
+    # Generate proper multi-chain YAML using Python
+    # Handles colon-separated sequences (e.g., "VH_SEQ:VL_SEQ" -> chains A, B)
+    python3 << 'PYEOF'
+import yaml
+from pathlib import Path
+import os
+
+sequence_input = "${sequence}"
+sequence_name = "${sequence_name}"
+
+# Check if MSA was generated
+msa_path = None
+msa_check = f"msa/{sequence_name}.a3m"
+if Path(msa_check).exists():
+    msa_path = str(Path(msa_check).resolve())
+
+# Split by colon for multi-chain input
+chains = sequence_input.split(':')
+chain_ids = [chr(ord('A') + i) for i in range(len(chains))]
+
+# Build Boltz YAML structure
+boltz_yaml = {"version": 1, "sequences": []}
+
+for chain_id, chain_seq in zip(chain_ids, chains):
+    entry = {
+        "protein": {
+            "id": [chain_id],
+            "sequence": chain_seq.strip()
+        }
+    }
+    # Apply MSA to all chains to avoid "Cannot mix custom and auto-generated MSAs" error
+    if msa_path:
+        entry["protein"]["msa"] = msa_path
+    boltz_yaml["sequences"].append(entry)
+
+# Write YAML
+yaml_path = f"yamls/{sequence_name}.yaml"
+with open(yaml_path, "w") as f:
+    yaml.dump(boltz_yaml, f, default_flow_style=False)
+
+print(f"Generated Boltz YAML with {len(chains)} chain(s): {chain_ids}")
+print(yaml.dump(boltz_yaml, default_flow_style=False))
+PYEOF
     
     # Run Boltz-2 prediction (NO --use_msa_server - MSA is pre-computed!)
     boltz predict \\
@@ -219,17 +243,46 @@ process BoltzFromSequenceWithMSA {
     export TRITON_CACHE_DIR=tmp
     export HOME=tmp
     
-    # Write sequence to YAML format with pre-computed MSA
-    # Use absolute path for MSA so Boltz can find it from any context
-    MSA_ABS_PATH=\$(readlink -f ${msa_file})
-    cat > yamls/${sequence_name}.yaml << EOF
-version: 1
-sequences:
-  - protein:
-      id: ['A']
-      sequence: ${sequence}
-      msa: \${MSA_ABS_PATH}
-EOF
+    # Generate proper multi-chain YAML using Python
+    # Handles colon-separated sequences (e.g., "VH_SEQ:VL_SEQ" -> chains A, B)
+    python3 << 'PYEOF'
+import yaml
+from pathlib import Path
+
+sequence_input = "${sequence}"
+sequence_name = "${sequence_name}"
+msa_file = "${msa_file}"
+
+# Split by colon for multi-chain input
+chains = sequence_input.split(':')
+chain_ids = [chr(ord('A') + i) for i in range(len(chains))]
+
+# Build Boltz YAML structure
+boltz_yaml = {"version": 1, "sequences": []}
+
+msa_path = str(Path(msa_file).resolve()) if Path(msa_file).exists() else None
+
+for chain_id, chain_seq in zip(chain_ids, chains):
+    entry = {
+        "protein": {
+            "id": [chain_id],
+            "sequence": chain_seq.strip()
+        }
+    }
+    # Apply MSA to all chains to avoid "Cannot mix custom and auto-generated MSAs" error
+    # Boltz2/ColabFold style MSAs typically cover the full complex or related chains
+    if msa_path:
+        entry["protein"]["msa"] = msa_path
+    boltz_yaml["sequences"].append(entry)
+
+# Write YAML
+yaml_path = f"yamls/{sequence_name}.yaml"
+with open(yaml_path, "w") as f:
+    yaml.dump(boltz_yaml, f, default_flow_style=False)
+
+print(f"Generated Boltz YAML with {len(chains)} chain(s): {chain_ids}")
+print(yaml.dump(boltz_yaml, default_flow_style=False))
+PYEOF
     
     # Run Boltz-2 prediction with cached MSA (NO --use_msa_server!)
     boltz predict \\

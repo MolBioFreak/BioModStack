@@ -80,15 +80,32 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (initialValues.target_pdb) {
                 const path = initialValues.target_pdb;
                 const name = path.split('/').pop() || 'target.pdb';
-                // We need to fetch this file to parse chains
+
+                // Check if this is an RCSB cached file (e.g., /path/to/rcsb/6pax.pdb)
+                const rcsbMatch = path.match(/\/rcsb\/([a-z0-9]{4})\.pdb$/i);
+                let fetchUrl: string;
+                let sourceType: string;
+
+                if (rcsbMatch) {
+                    // RCSB cached file - use RCSB API endpoint
+                    const pdbId = rcsbMatch[1].toUpperCase();
+                    fetchUrl = `/api/rcsb/${pdbId}/file`;
+                    sourceType = 'rcsb';
+                    console.log(`[CLONE] Detected RCSB PDB: ${pdbId}`);
+                } else {
+                    // Regular uploaded/preset file
+                    fetchUrl = `/api/files/download?path=${encodeURIComponent(path)}`;
+                    sourceType = 'preset';
+                }
+
                 setTargetSource({
-                    type: 'preset', // Treat as preset/uploaded path
+                    type: sourceType,
                     path: path,
-                    url: `/api/files/download?path=${encodeURIComponent(path)}`,
+                    url: fetchUrl,
                     name: name
                 });
                 // Trigger fetch
-                fetch(`/api/files/download?path=${encodeURIComponent(path)}`)
+                fetch(fetchUrl)
                     .then(res => res.blob())
                     .then(blob => {
                         const file = new File([blob], name, { type: 'chemical/x-pdb' });
@@ -170,10 +187,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
 
         try {
-            // Step 1: Upload PDB file if not already uploaded
-            let pdbPath = uploadedPath;
-            if (!pdbPath) {
+            // Step 1: Determine PDB path based on source
+            // - targetSource.path: file from previous run, preset, or RCSB PDB  
+            // - uploadedPath: manually uploaded file (already on server)
+            // - handleFileUpload: new file upload (needs to be uploaded first)
+            let pdbPath = targetSource?.path || uploadedPath;
+            if (!pdbPath && targetPdb) {
                 pdbPath = await handleFileUpload(targetPdb);
+            }
+
+            if (!pdbPath) {
+                alert('Failed to determine PDB file path');
+                return;
             }
 
             // Format selected residues for backend

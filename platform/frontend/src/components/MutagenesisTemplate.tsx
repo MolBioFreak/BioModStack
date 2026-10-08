@@ -4,6 +4,8 @@ import { parseRegions, generateLibrary } from '../utils/mutationUtils';
 import type { VariantSequence, SubstitutionStrategy, Mutation } from '../utils/mutationUtils';
 import { InteractiveSequence } from './InteractiveSequence';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
+import { TargetAntigenSelector } from './TargetAntigenSelector';
+import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 
 interface MutagenesisTemplateProps {
     onBack: () => void;
@@ -47,6 +49,10 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
     // Complex Mode: Ligands & Ions
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
+
+    // PDB Import State
+    const [showPdbImport, setShowPdbImport] = useState(false);
+    const [parsedChains, setParsedChains] = useState<Chain[]>([]);
 
     // Handlers
     const handleGeneratePreview = () => {
@@ -144,6 +150,12 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 className="px-3 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 text-xs rounded-lg transition-colors flex items-center gap-2"
                             >
                                 📚 Sequence Library
+                            </button>
+                            <button
+                                onClick={() => setShowPdbImport(true)}
+                                className="px-3 py-1 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-600/30 text-cyan-400 text-xs rounded-lg transition-colors flex items-center gap-2"
+                            >
+                                🧬 Import from PDB
                             </button>
                             {baseSequence && baseSequence.length > 0 && (
                                 <button
@@ -496,6 +508,100 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                 initialSequence={sequenceToSave?.sequence || ''}
                 initialName={sequenceToSave?.name || ''}
             />
+
+            {/* PDB Import Modal */}
+            {showPdbImport && (
+                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center">
+                    <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto shadow-2xl">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-bold text-white">Import Sequence from PDB</h3>
+                            <button
+                                onClick={() => {
+                                    setShowPdbImport(false);
+                                    setParsedChains([]);
+                                }}
+                                className="text-slate-400 hover:text-white"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        {parsedChains.length === 0 ? (
+                            <TargetAntigenSelector
+                                onSelect={async (target) => {
+                                    if (target?.url) {
+                                        try {
+                                            const response = await fetch(target.url);
+                                            const blob = await response.blob();
+                                            const file = new File([blob], target.name + '.pdb', { type: 'chemical/x-pdb' });
+                                            const parsed = await parsePDBFile(file);
+                                            if (parsed.chains.length === 1) {
+                                                // Single chain - use directly
+                                                setBaseSequence(parsed.chains[0].sequence);
+                                                setShowPdbImport(false);
+                                                setParsedChains([]);
+                                            } else if (parsed.chains.length > 1) {
+                                                // Multiple chains - let user select
+                                                setParsedChains(parsed.chains);
+                                            } else {
+                                                alert('No protein chains found in PDB');
+                                            }
+                                        } catch (err) {
+                                            console.error('Failed to parse PDB:', err);
+                                            alert('Failed to parse PDB file');
+                                        }
+                                    } else if (target?.file) {
+                                        try {
+                                            const parsed = await parsePDBFile(target.file);
+                                            if (parsed.chains.length === 1) {
+                                                setBaseSequence(parsed.chains[0].sequence);
+                                                setShowPdbImport(false);
+                                                setParsedChains([]);
+                                            } else if (parsed.chains.length > 1) {
+                                                setParsedChains(parsed.chains);
+                                            } else {
+                                                alert('No protein chains found in PDB');
+                                            }
+                                        } catch (err) {
+                                            console.error('Failed to parse PDB:', err);
+                                            alert('Failed to parse PDB file');
+                                        }
+                                    }
+                                }}
+                            />
+                        ) : (
+                            <div className="space-y-4">
+                                <p className="text-sm text-slate-400">Select a chain to import:</p>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {parsedChains.map(chain => (
+                                        <button
+                                            key={chain.id}
+                                            onClick={() => {
+                                                setBaseSequence(chain.sequence);
+                                                setShowPdbImport(false);
+                                                setParsedChains([]);
+                                            }}
+                                            className="p-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-left transition-colors"
+                                        >
+                                            <div className="text-sm font-medium text-cyan-400">Chain {chain.id}</div>
+                                            <div className="text-xs text-slate-500">{chain.length} residues</div>
+                                            <div className="text-xs text-slate-600 font-mono mt-1 truncate">
+                                                {chain.sequence.slice(0, 30)}...
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={() => setParsedChains([])}
+                                    className="text-sm text-slate-400 hover:text-white"
+                                >
+                                    ← Back to PDB selection
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { Job } from '../../lib/api';
 import { JobDetailsPanel } from '../JobDetailsPanel';
 import { getModeDisplayName, getStageDisplayName } from '../../constants/displayNames';
+
+type SortColumn = 'name' | 'mode' | 'status' | 'designs' | 'created';
+type SortDirection = 'asc' | 'desc';
 
 interface JobQueueTableProps {
     jobs: Job[];
@@ -27,6 +31,44 @@ export function JobQueueTable({
     quickViewJobId
 }: JobQueueTableProps) {
     const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
+    const [sortColumn, setSortColumn] = useState<SortColumn>('created');
+    const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+    const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set());
+
+    const handleSort = (column: SortColumn) => {
+        if (sortColumn === column) {
+            setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortColumn(column);
+            setSortDirection(column === 'created' ? 'desc' : 'asc');
+        }
+    };
+
+    const toggleBatch = (batchId: string) => {
+        setExpandedBatches(prev => {
+            const next = new Set(prev);
+            if (next.has(batchId)) {
+                next.delete(batchId);
+            } else {
+                next.add(batchId);
+            }
+            return next;
+        });
+    };
+
+    const SortHeader = ({ column, children }: { column: SortColumn; children: React.ReactNode }) => (
+        <th
+            onClick={() => handleSort(column)}
+            className="text-left py-3 px-4 text-sm font-medium text-slate-400 cursor-pointer hover:text-slate-200 select-none"
+        >
+            <span className="flex items-center gap-1">
+                {children}
+                {sortColumn === column && (
+                    <span className="text-purple-400">{sortDirection === 'asc' ? '▲' : '▼'}</span>
+                )}
+            </span>
+        </th>
+    );
 
     if (loading) {
         return (
@@ -41,11 +83,11 @@ export function JobQueueTable({
             <table className="w-full">
                 <thead>
                     <tr className="border-b border-slate-700">
-                        <th className="text-left py-3 px-4 text-sm font-medium text-slate-400">Name</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-slate-400">Mode</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-slate-400">Status</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-slate-400">Designs</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-slate-400">Created</th>
+                        <SortHeader column="name">Name</SortHeader>
+                        <SortHeader column="mode">Mode</SortHeader>
+                        <SortHeader column="status">Status</SortHeader>
+                        <SortHeader column="designs">Designs</SortHeader>
+                        <SortHeader column="created">Created</SortHeader>
                         <th className="text-left py-3 px-4 text-sm font-medium text-slate-400">Actions</th>
                     </tr>
                 </thead>
@@ -98,28 +140,50 @@ export function JobQueueTable({
                             }
                         });
 
-                        // Sort: running > queued > failed > completed > cancelled
+                        // Dynamic sorting based on selected column and direction
                         const statusOrder: Record<string, number> = {
                             running: 0, queued: 1, failed: 2, completed: 3, cancelled: 4
                         };
-                        displayItems.sort((a, b) => {
-                            const getStatus = (item: DisplayItem) => {
-                                if (item.type === 'batch') {
-                                    const jobs = item.jobs;
-                                    if (jobs.some(j => j.status === 'running')) return 'running';
-                                    if (jobs.some(j => j.status === 'queued')) return 'queued';
-                                    if (jobs.some(j => j.status === 'failed')) return 'failed';
-                                    return 'completed';
+
+                        const getValue = (item: DisplayItem, col: SortColumn): string | number => {
+                            if (item.type === 'batch') {
+                                const jobs = item.jobs;
+                                switch (col) {
+                                    case 'name': return item.jobs[0].batch_name || '';
+                                    case 'mode': return jobs[0].mode;
+                                    case 'status': {
+                                        if (jobs.some(j => j.status === 'running')) return statusOrder.running;
+                                        if (jobs.some(j => j.status === 'queued')) return statusOrder.queued;
+                                        if (jobs.some(j => j.status === 'failed')) return statusOrder.failed;
+                                        return statusOrder.completed;
+                                    }
+                                    case 'designs': return jobs.reduce((sum, j) => sum + j.design_count, 0);
+                                    case 'created': return new Date(item.firstDate).getTime();
                                 }
-                                return item.job.status;
-                            };
-                            const aStatus = statusOrder[getStatus(a)] ?? 5;
-                            const bStatus = statusOrder[getStatus(b)] ?? 5;
-                            if (aStatus !== bStatus) return aStatus - bStatus;
-                            // Same status: sort by date descending
-                            const aDate = a.type === 'batch' ? a.firstDate : a.job.created_at;
-                            const bDate = b.type === 'batch' ? b.firstDate : b.job.created_at;
-                            return new Date(bDate).getTime() - new Date(aDate).getTime();
+                            } else {
+                                const job = item.job;
+                                switch (col) {
+                                    case 'name': return job.name;
+                                    case 'mode': return job.mode;
+                                    case 'status': return statusOrder[job.status] ?? 5;
+                                    case 'designs': return job.design_count;
+                                    case 'created': return new Date(job.created_at).getTime();
+                                }
+                            }
+                            // Fallback for cases where a value might not be explicitly returned (e.g., if a switch case is missed)
+                            return '';
+                        };
+
+                        displayItems.sort((a, b) => {
+                            const aVal = getValue(a, sortColumn);
+                            const bVal = getValue(b, sortColumn);
+                            let comparison = 0;
+                            if (typeof aVal === 'number' && typeof bVal === 'number') {
+                                comparison = aVal - bVal;
+                            } else {
+                                comparison = String(aVal).localeCompare(String(bVal));
+                            }
+                            return sortDirection === 'asc' ? comparison : -comparison;
                         });
 
                         const rows: React.ReactNode[] = [];
@@ -135,78 +199,97 @@ export function JobQueueTable({
                                 const anyRunning = batchJobs.some(j => j.status === 'running');
                                 const anyFailed = batchJobs.some(j => j.status === 'failed');
 
-                                // Batch header row
+                                // Batch header row - clickable to expand/collapse
+                                const isExpanded = expandedBatches.has(batchId);
                                 rows.push(
-                                    <tr key={`batch-${batchId}`} className="bg-purple-500/10 border-b border-purple-500/30">
+                                    <tr
+                                        key={`batch-${batchId}`}
+                                        className="bg-purple-500/10 border-b border-purple-500/30 cursor-pointer hover:bg-purple-500/20 transition-colors"
+                                        onClick={() => toggleBatch(batchId)}
+                                    >
                                         <td colSpan={6} className="py-2 px-4">
                                             <div className="flex items-center justify-between">
                                                 <div className="flex items-center gap-2">
+                                                    <span className="text-purple-400 w-4">{isExpanded ? '▼' : '▶'}</span>
                                                     <span className="text-purple-400">📦</span>
                                                     <span className="text-white font-medium">{batchName}</span>
                                                     <span className="text-purple-300 text-sm">({batchJobs.length} sims)</span>
                                                 </div>
                                                 <div className="flex items-center gap-4 text-sm">
                                                     <span className="text-slate-400">{totalDesigns} designs</span>
+                                                    <span className="text-slate-400">{new Date(item.firstDate).toLocaleString()}</span>
                                                     <StatusBadge status={anyFailed ? 'failed' : anyRunning ? 'running' : allCompleted ? 'completed' : 'queued'} />
+                                                    {allCompleted && (
+                                                        <Link
+                                                            to={`/results?batch_id=${batchId}`}
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            className="px-2 py-1 text-xs bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded transition-colors"
+                                                        >
+                                                            📊 Results
+                                                        </Link>
+                                                    )}
                                                 </div>
                                             </div>
                                         </td>
                                     </tr>
                                 );
 
-                                // Individual jobs in batch (indented)
-                                batchJobs.forEach(job => {
-                                    rows.push(
-                                        <React.Fragment key={job.id}>
-                                            <tr
-                                                onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
-                                                className={`border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors cursor-pointer ${expandedJobId === job.id ? 'bg-slate-700/40' : ''}`}
-                                            >
-                                                <td className="py-3 px-4 text-white font-medium pl-10">
-                                                    <span className="mr-2">{expandedJobId === job.id ? '▼' : '▶'}</span>
-                                                    {job.name.replace(batchName + '_', '')}
-                                                </td>
-                                                <td className="py-3 px-4">
-                                                    <span className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs">
-                                                        {getModeDisplayName(job.mode)}
-                                                    </span>
-                                                </td>
-                                                <td className="py-3 px-4">
-                                                    <StatusBadge status={job.status} errorMessage={job.error_message} />
-                                                </td>
-                                                <td className="py-3 px-4 text-slate-300">{job.design_count}</td>
-                                                <td className="py-3 px-4 text-slate-400 text-sm">
-                                                    {new Date(job.created_at).toLocaleTimeString()}
-                                                </td>
-                                                <td className="py-3 px-4">
-                                                    <div className="flex items-center gap-2">
-                                                        {job.status === 'completed' && (
-                                                            <button
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    onViewQuick(job.id);
-                                                                }}
-                                                                className={`px-2 py-1 text-xs rounded transition-colors ${quickViewJobId === job.id
-                                                                    ? 'bg-purple-500/30 text-purple-300'
-                                                                    : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
-                                                                    }`}
-                                                                title="Load in Quick Viewer"
-                                                            >
-                                                                🔬 View
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                            {expandedJobId === job.id && (
-                                                <JobDetailsPanel
-                                                    job={job}
-                                                    onClose={() => setExpandedJobId(null)}
-                                                />
-                                            )}
-                                        </React.Fragment>
-                                    );
-                                });
+
+                                // Individual jobs in batch (only render if expanded)
+                                if (isExpanded) {
+                                    batchJobs.forEach(job => {
+                                        rows.push(
+                                            <React.Fragment key={job.id}>
+                                                <tr
+                                                    onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
+                                                    className={`border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors cursor-pointer ${expandedJobId === job.id ? 'bg-slate-700/40' : ''}`}
+                                                >
+                                                    <td className="py-3 px-4 text-white font-medium pl-10">
+                                                        <span className="mr-2">{expandedJobId === job.id ? '▼' : '▶'}</span>
+                                                        {job.name.replace(batchName + '_', '')}
+                                                    </td>
+                                                    <td className="py-3 px-4">
+                                                        <span className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs">
+                                                            {getModeDisplayName(job.mode)}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-3 px-4">
+                                                        <StatusBadge status={job.status} errorMessage={job.error_message} />
+                                                    </td>
+                                                    <td className="py-3 px-4 text-slate-300">{job.design_count}</td>
+                                                    <td className="py-3 px-4 text-slate-400 text-sm">
+                                                        {new Date(job.created_at).toLocaleString()}
+                                                    </td>
+                                                    <td className="py-3 px-4">
+                                                        <div className="flex items-center gap-2">
+                                                            {job.status === 'completed' && (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        onViewQuick(job.id);
+                                                                    }}
+                                                                    className={`px-2 py-1 text-xs rounded transition-colors ${quickViewJobId === job.id
+                                                                        ? 'bg-purple-500/30 text-purple-300'
+                                                                        : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+                                                                        }`}
+                                                                    title="Load in Quick Viewer"
+                                                                >
+                                                                    🔬 View
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                                {expandedJobId === job.id && (
+                                                    <JobDetailsPanel
+                                                        job={job}
+                                                        onClose={() => setExpandedJobId(null)}
+                                                    />
+                                                )}
+                                            </React.Fragment>
+                                        );
+                                    });
+                                }
                             } else {
                                 // Standalone job
                                 const job = item.job;

@@ -33,8 +33,8 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     git clone https://github.com/Kuhlman-Lab/ThermoMPNN.git /opt/ThermoMPNN
     cd /opt/ThermoMPNN
 
-    # Install dependencies
-    uv pip install joblib omegaconf pandas numpy tqdm biopython
+    # Install dependencies (including wandb and pytorch-lightning for ThermoMPNN)
+    uv pip install joblib omegaconf pandas numpy tqdm biopython wandb pytorch-lightning
     uv pip install mmseqs2 || true  # May not be on PyPI
 
     # Cleanup
