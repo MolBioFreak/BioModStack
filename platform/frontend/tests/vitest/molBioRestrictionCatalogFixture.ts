@@ -39,4 +39,11 @@ const RECORD = {
     record_sha256: H,
 };
 
-export { RECEIPT, RECORD };
+const SUMMARY = {
+    enzyme_id: RECORD.enzyme_id, canonical_name: RECORD.canonical_name, aliases: RECORD.aliases,
+    site_iupac: RECORD.recognition.site_iupac, site_alternatives_iupac: RECORD.recognition.site_alternatives_iupac,
+    palindromic: true, cleavage_status: 'known_double_strand', overhang_kinds: ['five_prime'], nick_strand: null,
+    enzyme_kind: RECORD.enzyme_kind, analysis_capability: RECORD.analysis_capability,
+    golden_gate_compatible: false, exclusion_reason: null, reported_commercial: true, historical_supplier_codes: ['N'],
+};
+export { RECEIPT, RECORD, SUMMARY };

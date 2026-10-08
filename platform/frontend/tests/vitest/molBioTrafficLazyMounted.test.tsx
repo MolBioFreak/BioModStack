@@ -15,7 +15,7 @@ vi.mock('../../src/components/MolBioToolkit/panels', () => Object.fromEntries(['
 vi.mock('../../src/components/MolBioToolkit/RnaStructureViewer', () => ({ RnaStructureViewer: () => null }));
 vi.mock('../../src/components/MolBioToolkit/demoConstructs', () => ({ loadDemoPlasmids: async () => [] }));
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({ useGlobalExperimentContext: () => ({ updateQueryParams: vi.fn(), contextHref: (p: string) => p }) }));
-vi.mock('../../src/lib/restrictionAnalysis', async original => ({ ...await original<any>(), fetchRestrictionCatalog: async () => ({ catalog: { catalog_id: 'fixture' }, items: [] }), fetchRestrictionAnalysisBatch: async () => ({}) }));
+vi.mock('../../src/lib/restrictionAnalysis', async original => ({ ...await original<any>(), fetchRestrictionCatalogBrowse: async () => ({ catalog: { catalog_id: 'fixture' }, items: [] }), fetchRestrictionAnalysisBatch: async () => ({}) }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<any>(), fetchNucleotideSequences: async () => ({ data: [] }), createNucleotideSequence: async (data: any) => ({ data: { ...data, id: 'imported', length: data.sequence.length, version: 1 } }), fetchPrimerTmOptions: async () => ({ data: { algorithms: [{ id: 'nn_santalucia_hicks_2004', sequence_types: ['dna', 'rna'] }], defaults: {} } }) }));
 import { MolBioToolkitV2 } from '../../src/components/MolBioToolkit/MolBioToolkitV2';
 import { ExportDropdown } from '../../src/components/MolBioToolkit/ExportDropdown';
