@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -6,6 +7,31 @@ import {
     deriveStructureReorchestrateSettings,
     isStructureReorchestrateJob,
 } from '../src/components/dashboard/reorchestrateStructureSettings.js';
+
+test('dashboard hydrates a summary row before opening re-orchestration settings', () => {
+    const dashboardSource = readFileSync(
+        new URL('../src/components/Dashboard.tsx', import.meta.url),
+        'utf8',
+    );
+    assert.match(dashboardSource, /const handleResumeWithSettings = async \(job: Job\)/);
+    assert.match(dashboardSource, /detailedJob = await hydrateJobForDetail\(job\)/);
+    assert.match(dashboardSource, /setResumeSettingsJob\(detailedJob\)/);
+    assert.match(dashboardSource, /deriveStructureReorchestrateSettings\(detailedJob\)/);
+});
+
+test('always submits the visible MSA provider when re-orchestrating from a summary row', () => {
+    const summaryJob = {
+        model_id: 'boltz_cp_experimental',
+        mode: 'design',
+        params: {},
+    };
+
+    const settings = deriveStructureReorchestrateSettings(summaryJob);
+    assert.equal(settings.msaProvider, 'colabfold_api');
+    assert.deepEqual(buildStructureReorchestrateOverrides(summaryJob, settings), {
+        msa_provider: 'colabfold_api',
+    });
+});
 
 test('recognizes structure-validation jobs and derives boltz retry controls from current params', () => {
     const job = {
@@ -126,6 +152,7 @@ test('normalizes legacy complex all runs to boltz plus protenix for re-orchestra
 
     const settings = deriveStructureReorchestrateSettings(job);
     assert.deepEqual(settings.predictors, ['boltz', 'protenix']);
+    assert.equal(settings.msaProvider, 'colabfold_api');
 });
 
 test('uses the 200-step Boltz default when retry metadata omitted sampling steps', () => {

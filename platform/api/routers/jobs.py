@@ -1494,6 +1494,13 @@ def _supports_colabfold_api_single_job(model_id: str, mode: str) -> bool:
     return normalized_model in {"boltz2", "rf3", "protenix"} and normalized_mode in {"predict", "complex"}
 
 
+def _default_msa_provider_for_job(model_id: str, mode: str) -> str:
+    """Default supported structure jobs to the remote ColabFold service."""
+    if _supports_colabfold_api_single_job(model_id, mode):
+        return "colabfold_api"
+    return "local"
+
+
 def _normalize_target_geometry_mode(raw: Any) -> Optional[str]:
     value = str(raw or "").strip().lower()
     if not value:
@@ -5169,13 +5176,16 @@ async def create_job(
     if job_data.model_id == "nanopore" and num_jobs != 1:
         raise HTTPException(status_code=422, detail="Nanopore submissions must create exactly one authorized job")
 
-    # ColabFold API mode is currently scoped to single structure-prediction jobs.
-    msa_provider = str(job_data.params.get("msa_provider", "local") or "local").strip().lower()
+    # ColabFold API is the default for supported structure-prediction jobs.
+    # Existing single-job validation below makes local MSA an explicit override for batches.
+    default_msa_provider = _default_msa_provider_for_job(job_data.model_id, job_data.mode)
+    msa_provider = str(job_data.params.get("msa_provider", default_msa_provider) or default_msa_provider).strip().lower()
     if msa_provider not in {"local", "colabfold_api"}:
         raise HTTPException(
             status_code=422,
             detail=f"Invalid msa_provider '{msa_provider}'. Allowed: local, colabfold_api",
         )
+    job_data.params["msa_provider"] = msa_provider
 
     if msa_provider == "colabfold_api":
         if not _supports_colabfold_api_single_job(job_data.model_id, job_data.mode):

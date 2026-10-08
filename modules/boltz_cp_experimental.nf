@@ -103,7 +103,7 @@ process RunBoltzCPExperimental {
     def seedValue = (params.get('bcp_seed', '') ?: '').toString().trim()
     def seedFlag = seedValue ? "--seed ${seedValue}" : ''
     def useMsa = params.boltz_use_msa?.toString()?.toLowerCase() in ['true', '1', 'yes', 'y', 'on']
-    def msaProvider = (params.msa_provider ?: 'local').toString()
+    def msaProvider = (params.msa_provider ?: 'colabfold_api').toString()
     def msaPreset = (params.msa_preset ?: 'fast').toString()
     def msaLocalDb = (params.msa_local_db ?: '').toString()
     def msaCacheDir = (params.msa_cache_dir ?: '').toString()

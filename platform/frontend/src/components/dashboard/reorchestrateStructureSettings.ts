@@ -68,7 +68,7 @@ export interface StructureReorchestrateSettings {
 
 const DEFAULTS: StructureReorchestrateSettings = {
     predictors: ['boltz'],
-    msaProvider: 'local',
+    msaProvider: 'colabfold_api',
     msaPreset: 'fast',
     msaTargetShardMode: 'auto',
     msaTargetShards: 4,
@@ -126,7 +126,7 @@ const toInteger = (value: unknown, fallback: number, min = 1): number => {
 };
 
 const normalizeMsaProvider = (value: unknown): StructureMsaProvider => (
-    value === 'colabfold_api' ? 'colabfold_api' : 'local'
+    value === 'local' ? 'local' : 'colabfold_api'
 );
 
 const normalizeMsaPreset = (value: unknown): StructureMsaPreset => {
@@ -299,7 +299,9 @@ export const buildStructureReorchestrateOverrides = (
         }
     };
 
-    maybeSet('msa_provider', next.msaProvider, previous.msaProvider);
+    // This value comes from an explicit visible control. Always submit it so a
+    // summary-row modal cannot silently inherit the source job's provider.
+    overrides.msa_provider = next.msaProvider;
     maybeSet('msa_preset', next.msaPreset, previous.msaPreset);
     maybeSet('msa_target_shard_mode', next.msaTargetShardMode, previous.msaTargetShardMode);
     maybeSet('msa_target_shards', next.msaTargetShards, previous.msaTargetShards);

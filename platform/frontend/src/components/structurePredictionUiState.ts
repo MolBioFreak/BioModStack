@@ -114,6 +114,7 @@ type StructureMsaSubmitParams = Record<string, string | number | boolean>;
 export const DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE: StructureMsaTargetShardMode = 'auto';
 export const DEFAULT_STRUCTURE_MSA_TARGET_SHARDS = 4;
 export const DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB = 1;
+export const DEFAULT_STRUCTURE_MSA_PROVIDER: StructureMsaProvider = 'colabfold_api';
 
 export const BOLTZ_CP_DEFAULT_SHARD_PLAN_ID: BoltzCpShardPlanId = '2x2';
 export const DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS = 512;
