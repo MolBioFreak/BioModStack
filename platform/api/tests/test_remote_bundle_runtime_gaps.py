@@ -128,12 +128,12 @@ def package(tmp_path, monkeypatch):
                '--api_python', str(current/'venv/bin/python'),
                '--msa_cache_dir', str(roots['data']/'cache'),
                '--msa_local_db', str(roots['data']/'absent-offline'),
-               '--af2_models', '/ignored/default/af2', '--bcp_repo_path', '/ignored/default/bcp']
+               '--af2_models', '/ignored/default/af2', '--boltz_models', str(roots['weights']/'boltz')]
     job = SimpleNamespace(id='job', model_id='protenix', mode='predict', child_output_dir=None,
                           output_dir=str(output), lineage_root_job_id=None, parent_job_id=None,
                           execution_source_revision='a'*40, execution_source_tree='b'*40,
                           params={'protenix_msa_backend':'local', 'af2_models':'/ignored/original',
-                                  'bcp_repo_path':str(roots['data']/'unrelated')},
+                                  'boltz_models':str(roots['data']/'unrelated')},
                           provenance=bundle_assignment_fixture(), assigned_gpu=0)
     target = SimpleNamespace(id='target', remote_root=str(tmp_path/'remote'))
     for name, value in {'BMS_HOME': roots['repo'], 'BMS_DATA': roots['data'],
@@ -153,7 +153,7 @@ def package(tmp_path, monkeypatch):
                   container_dir=str(roots['containers']), data_root=str(roots['data']),
                   code_root=str(roots['repo']), api_python=str(current/'venv/bin/python'),
                   msa_cache_dir=str(roots['data']/'cache'), msa_local_db=str(roots['data']/'absent-offline'),
-                  af2_models='/ignored/default/af2', bcp_repo_path='/ignored/default/bcp',
+                  af2_models='/ignored/default/af2', boltz_models=str(roots['weights']/'boltz'),
                   out_dir=str(output), work_dir=str(roots['data']/'work'))
     job.native_invocation = replace(NativeInvocation.capture(
         model_id=job.model_id, mode=job.mode, command=command, requested=native,
@@ -236,7 +236,7 @@ def test_normalized_bundle_relocates_real_runtime(package, tmp_path, monkeypatch
                for t in prepared.input_transfers) == 1
     assert sum(t.remote_destination.endswith('/component-resources.config')
                for t in prepared.input_transfers) == 1
-    assert not any(flag in envelope.command for flag in ('--af2_models','--bcp_repo_path','--msa_local_db'))
+    assert not any(flag in envelope.command for flag in ('--af2_models','--boltz_models','--msa_local_db'))
     assert str(roots['results']) not in ' '.join(envelope.command)
     assert str(tmp_path/'controller') not in ' '.join(envelope.command + list(envelope.environment.values()))
     for transfer in (*prepared.runtime_transfers, *prepared.input_transfers, prepared.source_transfer):
@@ -514,12 +514,36 @@ def test_effective_dependency_inventory_omits_other_model_runtime_defaults(packa
     roots, release, job, target, _ = package
     from services.frustrampnn.settings import default_settings
     command = compile_native(job, dict(sequence='AAAA', protenix_use_msa=False,
-        msa_provider='colabfold_api', rf3_container_path='/unrelated/rf3.sif', run_frustrampnn=True,
+        msa_provider='colabfold_api', run_frustrampnn=True,
         frustrampnn_settings=default_settings().model_dump_json(), gpu_id=0))
+    # Exercise actual compiler defaults, not arbitrary flags passed through from
+    # test kwargs. Neither RF3's invented flag nor Fold-CP's explicit repo mapping
+    # is a shared default produced for this workflow.
+    defaults = {'rfd_models', 'af2_models', 'alphafold_params', 'boltz_models', 'msa_local_db'}
+    before = job.native_invocation.native_parameters
+    assert defaults <= before.keys()
+    assert not {'rf3_container_path', 'bcp_repo_path'} & before.keys()
+    assert all('--' + key in command for key in defaults)
     compiled, params = bundle.compile_remote_dependencies('protenix', 'predict', command,
                                                          native_invocation=job.native_invocation)
-    assert '--rf3_container_path' not in compiled
+    assert not defaults & params.keys()
+    assert all('--' + key not in compiled for key in defaults)
+    assert job.native_invocation.native_parameters == before
     assert params['run_frustrampnn'] is True
+
+
+@pytest.mark.parametrize('key', ['rf3_container_path', 'bcp_repo_path', 'input_pdb'])
+def test_explicit_paths_are_not_misclassified_as_shared_defaults(package, key):
+    roots, _, job, target, _ = package
+    missing = str(roots['inputs'] / 'missing-explicit-input')
+    command = compile_native(job, dict(sequence='AAAA', protenix_use_msa=False,
+        run_frustrampnn=False, **{key: missing}))
+    compiled, params = bundle.compile_remote_dependencies(job.model_id, job.mode, command,
+        native_invocation=job.native_invocation)
+    assert '--' + key in compiled and params[key] == missing
+    with pytest.raises(bundle.RemoteBundleError, match='Declared input is unavailable'):
+        bundle.prepare_remote_bundle(job=job, target=target, command=command,
+            native_invocation=job.native_invocation)
 
 
 def test_actual_normalized_nextflow_command_omits_unrelated_original_params(package):
