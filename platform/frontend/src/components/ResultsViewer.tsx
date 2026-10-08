@@ -121,6 +121,15 @@ const getAvailableCdrLoopIds = (job: Job | null | undefined): string[] => {
     return ['H1', 'H2', 'H3'];
 };
 
+type AntibodyLoopRow = {
+    chain: 'H' | 'L';
+    region: 'H1' | 'H2' | 'H3' | 'L1' | 'L2' | 'L3';
+    sequence: string | null;
+    length: number | null;
+};
+
+const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
@@ -321,45 +330,62 @@ export function ResultsViewer() {
     });
     const antibodyData = antibodyDataWrapper?.data;
 
-    // Antibody selections for Molstar - dynamic based on actual CDR data
+    // Antibody selections for Molstar - prefer IMGT-standard chain/range overlays when available.
     const antibodySelections = useMemo(() => {
         const design = designs.find(d => d.id === selectedDesignId) as any;
-        if (!design?.cdr_h1_length) return undefined;
+        if (!design) return undefined;
 
-        // Use chain 'B' which is typically the binder in RFantibody outputs
-        // Compute approximate positions based on framework regions
-        // Standard VHH/Fab structure: FR1 (1-26) | CDR1 | FR2 (39-55) | CDR2 | FR3 (66-104) | CDR3 | FR4
-        const h1Start = 27;
-        const h1End = 26 + (design.cdr_h1_length || 12);
-        const h2Start = h1End + 17; // FR2 is ~17 residues
-        const h2End = h2Start + (design.cdr_h2_length || 10) - 1;
-        const h3Start = h2End + 39; // FR3 is ~39 residues
-        const h3End = h3Start + (design.cdr_h3_length || 12) - 1;
+        const selections = [];
+        const hasImgT = Boolean(antibodyData?.imgt_pdb_url);
+        const heavyChainId = hasImgT ? 'H' : 'A';
+        const lightChainId = hasImgT ? 'L' : 'C';
 
-        const selections = [
-            { chain_id: 'A', start_residue_number: h1Start, end_residue_number: h1End, color: { r: 255, g: 50, b: 50 } }, // H1 - Red
-            { chain_id: 'A', start_residue_number: h2Start, end_residue_number: h2End, color: { r: 50, g: 255, b: 50 } }, // H2 - Green
-            { chain_id: 'A', start_residue_number: h3Start, end_residue_number: h3End, color: { r: 50, g: 100, b: 255 } }, // H3 - Blue
-        ];
-
-        // Add L-chain CDRs if this is a Fab (not VHH)
-        if (design.antibody_type !== 'vhh' && design.cdr_l1_length) {
-            const l1Start = 27;
-            const l1End = 26 + (design.cdr_l1_length || 11);
-            const l2Start = l1End + 16;
-            const l2End = l2Start + (design.cdr_l2_length || 7) - 1;
-            const l3Start = l2End + 33;
-            const l3End = l3Start + (design.cdr_l3_length || 9) - 1;
-
-            selections.push(
-                { chain_id: 'C', start_residue_number: l1Start, end_residue_number: l1End, color: { r: 255, g: 255, b: 50 } }, // L1 - Yellow
-                { chain_id: 'C', start_residue_number: l2Start, end_residue_number: l2End, color: { r: 50, g: 255, b: 255 } }, // L2 - Cyan
-                { chain_id: 'C', start_residue_number: l3Start, end_residue_number: l3End, color: { r: 255, g: 50, b: 255 } }, // L3 - Magenta
-            );
+        if (design.cdr_h1_length || design.cdr_h2_length || design.cdr_h3_length) {
+            if (hasImgT) {
+                selections.push(
+                    { chain_id: heavyChainId, start_residue_number: 27, end_residue_number: 38, color: { r: 255, g: 50, b: 50 } },
+                    { chain_id: heavyChainId, start_residue_number: 56, end_residue_number: 65, color: { r: 50, g: 255, b: 50 } },
+                    { chain_id: heavyChainId, start_residue_number: 105, end_residue_number: 117, color: { r: 50, g: 100, b: 255 } },
+                );
+            } else {
+                const h1Start = 27;
+                const h1End = 26 + (design.cdr_h1_length || 12);
+                const h2Start = h1End + 17;
+                const h2End = h2Start + (design.cdr_h2_length || 10) - 1;
+                const h3Start = h2End + 39;
+                const h3End = h3Start + (design.cdr_h3_length || 12) - 1;
+                selections.push(
+                    { chain_id: heavyChainId, start_residue_number: h1Start, end_residue_number: h1End, color: { r: 255, g: 50, b: 50 } },
+                    { chain_id: heavyChainId, start_residue_number: h2Start, end_residue_number: h2End, color: { r: 50, g: 255, b: 50 } },
+                    { chain_id: heavyChainId, start_residue_number: h3Start, end_residue_number: h3End, color: { r: 50, g: 100, b: 255 } },
+                );
+            }
         }
 
-        return selections;
-    }, [designs, selectedDesignId]);
+        if (design.antibody_type !== 'vhh' && (design.cdr_l1_length || design.cdr_l2_length || design.cdr_l3_length)) {
+            if (hasImgT) {
+                selections.push(
+                    { chain_id: lightChainId, start_residue_number: 27, end_residue_number: 38, color: { r: 255, g: 255, b: 50 } },
+                    { chain_id: lightChainId, start_residue_number: 56, end_residue_number: 65, color: { r: 50, g: 255, b: 255 } },
+                    { chain_id: lightChainId, start_residue_number: 105, end_residue_number: 117, color: { r: 255, g: 50, b: 255 } },
+                );
+            } else {
+                const l1Start = 27;
+                const l1End = 26 + (design.cdr_l1_length || 11);
+                const l2Start = l1End + 16;
+                const l2End = l2Start + (design.cdr_l2_length || 7) - 1;
+                const l3Start = l2End + 33;
+                const l3End = l3Start + (design.cdr_l3_length || 9) - 1;
+                selections.push(
+                    { chain_id: lightChainId, start_residue_number: l1Start, end_residue_number: l1End, color: { r: 255, g: 255, b: 50 } },
+                    { chain_id: lightChainId, start_residue_number: l2Start, end_residue_number: l2End, color: { r: 50, g: 255, b: 255 } },
+                    { chain_id: lightChainId, start_residue_number: l3Start, end_residue_number: l3End, color: { r: 255, g: 50, b: 255 } },
+                );
+            }
+        }
+
+        return selections.length > 0 ? selections : undefined;
+    }, [designs, selectedDesignId, antibodyData?.imgt_pdb_url]);
 
     // Sorted & Filtered designs for table
     const sortedDesigns = useMemo(() => {
@@ -452,6 +478,26 @@ export function ResultsViewer() {
         }
     }, [selectedJobId, isOligoJob, activeJob?.name]);
     const selectedDesign = designs.find(d => d.id === selectedDesignId);
+    const antibodyLoopRows = useMemo<AntibodyLoopRow[]>(() => {
+        if (!selectedDesign) return [];
+        const rows: AntibodyLoopRow[] = [
+            { chain: 'H', region: 'H1', sequence: selectedDesign.cdr_h1 ?? antibodyData?.cdrs?.H1 ?? null, length: selectedDesign.cdr_h1_length ?? antibodyData?.cdrs?.H1?.length ?? null },
+            { chain: 'H', region: 'H2', sequence: selectedDesign.cdr_h2 ?? antibodyData?.cdrs?.H2 ?? null, length: selectedDesign.cdr_h2_length ?? antibodyData?.cdrs?.H2?.length ?? null },
+            { chain: 'H', region: 'H3', sequence: selectedDesign.cdr_h3 ?? antibodyData?.cdrs?.H3 ?? null, length: selectedDesign.cdr_h3_length ?? antibodyData?.cdrs?.H3?.length ?? null },
+            { chain: 'L', region: 'L1', sequence: selectedDesign.cdr_l1 ?? antibodyData?.cdrs?.L1 ?? null, length: selectedDesign.cdr_l1_length ?? antibodyData?.cdrs?.L1?.length ?? null },
+            { chain: 'L', region: 'L2', sequence: selectedDesign.cdr_l2 ?? antibodyData?.cdrs?.L2 ?? null, length: selectedDesign.cdr_l2_length ?? antibodyData?.cdrs?.L2?.length ?? null },
+            { chain: 'L', region: 'L3', sequence: selectedDesign.cdr_l3 ?? antibodyData?.cdrs?.L3 ?? null, length: selectedDesign.cdr_l3_length ?? antibodyData?.cdrs?.L3?.length ?? null },
+        ];
+        return rows.filter((row) => row.sequence || row.length || row.chain === 'H');
+    }, [selectedDesign, antibodyData]);
+    const antibodyTopFrustrationResidues = useMemo(() => {
+        const rows = Array.isArray(selectedDesign?.frustration_residues) ? selectedDesign.frustration_residues : [];
+        return [...rows]
+            .filter((row) => row && typeof row.pos === 'number' && isFiniteNumber(row.frust))
+            .sort((a, b) => Math.abs(b.frust) - Math.abs(a.frust))
+            .slice(0, 8);
+    }, [selectedDesign]);
+    const antibodyHasAnnotation = antibodyLoopRows.some((row) => Boolean(row.sequence));
     // Detect structure format from file extension
     const structureFormat = selectedDesign?.pdb_path?.endsWith('.cif') ? 'cif' : 'pdb';
     const isLoading = designsLoading;
@@ -1420,42 +1466,78 @@ export function ResultsViewer() {
                                     {/* ANTIBODY TAB */}
                                     {activeTab === 'antibody' && (
                                         <div className="p-6 space-y-6">
-                                            {!antibodyData ? (
+                                            {!selectedDesign ? (
                                                 <div className="flex flex-col items-center justify-center py-20 text-slate-500">
                                                     <div className="text-4xl mb-4">🧬</div>
-                                                    <p>Select an antibody design to view analysis.</p>
-                                                    <p className="text-xs mt-2 opacity-60">If this is an antibody job, ensure ANARCII processing succeeded.</p>
+                                                    <p>Select an antibody design to inspect.</p>
                                                 </div>
                                             ) : (
                                                 <>
-                                                    {/* CDR + Humanness Header */}
-                                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                                                        {/* CDR Table */}
-                                                        <div className="lg:col-span-2 bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
-                                                            <div className="px-4 py-3 bg-slate-800/80 border-b border-slate-700/50 flex justify-between items-center">
-                                                                <h3 className="text-sm font-semibold text-white">CDR Loops (IMGT)</h3>
-                                                                {/* Design Selector Dropdown */}
-                                                                <div className="relative">
-                                                                    <select
-                                                                        value={selectedDesignId ?? ''}
-                                                                        onChange={(e) => setSelectedDesignId(e.target.value)}
-                                                                        className="appearance-none bg-slate-700/60 backdrop-blur-sm border border-slate-600/50 rounded-lg px-3 py-1 pr-8 text-xs text-blue-300 cursor-pointer hover:bg-slate-600/60 transition-colors min-w-[200px]"
-                                                                    >
-                                                                        {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
-                                                                            <option key={d.id} value={d.id}>
-                                                                                {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
-                                                                            </option>
-                                                                        ))}
-                                                                    </select>
-                                                                    <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-xs">
-                                                                        ▾
-                                                                    </div>
+                                                    <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                                                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                                            <div>
+                                                                <div className="text-sm font-semibold text-white">Antibody Design Inspector</div>
+                                                                <div className="mt-1 text-xs text-slate-400">
+                                                                    Inspect CDR annotation, validation metrics, frustration hotspots, and antibody-specific structure overlays for the selected design.
                                                                 </div>
                                                             </div>
-                                                            <div className="p-4 overflow-x-auto">
+                                                            <div className="relative">
+                                                                <select
+                                                                    value={selectedDesignId ?? ''}
+                                                                    onChange={(e) => setSelectedDesignId(e.target.value)}
+                                                                    className="appearance-none rounded-lg border border-slate-600/50 bg-slate-700/60 px-3 py-2 pr-8 text-xs text-blue-300 transition-colors hover:bg-slate-600/60 min-w-[240px]"
+                                                                >
+                                                                    {[...designs]
+                                                                        .sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0))
+                                                                        .map((d) => (
+                                                                            <option key={d.id} value={d.id}>
+                                                                                {getFriendlyDesignName(d)}{getOutputSourceLabel(d) ? ` | ${getOutputSourceLabel(d)}` : ''}{d.plddt_overall ? ` | pLDDT ${d.plddt_overall.toFixed(0)}` : ''}
+                                                                            </option>
+                                                                        ))}
+                                                                </select>
+                                                                <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+                                                        {[
+                                                            { label: 'Output', value: getOutputSourceLabel(selectedDesign), tone: 'text-cyan-300' },
+                                                            { label: 'Antibody Type', value: selectedDesign.antibody_type?.toUpperCase() || '—', tone: 'text-slate-200' },
+                                                            { label: 'pLDDT', value: formatMetric(selectedDesign.plddt_overall, 1), tone: getMetricColor('plddt_overall', selectedDesign.plddt_overall) },
+                                                            { label: 'iPTM', value: formatMetric(selectedDesign.iptm, 2), tone: getMetricColor('ptm', selectedDesign.iptm ?? null) },
+                                                            { label: 'Epitope Contacts', value: selectedDesign.epitope_contact_count ?? '—', tone: 'text-slate-200' },
+                                                            { label: 'Min Epitope Dist', value: selectedDesign.epitope_min_distance != null ? `${selectedDesign.epitope_min_distance.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Val RMSD All', value: selectedDesign.rmsd_overall != null ? `${selectedDesign.rmsd_overall.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Val RMSD Bd', value: selectedDesign.rmsd_binder != null ? `${selectedDesign.rmsd_binder.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Humanness', value: antibodyData?.humanness_score != null ? `${(antibodyData.humanness_score * 100).toFixed(0)}%` : '—', tone: antibodyData?.humanness_score != null ? ((antibodyData.humanness_score > 0.8) ? 'text-emerald-300' : (antibodyData.humanness_score > 0.6 ? 'text-amber-300' : 'text-red-300')) : 'text-slate-500' },
+                                                            { label: 'High Frust %', value: selectedDesign.frustration_pct_high != null ? `${selectedDesign.frustration_pct_high.toFixed(1)}%` : '—', tone: 'text-amber-300' },
+                                                            { label: 'High Frust Count', value: selectedDesign.frustration_high_count ?? '—', tone: 'text-amber-300' },
+                                                            { label: 'Maturation ΔIface', value: selectedDesign.maturation_delta_interface != null ? selectedDesign.maturation_delta_interface.toFixed(2) : '—', tone: 'text-fuchsia-300' },
+                                                        ].map((card) => (
+                                                            <div key={card.label} className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-4">
+                                                                <div className="text-[11px] uppercase tracking-wider text-slate-500">{card.label}</div>
+                                                                <div className={`mt-2 text-lg font-semibold ${card.tone}`}>{card.value as any}</div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+
+                                                    {!antibodyHasAnnotation && (
+                                                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200">
+                                                            ANARCII-derived CDR sequences are not populated for this design yet. Lengths and structure-level metrics are still shown below when available.
+                                                        </div>
+                                                    )}
+
+                                                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                                                        <div className="xl:col-span-2 rounded-xl border border-slate-700/50 bg-slate-800/50 overflow-hidden">
+                                                            <div className="flex items-center justify-between border-b border-slate-700/50 bg-slate-800/80 px-4 py-3">
+                                                                <h3 className="text-sm font-semibold text-white">CDR Loops</h3>
+                                                                <div className="text-[11px] text-slate-500">{antibodyData?.imgt_pdb_url ? 'IMGT renumbered view available' : 'Using original structure numbering'}</div>
+                                                            </div>
+                                                            <div className="overflow-x-auto p-4">
                                                                 <table className="w-full text-sm">
                                                                     <thead>
-                                                                        <tr className="text-left text-xs text-slate-400 uppercase tracking-wider border-b border-slate-700/50">
+                                                                        <tr className="border-b border-slate-700/50 text-left text-xs uppercase tracking-wider text-slate-400">
                                                                             <th className="pb-2">Chain</th>
                                                                             <th className="pb-2">Region</th>
                                                                             <th className="pb-2">Sequence</th>
@@ -1463,86 +1545,78 @@ export function ResultsViewer() {
                                                                         </tr>
                                                                     </thead>
                                                                     <tbody className="divide-y divide-slate-700/30 font-mono">
-                                                                        {['H1', 'H2', 'H3', 'L1', 'L2', 'L3'].map(region => {
-                                                                            const seq = antibodyData.cdrs[region as keyof typeof antibodyData.cdrs];
-                                                                            if (!seq) return null;
-                                                                            return (
-                                                                                <tr key={region} className="hover:bg-slate-700/20">
-                                                                                    <td className="py-2 text-slate-500">{region[0]}</td>
-                                                                                    <td className="py-2 font-bold text-slate-300">{region}</td>
-                                                                                    <td className="py-2 text-white break-all">{seq}</td>
-                                                                                    <td className="py-2 text-right text-slate-500">{seq.length}</td>
-                                                                                </tr>
-                                                                            );
-                                                                        })}
+                                                                        {antibodyLoopRows.map((row) => (
+                                                                            <tr key={row.region} className="hover:bg-slate-700/20">
+                                                                                <td className="py-2 text-slate-500">{row.chain}</td>
+                                                                                <td className="py-2 font-bold text-slate-300">{row.region}</td>
+                                                                                <td className="py-2 text-white break-all">{row.sequence || '—'}</td>
+                                                                                <td className="py-2 text-right text-slate-500">{row.length ?? '—'}</td>
+                                                                            </tr>
+                                                                        ))}
                                                                     </tbody>
                                                                 </table>
                                                             </div>
                                                         </div>
 
-                                                        {/* Humanness & Status */}
                                                         <div className="space-y-6">
-                                                            {/* Humanness Score */}
-                                                            <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6 flex flex-col items-center justify-center text-center">
-                                                                <span className="text-slate-400 text-sm font-medium mb-2">Humanness Score</span>
-                                                                <div className="relative w-32 h-32 flex items-center justify-center">
-                                                                    <svg className="w-full h-full transform -rotate-90">
-                                                                        <circle cx="64" cy="64" r="56" stroke="#1e293b" strokeWidth="12" fill="transparent" />
-                                                                        <circle
-                                                                            cx="64"
-                                                                            cy="64"
-                                                                            r="56"
-                                                                            stroke={
-                                                                                (antibodyData.humanness_score || 0) > 0.8 ? '#10b981' :
-                                                                                    (antibodyData.humanness_score || 0) > 0.6 ? '#f59e0b' : '#ef4444'
-                                                                            }
-                                                                            strokeWidth="12"
-                                                                            fill="transparent"
-                                                                            strokeDasharray={351.86}
-                                                                            strokeDashoffset={351.86 * (1 - (antibodyData.humanness_score || 0))}
-                                                                            className="transition-all duration-1000 ease-out"
-                                                                        />
-                                                                    </svg>
-                                                                    <span className="absolute text-2xl font-bold text-white">
-                                                                        {((antibodyData.humanness_score || 0) * 100).toFixed(0)}%
-                                                                    </span>
+                                                            <div className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-4">
+                                                                <h3 className="text-sm font-semibold text-white">Framework Contact Hotspots</h3>
+                                                                <div className="mt-3 space-y-2 text-xs">
+                                                                    {[
+                                                                        ['FR2', selectedDesign.fr2_contacts],
+                                                                        ['DE', selectedDesign.de_loop],
+                                                                        ['FR3', selectedDesign.fr3_contacts],
+                                                                        ['FR4', selectedDesign.fr4_contacts],
+                                                                    ].map(([label, value]) => (
+                                                                        <div key={label} className="flex items-center justify-between rounded-lg bg-slate-900/50 px-3 py-2">
+                                                                            <span className="text-slate-500">{label}</span>
+                                                                            <span className="font-mono text-slate-200">{(value as string) || '—'}</span>
+                                                                        </div>
+                                                                    ))}
                                                                 </div>
-                                                                <p className="text-xs text-slate-500 mt-2">OAS-based similarity metric</p>
+                                                            </div>
+
+                                                            <div className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-4">
+                                                                <h3 className="text-sm font-semibold text-white">FrustraMPNN Hotspots</h3>
+                                                                <div className="mt-3 space-y-2 text-xs">
+                                                                    {antibodyTopFrustrationResidues.length > 0 ? antibodyTopFrustrationResidues.map((row: any) => (
+                                                                        <div key={`${row.chain}:${row.pos}`} className="flex items-center justify-between rounded-lg bg-slate-900/50 px-3 py-2">
+                                                                            <span className="font-mono text-slate-300">{row.chain}{row.pos}</span>
+                                                                            <span className={`${row.frust <= -1 ? 'text-amber-300' : row.frust >= 0.58 ? 'text-red-300' : 'text-slate-400'}`}>{row.frust.toFixed(2)} {row.frustClass}</span>
+                                                                        </div>
+                                                                    )) : (
+                                                                        <div className="rounded-lg bg-slate-900/50 px-3 py-3 text-slate-500">No frustration annotation on this design.</div>
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     </div>
 
-                                                    {/* Structure Preview with Highlights */}
-                                                    <div className="h-[500px] bg-slate-900 rounded-xl border border-slate-700/50 overflow-hidden relative">
-                                                        <div className="absolute top-3 left-3 z-10 bg-slate-900/80 backdrop-blur px-3 py-1 rounded text-xs text-slate-300 pointer-events-none">
-                                                            {antibodyData.imgt_pdb_url ? 'IMGT Renumbered Structure' : 'Original Structure (Highlights may be offset)'}
+                                                    <div className="h-[500px] overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900 relative">
+                                                        <div className="absolute top-3 left-3 z-10 rounded bg-slate-900/80 px-3 py-1 text-xs text-slate-300 pointer-events-none">
+                                                            {getFriendlyDesignName(selectedDesign)} • {antibodyData?.imgt_pdb_url ? 'IMGT Renumbered Structure' : 'Original Structure'}
                                                         </div>
                                                         <MolstarViewer
                                                             key={selectedDesignId + '_ab'}
-                                                            structureUrl={antibodyData.imgt_pdb_url || (selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined)}
+                                                            structureUrl={antibodyData?.imgt_pdb_url || (selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined)}
                                                             format="pdb"
                                                             alphafoldView={false}
                                                             height="100%"
                                                             backgroundColor="#0f172a"
                                                             hideControls={true}
                                                             selections={antibodySelections}
-                                                            label="CDR H1:Red H2:Green H3:Blue | L1:Yel L2:Cyan L3:Mag"
+                                                            label="CDR overlay: H1 red, H2 green, H3 blue, L1 yellow, L2 cyan, L3 magenta"
                                                         />
                                                     </div>
 
-                                                    {/* Stability Heatmap */}
-                                                    {antibodyData.stability_data && (
-                                                        <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6">
-                                                            <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-                                                                <div className="w-2 h-2 rounded-full bg-accent-secondary"></div>
+                                                    {antibodyData?.stability_data && (
+                                                        <div className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-6">
+                                                            <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
+                                                                <div className="h-2 w-2 rounded-full bg-accent-secondary"></div>
                                                                 ThermoMPNN Stability Scan (ddG)
                                                             </h3>
-                                                            <div className="h-[400px] w-full flex items-center justify-center bg-slate-900/50 rounded-lg border border-slate-800">
-                                                                <StabilityHeatmap
-                                                                    data={antibodyData.stability_data}
-                                                                    width={800}
-                                                                    height={380}
-                                                                />
+                                                            <div className="flex h-[400px] w-full items-center justify-center rounded-lg border border-slate-800 bg-slate-900/50">
+                                                                <StabilityHeatmap data={antibodyData.stability_data} width={800} height={380} />
                                                             </div>
                                                         </div>
                                                     )}
