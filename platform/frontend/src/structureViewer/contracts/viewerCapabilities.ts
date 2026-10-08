@@ -26,8 +26,6 @@ export type ViewerCapabilityId =
     | 'event-provenance';
 
 export type ViewerCapabilityBoundary =
-    | 'pdbe-wrapper'
-    | 'pdbe-wrapper-private-instance'
     | 'direct-molstar-only'
     | 'bms-direct-adapter'
     | 'bms-engine-owner'
@@ -51,11 +49,10 @@ export interface ViewerCapability {
 }
 
 export interface ViewerRuntimeIdentity {
-    readonly packageName: 'pdbe-molstar';
+    readonly packageName: 'molstar';
     readonly packageVersion: string;
-    readonly packageAlias: string;
-    readonly engineName: 'molstar';
-    readonly engineVersion: string;
+    readonly adapterId: 'bms-molstar-direct';
+    readonly adapterVersion: string;
     readonly productionResolution: string;
 }
 

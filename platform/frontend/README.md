@@ -40,9 +40,9 @@ From the repo root:
 Frontend-only dev mode:
 
 ```bash
-cd platform/frontend
-npm install
-npm run dev -- --host 127.0.0.1 --port 5173
+# From the repository root; the root pnpm lock is authoritative.
+corepack pnpm install
+corepack pnpm --dir platform/frontend dev --host 127.0.0.1 --port 5173
 ```
 
 Default local URL:

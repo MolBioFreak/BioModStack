@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
-import MolstarViewer from './MolstarViewer';
+import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
 import ChainDetailsPanel from './ChainDetailsPanel';
 import ReferenceSelector, { type ReferenceStructure } from './ReferenceSelector';
 import { useThemeColors } from './useThemeColors';
@@ -27,6 +27,7 @@ import {
 import { inferDesignAnalysisLens, inferDesignOutputSource, getValidationOutputLabel } from './designOutputSource';
 import { buildMetricLayerFromExplicitMaps } from '../lib/molstar-metrics';
 import type { MolstarResidueMetricLayer } from '../lib/molstar-metrics';
+import type { MetricLayer } from '../structureViewer/metrics/metricContracts.js';
 import {
     buildConforNetsConformerNavigation,
     buildConforNetsConformerSet,
@@ -400,7 +401,6 @@ export default function StructureViewerPane({
         () => resolveConforNetsOverlayIds(conforNetsConformerSet, conforNetsOverlayIds),
         [conforNetsConformerSet, conforNetsOverlayIds],
     );
-    const conforNetsOverlaySignature = resolvedConforNetsOverlayIds.join('|');
     const conforNetsDefaultChainId = useMemo(
         () => getConforNetsDefaultChainId(selectedDesign ?? null) ?? (conforNetsConformerSet ? 'A' : null),
         [conforNetsConformerSet, selectedDesign],
@@ -1126,6 +1126,72 @@ export default function StructureViewerPane({
         }
         return undefined;
     }, [bfactorLabel, chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, effectiveColorMode, fampnnPsceChainIds, fampnnPsceChains, fampnnPsceResidueColors, frustrationResidueColors, plddtProfile, plddtResidueColors, residueMetricNumbers, selectedDesign]);
+
+    const pairMetricLayers = useMemo<readonly MetricLayer[]>(() => {
+        const layers: MetricLayer[] = [];
+        const maxPairs = 250_000;
+        const indexedResidues = Object.keys(chainMetrics).sort().flatMap((chainId) => (
+            chainMetrics[chainId]?.residue_numbers.map((residueNumber) => ({
+                documentId: 'primary',
+                labelAsymId: chainId,
+                labelSeqId: residueNumber,
+            })) ?? []
+        ));
+        if (paeData && paeMatrix && indexedResidues.length === paeData.size && paeMatrix.length === paeData.size) {
+            const values = [];
+            for (let row = 0; row < paeData.size && values.length < maxPairs; row += 1) {
+                for (let column = 0; column < paeData.size && values.length < maxPairs; column += 1) {
+                    const value = paeMatrix[row]?.[column];
+                    values.push({
+                        identity: { first: indexedResidues[row]!, second: indexedResidues[column]! },
+                        value: typeof value === 'number' && Number.isFinite(value) ? value : null,
+                        ...(typeof value === 'number' && Number.isFinite(value) ? {} : { missingness: 'unavailable' as const }),
+                    });
+                }
+            }
+            layers.push({
+                descriptor: {
+                    id: 'pae', label: 'Predicted aligned error', dimension: 'residue-pair-matrix',
+                    units: 'Å', direction: 'lower_is_better', valueRange: [0, 32],
+                    projectionPolicy: 'none', normalization: 'none',
+                    palette: { colors: ['#2563eb', '#f8fafc', '#dc2626'], domain: [0, 32], missingColor: '#475569' },
+                    provenance: {
+                        source: paeData.source_mode ?? 'persisted PAE artifact',
+                        artifactId: paeData.confidence_file ?? undefined,
+                        parameters: { admitted_pairs: values.length, total_pairs: paeData.size * paeData.size, bounded: values.length < paeData.size * paeData.size },
+                    },
+                },
+                values,
+            });
+        }
+        if (contactMap && contactMap.chain_ids.length === contactMap.size && contactMap.residue_numbers.length === contactMap.size) {
+            const identities = contactMap.residue_numbers.map((residueNumber, index) => ({
+                documentId: 'primary', labelAsymId: contactMap.chain_ids[index]!, labelSeqId: residueNumber,
+            }));
+            const values = [];
+            for (let row = 0; row < contactMap.size && values.length < maxPairs; row += 1) {
+                for (let column = 0; column < contactMap.size && values.length < maxPairs; column += 1) {
+                    const value = contactMap.distance_matrix[row]?.[column];
+                    values.push({
+                        identity: { first: identities[row]!, second: identities[column]! },
+                        value: typeof value === 'number' && Number.isFinite(value) ? value : null,
+                        ...(typeof value === 'number' && Number.isFinite(value) ? {} : { missingness: 'unavailable' as const }),
+                    });
+                }
+            }
+            layers.push({
+                descriptor: {
+                    id: 'contact-distance', label: 'Cα contact distance', dimension: 'residue-pair-matrix',
+                    units: 'Å', direction: 'lower_is_better',
+                    valueRange: [0, 20], projectionPolicy: 'none', normalization: 'none',
+                    palette: { colors: ['#16a34a', '#facc15', '#dc2626'], domain: [0, 20], missingColor: '#475569' },
+                    provenance: { source: 'BioModStack contact-map analysis', parameters: { admitted_pairs: values.length, total_pairs: contactMap.size * contactMap.size, bounded: values.length < contactMap.size * contactMap.size } },
+                },
+                values,
+            });
+        }
+        return layers;
+    }, [chainMetrics, contactMap, paeData, paeMatrix]);
 
     const topFrustratedResidues = (() => {
         if (!selectedDesign?.frustration_residues?.length) return [];
@@ -2759,14 +2825,16 @@ export default function StructureViewerPane({
                         }
                         style={isFullscreen ? undefined : { height: viewerLayout.viewerHeight }}
                     >
-                        <MolstarViewer
-                            key={`${selectedDesignId}_${effectiveColorMode}_${conforNetsOverlaySignature}`}
+                        <StructureWorkbench
+                            mode="standard"
                             structureUrl={viewerStructureUrl}
                             format={viewerStructureFormat}
                             alphafoldView={effectiveColorMode === 'plddt' && !plddtResidueColors}
                             selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
                             overlayStructures={conforNetsOverlayStructures}
                             residueMetricLayer={residueMetricLayer}
+                            metricLayers={pairMetricLayers}
+                            activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
                             height="100%"
                             backgroundColor={themeColors.bgPrimary}
                         />
@@ -2807,8 +2875,8 @@ export default function StructureViewerPane({
 
                                 {referenceDockMode === 'viewer' && selectedReference ? (
                                     <div className="h-[calc(100%-45px)] p-2">
-                                        <MolstarViewer
-                                            key={`reference:${selectedReference.url}`}
+                                        <StructureWorkbench
+                                            mode="compact"
                                             structureUrl={selectedReference.url}
                                             format={selectedReference.format}
                                             alphafoldView={false}

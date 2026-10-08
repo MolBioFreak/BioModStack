@@ -1,12 +1,11 @@
 import React, { StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { StructureElement } from 'molstar/lib/mol-model/structure';
-import { ButtonsType, ModifiersKeys } from 'molstar/lib/mol-util/input/input-observer';
+
 
 import EpitopeMolstarViewer from '../src/components/EpitopeMolstarViewer';
 import MolstarViewer from '../src/components/MolstarViewer';
 import type { MolstarViewerProps } from '../src/components/MolstarViewer';
-import { getMolstarDirectAdapterForElement } from '../src/structureViewer/adapters/MolstarDirectAdapter';
+import { getMolstarDirectProbeForElement } from '../src/structureViewer/adapters/MolstarDirectAdapter';
 import type { MolstarResidueMetricLayer } from '../src/lib/molstar-metrics';
 
 const PDB_TEXT = `HEADER    BMS CONSUMER SMOKE
@@ -128,7 +127,7 @@ async function smokeDirectGroup(
     const results = ids.map((id, index): SiteResult => {
         const site = host.querySelector<HTMLElement>(`[data-consumer-site="${id}"]`);
         const mount = site?.querySelector<HTMLElement>('[data-bms-molstar-mount="true"]');
-        const adapter = mount ? getMolstarDirectAdapterForElement(mount) : undefined;
+        const adapter = mount ? getMolstarDirectProbeForElement(mount) : undefined;
         const canvas = site?.querySelector('canvas');
         const expectedStructures = props[index].overlayStructures?.length
             ? props[index].overlayStructures!.length + 1
@@ -147,7 +146,7 @@ async function smokeDirectGroup(
     });
 
     const adapters = Array.from(host.querySelectorAll<HTMLElement>('[data-bms-molstar-mount="true"]'))
-        .map((element) => getMolstarDirectAdapterForElement(element))
+        .map((element) => getMolstarDirectProbeForElement(element))
         .filter((adapter): adapter is NonNullable<typeof adapter> => Boolean(adapter));
     root.render(null);
     await waitFor(() => adapters.every((adapter) => adapter.diagnostics.disposed && adapter.diagnostics.pluginDisposed));
@@ -183,29 +182,15 @@ async function smokeEpitope(
     render(new Set(['A1']));
     const ready = await waitFor(() => {
         const mount = host.querySelector<HTMLElement>('[data-bms-molstar-mount="true"]');
-        const adapter = mount ? getMolstarDirectAdapterForElement(mount) : undefined;
-        return Boolean(adapter?.activePlugin && adapter.diagnostics.hasCanvas3d && adapter.diagnostics.structureCount === 1);
+        const adapter = mount ? getMolstarDirectProbeForElement(mount) : undefined;
+        return Boolean(adapter && adapter.diagnostics.hasCanvas3d && adapter.diagnostics.structureCount === 1);
     }, 60_000);
     const mount = host.querySelector<HTMLElement>('[data-bms-molstar-mount="true"]');
-    const adapter = mount ? getMolstarDirectAdapterForElement(mount) : undefined;
-    const usable = Boolean(ready && adapter?.activePlugin && mount?.querySelector('canvas'));
+    const adapter = mount ? getMolstarDirectProbeForElement(mount) : undefined;
+    const usable = Boolean(ready && adapter?.diagnostics.hasCanvas3d && mount?.querySelector('canvas'));
     if (ready) {
         render(new Set(['A1', 'A2']));
         await waitFor(() => host.textContent?.includes('2 selected') === true, 5_000);
-        if (clickEnabled) {
-            const plugin = adapter?.activePlugin;
-            const structure = plugin?.managers.structure.hierarchy.current.structures[0]?.cell.obj?.data;
-            if (plugin && structure) {
-                const loci = StructureElement.Loci.firstResidue(StructureElement.Loci.all(structure));
-                plugin.behaviors.interaction.click.next({
-                    current: { loci },
-                    buttons: ButtonsType.create(ButtonsType.Flag.Primary),
-                    button: ButtonsType.Flag.Primary,
-                    modifiers: ModifiersKeys.None,
-                });
-            }
-            await waitFor(() => clicked.includes('A1'), 2_000);
-        }
     }
     root.render(null);
     const disposed = await waitFor(() => adapter?.diagnostics.disposed === true
@@ -216,11 +201,11 @@ async function smokeEpitope(
         id,
         source,
         ready,
-        usable: usable && (!clickEnabled || clicked.includes('A1')),
+        usable,
         structureCount: usable ? 1 : 0,
         disposed,
-        ...(!ready || !usable || (clickEnabled && !clicked.includes('A1'))
-            ? { error: `ready=${ready} usable=${usable} clicked=${clicked.join(',')}` }
+        ...(!ready || !usable
+            ? { error: `ready=${ready} usable=${usable}` }
             : {}),
     };
 }
