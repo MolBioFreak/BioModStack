@@ -264,13 +264,21 @@ def _consume_preparation_bundle(
     system_dir.mkdir(parents=True, exist_ok=True)
     coordinates = system_dir / "prepared.gro"
     topology = system_dir / "topol.top"
-    position_restraints = system_dir / "posre.itp"
-    required = [coordinates, topology, position_restraints]
+    restraint_names = sorted(
+        record["path"] for record in manifest["files"]
+        if isinstance(record, Mapping)
+        and isinstance(record.get("path"), str)
+        and record["path"].startswith("posre")
+        and record["path"].endswith(".itp")
+    )
+    position_restraints = [system_dir / name for name in restraint_names]
+    required = [coordinates, topology, *position_restraints]
     if not ledger.is_complete("preparation", required):
         ledger.mark_running("preparation", ["consume-immutable-bundle", manifest["bundle_sha256"]])
         shutil.copy2(Path(bundle) / "system.gro", coordinates)
         shutil.copy2(Path(bundle) / "system.top", topology)
-        shutil.copy2(Path(bundle) / "posre.itp", position_restraints)
+        for source_name, destination_path in zip(restraint_names, position_restraints, strict=True):
+            shutil.copy2(Path(bundle) / source_name, destination_path)
         ledger.mark_completed(
             "preparation", required,
             performance={"bundle_sha256": manifest["bundle_sha256"]},

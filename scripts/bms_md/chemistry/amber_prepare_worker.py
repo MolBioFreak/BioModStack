@@ -101,26 +101,62 @@ def _composition(structure: Any) -> tuple[int, int, float]:
 
 
 def _install_position_restraints(structure: Any, topology_path: Path) -> int:
-    restrained = [
-        atom.idx + 1
-        for atom in structure.atoms
-        if atom.residue.name not in WATER_NAMES | ION_NAMES and int(atom.atomic_number or 0) > 1
-    ]
-    if not restrained:
-        raise RuntimeError("prepared solute has no heavy atoms for position restraints")
-    Path("posre.itp").write_text(
-        "[ position_restraints ]\n; atom  type      fx      fy      fz\n"
-        + "".join(f"{index:8d}     1  1000.0  1000.0  1000.0\n" for index in restrained),
-        encoding="utf-8",
-    )
+    del structure  # The exported GROMACS topology is authoritative for molecule-local indices.
     lines = topology_path.read_text(encoding="utf-8").splitlines()
     molecule_headers = [index for index, line in enumerate(lines) if line.strip() == "[ moleculetype ]"]
-    if len(molecule_headers) < 2:
-        raise RuntimeError("prepared topology does not expose a bounded solute molecule type")
-    insertion = molecule_headers[1]
-    include = ["#ifdef POSRES", '#include "posre.itp"', "#endif", ""]
-    topology_path.write_text("\n".join(lines[:insertion] + include + lines[insertion:]) + "\n", encoding="utf-8")
-    return len(restrained)
+    system_headers = [index for index, line in enumerate(lines) if line.strip() == "[ system ]"]
+    if not molecule_headers or not system_headers:
+        raise RuntimeError("prepared topology does not expose bounded molecule types")
+
+    insertions: list[tuple[int, list[str]]] = []
+    total_restrained = 0
+    restraint_ordinal = 0
+    boundaries = [*molecule_headers[1:], system_headers[0]]
+    for start, end in zip(molecule_headers, boundaries, strict=True):
+        atoms_header = next(
+            (index for index in range(start + 1, end) if lines[index].strip() == "[ atoms ]"),
+            None,
+        )
+        if atoms_header is None:
+            continue
+        atom_end = next(
+            (
+                index
+                for index in range(atoms_header + 1, end)
+                if lines[index].strip().startswith("[")
+            ),
+            end,
+        )
+        restrained: list[int] = []
+        for line in lines[atoms_header + 1 : atom_end]:
+            fields = line.split(";", 1)[0].split()
+            if len(fields) < 8 or not fields[0].isdigit():
+                continue
+            residue_name = fields[3]
+            try:
+                mass = float(fields[7])
+            except ValueError:
+                continue
+            if residue_name not in WATER_NAMES | ION_NAMES and mass > 2.0:
+                restrained.append(int(fields[0]))
+        if not restrained:
+            continue
+        filename = "posre.itp" if restraint_ordinal == 0 else f"posre_{restraint_ordinal}.itp"
+        Path(filename).write_text(
+            "[ position_restraints ]\n; atom  type      fx      fy      fz\n"
+            + "".join(f"{index:8d}     1  1000.0  1000.0  1000.0\n" for index in restrained),
+            encoding="utf-8",
+        )
+        insertions.append((end, ["#ifdef POSRES", f'#include "{filename}"', "#endif", ""]))
+        total_restrained += len(restrained)
+        restraint_ordinal += 1
+
+    if not total_restrained:
+        raise RuntimeError("prepared solute has no heavy atoms for position restraints")
+    for insertion, include in reversed(insertions):
+        lines[insertion:insertion] = include
+    topology_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return total_restrained
 
 
 def _grompp_validation_command(gmx: Path) -> list[str]:

@@ -145,27 +145,37 @@ def test_nextflow_preparation_runs_directly_in_pinned_preparation_image() -> Non
     assert "BMS_MD_PREPARATION_RUNTIME_LOCK=/opt/bms-md-preparation-runtime.lock" in label
 
 
-def test_position_restraints_are_bound_to_the_first_solute_molecule(tmp_path: Path, monkeypatch) -> None:
+def test_position_restraints_are_bound_to_each_solute_molecule_type(tmp_path: Path, monkeypatch) -> None:
     from scripts.bms_md.chemistry.amber_prepare_worker import _install_position_restraints
 
-    atoms = [
-        SimpleNamespace(idx=0, atomic_number=6, residue=SimpleNamespace(name="ALA")),
-        SimpleNamespace(idx=1, atomic_number=1, residue=SimpleNamespace(name="ALA")),
-        SimpleNamespace(idx=2, atomic_number=8, residue=SimpleNamespace(name="WAT")),
-    ]
     topology = tmp_path / "system.top"
     topology.write_text(
-        "[ moleculetype ]\n; solute\n[ atoms ]\n1 C\n\n[ moleculetype ]\n; water\n",
+        "[ moleculetype ]\nProtein 3\n[ atoms ]\n"
+        "1 C 1 ALA CA 1 0.0 12.01\n2 H 1 ALA HA 1 0.0 1.008\n"
+        "[ bonds ]\n\n"
+        "[ moleculetype ]\nDNA 3\n[ atoms ]\n"
+        "1 P 1 DA P 1 0.0 30.97\n2 O 1 DA O1P 1 0.0 16.00\n"
+        "[ bonds ]\n\n"
+        "[ moleculetype ]\nSOL 2\n[ atoms ]\n"
+        "1 OW 1 WAT O 1 0.0 16.00\n2 HW 1 WAT H1 1 0.0 1.008\n"
+        "[ system ]\nPrepared system\n[ molecules ]\nProtein 1\nDNA 1\nSOL 10\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
 
-    count = _install_position_restraints(SimpleNamespace(atoms=atoms), topology)
+    count = _install_position_restraints(SimpleNamespace(), topology)
 
-    assert count == 1
+    assert count == 3
     assert (tmp_path / "posre.itp").read_text(encoding="utf-8").count("1000.0") == 3
+    second = (tmp_path / "posre_1.itp").read_text(encoding="utf-8")
+    assert second.count("1000.0") == 6
+    assert "       1" in second and "       2" in second
     rendered = topology.read_text(encoding="utf-8")
-    assert rendered.index('#include "posre.itp"') < rendered.rindex("[ moleculetype ]")
+    dna_header = rendered.rfind("[ moleculetype ]", 0, rendered.index("DNA 3"))
+    solvent_header = rendered.rfind("[ moleculetype ]", 0, rendered.index("SOL 2"))
+    assert rendered.index('#include "posre.itp"') < dna_header
+    assert rendered.index('#include "posre_1.itp"') < solvent_header
+    assert rendered.count("#ifdef POSRES") == 2
 
 
 def test_preparation_validation_supplies_restraint_reference_coordinates() -> None:
@@ -191,7 +201,14 @@ def test_gromacs_runner_stages_position_restraint_include_from_bundle(
     monkeypatch.setattr(
         preparation_module,
         "verify_preparation_bundle",
-        lambda *args, **kwargs: {"bundle_sha256": "b" * 64},
+        lambda *args, **kwargs: {
+            "bundle_sha256": "b" * 64,
+            "files": [
+                {"path": "system.gro"},
+                {"path": "system.top"},
+                {"path": "posre.itp"},
+            ],
+        },
     )
 
     class Ledger:
