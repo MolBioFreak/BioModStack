@@ -1940,6 +1940,7 @@ export interface AssemblyFragmentInput {
     role?: string;
     source_sequence_id?: string;
     source_name?: string;
+    source_revision?: number;
     source_start?: number;
     source_end?: number;
     source_wraps_origin?: boolean;
@@ -1955,6 +1956,7 @@ export interface AssemblyFragmentResult {
     role?: string | null;
     source_sequence_id?: string | null;
     source_name?: string | null;
+    source_revision?: number | null;
     source_start?: number | null;
     source_end?: number | null;
     source_wraps_origin?: boolean;
@@ -2011,6 +2013,66 @@ export interface GibsonAssemblyRequest {
     maximum_overlap?: number | null;
     new_name?: string;
     save_description?: string;
+}
+
+export interface GibsonDesignFragmentInput extends AssemblyFragmentInput {
+    preparation: 'pcr' | 'ready_linear';
+}
+
+export interface GibsonDesignRequest {
+    fragments: GibsonDesignFragmentInput[];
+    circular?: boolean;
+    overlap?: number;
+    target_tm?: number;
+    min_anneal?: number;
+    selected_candidate_checksum?: string;
+    new_name?: string;
+    save_description?: string;
+}
+
+export interface GibsonDesignedPrimer {
+    id: string;
+    fragment_id: string;
+    fragment_name: string;
+    direction: 'forward' | 'reverse';
+    full_sequence: string;
+    annealing_sequence: string;
+    tail_sequence: string;
+    tm: number;
+    warnings: string[];
+}
+
+export interface GibsonDesignedFragment {
+    id: string;
+    name: string;
+    preparation: 'pcr' | 'ready_linear';
+    sequence: string;
+    checksum: string;
+    primer_ids: string[];
+}
+
+export interface GibsonDesignCandidate {
+    checksum: string;
+    product: AssemblyProduct;
+    exact_match: boolean;
+}
+
+export interface GibsonDesignResponse {
+    engine: string;
+    engine_version: string;
+    circular: boolean;
+    overlap: number;
+    target_tm: number;
+    min_anneal: number;
+    primers: GibsonDesignedPrimer[];
+    designed_fragments: GibsonDesignedFragment[];
+    candidates: GibsonDesignCandidate[];
+    selected_candidate_checksum: string;
+    selected_product: AssemblyProduct;
+    warnings: string[];
+    source_provenance: Array<Record<string, unknown>>;
+    saved_sequence?: NucleotideSequence | null;
+    message: string;
 }
 
 export interface GoldenGateAssemblyRequest {
@@ -2344,6 +2406,12 @@ export const simulateGibsonAssembly = (data: GibsonAssemblyRequest) =>
 
 export const saveGibsonAssembly = (data: GibsonAssemblyRequest) =>
     api.post<AssemblyOperationResponse>('/api/molbio/assembly/gibson/save', data);
+
+export const designGibsonAssembly = (data: GibsonDesignRequest) =>
+    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design', data);
+
+export const saveDesignedGibsonAssembly = (data: GibsonDesignRequest) =>
+    api.post<GibsonDesignResponse>('/api/molbio/assembly/gibson/design/save', data);
 
 export const fetchGoldenGateAssemblyOptions = () =>
     api.get<GoldenGateAssemblyOptionsResponse>('/api/molbio/assembly/golden-gate/options');

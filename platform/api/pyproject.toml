@@ -20,7 +20,8 @@ dependencies = [
     "numpy>=2.2.6",
     "pandas>=2.0.0",  # Required for FrustraMPNN API
     "biotite>=0.42.0",  # Structure analysis (PDB/CIF parsing, RMSD, SSE, etc.)
-    "biopython>=1.84",
+    "biopython>=1.87,<2",
+    "pydna==5.5.16",
     "aiohttp>=3.13.3",
     "httpx>=0.27.0",
     "viennarna>=2.7.0",
