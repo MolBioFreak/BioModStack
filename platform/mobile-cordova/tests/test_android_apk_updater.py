@@ -111,8 +111,8 @@ def test_core_runtime_compose_passes_both_apk_authentication_policies() -> None:
 def test_shell_version_navigation_network_and_release_signing_are_constrained() -> None:
     config = CONFIG.read_text()
     gradle = GRADLE.read_text()
-    assert 'version="0.4.2"' in config
-    assert 'android-versionCode="402"' in config
+    assert 'version="0.4.3"' in config
+    assert 'android-versionCode="403"' in config
     runtime = (ROOT / "cordova.runtime.json").read_text(encoding="utf-8")
     assert '"remoteUiUrl": "https://compute-node.taileb3a90.ts.net/"' in runtime
     assert '<allow-navigation href="https://localhost/*"' in config

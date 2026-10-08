@@ -261,6 +261,48 @@ function exactSelectionReceipt(environment) {
       source_revision: 'a'.repeat(40),
     };
     receipt.frontend_listeners = [frontendReport];
+
+    const developmentRevision = receipt.selector_revision;
+    const apiRoot = `${receipt.project_root}/platform/api`;
+    const apiReport = processReport(111, '7', {
+      cwd: apiRoot,
+      cmdline: `${apiRoot}/.venv/bin/python3 ${apiRoot}/.venv/bin/uvicorn main:app --port 18002 --host 127.0.0.1 --no-access-log --reload`,
+      argv: [
+        `${apiRoot}/.venv/bin/python3`, `${apiRoot}/.venv/bin/uvicorn`, 'main:app',
+        '--port', '18002', '--host', '127.0.0.1', '--no-access-log', '--reload',
+      ],
+      executable: '/usr/bin/python3',
+      cgroup: '0::/user.slice/user-1000.slice/user@1000.service/app.slice/biomodstack-api.service',
+      build_revision: developmentRevision,
+    });
+    receipt.project_revision = developmentRevision;
+    receipt.api_health_target = 'http://127.0.0.1:18002/api/health';
+    receipt.health.local_api.url = receipt.api_health_target;
+    receipt.health.local_api.final_url = receipt.api_health_target;
+    for (const probe of [receipt.health.local_api, receipt.health.tailnet_api]) {
+      probe.payload.build.revision = developmentRevision;
+      probe.payload.readiness.mode = 'native';
+      probe.payload.readiness.checks.workflow_adapter = {
+        ready: true, required: false, status: 'not_required',
+      };
+    }
+    receipt.workflow_adapter_listener.listener_reports[0].build_revision = developmentRevision;
+    receipt.development_api_listener = {
+      port: 18002,
+      bind_addresses: ['127.0.0.1'],
+      listener_inodes: [180021],
+      listener_inode_owners: { 180021: [111] },
+      listener_pids: [111],
+      listener_reports: [apiReport],
+      systemd_service: 'biomodstack-api.service',
+      source_root: apiRoot,
+      source_revision: developmentRevision,
+      state_root: '/srv/.biomodstack-dev',
+      database_path: '/srv/.biomodstack-dev/biomodstack.db',
+    };
+    receipt.api_listeners = [apiReport];
+    delete receipt.managed_api_runtime;
+    delete receipt.managed_api_listener;
   }
   return receipt;
 }
@@ -504,7 +546,7 @@ test('buildUpdateLoaderScript exposes fallback boot and readiness hooks for down
   assert.doesNotThrow(() => new vm.Script(script));
 });
 
-test('remote-live loader clears stored bundles and cannot mount an iframe before successful selection', async () => {
+test('remote-live loader preserves a compatible downloaded bundle and activates it only after successful selection', async () => {
   const script = buildUpdateLoaderScript();
   const elements = [];
   const storage = new Map([['bms.cordova.uiBundleState', JSON.stringify({
@@ -548,8 +590,9 @@ test('remote-live loader clears stored bundles and cannot mount an iframe before
   vm.createContext(context);
   new vm.Script(script).runInContext(context);
 
-  assert.equal(storage.has('bms.cordova.uiBundleState'), false);
+  assert.equal(storage.has('bms.cordova.uiBundleState'), true);
   assert.equal(elements.filter((element) => element.tagName === 'iframe').length, 0);
+  assert.equal(elements.filter((element) => element.tagName === 'script').length, 0);
   context.window.__BMS_CORDOVA_BOOT_UI__({
     version: 'bypass',
     shellApiVersion: 1,
@@ -575,7 +618,12 @@ test('remote-live loader clears stored bundles and cannot mount an iframe before
     'https://compute-node.taileb3a90.ts.net',
     'development',
   );
-  assert.equal(elements.filter((element) => element.tagName === 'iframe').length, 1);
+  assert.equal(elements.filter((element) => element.tagName === 'iframe').length, 0);
+  assert.equal(elements.filter((element) => element.tagName === 'script').length, 1);
+  assert.equal(
+    elements.find((element) => element.tagName === 'script').src,
+    '/__bms_ui__/active/assets/old.js',
+  );
 });
 
 test('selection response contract accepts exact development and production receipts and rejects cross-environment identities', () => {
@@ -587,14 +635,18 @@ test('selection response contract accepts exact development and production recei
   assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
     receipt('production'), 'production', 'https://compute-node.taileb3a90.ts.net',
   ));
-  const reorderedMount = receipt('development');
+  const reorderedMount = receipt('production');
   const mount = reorderedMount.managed_api_runtime.containers[0].mounts[0];
-  reorderedMount.managed_api_runtime.containers[0].mounts[0] = {
+  const reordered = {
     propagation: mount.propagation, rw: mount.rw, mode: mount.mode,
     destination: mount.destination, source: mount.source, type: mount.type,
   };
+  reorderedMount.managed_api_runtime.containers[0].mounts[0] = reordered;
+  reorderedMount.container_runtime.containers.find(
+    (item) => item.name === 'biomodstack-api',
+  ).mounts[0] = { ...reordered };
   assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
-    reorderedMount, 'development', 'https://compute-node.taileb3a90.ts.net',
+    reorderedMount, 'production', 'https://compute-node.taileb3a90.ts.net',
   ));
   const fractionalTimestamp = receipt('production');
   fractionalTimestamp.health.local_api.payload.build.build_time = '2026-07-27T05:29:07.904235Z';
@@ -936,6 +988,7 @@ print(json.dumps(closures, sort_keys=True))
 
   const development = exactSelectionReceipt('development');
   development.workflow_adapter_listener = structuredClone(production.workflow_adapter_listener);
+  development.workflow_adapter_listener.listener_reports[0].build_revision = 'a'.repeat(40);
   development.development_frontend_listener = {
     ...closures['5173'],
     systemd_service: 'biomodstack-frontend.service',

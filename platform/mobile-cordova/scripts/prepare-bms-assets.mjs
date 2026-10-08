@@ -526,6 +526,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
   const expected = environment === 'development'
     ? {
       frontendTarget: 'http://127.0.0.1:5173',
+      apiHealthTarget: 'http://127.0.0.1:18002/api/health',
       serveRootProxy: 'http://127.0.0.1:5173',
       runtimeMode: 'dev',
       runtimeTarget: 'dev',
@@ -533,6 +534,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     : environment === 'production'
       ? {
         frontendTarget: 'http://127.0.0.1:18080/bms/',
+        apiHealthTarget: 'http://127.0.0.1:8000/api/health',
         serveRootProxy: 'http://127.0.0.1:18081',
         runtimeMode: 'container',
         runtimeTarget: 'prod',
@@ -919,6 +921,46 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         && reportInExactUnit(report, 'biomodstack-frontend.service')
       ));
   };
+  const validDevelopmentApiListener = (listener, projectRoot, revision) => {
+    const sourceRoot = `${projectRoot}/platform/api`;
+    const expectedPort = Number(new URL(expected.apiHealthTarget).port);
+    if (!(
+      hasExactKeys(listener, [
+        'port', 'bind_addresses', 'listener_inodes', 'listener_inode_owners',
+        'listener_pids', 'listener_reports', 'systemd_service', 'source_root',
+        'source_revision', 'state_root', 'database_path',
+      ])
+      && validListenerClosure(listener, expectedPort, ['127.0.0.1'])
+      && sortedUniquePositiveIntegers(listener.listener_pids)
+      && JSON.stringify(listener.listener_pids)
+        === JSON.stringify(listener.listener_reports.map((report) => report?.pid))
+      && listener.systemd_service === 'biomodstack-api.service'
+      && listener.source_root === sourceRoot
+      && listener.source_revision === revision
+      && normalizeAbsolutePath(listener.state_root) === listener.state_root
+      && normalizeAbsolutePath(listener.database_path) === listener.database_path
+      && listener.database_path === `${listener.state_root}/biomodstack.db`
+      && listener.listener_reports.every((report) => (
+        hasExactKeys(report, [
+          'pid', 'cwd', 'cmdline', 'argv', 'executable', 'cgroup', 'build_revision',
+        ])
+        && report.cwd === sourceRoot
+        && report.build_revision === revision
+        && Array.isArray(report.argv) && report.argv.length >= 4
+        && normalizeAbsolutePath(report.argv[0]) === `${sourceRoot}/.venv/bin/python3`
+        && nonEmptyBounded(report.executable, 4096)
+        && normalizeAbsolutePath(report.executable) === report.executable
+        && report.cmdline === report.argv.join(' ')
+        && reportInExactUnit(report, 'biomodstack-api.service')
+      ))
+    )) return false;
+    return listener.listener_reports.some((report) => (
+      normalizeAbsolutePath(report.argv[1]) === `${sourceRoot}/.venv/bin/uvicorn`
+      && report.argv.includes('main:app')
+      && report.argv.includes(String(expectedPort))
+      && report.argv.includes('--reload')
+    ));
+  };
   const validWorkflowAdapterListener = (
     listener, projectRoot, selectorRevision, runtimeRevision,
   ) => {
@@ -942,7 +984,8 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         && report.cwd === apiRoot
         && report.build_revision === runtimeRevision
         && report.argv.length === 9
-        && normalizeAbsolutePath(report.argv[0]) === `${apiRoot}/.venv/bin/python`
+        && [`${apiRoot}/.venv/bin/python`, `${apiRoot}/.venv/bin/python3`]
+          .includes(normalizeAbsolutePath(report.argv[0]))
         && normalizeAbsolutePath(report.argv[1]) === `${apiRoot}/.venv/bin/uvicorn`
         && JSON.stringify(report.argv.slice(2)) === JSON.stringify([
           'workflow_adapter_app:app', '--port', '8001', '--host', '127.0.0.1',
@@ -998,7 +1041,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && payload.molbio.sequence_parent_cycle_count === 0
       && hasExactKeys(payload.readiness, ['checks', 'mode', 'ready'])
       && payload.readiness.ready === true
-      && payload.readiness.mode === 'container'
+      && payload.readiness.mode === (environment === 'development' ? 'native' : 'container')
       && hasExactKeys(payload.readiness.checks, [
         'core_database', 'frontend', 'molbio_database', 'process_liveness',
         'workflow_adapter', 'workflow_launch',
@@ -1008,8 +1051,13 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         frontend: 'http_200',
         molbio_database: 'ready',
         process_liveness: 'alive',
-        workflow_adapter: 'http_200',
       }).every(([key, status]) => validReadinessCheck(payload.readiness.checks[key], status))
+      && (environment === 'development'
+        ? hasExactKeys(payload.readiness.checks.workflow_adapter, ['ready', 'required', 'status'])
+          && payload.readiness.checks.workflow_adapter.ready === true
+          && payload.readiness.checks.workflow_adapter.required === false
+          && payload.readiness.checks.workflow_adapter.status === 'not_required'
+        : validReadinessCheck(payload.readiness.checks.workflow_adapter, 'http_200'))
       && validReadinessCheck(payload.readiness.checks.workflow_launch, 'allowed', true)
     );
     const validProbe = (report, requestedUrl, finalUrl, expectApi) => (
@@ -1029,8 +1077,8 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && validProbe(health.local_frontend, localFrontendUrl, localFrontendUrl, false)
       && validProbe(health.tailnet_frontend, `${trustedOrigin}/`, publicFrontendFinalUrl, false)
       && validProbe(
-        health.local_api, 'http://127.0.0.1:8000/api/health',
-        'http://127.0.0.1:8000/api/health', true,
+        health.local_api, expected.apiHealthTarget,
+ expected.apiHealthTarget, true,
       )
       && validProbe(
         health.tailnet_api, `${trustedOrigin}/api/health`,
@@ -1066,13 +1114,12 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     'selected_environment', 'runtime_mode', 'runtime_target', 'project_root',
     'project_revision', 'selector_revision', 'frontend_target', 'api_health_target',
     'serve_root_proxy', 'tailnet_origin', 'serve_handlers', 'frontend_listeners',
-    'api_listeners', 'workflow_adapter_listener', 'health',
-    'managed_api_runtime', 'managed_api_listener',
-    'previous_serve_root_proxy',
+    'api_listeners', 'workflow_adapter_listener', 'health', 'previous_serve_root_proxy',
   ];
   const environmentKeys = environment === 'development'
-    ? ['development_frontend_listener']
+    ? ['development_api_listener', 'development_frontend_listener']
     : [
+      'managed_api_runtime', 'managed_api_listener',
       'container_runtime', 'managed_frontend_listener',
       'tailnet_production_proxy', 'tailnet_production_proxy_listeners',
     ];
@@ -1080,7 +1127,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
   if (
     payload.selected_environment !== environment
     || payload.frontend_target !== expected.frontendTarget
-    || payload.api_health_target !== 'http://127.0.0.1:8000/api/health'
+    || payload.api_health_target !== expected.apiHealthTarget
     || payload.serve_root_proxy !== expected.serveRootProxy
     || payload.runtime_mode !== expected.runtimeMode
     || payload.runtime_target !== expected.runtimeTarget
@@ -1119,14 +1166,6 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     || localBuild.build_id !== tailnetBuild.build_id
     || localBuild.build_time !== tailnetBuild.build_time
     || payload.project_revision !== localBuild.revision
-    || !validContainerSet(payload.managed_api_runtime, ['biomodstack-api'], localBuild.revision)
-    || !validContainerListener(
-      payload.managed_api_listener,
-      payload.managed_api_runtime,
-      'biomodstack-api',
-      8000,
-    )
-    || JSON.stringify(payload.api_listeners) !== JSON.stringify(payload.managed_api_listener?.listener_reports)
     || !validWorkflowAdapterListener(
       payload.workflow_adapter_listener,
       payload.project_root,
@@ -1140,6 +1179,15 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       payload.container_runtime !== undefined
       || payload.tailnet_production_proxy !== undefined
       || payload.managed_frontend_listener !== undefined
+      || payload.managed_api_runtime !== undefined
+      || payload.managed_api_listener !== undefined
+      || !validDevelopmentApiListener(
+        payload.development_api_listener,
+        payload.project_root,
+        localBuild.revision,
+      )
+      || JSON.stringify(payload.api_listeners)
+        !== JSON.stringify(payload.development_api_listener?.listener_reports)
       || !validDevelopmentListener(
         payload.development_frontend_listener,
         payload.project_root,
@@ -1151,7 +1199,16 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
   } else {
     const proxy = payload.tailnet_production_proxy;
     if (
-      !validContainerSet(payload.container_runtime, ['biomodstack-api', 'biomodstack-web'], localBuild.revision)
+      !validContainerSet(payload.managed_api_runtime, ['biomodstack-api'], localBuild.revision)
+      || !validContainerListener(
+        payload.managed_api_listener,
+        payload.managed_api_runtime,
+        'biomodstack-api',
+        8000,
+      )
+      || JSON.stringify(payload.api_listeners)
+        !== JSON.stringify(payload.managed_api_listener?.listener_reports)
+      || !validContainerSet(payload.container_runtime, ['biomodstack-api', 'biomodstack-web'], localBuild.revision)
       || !sameRuntimeContainer(
         payload.managed_api_runtime,
         payload.container_runtime,
@@ -1387,7 +1444,18 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
     }
     remoteUiUrl.searchParams.set('bms_environment', environment);
     remoteUiUrl.searchParams.set('bms_switch', String(Date.now()));
-    mountVerifiedRemoteUi(remoteUiUrl.toString());
+    if (
+      storedBundleState
+      && storedBundleState.descriptor
+      && Number.parseInt(storedBundleState.descriptor.shellApiVersion ?? 0, 10) === bundledDescriptor.shellApiVersion
+    ) {
+      bootDescriptor(storedBundleState.descriptor, {
+        source: 'downloaded',
+        basePath: storedBundleState.basePath || downloadedBasePath,
+      });
+    } else {
+      mountVerifiedRemoteUi(remoteUiUrl.toString());
+    }
     return payload;
   }
 
@@ -1457,9 +1525,9 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
 
   const storedBundleState = readStoredBundleState();
   if (remoteLiveMode) {
-    if (storedBundleState && storedBundleState.descriptor) {
-      clearStoredBundleState();
-    }
+    // Keep compatible downloaded assets dormant behind the trusted preflight.
+    // They are activated only after the selected Tailnet environment passes
+    // the full authenticated runtime-identity contract above.
     bootBundledUi();
   } else if (
     storedBundleState
