@@ -48,7 +48,8 @@ def preview_model_acquisition(model_id: str) -> dict:
 
 
 def acquire_model(model_id: str, store_root: Path, *, expected_plan_digest: str,
-                  accepted_licenses=(), attempts=3, timeout=30, total_timeout=300) -> dict:
+                  accepted_licenses=(), attempts=3, timeout=30, total_timeout=300,
+                  weights_root: Path | None = None) -> dict:
     """Re-resolve trusted metadata and bind to preview; never accept URLs from UI.
 
     Return durable per-artifact receipts. A partial model failure is not success;
@@ -69,10 +70,10 @@ def acquire_model(model_id: str, store_root: Path, *, expected_plan_digest: str,
     for entry in plan['artifacts']:
         receipt = acquire(Artifact(**entry['manifest']), store_root,
                           accepted_licenses=licenses, attempts=attempts,
-                          timeout=timeout, total_timeout=total_timeout)
+                          timeout=timeout, total_timeout=total_timeout, weights_root=weights_root)
         receipts.append({'dependency': entry['dependency'], **receipt})
     layouts = [materialize_weights(dependency, members, store_root,
                 accepted_licenses=licenses, attempts=attempts, timeout=timeout,
-                total_timeout=total_timeout) for dependency, members in _layouts(plan)]
+                total_timeout=total_timeout, weights_root=weights_root) for dependency, members in _layouts(plan)]
     return {'model_id': model_id, 'plan_digest': plan['plan_digest'],
             'artifacts': receipts, 'layouts': layouts, 'qualification': 'not_checked'}

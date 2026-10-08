@@ -37,6 +37,7 @@ def source():
         interrupt = False
         corrupt = False
         oversized = False
+        split_oversized = False
         redirect = False
         bad_range = False
         unavailable = False
@@ -72,6 +73,11 @@ def source():
                 self.wfile.write(payload[offset:offset+10000])
                 self.wfile.flush()
                 self.connection.shutdown(socket.SHUT_RDWR)
+            elif cls.split_oversized:
+                self.wfile.write(payload[offset:-1])
+                self.wfile.flush()
+                time.sleep(0.15)
+                self.wfile.write(payload[-1:])
             else:
                 self.wfile.write(payload[offset:])
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -87,6 +93,20 @@ def source():
         server.shutdown()
         server.server_close()
         worker.join()
+
+
+def test_oversize_rejection_cannot_be_laundered_by_resume(source, tmp_path):
+    artifact, handler = source
+    handler.oversized = handler.split_oversized = True
+    with pytest.raises(AcquisitionError, match='exceeds pinned'):
+        acquire(artifact, tmp_path, test_only=True)
+    state = json.loads(next(tmp_path.rglob('state.json')).read_text())
+    assert state['bytes'] == artifact.size_bytes
+    handler.oversized = handler.split_oversized = False
+    with pytest.raises(AcquisitionError, match='previous acquisition rejected'):
+        acquire(artifact, tmp_path, test_only=True)
+    assert len(handler.requests) == 1
+    assert not list(tmp_path.rglob('runtime.sif'))
 
 
 def test_real_download_revalidation_and_corrupt_cache(source, tmp_path):

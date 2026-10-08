@@ -2,8 +2,10 @@
 
 ## Integration contract
 
-The existing setup CLI can import `services.runtime_acquisition` with the API
-module directory on its normal import path:
+The existing setup CLI now integrates this API through `provision-plan`,
+`provision`, and identity-bound `resume`; see [Setup provision CLI](Setup_Provision_CLI.md).
+Library consumers import `services.runtime_acquisition` with the API module
+directory on their normal import path:
 
 ```python
 plan = preview_model_acquisition(model_id)
@@ -31,7 +33,8 @@ receipt = acquire_model(
   filesystem identities, manifest digest, and `qualification: not_checked`.
   Configuration transaction code must perform its existing runtime binding,
   license persistence, and scientific qualification. Acquisition does not mean
-  readiness and does not activate anything. No CLI/transaction files are changed.
+  readiness and does not activate anything. The CLI journals license acceptance
+  and materialization; the release/configuration transaction remains separate.
 - Errors may include `AcquisitionError`, the shared store's validation error, or
   filesystem errors. A failed multi-artifact operation is not model success;
   rerun with the same preview to rehash/reuse completed objects and resume partials.
@@ -39,8 +42,9 @@ receipt = acquire_model(
 ## Byte and filesystem guarantees
 
 `lib.pinned_acquisition.acquire` streams real HTTP(S), with one to five attempts,
-bounded socket timeout and an elapsed transfer deadline. HTTP redirects and
-content encodings are rejected; publish the final approved source URL explicitly.
+bounded socket timeout and an elapsed transfer deadline. HTTP redirects require
+an explicit reviewed redirect policy; content encodings remain rejected. See
+`Reviewed_Redirect_Weight_Layout_Contract.md`.
 Resume requires an exact HTTP Content-Range; a server returning 200 restarts from
 zero. Exact digest and byte size are checked before publication. Transfer size is
 capped by the manifest, not server claims. System resolver delays, filesystem IO
@@ -63,12 +67,14 @@ Corrupt published cache objects are rejected, never healed from staging. The
 service-owned filesystem assumption of that authority still applies.
 
 Runtime images use the existing store root. Weight byte objects use its separate
-`weights` namespace, require explicit license identity and acceptance, and are
-never automatically unpacked or installed. The inherited opaque object filename
+`weights` namespace by default, or the explicit configured `weights_root` supplied
+by the CLI. They require explicit license identity and acceptance and are never
+automatically unpacked or activated. The inherited opaque object filename
 is `runtime.sif` even in the weights namespace; this is a cache naming convention,
-**not** an assertion that weights are SIF images. A future weight installation
-adapter must preserve pinned member identities and safely materialize the model's
-approved layout. No such layout approvals exist in the current registry.
+**not** an assertion that weights are SIF images. The member materializer preserves
+pinned identities in an immutable approved directory layout; CLI/release consumers
+use `layouts[].dependency` → `layouts[].path`, never opaque member paths.
+No such layout approvals exist in the current production registry.
 Staging is retained for explicit reconciliation; budget roughly two artifact
 copies for staging plus publication, separately from any future expansion.
 
@@ -122,4 +128,6 @@ Range resume, corrupt cache/checkpoint/body rejection, changed manifests,
 oversized bodies, redirects, invalid ranges, bounded retry/timeouts, license
 separation, and symlink rejection. `test_only=True` forces a separate
 `test-fixtures-not-scientific-assets` store; the setup-facing API does not expose
-this option. Fixtures are never entered into any scientific model registry.
+this option. Fixtures are never entered into the production scientific registry
+or registered as runtimes. The explicit CLI test harness uses an isolated
+in-process registry authority only.

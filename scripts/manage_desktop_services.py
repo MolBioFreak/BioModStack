@@ -71,7 +71,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Manage BioModStack desktop services")
     parser.add_argument(
         "action",
-        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status", "discover", "plan", "configure-preview", "configure", "recover", "resume"],
+        choices=["start", "start-api", "start-target", "stop", "stop-api", "restart", "restart-api", "status", "discover", "plan", "provision-plan", "provision", "configure-preview", "configure", "recover", "resume"],
     )
     parser.add_argument(
         "--runtime",
@@ -85,7 +85,23 @@ def main() -> int:
     parser.add_argument("--document", type=Path, help="versioned install JSON for configure-preview")
     parser.add_argument("--operation-id", help="expected durable configure operation identity")
     parser.add_argument("--expect-document-sha256", help="reject a stale input before writing")
+    parser.add_argument("--expect-plan-sha256", help="expected provision-plan identity; also selects provision resume")
+    parser.add_argument("--accept-license", action="append", default=[], help="explicit acceptance of a reviewed license ID; repeatable, recorded durably")
     args = parser.parse_args()
+
+    if args.action in {"provision-plan", "provision"} or (args.action == "resume" and args.expect_plan_sha256):
+        if args.notify or args.target or args.runtime or args.document or args.expect_document_sha256:
+            parser.error("provisioning uses configured stores; runtime/target/document/notify are unsupported")
+        if args.action == "provision-plan" and (args.operation_id or args.accept_license or args.expect_plan_sha256):
+            parser.error("provision-plan is read-only and does not accept operation/license/expected identity")
+        from biomodstack_provision import provision_report
+        report = provision_report(args.action, project_root=REPO_ROOT, models=tuple(args.model),
+                                  operation_id=args.operation_id, expected_plan_digest=args.expect_plan_sha256,
+                                  accepted_licenses=tuple(args.accept_license))
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0 if report["status"] in {"planned", "bytes-materialized"} else 3
+    if args.expect_plan_sha256 or args.accept_license:
+        parser.error("plan identity/license acceptance require provision or provision resume")
 
     if args.action in {"configure", "recover", "resume"}:
         if args.notify or args.target or args.runtime or args.model:

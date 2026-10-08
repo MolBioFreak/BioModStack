@@ -107,7 +107,7 @@ def _observed(path: Path) -> tuple[str, int]:
 
 def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
             attempts: int = 3, timeout: float = 30, total_timeout: float = 300,
-            test_only: bool = False) -> dict:
+            test_only: bool = False, weights_root: Path | None = None) -> dict:
     """Download/resume one reviewed artifact, verify, atomically publish, receipt.
 
     A changed manifest for the same artifact ID, altered checkpoint bytes, or
@@ -128,7 +128,10 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
     root = Path(store_root).absolute()
     if test_only:
         root = root / 'test-fixtures-not-scientific-assets'
-    cache = root if artifact.kind == 'image' else root / 'weights'
+    cache = root if artifact.kind == 'image' else (
+        Path(weights_root).absolute() if weights_root is not None else root / 'weights')
+    if test_only and weights_root is not None and artifact.kind == 'weights':
+        cache /= 'test-fixtures-not-scientific-assets'
     stage = cache / '.acquisition' / artifact.artifact_id
     deadline = time.monotonic() + total_timeout
     with _lock(cache / '.acquisition', hashlib.sha256(artifact.artifact_id.encode()).hexdigest()):
@@ -152,6 +155,8 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
             raise AcquisitionError('invalid durable acquisition state') from exc
         if not isinstance(state, dict):
             raise AcquisitionError('invalid durable acquisition state')
+        if state.get('rejected'):
+            raise AcquisitionError('previous acquisition rejected: explicit operator reconciliation required')
         if state.get('manifest_digest') != artifact.manifest_digest:
             raise AcquisitionError('manifest changed: explicit operator reconciliation required')
         if (type(state.get('bytes')) is not int or not 0 <= state['bytes'] <= artifact.size_bytes
@@ -212,6 +217,7 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
                                     if not chunk:
                                         break
                                     if offset + len(chunk) > artifact.size_bytes:
+                                        state['rejected'] = True
                                         raise AcquisitionError('download exceeds pinned byte size')
                                     stream.write(chunk)
                                     offset += len(chunk)
