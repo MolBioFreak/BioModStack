@@ -1,5 +1,7 @@
 # Stats Toolkit Add-on Repo Split Implementation Plan
 
+> **Historical / superseded:** This extraction plan predates the P1 standalone ownership boundary. It is retained only as design history and is not active architecture or implementation guidance.
+
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task after Christian approves the phase slice.
 
 **Goal:** Break the BioModStack Stats Toolkit out of the core BioModStack runtime into an explicitly optional add-on with its own repo, image(s), tests, release cadence, and lifecycle controls.

@@ -18,7 +18,7 @@ export interface AntibodyRefinementLaunchState {
     sourceTotalCount?: number | null;
 }
 
-const STORAGE_KEY = 'bms_antibody_refinement_launch_v1';
+const STORAGE_ENTRY = 'bms_antibody_refinement_launch_v1';
 
 const canUseSessionStorage = () =>
     typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined';
@@ -26,7 +26,7 @@ const canUseSessionStorage = () =>
 export const saveAntibodyRefinementLaunchState = (state: AntibodyRefinementLaunchState) => {
     if (!canUseSessionStorage()) return;
     try {
-        window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        window.sessionStorage.setItem(STORAGE_ENTRY, JSON.stringify(state));
     } catch (error) {
         console.warn('[REFINEMENT] Failed to persist launch state', error);
     }
@@ -35,7 +35,7 @@ export const saveAntibodyRefinementLaunchState = (state: AntibodyRefinementLaunc
 export const loadAntibodyRefinementLaunchState = (): AntibodyRefinementLaunchState | null => {
     if (!canUseSessionStorage()) return null;
     try {
-        const raw = window.sessionStorage.getItem(STORAGE_KEY);
+        const raw = window.sessionStorage.getItem(STORAGE_ENTRY);
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed !== 'object') return null;
@@ -49,7 +49,7 @@ export const loadAntibodyRefinementLaunchState = (): AntibodyRefinementLaunchSta
 export const clearAntibodyRefinementLaunchState = () => {
     if (!canUseSessionStorage()) return;
     try {
-        window.sessionStorage.removeItem(STORAGE_KEY);
+        window.sessionStorage.removeItem(STORAGE_ENTRY);
     } catch (error) {
         console.warn('[REFINEMENT] Failed to clear launch state', error);
     }

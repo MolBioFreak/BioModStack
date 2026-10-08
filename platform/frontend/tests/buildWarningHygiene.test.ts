@@ -32,7 +32,6 @@ test('top-level scientific workstation pages are route-lazy loaded', () => {
     ['NGSToolkit', './components/NGSToolkit'],
     ['BioXpCockpit', './components/BioXpCockpit'],
     ['InfraMonitorPage', './components/InfraMonitorPage'],
-    ['AssayAnalytics', './components/AssayAnalytics'],
   ] as const;
 
   assert.match(source, /import\s*\{\s*lazy\s*,\s*Suspense\s*\}\s*from ['"]react['"]/u);

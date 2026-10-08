@@ -12,8 +12,7 @@ import logging
 
 from database import init_db, async_session
 from molbio_database import init_molbio_db, molbio_health
-from services.assay_analytical_store import init_analytical_store
-from routers import analyses, analytics, assay_analytics, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_ui_updates, models, molbio_ops, msa, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
+from routers import analyses, analytics, boltzgen, designs, files, frameworks, frustrampnn, gpu, inputs, jobs, mobile_ui_updates, models, molbio_ops, msa, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, smiles_converter, system, templates, user_sequences, user_templates
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
@@ -27,29 +26,6 @@ logger = logging.getLogger(__name__)
 # Global orchestrator instance
 _orchestrator: GPUOrchestrator = None
 _analysis_worker: AnalysisWorker = None
-ANALYTICAL_STARTUP_STATUS: dict[str, object] = {"attempted": False, "ok": None, "message": "not requested"}
-
-
-def _truthy_env(name: str, default: str = "0") -> bool:
-    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
-
-
-async def _init_analytical_store_optional() -> None:
-    """Initialize the analytical store without making API/web boot depend on Postgres."""
-    global ANALYTICAL_STARTUP_STATUS
-    if not _truthy_env("BMS_ANALYTICAL_INIT_ON_STARTUP"):
-        ANALYTICAL_STARTUP_STATUS = {"attempted": False, "ok": None, "message": "not requested"}
-        return
-    try:
-        await init_analytical_store()
-    except Exception as exc:  # noqa: BLE001 - DB startup must be degraded, not fatal.
-        ANALYTICAL_STARTUP_STATUS = {"attempted": True, "ok": False, "message": str(exc)}
-        logger.warning("[STARTUP] BMS DB service unavailable for analytical init: %s", exc)
-        return
-    ANALYTICAL_STARTUP_STATUS = {"attempted": True, "ok": True, "message": "initialized"}
-    logger.info("[STARTUP] Assay analytical PostgreSQL store initialized")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database and GPU orchestrator on startup."""
@@ -60,7 +36,6 @@ async def lifespan(app: FastAPI):
     # Initialize independently owned persistence stores.
     await init_db()
     await init_molbio_db()
-    await _init_analytical_store_optional()
     
     # Initialize GPU orchestrator only when this runtime is allowed to own workflow launches.
     if workflow_launches_allowed():
@@ -176,7 +151,6 @@ app.include_router(analyses.router, prefix="/api", tags=["analyses"])
 app.include_router(gpu.router, prefix="/api/gpu", tags=["gpu"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
-app.include_router(assay_analytics.router, prefix="/api/assay-analytics", tags=["assay-analytics"])
 app.include_router(user_sequences.router, prefix="/api/user-sequences", tags=["user-sequences"])
 app.include_router(user_templates.router, prefix="/api/user-templates", tags=["user-templates"])
 # msa_cache router removed - now using file-based caching

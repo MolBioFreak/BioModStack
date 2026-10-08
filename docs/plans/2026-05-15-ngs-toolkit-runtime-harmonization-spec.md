@@ -520,7 +520,7 @@ Update canonical docs after implementation phases land:
 ### Acceptance gates
 
 - Docs distinguish shipped behavior, active plan, and historical artifacts.
-- No docs claim AB1/chromatogram/virtual-gel/Q60-style deliverables unless implemented and tested.
+- No docs claim AB1/trace artifact/virtual-gel/Q60-style deliverables unless implemented and tested.
 - Docs say old jobs may lack manifests/output dirs and therefore are not proof of artifact availability.
 
 ---

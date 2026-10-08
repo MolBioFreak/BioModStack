@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import biomodstack_services as services
+import biomodstack_services as services  # noqa: E402
 
 
 def test_launch_preferences_default_to_browser_and_auto_open(tmp_path: Path, monkeypatch) -> None:
@@ -1070,7 +1070,7 @@ def test_core_runtime_compose_bounds_docker_json_logs() -> None:
     assert "x-bms-json-logging: &bms-json-logging" in compose
     assert "max-size: ${BMS_DOCKER_LOG_MAX_SIZE:-10m}" in compose
     assert "max-file: \"${BMS_DOCKER_LOG_MAX_FILE:-5}\"" in compose
-    assert compose.count("logging: *bms-json-logging") >= 5
+    assert compose.count("logging: *bms-json-logging") == 4
 
 
 def test_stop_all_container_mode_is_prod_scoped(monkeypatch, tmp_path: Path) -> None:

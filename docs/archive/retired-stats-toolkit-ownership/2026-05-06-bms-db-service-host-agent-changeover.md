@@ -1,5 +1,7 @@
 # BMS DB Service + Generic Host Agent Changeover Implementation Plan
 
+> **Historical / superseded:** This document records the former analytical database and Stats-tools control design. P1 retired that ownership from core; it is not active architecture or implementation guidance.
+
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task after Christian approves the phase slice.
 
 **Goal:** Rename/surface the database runtime as **BMS DB service**, remove DB-offline hard startup gates, and replace one-off privileged helpers such as `bms-cpu-power` with a generic, host-portable `bms-host-agent` boundary.

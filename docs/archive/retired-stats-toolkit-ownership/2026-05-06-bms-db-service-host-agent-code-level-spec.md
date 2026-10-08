@@ -1,6 +1,8 @@
 # Code-Level Spec — BMS DB service + Generic Host Agent
 
-> Companion to `docs/plans/2026-05-06-bms-db-service-host-agent-changeover.md`.
+> **Historical / superseded:** This document records the former analytical database and Stats-tools implementation design. P1 retired that ownership from core; it is not active architecture or implementation guidance.
+
+> Companion to `2026-05-06-bms-db-service-host-agent-changeover.md` in this archive.
 >
 > This is the file-by-file implementation spec. It intentionally keeps the first slice low-risk: expose the current analytical Postgres container as **BMS DB service**, remove boot hard-gates, and add clear degraded status before doing the stateful DB rename.
 
