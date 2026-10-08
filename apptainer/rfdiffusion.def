@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+From: nvcr.io/nvidia/cuda:12.8.0-cudnn9-devel-ubuntu22.04
 
 # The post section is equivalent to the Docker RUN instruction.
 %post
@@ -18,10 +18,10 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     git clone https://github.com/PapenfussLab/RFdiffusion /app/RFdiffusion
     cd /app/RFdiffusion && git checkout 0938f878388466d30d16f1f468c362afe9c8d345
 
-    # Install PyTorch nightly with CUDA 12.1 for RTX 5090 (sm_120) support
-    # Using nightly build for Blackwell architecture compatibility
+    # Install PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
+    # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
     pip install -q --no-cache-dir \
-        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu121
+        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
     # Install DGL 1.1.3 from PyPI (older version without graphbolt, compatible with PyTorch 2.4.1)
     pip install -q --no-cache-dir dgl==1.1.3

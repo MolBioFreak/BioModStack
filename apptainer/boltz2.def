@@ -1,7 +1,7 @@
 # Build stage - install dependencies and compile
 Bootstrap: docker
 Stage: build
-From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+From: nvcr.io/nvidia/cuda:12.8.0-cudnn9-devel-ubuntu22.04
 
 %post
     # install build deps
@@ -18,9 +18,9 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
     python3.10 -m venv /opt/venv
     . /opt/venv/bin/activate
 
-    # install PyTorch nightly with CUDA 12.1 for RTX 5090 (sm_120) support
-    # Using nightly build for Blackwell architecture compatibility
-    pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu121
+    # install PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
+    # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
+    pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
     # install boltz
     git clone https://github.com/jwohlwend/boltz.git && cd /boltz && git checkout aaef502
