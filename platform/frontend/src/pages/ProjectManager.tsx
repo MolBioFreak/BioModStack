@@ -42,19 +42,6 @@ const MAP_LIMIT = 50;
 const RUN_LIMIT = 25;
 const COLLECTION_LIMIT = 25;
 
-function mergeJsonPages(current: JsonObject[], incoming: JsonObject[]): JsonObject[] {
-    const merged = new Map<string, JsonObject>();
-    const keyFor = (item: JsonObject, index: number) => {
-        for (const key of ['id', 'resource_id', 'receipt_id', 'edge_key', 'entity_id']) {
-            if (typeof item[key] === 'string') return `${key}:${item[key]}`;
-        }
-        return `index:${index}:${JSON.stringify(item)}`;
-    };
-    current.forEach((item, index) => merged.set(keyFor(item, index), item));
-    incoming.forEach((item, index) => merged.set(keyFor(item, current.length + index), item));
-    return Array.from(merged.values());
-}
-
 function folderKindFromNodeKey(nodeKey: string | undefined): FolderKind | null {
     if (!nodeKey?.startsWith('virtual_folder:')) return null;
     const candidate = nodeKey.split(':').at(-1);
@@ -360,25 +347,6 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const [dialogMode, setDialogMode] = useState<ManagerDialogMode | null>(null);
     const [newExperimentOpen, setNewExperimentOpen] = useState(false);
 
-    const [accumulatedMap, setAccumulatedMap] = useState<{
-        contextKey: string;
-        nodes: ProjectManagerReadModel['map']['nodes'];
-        edges: ProjectManagerReadModel['map']['edges'];
-    } | null>(null);
-    const [accumulatedRuns, setAccumulatedRuns] = useState<{
-        contextKey: string;
-        items: ProjectManagerReadModel['runs']['items'];
-    } | null>(null);
-    const [accumulatedCollections, setAccumulatedCollections] = useState<{
-        contextKey: string;
-        results: JsonObject[];
-        lineage: JsonObject[];
-        notes: JsonObject[];
-        decisions: JsonObject[];
-        datasets: JsonObject[];
-        activity: JsonObject[];
-    } | null>(null);
-
     // URL completion names the same server-resolved read, not a new selection.
     // Keep that observer's original identity and freshness; real navigation,
     // cursors, invalidation and retries still use normal React Query behavior.
@@ -437,88 +405,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         enabled: rawSummary?.project.project_scope === 'ngs_molbio_local',
     });
     const projectLevelError = summaryQuery.isError && !invalidSelection;
-    const mapContextKey = `${projectId}:${focusId ?? 'default'}`;
-    const selectedDomainScope = selectedNodeKey?.startsWith('virtual_folder:')
-        ? selectedNodeKey.split(':')[1]
-        : selectedNodeKey?.startsWith('domain_experiment:')
-            ? selectedNodeKey.split(':')[1]
-            : 'all-domains';
-    const collectionContextKey = `${mapContextKey}:${selectedDomainScope}`;
-
-    useEffect(() => {
-        if (!rawSummary || selectionPending) return;
-        setAccumulatedMap((current) => {
-            if (!current || current.contextKey !== mapContextKey) {
-                return { contextKey: mapContextKey, nodes: rawSummary.map.nodes, edges: rawSummary.map.edges };
-            }
-            const nodes = new Map(current.nodes.map((item) => [item.node_key, item]));
-            for (const item of rawSummary.map.nodes) nodes.set(item.node_key, item);
-            const edges = new Map(current.edges.map((item) => [item.edge_key, item]));
-            for (const item of rawSummary.map.edges) edges.set(item.edge_key, item);
-            return {
-                contextKey: mapContextKey,
-                nodes: Array.from(nodes.values()),
-                edges: Array.from(edges.values()),
-            };
-        });
-    }, [mapContextKey, rawSummary, selectionPending]);
-
-    useEffect(() => {
-        if (!rawSummary || selectionPending) return;
-        setAccumulatedRuns((current) => {
-            if (!current || current.contextKey !== mapContextKey) return { contextKey: mapContextKey, items: rawSummary.runs.items };
-            const items = new Map(current.items.map((item) => [item.run_id, item]));
-            for (const item of rawSummary.runs.items) items.set(item.run_id, item);
-            return { contextKey: mapContextKey, items: Array.from(items.values()) };
-        });
-    }, [mapContextKey, rawSummary, selectionPending]);
-
-    useEffect(() => {
-        if (!rawSummary || selectionPending || rawSummary.loaded_collection_families?.length === 0) return;
-        const pages = rawSummary.pagination;
-        const incoming = {
-            results: pages.results.items,
-            lineage: pages.lineage.items,
-            notes: pages.notes.items,
-            decisions: pages.decisions.items,
-            datasets: pages.datasets.items,
-            activity: pages.activity.items as unknown as JsonObject[],
-        };
-        setAccumulatedCollections((current) => {
-            if (!current || current.contextKey !== collectionContextKey) return { contextKey: collectionContextKey, ...incoming };
-            return {
-                contextKey: collectionContextKey,
-                results: mergeJsonPages(current.results, incoming.results),
-                lineage: mergeJsonPages(current.lineage, incoming.lineage),
-                notes: mergeJsonPages(current.notes, incoming.notes),
-                decisions: mergeJsonPages(current.decisions, incoming.decisions),
-                datasets: mergeJsonPages(current.datasets, incoming.datasets),
-                activity: mergeJsonPages(current.activity, incoming.activity),
-            };
-        });
-    }, [collectionContextKey, rawSummary, selectionPending]);
-
-    const summary = useMemo(() => {
-        if (!rawSummary) return undefined;
-        const map = accumulatedMap?.contextKey === mapContextKey
-            ? { ...rawSummary.map, nodes: accumulatedMap.nodes, edges: accumulatedMap.edges }
-            : rawSummary.map;
-        const runs = accumulatedRuns?.contextKey === mapContextKey
-            ? { ...rawSummary.runs, items: accumulatedRuns.items }
-            : rawSummary.runs;
-        const pagination = accumulatedCollections?.contextKey === collectionContextKey
-            ? {
-                ...rawSummary.pagination,
-                results: { ...rawSummary.pagination.results, items: accumulatedCollections.results },
-                lineage: { ...rawSummary.pagination.lineage, items: accumulatedCollections.lineage },
-                notes: { ...rawSummary.pagination.notes, items: accumulatedCollections.notes },
-                decisions: { ...rawSummary.pagination.decisions, items: accumulatedCollections.decisions },
-                datasets: { ...rawSummary.pagination.datasets, items: accumulatedCollections.datasets },
-                activity: { ...rawSummary.pagination.activity, items: accumulatedCollections.activity as unknown as ProjectManagerReadModel['pagination']['activity']['items'] },
-            }
-            : rawSummary.pagination;
-        return { ...rawSummary, map, runs, pagination };
-    }, [accumulatedCollections, accumulatedMap, accumulatedRuns, collectionContextKey, mapContextKey, rawSummary]);
+    const summary = rawSummary;
 
     useEffect(() => {
         setMapCursor(undefined);
@@ -529,7 +416,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         setDecisionCursor(undefined);
         setDatasetCursor(undefined);
         setActivityCursor(undefined);
-    }, [focusId]);
+    }, [focusId, selectedNodeKey]);
 
     useEffect(() => {
         if (!rawSummary || invalidSelection || selectionPending) return;

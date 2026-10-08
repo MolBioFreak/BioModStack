@@ -994,7 +994,8 @@ async def patch_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
+        if payload.model_fields_set - {'expected_head_generation', 'name', 'change_summary', 'description', 'tags'}:
+            _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         await save_hierarchy_revision(
             session,
             project_id,
@@ -1020,7 +1021,6 @@ async def archive_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         archived = await archive_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, archived, exposed_kind="project", storage_kind="workspace")
@@ -1039,7 +1039,6 @@ async def restore_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         restored = await restore_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, restored, exposed_kind="project", storage_kind="workspace")
@@ -1359,7 +1358,8 @@ async def patch_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
+        if payload.model_fields_set - {'expected_head_generation', 'name', 'change_summary', 'description', 'tags'}:
+            _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         await save_hierarchy_revision(
             session,
             experiment_id,
@@ -1392,7 +1392,6 @@ async def archive_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         archived = await archive_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, archived, exposed_kind="global_experiment", storage_kind="experiment", parent_id=project_id)
@@ -1412,7 +1411,6 @@ async def restore_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         restored = await restore_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, restored, exposed_kind="global_experiment", storage_kind="experiment", parent_id=project_id)
@@ -1770,7 +1768,8 @@ async def patch_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
+        if payload.model_fields_set - {'expected_head_generation', 'name', 'change_summary', 'tags'}:
+            _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         revision = await save_hierarchy_revision(
             session,
             domain_id,
@@ -1780,7 +1779,7 @@ async def patch_domain_experiment(
         )
         command = None
         refreshed_payload = await _payload(session, head)
-        if refreshed_payload.get("domain_kind") == "ngs_molbio":
+        if refreshed_payload.get("domain_kind") == "ngs_molbio" and refreshed_payload.get("schema") == "bms.domain-experiment.v4":
             command = await _issue_domain_revision_reverification(
                 session,
                 domain_session,
@@ -1820,7 +1819,6 @@ async def archive_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         domain_payload = await _payload(session, head)
         archived = await archive_aggregate(
             session,
@@ -1828,7 +1826,7 @@ async def archive_domain_experiment(
             expected_head_generation=payload.expected_head_generation,
         )
         command = None
-        if domain_payload.get("domain_kind") == "ngs_molbio":
+        if domain_payload.get("domain_kind") == "ngs_molbio" and domain_payload.get("schema") == "bms.domain-experiment.v4":
             command = await _issue_domain_revision_reverification(
                 session,
                 domain_session,
@@ -1867,7 +1865,6 @@ async def restore_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
-        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         domain_payload = await _payload(session, head)
         restored = await restore_aggregate(
             session,
@@ -1875,7 +1872,7 @@ async def restore_domain_experiment(
             expected_head_generation=payload.expected_head_generation,
         )
         command = None
-        if domain_payload.get("domain_kind") == "ngs_molbio":
+        if domain_payload.get("domain_kind") == "ngs_molbio" and domain_payload.get("schema") == "bms.domain-experiment.v4":
             command = await _issue_domain_revision_reverification(
                 session,
                 domain_session,
