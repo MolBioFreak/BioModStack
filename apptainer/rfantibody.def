@@ -26,8 +26,8 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     export VIRTUAL_ENV=/opt/venv
     export PATH="/opt/venv/bin:$PATH"
 
-    # Install PyTorch with CUDA 12.4 support
-    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    # Install PyTorch 2.4 with CUDA 12.4 support (DGL 2.1.0 requires PyTorch <= 2.4)
+    uv pip install "torch==2.4.*" "torchvision==0.19.*" "torchaudio==2.4.*" --index-url https://download.pytorch.org/whl/cu124
 
     # Clone RFantibody
     git clone https://github.com/RosettaCommons/RFantibody.git /opt/RFantibody
@@ -45,8 +45,9 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     # Pin torchdata to version with datapipes API (required by DGL)
     uv pip install "torchdata==0.8.0"
     
-    # SE3-Transformer / DGL (required for RF tools)
-    uv pip install dgl -f https://data.dgl.ai/wheels/cu124/repo.html
+    # SE3-Transformer / DGL - try older version for compatibility
+    # Also install dgl without graphbolt dependency issues
+    uv pip install "dgl==2.0.0" -f https://data.dgl.ai/wheels/cu121/repo.html
 
     # Cleanup
     rm -rf /root/.cache/uv
