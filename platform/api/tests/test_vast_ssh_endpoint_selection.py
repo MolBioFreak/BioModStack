@@ -6,7 +6,7 @@ import pytest
 
 from services.remote_execution import targets, transport, vast
 from services.remote_execution.contracts import ExecutionTargetActivateRequest, ExecutionTargetInventoryResponse
-from test_vast_inventory_reconciliation import store
+from test_vast_inventory_reconciliation import attach_stubs, managed_runtime, store
 
 DIRECT = ('203.0.113.10', 22)
 PROXY = ('ssh.example.test', 15938)
@@ -29,7 +29,7 @@ def provider(monkeypatch, *, proxy=True):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('failure', ['unreachable', 'both_unreachable', 'retained_pin', 'malformed', 'authentication', 'known_host', 'pinned', 'lease', 'absent', 'replaced'])
+@pytest.mark.parametrize('failure', ['unreachable', 'both_unreachable', 'retained_pin', 'malformed', 'authentication', 'known_host', 'pinned', 'lease', 'replaced'])
 async def test_initial_selection_and_refresh_are_bounded_and_fenced(store, monkeypatch, failure):
     session, factory = store
     provider(monkeypatch)
@@ -38,17 +38,16 @@ async def test_initial_selection_and_refresh_are_bounded_and_fenced(store, monke
         transport.known_hosts_path().write_text(DIRECT[0] + ' ssh-ed25519 YQ==\n')
     async def scan(host, port):
         scans.append((host, port))
-        if failure in {'unreachable', 'retained_pin', 'both_unreachable', 'pinned', 'lease', 'absent', 'replaced'}:
+        if failure in {'unreachable', 'retained_pin', 'both_unreachable', 'pinned', 'lease', 'replaced'}:
             if (host, port) == DIRECT or failure == 'both_unreachable':
-                if failure in {'lease', 'absent', 'replaced'}:
+                if failure in {'lease', 'replaced'}:
                     async with factory() as other:
                         row = await targets.get_target(other, 'vast:49674511')
                         if failure == 'lease':
                             row.leased_job_id = 'racing-owner'
                         else:
                             metadata = deepcopy(row.provider_metadata)
-                            if failure == 'absent': metadata['inventory']['present'] = False
-                            else: metadata['setup']['started_at'] = 'replacement'
+                            metadata['setup']['started_at'] = 'replacement'
                             row.provider_metadata = metadata
                         await other.commit()
                 raise transport.RemoteHostKeyUnavailable('Unable to read the remote SSH host key')
@@ -99,8 +98,44 @@ async def test_initial_selection_and_refresh_are_bounded_and_fenced(store, monke
     else:
         assert not row.active
         assert 'attachment' not in row.provider_metadata
-        if failure in {'both_unreachable', 'retained_pin', 'malformed', 'pinned', 'lease', 'absent', 'replaced'}:
+        if failure in {'both_unreachable', 'retained_pin', 'malformed', 'pinned', 'lease', 'replaced'}:
             assert not pins and not authenticated
+
+
+@pytest.mark.asyncio
+async def test_ready_publication_survives_a_provider_outage_during_attach(store, monkeypatch, managed_runtime):
+    """The completed install discarded by the inventory fence must now reach `ready`."""
+    session, factory = store
+    provider(monkeypatch)
+    outage = []
+
+    async def lose_the_provider(*args):
+        async def unavailable():
+            raise vast.VastInventoryError('Vast instance inventory is unavailable')
+        monkeypatch.setattr(targets, 'list_owned_instances', unavailable)
+        async with factory() as other:
+            with pytest.raises(targets.ExecutionTargetError):
+                await targets.refresh_vast_targets(other)
+        outage.append(True)
+
+    attach_stubs(monkeypatch, on_command=lose_the_provider)
+    result = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
+    assert outage == [True]
+    assert result.active and result.state == 'ready'
+    row = await targets.get_target(session, 'vast:49674511')
+    assert row.provider_metadata['setup']['phase'] == 'ready'
+    assert row.provider_metadata['setup']['message'] == 'Remote worker ready; analytics available'
+    assert row.host_key_sha256 == 'a' * 64
+    assert row.provider_metadata['inventory']['status'] == 'unknown'
+    # Placement stays fail-closed on the missing provider reading.
+    assert not targets.target_eligible(row)
+    projection = next(row for row in await targets.list_targets(session) if row.id == 'vast:49674511')
+    assert projection.capabilities['scheduling']['inventory_status'] == 'unknown'
+    assert projection.capabilities['scheduling']['inventory_reason'] == 'Vast instance inventory is unavailable'
+    provider(monkeypatch)
+    await targets.refresh_vast_targets(session)
+    await session.refresh(row)
+    assert row.state == 'ready' and targets.target_eligible(row)
 
 
 @pytest.mark.asyncio

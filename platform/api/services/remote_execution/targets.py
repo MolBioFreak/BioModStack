@@ -39,8 +39,47 @@ from .progress import preload_active, preload_idle_clause
 
 RUNNING_PROVIDER_STATES = frozenset({"running", "ready"})
 INVENTORY_MAX_AGE_SECONDS = 120
+# A complete inventory that omits an owned instance is a provider read artefact
+# until a second consecutive read confirms it; only the confirmed absence may
+# release a healthy attachment.
+ABSENT_INVENTORY_CONFIRMATIONS = 2
+# An attachment attempt whose task never registered may only be released by an
+# explicit operator detach once the longest bounded install budget has passed
+# (bootstrap and artifact transfer allow 3600 s each).
+ATTACHMENT_ABANDONED_SECONDS = 2 * 3600
+EMPTY_INVENTORY_MESSAGE = "Vast inventory is unknown or expired; placement is unavailable"
+ABSENT_INVENTORY_MESSAGE = "Absent from complete owned Vast inventory"
+INVENTORY_OUTAGE_MESSAGE = "Vast inventory refresh did not complete"
 _empty_inventory_checked_at: datetime | None = None
 _inventory_refresh_lock = asyncio.Lock()
+
+# One typed reason per attachment fence site. The operator must be able to tell a
+# superseded attempt from an endpoint change from a released worker without
+# reading the database, so these strings are published verbatim.
+ATTACHMENT_SUPERSEDED = "Setup attempt was superseded by a newer attachment attempt"
+ATTACHMENT_REPLACED = "Attachment record was replaced during setup"
+ATTACHMENT_ENDPOINT_CHANGED = "Selected SSH endpoint changed during setup"
+ATTACHMENT_HOST_KEY_CHANGED = "Pinned SSH host key changed during setup"
+ATTACHMENT_LEASED = "Execution target was leased to another attempt during setup"
+ATTACHMENT_RELEASED = "Attachment was released before setup completed"
+ATTACHMENT_WORKER_ABSENT = "Worker is absent from the provider inventory; attachment released"
+ATTACHMENT_NOT_RUNNING = "Provider reports the instance is not running; attachment released"
+ATTACHMENT_ENDPOINT_SELECTION = "Alternate SSH endpoint selection was superseded during setup"
+ATTACHMENT_COMMIT_SUPERSEDED = "Attachment commit was superseded before it could be recorded"
+ATTACHMENT_PUBLICATION_REFUSED = "Readiness publication was refused before it could be committed"
+ATTACHMENT_TASK_NOT_STARTED = "Attachment task could not be started; retry Attach"
+ATTACHMENT_ADMISSION_INCOMPLETE = "Setup admission did not publish an attempt identity"
+ATTACHMENT_FENCE_REASONS = frozenset({
+    ATTACHMENT_SUPERSEDED, ATTACHMENT_REPLACED, ATTACHMENT_ENDPOINT_CHANGED,
+    ATTACHMENT_HOST_KEY_CHANGED, ATTACHMENT_LEASED, ATTACHMENT_RELEASED,
+    ATTACHMENT_WORKER_ABSENT, ATTACHMENT_NOT_RUNNING, ATTACHMENT_ENDPOINT_SELECTION,
+    ATTACHMENT_COMMIT_SUPERSEDED, ATTACHMENT_PUBLICATION_REFUSED,
+})
+STALE_ATTACHMENT_RELEASED = "Stranded attachment attempt was released without a running task"
+DETACH_LEASE_BLOCKED = "Execution target has an active attempt lease; cannot detach"
+DETACH_PRELOAD_BLOCKED = "Worker preload is active; cannot detach"
+DETACH_ATTACHMENT_BLOCKED = "Attachment is still in progress; cannot detach"
+DETACH_BLOCKED = "Worker has active setup, preload, or execution; cannot detach"
 
 
 def inventory_fresh(target: ExecutionTarget) -> bool:
@@ -58,13 +97,13 @@ def target_eligible(target: ExecutionTarget) -> bool:
                 and inventory.get("present") is True and inventory.get("running") is True)
 
 
-async def invalidate_vast_inventory(session: AsyncSession) -> None:
+async def invalidate_vast_inventory(session: AsyncSession, reason: str = INVENTORY_OUTAGE_MESSAGE) -> None:
     """Invalidate current knowledge, never historical presence or attempt evidence."""
     global _empty_inventory_checked_at
     _empty_inventory_checked_at = None
     for row in (await session.scalars(select(ExecutionTarget).where(ExecutionTarget.provider == "vast"))).all():
         metadata = dict(row.provider_metadata or {})
-        metadata["inventory"] = {**metadata.get("inventory", {}), "status": "unknown"}
+        metadata["inventory"] = {**metadata.get("inventory", {}), "status": "unknown", "reason": reason}
         row.provider_metadata = metadata
     await session.commit()
 
@@ -77,8 +116,10 @@ async def run_vast_inventory_refresh(session_factory, stop: asyncio.Event, *, wa
         try:
             async with session_factory() as session:
                 await refresh_vast_targets(session)
-        except Exception:
-            logging.getLogger(__name__).warning("Vast inventory refresh unavailable")
+        except Exception as exc:
+            # The provider outage is named for the operator instead of arriving
+            # as an attachment fence message.
+            logging.getLogger(__name__).warning("Vast inventory refresh unavailable: %s", exc)
         if wait is not None:
             await wait(60)
         else:
@@ -144,6 +185,7 @@ def observed_artifact_inventory(target):
 
 
 def _target_response(target: ExecutionTarget) -> ExecutionTargetResponse:
+    inventory = (target.provider_metadata or {}).get("inventory") or {}
     return ExecutionTargetResponse(
         artifact_inventory=observed_artifact_inventory(target),
         setup=(target.provider_metadata or {}).get("setup"),
@@ -167,6 +209,9 @@ def _target_response(target: ExecutionTarget) -> ExecutionTargetResponse:
             "policy": "exclusive_target", "max_concurrent_root_attempts": 1,
             "new_work_ready": target_eligible(target) and not target.leased_job_id,
             "inventory_fresh": inventory_fresh(target),
+            "inventory_status": inventory.get("status"),
+            "inventory_reason": inventory.get("reason"),
+            "absent_observations": inventory.get("absent_observations", 0),
             "leased_job_id": target.leased_job_id,
         }},
         pricing=dict(target.pricing or {}),
@@ -218,7 +263,7 @@ async def list_targets(session: AsyncSession) -> list[ExecutionTargetResponse]:
         not rows and (_empty_inventory_checked_at is None or
         (datetime.utcnow() - _empty_inventory_checked_at).total_seconds() > INVENTORY_MAX_AGE_SECONDS)
     ):
-        raise ExecutionTargetError("Vast inventory is unknown or expired; placement is unavailable")
+        raise ExecutionTargetError(EMPTY_INVENTORY_MESSAGE)
     # A stale/unreachable member cannot hide the rest of the fleet or retained
     # ownership. Per-target admission remains fail-closed in get_ready_target.
     return [_target_response(row) for row in rows if row.active or row.leased_job_id
@@ -303,20 +348,31 @@ async def _refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInvento
     try:
         inventory = await list_owned_instances()
     except VastInventoryError as exc:
-        await invalidate_vast_inventory(session)
+        await invalidate_vast_inventory(session, str(exc))
         raise ExecutionTargetError(str(exc)) from exc
     if not inventory.available:
-        await invalidate_vast_inventory(session)
+        await invalidate_vast_inventory(session, inventory.message)
         return inventory
     now = datetime.utcnow()
     present_ids = {target_id("vast", instance.provider_instance_id) for instance in inventory.instances}
     for row in (await session.scalars(select(ExecutionTarget).where(ExecutionTarget.provider == "vast"))).all():
         if row.id not in present_ids:
-            row.provider_metadata = {**dict(row.provider_metadata or {}), "inventory": {
-                "status": "complete", "present": False, "running": False, "checked_at": now.isoformat()}}
-            row.active = False
-            row.state = "inactive"
-            row.last_error = "Absent from complete owned Vast inventory"
+            previous = dict((row.provider_metadata or {}).get("inventory") or {})
+            observations = previous.get("absent_observations")
+            observations = observations + 1 if isinstance(observations, int) and observations > 0 else 1
+            # One omitted instance is not evidence of absence: the attachment,
+            # the ready projection, the pinned key and the last known endpoints
+            # survive until a second complete inventory confirms the omission.
+            row.provider_metadata = {**(row.provider_metadata or {}), "inventory": {
+                **previous, "status": "complete", "present": False, "running": False,
+                "absent_observations": observations,
+                "absent_since": previous.get("absent_since") or now.isoformat(),
+                "reason": ABSENT_INVENTORY_MESSAGE if observations >= ABSENT_INVENTORY_CONFIRMATIONS else None,
+                "checked_at": now.isoformat()}}
+            if observations >= ABSENT_INVENTORY_CONFIRMATIONS:
+                row.active = False
+                row.state = "inactive"
+                row.last_error = ABSENT_INVENTORY_MESSAGE
     _empty_inventory_checked_at = now
     for instance in inventory.instances:
         identifier = target_id("vast", instance.provider_instance_id)
@@ -369,6 +425,12 @@ async def _refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInvento
         if instance.provider_state not in RUNNING_PROVIDER_STATES:
             target.state = "unavailable" if target.active else "discovered"
             target.last_error = f"Provider state is {instance.provider_state}"
+        elif await restore_ready_projection(session, identifier, now):
+            # The provider reading recovered within this refresh. Reverse the
+            # provider-driven downgrade instead of stranding a fully installed,
+            # still-attached worker; a released, superseded or re-attached target
+            # never matches the attachment clause and stays untouched.
+            await session.refresh(target)
     await session.commit()
     return inventory
 
@@ -376,10 +438,9 @@ async def _refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInvento
 SETUP_ACTIVE_PHASES = ("checking", "installing", "transferring", "verifying")
 
 
-def attachment_clause(now):
-    """Current authenticated setup generation, also used for failure recovery."""
+def attachment_identity_clause():
+    """Owner-written attachment identity; provider inventory is never consulted."""
     attachment = ExecutionTarget.provider_metadata["attachment"]
-    inventory = ExecutionTarget.provider_metadata["inventory"]
     return (
         ExecutionTarget.active.is_(True)
         & (attachment["started_at"].as_string() == ExecutionTarget.provider_metadata["setup"]["started_at"].as_string())
@@ -388,12 +449,81 @@ def attachment_clause(now):
         & (attachment["username"].as_string() == ExecutionTarget.username)
         & (attachment["remote_root"].as_string() == ExecutionTarget.remote_root)
         & (attachment["fingerprint"].as_string() == ExecutionTarget.host_key_sha256)
+    )
+
+
+def attachment_clause(now):
+    """Current authenticated setup generation, also used for failure recovery."""
+    inventory = ExecutionTarget.provider_metadata["inventory"]
+    return (
+        attachment_identity_clause()
         & (inventory["status"].as_string() == "complete")
         & inventory["present"].as_boolean().is_(True)
         & inventory["running"].as_boolean().is_(True)
         & (inventory["checked_at"].as_string() >= (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat())
         & (inventory["checked_at"].as_string() <= now.isoformat())
     )
+
+
+async def restore_ready_projection(session: AsyncSession, identifier: str, now: datetime) -> bool:
+    """Reverse a provider-driven downgrade of a still-current attachment.
+
+    The gate is the existing attachment clause, so a released, re-attached,
+    superseded or absence-deactivated target is never activated here.
+    """
+    restored = await session.execute(update(ExecutionTarget).where(
+        ExecutionTarget.id == identifier,
+        ExecutionTarget.state != "ready",
+        attachment_clause(now),
+    ).values(state="ready", active=True, last_error=None, updated_at=now)
+        .execution_options(synchronize_session=False))
+    return restored.rowcount == 1
+
+
+def _released_reason(inventory: dict) -> str:
+    """Name the provider fact behind a released attachment where one exists."""
+    if inventory.get("present") is False:
+        return ATTACHMENT_WORKER_ABSENT
+    if inventory.get("running") is False:
+        return ATTACHMENT_NOT_RUNNING
+    return ATTACHMENT_RELEASED
+
+
+def attachment_fence_reason(target, *, started_at, connection, fingerprint) -> str | None:
+    """Typed reason when this setup attempt no longer owns the worker, else None.
+
+    The fence reads only owner-written identity: the attempt generation, the
+    committing attachment, the lease, the selected endpoint and the pinned key.
+    Provider inventory freshness is an admission-time concern, so a stale,
+    unavailable or flapping provider read never aborts a running install.
+    """
+    metadata = target.provider_metadata or {}
+    attachment = metadata.get("attachment")
+    if (metadata.get("setup") or {}).get("started_at") != started_at:
+        return ATTACHMENT_SUPERSEDED
+    if target.leased_job_id:
+        return ATTACHMENT_LEASED
+    identity = (target.host, target.port, target.username, str(target.remote_root))
+    current = (connection.host, connection.port, connection.username, str(connection.remote_root))
+    if identity != current:
+        return ATTACHMENT_ENDPOINT_CHANGED
+    if target.host_key_sha256 is not None and target.host_key_sha256 != fingerprint:
+        return ATTACHMENT_HOST_KEY_CHANGED
+    if attachment is None or attachment.get("started_at") != (metadata.get("setup") or {}).get("started_at"):
+        # Nothing committed by this attempt yet: a superseded record from an
+        # earlier generation is not this attempt's identity, and the committed
+        # attachment is still the one that proves ownership below.
+        return None
+    if not target.active:
+        return _released_reason(metadata.get("inventory") or {})
+    recorded = (attachment.get("started_at"), attachment.get("host"), attachment.get("port"),
+                attachment.get("username"), str(attachment.get("remote_root")),
+                attachment.get("fingerprint"))
+    published = ((metadata.get("setup") or {}).get("started_at"), target.host, target.port,
+                 target.username, str(target.remote_root), target.host_key_sha256)
+    if recorded != published:
+        return ATTACHMENT_REPLACED
+    return None
 
 
 def telemetry_eligible(target):
@@ -470,9 +600,18 @@ class AttachmentController:
             if target_id("vast", request.provider_instance_id) in self.tasks:
                 raise ExecutionTargetError("An attachment is already in progress")
             result = await begin_activation(session, request)
-            if result.setup is None or result.setup.started_at is None:
-                raise ExecutionTargetError("Setup admission did not publish an attempt identity")
-            task = asyncio.create_task(self._run(result.id, result.setup.started_at.isoformat()), name=f"attach-{result.id}")
+            started_at = result.setup.started_at.isoformat() if result.setup is not None and result.setup.started_at is not None else None
+            try:
+                if started_at is None:
+                    raise ExecutionTargetError(ATTACHMENT_ADMISSION_INCOMPLETE)
+                task = asyncio.create_task(self._run(result.id, started_at), name=f"attach-{result.id}")
+            except BaseException:
+                # An admitted attempt with no task would strand the target in
+                # `probing`; end this attempt before propagating.
+                if started_at is not None:
+                    async with self.session_factory() as cleanup:
+                        await fail_setup(cleanup, result.id, started_at, ATTACHMENT_TASK_NOT_STARTED)
+                raise
             self.tasks[result.id] = task
             return result
 
@@ -515,7 +654,7 @@ async def activate_target(session, request):
     """Internal synchronous entrypoint retained for fenced service callers."""
     result = await begin_activation(session, request)
     if result.setup is None or result.setup.started_at is None:
-        raise ExecutionTargetError("Setup admission did not publish an attempt identity")
+        raise ExecutionTargetError(ATTACHMENT_ADMISSION_INCOMPLETE)
     try:
         return await finish_activation(session, result.id)
     except BaseException as exc:
@@ -588,16 +727,10 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
 
     async def checked_io(operation, *args, **kwargs):
         await session.refresh(target)
-        if (not inventory_fresh(target)
-                or target.provider_metadata["inventory"].get("present") is not True
-                or target.provider_metadata["inventory"].get("running") is not True
-
-                or (target.host_key_sha256 is not None and target.host_key_sha256 != fingerprint)
-                or target.state != "probing" or target.leased_job_id
-                or (target.provider_metadata or {}).get("setup", {}).get("started_at") != started_at
-                or (target.host, target.port, target.username, target.remote_root) !=
-                   (connection.host, connection.port, connection.username, connection.remote_root)):
-            raise ExecutionTargetError("Vast inventory or endpoint changed during attachment")
+        reason = attachment_fence_reason(target, started_at=started_at, connection=connection,
+                                        fingerprint=fingerprint)
+        if reason is not None:
+            raise ExecutionTargetError(reason)
         return await operation(*args, **kwargs)
 
     try:
@@ -630,7 +763,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                 ).values(host=candidate.host, port=candidate.port).execution_options(synchronize_session=False))
                 if changed.rowcount != 1:
                     await session.rollback()
-                    raise ExecutionTargetError('Vast inventory or endpoint changed during attachment')
+                    raise ExecutionTargetError(ATTACHMENT_ENDPOINT_SELECTION)
                 await session.commit()
                 connection = candidate
             host_key_line, fingerprint = await checked_io(capture_host_key, connection.host, connection.port)
@@ -654,24 +787,19 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         attachment = dict(started_at=started_at, host=connection.host, port=connection.port,
             username=connection.username, remote_root=connection.remote_root, fingerprint=fingerprint,
             telemetry="BMS_TELEMETRY" in attached.stdout.splitlines())
-        inventory = ExecutionTarget.provider_metadata["inventory"]
         committed = await session.execute(update(ExecutionTarget).where(
-            ExecutionTarget.id == identifier, ExecutionTarget.state == "probing",
+            ExecutionTarget.id == identifier,
             ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
             ExecutionTarget.leased_job_id.is_(None), ExecutionTarget.host == connection.host,
             ExecutionTarget.port == connection.port, ExecutionTarget.username == connection.username,
             ExecutionTarget.remote_root == connection.remote_root,
             or_(ExecutionTarget.host_key_sha256.is_(None), ExecutionTarget.host_key_sha256 == fingerprint),
-            inventory["status"].as_string() == "complete",
-            inventory["present"].as_boolean().is_(True), inventory["running"].as_boolean().is_(True),
-            inventory["checked_at"].as_string() >= (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
-            inventory["checked_at"].as_string() <= now.isoformat(),
         ).values(active=True, host_key_sha256=fingerprint, activated_at=now, updated_at=now,
             provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.attachment",
                 func.json(json.dumps(attachment)))).execution_options(synchronize_session=False))
         if committed.rowcount != 1:
             await session.rollback()
-            raise ExecutionTargetError("Vast inventory or endpoint changed during attachment")
+            raise ExecutionTargetError(ATTACHMENT_COMMIT_SUPERSEDED)
         await session.commit()
         script = Path(__file__).with_name("bootstrap_worker.sh").read_bytes()
         await checked_io(run_remote, connection, ["bash", "-s", "--", "check", connection.remote_root], input_bytes=script, timeout=60)
@@ -732,7 +860,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
     except (RemoteTransportError, OSError, ValueError) as exc:
         await session.refresh(target)
         phase = (target.provider_metadata or {}).get("setup", {}).get("phase", "checking")
-        safe = BOOTSTRAP_ERRORS | {
+        safe = BOOTSTRAP_ERRORS | ATTACHMENT_FENCE_REASONS | {
             "Remote transport timed out", "Remote runner transfer failed integrity verification",
             "Pinned Nextflow version verification failed", "CUDA container verification failed",
             "Remote SSH host key changed since the last activation", "Remote SSH host key changed",
@@ -750,27 +878,22 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
 
 
     await session.refresh(target)
-    # Publish readiness with an atomic current-inventory predicate, never ORM
-    # autoflush of an old ready projection after network I/O.
+    # Publish readiness against the owner-written attachment identity, never ORM
+    # autoflush of an old ready projection after network I/O. Provider freshness
+    # is admission-time only: it is re-checked by target_eligible, so a provider
+    # outage must not discard a completed install.
     now = datetime.utcnow()
     published = await session.execute(
         update(ExecutionTarget).where(
             ExecutionTarget.id == identifier,
-            ExecutionTarget.state == "probing",
-            attachment_clause(now),
+            ExecutionTarget.leased_job_id.is_(None),
+            attachment_identity_clause(),
             ExecutionTarget.host_key_sha256 == fingerprint,
             ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
-            ExecutionTarget.leased_job_id.is_(None),
             ExecutionTarget.host == connection.host,
             ExecutionTarget.port == connection.port,
             ExecutionTarget.username == connection.username,
             ExecutionTarget.remote_root == connection.remote_root,
-            ExecutionTarget.provider_metadata["inventory"]["status"].as_string() == "complete",
-            ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
-            ExecutionTarget.provider_metadata["inventory"]["running"].as_boolean().is_(True),
-            ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() >=
-                (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
-            ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= now.isoformat(),
         ).values(
             state="ready", active=True, updated_at=now, last_error=None,
             provider_metadata={**dict(target.provider_metadata or {}),
@@ -793,7 +916,11 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
     )
     if published.rowcount != 1:
         await session.rollback()
-        raise ExecutionTargetError("Vast inventory or endpoint changed during attachment")
+        await session.refresh(target)
+        # Name the clause that actually refused the publication.
+        raise ExecutionTargetError(attachment_fence_reason(
+            target, started_at=started_at, connection=connection, fingerprint=fingerprint)
+            or ATTACHMENT_PUBLICATION_REFUSED)
     await session.commit()
     await session.refresh(target)
     return _target_response(target)
@@ -808,16 +935,42 @@ async def deactivate_target(
         raise ExecutionTargetError(
             "Execution target has nonterminal Jobs and cannot be detached"
         )
+    now = datetime.utcnow()
+    # A `probing` row whose task never registered must not be a permanent dead
+    # end: an explicit detach may release it once its bounded install budget has
+    # passed. Admission strictness is unchanged, so a release is still required
+    # before re-attaching.
+    abandoned = ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() <= (
+        now - timedelta(seconds=ATTACHMENT_ABANDONED_SECONDS)).isoformat()
     changed = await session.execute(update(ExecutionTarget).where(
         ExecutionTarget.id == execution_target_id, ExecutionTarget.leased_job_id.is_(None),
-        ExecutionTarget.state != "probing", preload_idle_clause(),
-    ).values(active=False, state="inactive", updated_at=datetime.utcnow()).execution_options(synchronize_session=False))
+        preload_idle_clause(), or_(ExecutionTarget.state != "probing", abandoned),
+    ).values(active=False, state="inactive", updated_at=now,
+        last_error=case((ExecutionTarget.state == "probing", STALE_ATTACHMENT_RELEASED),
+                        else_=ExecutionTarget.last_error),
+        provider_metadata=case((ExecutionTarget.state == "probing", func.json_set(
+            ExecutionTarget.provider_metadata, "$.setup.phase", "failed",
+            "$.setup.message", STALE_ATTACHMENT_RELEASED,
+            "$.setup.updated_at", now.isoformat())), else_=ExecutionTarget.provider_metadata),
+    ).execution_options(synchronize_session=False))
     if changed.rowcount != 1:
         await session.rollback()
-        raise ExecutionTargetError("Worker has active setup, preload, or execution; cannot detach")
+        await session.refresh(target)
+        raise ExecutionTargetError(_detach_blocked_reason(target))
     await session.commit()
     await session.refresh(target)
     return _target_response(target)
+
+
+def _detach_blocked_reason(target: ExecutionTarget) -> str:
+    """Name the owner still holding the target instead of one generic refusal."""
+    if target.leased_job_id:
+        return DETACH_LEASE_BLOCKED
+    if preload_active(target):
+        return DETACH_PRELOAD_BLOCKED
+    if target.state == "probing":
+        return DETACH_ATTACHMENT_BLOCKED
+    return DETACH_BLOCKED
 
 
 async def remote_target_telemetry(target: ExecutionTarget) -> dict[str, Any]:

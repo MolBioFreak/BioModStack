@@ -44,16 +44,30 @@ def inventory(monkeypatch, ids=(), *, available=True, host='203.0.113.10', state
 
 
 @pytest.mark.asyncio
-async def test_complete_empty_hides_all_history_without_touching_jobs_or_lease(store, monkeypatch):
+async def test_complete_empty_inventory_releases_history_only_after_a_confirmed_omission(
+        store, monkeypatch):
     session, _ = store
     before = (await session.execute(select(Job.__table__))).all()
     inventory(monkeypatch)
     await targets.refresh_vast_targets(session)
-    assert await targets.list_targets(session) == []
     rows = (await session.scalars(select(ExecutionTarget))).all()
     assert len(rows) == 3
-    assert all(not row.active and row.provider_metadata['inventory']['present'] is False for row in rows)
+    # One omission is a provider read artefact: presence is denied to admission
+    # but nothing is released.
+    assert all(row.provider_metadata['inventory']['present'] is False for row in rows)
+    assert [row.provider_metadata['inventory']['absent_observations'] for row in rows] == [1, 1, 1]
+    ready = await session.get(ExecutionTarget, 'vast:49684651')
+    assert ready.active and ready.state == 'ready' and ready.last_error is None
+    assert not targets.target_eligible(ready)
+    inventory(monkeypatch)
+    await targets.refresh_vast_targets(session)
+    rows = (await session.scalars(select(ExecutionTarget))).all()
+    assert all(not row.active and row.state == 'inactive'
+               and row.last_error == targets.ABSENT_INVENTORY_MESSAGE for row in rows)
+    assert [row.provider_metadata['inventory']['absent_observations'] for row in rows] == [2, 2, 2]
     assert rows[0].leased_job_id == 'attempt-owner'
+    # The leased attempt is still the operator's retained ownership.
+    assert [row.id for row in await targets.list_targets(session)] == ['vast:49684651']
     assert (await session.execute(select(Job.__table__))).all() == before
 
 
@@ -253,67 +267,44 @@ async def test_discover_serializes_complete_fetch_through_reconciliation(store, 
     await asyncio.gather(first, second)
     assert overlap == 1
     async with factory() as session:
-        assert await targets.list_targets(session) == []
+        # The leased attempt keeps the target visible for its explicit return.
+        assert [row.id for row in await targets.list_targets(session)] == ['vast:49684651']
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('outcome', ['stopped', 'stopped_final', 'absent', 'unknown', 'present'])
-async def test_activation_cannot_publish_ready_after_provider_stops_during_probe(store, monkeypatch, tmp_path, outcome):
+@pytest.mark.parametrize('outcome', ['stopped', 'absent', 'unknown'])
+async def test_provider_reading_during_setup_does_not_discard_a_completed_install(
+        store, monkeypatch, managed_runtime, outcome):
+    """A provider status flip is not evidence that the worker is gone.
+
+    The attempt publishes readiness from its own authenticated attachment; the
+    provider reading stays an admission gate, so the worker is never advertised
+    for new work until the provider agrees again.
+    """
     session, factory = store
-    inventory(monkeypatch, ['49674511'])
-    launcher = tmp_path / 'nextflow'
-    launcher.write_text('fixture')
-    from services import nextflow
-    monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: str(launcher))
-    async def capture(*args): return ('fixture host key', 'a' * 64)
-    async def noop(*args, **kwargs): pass
-    calls = []
-    async def probe(*args):
-        async def stopped():
-            return ExecutionTargetInventoryResponse(provider='vast', available=True, credential_configured=True,
-                message='stopped', instances=[vast._normalize({'id': '49674511', 'actual_status': 'stopped', 'ssh_host': '203.0.113.10', 'ssh_port': 22})])
-        if outcome in {'present', 'stopped_final'}:
-            return {'ok': True}
-        monkeypatch.setattr(targets, 'list_owned_instances', stopped)
+    identifier = '49674511'
+    inventory(monkeypatch, [identifier])
+
+    async def flip(*args):
         async with factory() as other:
             if outcome == 'unknown':
                 await targets.invalidate_vast_inventory(other)
-            else:
-                if outcome == 'absent':
-                    inventory(monkeypatch)
-                await targets.refresh_vast_targets(other)
-        return {'ok': True}
-    async def run(connection, command, **kwargs):
-        calls.append('ssh')
-        if outcome == 'stopped_final' and command[0] == 'sha256sum':
-            inventory(monkeypatch, ['49674511'], state='stopped')
-            async with factory() as other:
-                await targets.refresh_vast_targets(other)
-        if command[:3] == ['sh', '-s', '--']:
-            assert command[3] == connection.remote_root
-            assert b'BMS_ATTACHED' in kwargs['input_bytes']
-            return SimpleNamespace(stdout='BMS_ATTACHED\nBMS_TELEMETRY\n')
-        if command[0] == 'env': return SimpleNamespace(stdout='nextflow version 25.10.1\n')
-        if command[0] == 'apptainer': return SimpleNamespace(stdout='BMS_CUDA_OK\n')
-        return SimpleNamespace(stdout='fixturehash worker\nfixturehash nextflow\n')
-    monkeypatch.setattr(targets, 'capture_host_key', capture)
-    monkeypatch.setattr(targets, 'persist_host_key', noop)
-    monkeypatch.setattr(targets, 'probe_readiness', probe)
-    monkeypatch.setattr(targets, 'rsync_to_remote', noop)
-    monkeypatch.setattr(targets, 'run_remote', run)
-    monkeypatch.setattr(targets, '_sha256_file', lambda *args: 'fixturehash')
-    if outcome == 'present':
-        result = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
-        assert result.active and result.state == 'ready'
-        assert len(calls) == 7  # One verified promotion replaces two chmod calls.
-        return
-    with pytest.raises(targets.ExecutionTargetError):
-        await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
-    await session.rollback()
-    async with factory() as check:
-        assert not (await check.get(ExecutionTarget, 'vast:49674511')).active
-    # Authenticated attachment now precedes the two bootstrap calls.
-    assert len(calls) == (5 if outcome == 'stopped_final' else 3)
+                return
+            inventory(monkeypatch, [identifier] if outcome == 'stopped' else [], state='stopped')
+            await targets.refresh_vast_targets(other)
+
+    attach_stubs(monkeypatch, on_command=flip)
+    result = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id=identifier))
+    assert result.active and result.state == 'ready'
+    row = await targets.get_target(session, targets.target_id('vast', identifier))
+    assert row.provider_metadata['setup']['phase'] == 'ready'
+    assert row.provider_metadata['setup']['message'] != 'Vast inventory or endpoint changed during attachment'
+    assert row.host_key_sha256 == 'a' * 64
+    assert not targets.target_eligible(row)
+    inventory(monkeypatch, [identifier])
+    await targets.refresh_vast_targets(session)
+    await session.refresh(row)
+    assert targets.target_eligible(row)
 
 
 @pytest.mark.asyncio
@@ -500,3 +491,306 @@ async def test_inventory_attachment_initial_mutation_is_fenced(store, monkeypatc
         if change == 'lease':
             assert current.leased_job_id == 'racing-owner'
     assert calls == []
+
+
+# --- provider lifecycle: bounded absence, two-way ready, typed fence reasons ---
+
+@pytest.fixture
+def managed_runtime(monkeypatch):
+    """Local doubles for the managed-runtime owner: real state, no SSH or provider."""
+    from services.remote_execution import cache, critical_runtime, managed_inventory
+
+    class Receipt:
+        def __init__(self, **fields):
+            self.__dict__.update(fields)
+
+        def model_dump(self, mode='json'):
+            return {key: (value.model_dump(mode) if isinstance(value, Receipt) else value)
+                    for key, value in self.__dict__.items()}
+
+    hooks = SimpleNamespace(before_publication=None)
+    release = Receipt(critical=Receipt(observed={'backend': 'apptainer', 'cuda': {'ok': True}}), state='verified')
+
+    monkeypatch.setattr(critical_runtime, 'project_runtime',
+                        lambda root, staging: ({'selection': 'fixture', 'entries': []}, []))
+    monkeypatch.setattr(critical_runtime, 'runtime_binding',
+                        lambda root, manifest, backend: {'environment': {'NXF_OFFLINE': 'true'}, 'paths': {}})
+    monkeypatch.setattr(managed_inventory, 'saved_manifests', lambda target: [])
+
+    async def helper_call(connection, request, fence):
+        await fence()
+        return {'boot_id': 'fixture-boot'}
+
+    async def cache_artifacts(**kwargs):
+        await kwargs['check_fence']()
+
+    async def activate_release(connection, manifest, fence, progress, boot):
+        await fence()
+        return release
+
+    async def observe_releases(connection, manifests, fence):
+        await fence()
+        if hooks.before_publication is not None:
+            await hooks.before_publication()
+        return Receipt(boot_id='fixture-boot', critical_runtime_ready=True)
+
+    monkeypatch.setattr(managed_inventory, 'helper_call', helper_call)
+    monkeypatch.setattr(cache, '_cache_artifacts', cache_artifacts)
+    monkeypatch.setattr(managed_inventory, 'activate_release', activate_release)
+    monkeypatch.setattr(managed_inventory, 'observe_releases', observe_releases)
+    return hooks
+
+
+def attach_stubs(monkeypatch, *, on_command=None, after=1):
+    """Stub one attachment's transport; `on_command` runs once, after the commit."""
+    seen = []
+
+    async def capture(host, port):
+        return 'fixture host key', 'a' * 64
+
+    async def persist(*args):
+        return None
+
+    async def probe(connection):
+        return {'gpus': ['fixture gpu']}
+
+    async def run(connection, command, **kwargs):
+        if command[:3] == ['sh', '-s', '--']:
+            assert command[3] == connection.remote_root
+            assert b'BMS_ATTACHED' in kwargs['input_bytes']
+            return SimpleNamespace(stdout='BMS_ATTACHED\nBMS_TELEMETRY\n')
+        seen.append(command)
+        if on_command is not None and len(seen) == after:
+            await on_command(command)
+        return SimpleNamespace(stdout='fixture output\n')
+
+    monkeypatch.setattr(targets, 'capture_host_key', capture)
+    monkeypatch.setattr(targets, 'persist_host_key', persist)
+    monkeypatch.setattr(targets, 'probe_readiness', probe)
+    monkeypatch.setattr(targets, 'run_remote', run)
+
+
+async def attach_ready(session, monkeypatch, identifier='51264075'):
+    """Drive one real publication to `ready` against the stubbed transport."""
+    inventory(monkeypatch, [identifier])
+    attach_stubs(monkeypatch)
+    result = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id=identifier))
+    assert result.active and result.state == 'ready'
+    return result
+
+
+@pytest.mark.asyncio
+async def test_omitted_inventory_releases_only_after_a_confirmed_omission(store, monkeypatch, managed_runtime):
+    session, _ = store
+    await attach_ready(session, monkeypatch)
+    row = await session.get(ExecutionTarget, 'vast:51264075')
+    attachment, pinned = dict(row.provider_metadata['attachment']), row.host_key_sha256
+    assert targets.target_eligible(row)
+
+    inventory(monkeypatch)
+    await targets.refresh_vast_targets(session)
+    await session.refresh(row)
+    assert row.active and row.state == 'ready'
+    assert row.provider_metadata['attachment'] == attachment
+    assert row.host_key_sha256 == pinned
+    assert row.provider_metadata['inventory']['absent_observations'] == 1
+    assert not targets.target_eligible(row)
+
+    inventory(monkeypatch, ['51264075'])
+    await targets.refresh_vast_targets(session)
+    await session.refresh(row)
+    assert targets.target_eligible(row)
+    inventory(monkeypatch)
+    await targets.refresh_vast_targets(session)
+    await session.refresh(row)
+    assert row.active and row.state == 'ready'
+    assert row.provider_metadata['inventory']['absent_observations'] == 1
+
+    inventory(monkeypatch)
+    await targets.refresh_vast_targets(session)
+    await session.refresh(row)
+    assert not row.active and row.state == 'inactive'
+    assert row.last_error == targets.ABSENT_INVENTORY_MESSAGE
+    # The ready projection, the pinned key and the last known endpoints survive.
+    assert row.provider_metadata['attachment'] == attachment
+    assert row.host_key_sha256 == pinned
+    assert row.provider_metadata['inventory']['ssh_endpoints']
+    scheduling = targets._target_response(row).capabilities['scheduling']
+    assert scheduling['inventory_reason'] == targets.ABSENT_INVENTORY_MESSAGE
+    assert scheduling['new_work_ready'] is False
+
+
+@pytest.mark.asyncio
+async def test_running_to_not_running_to_running_restores_the_ready_projection(store, monkeypatch, managed_runtime):
+    session, _ = store
+    await attach_ready(session, monkeypatch)
+    row = await session.get(ExecutionTarget, 'vast:51264075')
+
+    inventory(monkeypatch, ['51264075'], state='stopped')
+    await targets.refresh_vast_targets(session)
+    await session.refresh(row)
+    assert row.state == 'unavailable' and row.active
+    assert row.last_error == 'Provider state is stopped'
+    assert not targets.target_eligible(row)
+
+    inventory(monkeypatch, ['51264075'])
+    await targets.refresh_vast_targets(session)
+    await session.refresh(row)
+    assert row.state == 'ready' and row.active and row.last_error is None
+    assert targets.target_eligible(row)
+
+
+@pytest.mark.asyncio
+async def test_released_target_is_never_reactivated_by_recovery_or_a_late_failure(store, monkeypatch, managed_runtime):
+    session, _ = store
+    await attach_ready(session, monkeypatch)
+    row = await session.get(ExecutionTarget, 'vast:51264075')
+    started_at = row.provider_metadata['setup']['started_at']
+    for _ in range(targets.ABSENT_INVENTORY_CONFIRMATIONS):
+        inventory(monkeypatch)
+        await targets.refresh_vast_targets(session)
+    await session.refresh(row)
+    assert not row.active and row.state == 'inactive'
+
+    inventory(monkeypatch, ['51264075'])
+    await targets.refresh_vast_targets(session)
+    await session.refresh(row)
+    # A provider reading is not an activation: the operator keeps that decision.
+    assert not row.active and row.state == 'inactive'
+    matched = (await session.scalars(select(ExecutionTarget.id).where(
+        ExecutionTarget.id == row.id, targets.attachment_clause(datetime.utcnow())))).all()
+    assert matched == []
+    await targets.fail_setup(session, row.id, started_at, 'late failure for the released attempt')
+    await session.refresh(row)
+    assert not row.active and row.state == 'inactive'
+    assert row.provider_metadata['setup']['phase'] == 'ready'
+
+
+@pytest.mark.asyncio
+async def test_single_omitted_inventory_read_does_not_fence_an_in_flight_attachment(
+        store, monkeypatch, managed_runtime):
+    session, factory = store
+    identifier = '51264075'
+
+    async def omission(*args):
+        async with factory() as other:
+            row = await targets.get_target(other, targets.target_id('vast', identifier))
+            metadata = dict(row.provider_metadata)
+            metadata['inventory'] = {**metadata['inventory'], 'present': False, 'running': False}
+            row.provider_metadata = metadata
+            await other.commit()
+
+    inventory(monkeypatch, [identifier])
+    attach_stubs(monkeypatch, on_command=omission)
+    result = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id=identifier))
+    assert result.active and result.state == 'ready'
+    row = await targets.get_target(session, targets.target_id('vast', identifier))
+    assert row.provider_metadata['setup']['phase'] == 'ready'
+    assert row.host_key_sha256 == 'a' * 64
+    assert row.provider_metadata['attachment']['telemetry'] is True
+    assert not targets.target_eligible(row)
+
+
+@pytest.mark.asyncio
+async def test_stranded_probing_target_is_releasable_after_the_install_budget(store, monkeypatch):
+    session, _ = store
+    inventory(monkeypatch, ['51264075'])
+    admitted = await targets.begin_activation(session, ExecutionTargetActivateRequest(provider_instance_id='51264075'))
+    assert admitted.state == 'probing'
+    with pytest.raises(targets.ExecutionTargetError) as refused:
+        await targets.deactivate_target(session, admitted.id)
+    assert str(refused.value) == targets.DETACH_ATTACHMENT_BLOCKED
+    with pytest.raises(targets.ExecutionTargetError, match='changed before attachment'):
+        await targets.begin_activation(session, ExecutionTargetActivateRequest(provider_instance_id='51264075'))
+    row = await session.get(ExecutionTarget, admitted.id)
+    row.provider_metadata = {**row.provider_metadata, 'setup': {
+        **row.provider_metadata['setup'],
+        'started_at': (datetime.utcnow() - timedelta(
+            seconds=targets.ATTACHMENT_ABANDONED_SECONDS + 1)).isoformat()}}
+    await session.commit()
+    released = await targets.deactivate_target(session, admitted.id)
+    assert released.state == 'inactive' and not released.active
+    assert released.setup is not None
+    assert released.setup.phase == 'failed'
+    assert released.setup.message == targets.STALE_ATTACHMENT_RELEASED
+    assert released.last_error == targets.STALE_ATTACHMENT_RELEASED
+    inventory(monkeypatch, ['51264075'])
+    assert (await targets.begin_activation(session, ExecutionTargetActivateRequest(
+        provider_instance_id='51264075'))).state == 'probing'
+
+
+@pytest.mark.asyncio
+async def test_attach_task_registry_failure_does_not_strand_the_target(store, monkeypatch):
+    session, factory = store
+    inventory(monkeypatch, ['51264075'])
+    controller = targets.AttachmentController(factory)
+
+    class BrokenLoop:
+        def create_task(self, *args, **kwargs):
+            raise RuntimeError('task registry unavailable')
+
+    monkeypatch.setattr(targets, 'asyncio', BrokenLoop())
+    with pytest.raises(RuntimeError, match='task registry unavailable'):
+        await controller.attach(session, ExecutionTargetActivateRequest(provider_instance_id='51264075'))
+    row = await session.get(ExecutionTarget, 'vast:51264075')
+    assert row.state == 'unavailable' and not row.active
+    assert row.provider_metadata['setup']['phase'] == 'failed'
+    assert row.provider_metadata['setup']['message'] == targets.ATTACHMENT_TASK_NOT_STARTED
+    assert (await targets.deactivate_target(session, row.id)).state == 'inactive'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('blocked', ['superseded', 'endpoint', 'lease', 'released', 'absent',
+                                     'not_running', 'publication'])
+async def test_attachment_fence_publishes_the_blocking_clause(store, monkeypatch, managed_runtime, blocked):
+    session, factory = store
+    identifier = '51264075'
+    reason, disposition = {
+        'superseded': (targets.ATTACHMENT_SUPERSEDED, 'replacement'),
+        'endpoint': (targets.ATTACHMENT_ENDPOINT_CHANGED, 'recorded'),
+        'lease': (targets.ATTACHMENT_LEASED, 'lease'),
+        'released': (targets.ATTACHMENT_RELEASED, 'recorded'),
+        'absent': (targets.ATTACHMENT_WORKER_ABSENT, 'recorded'),
+        'not_running': (targets.ATTACHMENT_NOT_RUNNING, 'recorded'),
+        'publication': (targets.ATTACHMENT_LEASED, 'lease'),
+    }[blocked]
+
+    async def mutate(*args):
+        async with factory() as other:
+            row = await targets.get_target(other, targets.target_id('vast', identifier))
+            if blocked == 'superseded':
+                row.provider_metadata = {**row.provider_metadata, 'setup': {
+                    **row.provider_metadata['setup'], 'started_at': 'replacement'}}
+            elif blocked == 'endpoint':
+                row.host = '203.0.113.99'
+            elif blocked in {'lease', 'publication'}:
+                row.leased_job_id = 'racing-owner'
+            else:
+                metadata = dict(row.provider_metadata)
+                metadata['inventory'] = {**metadata['inventory'],
+                                         'present': blocked != 'absent',
+                                         'running': blocked != 'not_running'}
+                row.provider_metadata = metadata
+                row.active = False
+            await other.commit()
+
+    inventory(monkeypatch, [identifier])
+    if blocked == 'publication':
+        managed_runtime.before_publication = mutate
+        attach_stubs(monkeypatch)
+    else:
+        # `superseded` must be observed by the fence, not by the setup writer.
+        attach_stubs(monkeypatch, on_command=mutate, after=2 if blocked == 'superseded' else 1)
+    with pytest.raises(targets.ExecutionTargetError) as refused:
+        await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id=identifier))
+    assert str(refused.value) == reason
+    row = await targets.get_target(session, targets.target_id('vast', identifier))
+    if disposition == 'recorded':
+        assert row.provider_metadata['setup']['message'] == reason
+        assert row.last_error == reason
+    elif disposition == 'replacement':
+        # The replacement attempt owns the row; the abandoned attempt must not
+        # rewrite its setup record.
+        assert row.provider_metadata['setup']['started_at'] == 'replacement'
+    else:
+        assert row.leased_job_id == 'racing-owner'
