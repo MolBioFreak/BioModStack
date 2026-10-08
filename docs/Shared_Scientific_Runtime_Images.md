@@ -92,6 +92,19 @@ source/alias, qualify a worker/GPU, or authorize inference. Image leases,
 worker canonical publication and semantic `containers/fold-cp.sif` transport
 remain with the existing shared owners.
 
+### Fold-CP composed model closure
+
+`boltz_cp_experimental` also has a reviewed independent model binding: its
+launcher image (`fold-cp.sif`, the same selector above) plus the shared
+`weights/boltz` tree the native `BoltzCP` process label already loads. Provisioning
+and pre-warm therefore send both, and the provision catalog/preview reports those
+two dependencies instead of refusing an unavailable binding. No second weight set
+is declared: Fold-CP and Boltz-2 name the same installed tree, so their weight
+object identity is one shared asset. Fold-CP accordingly leaves the image-only
+catalog list (`boltzgen`, `protein_local_redesign`, `molecular_dynamics`,
+`confornets_experimental` remain image-only); its image-only selection and the
+Structure Prediction workflow's predictor choices are unchanged.
+
 ### FrustraMPNN canonical reader
 
 `BMS_FRUSTRAMPNN_SIF` is an installation-owned path selector. Set it to the existing shared store's `objects/sha256/c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da/runtime.sif`, with `BMS_RUNTIME_IMAGE_STORE` identifying that store (default `${BMS_CONTAINER_DIR}/.image-store`). The selector is snapshotted into the existing runtime identity at process startup; restart through the normal managed release process after changing it. It does not select a new model digest, executable or checkpoint. No public request parameter or digest override is added.

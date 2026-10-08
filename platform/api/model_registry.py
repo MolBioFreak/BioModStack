@@ -92,6 +92,10 @@ class RuntimeDependencyRef(BaseModel):
 INDEPENDENT_RUNTIME_MODELS = frozenset({
     "protenix", "esmfold2", "esmfold2_experimental", "fampnn", "frustrampnn",
     "boltz2", "af2", "proteinmpnn", "unidock",
+    # Fold-CP runs Boltz under OEM context parallelism: the native BoltzCP label
+    # binds 'boltz', the same installed tree boltz2 loads, so the reviewed closure
+    # is its launcher image plus that shared tree rather than a second weight set.
+    "boltz_cp_experimental",
 })
 
 
@@ -99,7 +103,7 @@ INDEPENDENT_RUNTIME_MODELS = frozenset({
 # These public launcher entries already bind the named image in native plans.
 INDEPENDENT_RUNTIME_IMAGES = INDEPENDENT_RUNTIME_MODELS | frozenset({
     'boltzgen', 'protein_local_redesign', 'molecular_dynamics',
-    'boltz_cp_experimental', 'confornets_experimental',
+    'confornets_experimental',
 })
 
 
@@ -125,7 +129,7 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
         raise ValueError("Independent runtime closure is not available for this model")
     refs = [RuntimeDependencyRef(kind="image", relative_path=model.container)]
     weights = {"protenix": "protenix", "esmfold2": "esmfold2", "esmfold2_experimental": "esmfold2",
-               "boltz2": "boltz", "af2": "alphafold"}
+               "boltz2": "boltz", "af2": "alphafold", "boltz_cp_experimental": "boltz"}
     if model_id in weights:
         refs.append(RuntimeDependencyRef(kind="weights", relative_path=weights[model_id]))
     # Native preparation/filter stages are part of these models, not optional
