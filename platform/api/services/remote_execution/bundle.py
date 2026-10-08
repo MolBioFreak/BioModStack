@@ -535,19 +535,10 @@ def compile_remote_dependencies(model_id: str, mode: str, command: list[str], *,
         omitted.update(key for key in params
                        if any(token in key for token in ("container_path", "_container", "runtime_sif", "checkpoint_path", "runtime_lock", "repo_path"))
                        and not key.startswith(("protenix_", "frustrampnn_")))
-        backend = str(params.get("protenix_msa_backend", "auto")).lower()
-        provider = str(params.get("msa_provider", "")).strip().lower()
-        if backend in {"", "auto"} and provider in {"local", "colabfold_api"}:
-            backend = provider
-            params["protenix_msa_backend"] = backend
-            command = list(command)
-            if "--protenix_msa_backend" in command:
-                for index, value in enumerate(command[:-1]):
-                    if value == "--protenix_msa_backend":
-                        command[index + 1] = backend
-            else:
-                command.extend(["--protenix_msa_backend", backend])
-        if backend == "colabfold_api" or str(params.get("protenix_use_msa", "true")).lower() == "false":
+        backend = str(params.get("protenix_msa_backend", "")).lower()
+        if backend in {"", "auto", "local"}:
+            raise RemoteBundleError('Protenix MSA policy must be resolved by the shared compiler before placement')
+        if backend in {"colabfold_api", "neurosnap_api", "none", "esm"} or params.get("protenix_use_msa") is False:
             omitted.add("msa_local_db")
     compiled: list[str] = []
     index = 0
