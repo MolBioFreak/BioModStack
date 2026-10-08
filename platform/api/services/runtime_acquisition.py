@@ -12,6 +12,19 @@ _SCRIPTS = Path(__file__).resolve().parents[3] / 'scripts'
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 from lib.pinned_acquisition import AcquisitionError, Artifact, acquire
+from lib.pinned_weight_layout import materialize_weights, validate_members
+
+
+def _layouts(plan):
+    groups = {}
+    for entry in plan["artifacts"]:
+        key = (entry["dependency"]["kind"], entry["dependency"]["relative_path"])
+        groups.setdefault(key, []).append(entry)
+    for group in groups.values():
+        if any(e.get("member_path") is not None for e in group):
+            yield group[0]["dependency"], [
+                {"member_path": e.get("member_path"), "manifest": e["manifest"]}
+                for e in group]
 
 
 def preview_model_acquisition(model_id: str) -> dict:
@@ -24,6 +37,11 @@ def preview_model_acquisition(model_id: str) -> dict:
             plan['blockers'].append({'code': 'invalid_acquisition_metadata',
                                      'artifact_id': entry['manifest']['artifact_id'],
                                      'detail': str(exc)})
+    for dependency, members in _layouts(plan):
+        try:
+            validate_members(dependency, members)
+        except (AcquisitionError, TypeError, ValueError) as exc:
+            plan["blockers"].append({"code": "invalid_weight_layout", "detail": str(exc)})
     canonical = json.dumps(plan, sort_keys=True, separators=(',', ':')).encode()
     return {**plan, 'plan_digest': hashlib.sha256(canonical).hexdigest(),
             'qualification': 'not_checked'}
@@ -53,5 +71,8 @@ def acquire_model(model_id: str, store_root: Path, *, expected_plan_digest: str,
                           accepted_licenses=licenses, attempts=attempts,
                           timeout=timeout, total_timeout=total_timeout)
         receipts.append({'dependency': entry['dependency'], **receipt})
+    layouts = [materialize_weights(dependency, members, store_root,
+                accepted_licenses=licenses, attempts=attempts, timeout=timeout,
+                total_timeout=total_timeout) for dependency, members in _layouts(plan)]
     return {'model_id': model_id, 'plan_digest': plan['plan_digest'],
-            'artifacts': receipts, 'qualification': 'not_checked'}
+            'artifacts': receipts, 'layouts': layouts, 'qualification': 'not_checked'}

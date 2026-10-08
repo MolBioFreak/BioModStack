@@ -6,6 +6,7 @@ verification authority. Private staging and weights have separate namespaces.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -14,9 +15,10 @@ import stat
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+
+from .reviewed_transport import TransportError, validate_policy, open_response
 
 from .shared_runtime_images import (
     _directory, _file, _hash, _check_file, _lock, publish_image, verify_image,
@@ -37,6 +39,7 @@ class Artifact:
     source_authority: str
     approval_ref: str
     license_id: str | None = None
+    redirect_policy: dict | None = None
 
     def validate(self, *, test_only: bool = False) -> None:
         if self.artifact_id in {'.', '..'} or not re.fullmatch(r'[A-Za-z0-9_.-]+', self.artifact_id):
@@ -47,11 +50,15 @@ class Artifact:
             raise AcquisitionError('missing pinned SHA-256')
         if type(self.size_bytes) is not int or self.size_bytes <= 0:
             raise AcquisitionError('missing exact byte size')
+        try:
+            validate_policy(self.redirect_policy, self.url)
+        except TransportError as exc:
+            raise AcquisitionError(str(exc)) from None
         parsed = urllib.parse.urlsplit(self.url)
         fixture = test_only and parsed.scheme == 'http' and parsed.hostname == '127.0.0.1'
         if (parsed.scheme != 'https' and not fixture) or not parsed.hostname:
             raise AcquisitionError('approved HTTPS source required')
-        if parsed.username or parsed.password or parsed.fragment:
+        if parsed.username or parsed.password or parsed.fragment or parsed.query:
             raise AcquisitionError('credentials/fragments forbidden in source URL')
         if parsed.netloc != self.source_authority or not self.approval_ref.strip():
             raise AcquisitionError('source authority or release approval missing')
@@ -62,13 +69,11 @@ class Artifact:
 
     @property
     def manifest_digest(self) -> str:
-        return hashlib.sha256(json.dumps(asdict(self), sort_keys=True,
+        payload = asdict(self)
+        if self.redirect_policy is None:
+            payload.pop('redirect_policy')  # Preserve existing no-redirect checkpoints.
+        return hashlib.sha256(json.dumps(payload, sort_keys=True,
                                          separators=(',', ':')).encode()).hexdigest()
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise AcquisitionError('redirect requires a separately approved pinned source')
 
 
 def _write_state(directory: Path, payload: dict) -> None:
@@ -112,6 +117,7 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
     test_only uses a segregated fixture store and cannot produce production paths.
     Weights are opaque pinned files: no archive extraction or license acceptance.
     """
+    artifact = replace(artifact, redirect_policy=copy.deepcopy(artifact.redirect_policy))
     artifact.validate(test_only=test_only)
     if artifact.kind == 'weights' and artifact.license_id not in accepted_licenses:
         raise AcquisitionError(f'license acceptance required: {artifact.license_id}')
@@ -164,7 +170,6 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
                     raise AcquisitionError('corrupt or uncheckpointed staging bytes')
             elif state.get('bytes'):
                 raise AcquisitionError('durable checkpoint payload missing')
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
             for attempt in range(attempts):
                 offset = state['bytes']
                 if offset == artifact.size_bytes:
@@ -172,9 +177,12 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
                 if time.monotonic() >= deadline:
                     raise AcquisitionError('total acquisition deadline exceeded')
                 try:
-                    request = urllib.request.Request(artifact.url, headers={
-                        'Accept-Encoding': 'identity', **({'Range': f'bytes={offset}-'} if offset else {})})
-                    with opener.open(request, timeout=min(timeout, deadline-time.monotonic())) as response:
+                    try:
+                        response = open_response(artifact.url, policy=artifact.redirect_policy,
+                            offset=offset, timeout=timeout, deadline=deadline, test_only=test_only)
+                    except TransportError as exc:
+                        raise AcquisitionError(str(exc)) from None
+                    with response:
                         if response.headers.get('Content-Encoding', 'identity') != 'identity':
                             raise AcquisitionError('encoded response forbidden')
                         if response.status == 206:
@@ -184,7 +192,7 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
                         elif response.status == 200:
                             offset = 0
                         else:
-                            raise AcquisitionError('unexpected HTTP status')
+                            raise OSError('unexpected HTTP status')
                         with _directory(stage) as parent:
                             fd = os.open('payload.part', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
                                          0o600, dir_fd=parent)
@@ -218,7 +226,7 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
                     break
                 except (OSError, urllib.error.URLError) as exc:
                     if attempt + 1 == attempts:
-                        raise AcquisitionError(f'download failed after {attempts} attempt(s): {exc}') from exc
+                        raise AcquisitionError(f'download failed after {attempts} attempt(s)') from None
             digest, size = _observed(partial)
             if (digest, size) != (artifact.sha256, artifact.size_bytes):
                 raise AcquisitionError('downloaded bytes differ from pinned SHA-256/size')
