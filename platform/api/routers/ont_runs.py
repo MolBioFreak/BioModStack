@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from services import ont_run_control
+from services.host_agent_client import HostAgentRequestError
 
 router = APIRouter()
 
@@ -34,6 +35,8 @@ async def ont_begin_position_hardware_check(position: str, payload: dict[str, An
         return ont_run_control.begin_position_hardware_check(position, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HostAgentRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 @router.post("/positions/{position}/refresh")
 async def ont_refresh_position_state(position: str) -> dict[str, Any]:

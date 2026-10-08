@@ -254,3 +254,41 @@ def test_begin_hardware_check_uses_configured_manager_without_name_error(monkeyp
     assert status_code == 202
     assert payload["action"] == "begin_hardware_check"
     assert payload["hardware_check_run_id"] == "HC-UNIT-001"
+
+
+
+def test_begin_hardware_check_reports_no_flowcell_as_operator_conflict(monkeypatch) -> None:
+    from lib import ont_minknow_host  # noqa: PLC0415
+
+    class FakeProtocol:
+        def begin_hardware_check(self):
+            raise RuntimeError('FAILED_PRECONDITION:No flow cell present for hardware check.')
+
+    class FakeConnection:
+        protocol = FakeProtocol()
+
+    class FakePosition:
+        name = "MD-105428"
+
+        def connect(self):
+            return FakeConnection()
+
+    class FakeManager:
+        def flow_cell_positions(self):
+            return [FakePosition()]
+
+    monkeypatch.setattr(
+        ont_minknow_host,
+        "discover_status",
+        lambda: {
+            "implementation_status": ont_minknow_host.MINKNOW_STATUS_CONFIGURED,
+            "live_devices": [{"position": "MD-105428", "current_protocol": None, "flow_cell": {"present": False}}],
+        },
+    )
+    monkeypatch.setattr(ont_minknow_host.MinknowHostConfig, "from_env", staticmethod(lambda: object()))
+    monkeypatch.setattr(ont_minknow_host, "build_manager", lambda config: FakeManager())
+
+    status_code, payload = ont_minknow_host.begin_hardware_check("MD-105428", {"confirm_hardware_check": True})
+
+    assert status_code == 409
+    assert payload["detail"] == "MinKNOW refused hardware check: no flow cell/test cell is currently reported as present on this position."

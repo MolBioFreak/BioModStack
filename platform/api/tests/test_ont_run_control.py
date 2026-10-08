@@ -351,3 +351,29 @@ def test_begin_position_hardware_check_requires_confirmation_and_proxies_host_ag
 
     assert payload["action"] == "begin_hardware_check"
     assert calls == [("POST", "/ont/positions/MD-105428/hardware-check", {"confirm_hardware_check": True})]
+
+
+
+def test_hardware_check_endpoint_maps_host_agent_error_without_500(monkeypatch) -> None:
+    from services.host_agent_client import HostAgentRequestError  # noqa: PLC0415
+
+    app = FastAPI()
+    app.include_router(ont_runs.router, prefix="/api/ont")
+    client = TestClient(app)
+
+    monkeypatch.setattr(
+        ont_run_control,
+        "begin_position_hardware_check",
+        lambda position, payload: (_ for _ in ()).throw(
+            HostAgentRequestError(
+                status_code=409,
+                detail={"detail": "MinKNOW refused hardware check: no flow cell/test cell is currently reported as present on this position."},
+                url="http://127.0.0.1:8798/ont/positions/MD-105428/hardware-check",
+            )
+        ),
+    )
+
+    response = client.post("/api/ont/positions/MD-105428/hardware-check", json={"confirm_hardware_check": True})
+
+    assert response.status_code == 409
+    assert "no flow cell/test cell" in response.text
