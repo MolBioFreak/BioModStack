@@ -587,6 +587,42 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && paths.some((path) => expectedPaths.has(path))
       && paths.every((path) => path === '/' || expectedPaths.has(path));
   };
+  const validContainerProcessReport = (report, name, containerId) => {
+    if (
+      !hasExactKeys(report, [
+        'pid', 'cgroup', 'container_pid', 'parent_container_pid',
+        'executable', 'argv', 'cwd', 'uid',
+      ])
+      || !Number.isInteger(report.pid) || report.pid <= 0
+      || !Number.isInteger(report.container_pid) || report.container_pid <= 0
+      || !Number.isInteger(report.parent_container_pid) || report.parent_container_pid < 0
+      || !exactContainerCgroup(report.cgroup, containerId)
+      || !Array.isArray(report.argv)
+    ) return false;
+    if (name === 'biomodstack-api') {
+      return report.container_pid === 1
+        && report.parent_container_pid === 0
+        && report.executable === '/usr/local/bin/python3.10'
+        && JSON.stringify(report.argv) === JSON.stringify([
+          '/app/platform/api/.venv/bin/python', '/app/platform/api/.venv/bin/uvicorn',
+          'main:app', '--host', '127.0.0.1', '--port', '8000',
+        ])
+        && report.cwd === '/app/platform/api'
+        && report.uid === 1000;
+    }
+    if (report.container_pid === 1) {
+      return report.parent_container_pid === 0
+        && report.executable === '/usr/sbin/nginx'
+        && JSON.stringify(report.argv) === JSON.stringify(['nginx: master process nginx -g daemon off;'])
+        && report.cwd === '/'
+        && report.uid === 0;
+    }
+    return report.parent_container_pid === 1
+      && report.executable === '/usr/sbin/nginx'
+      && JSON.stringify(report.argv) === JSON.stringify(['nginx: worker process'])
+      && report.cwd === '/'
+      && report.uid === 101;
+  };
   const validContainerSet = (runtime, requiredNames, revision) => {
     if (
       !hasExactKeys(runtime, ['containers', 'validated_revision', 'validated_compose_root'])
@@ -602,10 +638,15 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       const container = byName.get(name);
       const expectedIdentity = name === 'biomodstack-api'
         ? {
+          imageId: 'sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c',
           cmdline: '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000',
           cwd: '/app/platform/api',
         }
-        : { cmdline: '/docker-entrypoint.sh nginx -g daemon off;', cwd: '/' };
+        : {
+          imageId: 'sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e',
+          cmdline: '/docker-entrypoint.sh nginx -g daemon off;',
+          cwd: '/',
+        };
       if (
         !hasExactKeys(container, [
           'name', 'container_id', 'revision', 'compose_working_dir', 'pid', 'cgroup',
@@ -617,7 +658,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         || !Number.isInteger(container.pid) || container.pid <= 0
         || !nonEmptyBounded(container.cgroup, 4096)
         || !exactContainerCgroup(container.cgroup, container.container_id)
-        || !digestPattern.test(String(container.image_id || ''))
+        || container.image_id !== expectedIdentity.imageId
         || container.cmdline !== expectedIdentity.cmdline
         || container.cwd !== expectedIdentity.cwd
         || !sortedUniquePositiveIntegers(container.host_pids)
@@ -630,8 +671,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       const reportPids = container.process_reports.map((report) => report?.pid);
       return JSON.stringify(reportPids) === JSON.stringify(container.host_pids)
         && container.process_reports.every((report) => (
-          hasExactKeys(report, ['pid', 'cgroup'])
-          && exactContainerCgroup(report.cgroup, container.container_id)
+          validContainerProcessReport(report, name, container.container_id)
         ));
     });
   };
@@ -737,11 +777,13 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     const ownerPids = [...new Set(Object.values(listener.listener_inode_owners).flat())]
       .sort((left, right) => left - right);
     return JSON.stringify(listener.host_listener_pids) === JSON.stringify(ownerPids)
-      && ownerPids.every((pid) => listener.container_host_pids.includes(pid))
+      && JSON.stringify(ownerPids) === JSON.stringify(listener.container_host_pids)
       && listener.listener_reports.every((report) => (
-        hasExactKeys(report, ['pid', 'cgroup'])
-        && exactContainerCgroup(report.cgroup, container.container_id)
-      ));
+        validContainerProcessReport(report, containerName, container.container_id)
+      ))
+      && JSON.stringify(listener.listener_reports) === JSON.stringify(
+        container.process_reports.filter((report) => listener.host_listener_pids.includes(report.pid)),
+      );
   };
   const validProductionProxy = (proxy, projectRoot, publicReports) => {
     const keys = [
@@ -804,9 +846,11 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && proxy.listener_pid_map.filter((item) => item.container_pid === 1).length === 1
       && proxy.listener_pid_map.find((item) => item.container_pid === 1)?.host_pid === proxy.pid
       && JSON.stringify(reportPids) === JSON.stringify(ownerPids)
+      && JSON.stringify(proxy.listener_pids) === JSON.stringify(proxy.container_host_pids)
       && proxy.listener_reports.every((report) => (
-        hasExactKeys(report, ['pid', 'cgroup'])
-        && exactContainerCgroup(report.cgroup, proxy.container_id)
+        validContainerProcessReport(
+          report, 'biomodstack-tailnet-production-proxy', proxy.container_id,
+        )
       ))
       && JSON.stringify(publicReports) === JSON.stringify(proxy.listener_reports);
   };
