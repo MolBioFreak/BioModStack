@@ -82,7 +82,7 @@ def _verify_tree(root, entries, *, frozen):
 
 
 def materialize_weights(dependency, entries, store_root, *, accepted_licenses=(),
-                        test_only=False, attempts=3, timeout=30, total_timeout=300):
+                        test_only=False, attempts=3, timeout=30, total_timeout=300, weights_root=None):
     """Return immutable generation path; caller owns activation/transaction binding.
 
     entries = [{member_path: relative POSIX path, manifest: Artifact kwargs}].
@@ -101,7 +101,10 @@ def materialize_weights(dependency, entries, store_root, *, accepted_licenses=()
     root = Path(store_root).absolute()
     if test_only:
         root /= 'test-fixtures-not-scientific-assets'
-    layouts = root / 'weights' / 'layouts' / dependency['relative_path']
+    weight_store = Path(weights_root).absolute() if weights_root is not None else root / 'weights'
+    if test_only and weights_root is not None:
+        weight_store /= 'test-fixtures-not-scientific-assets'
+    layouts = weight_store / 'layouts' / dependency['relative_path']
     destination = layouts / digest
     stage = layouts / ('.staging-' + digest)
     with _lock(layouts, digest):
@@ -112,7 +115,7 @@ def materialize_weights(dependency, entries, store_root, *, accepted_licenses=()
                 artifact = Artifact(**entry['manifest'])
                 receipt = acquire(artifact, store_root, accepted_licenses=licenses,
                                   test_only=test_only, attempts=attempts, timeout=timeout,
-                                  total_timeout=total_timeout)
+                                  total_timeout=total_timeout, weights_root=weights_root)
                 target = stage / entry['member_path']
                 with _directory(target.parent, create=True) as parent:
                     temp = '.' + target.name + '.copy'

@@ -140,7 +140,10 @@ def bootstrap_report(action: str, *, project_root: Path, runtime: str | None = N
             "applicability": "unknown", "acceptance": "not_checked",
             "reason": "Dependency references do not establish license requirements; no reviewed license applicability authority is wired into bootstrap"}
         block("license_applicability_unknown", "Selected-model license applicability has not been established; this does not assert that every selection needs licensed weights")
-    block("acquisition_unavailable", "No approved pinned acquisition executor is wired into bootstrap; existing files are not acquisition or qualification evidence")
+    observations["provisioning"] = {"plan_command": "provision-plan", "execute_command": "provision",
+                                   "resume_command": "resume --expect-plan-sha256 DIGEST",
+                                   "qualification": "not_checked"}
+    block("acquisition_unavailable", "Discover/plan do not acquire bytes. Use provision-plan --model MODEL for registry-specific metadata blockers and provision for approved pinned bytes; existing files are not qualification evidence")
     block("disk_requirement_unknown", "Authoritative acquisition/staging/expansion sizes are unavailable; free space is not a sufficient-disk verdict")
     block("prerequisite_qualification_not_run", "Tool versions, GPU compatibility, service privileges and locked dependencies have not been qualified")
     block("installation_readiness_not_verified", "Discover/plan are read-only; configure/recover do not acquire, qualify, register or verify installation readiness")
