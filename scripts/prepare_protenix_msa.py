@@ -38,6 +38,7 @@ from local_msa_runtime import (
     DEFAULT_GPUSERVER_DB_LOAD_MODE,
     DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
     DEFAULT_GPUSERVER_WAIT_TIMEOUT,
+    resolve_protenix_local_gpu_server_mode,
 )
 from local_msa.batching import run_batch_msa
 from local_msa.runtime import inspect_mmseqs_runtime, parse_gpu_csv
@@ -145,7 +146,13 @@ def choose_backend(requested: str, stats: Dict[str, int], max_tasks: int, max_ch
     return "local"
 
 
-def write_msa_report(report_path: Path, payload: List[Dict[str, Any]], backend: str, stats: Dict[str, int]) -> None:
+def write_msa_report(
+    report_path: Path,
+    payload: List[Dict[str, Any]],
+    backend: str,
+    stats: Dict[str, int],
+    local_msa_runtime_contract: Dict[str, Any] | None = None,
+) -> None:
     report: Dict[str, Any] = {
         "backend": backend,
         "tasks": stats["tasks"],
@@ -154,6 +161,8 @@ def write_msa_report(report_path: Path, payload: List[Dict[str, Any]], backend: 
         "total_residues": stats["total_residues"],
         "chains": [],
     }
+    if local_msa_runtime_contract:
+        report["local_msa_runtime_contract"] = dict(local_msa_runtime_contract)
 
     for task_idx, seq_idx, chain in iter_protein_chains(payload):
         _hydrate_old_precomputed_dir(chain)
@@ -448,6 +457,7 @@ def prepare_with_local_msa(
             force_refresh=False,
             cache_only=cache_only,
             cpu_only=cpu_only,
+            threads=threads,
             preset=preset,
             gpu_mode=gpu_mode,
             gpu_threshold=gpu_threshold,
@@ -627,6 +637,7 @@ def main() -> None:
     )
     print(f"[prepare_protenix_msa] Selected backend: {backend}", flush=True)
 
+    local_msa_runtime_contract: Dict[str, Any] | None = None
     if backend == "colabfold_api":
         prepared = prepare_with_colabfold_api(
             input_json=input_json,
@@ -640,9 +651,10 @@ def main() -> None:
         if not args.cache_dir:
             raise ValueError("Local Protenix MSA preparation requires --cache-dir")
 
-        resolved_gpu_server_mode = str(args.gpu_server_mode or "persistent")
-        if resolved_gpu_server_mode in {"auto", "persistent"}:
-            resolved_gpu_server_mode = "off"
+        local_msa_runtime_contract = resolve_protenix_local_gpu_server_mode(args.gpu_server_mode)
+        requested_gpu_server_mode = local_msa_runtime_contract["requested_gpu_server_mode"]
+        resolved_gpu_server_mode = local_msa_runtime_contract["effective_gpu_server_mode"]
+        if requested_gpu_server_mode != resolved_gpu_server_mode:
             print(
                 "[prepare_protenix_msa] Forcing gpu-server-mode=off for local Protenix MSA to avoid persistent gpuserver handshake stalls.",
                 flush=True,
@@ -662,6 +674,8 @@ def main() -> None:
             gpu_server_startup_wait=float(args.gpu_server_startup_wait),
             verbose=True,
         )
+        if runtime.get("selected_gpu_id") is not None:
+            local_msa_runtime_contract["selected_gpu_id"] = runtime.get("selected_gpu_id")
         if not bool(runtime.get("use_gpu_mmseqs")) and not bool(args.allow_cpu_fallback):
             failure_message = str(
                 runtime.get("failure_message")
@@ -699,7 +713,13 @@ def main() -> None:
 
     if args.report_json:
         prepared_payload = load_json(Path(prepared))
-        write_msa_report(Path(args.report_json).expanduser().resolve(), prepared_payload, backend, stats)
+        write_msa_report(
+            Path(args.report_json).expanduser().resolve(),
+            prepared_payload,
+            backend,
+            stats,
+            local_msa_runtime_contract=local_msa_runtime_contract if backend == "local" else None,
+        )
 
     print(f"[prepare_protenix_msa] Prepared input JSON: {prepared}", flush=True)
     print(str(prepared), flush=True)

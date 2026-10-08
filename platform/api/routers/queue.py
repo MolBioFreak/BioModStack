@@ -531,6 +531,26 @@ async def resume_job(job_id: str, session: AsyncSession = Depends(get_session)):
     return {"success": True, "message": f"Job {job.name} resumed", "job_id": job_id}
 
 
+@router.post("/{job_id}/release-gpu")
+async def release_job_gpu(job_id: str, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    released_gpu = job.assigned_gpu
+    job.assigned_gpu = None
+    await session.commit()
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "released_gpu": released_gpu,
+        "message": f"Released assigned GPU for job {job.name}",
+    }
+
+
 @router.delete("/{job_id}")
 async def cancel_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Cancel a queued/paused/running job and any active descendant jobs it spawned."""

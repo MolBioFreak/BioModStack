@@ -45,6 +45,15 @@ def normalize_gpuserver_startup_wait(value: Optional[float]) -> float:
     return normalized
 
 
+def resolve_protenix_local_gpu_server_mode(value: Optional[str]) -> Dict[str, str]:
+    requested = str(value or "persistent").strip().lower() or "persistent"
+    effective = "off" if requested in {"auto", "persistent"} else requested
+    return {
+        "requested_gpu_server_mode": requested,
+        "effective_gpu_server_mode": effective,
+    }
+
+
 def is_matching_gpuserver_process(
     pid: int,
     target_db: Path,

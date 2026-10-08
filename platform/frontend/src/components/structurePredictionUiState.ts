@@ -3,6 +3,9 @@ export type StructurePredictorFamily = 'boltz' | 'rf3' | 'protenix';
 export type StructurePredictorSelection = StructurePredictorFamily | 'both' | 'all' | 'boltz_protenix';
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
 export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
+export type StructureMsaProvider = 'local' | 'colabfold_api';
+export type StructureMsaPreset = 'maximum' | 'balanced' | 'fast';
+export type StructureMsaTargetShardMode = 'auto' | 'required' | 'off';
 
 export interface StructurePredictorOption {
     id: StructurePredictorSelection;
@@ -88,13 +91,25 @@ export interface BoltzCpSubmitParamsInput {
     writeFullPae: boolean;
     seed?: string | null;
     gpuIds?: string | null;
-    sizeCp: number;
+}
+
+export interface StructureMsaSubmitParamsInput {
+    provider: StructureMsaProvider;
+    preset: StructureMsaPreset;
+    targetShardMode?: StructureMsaTargetShardMode | string | null;
+    targetShards?: number | string | null;
+    targetShardMinSizeGb?: number | string | null;
 }
 
 const COMPLEX_RF3_DISABLED_REASON = 'RF3 is predict-only and cannot be launched in complex mode.';
 const TARGET_PREVIEW_HIGHLIGHT = { r: 59, g: 130, b: 246 };
 type StructureInitialValues = Record<string, unknown>;
 type BoltzCpSubmitParams = Record<string, string | number | boolean>;
+type StructureMsaSubmitParams = Record<string, string | number | boolean>;
+
+export const DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE: StructureMsaTargetShardMode = 'auto';
+export const DEFAULT_STRUCTURE_MSA_TARGET_SHARDS = 4;
+export const DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB = 1;
 
 export const BOLTZ_CP_DEFAULT_SHARD_PLAN_ID: BoltzCpShardPlanId = '2x2';
 const BOLTZ_CP_LOGICAL_SIZE_CP_BY_ID: Record<BoltzCpShardPlanId, number> = {
@@ -142,6 +157,24 @@ export const inferBoltzCpShardPlanId = (sizeCp: unknown): BoltzCpShardPlanId => 
     if (parsed === 16) return '4x4';
     if (parsed === 4) return '2x2';
     return BOLTZ_CP_DEFAULT_SHARD_PLAN_ID;
+};
+
+export const normalizeMsaTargetShardMode = (value: unknown): StructureMsaTargetShardMode => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'required' || normalized === 'off') {
+        return normalized;
+    }
+    return DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE;
+};
+
+export const normalizeMsaTargetShards = (value: unknown): number => {
+    const parsed = Number.parseInt(String(value), 10);
+    return Number.isFinite(parsed) ? Math.max(1, parsed) : DEFAULT_STRUCTURE_MSA_TARGET_SHARDS;
+};
+
+export const normalizeMsaTargetShardMinSizeGb = (value: unknown): number => {
+    const parsed = Number.parseFloat(String(value));
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB;
 };
 
 const toStructureLaunchVariant = (initialValues?: StructureInitialValues | null): StructureLaunchVariant => {
@@ -253,7 +286,8 @@ export const getBoltzCpRuntimeBridgeSummary = ({
     const logicalSizeCp = getBoltzCpLogicalSizeCp(normalizedPlanId);
     const resolvedGpuLabel = String(gpuIds || '').trim() || autoFallbackLabel;
     const logicalShardLabel = logicalSizeCp === 1 ? 'logical shard' : 'logical shards';
-    return `The selected logical plan stays ${normalizedPlanId} (${logicalSizeCp} ${logicalShardLabel}); GPU count only affects the current runtime bridge. ${resolvedGpuLabel} → launch size_cp ${sizeCp}.`;
+    const physicalRankLabel = sizeCp === 1 ? 'CP rank' : 'CP ranks';
+    return `The selected logical plan stays ${normalizedPlanId} (${logicalSizeCp} ${logicalShardLabel}); GPU count only affects the current runtime bridge. ${resolvedGpuLabel} → current physical launch = ${sizeCp} ${physicalRankLabel}.`;
 };
 
 export const resolveStructureSubmitTarget = ({
@@ -285,7 +319,6 @@ export const buildBoltzCpSubmitParams = ({
     writeFullPae,
     seed,
     gpuIds,
-    sizeCp,
 }: BoltzCpSubmitParamsInput): BoltzCpSubmitParams => {
     const params: BoltzCpSubmitParams = {
         structure_launch_variant: 'boltz_cp_experimental',
@@ -294,7 +327,6 @@ export const buildBoltzCpSubmitParams = ({
         bcp_shard_plan_id: normalizeBoltzCpShardPlanId(shardPlanId),
         bcp_output_format: outputFormat,
         bcp_write_full_pae: writeFullPae,
-        bcp_size_cp: sizeCp,
     };
     if (gpuIds && gpuIds.trim()) {
         params.bcp_gpu_ids = gpuIds.trim();
@@ -306,6 +338,20 @@ export const buildBoltzCpSubmitParams = ({
     }
     return params;
 };
+
+export const buildStructureMsaSubmitParams = ({
+    provider,
+    preset,
+    targetShardMode,
+    targetShards,
+    targetShardMinSizeGb,
+}: StructureMsaSubmitParamsInput): StructureMsaSubmitParams => ({
+    msa_provider: provider === 'colabfold_api' ? 'colabfold_api' : 'local',
+    msa_preset: preset === 'maximum' || preset === 'balanced' ? preset : 'fast',
+    msa_target_shard_mode: normalizeMsaTargetShardMode(targetShardMode),
+    msa_target_shards: normalizeMsaTargetShards(targetShards),
+    msa_target_shard_min_size_gb: normalizeMsaTargetShardMinSizeGb(targetShardMinSizeGb),
+});
 
 export const BOLTZ_QUALITY_PRESETS = [
     { id: 'quick' as const, label: 'Quick', samplingSteps: 50 },

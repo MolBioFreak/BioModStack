@@ -61,13 +61,43 @@ def _normalize_gpu_ids(raw: Any) -> list[int]:
     return values
 
 
+def _release_parent_gpu_assignment(parent_job_id: str, api_url: str) -> None:
+    try:
+        response = requests.post(f"{api_url}/api/queue/{parent_job_id}/release-gpu", timeout=10)
+        if response.ok:
+            payload = response.json() if response.text else {}
+            print(
+                f"[SPAWN-BOLTZ-CP] Released parent GPU assignment for {parent_job_id} "
+                f"(released_gpu={payload.get('released_gpu')})"
+            )
+        else:
+            print(
+                f"[SPAWN-BOLTZ-CP] Warning: failed to release parent GPU assignment for {parent_job_id}: "
+                f"{response.status_code} {response.text}",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # pragma: no cover - network/API failure path
+        print(
+            f"[SPAWN-BOLTZ-CP] Warning: error releasing parent GPU assignment for {parent_job_id}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def spawn_boltz_cp_children(
     parent_job_id: str,
     manifest_path: str,
+    plan_store_path: str,
     batch_name: str,
     api_url: str = DEFAULT_API_URL,
 ) -> Dict[str, Any]:
-    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    manifest_file = Path(manifest_path).resolve()
+    plan_store_file = Path(plan_store_path).resolve()
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    plan_store = json.loads(plan_store_file.read_text(encoding="utf-8"))
+    store_root = str(plan_store.get("store_root") or "").strip()
+    plan_manifest_path = str(plan_store.get("plan_manifest_path") or manifest_file).strip()
+    if not store_root:
+        raise ValueError(f"Plan store file {plan_store_file} is missing store_root")
     bundles = manifest.get("bundles") or []
     input_metadata = manifest.get("input_metadata") or {}
     shard_plan = manifest.get("shard_plan") or {}
@@ -130,7 +160,8 @@ def spawn_boltz_cp_children(
             "bcp_container_path": input_metadata.get("container_path"),
             "bcp_shard_plan_id": shard_plan.get("name") or manifest.get("plan_id") or input_metadata.get("shard_plan_id") or "2x2",
             "bcp_parent_job_id": parent_job_id,
-            "bcp_plan_manifest_path": str(Path(manifest_path).resolve()),
+            "bcp_store_root": store_root,
+            "bcp_plan_manifest_path": plan_manifest_path,
             "bcp_bundle_id": bundle.get("bundle_id"),
             "bcp_bundle_index": bundle_index,
             "bcp_bundle_row_index": bundle.get("row_index"),
@@ -173,6 +204,7 @@ def spawn_boltz_cp_children(
                 child_params[passthrough_key] = input_metadata[passthrough_key]
 
         if assigned_gpu is not None:
+            child_params["bcp_assigned_gpu"] = assigned_gpu
             child_params["bcp_gpu_ids"] = str(assigned_gpu)
             child_params["pinned_gpus"] = [assigned_gpu]
 
@@ -220,6 +252,9 @@ def spawn_boltz_cp_children(
             print(f"[SPAWN-BOLTZ-CP] Error creating child {child_name}: {exc}", file=sys.stderr)
             failed += 1
 
+    if len(bundles) > 1 and (created or existing_count > 0):
+        _release_parent_gpu_assignment(parent_job_id, api_url)
+
     result = {
         "status": "complete" if failed == 0 else "partial",
         "spawned_jobs": len([child for child in created if not child.get("reused")]),
@@ -242,6 +277,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Spawn Fold-CP child jobs from a plan manifest")
     parser.add_argument("--parent_job_id", required=True, help="Parent job ID")
     parser.add_argument("--manifest", required=True, help="Path to boltz_cp_plan_manifest.json")
+    parser.add_argument("--plan_store", required=True, help="Path to boltz_cp_plan_store.json")
     parser.add_argument("--batch_name", required=True, help="Batch name for display")
     parser.add_argument("--api_url", default=DEFAULT_API_URL, help="API URL")
     parser.add_argument("--output", default="spawn_boltz_cp_result.json", help="Output JSON path")
@@ -250,6 +286,7 @@ def main() -> None:
     result = spawn_boltz_cp_children(
         parent_job_id=args.parent_job_id,
         manifest_path=args.manifest,
+        plan_store_path=args.plan_store,
         batch_name=args.batch_name,
         api_url=args.api_url,
     )

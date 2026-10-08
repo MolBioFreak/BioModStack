@@ -30,7 +30,6 @@ modes:
       - input_path
       - shard_plan_id
       - gpu_ids
-      - size_cp
       - input_format
       - output_format
       - write_full_pae
@@ -53,17 +52,9 @@ params:
 
   - name: shard_plan_id
     type: string
-    description: Logical Fold-CP shard geometry identifier (1x1, 2x2, or 4x4); physical launch size_cp is derived from this plan and the available GPU pool
+    description: Logical Fold-CP shard geometry identifier (1x1, 2x2, or 4x4); physical launch width is derived from this plan and the available GPU pool
     required: false
     default: 2x2
-
-  - name: size_cp
-    type: integer
-    description: Derived physical launch CP size used by the current worker pool bridge; this is computed from shard_plan_id and the selected GPUs when omitted
-    required: false
-    default: 4
-    minimum: 1
-    maximum: 16
 
   - name: input_format
     type: string

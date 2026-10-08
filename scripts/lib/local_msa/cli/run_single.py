@@ -40,6 +40,9 @@ def build_single_request_from_namespace(args: Namespace) -> SingleMSARequest:
             gpu_server_wait_timeout=int(args.gpu_server_wait_timeout),
             gpu_server_db_load_mode=int(args.gpu_server_db_load_mode),
             gpu_server_startup_wait=float(args.gpu_server_startup_wait),
+            target_shard_mode=str(getattr(args, "target_shard_mode", "auto") or "auto"),
+            target_shards=int(getattr(args, "target_shards", 4) or 4),
+            target_shard_min_size_gb=float(getattr(args, "target_shard_min_size_gb", 1.0)),
             disallow_cpu_fallback=bool(args.disallow_cpu_fallback),
         ),
         overrides=MSAOverrides(
@@ -112,5 +115,8 @@ def dispatch_single_request(
         return colabfold_api_executor(**common_kwargs, **extra)
     return local_executor(
         **common_kwargs,
+        target_shard_mode=request.runtime.target_shard_mode,
+        target_shards=request.runtime.target_shards,
+        target_shard_min_size_gb=request.runtime.target_shard_min_size_gb,
         disallow_cpu_fallback=request.runtime.disallow_cpu_fallback,
     )

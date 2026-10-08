@@ -59,6 +59,13 @@ if str(LIB_DIR) not in sys.path:
 
 from local_msa.providers.colabfold_api import register_legacy_run_colabfold_api_msa_workflow
 from local_msa.providers.local_mmseqs import register_legacy_run_colabfold_msa_workflow
+from local_msa.sharding import (
+    DEFAULT_TARGET_SHARD_MIN_SIZE_GB,
+    DEFAULT_TARGET_SHARDS,
+    build_target_shard_plan_from_gb,
+    ensure_target_shards,
+    run_sharded_target_search,
+)
 
 if TYPE_CHECKING:
     from lib.local_msa.cli.run_single import dispatch_single_request as _dispatch_single_request_ast_check
@@ -2279,6 +2286,9 @@ def run_colabfold_msa_workflow(
     gpu_server_wait_timeout: int = DEFAULT_GPUSERVER_WAIT_TIMEOUT,
     gpu_server_db_load_mode: int = DEFAULT_GPUSERVER_DB_LOAD_MODE,
     gpu_server_startup_wait: float = DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
+    target_shard_mode: str = "auto",
+    target_shards: int = DEFAULT_TARGET_SHARDS,
+    target_shard_min_size_gb: float = DEFAULT_TARGET_SHARD_MIN_SIZE_GB,
     disallow_cpu_fallback: bool = False,
     reference_sequence: str = None,
     # Preset and override parameters
@@ -2332,6 +2342,9 @@ def run_colabfold_msa_workflow(
         gpu_server_wait_timeout: Seconds search waits for gpuserver readiness
         gpu_server_db_load_mode: MMseqs DB load mode used by gpuserver/search
         gpu_server_startup_wait: Seconds to wait after starting gpuserver
+        target_shard_mode: EnvDB target-sharding policy (auto, required, off)
+        target_shards: Target DB shard count for high-quality EnvDB searches
+        target_shard_min_size_gb: Minimum target DB size before auto sharding
         reference_sequence: For mutagenesis - use this sequence for cache key
         preset: Quality preset (maximum, balanced, fast)
         num_iterations: Override number of profile iterations
@@ -2507,6 +2520,7 @@ def run_colabfold_msa_workflow(
         normalized_gpu_mode = runtime["normalized_gpu_mode"]
         normalized_gpu_server_mode = runtime["normalized_gpu_server_mode"]
         effective_gpu_server_wait_timeout = runtime["effective_gpu_server_wait_timeout"]
+        effective_preferred_gpus = list(runtime.get("effective_preferred_gpus") or [])
         selected_gpu_id = runtime["selected_gpu_id"]
         use_gpu_flag = bool(runtime["use_gpu_mmseqs"])
 
@@ -2920,6 +2934,9 @@ def run_colabfold_msa_workflow(
             # STEP 7: Environmental database search (Maximum/Balanced presets)
             # ═══════════════════════════════════════════════════════════════════
             env_a3m_db = None
+            target_shard_plan = None
+            target_shard_materialization = None
+            target_sharded_env_search = False
             if effective_use_env and env_available:
                 print(f"Searching environmental database ({envdb.name})...", flush=True)
 
@@ -2948,8 +2965,69 @@ def run_colabfold_msa_workflow(
                     "-a", "-e", str(config["evalue"]),
                     "--max-seqs", str(config["max_seqs"]),
                 ]
+
+                target_shard_plan = build_target_shard_plan_from_gb(
+                    mode=target_shard_mode,
+                    preset=preset,
+                    use_env=bool(effective_use_env),
+                    env_available=bool(env_available),
+                    target_db=envdb,
+                    total_threads=num_threads,
+                    requested_shards=target_shards,
+                    target_shard_min_size_gb=target_shard_min_size_gb,
+                    shard_cache_dir=Path(cache_dir) / ".target_shards",
+                )
+                if target_shard_plan.enabled:
+                    print(
+                        f"Target DB sharding enabled for EnvDB: {target_shard_plan.shard_count} shard(s) "
+                        f"x {target_shard_plan.threads_per_worker} thread(s) "
+                        f"(total budget {target_shard_plan.total_threads}).",
+                        flush=True,
+                    )
+                    try:
+                        shard_mmseqs_bin = mmseqs_cpu if Path(str(mmseqs_cpu)).exists() else mmseqs_bin
+                        target_shard_materialization = ensure_target_shards(
+                            mmseqs_bin=shard_mmseqs_bin,
+                            target_db=envdb,
+                            shard_count=target_shard_plan.shard_count,
+                            shard_cache_dir=target_shard_plan.shard_cache_dir,
+                            env=env,
+                            run_mmseqs=run_mmseqs,
+                        )
+                        print(
+                            f"{'Reusing' if target_shard_materialization.reused else 'Built'} EnvDB target shards: "
+                            f"{target_shard_materialization.manifest_path}",
+                            flush=True,
+                        )
+                        run_sharded_target_search(
+                            mmseqs_bin=shard_mmseqs_bin,
+                            query_db=profile_db if has_profile else query_db,
+                            target_db=envdb,
+                            result_db=env_result_db,
+                            tmp_dir=os.path.join(tmp_dir, "tmp_env_sharded"),
+                            base_search_params=env_base_search_params,
+                            shards=target_shard_materialization.shards,
+                            threads_per_worker=target_shard_plan.threads_per_worker,
+                            env=env,
+                            run_mmseqs=run_mmseqs,
+                            extra_search_params=[
+                                "--db-load-mode", str(gpu_server_db_load_mode),
+                                "-s", str(config["sensitivity"]),
+                            ],
+                            max_parallel_workers=target_shard_plan.shard_count,
+                        )
+                        target_sharded_env_search = True
+                    except Exception as e:
+                        if not target_shard_plan.fallback_allowed:
+                            raise
+                        print(
+                            f"WARNING: EnvDB target sharding failed ({e}); falling back to unsharded EnvDB search.",
+                            flush=True,
+                        )
+                elif target_shard_mode != "off":
+                    print(f"Target DB sharding not used: {target_shard_plan.reason}", flush=True)
                 
-                if use_gpu_flag:
+                if not target_sharded_env_search and use_gpu_flag:
                     used_gpu_server = False
                     direct_gpu_allowed = True
                     if normalized_gpu_server_mode != "off":
@@ -3006,7 +3084,7 @@ def run_colabfold_msa_workflow(
                                 "-s", str(config["sensitivity"]),
                                 "--threads", str(num_threads),
                             ], env)
-                else:
+                elif not target_sharded_env_search:
                     run_mmseqs(mmseqs_bin, env_base_search_params + [
                         "--db-load-mode", "2",  # mmap databases into RAM
                         "-s", str(config["sensitivity"]),
@@ -3206,6 +3284,19 @@ def run_colabfold_msa_workflow(
                     }
                     for name, status in gpuserver_host_status.items()
                 },
+                "target_sharding": {
+                    "mode_requested": target_shard_mode,
+                    "enabled": bool(target_shard_plan.enabled) if target_shard_plan else False,
+                    "mode_effective": target_shard_plan.mode if target_shard_plan else "off",
+                    "reason": target_shard_plan.reason if target_shard_plan else "EnvDB search not executed",
+                    "shard_count": target_shard_plan.shard_count if target_shard_plan else 0,
+                    "threads_per_worker": target_shard_plan.threads_per_worker if target_shard_plan else num_threads,
+                    "total_threads": target_shard_plan.total_threads if target_shard_plan else num_threads,
+                    "fallback_allowed": bool(target_shard_plan.fallback_allowed) if target_shard_plan else False,
+                    "manifest_path": str(target_shard_materialization.manifest_path) if target_shard_materialization else None,
+                    "reused_manifest": bool(target_shard_materialization.reused) if target_shard_materialization else None,
+                    "search_was_sharded": bool(target_sharded_env_search),
+                },
                 "from_cache": False,
             }
             
@@ -3352,6 +3443,13 @@ Quality Presets:
                         help="Fail if MSA has fewer sequences (0 = no fail)")
     parser.add_argument("--fast-env-fallback-min-depth", type=int, default=25,
                         help="For preset=fast with use_env disabled, auto-run EnvDB when UniRef depth is below this (0 disables fallback)")
+    parser.add_argument("--target-shard-mode", dest="target_shard_mode", type=str, default="auto",
+                        choices=["auto", "required", "off"],
+                        help="EnvDB target DB sharding policy for high-quality local MSA runs (default: auto)")
+    parser.add_argument("--target-shards", dest="target_shards", type=int, default=DEFAULT_TARGET_SHARDS,
+                        help=f"Number of target DB shards for EnvDB sharded search (default: {DEFAULT_TARGET_SHARDS})")
+    parser.add_argument("--target-shard-min-size-gb", dest="target_shard_min_size_gb", type=float, default=DEFAULT_TARGET_SHARD_MIN_SIZE_GB,
+                        help=f"Minimum target DB size before auto sharding, in GiB (default: {DEFAULT_TARGET_SHARD_MIN_SIZE_GB})")
     return parser
 
 
