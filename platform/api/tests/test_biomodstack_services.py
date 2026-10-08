@@ -12,6 +12,89 @@ if str(REPO_ROOT) not in sys.path:
 import biomodstack_services as services
 
 
+def test_launch_preferences_default_to_browser_and_auto_open(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+    prefs = services.load_launch_preferences()
+
+    assert prefs == {
+        "default_surface": services.BROWSER_LAUNCH_SURFACE,
+        "auto_open_hosted_web_on_start": True,
+    }
+
+
+def test_launch_preferences_normalize_invalid_surface_to_browser(tmp_path: Path, monkeypatch) -> None:
+    config_home = tmp_path / "config"
+    prefs_path = config_home / "biomodstack" / "launch_preferences.json"
+    prefs_path.parent.mkdir(parents=True, exist_ok=True)
+    prefs_path.write_text(
+        '{"default_surface": "sideways", "auto_open_hosted_web_on_start": false}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    prefs = services.load_launch_preferences()
+
+    assert prefs == {
+        "default_surface": services.BROWSER_LAUNCH_SURFACE,
+        "auto_open_hosted_web_on_start": False,
+    }
+
+
+def test_runtime_descriptor_for_dev_mode(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    monkeypatch.setattr(services, "service_is_active", lambda name, project_root=None: name == services.API_SERVICE)
+    monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: True)
+    monkeypatch.setattr(
+        services,
+        "load_launch_preferences",
+        lambda: {
+            "default_surface": services.BROWSER_LAUNCH_SURFACE,
+            "auto_open_hosted_web_on_start": True,
+        },
+    )
+
+    descriptor = services.runtime_descriptor(project_root=project_root, runtime_mode="dev")
+
+    assert descriptor["runtime_mode"] == "dev"
+    assert descriptor["frontend_url"] == "http://127.0.0.1:5173/"
+    assert descriptor["browser_url"] == "http://127.0.0.1:5173/"
+    assert descriptor["router_basename"] == "/"
+    assert descriptor["supported_launch_surfaces"] == ["browser", "electron", "none"]
+    assert descriptor["services"] == [
+        {"name": services.API_SERVICE, "active": True},
+        {"name": services.FRONTEND_SERVICE, "active": False},
+    ]
+
+
+def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    monkeypatch.setattr(services, "service_is_active", lambda name, project_root=None: name == services.CORE_RUNTIME_SERVICE)
+    monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: True)
+    monkeypatch.setattr(
+        services,
+        "load_launch_preferences",
+        lambda: {
+            "default_surface": services.BROWSER_LAUNCH_SURFACE,
+            "auto_open_hosted_web_on_start": True,
+        },
+    )
+
+    descriptor = services.runtime_descriptor(project_root=project_root, runtime_mode="container")
+
+    assert descriptor["runtime_mode"] == "container"
+    assert descriptor["frontend_url"] == "http://127.0.0.1:5173/bms/"
+    assert descriptor["browser_url"] == "http://127.0.0.1:5173/bms/"
+    assert descriptor["router_basename"] == "/bms/"
+    assert descriptor["logs"] == [
+        {
+            "id": "runtime",
+            "label": "Core runtime log",
+            "path": str(services.CORE_RUNTIME_LOG),
+        }
+    ]
+
+
 def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path) -> None:
     project_root = tmp_path / "biomodstack"
     units = services.render_user_units(project_root, runtime_mode="dev")
@@ -150,6 +233,90 @@ def test_cleanup_legacy_listener_kills_matching_ancestor_chain(monkeypatch, tmp_
     services.cleanup_legacy_listener("api", project_root=project_root)
 
     assert killed == [9102, 9101]
+
+
+def test_start_all_dev_mode_waits_for_dev_frontend_url(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: calls.append(("ensure", runtime_mode)))
+    monkeypatch.setattr(services, "cleanup_legacy_listener", lambda kind, project_root=None: calls.append(("cleanup", kind)))
+    monkeypatch.setattr(
+        services,
+        "run_systemctl",
+        lambda *args, **kwargs: calls.append(("systemctl", args)) or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        services,
+        "should_cleanup_legacy_listeners_before_start",
+        lambda runtime_mode=None, project_root=None: True,
+    )
+    monkeypatch.setattr(services, "wait_for_http", lambda url, timeout_seconds=30.0: calls.append(("wait", url)))
+
+    services.start_all(project_root=project_root, runtime_mode="dev")
+
+    assert calls[-1] == ("wait", "http://127.0.0.1:5173/")
+
+
+def test_status_lines_keep_existing_container_human_output(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: None)
+    monkeypatch.setattr(
+        services,
+        "runtime_descriptor",
+        lambda project_root=None, runtime_mode=None: {
+            "runtime_mode": "container",
+            "runtime_active": True,
+            "api_url": "http://127.0.0.1:8000",
+            "frontend_url": "http://127.0.0.1:5173/bms/",
+            "health": {"api_ready": True, "frontend_ready": False},
+            "logs": [{"id": "runtime", "label": "Core runtime log", "path": str(services.CORE_RUNTIME_LOG)}],
+        },
+    )
+
+    lines = services.status_lines(project_root=project_root, runtime_mode="container")
+
+    assert lines == [
+        f"Runtime: active ({services.CORE_RUNTIME_SERVICE})",
+        f"API: ready ({services.API_HEALTH_URL})",
+        "Frontend: not ready (http://127.0.0.1:5173/bms/)",
+        f"Runtime log: {services.CORE_RUNTIME_LOG}",
+    ]
+
+
+def test_status_lines_do_not_mutate_runtime_state(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    monkeypatch.setattr(
+        services,
+        "ensure_user_units",
+        lambda root, runtime_mode=None: (_ for _ in ()).throw(AssertionError("ensure_user_units should not run during status")),
+    )
+    monkeypatch.setattr(
+        services,
+        "runtime_descriptor",
+        lambda project_root=None, runtime_mode=None: {
+            "runtime_mode": "dev",
+            "services": [
+                {"name": services.API_SERVICE, "active": True},
+                {"name": services.FRONTEND_SERVICE, "active": False},
+            ],
+            "health": {"api_ready": True, "frontend_ready": False},
+            "frontend_url": "http://127.0.0.1:5173/",
+            "logs": [
+                {"id": "api", "label": "API log", "path": str(services.API_LOG)},
+                {"id": "frontend", "label": "Frontend log", "path": str(services.FRONTEND_LOG)},
+            ],
+        },
+    )
+
+    lines = services.status_lines(project_root=project_root, runtime_mode="dev")
+
+    assert lines == [
+        f"API: active ({services.API_SERVICE})",
+        f"Frontend: inactive ({services.FRONTEND_SERVICE})",
+        f"API log: {services.API_LOG}",
+        f"Frontend log: {services.FRONTEND_LOG}",
+    ]
 
 
 def test_start_all_container_mode_skips_legacy_cleanup_when_runtime_already_active(monkeypatch, tmp_path: Path) -> None:

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from biomodstack_services import (  # noqa: E402
     resolve_runtime_mode,
     restart_all,
     restart_api,
+    runtime_descriptor,
     start_all,
     status_lines,
     stop_all,
@@ -29,12 +32,15 @@ NOTIFY_ICON = "applications-science"
 def notify(message: str, icon: str = NOTIFY_ICON) -> None:
     import subprocess
 
-    subprocess.run(
-        ["notify-send", "BioModStack", message, "-i", icon],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        subprocess.run(
+            ["notify-send", "BioModStack", message, "-i", icon],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return
 
 
 def main() -> int:
@@ -46,11 +52,15 @@ def main() -> int:
         help="runtime mode to manage (defaults to BMS_RUNTIME_MODE or dev)",
     )
     parser.add_argument("--notify", action="store_true", help="send desktop notifications")
+    parser.add_argument("--json", action="store_true", dest="json_output", help="emit structured JSON for supported actions")
     args = parser.parse_args()
 
-    runtime_mode = resolve_runtime_mode(args.runtime)
+    if args.json_output and args.action != "status":
+        parser.error("--json is only supported with the status action")
 
     try:
+        runtime_mode = resolve_runtime_mode(args.runtime)
+
         if args.action == "start":
             if args.notify:
                 notify("🚀 Starting BioModStack services…")
@@ -91,13 +101,21 @@ def main() -> int:
             return 0
 
         if args.action == "status":
-            print("\n".join(status_lines(runtime_mode=runtime_mode)))
+            if args.json_output:
+                print(json.dumps(runtime_descriptor(runtime_mode=runtime_mode), indent=2, sort_keys=True))
+                return 0
+            lines = status_lines(runtime_mode=runtime_mode)
+            print("\n".join(lines))
             if runtime_mode == "container":
-                print(f"Core runtime log: {CORE_RUNTIME_LOG}")
+                fallback_log_line = f"Core runtime log: {CORE_RUNTIME_LOG}"
+                fallback_log_path = str(CORE_RUNTIME_LOG)
             else:
-                print(f"Frontend log: {FRONTEND_LOG}")
+                fallback_log_line = f"Frontend log: {FRONTEND_LOG}"
+                fallback_log_path = str(FRONTEND_LOG)
+            if not any(line.rstrip().endswith(fallback_log_path) for line in lines):
+                print(fallback_log_line)
             return 0
-    except ServiceManagerError as exc:
+    except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
         if args.notify:
             notify(f"❌ {exc}", icon="dialog-error")
         print(f"ERROR: {exc}", file=sys.stderr)
