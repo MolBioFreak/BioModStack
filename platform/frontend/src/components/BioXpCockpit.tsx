@@ -79,12 +79,18 @@ import {
     useThermalFastProfile,
     useThermalHardReset,
     useThermalSnapshot,
+    useUsbSniffRuns,
+    useUsbSniffStatus,
+    useStartUsbSniffCapture,
+    useStopUsbSniffCapture,
+    useExportUsbSniffCapture,
     useVisionBarcodeRead,
     useVisionInspect
 } from '../lib/bioxpClient';
-import type { AxisMotionResult, AxisName, AxisStatus, BioXpOperationReport, CameraControlRow, ChillerBankName, LiquidStatus, MotionPowerStatus, MotionReferenceStatus, ThermalBankName } from '../lib/bioxpClient';
+import type { AxisMotionResult, AxisName, AxisStatus, BioXpOperationReport, CameraControlRow, ChillerBankName, LiquidStatus, MotionPowerStatus, MotionReferenceStatus, ThermalBankName, UsbSniffProfile } from '../lib/bioxpClient';
 import { BioXpProtocolRunner } from './BioXpProtocolRunner';
 import { deriveRuntimeStatusSummary } from './bioxpConnectionSemantics.js';
+import { deriveBioXpInterlinkMenuStatus, isFreshPositiveBioXpSignal } from './bioxpInterlinkStatus.js';
 
 const getErrorMessage = (error: unknown) => {
     if (error instanceof Error) {
@@ -99,11 +105,10 @@ const getErrorMessage = (error: unknown) => {
     return null;
 };
 
-const SectionCard = ({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) => (
+const SectionCard = ({ title, children }: { title: string; subtitle?: string; children: ReactNode }) => (
     <div className="p-4 bg-surface-secondary border border-border-primary rounded-lg space-y-4">
-        <div className="space-y-1 border-b border-border-secondary pb-2">
+        <div className="border-b border-border-secondary pb-2">
             <h3 className="text-sm font-semibold text-content">{title}</h3>
-            {subtitle && <p className="text-xs text-content-muted">{subtitle}</p>}
         </div>
         {children}
     </div>
@@ -112,7 +117,7 @@ const SectionCard = ({ title, subtitle, children }: { title: string; subtitle?: 
 const JsonBlock = ({ title, data, fallback = 'No data yet.' }: { title: string; data: unknown; fallback?: string }) => (
     <details className="rounded border border-border-primary bg-surface/40 p-2">
         <summary className="cursor-pointer text-xs font-semibold text-content-muted hover:text-content transition-colors">
-            {title} Debug payload
+            {title}
         </summary>
         <pre className="mt-2 text-[10px] font-mono text-content-muted p-3 bg-[#000000] rounded border border-border-primary overflow-x-auto max-h-72">
             {data ? JSON.stringify(data, null, 2) : fallback}
@@ -375,6 +380,13 @@ const getAxisReferenceState = (referenceStatus: MotionReferenceStatus | undefine
     return String(row?.state ?? row?.reference_state ?? (row?.referenced === true ? 'referenced' : 'unknown')).toLowerCase();
 };
 
+const AXIS_REFERENCE_OK_STATES = new Set(['referenced', 'synced', 'known']);
+
+const isAxisReferenceTrusted = (referenceState: string) => AXIS_REFERENCE_OK_STATES.has(referenceState.toLowerCase());
+
+const isZPositiveDownReferenceGuardBlocked = (axis: AxisName, referenceState: string, position: number | null | undefined) =>
+    axis === 'z' && !isAxisReferenceTrusted(referenceState) && (position == null || position < 0);
+
 const hasMutationKeyPrefix = (mutationKey: unknown, prefix: readonly string[]) =>
     Array.isArray(mutationKey) && prefix.every((part, index) => mutationKey[index] === part);
 
@@ -581,7 +593,7 @@ const AxisControls = ({
     const motionRangeStatus = useMotionRangeStatus(enabled, localMotionBusy ? false : 5000);
 
     const referenceState = getAxisReferenceState(motionReferenceStatus.data, axis);
-    const axisReferenced = referenceState === 'referenced';
+    const axisReferenced = isAxisReferenceTrusted(referenceState);
     const axisRangeRow = getAxisRangeRow(motionRangeStatus.data, axis);
     const axisRangeBounds = getAxisRangeBounds(axisRangeRow);
     const axisRangePosition = getAxisRangePosition(axisRangeRow);
@@ -608,7 +620,7 @@ const AxisControls = ({
     const leftMasked = directionGuard.leftMasked;
     const rightMasked = directionGuard.rightMasked;
     const switchConflictObserved = directionGuard.conflictingSwitches;
-    const zPositiveDownBlocked = axis === 'z' && !axisReferenced && (displayPosition ?? 0) < 0;
+    const zPositiveDownBlocked = isZPositiveDownReferenceGuardBlocked(axis, referenceState, displayPosition);
     const negativeMoveBlocked = directionGuard.negativeBlocked;
     const positiveMoveBlocked = directionGuard.positiveBlocked || zPositiveDownBlocked;
     const absoluteMoveBlocked = !axisReferenced || !axisRangeAvailable;
@@ -618,6 +630,8 @@ const AxisControls = ({
         ? 'Needs referenced axis + live range.'
         : 'Move to controller coordinate 0.';
     const switchHomeTitle = 'Disabled here; use supervised OEM recipe.';
+    const negativeButtonLabel = axis === 'z' ? 'UP/-Z' : '◄';
+    const positiveButtonLabel = axis === 'z' ? 'DN/+Z' : '►';
     const motionProfile = lastMotionResult?.motion_profile ?? {
         speed: data?.preset?.speed ?? 100,
         acc: data?.preset?.acc ?? 50,
@@ -630,6 +644,7 @@ const AxisControls = ({
     const prepPolicyNote = lastMotionResult?.prep_policy?.note;
     const truthSummary = lastMotionResult?.motion_truth?.summary;
     const truthEvidenceLevel = lastMotionResult?.motion_truth?.evidence_level?.replaceAll('_', ' ');
+    const motionEvidenceClassification = lastMotionResult?.motion_evidence?.classification;
     const artifactBundle = lastMotionResult?.artifact_bundle;
     const artifactSnapshotCount = artifactBundle?.snapshot_refs?.length ?? 0;
     const boundedStepMagnitude = clampInteger(Math.abs(steps), sliderProfile.stepMin, sliderProfile.stepMax);
@@ -756,7 +771,7 @@ const AxisControls = ({
                     disabled={!enabled || moveRelative.isPending || negativeMoveBlocked}
                     className="px-3 py-1.5 bg-surface-secondary hover:bg-surface border border-accent/20 text-content text-xs rounded-lg transition-colors"
                 >
-                    ◄
+                    {negativeButtonLabel}
                 </button>
                 <button
                     onClick={() => {
@@ -773,7 +788,7 @@ const AxisControls = ({
                     disabled={!enabled || moveRelative.isPending || positiveMoveBlocked}
                     className="px-3 py-1.5 bg-surface-secondary hover:bg-surface border border-accent/20 text-content text-xs rounded-lg transition-colors"
                 >
-                    ►
+                    {positiveButtonLabel}
                 </button>
                 <button
                     onClick={() => {
@@ -865,6 +880,13 @@ const AxisControls = ({
                             Truth: {truthEvidenceLevel ?? 'controller only'} — {truthSummary}
                         </div>
                     )}
+                    {!commandLabel && motionEvidenceClassification && (
+                        <div className="text-[10px] text-content-muted font-mono">
+                            CTRL EVIDENCE: {motionEvidenceClassification.controller_motion_evidence === true ? 'YES' : 'NO'} · PHYSICAL PROOF: {motionEvidenceClassification.physical_motion_confirmed === true ? 'YES' : 'NO'} · STALL EVENT: {motionEvidenceClassification.stall_event_seen === true ? 'YES' : 'NO'}
+                            {motionEvidenceClassification.position_delta != null ? ` · Δpos: ${motionEvidenceClassification.position_delta}` : ''}
+                            {motionEvidenceClassification.nonzero_speed_seen != null ? ` · nonzero speed: ${motionEvidenceClassification.nonzero_speed_seen ? 'yes' : 'no'}` : ''}
+                        </div>
+                    )}
                     {!commandLabel && lastMotionResult?.message && (
                         <div className="text-[10px] text-content-muted">
                             Result: {lastMotionResult.message}
@@ -894,7 +916,7 @@ const AxisControls = ({
             {(negativeMoveBlocked || positiveMoveBlocked || absoluteMoveBlocked || switchHomeBlocked) && (
                 <div className="text-[10px] text-warning space-y-0.5">
                     {negativeMoveBlocked && <div>− move blocked by switch/conflict telemetry.</div>}
-                    {positiveMoveBlocked && <div>+ move blocked by switch/conflict telemetry{zPositiveDownBlocked ? ' or Z guard.' : '.'}</div>}
+                    {positiveMoveBlocked && <div>{zPositiveDownBlocked ? 'Z DN/+Z blocked until reference/position is trusted; use UP/-Z for lift.' : '+ move blocked by switch/conflict telemetry.'}</div>}
                     {absoluteMoveBlocked && <div>Abs/zero blocked: needs reference + range.</div>}
                     {switchHomeBlocked && <div>Switch Home disabled here; use supervised OEM recipe.</div>}
                 </div>
@@ -924,8 +946,10 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
     const [commandLabel, setCommandLabel] = useState<string | null>(null);
     const localMotionBusy = moveRelative.isPending || zeroAxis.isPending;
     const { data, isError, error } = useAxisStatus(axis, enabled, localMotionBusy ? 750 : 2500);
+    const motionReferenceStatus = useMotionReferenceStatus(enabled, [axis], localMotionBusy ? false : 2500);
 
     const position = data?.status?.position?.position;
+    const referenceState = getAxisReferenceState(motionReferenceStatus.data, axis);
     const speed = data?.status?.speed?.speed;
     const moving = typeof speed === 'number' ? speed !== 0 : false;
     const directionGuard = getAxisDirectionState(data);
@@ -935,7 +959,8 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
     const rightMasked = directionGuard.rightMasked;
     const switchConflictObserved = directionGuard.conflictingSwitches;
     const negativeMoveBlocked = directionGuard.negativeBlocked;
-    const positiveMoveBlocked = directionGuard.positiveBlocked;
+    const zPositiveDownBlocked = isZPositiveDownReferenceGuardBlocked(axis, referenceState, position);
+    const positiveMoveBlocked = directionGuard.positiveBlocked || zPositiveDownBlocked;
     const zeroToControllerBlocked = false;
     const liveDelta =
         commandStartPosition != null && typeof position === 'number'
@@ -977,7 +1002,7 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
                     disabled={!enabled || moveRelative.isPending || negativeMoveBlocked}
                     className="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
                 >
-                    ◄
+                    {axis === 'z' ? 'UP/-Z' : '◄'}
                 </button>
                 <button
                     onClick={() => {
@@ -990,7 +1015,7 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
                     disabled={!enabled || moveRelative.isPending || positiveMoveBlocked}
                     className="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
                 >
-                    ►
+                    {axis === 'z' ? 'DN/+Z' : '►'}
                 </button>
                 <button
                     onClick={() => {
@@ -1012,6 +1037,11 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
                     {switchConflictObserved
                         ? 'L/R switch readback both active (motion buttons blocked until telemetry clears)'
                         : `${leftActive === true ? (leftMasked ? 'L sw(masked)' : 'L sw(block)') : 'L ok'} · ${rightActive === true ? (rightMasked ? 'R sw(masked)' : 'R sw(block)') : 'R ok'}`}
+                </div>
+            )}
+            {zPositiveDownBlocked && (
+                <div className="text-[10px] text-warning">
+                    Z DN/+Z blocked until reference/position is trusted; use UP/-Z for lift.
                 </div>
             )}
             {commandLabel && (
@@ -1040,6 +1070,7 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
     const [lastAction, setLastAction] = useState<string | null>(null);
     const statusPollIntervalMs = holdCommand || moveRelative.isPending ? 500 : 2500;
     const axisBatchStatus = useAxisStatusBatch([...CAMERA_HOLD_JOG_AXES], enabled, statusPollIntervalMs);
+    const motionReferenceStatus = useMotionReferenceStatus(enabled, [...CAMERA_HOLD_JOG_AXES], holdCommand || moveRelative.isPending ? false : 2500);
     const axisRows = axisBatchStatus.data?.rows ?? {};
 
     const axisDataMap: Record<'x' | 'y' | 'z', AxisStatus | undefined> = useMemo(() => ({
@@ -1051,10 +1082,14 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
     const yAxis = axisDataMap.y;
     const zAxis = axisDataMap.z;
 
+    const zReferenceState = getAxisReferenceState(motionReferenceStatus.data, 'z');
+    const zPosition = zAxis?.status?.position?.position;
+    const zPositiveDownBlocked = isZPositiveDownReferenceGuardBlocked('z', zReferenceState, zPosition);
+
     const stopHold = () => setHoldCommand(null);
 
     const isBlocked = useCallback((command: CameraHoldJogCommand) =>
-        getAxisDirectionState(axisDataMap[command.axis]).blocked, [axisDataMap]);
+        getAxisDirectionState(axisDataMap[command.axis]).blocked || (command.axis === 'z' && command.steps > 0 && zPositiveDownBlocked), [axisDataMap, zPositiveDownBlocked]);
 
     const issueJog = useCallback((command: CameraHoldJogCommand) => {
         moveRelative.mutate(
@@ -1141,6 +1176,7 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
         yPositive.blocked ? 'Y+ blocked by active right limit.' : null,
         zNegative.blocked ? 'Z up (-) blocked by active left limit.' : null,
         zPositive.blocked ? 'Z down (+) blocked by active right limit.' : null,
+        zPositiveDownBlocked ? 'Z DN/+Z blocked until reference/position is trusted; use UP/-Z for lift.' : null,
     ].filter(Boolean);
 
     const conflicts = [
@@ -1259,7 +1295,7 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
                         { axis: 'z', steps: CAMERA_HOLD_JOG_PROFILE.z_step, label: 'Z down (+)' },
                         '▼',
                         'DN/+Z',
-                        zPositive.blocked,
+                        zPositive.blocked || zPositiveDownBlocked,
                         holdCommand?.axis === 'z' && holdCommand?.steps > 0,
                     )}
                 </div>
@@ -1638,7 +1674,7 @@ const ChillerControlCard = ({ bank, label, enabled }: { bank: ChillerBankName; l
 };
 
 export const BioXpCockpit = () => {
-    const [activeTab, setActiveTab] = useState<'connection' | 'operator' | 'service' | 'manual' | 'controls' | 'camera'>('controls');
+    const [activeTab, setActiveTab] = useState<'connection' | 'operator' | 'service' | 'manual' | 'controls' | 'camera' | 'usb'>('controls');
     const [cameraDevice, setCameraDevice] = useState('/dev/video0');
     const [snapshot, setSnapshot] = useState<string | null>(null);
     const [pollCamera, setPollCamera] = useState(false);
@@ -1666,6 +1702,13 @@ export const BioXpCockpit = () => {
     const [microMoveAxis, setMicroMoveAxis] = useState<AxisName>('x');
     const [microMoveSteps, setMicroMoveSteps] = useState(100);
     const [interlockOverrideReason, setInterlockOverrideReason] = useState('mag/latch commissioning; operator watching instrument');
+    const [usbSniffProfile, setUsbSniffProfile] = useState<UsbSniffProfile>('passive');
+    const [usbSniffDurationS, setUsbSniffDurationS] = useState(300);
+    const [usbSniffReason, setUsbSniffReason] = useState('full USB packet capture for controller-only motion RCA');
+    const [usbSniffIncludePcap, setUsbSniffIncludePcap] = useState(true);
+    const [usbSniffIncludeDriverLedger, setUsbSniffIncludeDriverLedger] = useState(true);
+    const [usbSniffPassiveOnly, setUsbSniffPassiveOnly] = useState(true);
+    const [latestUsbSniffAction, setLatestUsbSniffAction] = useState<{ action: string; data: UntypedApiValue } | null>(null);
     const [latestOperationReport, setLatestOperationReport] = useState<BioXpOperationReport | null>(null);
     const cameraViewerRef = useRef<HTMLDivElement | null>(null);
 
@@ -1677,13 +1720,37 @@ export const BioXpCockpit = () => {
     });
     const hardwareBusy = hardwareMutationCount > 0;
     const motionBusy = motionMutationCount > 0;
-    const bioXpInterlink = useBioXpInterlinkState(activeTab === 'connection', activeTab === 'connection' ? 5000 : false);
+    const bioXpInterlink = useBioXpInterlinkState(true, activeTab === 'connection' ? 5000 : false);
     const interlinkActive = Boolean(bioXpInterlink.data?.active);
     const interlinkConfigured = Boolean(bioXpInterlink.data?.configured);
     const interlinkUrl = bioXpInterlink.data?.robot_api_url ?? bioXpInterlink.data?.recommended_url ?? 'http://robot:8123';
-    const { data: status, isLoading: statusLoading, isError: statusIsError, error: statusError } = useBioXpStatus(interlinkActive, false);
+    const interlinkTruthStatus = deriveBioXpInterlinkMenuStatus({
+        active: interlinkActive,
+        configured: interlinkConfigured,
+        reachable: bioXpInterlink.data?.reachable,
+        lastProbeAt: bioXpInterlink.data?.last_probe_at,
+        probeFailed: bioXpInterlink.isError,
+        probeStale: bioXpInterlink.data?.probe_stale === true,
+    });
+    const interlinkProbeFresh = interlinkTruthStatus.isRobotReachabilityProven;
+    const interlinkExplicitFailure = interlinkActive && interlinkTruthStatus.state === 'unreachable';
+    const {
+        data: status,
+        isLoading: statusLoading,
+        isError: statusIsError,
+        error: statusError,
+        isFetchedAfterMount: statusFetchedAfterMount,
+        dataUpdatedAt: statusDataUpdatedAt,
+    } = useBioXpStatus(interlinkActive, false);
 
-    const { data: runtimeStatus, isLoading: runtimeLoading, isError: runtimeStatusIsError, error: runtimeStatusError } = useRuntimeStatus();
+    const {
+        data: runtimeStatus,
+        isLoading: runtimeLoading,
+        isError: runtimeStatusIsError,
+        error: runtimeStatusError,
+        isFetchedAfterMount: runtimeFetchedAfterMount,
+        dataUpdatedAt: runtimeDataUpdatedAt,
+    } = useRuntimeStatus(interlinkActive);
     const motionPowerEnable = useMotionPowerEnable();
     const motionPowerDiag = useMotionPowerDiag();
     const motionArmStrictStartup = useMotionArmStrictStartup();
@@ -1691,10 +1758,25 @@ export const BioXpCockpit = () => {
     const prepareInterlock = usePrepareInterlock();
     const clearLock = useClearLock();
 
-    const statusReportsHardwareConnected = !statusIsError && status?.hardware_connected === true;
-    const runtimeReportsHardwareConnected = !runtimeStatusIsError && runtimeStatus?.hardware_connected === true;
-    const interlinkReportsHardwareConnected = bioXpInterlink.data?.hardware_connected === true;
-    const hardwareReachable = interlinkActive && (statusReportsHardwareConnected || runtimeReportsHardwareConnected || interlinkReportsHardwareConnected);
+    const cockpitTruthNowMs = Date.now();
+    const statusReportsHardwareConnected = isFreshPositiveBioXpSignal({
+        value: status?.hardware_connected,
+        isFetchedAfterMount: statusFetchedAfterMount,
+        isError: statusIsError,
+        dataUpdatedAt: statusDataUpdatedAt,
+        nowMs: cockpitTruthNowMs,
+        blocked: interlinkExplicitFailure,
+    });
+    const runtimeReportsHardwareConnected = isFreshPositiveBioXpSignal({
+        value: runtimeStatus?.hardware_connected,
+        isFetchedAfterMount: runtimeFetchedAfterMount,
+        isError: runtimeStatusIsError,
+        dataUpdatedAt: runtimeDataUpdatedAt,
+        nowMs: cockpitTruthNowMs,
+        blocked: interlinkExplicitFailure,
+    });
+    const interlinkReportsHardwareConnected = !interlinkExplicitFailure && interlinkProbeFresh && bioXpInterlink.data?.hardware_connected === true;
+    const hardwareReachable = interlinkActive && !interlinkExplicitFailure && (statusReportsHardwareConnected || runtimeReportsHardwareConnected || interlinkReportsHardwareConnected);
     const linkageConfigured = interlinkConfigured || Boolean(status?.linkage_configured || runtimeStatus?.linkage_configured);
     const runtimeSummary = deriveRuntimeStatusSummary({
         linkageConfigured,
@@ -1715,7 +1797,7 @@ export const BioXpCockpit = () => {
     const controlsPollingEnabled = false;
     const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera && !motionBusy;
     const capabilities = useBioXpCapabilities(interlinkActive);
-    const operationCapabilities = useBioXpOperationCapabilities(interlinkActive);
+    const operationCapabilities = useBioXpOperationCapabilities(interlinkActive, hardwareBusy ? false : 30000);
     const operationReadiness = useBioXpOperationReadiness(interlinkActive && activeTab === 'service' && !hardwareBusy, hardwareBusy ? false : 30000);
     const prepareSafeOperation = usePrepareSafeOperation();
     const headClearLockOperation = useHeadClearLockOperation();
@@ -1801,22 +1883,56 @@ export const BioXpCockpit = () => {
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
     }, []);
 
-    const robotApiReachable =
-        bioXpInterlink.data?.reachable === true ||
-        runtimeStatus?.linked_runtime_reachable === true ||
-        operationCapabilities.data?.robot_openapi_reachable === true ||
-        hardwareReachable;
+    const interlinkReportsRobotApiReachable = !interlinkExplicitFailure && interlinkProbeFresh;
+    const runtimeReportsRobotApiReachable = isFreshPositiveBioXpSignal({
+        value: runtimeStatus?.linked_runtime_reachable,
+        isFetchedAfterMount: runtimeFetchedAfterMount,
+        isError: runtimeStatusIsError,
+        dataUpdatedAt: runtimeDataUpdatedAt,
+        nowMs: cockpitTruthNowMs,
+        blocked: interlinkExplicitFailure,
+    });
+    const operationCapabilitiesReportRobotApiReachable = isFreshPositiveBioXpSignal({
+        value: operationCapabilities.data?.robot_openapi_reachable,
+        isFetchedAfterMount: operationCapabilities.isFetchedAfterMount,
+        isError: operationCapabilities.isError,
+        dataUpdatedAt: operationCapabilities.dataUpdatedAt,
+        nowMs: cockpitTruthNowMs,
+        blocked: interlinkExplicitFailure,
+    });
+    const robotApiReachable = !interlinkExplicitFailure && (
+        interlinkReportsRobotApiReachable ||
+        runtimeReportsRobotApiReachable ||
+        operationCapabilitiesReportRobotApiReachable ||
+        hardwareReachable
+    );
     const robotApiExplicitlyUnreachable =
         interlinkActive &&
-        !robotApiReachable &&
-        (statusIsError || runtimeStatusIsError || bioXpInterlink.data?.reachable === false || runtimeStatus?.linked_runtime_reachable === false);
+        (
+            interlinkExplicitFailure ||
+            (!robotApiReachable && (
+                statusIsError ||
+                runtimeStatusIsError ||
+                bioXpInterlink.isError ||
+                operationCapabilities.isError ||
+                bioXpInterlink.data?.reachable === false ||
+                runtimeStatus?.linked_runtime_reachable === false ||
+                operationCapabilities.data?.robot_openapi_reachable === false
+            ))
+        );
     const controlPlaneReachable =
         interlinkActive &&
         linkageConfigured &&
         robotApiReachable &&
-        operationCapabilities.data?.robot_openapi_reachable === true;
+        operationCapabilitiesReportRobotApiReachable;
     const isConnected = interlinkActive && !robotApiExplicitlyUnreachable && (hardwareReachable || controlPlaneReachable);
     const interlockOverrideStatus = useMotionInterlockOverrideStatus(isConnected && (activeTab === 'controls' || activeTab === 'service') && !hardwareBusy, hardwareBusy ? false : 8000);
+    const usbSniffPollingEnabled = activeTab === 'usb' && linkageConfigured && !hardwareBusy;
+    const usbSniffStatus = useUsbSniffStatus(usbSniffPollingEnabled, hardwareBusy ? false : 5000);
+    const usbSniffRuns = useUsbSniffRuns(usbSniffPollingEnabled, false);
+    const usbSniffStart = useStartUsbSniffCapture();
+    const usbSniffStop = useStopUsbSniffCapture();
+    const usbSniffExport = useExportUsbSniffCapture();
     const isRecovering = interlinkActive && !robotApiExplicitlyUnreachable && !hardwareReachable && controlPlaneReachable;
     const isDegraded = !!status && !statusIsError && (status.status === 'degraded' || isRecovering);
     const linkInactive = linkageConfigured && !interlinkActive;
@@ -1960,6 +2076,8 @@ export const BioXpCockpit = () => {
     const recordOemError = (action: string, error: unknown) => recordOemAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
     const recordVisionAction = (action: string, data: UntypedApiValue) => setLatestVisionAction({ action, data });
     const recordVisionError = (action: string, error: unknown) => recordVisionAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
+    const recordUsbSniffAction = (action: string, data: UntypedApiValue) => setLatestUsbSniffAction({ action, data });
+    const recordUsbSniffError = (action: string, error: unknown) => recordUsbSniffAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
     const operationPayload = () => ({
         operator_ack: true,
         operator: 'bms-cockpit',
@@ -2187,6 +2305,62 @@ export const BioXpCockpit = () => {
         getErrorMessage(latchUnlockOperation.error) ||
         getErrorMessage(emergencyStopOperation.error);
 
+    const usbSniffStatusData = usbSniffStatus.data ?? null;
+    const usbSniffActive = usbSniffStatusData?.active === true;
+    const usbSniffAvailable = usbSniffStatusData?.available !== false && !usbSniffStatusData?.proxy_error;
+    const usbSniffReasonTrimmed = usbSniffReason.trim();
+    const usbSniffDurationBounded = Math.max(1, Math.min(1800, Math.trunc(Number.isFinite(usbSniffDurationS) ? usbSniffDurationS : 300)));
+    const usbSniffActionBusy = usbSniffStart.isPending || usbSniffStop.isPending || usbSniffExport.isPending;
+    const usbSniffBadgeLabel = usbSniffActive ? 'ACTIVE' : usbSniffAvailable && linkageConfigured ? 'READY' : 'UNAVAILABLE';
+    const usbSniffBadgeClassName = usbSniffActive
+        ? 'bg-success/10 text-success border-success/30'
+        : usbSniffAvailable && linkageConfigured
+            ? 'bg-accent/10 text-accent border-accent/30'
+            : 'bg-warning/10 text-warning border-warning/30';
+    const usbSniffActionError =
+        getErrorMessage(usbSniffStatus.error) ||
+        getErrorMessage(usbSniffRuns.error) ||
+        getErrorMessage(usbSniffStart.error) ||
+        getErrorMessage(usbSniffStop.error) ||
+        getErrorMessage(usbSniffExport.error);
+    const startUsbSniffCapture = () => {
+        if (!usbSniffReasonTrimmed) {
+            recordUsbSniffError('usb_sniff_start', 'Reason is required before starting USB packet capture.');
+            return;
+        }
+        usbSniffStart.mutate(
+            {
+                profile: usbSniffProfile,
+                duration_s: usbSniffDurationBounded,
+                include_pcap: usbSniffIncludePcap,
+                include_driver_ledger: usbSniffIncludeDriverLedger,
+                passive_only: usbSniffPassiveOnly,
+                reason: usbSniffReasonTrimmed,
+                operator_ack: 'USB_SNIFF',
+                operator: 'bms-cockpit',
+                stop_existing: true,
+            },
+            { onSuccess: (data) => recordUsbSniffAction('usb_sniff_start', data), onError: (error) => recordUsbSniffError('usb_sniff_start', error) },
+        );
+    };
+    const stopUsbSniffCapture = () => {
+        usbSniffStop.mutate(
+            {
+                reason: usbSniffReasonTrimmed || 'operator stopped USB packet capture',
+                operator_ack: 'USB_SNIFF',
+                operator: 'bms-cockpit',
+            },
+            { onSuccess: (data) => recordUsbSniffAction('usb_sniff_stop', data), onError: (error) => recordUsbSniffError('usb_sniff_stop', error) },
+        );
+    };
+    const exportUsbSniffCapture = () => {
+        const currentRunId = String(usbSniffStatusData?.current_run?.run_id || usbSniffStatusData?.latest_run?.run_id || '');
+        usbSniffExport.mutate(
+            currentRunId ? { run_id: currentRunId, operator_ack: 'USB_SNIFF', operator: 'bms-cockpit' } : { operator_ack: 'USB_SNIFF', operator: 'bms-cockpit' },
+            { onSuccess: (data) => recordUsbSniffAction('usb_sniff_export', data), onError: (error) => recordUsbSniffError('usb_sniff_export', error) },
+        );
+    };
+
     const serviceOperationsPanel = (
         <SectionCard
             title="Ready-Made Robot Recipes"
@@ -2248,6 +2422,106 @@ export const BioXpCockpit = () => {
             <JsonBlock title="Readiness Bundle" data={operationReadiness.data} fallback="Open Service Operations with linkage configured to poll readiness." />
             <JsonBlock title="Operation Capabilities" data={operationCapabilities.data} fallback="Capability map pending." />
             <JsonBlock title="Latest Operation Report" data={latestOperationReport} fallback="No named service operation executed yet." />
+        </SectionCard>
+    );
+
+    const usbSniffPanel = (
+        <SectionCard
+            title="Full USB Packet Capture"
+            subtitle="Priority 1 observability: usbmon pcap + driver TX/RX ledger, timestamped and exportable."
+        >
+            <div className="rounded-lg border border-warning/20 bg-warning/5 p-3 space-y-2">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1 max-w-3xl">
+                        <div className="text-sm font-semibold text-warning">Capture-only diagnostics</div>
+                        <div className="text-xs text-content-muted">No homing, no arming, no recovery, no axis movement. BMS only proxies robot-local sniff endpoints.</div>
+                        <div className="text-[11px] font-mono text-content-muted">ack USB_SNIFF | passive {String(usbSniffPassiveOnly)} | pcap {String(usbSniffIncludePcap)} | driver-ledger {String(usbSniffIncludeDriverLedger)}</div>
+                    </div>
+                    <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${usbSniffBadgeClassName}`}>
+                        USB SNIFF: {usbSniffBadgeLabel}
+                    </div>
+                </div>
+                {!linkageConfigured && <div className="text-xs text-warning">Configure BIOXP LINK before capture controls can reach the handler.</div>}
+                {linkageConfigured && !interlinkActive && <div className="text-xs text-warning">Saved profile inactive. Connect BIOXP LINK first; capture buttons stay disabled.</div>}
+                {usbSniffStatusData?.detail && <div className="text-xs text-content-muted">{getErrorMessage(usbSniffStatusData.detail) ?? 'USB sniff status detail available in JSON below.'}</div>}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                <label className="block text-xs text-content-muted space-y-1">
+                    <span>Capture profile</span>
+                    <select value={usbSniffProfile} onChange={(event) => setUsbSniffProfile(event.target.value as UsbSniffProfile)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm">
+                        <option value="passive">passive — observe only</option>
+                        <option value="manual_observe">manual_observe — operator-driven session</option>
+                        <option value="debug">debug — verbose decode session</option>
+                    </select>
+                </label>
+                <label className="block text-xs text-content-muted space-y-1">
+                    <span>Duration seconds (1–1800)</span>
+                    <input
+                        type="number"
+                        min={1}
+                        max={1800}
+                        value={usbSniffDurationS}
+                        onChange={(event) => setUsbSniffDurationS(Number(event.target.value))}
+                        className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono"
+                    />
+                </label>
+            </div>
+
+            <label className="block text-xs text-content-muted space-y-1">
+                <span>Reason required before start</span>
+                <input
+                    value={usbSniffReason}
+                    onChange={(event) => setUsbSniffReason(event.target.value)}
+                    className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm"
+                    placeholder="e.g. correlate controller ACKs with full USB IN/OUT stream"
+                />
+            </label>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs text-content-muted">
+                <label className="flex items-center gap-2 rounded border border-border-primary bg-surface p-2">
+                    <input type="checkbox" checked={usbSniffIncludePcap} onChange={(event) => setUsbSniffIncludePcap(event.target.checked)} />
+                    usbmon/tshark pcapng
+                </label>
+                <label className="flex items-center gap-2 rounded border border-border-primary bg-surface p-2">
+                    <input type="checkbox" checked={usbSniffIncludeDriverLedger} onChange={(event) => setUsbSniffIncludeDriverLedger(event.target.checked)} />
+                    driver TX/RX ledger
+                </label>
+                <label className="flex items-center gap-2 rounded border border-border-primary bg-surface p-2">
+                    <input type="checkbox" checked={usbSniffPassiveOnly} onChange={(event) => setUsbSniffPassiveOnly(event.target.checked)} />
+                    passive only / no motion
+                </label>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+                <button
+                    onClick={startUsbSniffCapture}
+                    disabled={!isConnected || usbSniffActionBusy || usbSniffActive || !usbSniffReasonTrimmed}
+                    className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
+                >
+                    {usbSniffStart.isPending ? 'STARTING...' : 'Start USB Capture'}
+                </button>
+                <button
+                    onClick={stopUsbSniffCapture}
+                    disabled={!isConnected || usbSniffActionBusy || !usbSniffActive}
+                    className="px-3 py-2 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10 disabled:opacity-40"
+                >
+                    {usbSniffStop.isPending ? 'STOPPING...' : 'Stop Capture'}
+                </button>
+                <button
+                    onClick={exportUsbSniffCapture}
+                    disabled={!isConnected || usbSniffActionBusy}
+                    className="px-3 py-2 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10 disabled:opacity-40"
+                >
+                    {usbSniffExport.isPending ? 'EXPORTING...' : 'Export Bundle'}
+                </button>
+            </div>
+
+            {usbSniffActionBusy && <div className="text-xs text-warning">USB capture action in flight; no motion endpoints are triggered by this panel.</div>}
+            {usbSniffActionError && <div className="text-xs text-error">{usbSniffActionError}</div>}
+            <JsonBlock title="USB Sniff Status" data={usbSniffStatusData} fallback="Open USB Capture with BIOXP LINK configured to poll capture status." />
+            <JsonBlock title="USB Sniff Runs" data={usbSniffRuns.data} fallback="No capture runs listed yet." />
+            <JsonBlock title="Latest USB Sniff Action" data={latestUsbSniffAction} fallback="No USB capture action executed yet." />
         </SectionCard>
     );
 
@@ -2946,6 +3220,7 @@ export const BioXpCockpit = () => {
                     { key: 'controls', label: 'Live X/Y/Z + Handler' },
                     { key: 'operator', label: 'Protocol Jobs' },
                     { key: 'service', label: 'Gated Service Recipes' },
+                    { key: 'usb', label: 'USB Capture' },
                     ...(showCommissioningControls ? [{ key: 'manual', label: 'Commissioning Motion' }] as const : []),
                     { key: 'camera', label: 'Camera / Vision' },
                 ] as const).map((tab) => (
@@ -3133,6 +3408,32 @@ export const BioXpCockpit = () => {
                     linkageConfigured={runtimeSummary.linkageConfigured}
                     runtimeSummary={runtimeSummary}
                 />
+            )}
+
+            {activeTab === 'usb' && (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                    <div className="space-y-6">
+                        {usbSniffPanel}
+                    </div>
+                    <div className="space-y-6">
+                        <SectionCard title="USB Observability Scope" subtitle="BMS/workstation side is staged now; handler-local endpoints own actual usbmon capture when powered.">
+                            <div className="space-y-2 text-xs text-content-muted">
+                                <div>Priority 1: capture every USB bulk IN/OUT packet and correlate with driver TX/RX ledger.</div>
+                                <div>Priority 2: compare alternate Linux USB handling mechanisms after capture completeness is proven.</div>
+                                <div>Priority 3: OEM Windows USB sniffing only if Linux traces need a known-good sequence diff.</div>
+                                <div className="text-warning">Safety: this tab must never home, arm, recover motion, or move axes.</div>
+                            </div>
+                        </SectionCard>
+                        <SectionCard title="Capture Completeness Contract" subtitle="What the handler-side implementation must return before we trust a run.">
+                            <div className="grid grid-cols-1 gap-2 text-xs text-content-muted">
+                                <div>• usbmon/tshark pcapng with every URB on Novo USB-to-CAN endpoints.</div>
+                                <div>• driver ledger with monotonic timestamps, sequence IDs, OUT hex, IN hex, decode, timeout, drain, and mismatch entries.</div>
+                                <div>• run manifest linking pcap ↔ ledger ↔ operator reason ↔ robot service log window.</div>
+                                <div>• explicit packet counts and unmatched-frame accounting before conclusions.</div>
+                            </div>
+                        </SectionCard>
+                    </div>
+                </div>
             )}
 
 

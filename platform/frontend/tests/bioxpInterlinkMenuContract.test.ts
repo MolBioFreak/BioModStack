@@ -10,13 +10,13 @@ const panelPath = resolve('src/components/BioXpInterlinkControlPanel.tsx');
 const panelSource = existsSync(panelPath) ? readFileSync(panelPath, 'utf8') : '';
 const interlinkStatusSource = readFileSync(resolve('src/components/bioxpInterlinkStatus.ts'), 'utf8');
 
-test('BIOXP LINK topbar menu exists and matches existing utility-menu pattern', () => {
+test('BIOXP LINK topbar menu exists but is gated by the install feature flag', () => {
     assert.ok(existsSync(panelPath), 'BioXpInterlinkControlPanel.tsx must exist');
     assert.match(layoutSource, /BioXpInterlinkMenu/);
-    assert.match(layoutSource, /<BioXpInterlinkMenu \/>/);
+    assert.match(layoutSource, /bmsFeatures\.bioxp\s*&&\s*<BioXpInterlinkMenu \/>/);
     assert.match(panelSource, /data-bms-bioxp-interlink-menu="true"/);
     assert.match(panelSource, /BIOXP LINK/);
-    assert.match(panelSource, /BioXP robot interlink/);
+    assert.doesNotMatch(panelSource, /BioXP robot interlink/);
 });
 
 test('interlink panel exposes governed connection, diagnostics, logs, and button-only runtime controls', () => {
@@ -25,6 +25,8 @@ test('interlink panel exposes governed connection, diagnostics, logs, and button
         'Endpoint:',
         'deriveBioXpInterlinkMenuStatus',
         'useBioXpInterlinkState(true, isOpen ? 5000 : 30000)',
+        'probeFailed: state.isError',
+        'probeStale: state.data?.probe_stale === true',
         'maskEndpointForDisplay',
         'xxx.xxx',
         'Profile settings',
@@ -38,13 +40,6 @@ test('interlink panel exposes governed connection, diagnostics, logs, and button
         'RESET BIOXP RUNTIME',
         'Reboot host',
         'REBOOT ROBOT',
-        'Documentation',
-        'BMS interlink spec',
-        'https://github.com/MolBioFreak/BioModStack/blob/main/docs/plans/2026-05-08-bioxp-workstation-interlink-control-panel-spec.md',
-        'BioXP vendor',
-        'https://telesisbio.com/products/bioxp-system/',
-        'PyUSB GitHub',
-        'FastAPI docs',
     ]) {
         assert.match(panelSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
@@ -107,7 +102,7 @@ test('interlink status helper fails closed on unknown, stale, or timed-out robot
 
     assert.doesNotMatch(panelSource, /reachable === false\s*\?\s*'DEGRADED'\s*:\s*'LINKED'/);
     assert.doesNotMatch(panelSource, /Connected, not reachable/);
-    assert.match(cockpitSource, /useBioXpInterlinkState\(activeTab === 'connection', activeTab === 'connection' \? 5000 : false\)/);
+    assert.match(cockpitSource, /useBioXpInterlinkState\(true, activeTab === 'connection' \? 5000 : false\)/);
 });
 
 test('frontend client exposes interlink hooks and only the BMS proxy route family', () => {
@@ -127,6 +122,19 @@ test('frontend client exposes interlink hooks and only the BMS proxy route famil
         'export interface MotionInterlockOverridePayload',
         'export const useMotionInterlockOverrideStatus',
         'export const useSetMotionInterlockOverride',
+        'export type UsbSniffProfile',
+        'export interface UsbSniffStatusResponse',
+        'export interface UsbSniffCapturePayload',
+        'export const useUsbSniffStatus',
+        'export const useUsbSniffRuns',
+        'export const useStartUsbSniffCapture',
+        'export const useStopUsbSniffCapture',
+        'export const useExportUsbSniffCapture',
+        "operator_ack: 'USB_SNIFF'",
+        'export interface MotionEvidence',
+        'motion_evidence?: MotionEvidence | null',
+        'controller_motion_evidence?: boolean',
+        'physical_motion_confirmed?: boolean',
         '/api/bioxp/interlink/state',
         '/api/bioxp/interlink/settings',
         '/api/bioxp/interlink/connect',
@@ -136,10 +144,28 @@ test('frontend client exposes interlink hooks and only the BMS proxy route famil
         '/api/bioxp/interlink/robot-reboot',
         '/api/bioxp/interlink/logs',
         '/api/bioxp/motion/interlock/override',
+        '/api/bioxp/diagnostics/usb-sniff/status',
+        '/api/bioxp/diagnostics/usb-sniff/runs',
+        '/api/bioxp/diagnostics/usb-sniff/start',
+        '/api/bioxp/diagnostics/usb-sniff/stop',
+        '/api/bioxp/diagnostics/usb-sniff/export',
     ]) {
         assert.match(clientSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
     assert.doesNotMatch(panelSource, /8123\/status/);
+});
+
+test('BioXP cockpit surfaces OEM-style motion evidence without claiming physical proof', () => {
+    for (const marker of [
+        'motionEvidenceClassification',
+        'CTRL EVIDENCE:',
+        'PHYSICAL PROOF:',
+        'STALL EVENT:',
+        'nonzero speed:',
+        "physical_motion_confirmed === true ? 'YES' : 'NO'",
+    ]) {
+        assert.match(cockpitSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    }
 });
 
 test('BioXP cockpit exposes latch/24V interlock override as explicit commissioning-only control', () => {
@@ -157,11 +183,42 @@ test('BioXP cockpit exposes latch/24V interlock override as explicit commissioni
     }
 });
 
+test('BioXP cockpit exposes full USB capture controls as capture-only diagnostics', () => {
+    for (const marker of [
+        'USB Capture',
+        'Full USB Packet Capture',
+        'Priority 1 observability: usbmon pcap + driver TX/RX ledger',
+        'Capture-only diagnostics',
+        'No homing, no arming, no recovery, no axis movement',
+        'USB SNIFF:',
+        'Start USB Capture',
+        'Stop Capture',
+        'Export Bundle',
+        "operator_ack: 'USB_SNIFF'",
+        'useUsbSniffStatus',
+        'useStartUsbSniffCapture',
+        'Capture Completeness Contract',
+        'packet counts and unmatched-frame accounting',
+    ]) {
+        assert.match(cockpitSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    }
+});
+
 test('BioXP cockpit fails closed when robot API/control-plane evidence is absent', () => {
     for (const marker of [
         'robotApiReachable',
         'robotApiExplicitlyUnreachable',
-        "operationCapabilities.data?.robot_openapi_reachable === true",
+        'interlinkProbeFresh',
+        'interlinkReportsRobotApiReachable',
+        'runtimeReportsRobotApiReachable',
+        'operationCapabilitiesReportRobotApiReachable',
+        'statusFetchedAfterMount',
+        'runtimeFetchedAfterMount',
+        'statusDataUpdatedAt',
+        'runtimeDataUpdatedAt',
+        'operationCapabilities.dataUpdatedAt',
+        'isFreshPositiveBioXpSignal',
+        'interlinkExplicitFailure',
         'ROBOT UNREACHABLE',
         'BIOXP ROBOT UNREACHABLE',
         'Robot probes failed; hardware state unknown.',
@@ -171,6 +228,10 @@ test('BioXP cockpit fails closed when robot API/control-plane evidence is absent
     }
 
     assert.doesNotMatch(cockpitSource, /robot_openapi_reachable\s*!==\s*false/);
+    assert.doesNotMatch(cockpitSource, /bioXpInterlink\.data\?\.reachable === true \|\|/);
+    assert.doesNotMatch(cockpitSource, /runtimeStatus\?\.linked_runtime_reachable === true \|\|/);
+    assert.doesNotMatch(cockpitSource, /operationCapabilities\.data\?\.robot_openapi_reachable === true \|\|/);
+    assert.doesNotMatch(cockpitSource, /interlinkReportsHardwareConnected = bioXpInterlink\.data\?\.hardware_connected === true/);
     assert.doesNotMatch(cockpitSource, /interlinkActive\s*&&\s*\(statusIsError\s*\|\|\s*runtimeStatusIsError/);
     assert.doesNotMatch(cockpitSource, /PINGING\.\.\./);
     assert.doesNotMatch(cockpitSource, /hasRecentHardwareContact/);
@@ -178,9 +239,9 @@ test('BioXP cockpit fails closed when robot API/control-plane evidence is absent
 
 test('BioXP cockpit treats fresh positive robot evidence as reachable even after a stale failed status probe', () => {
     for (const marker of [
-        'bioXpInterlink.data?.reachable === true',
-        'runtimeStatus?.linked_runtime_reachable === true',
-        'operationCapabilities.data?.robot_openapi_reachable === true',
+        'interlinkReportsRobotApiReachable',
+        'runtimeReportsRobotApiReachable',
+        'operationCapabilitiesReportRobotApiReachable',
         'statusReportsHardwareConnected',
         'runtimeReportsHardwareConnected',
         'interlinkReportsHardwareConnected',
