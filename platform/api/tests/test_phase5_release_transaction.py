@@ -198,6 +198,12 @@ def test_release_installs_operator_frontend_for_managed_api(tmp_path: Path, monk
     monkeypatch.setattr(release.services, "get_user_systemd_dir", lambda: systemd_dir)
     monkeypatch.setattr(
         release.services,
+        "run_systemctl",
+        lambda *args, **kwargs: calls.append("stop-old-runtime")
+        or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        release.services,
         "install_user_units",
         lambda *args, **kwargs: calls.append("install-container"),
     )
@@ -230,7 +236,7 @@ def test_release_installs_operator_frontend_for_managed_api(tmp_path: Path, monk
     frontend = (systemd_dir / release.services.FRONTEND_SERVICE).read_text()
     assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8000" in frontend
     assert "BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18002" not in frontend
-    assert calls == ["install-container", "daemon-reload"]
+    assert calls == ["stop-old-runtime", "install-container", "daemon-reload"]
 
 
 def test_release_restarts_operator_frontend_after_container_handoff(
