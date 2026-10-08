@@ -74,7 +74,7 @@ process ProtenixPredict {
         'protenix_base_20241211_v0.2.1': 'protenix_base_default_v1.0.0'
     ]
     def effective_model = model_aliases.get(model_name, model_name)
-    if (!use_msa && !(effective_model.contains('esm') || effective_model.contains('ism'))) {
+    if (!use_msa && !(effective_model.contains('esm') || effective_model.contains('ism') || effective_model.contains('protenix-v2'))) {
         effective_model = 'protenix_mini_esm_v0.5.0'
     }
 
@@ -430,7 +430,7 @@ process ProtenixFromComplex {
         resolvedFixedTargetSourcePath = "${params.code_root}/${fixedTargetSourcePath}".replaceAll('/+', '/')
     }
     def effective_model = model_aliases.get(model_name, model_name)
-    if (!use_msa && !(effective_model.contains('esm') || effective_model.contains('ism'))) {
+    if (!use_msa && !(effective_model.contains('esm') || effective_model.contains('ism') || effective_model.contains('protenix-v2'))) {
         effective_model = 'protenix_mini_esm_v0.5.0'
     }
 
