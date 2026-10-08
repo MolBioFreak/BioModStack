@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 API_LAUNCHER = REPO_ROOT / "scripts" / "run_biomodstack_api.sh"
+WORKFLOW_ADAPTER_LAUNCHER = REPO_ROOT / "scripts" / "run_biomodstack_workflow_adapter.sh"
 
 
 def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: Path) -> None:
@@ -45,12 +46,14 @@ def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: P
         "  'workflow_adapter_url': os.environ.get('BMS_WORKFLOW_ADAPTER_URL'),\n"
         "  'data': os.environ.get('BMS_DATA'),\n"
         "  'db_path': os.environ.get('BMS_DB_PATH'),\n"
+        "  'uv_cache_dir': os.environ.get('UV_CACHE_DIR'),\n"
         "}))\n",
         encoding="utf-8",
     )
     fake_uv.chmod(0o755)
 
     env = os.environ.copy()
+    env.pop("UV_CACHE_DIR", None)
     env.update(
         {
             "HOME": str(home),
@@ -83,4 +86,12 @@ def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: P
         "workflow_adapter_url": None,
         "data": str(tmp_path / "dev-state"),
         "db_path": str(tmp_path / "dev-state" / "biomodstack.db"),
+        "uv_cache_dir": str(home / ".cache" / "biomodstack" / "uv"),
     }
+
+
+def test_biomodstack_launchers_isolate_uv_cache_from_shared_user_cache() -> None:
+    expected = 'export UV_CACHE_DIR="${UV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/biomodstack/uv}"'
+
+    assert expected in API_LAUNCHER.read_text(encoding="utf-8")
+    assert expected in WORKFLOW_ADAPTER_LAUNCHER.read_text(encoding="utf-8")

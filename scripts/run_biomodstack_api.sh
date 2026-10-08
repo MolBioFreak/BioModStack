@@ -47,6 +47,11 @@ fi
 
 pin_nextflow_java
 
+# Keep BioModStack dependency resolution isolated from shared caches that may
+# have been populated by containers or root-owned maintenance jobs.
+export UV_CACHE_DIR="${UV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/biomodstack/uv}"
+mkdir -p "$UV_CACHE_DIR"
+
 API_MODE_RAW="${BMS_API_MODE:-dev}"
 API_RELOAD_RAW="${BMS_API_RELOAD:-1}"
 CPU_POWER_STRICT_RAW="${BMS_CPU_POWER_STRICT:-1}"

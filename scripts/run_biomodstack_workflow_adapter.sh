@@ -54,6 +54,11 @@ elif [ -f "$LEGACY_CORE_RUNTIME_ENV_FILE" ]; then
 fi
 pin_nextflow_java
 
+# Keep BioModStack dependency resolution isolated from shared caches that may
+# have been populated by containers or root-owned maintenance jobs.
+export UV_CACHE_DIR="${UV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/biomodstack/uv}"
+mkdir -p "$UV_CACHE_DIR"
+
 if ! command -v uv >/dev/null 2>&1; then
     echo "BioModStack workflow adapter launcher requires uv on PATH" >&2
     exit 1
