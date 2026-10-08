@@ -5646,7 +5646,9 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     md_input_resolver = md_input_resolver or _resolve_md_input_path_for_runtime
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
-    if (normalized_model_id, normalized_mode) == ('conformational_mapping', 'map') and native_entrypoint is not None:
+    if (normalized_model_id, normalized_mode) == ('conformational_mapping', 'map') and job_data.params.get('cm_request_path'):
+        from services.nextflow import MODEL_MODE_WORKFLOW_ENTRYPOINTS
+        native_entrypoint = native_entrypoint or MODEL_MODE_WORKFLOW_ENTRYPOINTS[(normalized_model_id, normalized_mode)]
         # The materialized CM document owns all scientific normalization. Generic
         # structure/Frustra defaults are not part of that sealed native contract.
         errors = registry.validate_job_params(job_data.model_id, job_data.mode,

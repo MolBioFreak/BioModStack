@@ -188,7 +188,7 @@ def _format(document, path):
     if isinstance(document, dict):
         if str(document.get("schema", "")).startswith("bms.md.job."):
             return "md-job"
-        if "confornets" in document and "request_sha256" in document:
+        if document.get("schema_name") == "cm_request" and "request_sha256" in document:
             return "cm-request"
         if document.get("backend") in {"disco", "laproteina"}:
             return "protein-cad"
@@ -217,9 +217,10 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
     visited = set()
     scanned_directories = set()
     identities = {}
+    inventory_supplied = runtime_references is not None
     runtime_references = runtime_references or {}
     document_owners = document_owners or {}
-    def visit(value, owner, selector, role="input", lineage=(), source_owner=None):
+    def visit(value, owner, selector, role="input", lineage=(), source_owner=None, snapshot_sha256=None):
         raw = Path(value)
         if not raw.is_absolute():
             raw = Path(source_owner or owner).parent / raw if owner else Path(output_dir) / raw
@@ -238,6 +239,8 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
             return
         path = _contained(raw, roots)
         if path.is_dir():
+            if role == "runtime-snapshot":
+                raise ValueError("Request-owned runtime snapshot must be a regular file")
             if path in scanned_directories:
                 return
             scanned_directories.add(path)
@@ -250,10 +253,16 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         if path not in identities:
             identities[path] = _identity(path)
         digest, size = identities[path]
-        if role == "runtime-snapshot" and not any(
-                item.get("sha256") == digest and item.get("size_bytes") == size
-                for item in runtime_references.values()):
-            raise ValueError("Request-owned runtime snapshot is not a selected dependency")
+        if role == "runtime-snapshot":
+            if digest != snapshot_sha256:
+                raise ValueError("Request-owned runtime snapshot differs from declared checkpoint digest")
+            # Read-only approval binds the immutable request-owned snapshot, not
+            # an installed model tree. Transport additionally proves membership
+            # in the selected dependency owner's concrete runtime inventory.
+            if inventory_supplied and not any(
+                    item.get("sha256") == digest and item.get("size_bytes") == size
+                    for item in runtime_references.values()):
+                raise ValueError("Request-owned runtime snapshot is not a selected dependency")
         identity = json.dumps([model_id, mode, str(owner or "params"), selector, digest], separators=(",", ":"))
         logical_id = "native-input:" + hashlib.sha256(identity.encode()).hexdigest()
         record = dict(logical_id=logical_id, role=role, format=path.suffix.lstrip(".") or "binary", source_path=str(path), sha256=digest, size_bytes=size, owner=str(owner or "params"), lineage=list(lineage), selector=list(selector))
@@ -276,7 +285,9 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         record["format"] = fmt
         for child_selector, child, child_role in native_reference_fields(document, fmt):
             visit(child, path, child_selector, child_role, (*lineage, logical_id),
-                  source_owner=document_owners.get(str(path)) if child_role != "msa" else None)
+                  source_owner=document_owners.get(str(path)) if child_role != "msa" else None,
+                  snapshot_sha256=document.get("confornets", {}).get("checkpoint", {}).get("sha256")
+                  if fmt == "cm-request" and child_role == "runtime-snapshot" else None)
         if fmt == "cm-request":
             visit(path.parent / "cm_runtime_registry_v1.json", path, ("runtime_registry",), "runtime-config", (*lineage, logical_id))
             visit(path.parent / "cm_coordinate_plan_v1.json", path, ("coordinate_plan",), "coordinate-plan", (*lineage, logical_id))

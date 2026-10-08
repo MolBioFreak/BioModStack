@@ -4140,6 +4140,28 @@ def compile_workflow_provision_request(request):
         output_dir=str(output), child_output_dir=None,
     )
     invocation = compile_job_nextflow_invocation(snapshot, params, str(output))
+    if (typed.model_id, typed.mode) == ('conformational_mapping', 'map'):
+        # The same managed checkpoint selected by native CM submission must own
+        # the request snapshot. Inspect only that registered file, never recurse
+        # through model trees during a read-only preview.
+        cm = _native_plan_metadata_settings(typed.model_id, typed.params).get('cm_request', {})
+        if cm.get('backend') == 'confornets':
+            from paths import get_weights_root, get_inputs_dir
+            from scripts.lib.portable_inputs import _contained, _identity
+            root = get_weights_root()
+            selected = invocation.execution_plan.dependencies
+            if not any(row.kind == 'weights' and row.relative_path == 'openfold3' for row in selected):
+                raise ValueError('CM checkpoint has no selected OpenFold3 dependency')
+            checkpoint = _contained(root / 'openfold3/of3-p2-155k.pt', [root.resolve()])
+            source_sha, source_size = _identity(checkpoint)
+            record = cm['confornets']['checkpoint']
+            request_path = Path(typed.params['cm_request_path'])
+            snapshot = Path(record['path'])
+            if not snapshot.is_absolute():
+                snapshot = request_path.parent / snapshot
+            snapshot = _contained(snapshot, [get_results_dir().resolve(), get_inputs_dir().resolve(), get_data_root().resolve()])
+            if source_sha != record['sha256'] or _identity(snapshot) != (source_sha, source_size):
+                raise ValueError('CM checkpoint snapshot differs from selected managed runtime source')
     if invocation.requested_json != canonical_bytes(original):
         raise ValueError('Workflow provision changed requested scientific identity')
     return invocation
