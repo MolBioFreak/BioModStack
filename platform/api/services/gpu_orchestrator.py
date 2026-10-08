@@ -257,6 +257,7 @@ VRAM_PROFILES = {
     'fampnn_child': {'base': 3000, 'scale': 10},# FAMPNN child jobs
     'proteinmpnn': {'base': 2000, 'scale': 5},  # ProteinMPNN (vanilla)
     'mpnn': {'base': 2000, 'scale': 5},         # Alias for ProteinMPNN
+    'protonpottsmpnn': {'base': 0, 'scale': 0},  # Native redesign uses CPU fork workers.
     'ligandmpnn': {'base': 2500, 'scale': 8},   # LigandMPNN (ligand-aware sequence design)
     'thermompnn': {'base': 2000, 'scale': 5},   # ThermoMPNN (stability-focused)
     'frustrampnn': {'base': 2500, 'scale': 8},  # FrustraMPNN (frustration analysis)
