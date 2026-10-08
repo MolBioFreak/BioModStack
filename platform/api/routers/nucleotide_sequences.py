@@ -381,10 +381,11 @@ def topology_for(is_circular: bool) -> str:
     return "circular" if is_circular else "linear"
 
 
-def _molecular_revision_response(
+async def _molecular_revision_response(
     document: MolecularDocument,
     revision: MolecularRevision,
     *,
+    session: AsyncSession,
     parent_revision_id: Optional[str],
 ) -> MolecularRevisionResponse:
     snapshot = revision.snapshot
@@ -407,6 +408,11 @@ def _molecular_revision_response(
         or len(raw_sequence) != revision.content_length
     ):
         raise ValueError("immutable molecular revision content digest or length is invalid")
+    snapshot = dict(snapshot)
+    if "operation_params" in snapshot:
+        snapshot["operation_params"] = await resolve_sequence_operation_params(
+            session, snapshot["operation_params"],
+        )
     return MolecularRevisionResponse(
         document_id=document.id,
         sequence_id=document.id,
@@ -883,9 +889,10 @@ async def list_molecular_revisions(
             revision_ids_by_number[minimum_number - 1] = previous_id
     try:
         return [
-            _molecular_revision_response(
+            await _molecular_revision_response(
                 document,
                 revision,
+                session=session,
                 parent_revision_id=revision_ids_by_number.get(
                     revision.revision_number - 1
                 ),
@@ -921,9 +928,10 @@ async def get_molecular_revision(
             )
         ).scalar_one_or_none()
     try:
-        return _molecular_revision_response(
+        return await _molecular_revision_response(
             document,
             revision,
+            session=session,
             parent_revision_id=parent_revision_id,
         )
     except ValueError as error:
