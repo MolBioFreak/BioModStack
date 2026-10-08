@@ -16,7 +16,9 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from ngs_resource_fixture import ngs_resources
 from database import Base, Job
+from test_ont_ngs_native_completion import isolated_result_root
 from molbio_ngs_models import (
     MolBioNGSBase, MolBioNGSDomainState, MolBioNGSGlobalBinding,
     MolBioNGSDomainStateRevision, MolBioNGSMemberReceipt, MolBioNGSOutboxEvent,
@@ -161,7 +163,7 @@ async def test_native_attach_replay_membership_and_delivery(stores, tmp_path, mi
 @pytest.mark.asyncio
 async def test_eligible_discovery_filters_before_limit(stores):
     core, _, _initial = stores
-    identities = [(None, "unrelated", {}), (None, "legacy", {"workflow_id": "ont_basecall_dna"}),
+    identities = [("", "unrelated", {}), ("", "legacy", {"workflow_id": "ont_basecall_dna"}),
                   ("unrelated", "ont_basecall_dna", {}), ("ont_methylation_analysis", "native", {})]
     for index, (model, mode, params) in enumerate(identities):
         core.add(Job(id=f"job-{index}", name="fixture", model_id=model, mode=mode, params=params,
@@ -185,7 +187,8 @@ def test_pooled_native_identity_is_not_catalog_eligibility():
     (6, 4, 20, "capped", "read_limit"),
     (6, 4, 1, "reduced", "record_limit"),
 ])
-def test_preview_producer_persists_admission_population(tmp_path, monkeypatch, count, target, max_records, expected, reason):
+@pytest.mark.native_http
+def test_preview_producer_persists_admission_population(tmp_path, monkeypatch, ngs_resources, native_http, count, target, max_records, expected, reason):
     import pysam
     from services import ngs_alignment_product_builder as builder
     bam = tmp_path / "source.bam"
@@ -205,10 +208,18 @@ def test_preview_producer_persists_admission_population(tmp_path, monkeypatch, c
     preview = tmp_path / "preview"
     catalog.mkdir(); preview.mkdir()
     allocation = SimpleNamespace(dram_bytes=64 * 1024 * 1024, disk_bytes=256 * 1024 * 1024)
-    builder._catalog_tables(catalog, str(bam), lambda: None, allocation)
+    from services import ngs_alignment_sessions as storage
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        source = stack.enter_context(storage.open_verified_artifact_snapshot(
+            bam, expected_sha256=sha(bam.read_bytes()), expected_size=bam.stat().st_size))
+        builder._catalog_tables(catalog, source, lambda: None, allocation)
     policy = {**builder.resolved_preview_policy(), "target_reads": target, "max_records": max_records}
     monkeypatch.setattr(builder, "resolved_preview_policy", lambda: policy)
-    _header, _metadata, selected, stats = builder._preview_plan(preview, catalog, str(bam), policy, sha(b"source"), lambda: None, allocation)
+    with storage.open_verified_artifact_snapshot(
+            bam, expected_sha256=sha(bam.read_bytes()), expected_size=bam.stat().st_size) as source:
+        _header, _metadata, selected, stats = builder._preview_plan(
+            preview, catalog, source, policy, sha(b"source"), lambda: None, allocation)
     assert stats["population_state"] == expected
     assert reason in stats["population_reasons"]
     assert stats["eligible_read_count"] == count

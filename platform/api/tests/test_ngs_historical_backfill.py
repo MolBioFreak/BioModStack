@@ -7,6 +7,7 @@ import sqlite3
 from types import SimpleNamespace
 
 import pytest
+from ngs_resource_fixture import ngs_resources
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
@@ -201,7 +202,8 @@ def test_additive_ownership_migration_preserves_original_rows_and_registry_ordin
         _validate_applied_migration_identities(incompatible)
 
 
-def test_builder_adopts_only_new_contract_and_preserves_predecessor_bytes(tmp_path, monkeypatch):
+@pytest.mark.native_http
+def test_builder_adopts_only_new_contract_and_preserves_predecessor_bytes(tmp_path, monkeypatch, ngs_resources, native_http):
     import pysam
     from services import ngs_alignment_product_builder as builder
     bam = tmp_path / "source.bam"
