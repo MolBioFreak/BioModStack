@@ -1,6 +1,8 @@
 import type { BrowserWindowConstructorOptions } from 'electron';
 
-export type ShellRuntimeMode = 'dev' | 'container';
+import type { ServiceRuntimeMode, ServiceStatusPayload } from './serviceControl';
+
+export type ShellRuntimeMode = ServiceRuntimeMode;
 
 export type ShellContext = {
   runtimeMode: ShellRuntimeMode;
@@ -12,12 +14,31 @@ export type ShellContext = {
 
 export type BiomodstackDesktopApi = {
   getShellContext: () => Promise<ShellContext>;
+  getStatus: (runtimeMode?: ShellRuntimeMode) => Promise<ServiceStatusPayload>;
+  startAll: (runtimeMode?: ShellRuntimeMode) => Promise<void>;
+  stopAll: (runtimeMode?: ShellRuntimeMode) => Promise<void>;
+  restartAll: (runtimeMode?: ShellRuntimeMode) => Promise<void>;
+  restartApi: (runtimeMode?: ShellRuntimeMode) => Promise<void>;
   openInBrowser: () => Promise<void>;
 };
 
 export const GET_SHELL_CONTEXT_CHANNEL = 'biomodstack:get-shell-context';
+export const GET_STATUS_CHANNEL = 'biomodstack:get-status';
+export const START_ALL_CHANNEL = 'biomodstack:start-all';
+export const STOP_ALL_CHANNEL = 'biomodstack:stop-all';
+export const RESTART_ALL_CHANNEL = 'biomodstack:restart-all';
+export const RESTART_API_CHANNEL = 'biomodstack:restart-api';
 export const OPEN_IN_BROWSER_CHANNEL = 'biomodstack:open-in-browser';
-export const EXPOSED_BIOMODSTACK_API_KEYS = ['getShellContext', 'openInBrowser'] as const;
+
+export const EXPOSED_BIOMODSTACK_API_KEYS = [
+  'getShellContext',
+  'getStatus',
+  'startAll',
+  'stopAll',
+  'restartAll',
+  'restartApi',
+  'openInBrowser',
+] as const;
 
 function normalizeOrigin(origin: string): string {
   return origin.trim().replace(/\/+$/, '');
@@ -47,9 +68,7 @@ export function resolveShellContext(options: Partial<ShellContext> = {}): ShellC
     options.frontendOrigin ?? process.env.BMS_FRONTEND_ORIGIN ?? 'http://127.0.0.1:5173',
   );
   const routerBasename = normalizeRouterBasename(
-    options.routerBasename
-      ?? process.env.BMS_ROUTER_BASENAME
-      ?? (runtimeMode === 'dev' ? '/' : '/bms/'),
+    options.routerBasename ?? process.env.BMS_ROUTER_BASENAME ?? (runtimeMode === 'dev' ? '/' : '/bms/'),
   );
   const hostedUrl = buildHostedUrl(frontendOrigin, routerBasename);
 

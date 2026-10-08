@@ -26,7 +26,15 @@ test('container shell context defaults to the /bms/ hosted frontend url', () => 
 test('browser window options keep the renderer hardened and expose only the audited preload api', () => {
   const options = buildBrowserWindowOptions('/tmp/biomodstack-preload.js');
 
-  assert.deepEqual(EXPOSED_BIOMODSTACK_API_KEYS, ['getShellContext', 'openInBrowser']);
+  assert.deepEqual(EXPOSED_BIOMODSTACK_API_KEYS, [
+    'getShellContext',
+    'getStatus',
+    'startAll',
+    'stopAll',
+    'restartAll',
+    'restartApi',
+    'openInBrowser',
+  ]);
   assert.equal(options.webPreferences?.preload, '/tmp/biomodstack-preload.js');
   assert.equal(options.webPreferences?.contextIsolation, true);
   assert.equal(options.webPreferences?.nodeIntegration, false);
