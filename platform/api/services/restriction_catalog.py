@@ -550,7 +550,7 @@ class CatalogAuthority:
                 "resource_policy": MappingProxyType(
                     {
                         "schema": "bms.molbio.restriction-analysis-resource-policy.v1",
-                        "policy_version": "1.0.0",
+                        "policy_version": "1.1.0",
                         "scan_work_formula_id": ANALYSIS_SCAN_WORK_FORMULA_ID,
                         "scan_work_formula_version": ANALYSIS_SCAN_WORK_FORMULA_VERSION,
                         "sequence_length_maximum": ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH,
@@ -571,8 +571,8 @@ class CatalogAuthority:
                         "cache_entry_maximum": ANALYSIS_CACHE_MAXIMUM_ENTRIES,
                         "cache_total_weight_maximum_bytes": ANALYSIS_CACHE_MAXIMUM_TOTAL_WEIGHT_BYTES,
                         "cache_result_weight_maximum_bytes": ANALYSIS_CACHE_MAXIMUM_RESULT_WEIGHT_BYTES,
-                        "cache_weight_formula_id": "recursive-sys-getsizeof-object-graph",
-                        "cache_weight_formula_version": "1.0.0",
+                        "cache_weight_formula_id": "canonical-json-entry-and-complete-cache-graph",
+                        "cache_weight_formula_version": "2.0.0",
                     }
                 ),
                 "analysis_enabled": True,

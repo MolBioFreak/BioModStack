@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Mapping
+
+from pydantic import BaseModel
 
 import pytest
 
@@ -28,6 +32,38 @@ def _analyze(sequence: str, enzymes: list[str], *, topology: str = "linear", pos
 
 def _occ(result, enzyme: str):
     return [row for row in result.occurrences if row.enzyme_id == enzyme]
+
+
+def _independent_retained_footprint(value: object, seen: set[int] | None = None) -> int:
+    """Test-only cache graph oracle, independent of the production estimator."""
+    identities = seen if seen is not None else set()
+    identity = id(value)
+    if identity in identities:
+        return 0
+    identities.add(identity)
+    size = sys.getsizeof(value)
+    if isinstance(value, BaseModel):
+        owned = [value.__dict__]
+        for slot in ("__pydantic_fields_set__", "__pydantic_extra__", "__pydantic_private__"):
+            if hasattr(value, slot):
+                owned.append(getattr(value, slot))
+        return size + sum(_independent_retained_footprint(item, identities) for item in owned)
+    if isinstance(value, Mapping):
+        return size + sum(
+            _independent_retained_footprint(key, identities)
+            + _independent_retained_footprint(item, identities)
+            for key, item in value.items()
+        )
+    if isinstance(value, (tuple, list, set, frozenset)):
+        return size + sum(_independent_retained_footprint(item, identities) for item in value)
+    slots = getattr(type(value), "__slots__", ())
+    if isinstance(slots, str):
+        slots = (slots,)
+    return size + sum(
+        _independent_retained_footprint(getattr(value, slot), identities)
+        for slot in slots
+        if slot not in {"__weakref__", "__dict__"} and hasattr(value, slot)
+    )
 
 
 def test_ecori_linear_reports_exact_site_and_five_prime_overhang() -> None:
@@ -241,7 +277,8 @@ def test_analysis_is_deterministic_and_cache_separates_authorities() -> None:
     first = _analyze("GAATTC", ["EcoRI"])
     second = _analyze("GAATTC", ["EcoRI"])
     other = _analyze("GAATTCAA", ["EcoRI"])
-    assert first is second
+    assert first == second
+    assert first is not second
     assert first.result_sha256 == second.result_sha256
     assert first.result_sha256 != other.result_sha256
     assert first.result_sha256 == hashlib.sha256(first.canonical_result_bytes()).hexdigest()
@@ -262,38 +299,65 @@ def test_policy_identity_is_hash_bound_and_prevents_cross_policy_cache_reuse(mon
     assert second.result_sha256 == hashlib.sha256(second.canonical_result_bytes()).hexdigest()
 
 
-def test_cache_evicts_by_retained_weight_and_entry_lru(monkeypatch) -> None:
+def test_cache_graph_weight_matches_independent_complete_footprint_oracle() -> None:
     import services.restriction_analysis as module
 
     module._clear_cache_for_testing()
-    sample = _analyze("AAAAAA", ["EcoRI"])
-    weight = module._retained_weight(sample)
+    _analyze("AAAAAA", ["EcoRI"])
+    entries, retained_weight = module._cache_snapshot_for_testing()
+    assert entries == 1
+    assert retained_weight == _independent_retained_footprint(module._cache)
+    assert retained_weight > _independent_retained_footprint(next(iter(module._cache.values())))
+
+
+def test_cache_evicts_by_exact_total_weight_and_entry_count(monkeypatch) -> None:
+    import services.restriction_analysis as module
+
     module._clear_cache_for_testing()
     monkeypatch.setattr(module, "CACHE_MAX_ENTRIES", 32)
-    monkeypatch.setattr(module, "CACHE_MAX_TOTAL_WEIGHT_BYTES", weight * 2 - 1)
-    monkeypatch.setattr(module, "CACHE_MAX_RESULT_WEIGHT_BYTES", weight * 2)
+    monkeypatch.setattr(module, "CACHE_MAX_TOTAL_WEIGHT_BYTES", 1 << 30)
+    monkeypatch.setattr(module, "CACHE_MAX_RESULT_WEIGHT_BYTES", 1 << 30)
+    first = _analyze("AAAAAA", ["EcoRI"])
+    _analyze("AAAAAAA", ["EcoRI"])
+    exact_two_entry_bound = _independent_retained_footprint(module._cache)
+    module._clear_cache_for_testing()
+    monkeypatch.setattr(module, "CACHE_MAX_TOTAL_WEIGHT_BYTES", exact_two_entry_bound)
     first = _analyze("AAAAAA", ["EcoRI"])
     _analyze("AAAAAAA", ["EcoRI"])
     _analyze("AAAAAAAA", ["EcoRI"])
     entries, retained_weight = module._cache_snapshot_for_testing()
     assert entries <= 2
-    assert retained_weight <= weight * 2 - 1
+    assert retained_weight == _independent_retained_footprint(module._cache)
+    assert retained_weight <= exact_two_entry_bound
     assert _analyze("AAAAAA", ["EcoRI"]) is not first
+
+    module._clear_cache_for_testing()
+    monkeypatch.setattr(module, "CACHE_MAX_TOTAL_WEIGHT_BYTES", 1 << 30)
+    monkeypatch.setattr(module, "CACHE_MAX_ENTRIES", 2)
+    _analyze("CCCCCC", ["EcoRI"])
+    _analyze("CCCCCCC", ["EcoRI"])
+    _analyze("CCCCCCCC", ["EcoRI"])
+    assert module._cache_snapshot_for_testing()[0] == 2
 
 
 def test_oversized_result_bypasses_cache(monkeypatch) -> None:
     import services.restriction_analysis as module
 
     module._clear_cache_for_testing()
-    sample = _analyze("CCCCCC", ["EcoRI"])
-    weight = module._retained_weight(sample)
+    fixed_policy = module.resource_policy_receipt()
+    monkeypatch.setattr(module, "resource_policy_receipt", lambda: fixed_policy)
+    first = _analyze("CCCCCC", ["EcoRI"])
+    entry_weight = _independent_retained_footprint(next(iter(module._cache.values())))
+    assert entry_weight == module._retained_weight(next(iter(module._cache.values())))
     module._clear_cache_for_testing()
-    monkeypatch.setattr(module, "CACHE_MAX_RESULT_WEIGHT_BYTES", weight - 1)
+    monkeypatch.setattr(module, "CACHE_MAX_RESULT_WEIGHT_BYTES", entry_weight - 1)
     first = _analyze("CCCCCC", ["EcoRI"])
     second = _analyze("CCCCCC", ["EcoRI"])
     assert first == second
     assert first is not second
-    assert module._cache_snapshot_for_testing() == (0, 0)
+    assert module._cache_snapshot_for_testing() == (
+        0, _independent_retained_footprint(module._cache)
+    )
 
 
 def test_cache_exact_key_identity_and_thread_safety() -> None:
@@ -301,7 +365,9 @@ def test_cache_exact_key_identity_and_thread_safety() -> None:
 
     module._clear_cache_for_testing()
     first = _analyze("TTGAATTCAA", ["EcoRI"])
-    assert _analyze("TTGAATTCAA", ["EcoRI"]) is first
+    cached = _analyze("TTGAATTCAA", ["EcoRI"])
+    assert cached == first
+    assert cached is not first
     assert _analyze("TTGAATTCAAA", ["EcoRI"]) is not first
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(
