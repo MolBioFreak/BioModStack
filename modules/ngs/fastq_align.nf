@@ -34,8 +34,12 @@ process FastqAlign {
         "${reference}" "${fastq}" 2>fastq_align.log \\
         | samtools sort -@ ${task.cpus} -o aligned.bam
 
+    samtools quickcheck -v aligned.bam 2>>fastq_align.log
     samtools index aligned.bam
-    cp "${reference}" reference.fasta
+    samtools idxstats aligned.bam > /dev/null 2>>fastq_align.log
+    if [[ "\$(realpath "${reference}")" != "\$(realpath -m reference.fasta)" ]]; then
+        cp "${reference}" reference.fasta
+    fi
     samtools faidx reference.fasta
     """
 }

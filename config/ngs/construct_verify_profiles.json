@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "plasmid_strict_v1": {
+      "version": "1.0.0",
+      "description": "Fail-closed ONT plasmid construct verification. PASS requires complete independently observed sequence, support, contamination-screen, and topology evidence.",
+      "calibration_status": "experimental",
+      "public_accuracy_validated": false,
+      "automatic_pass_eligible": false,
+      "expected_topology": "circular",
+      "min_coverage_fraction": 0.99,
+      "min_depth": 20,
+      "max_low_depth_fraction": 0.01,
+      "min_major_allele_fraction": 0.90,
+      "min_variant_support_fraction": 0.80,
+      "max_strand_dominance_fraction": 0.95,
+      "max_unmapped_fraction": 0.10,
+      "max_ambiguous_base_fraction": 0.001,
+      "min_origin_spanning_reads": 2,
+      "max_secondary_anomaly_fraction": 0.02,
+      "require_zero_variants_for_pass": true
+    }
+  }
+}
