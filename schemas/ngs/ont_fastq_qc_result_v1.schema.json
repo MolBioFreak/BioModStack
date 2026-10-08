@@ -322,44 +322,7 @@
               "type": "string"
             },
             "kind": {
-              "enum": [
-                "alignment_bai",
-                "alignment_bam",
-                "alignment_stats",
-                "consensus",
-                "consensus_index",
-                "consensus_log",
-                "construct_verification_manifest",
-                "coverage",
-                "human_evidence_report",
-                "igv_coverage_depth",
-                "igv_gc_content",
-                "igv_gc_zscore",
-                "igv_junction_hotspots",
-                "igv_position_gradient",
-                "igv_report",
-                "igv_report_sites_bed",
-                "igv_report_sites_tsv",
-                "igv_softclip_density",
-                "igv_split_read_density",
-                "igv_track_config",
-                "log",
-                "modified_bases",
-                "normalized_variants",
-                "observed_consensus",
-                "per_base_metrics",
-                "per_base_support",
-                "read_lengths",
-                "reference",
-                "reference_index",
-                "sequence_qc_manifest",
-                "signal_data",
-                "source_read_provenance",
-                "source_reads_fastq",
-                "summary",
-                "verification_summary"
-              ],
-              "type": "string"
+              "$ref": "#/$defs/artifactKind"
             },
             "mime_type": {
               "enum": [
@@ -477,44 +440,7 @@
               ]
             },
             "kind": {
-              "enum": [
-                "alignment_bai",
-                "alignment_bam",
-                "alignment_stats",
-                "consensus",
-                "consensus_index",
-                "consensus_log",
-                "construct_verification_manifest",
-                "coverage",
-                "human_evidence_report",
-                "igv_coverage_depth",
-                "igv_gc_content",
-                "igv_gc_zscore",
-                "igv_junction_hotspots",
-                "igv_position_gradient",
-                "igv_report",
-                "igv_report_sites_bed",
-                "igv_report_sites_tsv",
-                "igv_softclip_density",
-                "igv_split_read_density",
-                "igv_track_config",
-                "log",
-                "modified_bases",
-                "normalized_variants",
-                "observed_consensus",
-                "per_base_metrics",
-                "per_base_support",
-                "read_lengths",
-                "reference",
-                "reference_index",
-                "sequence_qc_manifest",
-                "signal_data",
-                "source_read_provenance",
-                "source_reads_fastq",
-                "summary",
-                "verification_summary"
-              ],
-              "type": "string"
+              "$ref": "#/$defs/artifactKind"
             },
             "mime_type": {
               "type": "null"
@@ -597,6 +523,46 @@
           "type": "object"
         }
       ]
+    },
+    "artifactKind": {
+      "enum": [
+        "alignment_bai",
+        "alignment_bam",
+        "alignment_stats",
+        "consensus",
+        "consensus_index",
+        "consensus_log",
+        "construct_verification_manifest",
+        "coverage",
+        "human_evidence_report",
+        "igv_coverage_depth",
+        "igv_gc_content",
+        "igv_gc_zscore",
+        "igv_junction_hotspots",
+        "igv_position_gradient",
+        "igv_report",
+        "igv_report_sites_bed",
+        "igv_report_sites_tsv",
+        "igv_softclip_density",
+        "igv_split_read_density",
+        "igv_track_config",
+        "log",
+        "modified_bases",
+        "normalized_variants",
+        "observed_consensus",
+        "per_base_metrics",
+        "per_base_support",
+        "read_lengths",
+        "reference",
+        "reference_index",
+        "sequence_qc_manifest",
+        "signal_data",
+        "source_read_provenance",
+        "source_reads_fastq",
+        "summary",
+        "verification_summary"
+      ],
+      "type": "string"
     },
     "checkEnvelope": {
       "additionalProperties": false,
@@ -844,51 +810,7 @@
       ]
     },
     "readSupportCheck": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/checkEnvelope"
-        },
-        {
-          "properties": {
-            "metrics": {
-              "additionalProperties": true,
-              "properties": {
-                "coverage_fraction": {
-                  "maximum": 1,
-                  "minimum": 0,
-                  "type": "number"
-                },
-                "low_depth_fraction": {
-                  "maximum": 1,
-                  "minimum": 0,
-                  "type": "number"
-                },
-                "low_depth_positions": {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "minimum_depth": {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "mixed_allele_positions": {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "row_count": {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                "strand_imbalanced_positions": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          }
-        }
-      ]
+      "$ref": "#/$defs/coverageCheck"
     },
     "reasonCodes": {
       "items": {

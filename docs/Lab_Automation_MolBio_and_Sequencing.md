@@ -62,7 +62,7 @@ Current sequencing features:
 - IGV-ready track and reference artifacts
 - optional clone-validation style workflow handoff parameters
 
-The canonical sequencing model config is:
+Sequencing model configuration:
 - [platform/api/config/models/nanopore.yaml](../platform/api/config/models/nanopore.yaml)
 
 The workflow logic lives in:
@@ -73,12 +73,11 @@ The workflow logic lives in:
 ### ONT Read and Signal Workbench
 
 The `/ngs` result surface includes the **Read and Signal Workbench** for one
-persisted run generation. It keeps IGV as the alignment authority and can show:
+persisted run generation. It uses IGV to view alignments and can show:
 
-- one governed acquired-signal waveform from the exact retained indexed BLOW5;
+- one acquired-signal waveform from the selected run’s retained, indexed BLOW5 file;
 - reusable signal-to-read and signal-to-reference mappings;
-- bounded read, reference, and pileup views rendered by the separately pinned,
-  network-denied Squigualiser runtime; and
+- read, reference, and pileup views within configured limits, rendered by a pinned Squigualiser version without network access; and
 - saved viewer state that reopens the same read, locus, mapping, and render job.
 
 Acquired signal remains authoritative only when it resolves through the exact

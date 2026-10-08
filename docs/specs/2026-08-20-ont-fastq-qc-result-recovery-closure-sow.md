@@ -16,7 +16,7 @@
 > artifacts nor unrelated cross-source row counts are result-display prerequisites.
 
 
-**Status:** Controlling implementation and acceptance specification
+**Status:** Retry3 recovery specification with later contract corrections; historical acceptance packaging is not a current release seal
 **Date:** 2026-08-20
 **Parent specification:** `docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md`
 **Target branch:** `test`
@@ -35,7 +35,7 @@ The accepted path must use the existing retry3 scientific result. It must not su
 
 This document amends and closes the retained FASTQ-QC result and reopen slice of the parent NGS/MolBio SOW. It does not declare the complete parent SOW finished.
 
-This document replaces informal separation between “backend is kosher” and later UI work. Backend authority, lifecycle publication, browser authorization, scientific presentation, governed byte delivery, and viewer operation are one closure denominator.
+This document replaces informal separation between “backend is kosher” and later UI work. The scope covers result publication, authorized browser access and downloads, the scientific report, and the viewer.
 
 When this document and an older retry3 task note disagree, this document controls the remaining closure work. Immutable historical evidence remains historical evidence.
 
@@ -167,16 +167,22 @@ The standard Nextflow terminal publication CAS is the sole transition from activ
 
 Cancellation, awaiting-input, stale-attempt, and operator-gated rows remain authoritative over late worker publication.
 
-### 6.4 Normative contract package
+### 6.4 Runtime contracts and historical recovery package
 
-The implementation and release package contains these normative contracts:
+Current API and retained-record contracts:
 
 - `schemas/ngs/ont_fastq_qc_result_v1.schema.json` for the bounded result response;
 - `schemas/ngs/ont_fastq_qc_reconciliation_receipt_v1.schema.json` for the additive retry3 repair receipt;
 - `schemas/ngs/ont_alignment_session_v1.schema.json` for alignment-session list and detail responses;
 - `schemas/ngs/ont_ngs_error_v1.schema.json` for governed error responses;
 - `schemas/ngs/ont_ngs_rotation_success_v1.schema.json` for capability-rotation success;
-- `schemas/ngs/ont_ngs_capability_revocation_success_v1.schema.json` for idempotent capability revocation;
+- `schemas/ngs/ont_ngs_capability_revocation_success_v1.schema.json` for idempotent capability revocation.
+
+The following standalone schemas describe the frozen retry3 recovery package, not
+general runtime contracts or new-run admission rules. They remain available to
+historical schema readers; their literal snapshots are not maintained as current
+result examples:
+
 - `schemas/ngs/ont_fastq_qc_evidence_bundle_v1.schema.json` for each A1 through A17 evidence body;
 - `schemas/ngs/ont_fastq_qc_gate_evidence_body_v1.schema.json` for the closed content of every required evidence file;
 - `schemas/ngs/ont_fastq_qc_browser_evidence_manifest_v1.schema.json` for ordered browser evidence;
@@ -185,7 +191,7 @@ The implementation and release package contains these normative contracts:
 - `schemas/ngs/ont_fastq_qc_final_acceptance_receipt_v1.schema.json` for the retained release verdict;
 - `platform/api/tests/fixtures/ont_fastq_qc_result_retry3_v1.json` for the shared retry3 result fixture.
 
-`docs/specs/2026-08-20-ont-fastq-qc-result-recovery-spec-package.json` is the seal manifest. Its `records` array is in the exact normative order above, with the review ledger immediately after the SOW. Each row contains exactly path, size, and SHA-256. `package_sha256` is `SHA256(UTF8(RFC8785(manifest_without_package_sha256)))`. Only the top-level `package_sha256` field is omitted. Record order is preserved and participates in the digest. The manifest schema literal `bms.ont-fastq-qc-specification-package.v1` supplies domain separation.
+`docs/specs/2026-08-20-ont-fastq-qc-result-recovery-spec-package.json` is the historical v1 seal manifest for the original recovery package. It does not seal the current tree: later corrections changed this SOW and the runtime result schema without reissuing that manifest. Its original sizes, hashes and package digest are retained unchanged, not refreshed to imply new acceptance. Current result validation uses `schemas/ngs/ont_fastq_qc_result_v1.schema.json` through the result service and response model, independently of this historical seal. The manifest’s `records` array records the original normative order, with the review ledger immediately after the SOW. Each row contains exactly path, size, and SHA-256. `package_sha256` is `SHA256(UTF8(RFC8785(manifest_without_package_sha256)))`. Only the top-level `package_sha256` field is omitted. Record order is preserved and participates in the digest. The manifest schema literal `bms.ont-fastq-qc-specification-package.v1` supplies domain separation.
 
 Every timestamp in these contracts is UTC RFC 3339 with a terminal `Z`. A timezone-free timestamp is invalid. Every validator must assert `format` and the UTC lexical form.
 
@@ -369,7 +375,7 @@ This requirement changes future execution only. It does not rewrite retry3 histo
 
 Canonical FASTQ-QC completion must not call generic design ingestion, create design rows, publish `result_kind: design`, or display `design_count: 0` as scientific output.
 
-### LIFE-9: Producer resource evidence before fresh success
+### LIFE-9: Resource observations are optional for scientific completion
 
 For a fresh `ont_fastq_qc` execution, validate and attach resource observations when a complete producer receipt is available. Missing or unusable observations are explicitly `unavailable`, with null observed metrics, and do not prevent scientific completion or result access. Available receipts, scientific package authority, lifecycle mirrors and terminal state still publish through the guarded terminal CAS. Preview generation is demand-driven and cannot block scientific completion.
 
