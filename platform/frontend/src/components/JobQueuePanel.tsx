@@ -27,13 +27,18 @@ const GPU_NAMES: Record<number, string> = {
 
 function getModelBadge(modelId: string): string {
     const key = modelId.toLowerCase();
+    if (key === 'msa_batch') return 'MSA';
+    if (key.includes('boltzgen')) return 'BG';
     if (key.includes('boltz')) return 'B2';
     if (key.includes('rf3')) return 'RF';
-    if (key.includes('boltzgen')) return 'BG';
     if (key.includes('fampnn') || key.includes('mpnn')) return 'PN';
     if (key.includes('diff')) return 'RD';
     if (key.includes('dock')) return 'DD';
     return 'JB';
+}
+
+function isMsaJob(modelId: string): boolean {
+    return modelId.toLowerCase() === 'msa_batch';
 }
 
 function StatusBadge({ status, paused }: { status: string; paused: boolean }) {
@@ -56,6 +61,12 @@ function StatusBadge({ status, paused }: { status: string; paused: boolean }) {
             return (
                 <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400">
                     ⏳ Queued
+                </span>
+            );
+        case 'pending_msa':
+            return (
+                <span className="px-2 py-0.5 rounded text-xs font-medium bg-violet-500/20 text-violet-400">
+                    🧬 Waiting MSA
                 </span>
             );
         default:
@@ -183,9 +194,10 @@ export function JobQueuePanel() {
     const isPending = pauseMutation.isPending || resumeMutation.isPending ||
         cancelMutation.isPending || pinMutation.isPending || cancelAllMutation.isPending || killActiveMutation.isPending;
 
-    // Separate running and queued jobs
+    // Separate running, queued, and pending_msa jobs
     const runningJobs = queue.filter(j => j.queue_status === 'running');
     const queuedJobs = queue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused');
+    const pendingMsaJobs = queue.filter(j => j.queue_status === 'pending_msa');
 
     const handleCancelAll = () => {
         if (queuedJobs.length === 0) return;
@@ -383,7 +395,7 @@ function JobRow({
         <div className="bg-slate-700/30 rounded-lg p-3 hover:bg-slate-700/50 transition-colors">
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <span className="px-1.5 py-0.5 rounded text-xs font-mono bg-slate-600 text-slate-300">{getModelBadge(job.model_id)}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-mono ${isMsaJob(job.model_id) ? 'bg-violet-600 text-white' : 'bg-slate-600 text-slate-300'}`}>{getModelBadge(job.model_id)}</span>
                     <div className="min-w-0">
                         <div className="flex items-center gap-2">
                             <span className="font-medium text-white truncate">{job.name}</span>

@@ -13,6 +13,7 @@ include { PublishResults } from './modules/publish.nf'
 include { AlignBoltz ; FilterBoltz ; PrepBoltz ; RunBoltz } from './modules/boltz.nf'
 include { PrepBoltzGenInput ; RunBoltzGen ; FilterBoltzGen } from './modules/boltzgen.nf'
 include { PrepDiffDock ; RunDiffDock ; FilterDiffDock } from './modules/diffdock.nf'
+include { PrepUniDock ; RunUniDock ; FilterUniDock } from './modules/unidock.nf'
 include { CombineMetadata } from './modules/combine_metadata.nf'
 include { Compress as CompressRFD } from './modules/compress'
 include { Compress as CompressMPNN } from './modules/compress'
@@ -105,6 +106,63 @@ workflow {
             .set { final_pdbs }
 
         // Skip all other stages for complex prediction
+        return null
+    }
+
+    ///////////////////////////
+    // UNI-DOCK STANDALONE   //
+    ///////////////////////////
+
+    // Uni-Dock standalone docking mode (activated by unidock profile or params)
+    if (params.unidock_ligand_smiles || params.unidock_ntp_type) {
+        println("Running Uni-Dock standalone docking")
+        println("* Receptor: ${params.skip_input_dir}")
+        println("* Ligand SMILES: ${params.unidock_ligand_smiles ?: 'N/A'}")
+        println("* NTP Type: ${params.unidock_ntp_type ?: 'N/A'}")
+        println("* Box Size: ${params.unidock_box_size}Å")
+        println("* Exhaustiveness: ${params.unidock_exhaustiveness}")
+
+        // Get receptor PDB(s) from input dir
+        def inputPath = file(params.skip_input_dir)
+        if (!inputPath.exists()) {
+            error("Receptor PDB not found at: ${params.skip_input_dir}")
+        }
+
+        def receptor_pdbs = inputPath.isFile() ? [inputPath] : inputPath.listFiles().findAll { it.name.endsWith('.pdb') }
+        if (receptor_pdbs.isEmpty()) {
+            error("No PDB files found in: ${params.skip_input_dir}")
+        }
+
+        // Create channel from receptor PDBs
+        def receptor_ch = Channel.from(receptor_pdbs)
+
+        // Prepare Uni-Dock inputs
+        PrepUniDock(
+            receptor_ch,
+            params.unidock_ligand_smiles ?: '',
+            params.unidock_ntp_type ?: '',
+            params.unidock_box_size,
+            params.unidock_box_center ?: '',
+            params.unidock_flexible_residues ?: ''
+        )
+
+        // Run Uni-Dock
+        def flex_receptor = PrepUniDock.out.flex_receptor.ifEmpty(file('NO_FLEX'))
+
+        def unidock_input = PrepUniDock.out.receptor
+            .combine(flex_receptor)
+            .combine(PrepUniDock.out.ligand_dir)
+            .combine(PrepUniDock.out.box)
+            .map { receptor, flex, ligands, box -> 
+                tuple("unidock_0", receptor, flex, ligands, box)
+            }
+
+        RunUniDock(unidock_input)
+
+        // Filter results
+        FilterUniDock(RunUniDock.out.poses.collect(), RunUniDock.out.scores)
+
+        println("Uni-Dock docking complete. Results in: ${params.out_dir}/run/unidock")
         return null
     }
 

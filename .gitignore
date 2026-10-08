@@ -92,3 +92,19 @@ verify_parsing.nf
 # Debug outputs
 config_check*.txt
 definitions.txt
+
+# Uvicorn logs
+platform/api/uvicorn*.log
+
+# Temp workflow files
+body.nf
+body_new.nf
+header.nf
+header_old.nf
+main_clean.nf
+main_old.nf
+main_test.nf
+test.nf
+
+# Debug scripts
+debug_confidence.py

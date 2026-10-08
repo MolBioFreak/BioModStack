@@ -113,6 +113,8 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
         onSubmit(jobNamePrefix, generatedVariants, {
             predictor,
             ...predictorParams,
+            // Pass base sequence for MSA sharing - all variants use WT MSA
+            msa_reference_sequence: baseSequence,
             ligands: ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles }))
         });
     };

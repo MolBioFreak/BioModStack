@@ -44,6 +44,152 @@ def sanitize_filename(name: str) -> str:
     return sanitized if sanitized else "unnamed"
 
 
+async def launch_msa_batch_job(
+    job_id: str,
+    params: Dict[str, Any],
+    output_dir: str
+) -> None:
+    """
+    Launch an MSA batch job using batch_msa.py directly.
+    
+    This runs the batch MSA script and then unlocks child inference jobs.
+    """
+    from database import async_session, Job
+    from sqlalchemy import select
+    from schemas import JobStatus
+    
+    logger.info(f"[MSA BATCH] Launching job {job_id}")
+    
+    async with async_session() as session:
+        # Update job to running
+        result = await session.execute(select(Job).where(Job.id == job_id))
+        job = result.scalar_one_or_none()
+        if not job:
+            logger.error(f"[MSA BATCH] Job {job_id} not found")
+            return
+        
+        job.status = JobStatus.RUNNING.value
+        job.queue_status = 'running'
+        job.started_at = datetime.utcnow()
+        await session.commit()
+    
+    # Get sequences JSON and GPU ID
+    sequences_json = params.get('sequences_json', '[]')
+    gpu_id = params.get('gpu_id', 0)
+    reference_sequence = params.get('reference_sequence', '')
+    
+    # Build batch_msa.py command
+    script_path = PROJECT_ROOT / "scripts" / "batch_msa.py"
+    cmd = [
+        "python3", str(script_path),
+        "--sequences", sequences_json,
+        "--output_dir", output_dir,
+        "--db_path", "/mnt/BioModStack/colabfold_db",
+        "--cache_dir", "/mnt/BioModStack/msa_cache",
+        "--gpu_id", str(gpu_id),
+    ]
+    if reference_sequence:
+        cmd.extend(["--reference_sequence", reference_sequence])
+    
+    logger.info(f"[MSA BATCH] Command: {' '.join(cmd[:6])}...")
+    
+    try:
+        # Run batch_msa.py
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(PROJECT_ROOT),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        
+        stdout, _ = await process.communicate()
+        exit_code = process.returncode
+        
+        # Save log
+        log_path = Path(output_dir) / "msa_batch.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, 'w') as f:
+            f.write(stdout.decode() if stdout else "")
+        
+        async with async_session() as session:
+            result = await session.execute(select(Job).where(Job.id == job_id))
+            job = result.scalar_one_or_none()
+            
+            if exit_code == 0:
+                job.status = JobStatus.COMPLETED.value
+                job.queue_status = 'completed'
+                job.completed_at = datetime.utcnow()
+                job.msa_manifest_path = str(Path(output_dir) / "msa_manifest.json")
+                logger.info(f"[MSA BATCH] Job {job_id} completed successfully")
+                
+                # Unlock child inference jobs
+                await session.commit()
+                await unlock_child_inference_jobs(job_id, job.msa_manifest_path)
+            else:
+                job.status = JobStatus.FAILED.value
+                job.queue_status = 'failed'
+                job.error_message = f"MSA batch failed with exit code {exit_code}"
+                logger.error(f"[MSA BATCH] Job {job_id} failed: exit code {exit_code}")
+                await session.commit()
+    
+    except Exception as e:
+        logger.error(f"[MSA BATCH] Job {job_id} error: {e}")
+        async with async_session() as session:
+            result = await session.execute(select(Job).where(Job.id == job_id))
+            job = result.scalar_one_or_none()
+            if job:
+                job.status = JobStatus.FAILED.value
+                job.queue_status = 'failed'
+                job.error_message = str(e)
+                await session.commit()
+
+
+async def unlock_child_inference_jobs(msa_job_id: str, manifest_path: str) -> None:
+    """
+    Unlock child inference jobs after MSA batch completes.
+    
+    Updates child jobs from 'pending_msa' to 'queued' status.
+    """
+    from database import async_session, Job
+    from sqlalchemy import select
+    import json
+    
+    logger.info(f"[MSA COMPLETE] Unlocking child jobs for MSA job {msa_job_id}")
+    
+    async with async_session() as session:
+        # Get child jobs waiting for this MSA job
+        result = await session.execute(
+            select(Job).where(
+                Job.parent_job_id == msa_job_id,
+                Job.queue_status == "pending_msa"
+            )
+        )
+        child_jobs = result.scalars().all()
+        
+        if not child_jobs:
+            logger.info(f"[MSA COMPLETE] No child jobs found for {msa_job_id}")
+            return
+        
+        # Parse manifest for MSA paths
+        msa_paths = {}
+        try:
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+            for seq_info in manifest.get("sequences", []):
+                if seq_info.get("success"):
+                    msa_paths[seq_info.get("name", "")] = seq_info.get("msa_path")
+        except Exception as e:
+            logger.warning(f"[MSA COMPLETE] Could not parse manifest: {e}")
+        
+        # Update each child job
+        for job in child_jobs:
+            job.queue_status = 'queued'  # Now ready for inference!
+            logger.info(f"[MSA COMPLETE] Unlocked {job.name} for inference")
+        
+        await session.commit()
+        logger.info(f"[MSA COMPLETE] Unlocked {len(child_jobs)} inference jobs")
+
+
 
 async def launch_nextflow_job(
     job_id: str,
@@ -62,6 +208,13 @@ async def launch_nextflow_job(
     from schemas import JobStatus
     
     logger.info(f"Launching job {job_id} (model={model_id}, mode={mode})")
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # MSA BATCH JOBS: Run batch_msa.py directly (not Nextflow)
+    # ═══════════════════════════════════════════════════════════════════════════
+    if model_id == 'msa_batch':
+        await launch_msa_batch_job(job_id, params, output_dir)
+        return
     
     # Build Nextflow command
     cmd = build_nextflow_command(model_id, mode, params, output_dir)
@@ -221,6 +374,14 @@ def build_nextflow_command(
     if model_id == 'diffdock' and mode in ['dock', 'ntp_dock']:
         profile = "docking,workstation_ryzen7960x"
     
+    # Special case: Uni-Dock standalone docking uses 'unidock' profile
+    if model_id == 'unidock' and mode in ['dock', 'ntp_dock']:
+        profile = "unidock,workstation_ryzen7960x"
+    
+    # Special case: Dual docking mode (both DiffDock and Uni-Dock)
+    if model_id == 'docking' and mode in ['compare', 'consensus']:
+        profile = "dual_docking,workstation_ryzen7960x"
+    
     # Special case: BoltzGen standalone uses 'boltzgen' profile
     if model_id == 'boltzgen':
         profile = "boltzgen,workstation_ryzen7960x"
@@ -242,6 +403,26 @@ def build_nextflow_command(
         'ntp_type': 'diffdock_ntp_type',
         'num_poses': 'diffdock_num_poses',
         'confidence_threshold': 'diffdock_confidence_threshold',
+        # Uni-Dock param mapping
+        'unidock_ligand_smiles': 'unidock_ligand_smiles',
+        'unidock_ntp_type': 'unidock_ntp_type',
+        'unidock_num_poses': 'unidock_num_poses',
+        'unidock_exhaustiveness': 'unidock_exhaustiveness',
+        'unidock_scoring': 'unidock_scoring',
+        'unidock_box_size': 'unidock_box_size',
+        'unidock_box_center': 'unidock_box_center',
+        'unidock_flexible_residues': 'unidock_flexible_residues',
+        'unidock_affinity_threshold': 'unidock_affinity_threshold',
+        'exhaustiveness': 'unidock_exhaustiveness',  # Alias from YAML
+        'scoring_function': 'unidock_scoring',  # Alias from YAML
+        'box_size': 'unidock_box_size',  # Alias from YAML
+        'box_center': 'unidock_box_center',  # Alias from YAML
+        'flexible_residues': 'unidock_flexible_residues',  # Alias from YAML
+        'affinity_threshold': 'unidock_affinity_threshold',  # Alias from YAML
+        'search_mode': 'unidock_search_mode',  # Alias from YAML
+        'min_rmsd': 'unidock_min_rmsd',  # Alias from YAML
+        'energy_range': 'unidock_energy_range',  # Alias from YAML
+        'seed': 'unidock_seed',  # Alias from YAML
         # BoltzGen param mapping
         'target_pdb': 'boltzgen_target_pdb',
         'ligand_description': 'boltzgen_ligand_smiles',
@@ -279,6 +460,21 @@ def build_nextflow_command(
     # Handle complex_components specially - write JSON file for BoltzFromComplex process
     complex_components = params.pop('complex_components', None)
     
+    # Model-specific param preprocessing: Route ntp_type and ligand_smiles to correct targets
+    if model_id == 'unidock':
+        # For Uni-Dock: ntp_type -> unidock_ntp_type, ligand_smiles -> unidock_ligand_smiles
+        if 'ntp_type' in params:
+            params['unidock_ntp_type'] = params.pop('ntp_type')
+        if 'ligand_smiles' in params and 'unidock_ligand_smiles' not in params:
+            params['unidock_ligand_smiles'] = params.pop('ligand_smiles')
+    elif model_id == 'diffdock':
+        # For DiffDock: ntp_type -> diffdock_ntp_type
+        if 'ntp_type' in params:
+            params['diffdock_ntp_type'] = params.pop('ntp_type')
+    elif model_id == 'boltzgen':
+        # For BoltzGen: ntp_type -> boltzgen_ntp_type
+        if 'ntp_type' in params:
+            params['boltzgen_ntp_type'] = params.pop('ntp_type')
     
     if complex_components:
         import json

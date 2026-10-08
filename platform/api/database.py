@@ -65,6 +65,14 @@ class Job(Base):
     max_retries = Column(Integer, default=2)  # User-configurable retry limit
     oom_tolerance = Column(String(20), default="allow")  # 'allow' = auto-retry, 'approve' = wait for user
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # MSA BATCH: Parent-Child Job Linking
+    # ═══════════════════════════════════════════════════════════════════════════
+    parent_job_id = Column(String(36), nullable=True, index=True)  # MSA job that spawned this inference job
+    job_phase = Column(String(20), default="inference")  # 'msa_generation' or 'inference'
+    msa_sequences = Column(JSON, nullable=True)  # For MSA batch jobs: list of sequences to process
+    msa_manifest_path = Column(String(500), nullable=True)  # Path to MSA outputs manifest
+    
     # Relationship to designs
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
 
@@ -176,21 +184,7 @@ class UserTemplate(Base):
     updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
 
 
-class MSACache(Base):
-    """Cached MSA results from ColabFold API."""
-    __tablename__ = "msa_cache"
-    
-    id = Column(String(36), primary_key=True)
-    sequence_hash = Column(String(64), unique=True, nullable=False, index=True)  # SHA256 of sequence
-    sequence = Column(Text, nullable=False)  # Original sequence for verification
-    sequence_length = Column(Integer, nullable=False)
-    msa_path = Column(String(500), nullable=False)  # data/msa_cache/ab/abc123.a3m.gz
-    file_size_bytes = Column(Integer, nullable=False)  # Compressed size
-    colabfold_job_id = Column(String(100), nullable=True)  # Original ColabFold job ID
-    hit_count = Column(Integer, default=0)  # Usage tracking
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_accessed = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime, nullable=False)  # created_at + 30 days
+# MSACache removed - now using file-based caching in /mnt/BioModStack/msa_cache
 
 
 async def init_db():
