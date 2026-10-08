@@ -28,12 +28,12 @@ from services.scientific_artifacts import (
     ScientificArtifactError,
     artifact_reference,
     artifact_row_reference,
-    count_rows,
     publish_json_payload,
     publish_table_rows,
     query_rows,
     resolve_json_value,
 )
+from services.scientific_artifacts.query import artifact_query
 from services.scientific_artifacts.writer import guarded_delete_new_artifact
 from services.conformational_mapping.contracts import candidate_id as cm_candidate_id
 from .contracts import canonical_json_bytes, canonical_json_loads
@@ -1444,40 +1444,39 @@ async def landscape_page(
     invocation_authority = await _core_landscape_invocation_authority(
         session, parent_job_id, invocation_id
     )
-    if invocation_authority is None:
-        try:
-            legacy_rows = query_rows(
-                reference,
-                columns=("provenance_json",),
-                limit=1,
-                max_limit=1,
-            )
-            invocation_authority = (
-                json.loads(legacy_rows[0]["provenance_json"])
-                if legacy_rows
-                else None
-            )
-        except (ScientificArtifactError, KeyError, TypeError, ValueError):
-            invocation_authority = None
-    if not _complete_landscape_invocation_authority(invocation_authority):
-        raise FrustraMPNNPersistenceError(
-            "persisted FrustraMPNN landscape invocation authority is missing"
-        )
-    assert isinstance(invocation_authority, Mapping)
     try:
-        total = count_rows(reference, filters=filters, range_filters=range_filters)
-        rows = query_rows(
-            reference,
-            columns=columns,
-            limit=bounded_limit,
-            offset=bounded_offset,
-            max_limit=500,
-            filters=filters,
-            range_filters=range_filters,
-            order_by=(
-                "entity_instance_id", "sequence_index", "mutation_aa", "id",
-            ),
-        )
+        with artifact_query(reference) as query:
+            if invocation_authority is None:
+                try:
+                    legacy_rows = query.query_rows(
+                        columns=("provenance_json",),
+                        limit=1,
+                        max_limit=1,
+                    )
+                    invocation_authority = (
+                        json.loads(legacy_rows[0]["provenance_json"])
+                        if legacy_rows
+                        else None
+                    )
+                except (ScientificArtifactError, KeyError, TypeError, ValueError):
+                    invocation_authority = None
+            if not _complete_landscape_invocation_authority(invocation_authority):
+                raise FrustraMPNNPersistenceError(
+                    "persisted FrustraMPNN landscape invocation authority is missing"
+                )
+            assert isinstance(invocation_authority, Mapping)
+            total = query.count_rows(filters=filters, range_filters=range_filters)
+            rows = query.query_rows(
+                columns=columns,
+                limit=bounded_limit,
+                offset=bounded_offset,
+                max_limit=500,
+                filters=filters,
+                range_filters=range_filters,
+                order_by=(
+                    "entity_instance_id", "sequence_index", "mutation_aa", "id",
+                ),
+            )
     except ScientificArtifactError as exc:
         raise FrustraMPNNPersistenceError(
             f"persisted FrustraMPNN landscape artifact is unavailable: {exc}"
