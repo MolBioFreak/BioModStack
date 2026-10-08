@@ -317,6 +317,8 @@ The frontend renders and filters versioned analysis results. It does not invent 
 
 ### M5 — Conformational mapping, ensemble, comparison, and trajectory workbench
 
+**Normative tranche specification:** `docs/specs/structure_visualization/m5_m6_workbench_spec_v1.md`.
+
 **Goal:** provide the missing conformational-analysis UX without weakening the Conformational Mapping contract.
 
 **Separate authorization:** This phase does not start the separately gated `docs/plans/2026-07-06-conformational-mapping-orchestrator.md` Phase 13. That phase still requires its own Phase 12 `GO`, owner-approved baseline, allowlist, and review.
@@ -364,6 +366,8 @@ The frontend renders and filters versioned analysis results. It does not invent 
 ---
 
 ### M6 — Volumes, advanced analysis presentation, snapshots, and exports
+
+**Normative tranche specification:** `docs/specs/structure_visualization/m5_m6_workbench_spec_v1.md`.
 
 **Goal:** support cryo-EM/density, electrostatics, segmentation, and publication/review workflows after the core platform is stable.
 
