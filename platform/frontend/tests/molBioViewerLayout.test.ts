@@ -160,7 +160,7 @@ test('sequence viewer remount key changes when RNA/DNA identity changes at same 
     assert.match(source, /seqType=\{seqVizSeqType\}/);
     assert.match(source, /sequenceData\.sequenceType/);
     assert.match(source, /displaySequence\.slice\(0, 24\)/);
-    assert.match(source, /key=\{viewerSequenceKey\}/);
+    assert.match(source, /key=\{`\$\{viewerSequenceKey\}:selection-reset-\$\{selectionResetVersion\}`\}/);
 });
 
 test('sequence header exposes focus and panel collapse actions', () => {
