@@ -34,7 +34,11 @@ import {
     type MovieExportRequestV1,
 } from './browserMovieExport.js';
 
-const sceneResourceKey = (state: StructureSceneState): string => JSON.stringify(state.documents.map((document) => [document.documentId, document.contentSha256]));
+const sceneResourceKey = (state: StructureSceneState): string => JSON.stringify({
+    documents: state.documents,
+    activeDocumentId: state.activeDocumentId,
+    collection: state.collection ?? null,
+});
 const volumeEstimateBytes = (descriptor: SpatialVolumeDescriptorV1): number => descriptor.dimensions.reduce((product, value) => product * value, 1) * 8;
 const volumeRuntimeBudget = (): { residentBytes: number; visible: number } => {
     const memory = (globalThis.navigator as (Navigator & { deviceMemory?: number }) | undefined)?.deviceMemory;
@@ -103,7 +107,7 @@ export class StructureSceneController {
 
     async loadScene(state: StructureSceneState): Promise<ViewerResult<void>> {
         if (this.disposed) return viewerCancelled('Structure scene controller is disposed');
-        const replacingResources = !this.scene || this.scene.ref.generation !== state.ref.generation || sceneResourceKey(this.scene) !== sceneResourceKey(state);
+        const replacingResources = !this.scene || sceneResourceKey(this.scene) !== sceneResourceKey(state);
         const token = ++this.operationToken;
         this.abortController?.abort();
         const abortController = new AbortController();
