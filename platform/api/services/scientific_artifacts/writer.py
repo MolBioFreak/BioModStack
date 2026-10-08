@@ -1,12 +1,15 @@
 """Durable Parquet materialization and integrity verification."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
+import fcntl
 import hashlib
 import os
 from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping, Sequence
+import uuid
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -86,6 +89,41 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _lock_path(destination: Path) -> Path:
+    return destination.with_name(f".{destination.name}.lock")
+
+
+def _reuse_marker_path(destination: Path) -> Path:
+    return destination.with_name(f".{destination.name}.reused")
+
+
+@contextmanager
+def _artifact_lock(destination: Path):
+    """Serialize publication and rollback cleanup across API processes."""
+    descriptor = os.open(_lock_path(destination), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _retain_reused_artifact(destination: Path) -> None:
+    """Permanently disarm installer rollback after exact-byte reuse."""
+    marker = _reuse_marker_path(destination)
+    try:
+        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return
+    try:
+        os.write(descriptor, b"reused\n")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    _fsync_directory(destination.parent)
+
+
 def _artifact_id(owner_kind: str, owner_id: str, role: str, source_sha256: str) -> str:
     payload = canonical_json_bytes([owner_kind, owner_id, role, source_sha256, ARTIFACT_TABLE_SCHEMA])
     return "sci_" + hashlib.sha256(payload).hexdigest()
@@ -112,9 +150,9 @@ def install_parquet_rows(
     folder.mkdir(parents=True, exist_ok=True)
     relative_path = str((folder / f"{artifact_id}.parquet").relative_to(destination_root))
     destination = destination_root / relative_path
-    staging = destination.with_name(f".{destination.name}.staging-{os.getpid()}")
-    if staging.exists():
-        staging.unlink()
+    staging = destination.with_name(
+        f".{destination.name}.staging-{os.getpid()}-{uuid.uuid4().hex}"
+    )
     try:
         pq.write_table(
             table,
@@ -127,15 +165,20 @@ def install_parquet_rows(
         with staging.open("rb") as handle:
             os.fsync(handle.fileno())
         content_sha256, size_bytes = _content_digest(staging)
-        newly_installed = not destination.exists()
-        if not newly_installed:
-            existing_sha256, existing_size = _content_digest(destination)
-            if (existing_sha256, existing_size) != (content_sha256, size_bytes):
-                raise ScientificArtifactError(f"immutable artifact conflict: {destination}")
-            staging.unlink()
-        else:
-            os.replace(staging, destination)
-            _fsync_directory(destination.parent)
+        with _artifact_lock(destination):
+            try:
+                os.link(staging, destination)
+            except FileExistsError:
+                existing_sha256, existing_size = _content_digest(destination)
+                if (existing_sha256, existing_size) != (content_sha256, size_bytes):
+                    raise ScientificArtifactError(
+                        f"immutable artifact conflict: {destination}"
+                    )
+                _retain_reused_artifact(destination)
+                newly_installed = False
+            else:
+                newly_installed = True
+                _fsync_directory(destination.parent)
         metadata = pq.read_metadata(destination)
         if metadata.num_rows != len(materialized):
             raise ScientificArtifactError("installed Parquet row count changed during verification")
@@ -171,13 +214,16 @@ def guarded_delete_new_artifact(artifact: InstalledArtifact) -> bool:
         path.resolve(strict=False).relative_to(root)
     except ValueError:
         return False
-    if path.is_symlink() or not path.is_file():
-        return False
-    if _content_digest(path) != (artifact.content_sha256, artifact.size_bytes):
-        return False
-    path.unlink()
-    _fsync_directory(path.parent)
-    return True
+    with _artifact_lock(path):
+        if os.path.lexists(_reuse_marker_path(path)):
+            return False
+        if path.is_symlink() or not path.is_file():
+            return False
+        if _content_digest(path) != (artifact.content_sha256, artifact.size_bytes):
+            return False
+        path.unlink()
+        _fsync_directory(path.parent)
+        return True
 
 
 def verify_artifact(artifact: InstalledArtifact | Mapping[str, Any], *, root: Path | str | None = None) -> Path:

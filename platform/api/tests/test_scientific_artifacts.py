@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import hashlib
 import json
+import multiprocessing
 import sqlite3
 
 import pyarrow as pa
@@ -26,7 +27,35 @@ from services.scientific_artifacts import (
     resolve_json_value,
     verify_artifact,
 )
-from services.scientific_artifacts.writer import ScientificArtifactError
+from services.scientific_artifacts.writer import (
+    ScientificArtifactError,
+    guarded_delete_new_artifact,
+)
+
+
+def _publish_same_artifact(root, barrier, results) -> None:
+    """Force legacy replace publishers across the same race window."""
+    import services.scientific_artifacts.writer as writer
+
+    original_replace = writer.os.replace
+
+    def synchronized_replace(source, destination) -> None:
+        barrier.wait(timeout=10)
+        original_replace(source, destination)
+
+    writer.os.replace = synchronized_replace
+    artifact = writer.install_parquet_rows(
+        root=root,
+        owner_kind="concurrent-test",
+        owner_id="same-owner",
+        role="rows",
+        schema_id="bms.concurrent-test.v1",
+        schema_version=1,
+        source_sha256="a" * 64,
+        rows=[{"value": 1}],
+        schema=pa.schema([("value", pa.int64())]),
+    )
+    results.put(artifact)
 
 
 def test_small_design_scientific_array_is_externalized_before_flush(
@@ -99,6 +128,37 @@ def test_unrelated_design_update_keeps_existing_dense_artifact_receipt(
             )
         ).scalar_one()
     assert receipt_count == 1
+
+
+def test_concurrent_publication_has_one_installer_and_rollback_cannot_delete_reuse(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(tmp_path))
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_publish_same_artifact,
+            args=(tmp_path, barrier, results),
+        )
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=15)
+        assert process.exitcode == 0
+
+    artifacts = [results.get(timeout=2) for _ in processes]
+    assert sum(artifact.newly_installed for artifact in artifacts) == 1
+    assert {artifact.content_sha256 for artifact in artifacts} == {
+        artifacts[0].content_sha256
+    }
+    installer = next(artifact for artifact in artifacts if artifact.newly_installed)
+    assert guarded_delete_new_artifact(installer) is False
+    assert verify_artifact(artifacts[0], root=tmp_path).is_file()
 
 
 def test_parquet_artifact_round_trips_exact_envelope_and_duckdb_page(tmp_path):
