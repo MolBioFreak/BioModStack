@@ -394,7 +394,7 @@ Protein-centric metrics (SS count, RoG) are invalid for nucleic acids. Use:
 |------|--------|-------------|
 | `containers/rfdpoly.sif` | NEW | Pre-built container from IPD |
 | `tools/RFDpoly/` | NEW | Cloned repository |
-| `models/rfdpoly/*.pt` | NEW | Model checkpoints |
+| `$BMS_WEIGHTS/rfdpoly/*.pt` | NEW | Model checkpoints |
 | `modules/rfdpoly.nf` | NEW | Nextflow module |
 | `workflows/oligo_design.nf` | NEW | Workflow definition |
 | `scripts/prep_boltz_oligo.py` | NEW | Chain type detection |

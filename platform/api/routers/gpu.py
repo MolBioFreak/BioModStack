@@ -4,7 +4,7 @@ System monitoring API router - GPU, CPU, RAM statistics.
 
 from fastapi import APIRouter, HTTPException
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel
 from collections import deque
 from pathlib import Path
@@ -945,7 +945,7 @@ async def force_run_job(job_id: str, request: ForceRunRequest):
 class ConcurrencyLimitRequest(BaseModel):
     """Request to set concurrency limit for a model type."""
     model_type: str  # e.g., "fampnn", "rfantibody", "boltz"
-    limit: Optional[int] = None  # None = auto (no limit)
+    limit: Optional[Union[int, str]] = None  # None = unlimited, "auto" = VRAM-derived
 
 
 @router.get("/concurrency-limits")
@@ -956,7 +956,7 @@ async def get_concurrency_limits():
     config = read_scheduler_config()
     return {
         "concurrency_limits": config.get("concurrency_limits", {}),
-        "description": "Model type -> max concurrent jobs (null = auto/unlimited)"
+        "description": "Model type -> max concurrent running jobs (cap; 'auto' uses VRAM-derived limit)"
     }
 
 
@@ -965,8 +965,8 @@ async def set_concurrency_limit(request: ConcurrencyLimitRequest):
     """
     [DEBUG] Set concurrency limit for a specific model type.
     
-    Limits how many jobs of this type can run concurrently.
-    Set to null to remove the limit (auto mode).
+    Limits how many jobs of this type can run concurrently (cap).
+    Set to null for unlimited, or "auto" for VRAM-derived limit.
     """
     import logging
     logger = logging.getLogger("api.gpu")
@@ -979,11 +979,18 @@ async def set_concurrency_limit(request: ConcurrencyLimitRequest):
     old_limit = config["concurrency_limits"].get(request.model_type)
     
     if request.limit is None:
-        # Remove the limit
+        # Remove the limit (unlimited)
         config["concurrency_limits"].pop(request.model_type, None)
         logger.info(f"[CONCURRENCY] Removed limit for {request.model_type}")
+    elif isinstance(request.limit, str):
+        if request.limit.lower() != "auto":
+            raise HTTPException(status_code=400, detail="limit must be an integer, 'auto', or null")
+        config["concurrency_limits"][request.model_type] = "auto"
+        logger.info(f"[CONCURRENCY] Set {request.model_type} limit to auto")
     else:
-        config["concurrency_limits"][request.model_type] = request.limit
+        if request.limit < 1:
+            raise HTTPException(status_code=400, detail="limit must be >= 1, 'auto', or null")
+        config["concurrency_limits"][request.model_type] = int(request.limit)
         logger.info(f"[CONCURRENCY] Set {request.model_type} limit to {request.limit}")
     
     if not write_scheduler_config(config):

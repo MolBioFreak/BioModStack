@@ -49,7 +49,7 @@ async def ingest_job_results(
     
     Args:
         job_id: The job ID to associate designs with
-        output_dir: Path to the job's output directory (e.g., legacy pdj_results/job_xxx)
+        output_dir: Path to the job's output directory (e.g., legacy bms_results/job_xxx)
         session: Async database session
         epitope_residues: Optional list of epitope residues (e.g., ["A111", "A112"])
             for calculating contact metrics

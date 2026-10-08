@@ -4,7 +4,7 @@ standard_paths:
     path: benchmarkdata
     description: Benchmark target proteins for testing
   outputs:
-    path: pdj_results
+    path: bms_results
     description: Pipeline output directory
   lib:
     path: lib

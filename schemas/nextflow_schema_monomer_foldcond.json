@@ -8,7 +8,7 @@
     "essential_parameters": {
       "title": "Essential Parameters",
       "type": "object",
-      "description": "These parameters are required for ProteinDJ and are used by every mode.",
+      "description": "These parameters are required for BioModStack and are used by every mode.",
       "default": "",
       "properties": {
         "rfd_mode": {
@@ -31,7 +31,7 @@
         },
         "out_dir": {
           "type": "string",
-          "default": "${projectDir}/pdj_monomer_foldcond",
+          "default": "${projectDir}/bms_monomer_foldcond",
           "description": "Output directory for results.",
           "format": "directory-path"
         }
@@ -46,7 +46,7 @@
     "mode_specific_parameters": {
       "title": "Mode-Specific Parameters",
       "type": "object",
-      "description": "These parameters are used for some of the ProteinDJ modes.",
+      "description": "These parameters are used for some of the BioModStack modes.",
       "default": "",
       "properties": {
         "rfd_scaffold_dir": {
@@ -65,7 +65,7 @@
     "workflow_advanced_parameters": {
       "title": "Mode-Specific Parameters",
       "type": "object",
-      "description": "These parameters are used for some of the ProteinDJ modes.",
+      "description": "These parameters are used for some of the BioModStack modes.",
       "default": "",
       "properties": {
         "seq_method": {

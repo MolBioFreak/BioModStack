@@ -8,7 +8,7 @@
         "essential_parameters": {
             "title": "Essential Parameters",
             "type": "object",
-            "description": "These parameters are required for ProteinDJ and are used by every mode.",
+            "description": "These parameters are required for BioModStack and are used by every mode.",
             "default": "",
             "properties": {
                 "rfd_mode": {
@@ -27,7 +27,7 @@
                 },
                 "out_dir": {
                     "type": "string",
-                    "default": "${projectDir}/pdj_results",
+                    "default": "${projectDir}/bms_results",
                     "description": "Output directory for results.",
                     "format": "directory-path"
                 }
@@ -42,7 +42,7 @@
         "mode_specific_parameters": {
             "title": "Mode-Specific Parameters",
             "type": "object",
-            "description": "These parameters are used for some of the ProteinDJ modes.",
+            "description": "These parameters are used for some of the BioModStack modes.",
             "default": "",
             "properties": {
                 "rfd_contigs": {
@@ -101,7 +101,7 @@
         "workflow_advanced_parameters": {
             "title": "Mode-Specific Parameters",
             "type": "object",
-            "description": "These parameters are used for some of the ProteinDJ modes.",
+            "description": "These parameters are used for some of the BioModStack modes.",
             "default": "",
             "properties": {
                 "seq_method": {
@@ -257,8 +257,8 @@
                 },
                 "ppiflow_weights_dir": {
                     "type": "string",
-                    "default": "/mnt/BioModStack/weights/ppiflow",
-                    "description": "Host directory with PPIFlow weights.",
+                    "default": "BMS_WEIGHTS/ppiflow",
+                    "description": "Host directory with PPIFlow weights (BMS_WEIGHTS/ppiflow).",
                     "hidden": true
                 },
                 "ppiflow_heavy_chain": {

@@ -32,7 +32,7 @@ def get_inputs_dir() -> Path:
 
 
 def get_results_dir() -> Path:
-    return get_data_root() / "pdj_results"
+    return get_data_root() / "bms_results"
 
 
 def get_work_dir() -> Path:
@@ -100,7 +100,7 @@ def get_db_url() -> str:
 def get_allowed_roots() -> dict[str, Path]:
     code_root = get_code_root()
     return {
-        "pdj_results": get_results_dir(),
+        "bms_results": get_results_dir(),
         "benchmarkdata": code_root / "benchmarkdata",
         "lib": code_root / "lib",
         "rcsb": code_root / "rcsb",

@@ -33,8 +33,8 @@ process PrepBoltzWithMSA {
     path ("msa/*.a3m"), emit: msas, optional: true
 
     script:
-    def dbPath = params.msa_local_db ?: "/mnt/BioModStack/colabfold_db"
-    def cacheDir = params.msa_cache_dir ?: "/mnt/BioModStack/msa_cache"
+    def dbPath = params.msa_local_db
+    def cacheDir = params.msa_cache_dir
     def threads = params.msa_threads ?: 32
     """
     eval "\$(micromamba shell hook --shell bash)"

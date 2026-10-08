@@ -491,7 +491,7 @@ async def delete_job_permanently(
     - Job from database
     - All child jobs from database
     - All designs from database  
-    - Output directory (pdj_results/...)
+    - Output directory (bms_results/...)
     - Work directory (work/...)
     
     This is irreversible!

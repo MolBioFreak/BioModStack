@@ -26,6 +26,8 @@ BOLTZGEN_STAGES = [
     ("filtering", "Filtering", "Ranking and selecting top candidates"),
 ]
 
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+
 def report_stage(stage: str, status: str, job_id: str = None, message: str = None):
     """
     Report BoltzGen stage progress to the API.
@@ -55,7 +57,7 @@ def report_stage(stage: str, status: str, job_id: str = None, message: str = Non
         try:
             import requests
             requests.post(
-                f"http://localhost:8000/api/jobs/{job_id}/stage",
+                f"{API_BASE_URL}/api/jobs/{job_id}/stage",
                 json={
                     "stage": stage,
                     "stage_name": stage_name,

@@ -29,8 +29,8 @@ Before starting, ensure you have:
 First, clone the BioModStack repository:
 
 ```bash
-git clone https://github.com/MolBioFreak/Protein-De-Novo-Modification-and-Design-Platform
-cd Protein-De-Novo-Modification-and-Design-Platform
+git clone https://github.com/MolBioFreak/biomodstack
+cd biomodstack
 ```
 
 ---
@@ -113,10 +113,11 @@ nextflow -version
 
 ### RFdiffusion Models (~3.7 GB)
 
-RFdiffusion requires several diffusion model checkpoints (~3.7 GB). If you have not already downloaded the models, use the commands below, and update the `rfd_models` variable in `nextflow.config` to the location of the model directory (e.g. './models/rfd'):
+RFdiffusion requires several diffusion model checkpoints (~3.7 GB). If you have not already downloaded the models, use the commands below, and point `BMS_RFD_MODELS` (or `BMS_WEIGHTS`) to the model directory (e.g. `$BMS_WEIGHTS/rfd`):
 
 ```bash
-mkdir -p models/rfd && cd models/rfd
+MODEL_ROOT="${BMS_WEIGHTS:-/mnt/BioModStack/weights}"
+mkdir -p "$MODEL_ROOT/rfd" && cd "$MODEL_ROOT/rfd"
 
 # Download all required checkpoints
 wget http://files.ipd.uw.edu/pub/RFdiffusion/6f5902ac237024bdd0c176cb93063dc4/Base_ckpt.pt
@@ -133,10 +134,11 @@ cd ../..
 
 ### AlphaFold2 Models (~1.1 GB)
 
-To perform AlphaFold2 predictions, you will need to download the AF2 models from DeepMind's repository (download ~5.2GB, final size ~1.1 GB). If you have not already downloaded the models, use the commands below, and update the `af2_models` variable in `nextflow.config` to the location of the model directory (e.g. './models/af2'):
+To perform AlphaFold2 predictions, you will need to download the AF2 models from DeepMind's repository (download ~5.2GB, final size ~1.1 GB). If you have not already downloaded the models, use the commands below, and point `BMS_AF2_MODELS` (or `BMS_WEIGHTS`) to the model directory (e.g. `$BMS_WEIGHTS/alphafold/params`):
 
 ```bash
-mkdir -p models/af2 && cd models/af2
+MODEL_ROOT="${BMS_WEIGHTS:-/mnt/BioModStack/weights}"
+mkdir -p "$MODEL_ROOT/alphafold/params" && cd "$MODEL_ROOT/alphafold/params"
 
 # Download and extract AF2 parameters (only need the first model for AlphaFold2 Initial-Guess)
 wget https://storage.googleapis.com/alphafold/alphafold_params_2022-12-06.tar
@@ -148,10 +150,11 @@ cd ../..
 
 ### Boltz-2 Models (~2.2 GB)
 
-To perform Boltz-2 predictions, you will need to download the models (download ~3.8 GB, final size ~2.2 GB). If you have not already downloaded the models, use the commands below, and update the `boltz_models` variable in `nextflow.config` to the location of the model directory (e.g. './boltz_models'):
+To perform Boltz-2 predictions, you will need to download the models (download ~3.8 GB, final size ~2.2 GB). If you have not already downloaded the models, use the commands below, and point `BMS_BOLTZ_MODELS` (or `BMS_WEIGHTS`) to the model directory (e.g. `$BMS_WEIGHTS/boltz`):
 
 ```bash
-mkdir -p models/boltz && cd models/boltz
+MODEL_ROOT="${BMS_WEIGHTS:-/mnt/BioModStack/weights}"
+mkdir -p "$MODEL_ROOT/boltz" && cd "$MODEL_ROOT/boltz"
 
 # Download Boltz-2 checkpoints and molecular data
 wget https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_conf.ckpt
@@ -169,9 +172,10 @@ cd ../..
 
 ```bash
 # Check that all required files exist
-ls -la models/rfd/    # Should contain 8 .pt files
-ls -la models/af2/    # Should contain params directory
-ls -la models/boltz/  # Should contain .ckpt files and mols directory
+MODEL_ROOT="${BMS_WEIGHTS:-/mnt/BioModStack/weights}"
+ls -la "$MODEL_ROOT/rfd/"             # Should contain 8 .pt files
+ls -la "$MODEL_ROOT/alphafold/params" # Should contain params files
+ls -la "$MODEL_ROOT/boltz/"           # Should contain .ckpt files and mols directory
 ```
 
 ---
@@ -253,9 +257,9 @@ nano nextflow.config
 | Parameter       | Description                                 | Examples                       |
 | --------------- | ------------------------------------------- | ------------------------------ |
 | `container_dir` | Path to built containers                    | `'/shared/containers'`         |
-| `rfd_models`    | Path to RFdiffusion models                  | `"${projectDir}/models/rfd"`   |
-| `af2_models`    | Path to AlphaFold2 models                   | `"${projectDir}/models/af2"`   |
-| `boltz_models`  | Path to Boltz-2 models                      | `"${projectDir}/models/boltz"` |
+| `rfd_models`    | Path to RFdiffusion models                  | `"$BMS_WEIGHTS/rfd"`           |
+| `af2_models`    | Path to AlphaFold2 models                   | `"$BMS_WEIGHTS/alphafold/params"` |
+| `boltz_models`  | Path to Boltz-2 models                      | `"$BMS_WEIGHTS/boltz"`         |
 | `gpu_model`     | Your GPU type                               | `'A30'`, `'V100'`, `'A100'`    |
 | `gpus`          | Number of GPUs to request                   | `1`, `2`, `4`, `8`             |
 | `cpus_per_gpu`  | Number of CPUs to request per GPU           | `8`, `12`                      |
@@ -329,7 +333,7 @@ apptainer build --fakeroot --verbose <container>.sif <container>.def
 nextflow config
 
 # Verify file paths exist
-ls -la /path/to/models
+ls -la "${BMS_WEIGHTS:-/mnt/BioModStack/weights}"
 ls -la /path/to/containers
 ```
 
@@ -372,7 +376,7 @@ After successful installation:
 If you encounter issues:
 
 1. **Check the [Troubleshooting Guide](TROUBLESHOOTING.md)**
-2. **Search existing [GitHub Issues](https://github.com/MolBioFreak/Protein-De-Novo-Modification-and-Design-Platform/issues)**
+2. **Search existing [GitHub Issues](https://github.com/MolBioFreak/biomodstack/issues)**
 3. **Create a new issue** with detailed error information
 
 ---

@@ -78,8 +78,8 @@ nextflow -version
 
 ```bash
 # Clone repository
-git clone https://github.com/MolBioFreak/Protein-De-Novo-Modification-and-Design-Platform.git
-cd Protein-De-Novo-Modification-and-Design-Platform
+git clone https://github.com/MolBioFreak/biomodstack.git
+cd biomodstack
 
 # Checkout test branch
 git fetch origin test/workstation-setup
@@ -91,9 +91,9 @@ git checkout test/workstation-setup
 **Option A: Automatic (Recommended for first test)**
 
 Models will auto-download on first run to their respective cache locations:
-- RFdiffusion models: Download automatically to `models/rfd/`
-- AlphaFold2 models: Download automatically to `models/af2/`
-- Boltz models: Download automatically on first Boltz run to `models/boltz/`
+- RFdiffusion models: Download to `$BMS_WEIGHTS/rfd/`
+- AlphaFold2 models: Download to `$BMS_WEIGHTS/alphafold/params/`
+- Boltz models: Download on first Boltz run to `$BMS_WEIGHTS/boltz/`
 
 Total: ~15GB, happens during first pipeline run.
 
@@ -104,9 +104,9 @@ Total: ~15GB, happens during first pipeline run.
 bash scripts/download_models.sh
 
 # This downloads:
-# - RFdiffusion models (~1.5 GB) → models/rfd/
-# - AlphaFold2 models (~3.5 GB) → models/af2/
-# - Boltz models (~10 GB) → models/boltz/ (on first Boltz run)
+# - RFdiffusion models (~1.5 GB) → $BMS_WEIGHTS/rfd/
+# - AlphaFold2 models (~3.5 GB) → $BMS_WEIGHTS/alphafold/params/
+# - Boltz models (~10 GB) → $BMS_WEIGHTS/boltz/ (on first Boltz run)
 ```
 
 ### 3. Container Strategy

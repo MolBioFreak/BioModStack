@@ -444,7 +444,7 @@ function WorkflowPinningSection() {
 }
 
 function ConcurrencyLimitsSection() {
-    const [limits, setLimits] = useState<Record<string, number | null>>({});
+    const [limits, setLimits] = useState<Record<string, number | 'auto' | null>>({});
     const [localValues, setLocalValues] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(false);
     const [expanded, setExpanded] = useState(false);
@@ -459,7 +459,11 @@ function ConcurrencyLimitsSection() {
             setLocalValues(prev => {
                 const next: Record<string, string> = { ...prev };
                 Object.keys(nextLimits).forEach(key => {
-                    next[key] = nextLimits[key] == null ? '' : String(nextLimits[key]);
+                    if (nextLimits[key] == null || nextLimits[key] === 'auto') {
+                        next[key] = '';
+                    } else {
+                        next[key] = String(nextLimits[key]);
+                    }
                 });
                 return next;
             });
@@ -472,15 +476,19 @@ function ConcurrencyLimitsSection() {
         refreshLimits();
     }, []);
 
-    const updateLimit = async (modelType: string) => {
-        const raw = (localValues[modelType] ?? '').trim();
-        let limit: number | null;
-        if (raw === '') {
-            limit = null;
+    const updateLimit = async (modelType: string, override?: number | 'auto' | null) => {
+        let limit: number | 'auto' | null;
+        if (override !== undefined) {
+            limit = override;
         } else {
-            const parsed = Number(raw);
-            if (!Number.isFinite(parsed) || parsed < 1) return;
-            limit = Math.floor(parsed);
+            const raw = (localValues[modelType] ?? '').trim();
+            if (raw === '') {
+                limit = null;
+            } else {
+                const parsed = Number(raw);
+                if (!Number.isFinite(parsed) || parsed < 1) return;
+                limit = Math.floor(parsed);
+            }
         }
 
         setLoading(true);
@@ -493,7 +501,7 @@ function ConcurrencyLimitsSection() {
             if (res.ok) {
                 const data = await res.json();
                 setLimits(data.concurrency_limits || {});
-                setLocalValues(prev => ({ ...prev, [modelType]: limit == null ? '' : String(limit) }));
+                setLocalValues(prev => ({ ...prev, [modelType]: limit == null || limit === 'auto' ? '' : String(limit) }));
             }
         } catch (error) {
             console.error('Failed to update concurrency limit:', error);
@@ -517,12 +525,17 @@ function ConcurrencyLimitsSection() {
             {expanded && (
                 <div className="mt-3 space-y-2">
                     <p className="text-xs text-slate-500">
-                        Set max concurrent jobs per model type (blank = unlimited).
+                        Caps running jobs per model. Auto derives a VRAM-based cap; blank = unlimited.
                     </p>
                     {models.map(model => (
                         <div key={model} className="flex items-center justify-between bg-slate-700/30 rounded px-2 py-1.5">
                             <span className="text-xs text-slate-300 capitalize">{model}</span>
                             <div className="flex items-center gap-2">
+                                {limits[model] === 'auto' && (
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-cyan-500/20 text-cyan-300">
+                                        auto
+                                    </span>
+                                )}
                                 <input
                                     type="number"
                                     min="1"
@@ -531,6 +544,20 @@ function ConcurrencyLimitsSection() {
                                     onChange={(e) => setLocalValues(prev => ({ ...prev, [model]: e.target.value }))}
                                     className="w-20 bg-slate-800/60 border border-slate-600/50 rounded px-2 py-1 text-xs text-slate-200"
                                 />
+                                <button
+                                    onClick={() => updateLimit(model, 'auto')}
+                                    disabled={loading}
+                                    className="px-2 py-1 rounded text-xs font-medium bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30 disabled:opacity-50"
+                                >
+                                    Auto
+                                </button>
+                                <button
+                                    onClick={() => updateLimit(model, null)}
+                                    disabled={loading}
+                                    className="px-2 py-1 rounded text-xs font-medium bg-slate-700/60 text-slate-200 hover:bg-slate-600/60 disabled:opacity-50"
+                                >
+                                    Unlimited
+                                </button>
                                 <button
                                     onClick={() => updateLimit(model)}
                                     disabled={loading}

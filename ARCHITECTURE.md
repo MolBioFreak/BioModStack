@@ -57,7 +57,7 @@ Stage 6: ANALYSIS
 ## Directory Structure
 
 ```
-Protein-De-Novo-Modification-and-Design-Platform/
+biomodstack/
 ├── main.nf                       # Main workflow entry point
 ├── nextflow.config               # Configuration + profiles
 │

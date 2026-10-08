@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Cleanup Nextflow work directories older than 72 hours.
-Usage: python scripts/cleanup_workdirs.py
+Cleanup Nextflow work directories older than a retention window.
+Usage: python scripts/cleanup_workdirs.py [--days N | --hours N]
 """
 
-import os
+import argparse
 import time
 import shutil
 from pathlib import Path
@@ -17,19 +17,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Constants
 PROJECT_ROOT = Path(__file__).parent.parent.absolute()
 WORK_DIR = PROJECT_ROOT / "work"
-MAX_AGE_HOURS = 72
-MAX_AGE_SECONDS = MAX_AGE_HOURS * 3600
 
-def cleanup_work_directories():
-    """Delete Nextflow task directories older than MAX_AGE_HOURS."""
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Cleanup Nextflow work directories.")
+    parser.add_argument("--days", type=float, default=None, help="Delete tasks older than N days")
+    parser.add_argument("--hours", type=float, default=72, help="Delete tasks older than N hours (default: 72)")
+    return parser.parse_args()
+
+def cleanup_work_directories(max_age_hours: float):
+    """Delete Nextflow task directories older than max_age_hours."""
     if not WORK_DIR.exists():
         logger.info(f"Work directory {WORK_DIR} does not exist. Nothing to clean.")
         return
 
-    logger.info(f"Starting cleanup of {WORK_DIR} (retention: {MAX_AGE_HOURS} hours)")
+    logger.info(f"Starting cleanup of {WORK_DIR} (retention: {max_age_hours} hours)")
     
     now = time.time()
     deleted_count = 0
@@ -52,7 +56,7 @@ def cleanup_work_directories():
                 mtime = stats.st_mtime
                 age_hours = (now - mtime) / 3600
                 
-                if age_hours > MAX_AGE_HOURS:
+                if age_hours > max_age_hours:
                     logger.info(f"Deleting {task_dir.relative_to(PROJECT_ROOT)} (Age: {age_hours:.1f}h)")
                     shutil.rmtree(task_dir)
                     deleted_count += 1
@@ -76,4 +80,6 @@ def cleanup_work_directories():
     logger.info(f"Cleanup complete. Deleted: {deleted_count}, Retained: {retained_count}")
 
 if __name__ == "__main__":
-    cleanup_work_directories()
+    args = parse_args()
+    max_age_hours = args.hours if args.days is None else args.days * 24
+    cleanup_work_directories(max_age_hours)
