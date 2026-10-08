@@ -123,8 +123,11 @@ async def test_pause_requires_terminal_process_observation_and_accepted_checkpoi
 
 
 @pytest.mark.asyncio
-async def test_retry_dynamics_creates_new_attempt_without_mutating_failed_attempt(session) -> None:
-    job = Job(id="md-retry", name="MD", status="failed", model_id="md", mode="molecular_dynamics", params={})
+async def test_retry_dynamics_creates_new_attempt_without_mutating_failed_attempt(session, tmp_path) -> None:
+    job = Job(
+        id="md-retry", name="MD", status="failed", model_id="md", mode="molecular_dynamics", params={},
+        output_dir=str(tmp_path / "md-retry-results"),
+    )
     session.add(job); await session.flush()
     run = await create_md_run(session, job=job, normalized_request=_request())
     failed_child = Job(
@@ -156,6 +159,10 @@ async def test_retry_dynamics_creates_new_attempt_without_mutating_failed_attemp
     retry_child = await session.get(Job, retried.child_job_id)
     assert retry_child is not None and retry_child.status == "queued"
     assert retry_child.parent_job_id == job.id and retry_child.params["md_attempt"] == 1
+    assert retry_child.output_dir == str(
+        tmp_path / "md-retry-results" / "md_retry_attempts" / "replica_000" / "attempt_001"
+    )
+    assert job.status == "running" and job.queue_status == "running"
     assert failed.state == "failed" and failed.failure == {"code": "worker_lost"}
     assert failed_segment.execution_plan_sha256 == "b" * 64
     replay = await retry_replica_attempt(
