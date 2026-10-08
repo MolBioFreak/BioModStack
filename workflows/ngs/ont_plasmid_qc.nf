@@ -98,7 +98,7 @@ workflow ONT_PLASMID_QC {
 
         if (has_reference) {
             DoradoAlign(DoradoBasecall.out.bam, Channel.of(reference_file))
-            DoradoAlign.out.aligned.subscribe { _, _ ->
+            DoradoAlign.out.aligned.subscribe { bam, bai ->
                 reportStage(params, "dorado_align", [
                     "${params.out_dir}/align/aligned.bam",
                     "${params.out_dir}/align/aligned.bam.bai",
@@ -135,7 +135,7 @@ workflow ONT_PLASMID_QC {
             }
         } else {
             PrepareBamForAnalysis(DoradoBasecall.out.bam)
-            PrepareBamForAnalysis.out.aligned.subscribe { _, _ ->
+            PrepareBamForAnalysis.out.aligned.subscribe { bam, bai ->
                 reportStage(params, "bam_prepare", [
                     "${params.out_dir}/align/aligned.bam",
                     "${params.out_dir}/align/aligned.bam.bai",
@@ -155,7 +155,7 @@ workflow ONT_PLASMID_QC {
         def analysis_bam = null
         if (has_reference && forceBamRealign) {
             DoradoAlign(Channel.of(bam_input), Channel.of(reference_file))
-            DoradoAlign.out.aligned.subscribe { _, _ ->
+            DoradoAlign.out.aligned.subscribe { bam, bai ->
                 reportStage(params, "dorado_align", [
                     "${params.out_dir}/align/aligned.bam",
                     "${params.out_dir}/align/aligned.bam.bai",
@@ -165,7 +165,7 @@ workflow ONT_PLASMID_QC {
             analysis_bam = DoradoAlign.out.aligned
         } else {
             PrepareBamForAnalysis(Channel.of(bam_input))
-            PrepareBamForAnalysis.out.aligned.subscribe { _, _ ->
+            PrepareBamForAnalysis.out.aligned.subscribe { bam, bai ->
                 reportStage(params, "bam_prepare", [
                     "${params.out_dir}/align/aligned.bam",
                     "${params.out_dir}/align/aligned.bam.bai",
@@ -217,7 +217,7 @@ workflow ONT_PLASMID_QC {
         }
 
         FastqAlign(Channel.of(fastq_input), Channel.of(reference_file))
-        FastqAlign.out.aligned.subscribe { _, _ ->
+        FastqAlign.out.aligned.subscribe { bam, bai ->
             reportStage(params, "fastq_align", [
                 "${params.out_dir}/align/aligned.bam",
                 "${params.out_dir}/align/aligned.bam.bai",
@@ -253,4 +253,9 @@ workflow ONT_PLASMID_QC {
             }
         }
     }
+}
+
+// Entry point for standalone Ont Plasmid Qc workflow
+workflow {
+    ONT_PLASMID_QC()
 }

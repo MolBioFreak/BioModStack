@@ -65,7 +65,7 @@ workflow ONT_BASECALL_DNA {
     // --- Optional: align or prepare ---
     if (has_reference) {
         DoradoAlign(DoradoBasecall.out.bam, Channel.of(reference_file))
-        DoradoAlign.out.aligned.subscribe { _, _ ->
+        DoradoAlign.out.aligned.subscribe { bam, bai ->
             reportStage(params, "dorado_align", [
                 "${params.out_dir}/align/aligned.bam",
                 "${params.out_dir}/align/aligned.bam.bai",
@@ -76,7 +76,7 @@ workflow ONT_BASECALL_DNA {
         }
     } else {
         PrepareBamForAnalysis(DoradoBasecall.out.bam)
-        PrepareBamForAnalysis.out.aligned.subscribe { _, _ ->
+        PrepareBamForAnalysis.out.aligned.subscribe { bam, bai ->
             reportStage(params, "bam_prepare", [
                 "${params.out_dir}/align/aligned.bam",
                 "${params.out_dir}/align/aligned.bam.bai",
@@ -84,4 +84,9 @@ workflow ONT_BASECALL_DNA {
             ])
         }
     }
+}
+
+// Entry point for standalone Ont Basecall Dna workflow
+workflow {
+    ONT_BASECALL_DNA()
 }

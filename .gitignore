@@ -47,3 +47,4 @@ tmp/
 # Large local container images
 apptainer/*.sif
 apptainer/*.sif.*
+ngs_runtime_fixtures/
