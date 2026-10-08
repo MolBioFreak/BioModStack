@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Any, Never
+from typing import Any, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -48,7 +48,7 @@ async def _job(job_id: str, session: AsyncSession) -> Job:
     return job
 
 
-def _raise(error: ViewerResourceError, *, resource_id: str | None = None) -> Never:
+def _raise(error: ViewerResourceError, *, resource_id: str | None = None) -> NoReturn:
     raise HTTPException(status_code=error.status_code, detail=viewer_error_detail(error, resource_id=resource_id))
 
 
