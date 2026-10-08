@@ -17,14 +17,14 @@ export function Layout({ children }: LayoutProps) {
 
     return (
         <div
-            className="min-h-screen transition-colors duration-300"
+            className="h-screen flex flex-col transition-colors duration-300 overflow-hidden"
             style={{
                 background: `linear-gradient(to bottom right, var(--bg-gradient-from), var(--bg-gradient-via), var(--bg-gradient-to))`
             }}
         >
             {/* Top Navigation Bar */}
             <nav
-                className="backdrop-blur-sm border-b sticky top-0 z-50 transition-colors duration-300"
+                className="backdrop-blur-sm border-b flex-shrink-0 z-50 transition-colors duration-300"
                 style={{
                     backgroundColor: 'var(--nav-bg)',
                     borderColor: 'var(--border-primary)'
@@ -108,8 +108,8 @@ export function Layout({ children }: LayoutProps) {
                 </div>
             </nav>
 
-            {/* Main Content */}
-            <main>
+            {/* Main Content - takes remaining height */}
+            <main className="flex-1 overflow-hidden">
                 {children}
             </main>
         </div>

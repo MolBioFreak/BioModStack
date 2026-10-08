@@ -859,6 +859,8 @@ def build_nextflow_command(
         ('rfantibody_child', 'antibody_backbone'): 'antibody_backbone',  # Uses antibody_backbone profile which sets rfd_mode correctly
         # FAMPNN child jobs (sequence design - spawned by orchestrator)
         ('fampnn_child', 'sequence_design'): 'fampnn_predict',
+        # Oligo Designer (RFDpoly multi-polymer design)
+        ('oligo_design', 'oligo_design'): 'oligo_design',
     }
     
     # Determine profile based on model and mode
