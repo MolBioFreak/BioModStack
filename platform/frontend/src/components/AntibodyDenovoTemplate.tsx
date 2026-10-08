@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, type CDRAnnotationResponse } from '../lib/api';
-import { useNavigate } from 'react-router-dom';
+import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, type CDRAnnotationResponse } from '../lib/api';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
@@ -74,6 +74,16 @@ const parseLoopLengthRanges = (raw: unknown): Record<string, LoopLengthRange> =>
 };
 
 export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues }) => {
+    const location = useLocation();
+    const refinementState = location.state as {
+        refinementMode?: boolean;
+        sourceJobId?: string;
+        selectedDesignIds?: string[];
+    } | null;
+    const isRefinementMode = !!refinementState?.refinementMode;
+    const refinementParentJobId = refinementState?.sourceJobId;
+    const refinementDesignIds = refinementState?.selectedDesignIds;
+
     const restoringSelectionRef = useRef<{ chain: string | null; residues: string[] } | null>(null);
 
     const normalizeProtenixModel = (model?: string) => {
@@ -241,6 +251,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [skipFampnn, setSkipFampnn] = useState(false);
     const [fampnnCollectedPdbs, setFampnnCollectedPdbs] = useState<string>('');
     const [customOutputDir, setCustomOutputDir] = useState<string>('');
+
+    // If starting in refinement mode, we are bypassing RFantibody by default
+    useEffect(() => {
+        if (isRefinementMode) {
+            setSkipRFantibody(true);
+        }
+    }, [isRefinementMode]);
 
     const buildFilesApiUrl = (mode: 'download' | 'pdb', path: string) =>
         `/api/files/${mode}/${encodeURIComponent(path)}`;
@@ -720,14 +737,20 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             return;
         }
 
-        // Validate skip inputs have paths
-        if (skipRFantibody && !rfantibodyInputPdbs.trim()) {
-            alert('Please provide a path to backbone PDBs for Skip RFantibody');
-            return;
-        }
-        if (skipFampnn && !fampnnCollectedPdbs.trim()) {
-            alert('Please provide a path to sequenced PDBs for Skip FAMPNN');
-            return;
+        // When skipping, use a placeholder or the input dir path
+        if (isRefinementMode) {
+            // In refinement mode, the backend determines the input PDB paths via selection_dir
+            // We just let it proceed
+        } else {
+            // Validate skip inputs have paths
+            if (skipRFantibody && !rfantibodyInputPdbs.trim()) {
+                alert('Please provide a path to backbone PDBs for Skip RFantibody');
+                return;
+            }
+            if (skipFampnn && !fampnnCollectedPdbs.trim()) {
+                alert('Please provide a path to sequenced PDBs for Skip FAMPNN');
+                return;
+            }
         }
         const fampnnCheckpointSpecified = Boolean(
             qualitySettings.fampnn_checkpoint_path.trim() || qualitySettings.fampnn_checkpoint.trim()
@@ -1014,6 +1037,20 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 }
             };
 
+            if (isRefinementMode && refinementParentJobId && refinementDesignIds) {
+                // Determine action based on UI settings
+                // Nextflow determines the correct start based on skip flags which jobs.py injects
+                await launchAntibodyIteration({
+                    source_job_id: refinementParentJobId,
+                    action: 'ui_refinement',
+                    design_ids: refinementDesignIds,
+                    param_overrides: jobData.params
+                });
+                queryClient.invalidateQueries({ queryKey: ['jobs'] });
+                navigate('/');
+                return;
+            }
+
             await submitMutation.mutateAsync(jobData);
         } catch (error) {
             console.error('[ANTIBODY_DENOVO] Submission failed', error);
@@ -1044,11 +1081,29 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         ← Back
                     </button>
                     <div>
-                        <h2 className="text-lg font-semibold text-slate-200">De Novo Antibody Design</h2>
-                        <p className="text-sm text-slate-500">Generate novel antibodies targeting an antigen</p>
+                        <h2 className="text-lg font-semibold text-slate-200">
+                            {isRefinementMode ? 'Custom Refinement Round' : 'De Novo Antibody Design'}
+                        </h2>
+                        <p className="text-sm text-slate-500">
+                            {isRefinementMode ? `Configuring a downstream orchestrator run for ${refinementDesignIds?.length} designs.` : 'Generate novel antibodies targeting an antigen'}
+                        </p>
                     </div>
                 </div>
             </div>
+
+            {isRefinementMode && (
+                <div className="bg-indigo-500/20 text-indigo-200 p-4 rounded-lg mb-6 border border-indigo-500/40 animate-in fade-in slide-in-from-top-4">
+                    <div className="flex items-center gap-2 mb-2">
+                        <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        <h3 className="font-semibold text-indigo-200 text-sm">Target & Epitope configuration disabled</h3>
+                    </div>
+                    <p className="text-xs opacity-90 leading-relaxed max-w-3xl">
+                        You arrived here from an active interactive job (<code>{refinementParentJobId}</code>). The structural targets and complexes are fixed to the selected designs. Configure exactly how you want your {refinementDesignIds?.length} selections to be processed below.
+                    </p>
+                </div>
+            )}
 
             {/* Pipeline Visualization */}
             <div className="mb-6 p-4 bg-slate-900/50 rounded-lg border border-slate-700/50">
@@ -2028,8 +2083,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     {interactiveGateStage === 'post_rfantibody'
                                         ? 'Pause immediately after RFantibody backbone generation so you can reject visibly detached or malformed backbones before FAMPNN, MSA, and validator compute.'
                                         : interactiveGateStage === 'post_fampnn'
-                                        ? 'Pause immediately after FAMPNN candidate generation/filtering so you can inspect the initial sequence pool before any structure validator is called.'
-                                        : 'Pause after Boltz-2 or Protenix validation so the Results Viewer can be used to inspect metrics and launch the next refinement round.'}
+                                            ? 'Pause immediately after FAMPNN candidate generation/filtering so you can inspect the initial sequence pool before any structure validator is called.'
+                                            : 'Pause after Boltz-2 or Protenix validation so the Results Viewer can be used to inspect metrics and launch the next refinement round.'}
                                 </p>
                             </div>
                         )}
@@ -2460,7 +2515,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (typeof p.run_frustrampnn === 'boolean') { setRunFrustrampnn(p.run_frustrampnn); loaded.push('run_frustrampnn'); }
                         if (typeof p.run_anarcii_post === 'boolean') { setRunAnarciiPost(p.run_anarcii_post); loaded.push('run_anarcii_post'); }
                         if (typeof p.anarcii_include_children === 'boolean') { setAnarciiIncludeChildren(p.anarcii_include_children); loaded.push('anarcii_include_children'); }
-            if (typeof p.interactive_swa === 'boolean') { setInteractiveWorkflow(p.interactive_swa); loaded.push('interactive_swa'); }
+                        if (typeof p.interactive_swa === 'boolean') { setInteractiveWorkflow(p.interactive_swa); loaded.push('interactive_swa'); }
                         else if (typeof p.interactive_gating === 'boolean') { setInteractiveWorkflow(p.interactive_gating); loaded.push('interactive_gating'); }
                         if (
                             p.interactive_gate_stage === 'post_rfantibody' ||
