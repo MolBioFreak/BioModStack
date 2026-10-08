@@ -10,6 +10,7 @@ from services.md.state import RETRYABLE_INFRASTRUCTURE_FAILURES
 from services.md.artifacts import (
     MdArtifactProvenanceError, project_durable_md_artifacts, resolve_resume_checkpoint_artifacts,
 )
+from services.md.pause_actuator import _checkpoint_roots
 
 
 def _actions(phase: str, has_checkpoint: bool, retryable: bool, *, pause_ready: bool = False) -> list[str]:
@@ -23,6 +24,20 @@ def _actions(phase: str, has_checkpoint: bool, retryable: bool, *, pause_ready: 
     if phase not in {"completed", "partial", "failed", "cancelled", "cancelling"}:
         actions.append("cancel")
     return actions
+
+
+def _worker_pause_ready(child: Job | None) -> bool:
+    if child is None or not child.nextflow_run_id or not child.stage_work_dir:
+        return False
+    try:
+        roots = _checkpoint_roots(child)
+    except (OSError, TypeError, ValueError):
+        return False
+    return any(
+        (root / "production" / "production.cpt").is_file()
+        and not (root / "production" / "production.cpt").is_symlink()
+        for root in roots
+    )
 
 
 def _replica_count(request: dict, fallback: int) -> int:
@@ -124,6 +139,18 @@ async def md_queue_snapshot(session: AsyncSession, *, limit: int) -> dict:
             and ready_counts.get(job_id, 0) == replica_summary[job_id].get("running", 0)
             and set(replica_summary[job_id]).issubset({"running", "completed"})
         }
+        for job_id in tuple(pause_ready_jobs):
+            running = list((await session.scalars(select(MdReplicaRun).where(
+                MdReplicaRun.md_job_id == job_id,
+                MdReplicaRun.active.is_(True),
+                MdReplicaRun.state == "running",
+            ))).all())
+            children = [
+                await session.get(Job, replica.child_job_id) if replica.child_job_id else None
+                for replica in running
+            ]
+            if not children or not all(_worker_pause_ready(child) for child in children):
+                pause_ready_jobs.discard(job_id)
 
     queue_rows = []
     for run, job in rows:
@@ -240,7 +267,7 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
     if pause_ready:
         for replica in running_replicas:
             child = await session.get(Job, replica.child_job_id) if replica.child_job_id else None
-            if child is None or not child.nextflow_run_id or not child.stage_work_dir:
+            if not _worker_pause_ready(child):
                 pause_ready = False
                 break
     chemistry = run.normalized_request.get("chemistry", {})

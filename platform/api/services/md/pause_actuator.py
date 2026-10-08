@@ -52,7 +52,12 @@ def _checkpoint_roots(child: Job) -> list[Path]:
         if isinstance(resume_output, str) and resume_output:
             candidates.append(resume_output)
     if child.stage_work_dir:
-        candidates.append(str(child.stage_work_dir))
+        stage_root = Path(str(child.stage_work_dir)).expanduser().resolve(strict=True)
+        replica_index = child.params.get("md_replica_index", 0) if isinstance(child.params, dict) else 0
+        replica_root = stage_root / f"replica_{int(replica_index)}"
+        if replica_root.is_dir() and not replica_root.is_symlink():
+            candidates.append(str(replica_root))
+        candidates.append(str(stage_root))
     roots: list[Path] = []
     for candidate in candidates:
         root = Path(candidate).expanduser().resolve(strict=True)

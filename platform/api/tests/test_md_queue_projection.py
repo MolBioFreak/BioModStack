@@ -176,6 +176,13 @@ async def test_pause_is_advertised_only_after_running_worker_identity_is_durable
             replica.child_job_id = child.id
             await session.flush()
 
+            identity_only = await read_model.md_run_snapshot(session, "md-pause-ready")
+            assert identity_only is not None and "pause" not in identity_only["allowed_actions"]
+
+            checkpoint = tmp_path / "work" / "replica_0" / "production" / "production.cpt"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"current-checkpoint")
+
             detail = await read_model.md_run_snapshot(session, "md-pause-ready")
             queue = await read_model.md_queue_snapshot(session, limit=25)
             assert detail is not None and "pause" in detail["allowed_actions"]
