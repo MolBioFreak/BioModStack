@@ -212,6 +212,18 @@ test('sequence header source keeps the plasmid toolbar horizontally scrollable o
     assert.match(source, /min-w-max/);
 });
 
+test('sequence header drag scrolling never captures pointers that begin on interactive controls', () => {
+    const source = readFileSync(HEADER_PATH, 'utf8');
+
+    assert.match(source, /event\.target as HTMLElement/);
+    assert.match(source, /closest\(['"]button, a, input, select, textarea, \[role="button"\], \[data-sequence-header-drag-ignore="true"\]['"]\)/);
+    assert.match(source, /if \(interactiveTarget\) \{\s*return;\s*\}/);
+    assert.ok(
+        source.indexOf('if (interactiveTarget)') < source.indexOf('setPointerCapture(event.pointerId)'),
+        'interactive controls must be rejected before the scroll rail captures the pointer',
+    );
+});
+
 test('mol bio toolkit source gives mobile resize handles touch-safe hit targets', () => {
     const source = readFileSync(TOOLKIT_PATH, 'utf8');
 
