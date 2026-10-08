@@ -1,28 +1,46 @@
 Bootstrap: docker
 From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
+%labels
+    Author BioModStack
+    Description ThermoMPNN stability prediction
+    Version 1.0.0
+
 %post
     apt-get update && apt-get install -y \
         wget \
         git \
+        curl \
         python3 \
         python3-pip \
+        python3-venv \
         && apt-get clean \
         && rm -rf /var/lib/apt/lists/*
 
-    # Install PyTorch Nightly for Blackwell support (or latest stable compatible with CUDA 12.8 if available)
-    # Since native CUDA 12.8 might not have stable PyTorch wheels yet, we use nightly or latest cu124/cu126 
-    # and hope for forward compatibility, or target PyTorch 2.5+
-    pip3 install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
+    # Install UV package manager (10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
+    # Create virtual environment
+    uv venv /opt/venv
+    export VIRTUAL_ENV=/opt/venv
+    export PATH="/opt/venv/bin:$PATH"
+
+    # Install PyTorch Nightly for Blackwell support
+    uv pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
 
     # Install ThermoMPNN
     git clone https://github.com/Kuhlman-Lab/ThermoMPNN.git /opt/ThermoMPNN
     cd /opt/ThermoMPNN
 
-    # Install dependencies (ignoring the restrictive environment.yml)
-    pip3 install joblib omegaconf pandas numpy tqdm biopython
-    pip3 install mmseqs2  # If available via pip, otherwise might need conda/binary
+    # Install dependencies
+    uv pip install joblib omegaconf pandas numpy tqdm biopython
+    uv pip install mmseqs2 || true  # May not be on PyPI
+
+    # Cleanup
+    rm -rf /root/.cache/uv
 
 %environment
     export PYTHONPATH="/opt/ThermoMPNN:$PYTHONPATH"
-    export PATH="/opt/ThermoMPNN:$PATH"
+    export PATH="/opt/venv/bin:/opt/ThermoMPNN:$PATH"
+    export VIRTUAL_ENV=/opt/venv
