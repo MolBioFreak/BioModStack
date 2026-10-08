@@ -73,7 +73,9 @@ process RunFAMPNN {
     """
     mkdir -p results
 
-    python /app/fampnn/fampnn/inference/seq_design.py \\
+    # PyTorch >=2.6 defaults torch.load(..., weights_only=True), which breaks
+    # legacy FAMPNN checkpoints saved with defaultdict metadata.
+    TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 python /app/fampnn/fampnn/inference/seq_design.py \\
         batch_size=${params.fampnn_batch_size ?: 16} \\
         checkpoint_path=/app/fampnn/weights/fampnn_0_3.pt \\
         exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \\

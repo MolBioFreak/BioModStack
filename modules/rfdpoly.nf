@@ -83,8 +83,6 @@ process RFDPolyDesign {
         diffuser.T=${params.rfdpoly_diffusion_steps} \\
         inference.ckpt_path=/models/${ckpt_file} \\
         inference.num_designs=${params.rfdpoly_num_designs} \\
-        inference.update_seq_t=True \\
-        diffuser.aa_decode_steps=40 \\
         contigmap.contigs="['${contigs}']" \\
         contigmap.polymer_chains="[${chains_formatted}]" \\
         ${input_arg} \\
@@ -154,7 +152,7 @@ process PrepBoltzOligo {
 
 /*
  * Workflow: OLIGO_DESIGN
- * Complete workflow: RFDpoly → NA-MPNN → Boltz-2 → Results
+ * Complete workflow: RFDpoly → NA-MPNN → PyRosetta → Boltz-2 (if protein) → Results
  */
 workflow OLIGO_DESIGN {
     take:
@@ -190,15 +188,20 @@ workflow OLIGO_DESIGN {
     // Per RFDpoly paper: "we design base sequences on the generated backbones using NA-MPNN"
     NAMPNNDesign(RFDPolyDesign.out.pdbs, design_id)
 
-    // Stage 3: PyRosetta sidechain rebuild
+    // Stage 3: PyRosetta sidechain rebuild + repack
     // NA-MPNN outputs backbone-only PDBs (12 atoms/residue).
-    // PyRosetta restores nucleobase sidechains to produce full-atom structures.
+    // PyRosetta restores nucleobase sidechains and repacks for optimal placement.
     // Per paper: RFDpoly → NA-MPNN → PyRosetta rebuild
     rebuild_script = file("${params.code_root}/scripts/rebuild_sidechains.py")
-    PyRosettaRebuild(NAMPNNDesign.out.pdbs, rebuild_script)
+    PyRosettaRebuild(NAMPNNDesign.out.pdbs, NAMPNNDesign.out.fastas, rebuild_script, polymer_chains)
 
     // Stage 4: Prepare for Boltz-2 validation
-    if (params.oligo_validate_boltz) {
+    // Auto-enable when protein chains are present (validates protein-NA complex folding).
+    // User can override via params.oligo_validate_boltz.
+    def has_protein = polymer_chains.toString().toLowerCase().contains('protein')
+    def run_boltz = params.oligo_validate_boltz != null ? params.oligo_validate_boltz : has_protein
+
+    if (run_boltz) {
         prep_script = file("${params.code_root}/scripts/prep_boltz_oligo.py")
         PrepBoltzOligo(PyRosettaRebuild.out.pdbs, prep_script)
         boltz_yamls = PrepBoltzOligo.out.yamls
@@ -211,6 +214,8 @@ workflow OLIGO_DESIGN {
     pdbs = PyRosettaRebuild.out.pdbs
     sequences = NAMPNNDesign.out.fastas
     metrics = RFDPolyDesign.out.metrics
+    nampnn_metrics = NAMPNNDesign.out.metrics
+    rebuild_metrics = PyRosettaRebuild.out.metrics
     boltz_yamls = boltz_yamls
 }
 
@@ -239,11 +244,14 @@ process NAMPNNDesign {
     mkdir -p designed input_converted nampnn_out
     
     # Convert RFDpoly residue names to NA-MPNN format
-    # RNA: RG, RC, RU, RA -> G, C, U, A
-    # DNA: DG, DC, DT, DA -> G, C, T, A
+    # RNA only: RG, RC, RU, RA -> G, C, U, A (standard PDB RNA names)
+    # DNA: DG, DC, DT, DA are already in NA-MPNN's expected format
+    # NA-MPNN distinguishes DNA vs RNA by PDB residue name:
+    #   DG/DC/DT/DA = DNA (deoxyribose, no O2')
+    #   G/C/U/A     = RNA (ribose, with O2')
     for pdb in *.pdb; do
         if [ -f "\$pdb" ]; then
-            sed 's/ RG / G  /g; s/ RC / C  /g; s/ RU / U  /g; s/ RA / A  /g; s/ DG / G  /g; s/ DC / C  /g; s/ DT / T  /g; s/ DA / A  /g' "\$pdb" > "input_converted/\$pdb"
+            sed 's/ RG / G  /g; s/ RC / C  /g; s/ RU / U  /g; s/ RA / A  /g' "\$pdb" > "input_converted/\$pdb"
         fi
     done
     
@@ -262,6 +270,7 @@ process NAMPNNDesign {
                 --out_folder "\${WORKDIR}/nampnn_out" \\
                 --temperature ${params.nampnn_temperature ?: 0.2} \\
                 --number_of_batches ${params.nampnn_num_seqs ?: 1} \\
+                --save_stats 1 \\
                 ${params.nampnn_fixed_residues ? "--fixed_residues \"${params.nampnn_fixed_residues}\"" : ''} \\
                 ${params.nampnn_chains_to_design ? "--chains_to_design \"${params.nampnn_chains_to_design}\"" : ''} \\
                 ${params.nampnn_design_na_only ? '--design_na_only 1' : ''} \\
@@ -280,29 +289,59 @@ process NAMPNNDesign {
     if [ -d "./nampnn_out/seqs" ]; then
         cp ./nampnn_out/seqs/*.fa designed/ 2>/dev/null || true
     fi
+    # Copy stats files if --save_stats was enabled
+    if [ -d "./nampnn_out/stats" ]; then
+        cp ./nampnn_out/stats/*.pt designed/ 2>/dev/null || true
+    fi
     
     # Decode NA-MPNN internal alphabet to standard IUPAC bases in FASTA files
-    # NA-MPNN uses: b=A(adenine), d=C(cytosine), h=G(guanine), u=U(uracil)
+    # DNA alphabet: a=A(adenine), c=C(cytosine), g=G(guanine), t=T(thymine), x=X(unknown)
+    # RNA alphabet: b=A(adenine), d=C(cytosine), h=G(guanine), u=U(uracil), y=X(unknown)
+    # Protein residues (uppercase A-V) remain unchanged
     for fa in designed/*.fa; do
         if [ -f "\$fa" ]; then
-            sed -i '/^>/!{ s/b/A/g; s/d/C/g; s/h/G/g; s/u/U/g; }' "\$fa"
+            sed -i '/^>/!{ s/b/A/g; s/d/C/g; s/h/G/g; s/u/U/g; s/y/X/g; s/a/A/g; s/c/C/g; s/g/G/g; s/t/T/g; s/x/X/g; }' "\$fa"
         fi
     done
     
-    # Generate metrics JSON
+    # Generate metrics JSON — parse FASTA headers for quality metrics
     python3 -c "
-import json, glob
+import json, glob, re
 pdbs = glob.glob('designed/*.pdb')
 fastas = glob.glob('designed/*.fa')
+
+# Parse FASTA headers for NA-MPNN quality metrics
+# Header format: >{name}, id={id}, T={temp}, seed={seed}, overall_confidence={conf} seq_rec={rec}
+design_metrics = []
+for fa in fastas:
+    with open(fa) as f:
+        for line in f:
+            if line.startswith('>'):
+                header = line.strip().lstrip('>')
+                entry = {'header': header}
+                for match in re.finditer(r'(\\w+)=([\\d.]+)', header):
+                    key, val = match.groups()
+                    try:
+                        entry[key] = float(val)
+                    except ValueError:
+                        entry[key] = val
+                design_metrics.append(entry)
+
 metrics = {
     'design_id': '${design_id}',
     'num_designs': len(pdbs),
     'num_sequences': len(fastas),
     'model': 'na_mpnn',
-    'num_batches': ${params.nampnn_num_seqs ?: 1}
+    'num_batches': ${params.nampnn_num_seqs ?: 1},
+    'designs': design_metrics
 }
 json.dump(metrics, open('nampnn_metrics.json', 'w'), indent=2)
 print(f'NA-MPNN designed sequences for {len(pdbs)} structures')
+if design_metrics:
+    avg_conf = sum(d.get('overall_confidence', 0) for d in design_metrics) / len(design_metrics)
+    avg_rec = sum(d.get('seq_rec', 0) for d in design_metrics) / len(design_metrics)
+    print(f'  Avg overall_confidence: {avg_conf:.4f}')
+    print(f'  Avg seq_rec: {avg_rec:.4f}')
 "
     """
 }
@@ -322,18 +361,56 @@ process PyRosettaRebuild {
 
     input:
     path pdbs
+    path fastas
     path rebuild_script
+    val polymer_chains
 
     output:
     path "out_*.pdb", emit: pdbs
     path "rebuild_metrics.json", emit: metrics
 
-    script:
-    """
-    python ${rebuild_script} \\
-        --input_dir . \\
-        --out_dir . \\
-        --out_prefix out_ \\
+    shell:
+    // Per-chain polymer type mapping for correct residue name conversion.
+    // NA-MPNN always outputs DG/DC/DT/DA (DNA naming). For RNA chains:
+    //   DG -> G, DC -> C, DT -> U, DA -> A (ribose, with 2'-OH)
+    // For DNA chains: keep DG/DC/DT/DA as-is (deoxyribose, no 2'-OH)
+    // For protein chains: no conversion needed.
+    // Chain letters are assigned in order: A, B, C, ... matching polymer_chains order.
+    '''
+    # Pre-rebuild: per-chain residue name conversion for correct sugar chemistry
+    # Map polymer_chains ordering to PDB chain letters (A=0, B=1, C=2, ...)
+    CHAIN_LETTERS=(A B C D E F G H I J K L M N O P Q R S T U V W X Y Z)
+    IFS=',' read -ra POLYMER_TYPES <<< "!{polymer_chains}"
+
+    for pdb in *.pdb; do
+        if [ -f "$pdb" ] && [ "$pdb" != "!{rebuild_script}" ]; then
+            for i in "${!POLYMER_TYPES[@]}"; do
+                PTYPE="$(echo ${POLYMER_TYPES[$i]} | tr '[:upper:]' '[:lower:]' | xargs)"
+                CHAIN="${CHAIN_LETTERS[$i]}"
+                if [ "$PTYPE" = "rna" ]; then
+                    echo "Chain $CHAIN is RNA — converting DNA residue names to RNA"
+                    # Only convert lines matching this chain ID (PDB column 22, 1-indexed)
+                    # PDB format: columns 22 = chain ID
+                    sed -i "/^\(ATOM\|HETATM\).*\(.\{1\}\)/ {
+                        /^.\{21\}$CHAIN/ {
+                            s/ DG / G  /g
+                            s/ DC / C  /g
+                            s/ DA / A  /g
+                            s/ DT / U  /g
+                        }
+                    }" "$pdb"
+                else
+                    echo "Chain $CHAIN is $PTYPE — keeping residue names as-is"
+                fi
+            done
+        fi
+    done
+
+    python !{rebuild_script} \
+        --input_dir . \
+        --out_dir . \
+        --out_prefix out_ \
+        --nampnn_fasta_dir . \
         --metrics_out rebuild_metrics.json
-    """
+    '''
 }

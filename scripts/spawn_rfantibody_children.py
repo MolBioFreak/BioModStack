@@ -46,23 +46,48 @@ def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_
         
         data = resp.json()
         all_done = data.get("all_done", False)
-        completed_count = data.get("completed", 0)
-        total_count = data.get("total", 0)
+        children = data.get("children", [])
         child_output_dirs = data.get("child_output_dirs", [])
-        
-        # Build list of completed children with their output directories
-        # Note: child_output_dirs only contains directories for COMPLETED children
+        child_output_dirs_all = data.get("child_output_dirs_all", [])
+
+        # Deduplicate by child job ID and keep deterministic order.
+        deduped_children = {}
+        for child in children:
+            child_id = child.get("job_id")
+            if child_id:
+                deduped_children[child_id] = child
+
         completed_children = []
-        for i, output_dir in enumerate(child_output_dirs):
-            completed_children.append({
-                "job_id": f"completed_{i}",  # We don't need actual IDs for resume
-                "output_dir": output_dir,
-                "index": i
-            })
-        
-        # Add the raw API data for downstream use
+        for child_id, child in deduped_children.items():
+            if child.get("status") != "completed":
+                continue
+            output_dir = child.get("output_dir")
+            if not output_dir:
+                continue
+            completed_children.append(
+                {
+                    "job_id": child_id,
+                    "output_dir": output_dir,
+                    "aggregated_by_parent": bool(child.get("aggregated_by_parent", False)),
+                }
+            )
+
+        # Fallback for older API payloads that do not expose `children`.
+        if not completed_children:
+            fallback_dirs = child_output_dirs_all or child_output_dirs
+            for i, output_dir in enumerate(fallback_dirs):
+                completed_children.append(
+                    {
+                        "job_id": f"completed_{i}",
+                        "output_dir": output_dir,
+                        "aggregated_by_parent": False,
+                    }
+                )
+
+        # Add normalized children info for downstream resume logic.
         data["completed_children"] = completed_children
-        
+        data["deduped_child_ids"] = [c.get("job_id") for c in completed_children]
+
         return all_done, completed_children, data
         
     except Exception as e:
@@ -110,39 +135,57 @@ def spawn_rfantibody_jobs(
         parent_job_id, "rfantibody", api_url, batch_name=batch_name
     )
     
-    existing_count = len(existing_children)
+    existing_count = child_status.get("total", len(existing_children))
     if existing_count > 0:
         print(f"[SPAWN-RFA] Found {existing_count} existing children for parent {parent_job_id}")
+        completed = child_status.get("completed", len(existing_children))
+        running = child_status.get("running", 0)
+        pending = child_status.get("pending", 0)
+        failed = child_status.get("failed", 0)
+        cancelled = child_status.get("cancelled", 0)
+
+        print(
+            f"[SPAWN-RFA] Existing children status: "
+            f"{completed} completed, {running} running, {pending} pending, "
+            f"{failed} failed, {cancelled} cancelled"
+        )
         
         if all_done:
-            print(f"[SPAWN-RFA] RESUME: All {existing_count} children already completed! Skipping spawn.")
-            # Return info about existing children instead of spawning new ones
-            return {
-                "status": "resumed",
-                "spawned_jobs": 0,
-                "reused_jobs": existing_count,
-                "failed_spawns": 0,
-                "total_designs": total_designs,
-                "designs_per_job": designs_per_job,
-                "child_jobs": existing_children,
-                "resumed": True
-            }
+            if completed > 0:
+                print(f"[SPAWN-RFA] RESUME: Reusing {completed} completed child job(s); skipping spawn.")
+                return {
+                    "status": "resumed",
+                    "spawned_jobs": 0,
+                    "reused_jobs": completed,
+                    "failed_spawns": 0,
+                    "total_designs": total_designs,
+                    "designs_per_job": designs_per_job,
+                    "child_jobs": existing_children,
+                    "resumed": True
+                }
+
+            print("[SPAWN-RFA] Existing children are all failed/cancelled; starting a fresh spawn.")
         else:
-            # Some children exist but not all completed - check if we need more
-            completed = child_status.get("completed", 0)
-            running = child_status.get("running", 0)
-            pending = child_status.get("pending", 0)
-            failed = child_status.get("failed", 0)
-            
-            print(f"[SPAWN-RFA] Existing children: {completed} completed, {running} running, {pending} pending, {failed} failed")
-            
-            # If any are still running or pending, don't spawn duplicates
+            # If any are still running/pending, do not spawn duplicates.
             if running > 0 or pending > 0:
                 print(f"[SPAWN-RFA] RESUME: {running + pending} children still in progress. Not spawning duplicates.")
                 return {
                     "status": "in_progress",
                     "spawned_jobs": 0,
-                    "reused_jobs": existing_count,
+                    "reused_jobs": completed,
+                    "failed_spawns": 0,
+                    "total_designs": total_designs,
+                    "designs_per_job": designs_per_job,
+                    "child_jobs": existing_children,
+                    "resumed": True
+                }
+
+            if completed > 0:
+                print("[SPAWN-RFA] RESUME: Completed children already exist; skipping duplicate spawn.")
+                return {
+                    "status": "partial_complete",
+                    "spawned_jobs": 0,
+                    "reused_jobs": completed,
                     "failed_spawns": 0,
                     "total_designs": total_designs,
                     "designs_per_job": designs_per_job,

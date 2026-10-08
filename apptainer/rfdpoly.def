@@ -43,11 +43,59 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     uv pip install --compile --no-cache-dir "numpy>=1.23,<2.0"
 
     # ──────────────────────────────────────────────────────────────────────────
-    # DGL with CUDA support — install from DGL's cu124 wheel index
-    # cu124 wheels are binary-compatible with CUDA 12.8 runtime
-    # Must use --find-links and allow the wheel to match torch 2.7
+    # DGL from source with CUDA — pre-built wheels lack CUDA array ops
+    # (libdgl.so reports "Operator Range does not support cuda device")
+    # Build DGL 2.4.0 with -DUSE_CUDA=ON against the installed PyTorch
     # ──────────────────────────────────────────────────────────────────────────
-    pip install dgl -f https://data.dgl.ai/wheels/torch-2.5/cu124/repo.html
+    cd /tmp
+    git clone --recurse-submodules -b v2.4.0 https://github.com/dmlc/dgl.git dgl_src
+    cd dgl_src
+    mkdir build && cd build
+    cmake .. -DUSE_CUDA=ON -DBUILD_TYPE=Release -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda
+    make -j$(nproc)
+    cd ../python
+    pip install --no-deps .
+    cd /
+    rm -rf /tmp/dgl_src
+
+    # Reinstall PyTorch 2.7.0+cu128 — DGL cmake contaminates venv with torch 2.4
+    uv pip install --reinstall --compile --no-cache-dir \
+        "torch==2.7.0" "torchvision==0.22.0" "torchaudio==2.7.0" \
+        --index-url https://download.pytorch.org/whl/cu128
+    # Re-pin numpy <2.0 (torch reinstall may pull numpy 2.x)
+    uv pip install --compile --no-cache-dir "numpy>=1.23,<2.0"
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # DGL graphbolt + torchdata fix: inject stubs via sitecustomize.py
+    # This runs at Python startup before any imports, avoiding .pyc cache issues
+    # ──────────────────────────────────────────────────────────────────────────
+    SITE_DIR=$(python3 -c "import site; print(site.getsitepackages()[0])")
+    cat > "$SITE_DIR/sitecustomize.py" << 'SITECUSTOM'
+"""Auto-stub graphbolt and torchdata.datapipes for DGL + PyTorch 2.7 compatibility.
+RFDpoly only uses core DGL graph ops (DGLGraph, edge_softmax, AvgPooling)."""
+import sys, types
+
+# Stub torchdata.datapipes.iter.IterDataPipe
+td = types.ModuleType('torchdata')
+td_dp = types.ModuleType('torchdata.datapipes')
+td_dp_iter = types.ModuleType('torchdata.datapipes.iter')
+# Provide IterDataPipe as a simple base class
+td_dp_iter.IterDataPipe = type('IterDataPipe', (), {})
+sys.modules['torchdata'] = td
+sys.modules['torchdata.datapipes'] = td_dp
+sys.modules['torchdata.datapipes.iter'] = td_dp_iter
+
+# Stub dgl.graphbolt to prevent C++ lib load
+gb = types.ModuleType('dgl.graphbolt')
+sys.modules['dgl.graphbolt'] = gb
+SITECUSTOM
+
+    # Also nuke any compiled .pyc for graphbolt so Python doesn't use cached bytecode
+    DGL_DIR=$(python3 -c "import importlib.util; print(importlib.util.find_spec('dgl').submodule_search_locations[0])")
+    find "$DGL_DIR/graphbolt" -name "*.pyc" -delete 2>/dev/null || true
+    cat > "$DGL_DIR/graphbolt/__init__.py" << 'EOF'
+"""Patched: skips graphbolt C++ lib load."""
+EOF
 
     # ──────────────────────────────────────────────────────────────────────────
     # RFDpoly dependencies (from original SE3nv container package list)
@@ -69,7 +117,12 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
         networkx \
         python-dateutil \
         pyyaml \
-        opt-einsum-fx
+        opt-einsum-fx \
+        psutil \
+        tqdm \
+        packaging \
+        pydantic \
+        requests
 
     # Cleanup
     rm -rf /var/lib/apt/lists/*
@@ -107,19 +160,30 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     export NUMBA_CACHE_DIR=/tmp
     export XDG_CONFIG_HOME=/tmp
     export TRITON_CACHE_DIR=/tmp
-    python3 -c "
+    export DGL_HOME=/tmp
+    export MPLCONFIGDIR=/tmp
+    python3 -u -c "
 import torch
 print(f'PyTorch {torch.__version__}')
 print(f'CUDA: {torch.version.cuda}')
 arch_list = torch.cuda.get_arch_list()
 print(f'Architectures: {arch_list}')
-assert 'sm_120' in arch_list, 'ERROR: sm_120 (Blackwell) not in arch list!'
-print('✓ Blackwell (sm_120) support confirmed')
+if 'sm_120' not in arch_list:
+    print('WARNING: sm_120 not in arch list (expected — no GPU during build)')
+else:
+    print('✓ Blackwell (sm_120) support confirmed')
 "
-    python3 -c "import dgl; print(f'DGL {dgl.__version__}')"
-    python3 -c "import e3nn; print(f'e3nn {e3nn.__version__}')"
-    python3 -c "import hydra; print(f'hydra-core {hydra.__version__}')"
-    python3 -c "import numpy; assert int(numpy.__version__.split('.')[0]) < 2, 'numpy >= 2.0 breaks RFDpoly!'; print(f'numpy {numpy.__version__} (< 2.0 ✓)')"
+    python3 -u -c "import dgl; print(f'DGL {dgl.__version__}')"
+    python3 -u -c "import e3nn; print(f'e3nn {e3nn.__version__}')"
+    python3 -u -c "import hydra; print(f'hydra-core {hydra.__version__}')"
+    python3 -u -c "import numpy; assert int(numpy.__version__.split('.')[0]) < 2, 'numpy >= 2.0 breaks RFDpoly!'; print(f'numpy {numpy.__version__} (< 2.0 ✓)')"
+    # Verify ALL critical imports that have caused past failures
+    python3 -u -c "
+import psutil, tqdm, requests, packaging, pydantic, pyrsistent, networkx, yaml, dateutil
+import openbabel
+from opt_einsum_fx import optimize_einsums_full
+print('All critical imports OK')
+"
     echo "All build tests passed"
 
 %labels

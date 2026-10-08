@@ -203,7 +203,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
     },
     quality: {
         // RFantibody: Higher quality designs
-        rfantibody_diffusion_steps: 100,
+        rfantibody_diffusion_steps: 50,
         rfantibody_noise_scale_ca: 0.8,
         rfantibody_noise_scale_frame: 0.8,
         rfantibody_guide_scale: 15,
@@ -266,7 +266,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
     },
     maximum: {
         // RFantibody: Best possible quality
-        rfantibody_diffusion_steps: 200,
+        rfantibody_diffusion_steps: 50,
         rfantibody_noise_scale_ca: 0.7,
         rfantibody_noise_scale_frame: 0.7,
         rfantibody_guide_scale: 20,
@@ -931,7 +931,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 <input
                                     type="range"
                                     min={20}
-                                    max={200}
+                                    max={50}
                                     step={10}
                                     value={settings.rfantibody_diffusion_steps}
                                     onChange={(e) => updateSetting('rfantibody_diffusion_steps', parseInt(e.target.value))}
@@ -939,8 +939,8 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 />
                                 <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                                     <span>20 (fast)</span>
-                                    <span>100</span>
-                                    <span>200 (quality)</span>
+                                    <span>35</span>
+                                    <span>50 (max)</span>
                                 </div>
                             </div>
 

@@ -775,55 +775,152 @@ async def ingest_loose_files(
     if designs_created == 0:
         print("[Ingester] No JSON metrics found. Scanning for raw structure files...")
 
-        structure_paths = []
-        
-        # For oligo_design jobs: prefer run/rebuilt/ (full-atom PDBs with nucleobase sidechains)
-        # over run/rfdpoly/ (backbone templates) and run/nampnn/ (backbone-only after NA-MPNN)
-        rebuilt_dir = output_path / "run" / "rebuilt"
-        if rebuilt_dir.exists():
-            structure_paths.extend(list(rebuilt_dir.glob("*.pdb")))
-            # Also check nested rebuilt/rebuilt/ (older publishDir layout)
-            nested = rebuilt_dir / "rebuilt"
-            if nested.exists():
-                structure_paths.extend(list(nested.glob("*.pdb")))
-            print(f"[Ingester] Found {len(structure_paths)} rebuilt PDBs in {rebuilt_dir}")
-        
-        if not structure_paths:
-            structure_paths.extend(list(output_path.rglob("*.pdb")))
-            structure_paths.extend(list(output_path.rglob("*.cif")))
-            structure_paths.extend(list(output_path.rglob("*.mmcif")))
+        # Determine job type for model-specific ingestion logic
+        job_model_id = None
+        try:
+            job_result = await session.execute(select(Job.model_id).where(Job.id == job_id))
+            job_model_id = job_result.scalar_one_or_none()
+        except Exception:
+            pass
+        is_oligo = (job_model_id or "").lower() in ("oligo_design", "oligo_designer")
 
-        if not structure_paths:
-            print(f"[Ingester] No raw structures found under {output_path}")
+        # --- Oligo-specific ingestion ---
+        # For oligo_design jobs: ONLY ingest from run/rebuilt/ (full-atom PDBs).
+        # Do NOT fallback to rglob which grabs backbone PDBs from run/rfdpoly/ and run/nampnn/.
+        if is_oligo:
+            print("[Ingester] Oligo design job detected — using oligo-specific ingestion")
+            structure_paths = []
+            rebuilt_dir = output_path / "run" / "rebuilt"
+            if rebuilt_dir.exists():
+                structure_paths.extend(list(rebuilt_dir.glob("out_*.pdb")))
+                # Also check nested rebuilt/rebuilt/ (older publishDir layout)
+                nested = rebuilt_dir / "rebuilt"
+                if nested.exists():
+                    structure_paths.extend(list(nested.glob("out_*.pdb")))
+                print(f"[Ingester] Found {len(structure_paths)} rebuilt PDBs in {rebuilt_dir}")
+            
+            if not structure_paths:
+                print(f"[Ingester] No rebuilt PDBs found for oligo job under {rebuilt_dir}")
 
-        for structure_path in structure_paths:
-            design_name = structure_path.stem
-            if design_name in ingested_names:
-                continue
+            # Parse NA-MPNN quality metrics from nampnn_metrics.json
+            nampnn_design_metrics = {}
+            for metrics_path in [
+                output_path / "run" / "nampnn" / "nampnn_metrics.json",
+                output_path / "run" / "rebuilt" / "rebuild_metrics.json",
+            ]:
+                if metrics_path.exists():
+                    try:
+                        with open(metrics_path) as f:
+                            parsed = json.load(f)
+                        # nampnn_metrics.json has a 'designs' list with per-design metrics
+                        if "designs" in parsed:
+                            for d in parsed["designs"]:
+                                conf = d.get("overall_confidence")
+                                rec = d.get("seq_rec")
+                                header = d.get("header", "")
+                                if conf is not None or rec is not None:
+                                    nampnn_design_metrics[header] = {
+                                        "overall_confidence": conf,
+                                        "seq_rec": rec,
+                                    }
+                        # rebuild_metrics.json has 'nampnn_metrics' dict
+                        if "nampnn_metrics" in parsed:
+                            for key, metrics in parsed["nampnn_metrics"].items():
+                                nampnn_design_metrics[key] = metrics
+                        print(f"[Ingester] Parsed {len(nampnn_design_metrics)} design metrics from {metrics_path.name}")
+                    except Exception as e:
+                        print(f"[Ingester] Warning: could not parse {metrics_path}: {e}")
+
+            for structure_path in structure_paths:
+                design_name = structure_path.stem
+                if design_name in ingested_names:
+                    continue
+                    
+                # For oligo jobs: B-factors contain NA-MPNN design confidence (not pLDDT)
+                # Extract them but label correctly
+                bfactor_avg, residue_bfactors = extract_plddt_from_pdb(structure_path)
                 
-            # Calculate pLDDT from structure (supports PDB/CIF)
-            plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+                # Look up NA-MPNN metrics for this design
+                overall_confidence = None
+                seq_rec = None
+                for key, metrics in nampnn_design_metrics.items():
+                    if design_name.replace("out_", "") in key or key in design_name:
+                        overall_confidence = metrics.get("overall_confidence")
+                        seq_rec = metrics.get("seq_rec")
+                        break
                 
-            design = Design(
-                id=str(uuid.uuid4()),
-                job_id=job_id,
-                name=design_name,
-                pdb_path=str(structure_path),
-                json_path=None,
-                
-                # Backbone grouping
-                backbone_id=parse_backbone_id(design_name),
-                
-                # Store extracted pLDDT (both average and per-residue)
-                plddt_overall=plddt,
-                residue_plddt=residue_plddt,
-                
-                is_favorite=False,
-                created_at=datetime.utcnow()
-            )
-            session.add(design)
-            designs_created += 1
-            ingested_names.add(design_name)
+                design = Design(
+                    id=str(uuid.uuid4()),
+                    job_id=job_id,
+                    name=design_name,
+                    pdb_path=str(structure_path),
+                    json_path=None,
+                    
+                    backbone_id=parse_backbone_id(design_name),
+                    
+                    # For oligo: B-factors are NA-MPNN design confidence, NOT pLDDT
+                    # Store in plddt_overall for viewer compatibility but note it's design confidence
+                    plddt_overall=bfactor_avg if bfactor_avg and bfactor_avg > 0 else None,
+                    residue_plddt=residue_bfactors,
+                    
+                    # NA-MPNN quality metrics
+                    conf_score=overall_confidence,  # overall_confidence from FASTA header
+                    mpnn_score=seq_rec,  # sequence recovery from FASTA header
+                    
+                    is_favorite=False,
+                    created_at=datetime.utcnow()
+                )
+                session.add(design)
+                designs_created += 1
+                ingested_names.add(design_name)
+
+        # --- Standard (non-oligo) ingestion ---
+        else:
+            structure_paths = []
+            
+            # For non-oligo jobs: prefer run/rebuilt/ over raw structures
+            rebuilt_dir = output_path / "run" / "rebuilt"
+            if rebuilt_dir.exists():
+                structure_paths.extend(list(rebuilt_dir.glob("*.pdb")))
+                nested = rebuilt_dir / "rebuilt"
+                if nested.exists():
+                    structure_paths.extend(list(nested.glob("*.pdb")))
+                print(f"[Ingester] Found {len(structure_paths)} rebuilt PDBs in {rebuilt_dir}")
+            
+            if not structure_paths:
+                structure_paths.extend(list(output_path.rglob("*.pdb")))
+                structure_paths.extend(list(output_path.rglob("*.cif")))
+                structure_paths.extend(list(output_path.rglob("*.mmcif")))
+
+            if not structure_paths:
+                print(f"[Ingester] No raw structures found under {output_path}")
+
+            for structure_path in structure_paths:
+                design_name = structure_path.stem
+                if design_name in ingested_names:
+                    continue
+                    
+                # Calculate pLDDT from structure (supports PDB/CIF)
+                plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+                    
+                design = Design(
+                    id=str(uuid.uuid4()),
+                    job_id=job_id,
+                    name=design_name,
+                    pdb_path=str(structure_path),
+                    json_path=None,
+                    
+                    backbone_id=parse_backbone_id(design_name),
+                    
+                    plddt_overall=plddt,
+                    residue_plddt=residue_plddt,
+                    
+                    is_favorite=False,
+                    created_at=datetime.utcnow()
+                )
+                session.add(design)
+                designs_created += 1
+                ingested_names.add(design_name)
 
     if designs_created > 0:
         try:

@@ -292,8 +292,12 @@ export interface Design {
     protein_iptm: number | null;
     complex_iplddt: number | null;
     complex_ipde: number | null;
-    chains_ptm: Record<string, number> | null;
-    pair_chains_iptm: Record<string, Record<string, number>> | null;
+    disorder: number | null;
+    num_recycles: number | null;
+    has_clash: boolean | null;
+    chains_ptm: Record<string, number> | number[] | null;
+    pair_chains_iptm: Record<string, Record<string, number>> | number[][] | null;
+    confidence_metrics: Record<string, unknown> | null;
     // Backbone grouping & epitope analysis
     backbone_id: number | null;
     epitope_contact_count: number | null;
@@ -862,11 +866,30 @@ export interface ChainPairIptmData {
     size: number;
 }
 
+export interface PlotlyMetricPoint {
+    id: string;
+    name: string;
+    metrics: Record<string, number>;
+}
+
+export interface PlotlyMetricsResponse {
+    job_id: string;
+    metric_keys: string[];
+    points: PlotlyMetricPoint[];
+    total: number;
+}
+
 export const fetchContactMap = (designId: string, maxSize: number = 400) =>
     api.get<ContactMapData>(`/api/designs/${designId}/contact-map`, { params: { max_size: maxSize } });
 
 export const fetchChainPairIptm = (designId: string) =>
     api.get<ChainPairIptmData>(`/api/designs/${designId}/chain-iptm`);
+
+export const fetchDesignPlotlyMetrics = (
+    jobId: string,
+    params?: { include_children?: boolean; limit?: number; offset?: number }
+) =>
+    api.get<PlotlyMetricsResponse>(`/api/designs/by-job/${jobId}/plotly-metrics`, { params });
 
 // PAE (Predicted Aligned Error) data
 export interface PAEData {

@@ -341,6 +341,29 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             }
 
             // Step 3: Submit job with uploaded file path
+            const selectedLoops = Array.from(selectedCDRLoops).sort();
+            const detectedRangeMap: Record<string, [number, number] | null | undefined> = {
+                H1: detectedCDRs?.cdr_h1_range,
+                H2: detectedCDRs?.cdr_h2_range,
+                H3: detectedCDRs?.cdr_h3_range,
+                L1: detectedCDRs?.cdr_l1_range,
+                L2: detectedCDRs?.cdr_l2_range,
+                L3: detectedCDRs?.cdr_l3_range,
+            };
+            const detectedLoopSpecs = selectedLoops.map((loop) => {
+                const loopRange = detectedRangeMap[loop];
+                if (!loopRange || loopRange.length !== 2) {
+                    return null;
+                }
+                const [start, end] = loopRange;
+                return `${loop}:${start}-${end}`;
+            });
+            const hasCompleteDetectedRanges =
+                selectedLoops.length > 0 && detectedLoopSpecs.every((spec) => spec !== null);
+            const rfantibodyLoopSpec = hasCompleteDetectedRanges
+                ? `[${detectedLoopSpecs.join(',')}]`
+                : undefined;
+
             const jobData = {
                 name: jobName,
                 model_id: 'template_antibody_denovo',
@@ -375,11 +398,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     target_dna_seq: targetDnaSeq.trim() || undefined,
                     // Design mode settings
                     antibody_design_mode: designMode,
-                    antibody_design_loops: Array.from(selectedCDRLoops).sort().join(','),
+                    antibody_design_loops: selectedLoops.join(','),
+                    // Preserve detected IMGT ranges for RFantibody when available.
+                    rfantibody_design_loops: rfantibodyLoopSpec,
                     protect_vhh_tetrad: protectTetrad,
                     antibody_chains: frameworkType === 'nanobody' ? 'H' : 'H,L',
                     // Quality settings - RFantibody (backbone diffusion)
-                    rfantibody_diffusion_steps: qualitySettings.rfantibody_diffusion_steps,
+                    rfantibody_diffusion_steps: Math.min(qualitySettings.rfantibody_diffusion_steps, 50),
                     rfantibody_noise_scale_ca: qualitySettings.rfantibody_noise_scale_ca,
                     rfantibody_noise_scale_frame: qualitySettings.rfantibody_noise_scale_frame,
                     rfantibody_guide_scale: qualitySettings.rfantibody_guide_scale,

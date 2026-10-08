@@ -9,7 +9,7 @@ import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
-import { fetchAAComposition, fetchCDRLogos, fetchContactMap, fetchChainPairIptm, fetchDesignResidueMetrics, fetchPAEData, fetchChainMetrics, type ChainMetric } from '../lib/api';
+import { fetchAAComposition, fetchCDRLogos, fetchContactMap, fetchChainPairIptm, fetchDesignResidueMetrics, fetchPAEData, fetchChainMetrics, fetchDesignPlotlyMetrics, type ChainMetric } from '../lib/api';
 
 interface Design {
     id: string;
@@ -20,6 +20,14 @@ interface Design {
     pae_interaction: number | null;
     ptm: number | null;
     iptm: number | null;
+    protein_iptm?: number | null;
+    ligand_iptm?: number | null;
+    complex_iplddt?: number | null;
+    complex_ipde?: number | null;
+    disorder?: number | null;
+    num_recycles?: number | null;
+    has_clash?: boolean | null;
+    confidence_metrics?: Record<string, unknown> | null;
     conf_score: number | null;
     affinity_score: number | null;
     binder_probability: number | null;
@@ -48,6 +56,13 @@ const NUMERIC_METRICS = [
     { key: 'pae_interaction', label: 'PAE (Interaction)', color: '#f59e0b' },
     { key: 'ptm', label: 'pTM', color: '#a78bfa' },
     { key: 'iptm', label: 'iPTM', color: '#8b5cf6' },
+    { key: 'protein_iptm', label: 'Protein iPTM', color: '#7c3aed' },
+    { key: 'ligand_iptm', label: 'Ligand iPTM', color: '#14b8a6' },
+    { key: 'complex_iplddt', label: 'Interface pLDDT', color: '#0ea5e9' },
+    { key: 'complex_ipde', label: 'Interface PDE', color: '#f97316' },
+    { key: 'disorder', label: 'Disorder', color: '#eab308' },
+    { key: 'num_recycles', label: 'Num Recycles', color: '#a3a3a3' },
+    { key: 'has_clash', label: 'Has Clash (0/1)', color: '#ef4444' },
     { key: 'conf_score', label: 'Confidence Score', color: '#34d399' },
     { key: 'affinity_score', label: 'Affinity Score', color: '#10b981' },
     { key: 'binder_probability', label: 'Binder Probability', color: '#22c55e' },
@@ -59,7 +74,7 @@ const NUMERIC_METRICS = [
     { key: 'epitope_contact_count', label: 'Epitope Contacts', color: '#84cc16' },
 ] as const;
 
-type MetricKey = typeof NUMERIC_METRICS[number]['key'];
+type MetricKey = string;
 
 // Preset analysis configurations
 const PRESET_ANALYSES = [
@@ -164,6 +179,62 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         staleTime: 60000,
     });
 
+    // Flattened numeric metrics for Plotly (includes raw confidence_metrics summaries)
+    const { data: plotlyMetricsData } = useQuery({
+        queryKey: ['plotly-metrics', jobId],
+        queryFn: () => jobId ? fetchDesignPlotlyMetrics(jobId, { include_children: true, limit: 50000 }).then(r => r.data) : null,
+        enabled: !!jobId,
+        staleTime: 60000,
+    });
+
+    const plotlyMetricsByDesign = useMemo(() => {
+        const byId = new Map<string, Record<string, number>>();
+        (plotlyMetricsData?.points || []).forEach((point) => byId.set(point.id, point.metrics || {}));
+        return byId;
+    }, [plotlyMetricsData]);
+
+    const metricOptions = useMemo(() => {
+        const base = [...NUMERIC_METRICS] as Array<{ key: string; label: string; color: string }>;
+        const existing = new Set(base.map((m) => m.key));
+        const dynamicKeys = plotlyMetricsData?.metric_keys || [];
+
+        const toLabel = (key: string) =>
+            key
+                .replace(/_mean$/i, ' (mean)')
+                .replace(/_min$/i, ' (min)')
+                .replace(/_max$/i, ' (max)')
+                .replace(/_n$/i, ' (n)')
+                .replace(/_/g, ' ')
+                .replace(/\b\w/g, (c) => c.toUpperCase());
+
+        const toColor = (key: string) => {
+            let hash = 0;
+            for (let i = 0; i < key.length; i += 1) hash = ((hash << 5) - hash) + key.charCodeAt(i);
+            const hue = Math.abs(hash) % 360;
+            return `hsl(${hue}, 70%, 55%)`;
+        };
+
+        dynamicKeys.forEach((key) => {
+            if (existing.has(key)) return;
+            existing.add(key);
+            base.push({ key, label: toLabel(key), color: toColor(key) });
+        });
+
+        return base;
+    }, [plotlyMetricsData]);
+
+    const getMetricValue = (design: Design, key: string): number | null => {
+        const direct = (design as unknown as Record<string, unknown>)[key];
+        if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+        if (typeof direct === 'boolean') return direct ? 1 : 0;
+        const mapped = plotlyMetricsByDesign.get(design.id)?.[key];
+        if (typeof mapped === 'number' && Number.isFinite(mapped)) return mapped;
+        return null;
+    };
+
+    const getMetricLabel = (key: string): string =>
+        metricOptions.find((m) => m.key === key)?.label || key;
+
     // Sort designs by relevant metric based on preset
     const sortedDesigns = useMemo(() => {
         const getSortKey = (): keyof Design | null => {
@@ -200,7 +271,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
     // Extract numeric values from designs
     const extractValues = (key: MetricKey): number[] => {
         return designs
-            .map(d => (d as unknown as Record<string, unknown>)[key])
+            .map((d) => getMetricValue(d, key))
             .filter((v): v is number => v != null && typeof v === 'number');
     };
 
@@ -229,14 +300,14 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         const names: string[] = [];
 
         designs.forEach(d => {
-            const x = (d as unknown as Record<string, unknown>)[xAxis];
-            const y = (d as unknown as Record<string, unknown>)[yAxis];
-            if (x != null && y != null && typeof x === 'number' && typeof y === 'number') {
+            const x = getMetricValue(d, xAxis);
+            const y = getMetricValue(d, yAxis);
+            if (x != null && y != null) {
                 xVals.push(x);
                 yVals.push(y);
                 if (colorBy !== 'none') {
-                    const c = (d as unknown as Record<string, unknown>)[colorBy];
-                    colorVals.push(typeof c === 'number' ? c : 0);
+                    const c = getMetricValue(d, colorBy);
+                    colorVals.push(c ?? 0);
                 }
                 names.push(d.name);
             }
@@ -255,7 +326,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                 colorscale: 'Viridis',
                 showscale: colorBy !== 'none',
                 colorbar: colorBy !== 'none' ? {
-                    title: { text: NUMERIC_METRICS.find(m => m.key === colorBy)?.label || colorBy },
+                    title: { text: getMetricLabel(colorBy) },
                     thickness: 15,
                     len: 0.5,
                 } : undefined,
@@ -339,17 +410,16 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         const zKey = zAxis;
 
         designs.forEach(d => {
-            const dRecord = d as unknown as Record<string, unknown>;
-            const x = dRecord[xKey];
-            const y = dRecord[yKey];
-            const z = dRecord[zKey];
-            const col = dRecord[colorBy === 'none' ? 'plddt_overall' : colorBy];
+            const x = getMetricValue(d, xKey);
+            const y = getMetricValue(d, yKey);
+            const z = getMetricValue(d, zKey);
+            const col = getMetricValue(d, colorBy === 'none' ? 'plddt_overall' : colorBy);
 
-            if (typeof x === 'number' && typeof y === 'number' && typeof z === 'number') {
+            if (x != null && y != null && z != null) {
                 xVals.push(x);
                 yVals.push(y);
                 zVals.push(z);
-                colorVals.push(typeof col === 'number' ? col : 0);
+                colorVals.push(col ?? 0);
                 names.push(d.name);
             }
         });
@@ -357,10 +427,10 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         if (xVals.length === 0) return [];
 
         // Get axis labels
-        const xLabel = NUMERIC_METRICS.find(m => m.key === xKey)?.label || xKey;
-        const yLabel = NUMERIC_METRICS.find(m => m.key === yKey)?.label || yKey;
-        const zLabel = NUMERIC_METRICS.find(m => m.key === zKey)?.label || zKey;
-        const colorLabel = NUMERIC_METRICS.find(m => m.key === (colorBy === 'none' ? 'plddt_overall' : colorBy))?.label || 'pLDDT';
+        const xLabel = getMetricLabel(xKey);
+        const yLabel = getMetricLabel(yKey);
+        const zLabel = getMetricLabel(zKey);
+        const colorLabel = getMetricLabel(colorBy === 'none' ? 'plddt_overall' : colorBy);
 
         return [{
             type: 'scatter3d',
@@ -448,7 +518,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         // Build dimensions array for parcoords
         const dimensions = metricsForParallel.map(m => {
             const values = designs.map(d => {
-                const val = (d as unknown as Record<string, unknown>)[m.key];
+                const val = getMetricValue(d, m.key);
                 return typeof val === 'number' ? val : null;
             });
             const validValues = values.filter((v): v is number => v !== null);
@@ -465,7 +535,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         // Color by the selected colorBy metric
         const colorMetric = colorBy === 'none' ? 'plddt_overall' : colorBy;
         const colorValues = designs.map(d => {
-            const val = (d as unknown as Record<string, unknown>)[colorMetric];
+            const val = getMetricValue(d, colorMetric);
             return typeof val === 'number' ? val : 0;
         });
 
@@ -476,7 +546,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                 colorscale: 'Viridis',
                 showscale: true,
                 colorbar: {
-                    title: { text: NUMERIC_METRICS.find(m => m.key === colorMetric)?.label || 'Value' },
+                    title: { text: getMetricLabel(colorMetric) },
                     thickness: 15,
                     len: 0.5,
                 },
@@ -495,12 +565,11 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         const zVals: number[] = [];
 
         designs.forEach(d => {
-            const dRecord = d as unknown as Record<string, unknown>;
-            const x = dRecord[xAxis];
-            const y = dRecord[yAxis];
-            const z = dRecord[zAxis];
+            const x = getMetricValue(d, xAxis);
+            const y = getMetricValue(d, yAxis);
+            const z = getMetricValue(d, zAxis);
 
-            if (typeof x === 'number' && typeof y === 'number' && typeof z === 'number') {
+            if (x != null && y != null && z != null) {
                 xVals.push(x);
                 yVals.push(y);
                 zVals.push(z);
@@ -523,23 +592,23 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                 title: { text: 'Density', font: { color: '#e2e8f0' } },
                 tickfont: { color: '#94a3b8' },
             },
-            hovertemplate: `${NUMERIC_METRICS.find(m => m.key === xAxis)?.label}: %{x:.2f}<br>${NUMERIC_METRICS.find(m => m.key === yAxis)?.label}: %{y:.2f}<extra></extra>`,
+            hovertemplate: `${getMetricLabel(xAxis)}: %{x:.2f}<br>${getMetricLabel(yAxis)}: %{y:.2f}<extra></extra>`,
         } as Data];
     }, [designs, xAxis, yAxis, zAxis, selectedPreset]);
 
     // Layout configuration
     const scatterLayout: Partial<Layout> = {
         title: {
-            text: `${NUMERIC_METRICS.find(m => m.key === xAxis)?.label} vs ${NUMERIC_METRICS.find(m => m.key === yAxis)?.label}`,
+            text: `${getMetricLabel(xAxis)} vs ${getMetricLabel(yAxis)}`,
             font: { color: '#e2e8f0', size: 16 },
         },
         xaxis: {
-            title: { text: NUMERIC_METRICS.find(m => m.key === xAxis)?.label, font: { color: '#94a3b8' } },
+            title: { text: getMetricLabel(xAxis), font: { color: '#94a3b8' } },
             gridcolor: '#334155',
             color: '#94a3b8',
         },
         yaxis: {
-            title: { text: NUMERIC_METRICS.find(m => m.key === yAxis)?.label, font: { color: '#94a3b8' } },
+            title: { text: getMetricLabel(yAxis), font: { color: '#94a3b8' } },
             gridcolor: '#334155',
             color: '#94a3b8',
         },
@@ -552,11 +621,11 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
 
     const histogramLayout: Partial<Layout> = {
         title: {
-            text: `Distribution: ${NUMERIC_METRICS.find(m => m.key === xAxis)?.label}`,
+            text: `Distribution: ${getMetricLabel(xAxis)}`,
             font: { color: '#e2e8f0', size: 16 },
         },
         xaxis: {
-            title: { text: NUMERIC_METRICS.find(m => m.key === xAxis)?.label, font: { color: '#94a3b8' } },
+            title: { text: getMetricLabel(xAxis), font: { color: '#94a3b8' } },
             gridcolor: '#334155',
             color: '#94a3b8',
         },
@@ -640,7 +709,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                     onChange={(e) => setXAxis(e.target.value as MetricKey)}
                                     className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white"
                                 >
-                                    {NUMERIC_METRICS.map(m => (
+                                    {metricOptions.map(m => (
                                         <option key={m.key} value={m.key}>{m.label}</option>
                                     ))}
                                 </select>
@@ -654,7 +723,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                             onChange={(e) => setYAxis(e.target.value as MetricKey)}
                                             className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white"
                                         >
-                                            {NUMERIC_METRICS.map(m => (
+                                            {metricOptions.map(m => (
                                                 <option key={m.key} value={m.key}>{m.label}</option>
                                             ))}
                                         </select>
@@ -668,7 +737,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                                 onChange={(e) => setZAxis(e.target.value as MetricKey)}
                                                 className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white"
                                             >
-                                                {NUMERIC_METRICS.map(m => (
+                                                {metricOptions.map(m => (
                                                     <option key={m.key} value={m.key}>{m.label}</option>
                                                 ))}
                                             </select>
@@ -682,7 +751,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                             className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white"
                                         >
                                             <option value="none">None</option>
-                                            {NUMERIC_METRICS.map(m => (
+                                            {metricOptions.map(m => (
                                                 <option key={m.key} value={m.key}>{m.label}</option>
                                             ))}
                                         </select>
@@ -746,9 +815,9 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                 },
                                 paper_bgcolor: 'transparent',
                                 scene: {
-                                    xaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === xAxis)?.label || xAxis }, color: '#94a3b8', gridcolor: '#334155' },
-                                    yaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === yAxis)?.label || yAxis }, color: '#94a3b8', gridcolor: '#334155' },
-                                    zaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === zAxis)?.label || zAxis }, color: '#94a3b8', gridcolor: '#334155' },
+                                    xaxis: { title: { text: getMetricLabel(xAxis) }, color: '#94a3b8', gridcolor: '#334155' },
+                                    yaxis: { title: { text: getMetricLabel(yAxis) }, color: '#94a3b8', gridcolor: '#334155' },
+                                    zaxis: { title: { text: getMetricLabel(zAxis) }, color: '#94a3b8', gridcolor: '#334155' },
                                     bgcolor: '#1e293b',
                                 },
                                 font: { color: '#e2e8f0' },
@@ -846,9 +915,9 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                 },
                                 paper_bgcolor: 'transparent',
                                 scene: {
-                                    xaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === xAxis)?.label || xAxis }, color: '#94a3b8', gridcolor: '#334155' },
-                                    yaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === yAxis)?.label || yAxis }, color: '#94a3b8', gridcolor: '#334155' },
-                                    zaxis: { title: { text: NUMERIC_METRICS.find(m => m.key === zAxis)?.label || zAxis }, color: '#94a3b8', gridcolor: '#334155' },
+                                    xaxis: { title: { text: getMetricLabel(xAxis) }, color: '#94a3b8', gridcolor: '#334155' },
+                                    yaxis: { title: { text: getMetricLabel(yAxis) }, color: '#94a3b8', gridcolor: '#334155' },
+                                    zaxis: { title: { text: getMetricLabel(zAxis) }, color: '#94a3b8', gridcolor: '#334155' },
                                     bgcolor: '#1e293b',
                                 },
                                 font: { color: '#e2e8f0' },
@@ -899,12 +968,12 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                                 font: { color: '#e2e8f0' },
                                 margin: { l: 60, r: 80, t: 50, b: 60 },
                                 xaxis: {
-                                    title: { text: NUMERIC_METRICS.find(m => m.key === xAxis)?.label || xAxis, font: { color: '#94a3b8' } },
+                                    title: { text: getMetricLabel(xAxis), font: { color: '#94a3b8' } },
                                     gridcolor: '#334155',
                                     color: '#94a3b8',
                                 },
                                 yaxis: {
-                                    title: { text: NUMERIC_METRICS.find(m => m.key === yAxis)?.label || yAxis, font: { color: '#94a3b8' } },
+                                    title: { text: getMetricLabel(yAxis), font: { color: '#94a3b8' } },
                                     gridcolor: '#334155',
                                     color: '#94a3b8',
                                 },

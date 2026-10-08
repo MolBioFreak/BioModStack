@@ -501,6 +501,24 @@ function PowerControlMenu() {
         );
     };
 
+    const commitFanPreset = async (gpuKey: string, pct: number) => {
+        const fan = fanState?.gpus[gpuKey];
+        if (!fan) return;
+        if (!fan.writable) {
+            setMessage(`✗ Fan control is not writable on GPU ${gpuKey}`);
+            return;
+        }
+        const fanMin = Number(fan.min_percent ?? 30);
+        const fanMax = Number(fan.max_percent ?? 100);
+        const clamped = Math.max(fanMin, Math.min(fanMax, pct));
+        setDraftFanTargets((prev) => ({ ...prev, [gpuKey]: clamped }));
+        setDraftFanModes((prev) => ({ ...prev, [gpuKey]: 'manual' }));
+        await applyFanControl(
+            { gpu_index: Number(gpuKey), mode: 'manual', target_percent: clamped },
+            `fan-preset-${gpuKey}`,
+        );
+    };
+
     const rows = state
         ? Object.keys(state.hardware_limits).sort((a, b) => Number(a) - Number(b))
         : [];
@@ -577,7 +595,7 @@ function PowerControlMenu() {
                             </div>
                         )}
 
-                        <div className="grid grid-cols-[2fr_1.1fr_1.8fr_3.2fr_3.1fr] gap-2 px-1 text-[11px] uppercase tracking-wider text-slate-400">
+                        <div className="grid grid-cols-[2fr_1.1fr_1.8fr_3.2fr_3.6fr] gap-2 px-1 text-[11px] uppercase tracking-wider text-slate-400">
                             <div>GPU</div>
                             <div>Power</div>
                             <div>Power Quick</div>
@@ -617,7 +635,7 @@ function PowerControlMenu() {
                                 const disableFanControls = isFanLoading;
 
                                 return (
-                                    <div key={gpuKey} className="grid grid-cols-[2fr_1.1fr_1.8fr_3.2fr_3.1fr] gap-2 items-center bg-slate-900/60 border border-slate-700 rounded-lg px-2 py-2">
+                                    <div key={gpuKey} className="grid grid-cols-[2fr_1.1fr_1.8fr_3.2fr_3.6fr] gap-2 items-center bg-slate-900/60 border border-slate-700 rounded-lg px-2 py-2">
                                         <div className="text-sm text-slate-200">
                                             <span className="text-slate-400 mr-2">GPU {gpuKey}</span>
                                             <span className="text-slate-200">| {hw.name || `GPU ${gpuKey}`}</span>
@@ -704,7 +722,7 @@ function PowerControlMenu() {
                                                 </div>
                                             ) : (
                                                 <>
-                                                    <div className="flex items-center gap-1">
+                                                    <div className="flex items-center gap-1 flex-wrap">
                                                         <button
                                                             onClick={() => setFanMode(gpuKey, 'auto')}
                                                             disabled={disableFanControls || !fan.writable}
@@ -718,6 +736,28 @@ function PowerControlMenu() {
                                                             className={`px-1.5 py-0.5 text-[11px] rounded border disabled:opacity-50 ${fanMode === 'manual' ? 'border-amber-500/50 text-amber-300 bg-amber-500/15' : 'border-slate-600 text-slate-300 hover:bg-slate-700'}`}
                                                         >
                                                             Manual
+                                                        </button>
+                                                        <span className="border-l border-slate-600 h-4 mx-0.5" />
+                                                        <button
+                                                            onClick={() => commitFanPreset(gpuKey, 25)}
+                                                            disabled={disableFanControls || !fan.writable}
+                                                            className="px-1.5 py-0.5 text-[11px] rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                                                        >
+                                                            25%
+                                                        </button>
+                                                        <button
+                                                            onClick={() => commitFanPreset(gpuKey, 50)}
+                                                            disabled={disableFanControls || !fan.writable}
+                                                            className="px-1.5 py-0.5 text-[11px] rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                                                        >
+                                                            50%
+                                                        </button>
+                                                        <button
+                                                            onClick={() => commitFanPreset(gpuKey, 75)}
+                                                            disabled={disableFanControls || !fan.writable}
+                                                            className="px-1.5 py-0.5 text-[11px] rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                                                        >
+                                                            75%
                                                         </button>
                                                         <span className="text-[11px] text-slate-500 ml-1">
                                                             now {fanCurrent} ({fanRpm})

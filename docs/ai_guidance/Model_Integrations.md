@@ -102,9 +102,18 @@ Workflow / Module Integrations (not registry-backed)
 These are invoked in Nextflow workflows but do not appear as registry models.
 
 - **RFantibody** (`modules/rfantibody.nf`)
-  - Internal: `docs/RFA_PPIFlow_Implementation_Plan_Final.md`
+  - Internal: `docs/RFA_PPIFlow_Implementation_Plan_Final.md`, `docs/RFA_Workflow_Fix_Plan_2026-02-10.md`
   - External code: https://github.com/RosettaCommons/RFantibody
   - Paper/Preprint: not referenced in repo
+  - Container: `rfantibody.sif` (build from `apptainer/rfantibody.def`)
+  - Weights: `${weights_root}/rfantibody/rfantibody_repo/weights/RFdiffusion_Ab.pt`
+  - Runtime policy:
+    - Container code is immutable by default (weights-only bind mount).
+    - Runtime preflight runs before inference (`scripts/check_rfantibody_runtime.py`).
+    - Build metadata stored at `/opt/RFantibody/.build_manifest`.
+  - Verification commands:
+    - `apptainer exec --nv <rfantibody.sif> python3 -c "import torch,dgl; print(torch.__version__, torch.version.cuda, dgl.__version__)"`
+    - `apptainer exec <rfantibody.sif> bash -lc 'cat /opt/RFantibody/.build_manifest'`
 
 - **PPIFlow** (`modules/ppiflow.nf`)
   - Internal: `docs/RFA_PPIFlow_Implementation_Plan_Final.md`

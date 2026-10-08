@@ -141,6 +141,10 @@ class Design(Base):
     complex_ipde = Column(Float, nullable=True)  # Interface PDE
     chains_ptm = Column(JSON, nullable=True)  # {"0": 0.76, "1": 0.51} per-chain pTM
     pair_chains_iptm = Column(JSON, nullable=True)  # NxN chain matrix for heatmap
+    disorder = Column(Float, nullable=True)  # Protenix disorder score/probability
+    num_recycles = Column(Integer, nullable=True)  # Recycling iterations reported by model
+    has_clash = Column(Boolean, nullable=True)  # Steric clash flag from confidence output
+    confidence_metrics = Column(JSON, nullable=True)  # Raw model confidence JSON payload
     
     # Binding Affinity (Boltz-2)
     affinity_score = Column(Float, nullable=True)  # log(IC50)

@@ -15,6 +15,7 @@ Key Features:
 import asyncio
 import logging
 import math
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
@@ -106,19 +107,175 @@ HEAVY_MODELS = {'af2', 'rfdiffusion', 'rf3'}
 PROTENIX_MODELS = {'protenix', 'protenix_esm', 'protenix_mini_esm'}
 
 
-def estimate_vram(model_type: str, sequence_length: int) -> int:
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_protenix_profile(params: Dict[str, Any]) -> str:
+    """Map Protenix params to the closest VRAM profile."""
+    use_msa = _coerce_bool(params.get("protenix_use_msa", True), default=True)
+    model_name = str(params.get("protenix_model_weights", "")).strip().lower()
+
+    if "mini" in model_name and ("esm" in model_name or "ism" in model_name):
+        return "protenix_mini_esm"
+    if "esm" in model_name or "ism" in model_name:
+        return "protenix_esm"
+    if not use_msa:
+        # Pipeline auto-switches to mini ESM when MSA is disabled on a base model.
+        return "protenix_mini_esm"
+    return "protenix"
+
+
+def _normalize_msa_preset(value: Any) -> str:
+    preset = str(value).strip().lower() if value is not None else "fast"
+    if preset in {"maximum", "max"}:
+        return "maximum"
+    if preset in {"balanced", "balance", "medium"}:
+        return "balanced"
+    return "fast"
+
+
+def estimate_protenix_tokens(params: Any, fallback_length: int = 300) -> int:
+    """
+    Estimate Protenix total-token load from input payload.
+
+    Protenix memory scales with total tokens across all entities in the complex.
+    """
+    payload: Dict[str, Any] = {}
+    if isinstance(params, dict):
+        payload = params
+    elif isinstance(params, str):
+        try:
+            import json
+            loaded = json.loads(params)
+            if isinstance(loaded, dict):
+                payload = loaded
+        except Exception:
+            payload = {}
+
+    total_tokens = 0
+    components = payload.get("complex_components")
+    if isinstance(components, list):
+        for comp in components:
+            if not isinstance(comp, dict):
+                continue
+            comp_type = str(comp.get("type", "")).strip().lower()
+            count = max(1, _coerce_int(comp.get("count", 1), 1))
+
+            if comp_type in {"protein", "peptide", "dna", "rna"}:
+                sequence = comp.get("sequence")
+                if isinstance(sequence, str) and sequence:
+                    total_tokens += len(sequence) * count
+                continue
+
+            # Ligands/ions are much smaller; approximate using atom count if available.
+            if comp_type in {"ligand", "ion"}:
+                atom_count = _coerce_int(comp.get("atom_count"), 0)
+                if atom_count <= 0:
+                    smiles = comp.get("smiles")
+                    if isinstance(smiles, str) and smiles:
+                        atom_count = max(1, len(re.findall(r"[A-Z][a-z]?", smiles)))
+                    elif comp.get("ccd") or comp.get("ion") or comp.get("element"):
+                        atom_count = 1
+                if atom_count > 0:
+                    total_tokens += atom_count * count
+
+    if total_tokens > 0:
+        return total_tokens
+
+    for key in ("sequence_input", "sequence"):
+        sequence = payload.get(key)
+        if isinstance(sequence, str) and sequence:
+            return len(sequence)
+
+    return max(1, _coerce_int(fallback_length, 300))
+
+
+def _protenix_runtime_multiplier(params: Dict[str, Any]) -> float:
+    """
+    Apply conservative multipliers for Protenix runtime knobs that increase memory.
+    """
+    n_sample = max(1, _coerce_int(params.get("protenix_n_sample", 5), 5))
+    n_cycle = max(1, _coerce_int(params.get("protenix_n_cycle", 10), 10))
+    n_step = max(1, _coerce_int(params.get("protenix_n_step", 200), 200))
+    use_msa = _coerce_bool(params.get("protenix_use_msa", True), default=True)
+    msa_preset = _normalize_msa_preset(params.get("msa_preset", "fast"))
+    msa_max_seqs = _coerce_int(params.get("msa_max_seqs"), 0)
+    use_template = _coerce_bool(params.get("protenix_use_template", False), default=False)
+
+    multiplier = 1.0
+    if n_sample > 1:
+        multiplier += min(0.60, 0.08 * (n_sample - 1))
+    if n_cycle > 8:
+        multiplier += min(0.35, 0.03 * (n_cycle - 8))
+    if n_step > 200:
+        multiplier += min(0.20, 0.0005 * (n_step - 200))
+    if use_msa:
+        if msa_preset == "balanced":
+            multiplier += 0.10
+        elif msa_preset == "maximum":
+            multiplier += 0.20
+        if msa_max_seqs > 8000:
+            multiplier += 0.12
+        elif msa_max_seqs > 4000:
+            multiplier += 0.06
+    if use_template:
+        multiplier += 0.08
+
+    return max(1.0, min(2.5, multiplier))
+
+
+def estimate_vram(model_type: str, sequence_length: int, params: Optional[Any] = None) -> int:
     """
     Estimate VRAM required for a job.
     
     Uses quadratic scaling: base + scale * (length/100)^2
     """
-    profile = VRAM_PROFILES.get(model_type, VRAM_PROFILES['default'])
+    normalized_model = (model_type or "default").strip().lower()
+    effective_length = max(1, _coerce_int(sequence_length, 300))
+    runtime_multiplier = 1.0
+    profile_key = normalized_model
+
+    if normalized_model == "protenix":
+        protenix_params: Dict[str, Any] = {}
+        if isinstance(params, dict):
+            protenix_params = params
+        elif isinstance(params, str):
+            try:
+                import json
+                loaded = json.loads(params)
+                if isinstance(loaded, dict):
+                    protenix_params = loaded
+            except Exception:
+                protenix_params = {}
+        effective_length = estimate_protenix_tokens(protenix_params, effective_length)
+        profile_key = _normalize_protenix_profile(protenix_params)
+        runtime_multiplier = _protenix_runtime_multiplier(protenix_params)
+
+    profile = VRAM_PROFILES.get(profile_key, VRAM_PROFILES['default'])
     base = profile['base']
     scale = profile['scale']
     
     # Quadratic scaling for attention-based models
-    length_factor = (sequence_length / 100) ** 2
-    estimated = int(base + scale * length_factor)
+    length_factor = (effective_length / 100) ** 2
+    estimated = int((base + scale * length_factor) * runtime_multiplier)
     
     return estimated
 
@@ -189,6 +346,58 @@ def _median(values: List[int]) -> Optional[int]:
     if len(sorted_vals) % 2 == 1:
         return sorted_vals[mid]
     return int((sorted_vals[mid - 1] + sorted_vals[mid]) / 2)
+
+
+def _read_nextflow_history_statuses(job_ids: List[str]) -> Dict[str, Tuple[str, str]]:
+    """
+    Return latest Nextflow history status for each requested job id.
+
+    Output map: {job_id: (status_token, duration)} where status_token is typically
+    "OK", "ERR", or "-".
+    """
+    if not job_ids:
+        return {}
+
+    try:
+        from paths import get_code_root
+        history_path = get_code_root() / ".nextflow" / "history"
+    except Exception:
+        return {}
+
+    if not history_path.exists():
+        return {}
+
+    target_ids = {str(jid) for jid in job_ids}
+    found: Dict[str, Tuple[str, str]] = {}
+    job_id_pattern = re.compile(r"--job_id\s+([0-9a-fA-F-]{36})")
+
+    try:
+        lines = history_path.read_text(errors="ignore").splitlines()
+    except Exception as history_err:
+        logger.debug(f"[COMPLETION] Could not read Nextflow history: {history_err}")
+        return {}
+
+    # Scan newest-first so we capture the latest status for each job.
+    for line in reversed(lines):
+        if len(found) >= len(target_ids):
+            break
+        if "--job_id" not in line:
+            continue
+
+        match = job_id_pattern.search(line)
+        if not match:
+            continue
+
+        job_id = match.group(1)
+        if job_id not in target_ids or job_id in found:
+            continue
+
+        parts = line.split("\t")
+        status_token = parts[3].strip().upper() if len(parts) > 3 else ""
+        duration = parts[1].strip() if len(parts) > 1 else ""
+        found[job_id] = (status_token, duration)
+
+    return found
 
 
 def _compute_auto_limit(
@@ -647,15 +856,16 @@ class GPUOrchestrator:
             # Convert to JobInfo for packing
             job_infos = []
             for job in pending_jobs:
+                job_params = _normalize_job_params(job.params)
+
                 # Estimate VRAM if not set
                 vram = job.vram_estimate_mb
                 if vram is None:
                     seq_len = job.sequence_length or 300
                     model = job.model_id or 'default'
-                    vram = estimate_vram(model, seq_len)
+                    vram = estimate_vram(model, seq_len, job_params)
                 
                 # Extract pinned_gpus from job params if present
-                job_params = _normalize_job_params(job.params)
                 pinned_gpus = _normalize_pinned_gpus(job_params.get('pinned_gpus'))
                 
                 job_infos.append(JobInfo(
@@ -850,6 +1060,12 @@ class GPUOrchestrator:
                 if not running_jobs:
                     return
 
+                # Snapshot terminal status from Nextflow history. This lets us
+                # reconcile jobs even when API-side launch monitoring was interrupted.
+                history_status_by_job = _read_nextflow_history_statuses(
+                    [str(job.id) for job in running_jobs]
+                )
+
                 # Cross-check against launcher-tracked Nextflow processes.
                 # This prevents stale "completed" reconciliation when ps parsing
                 # misses a still-active process.
@@ -878,7 +1094,6 @@ class GPUOrchestrator:
                 for line in all_processes.split('\n'):
                     if 'seq_design.py' in line or 'nextflow' in line:
                         # Try to extract gpu_id from the process args
-                        import re
                         gpu_match = re.search(r'gpu_id[=\s]+(\d+)', line)
                         if gpu_match:
                             gpu_id = int(gpu_match.group(1))
@@ -914,10 +1129,23 @@ class GPUOrchestrator:
                     if not job_is_running and job.started_at:
                         age_seconds = (datetime.utcnow() - job.started_at).total_seconds()
                         if age_seconds > 60:  # Only mark complete if running > 1 min
-                            failure_reason = None
-                            if job.error_message:
+                            history_status = history_status_by_job.get(str(job.id))
+                            history_outcome = None
+                            history_note = None
+                            if history_status:
+                                status_token, duration = history_status
+                                duration_suffix = f", duration {duration}" if duration else ""
+                                if status_token == "ERR":
+                                    history_outcome = "failed"
+                                    history_note = f"Reconciled from .nextflow/history (ERR{duration_suffix})"
+                                elif status_token == "OK":
+                                    history_outcome = "completed"
+                                    history_note = f"Reconciled from .nextflow/history (OK{duration_suffix})"
+
+                            failure_reason = history_note if history_outcome == "failed" else None
+                            if failure_reason is None and job.error_message:
                                 failure_reason = str(job.error_message)
-                            elif job.output_dir:
+                            elif failure_reason is None and history_outcome != "completed" and job.output_dir:
                                 try:
                                     out_dir = Path(job.output_dir)
                                     nf_log = out_dir / "nextflow.log"
@@ -929,6 +1157,7 @@ class GPUOrchestrator:
                                             "ERROR ~ Error executing process",
                                             "terminated with an error exit status",
                                             "Nextflow exited with code",
+                                            "CUDA out of memory",
                                         )
                                         for marker in error_markers:
                                             if marker in tail:
@@ -941,6 +1170,7 @@ class GPUOrchestrator:
                                 if job.status == "running":
                                     job.status = "failed"
                                 job.queue_status = "failed"
+                                job.error_message = failure_reason
                                 job.completed_at = datetime.utcnow()
                                 logger.warning(
                                     f"[COMPLETION] {job.name} reconciled as failed "
@@ -952,6 +1182,7 @@ class GPUOrchestrator:
                                     job.status = "completed"
                                 job.current_stage = "Complete"
                                 job.stage_progress = None
+                                job.error_message = None
                                 job.completed_at = datetime.utcnow()
 
                                 # Best-effort safety net: if a top-level workflow completed but
@@ -976,7 +1207,16 @@ class GPUOrchestrator:
                                         logger.warning(
                                             f"[COMPLETION] Reconcile ingestion failed for {job.name}: {ingest_err}"
                                         )
-                                logger.info(f"[COMPLETION] {job.name} completed (no process found, age: {age_seconds:.0f}s)")
+                                if history_note:
+                                    logger.info(
+                                        f"[COMPLETION] {job.name} completed (no process found, "
+                                        f"age: {age_seconds:.0f}s): {history_note}"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"[COMPLETION] {job.name} completed "
+                                        f"(no process found, age: {age_seconds:.0f}s)"
+                                    )
 
                             reconciled += 1
                 
