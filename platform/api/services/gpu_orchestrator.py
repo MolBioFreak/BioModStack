@@ -103,6 +103,7 @@ VRAM_PROFILES = {
 
 # Models that need heavy GPUs (exclude 5060 Ti)
 HEAVY_MODELS = {'af2', 'rfdiffusion', 'rf3'}
+PROTENIX_MODELS = {'protenix', 'protenix_esm', 'protenix_mini_esm'}
 
 
 def estimate_vram(model_type: str, sequence_length: int) -> int:
@@ -339,6 +340,15 @@ def pack_jobs_to_gpus(
     for job in sorted_jobs:
         best_gpu = None
         best_score = -float('inf')
+
+        if job.model_type in PROTENIX_MODELS:
+            has_protenix_gpu = any(
+                GPU_CAPABILITIES.get(g.index, {'supports_protenix': True}).get('supports_protenix', True)
+                for g in active_gpus
+            )
+            if not has_protenix_gpu:
+                logger.warning(f"[PACK] {job.name}: No Protenix-compatible GPU available")
+                continue
         
         # Log if this job has a multi-GPU allowlist
         if job.pinned_gpus is not None and len(job.pinned_gpus) > 0:
@@ -423,6 +433,11 @@ def pack_jobs_to_gpus(
             # Check 3: Model compatibility (heavy models skip 5060 Ti)
             if job.model_type in HEAVY_MODELS:
                 if not gpu_caps.get('supports_heavy', True):
+                    continue
+
+            # Check 3b: Protenix compatibility (skip unsupported GPUs, e.g. Blackwell until stack update)
+            if job.model_type in PROTENIX_MODELS:
+                if not gpu_caps.get('supports_protenix', True):
                     continue
             
             # Check 4: VRAM availability (with per-GPU safety margin)
@@ -834,6 +849,16 @@ class GPUOrchestrator:
                 
                 if not running_jobs:
                     return
+
+                # Cross-check against launcher-tracked Nextflow processes.
+                # This prevents stale "completed" reconciliation when ps parsing
+                # misses a still-active process.
+                active_launch_jobs = set()
+                try:
+                    from services.nextflow import get_running_jobs
+                    active_launch_jobs = set(get_running_jobs().keys())
+                except Exception as proc_err:
+                    logger.debug(f"[COMPLETION] Could not query launcher running jobs: {proc_err}")
                 
                 # Get all running processes once (expensive operation)
                 try:
@@ -862,6 +887,10 @@ class GPUOrchestrator:
                 reconciled = 0
                 for job in running_jobs:
                     job_is_running = False
+
+                    # Method 0: Trust launcher's active process registry.
+                    if job.id in active_launch_jobs:
+                        job_is_running = True
                     
                     # Method 1: Check if job ID appears in any process (Nextflow uses --job_id UUID)
                     # Also check job name as fallback for non-Nextflow processes

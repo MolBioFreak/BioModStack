@@ -20,7 +20,7 @@ export interface MSASettings {
 export const MSA_DEFAULTS: Record<string, MSASettings> = {
     structure_prediction: {
         use_msa: true,
-        msa_preset: 'balanced',
+        msa_preset: 'fast',
         msa_min_depth_warning: 100,
         msa_min_depth_fail: 0,
     },
@@ -38,7 +38,7 @@ export const MSA_DEFAULTS: Record<string, MSASettings> = {
     },
     bindcraft: {
         use_msa: true,
-        msa_preset: 'balanced',
+        msa_preset: 'fast',
         msa_min_depth_warning: 100,
         msa_min_depth_fail: 0,
     },

@@ -775,14 +775,14 @@ async def launch_nextflow_job(
                     # Wait for process to fully exit
                     exit_code = await process.wait()
                 finally:
-                    # Remove from running processes
-                    _running_processes.pop(job_id, None)
+                    pass
 
                 lock_failed = (
                     exit_code != 0
                     and any(resume_lock_pattern in ln for ln in attempt_log)
                 )
                 if lock_failed and attempt < total_attempts:
+                    _running_processes.pop(job_id, None)
                     logger.warning(
                         f"[JOB {job_id}] Nextflow resume lock contention detected; retrying launch."
                     )
@@ -810,11 +810,14 @@ async def launch_nextflow_job(
                     logger.info(f"Job {job_id} was cancelled, keeping CANCELLED status")
                     job.queue_status = 'cancelled'
                     
-                elif job.status == JobStatus.RUNNING.value:
+                else:
                     if exit_code == 0:
+                        # Allow launcher finalization to heal stale reconciliations where
+                        # the orchestrator may have prematurely marked this job complete.
                         job.status = JobStatus.COMPLETED.value
-                        job.queue_status = 'completed'  # Update queue_status so job leaves the queue UI
-                        job.current_stage = "Complete" # Clear stage
+                        job.queue_status = 'completed'
+                        job.current_stage = "Complete"
+                        job.error_message = None
                         
                         # Ingest results into Design table
                         try:
@@ -845,13 +848,13 @@ async def launch_nextflow_job(
                     # Check for cancellation exit codes (SIGTERM=15/-15/143, SIGKILL=9/-9/137)
                     elif exit_code in (-15, -9, 143, 137):
                         job.status = JobStatus.CANCELLED.value
-                        job.queue_status = 'cancelled'  # Update queue_status
+                        job.queue_status = 'cancelled'
                         job.error_message = "Job cancelled by user"
                         logger.info(f"Job {job_id} exit code {exit_code} interpreted as CANCELLED")
                         
                     else:
                         job.status = JobStatus.FAILED.value
-                        job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
+                        job.queue_status = 'failed'
                         resume_lock_line = next(
                             (ln.strip() for ln in full_log if "Unable to acquire lock on session with ID" in ln),
                             None,
@@ -869,6 +872,7 @@ async def launch_nextflow_job(
                 
                 job.completed_at = datetime.utcnow()
                 await session.commit()
+                _running_processes.pop(job_id, None)
                 
         except Exception as e:
             logger.exception(f"Error running job {job_id}")

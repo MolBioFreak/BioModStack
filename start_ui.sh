@@ -20,6 +20,9 @@ if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
 fi
 
+# Fan-control backend defaults to CoolerControl unless explicitly overridden.
+export BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-coolercontrol}"
+
 check_port() {
     local port=$1
     if lsof -i :$port > /dev/null; then

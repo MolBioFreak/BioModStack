@@ -13,21 +13,27 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
         python3-venv \
         python3-pip \
         build-essential \
-        cmake
+        cmake \
+        libopenbabel-dev \
+        openbabel \
+        python3-openbabel \
+        swig
 
     # Install UV package manager (10-100x faster than pip)
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="/root/.local/bin:$PATH"
 
-    # Create and activate virtual environment
-    python3.10 -m venv /opt/venv
+    # Create venv with system-site-packages so apt-installed openbabel is visible
+    python3.10 -m venv --system-site-packages /opt/venv
     . /opt/venv/bin/activate
 
     # ──────────────────────────────────────────────────────────────────────────
-    # PyTorch with CUDA 12.8 for RTX 5090 (sm_120 / Blackwell) support
+    # PyTorch 2.7.0 with CUDA 12.8 — first release with sm_120 (Blackwell)
+    # Pinned to 2.7.0 because DGL CUDA wheels only go up to torch-2.5/cu124
+    # but cu124 wheels are forward-compatible with CUDA 12.8 runtime
     # ──────────────────────────────────────────────────────────────────────────
     uv pip install --compile --no-cache-dir \
-        torch torchvision torchaudio \
+        "torch==2.7.0" "torchvision==0.22.0" "torchaudio==2.7.0" \
         --index-url https://download.pytorch.org/whl/cu128
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -37,34 +43,11 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     uv pip install --compile --no-cache-dir "numpy>=1.23,<2.0"
 
     # ──────────────────────────────────────────────────────────────────────────
-    # DGL — graph neural network library required by RFDpoly's SE3Transformer
-    # DGL 2.2.1 from PyPI — its graphbolt C++ lib is compiled for PyTorch ≤2.5
-    # but RFDpoly only uses core graph ops (DGLGraph, edge_softmax, AvgPooling)
-    # Patches: (1) stub torchdata.datapipes  (2) gut graphbolt/__init__.py
+    # DGL with CUDA support — install from DGL's cu124 wheel index
+    # cu124 wheels are binary-compatible with CUDA 12.8 runtime
+    # Must use --find-links and allow the wheel to match torch 2.7
     # ──────────────────────────────────────────────────────────────────────────
-    uv pip install --compile --no-cache-dir dgl
-
-    # Locate DGL package dir WITHOUT importing it (import itself triggers the failure)
-    DGL_DIR=$(python3 -c "import importlib.util; print(importlib.util.find_spec('dgl').submodule_search_locations[0])")
-
-    # (1) Create torchdata.datapipes stub — DGL's dataloader imports IterDataPipe from it
-    SITE_DIR=$(python3 -c "import site; print(site.getsitepackages()[0])")
-    mkdir -p "$SITE_DIR/torchdata/datapipes/iter"
-    cat > "$SITE_DIR/torchdata/__init__.py" << 'EOF'
-"""Stub torchdata for DGL compatibility with PyTorch 2.10+"""
-EOF
-    cat > "$SITE_DIR/torchdata/datapipes/__init__.py" << 'EOF'
-"""Stub datapipes"""
-EOF
-    cat > "$SITE_DIR/torchdata/datapipes/iter/__init__.py" << 'EOF'
-"""Stub iter datapipes"""
-from torch.utils.data import IterableDataset as IterDataPipe
-EOF
-
-    # (2) Gut graphbolt/__init__.py — prevents C++ lib load mismatch
-    cat > "$DGL_DIR/graphbolt/__init__.py" << 'EOF'
-"""Patched: skips C++ graphbolt lib load for PyTorch 2.10+ compatibility."""
-EOF
+    pip install dgl -f https://data.dgl.ai/wheels/torch-2.5/cu124/repo.html
 
     # ──────────────────────────────────────────────────────────────────────────
     # RFDpoly dependencies (from original SE3nv container package list)
@@ -81,7 +64,12 @@ EOF
         assertpy \
         deepdiff \
         wandb \
-        prody
+        prody \
+        pyrsistent \
+        networkx \
+        python-dateutil \
+        pyyaml \
+        opt-einsum-fx
 
     # Cleanup
     rm -rf /var/lib/apt/lists/*

@@ -942,9 +942,14 @@ workflow structure_prediction_wf {
 
     main:
     def pred_method = params.pred_method ?: 'boltz'
-    def boltz_use_msa = params.boltz_use_msa ?: false
-    def rf3_use_msa = params.rf3_use_msa ?: false
-    def protenix_use_msa = params.protenix_use_msa ?: true
+    def toBool = { v, defVal ->
+        if (v == null) return defVal
+        if (v instanceof Boolean) return v
+        return v.toString().equalsIgnoreCase('true')
+    }
+    def boltz_use_msa = toBool(params.boltz_use_msa, false)
+    def rf3_use_msa = toBool(params.rf3_use_msa, false)
+    def protenix_use_msa = toBool(params.protenix_use_msa, true)
 
     structures = channel.empty()
 

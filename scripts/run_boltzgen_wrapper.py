@@ -96,13 +96,52 @@ def cif_to_pdb(cif_path: Path, pdb_path: Path):
         print(f"Warning: Fallback CIF to PDB conversion failed for {cif_path}: {e}")
         return False
 
-def create_metadata_json(csv_path: Path, output_dir: Path):
+def create_metadata_json(
+    csv_path: Path,
+    output_dir: Path,
+    known_design_ids: set[str] | None = None,
+    batch_prefix: str = "",
+):
     """Convert BoltzGen metrics CSV to JSON metadata files."""
     try:
         import pandas as pd
         df = pd.read_csv(csv_path)
         for _, row in df.iterrows():
-            design_id = row.get('id', row.get('file_name', 'unknown')).replace('.cif', '')
+            base_id = str(row.get('id', row.get('file_name', 'unknown'))).replace('.cif', '')
+            file_name = str(row.get('file_name', '')).replace('.cif', '')
+            final_rank = row.get('final_rank', None)
+
+            # BoltzGen final-ranked CIFs are typically named rank{N}_{base}.cif.
+            candidate_ids = []
+            if final_rank is not None and str(final_rank) not in {"", "nan", "None"}:
+                try:
+                    rank_num = int(float(final_rank))
+                    rank_base = file_name or base_id
+                    candidate_ids.append(f"rank{rank_num}_{rank_base}")
+                except Exception:
+                    pass
+
+            if file_name:
+                candidate_ids.append(file_name)
+            candidate_ids.append(base_id)
+
+            # De-duplicate while preserving order.
+            deduped = []
+            for cid in candidate_ids:
+                if cid not in deduped:
+                    deduped.append(cid)
+            candidate_ids = deduped
+
+            design_id = None
+            for cid in candidate_ids:
+                prefixed = f"{batch_prefix}{cid}" if batch_prefix else cid
+                if known_design_ids and prefixed in known_design_ids:
+                    design_id = prefixed
+                    break
+            if design_id is None:
+                fallback = candidate_ids[0] if candidate_ids else base_id
+                design_id = f"{batch_prefix}{fallback}" if batch_prefix else fallback
+
             metadata = {
                 'design_id': design_id,
                 'designed_sequence': row.get('designed_sequence', ''),
@@ -311,6 +350,9 @@ def main():
     report_stage("design", "starting", args.job_id, f"Processing {len(config_files)} configs, {args.num_designs} designs each")
     
     # Process each config in the batch
+    successful_configs = 0
+    failed_configs = 0
+
     for i, config_path in enumerate(config_files):
         config_name = Path(config_path).stem
         batch_out_dir = Path(args.out_dir) / f"batch_{i}_{config_name}"
@@ -367,10 +409,17 @@ def main():
         ret = os.system(cmd)
         
         if ret != 0:
+            failed_configs += 1
             report_stage("design", "error", args.job_id, f"Config {i+1} failed (code {ret})")
             print(f"Warning: BoltzGen failed for {config_path} (code {ret}), continuing with next...")
         else:
+            successful_configs += 1
             report_stage("design", "complete", args.job_id, f"Config {i+1} complete")
+
+    if successful_configs == 0:
+        msg = f"All {failed_configs} BoltzGen config(s) failed"
+        report_stage("design", "error", args.job_id, msg)
+        raise SystemExit(msg)
         
     # Stage 2-4 happen inside BoltzGen CLI (inverse_folding, design_folding, folding)
     # Report completion of internal BoltzGen stages
@@ -393,43 +442,67 @@ def main():
         batch_dirs = [Path(args.out_dir)]
     
     cif_converted = 0
-    processed_names = set()
+    converted_design_ids = set()
     
     for batch_dir in batch_dirs:
-        # Find CIF files in each batch's output locations
-        search_dirs = [
-            batch_dir / "final_ranked_designs",
+        # Prefer final ranked outputs; fallback to intermediate outputs.
+        preferred_globs = [
+            batch_dir / "final_ranked_designs" / "final_30_designs",
+            batch_dir / "final_ranked_designs" / "intermediate_ranked_10_designs",
+        ]
+        fallback_globs = [
             batch_dir / "intermediate_designs_inverse_folded",
             batch_dir / "intermediate_designs",
-            batch_dir
+            batch_dir,
         ]
-        
-        for search_dir in search_dirs:
-            if not search_dir.exists():
+
+        candidate_cifs = []
+        for search_dir in preferred_globs:
+            if search_dir.exists():
+                candidate_cifs.extend(search_dir.rglob("*.cif"))
+
+        if not candidate_cifs:
+            for search_dir in fallback_globs:
+                if search_dir.exists():
+                    candidate_cifs.extend(search_dir.rglob("*.cif"))
+
+        if not candidate_cifs:
+            continue
+
+        # Remove duplicate paths and "before_refolding" mirrors.
+        unique_paths = []
+        seen_paths = set()
+        for cif in candidate_cifs:
+            if "/before_refolding/" in str(cif):
                 continue
-            for cif in search_dir.glob("*.cif"):
-                # Skip input template CIFs (no numeric suffix) - only process actual designs
-                # Designs are named like: boltzgen_input_0.cif, boltzgen_input_1.cif, etc.
-                import re
-                if not re.search(r'_\d+$', cif.stem):
-                    print(f"Skipping input template: {cif.name}")
-                    continue
-                
-                if cif.stem in processed_names:
-                    continue
-                # Prefix with batch name to avoid collisions
-                batch_prefix = batch_dir.name.replace("batch_", "b") + "_" if len(batch_dirs) > 1 else ""
-                pdb_name = f"{batch_prefix}{cif.stem}.pdb"
-                pdb_path = designs_dir / pdb_name
-                
-                # Copy original CIF for zero data loss (Viewer prefers this for complexes)
-                cif_dest_name = f"{batch_prefix}{cif.stem}.cif"
-                shutil.copy(cif, designs_dir / cif_dest_name)
-                
-                if cif_to_pdb(cif, pdb_path):
-                    print(f"Converted: {cif.name} -> {pdb_name}")
-                    cif_converted += 1
-                    processed_names.add(cif.stem)
+            key = str(cif.resolve())
+            if key not in seen_paths:
+                unique_paths.append(cif)
+                seen_paths.add(key)
+
+        batch_prefix = batch_dir.name.replace("batch_", "b") + "_" if len(batch_dirs) > 1 else ""
+
+        for cif in unique_paths:
+            out_stem = f"{batch_prefix}{cif.stem}" if batch_prefix else cif.stem
+
+            # Ensure uniqueness if same stem appears multiple times.
+            suffix = 1
+            unique_stem = out_stem
+            while unique_stem in converted_design_ids:
+                suffix += 1
+                unique_stem = f"{out_stem}_{suffix}"
+
+            pdb_name = f"{unique_stem}.pdb"
+            pdb_path = designs_dir / pdb_name
+
+            # Copy original CIF for zero data loss (Viewer prefers this for complexes)
+            cif_dest_name = f"{unique_stem}.cif"
+            shutil.copy(cif, designs_dir / cif_dest_name)
+
+            if cif_to_pdb(cif, pdb_path):
+                print(f"Converted: {cif.name} -> {pdb_name}")
+                cif_converted += 1
+                converted_design_ids.add(unique_stem)
     
     if cif_converted == 0:
         print("Warning: No CIF files converted to PDB")
@@ -443,7 +516,13 @@ def main():
         for loc in [batch_dir / "final_ranked_designs" / "all_designs_metrics.csv",
                     batch_dir / "intermediate_designs_inverse_folded" / "metrics.csv"]:
             if loc.exists():
-                create_metadata_json(loc, designs_dir)
+                batch_prefix = batch_dir.name.replace("batch_", "b") + "_" if len(batch_dirs) > 1 else ""
+                create_metadata_json(
+                    loc,
+                    designs_dir,
+                    known_design_ids=converted_design_ids,
+                    batch_prefix=batch_prefix,
+                )
                 print(f"Created JSON metadata from {loc}")
                 csv_found = True
                 break

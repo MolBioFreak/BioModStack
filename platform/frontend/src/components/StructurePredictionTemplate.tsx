@@ -15,6 +15,12 @@ interface StructurePredictionTemplateProps {
 export function StructurePredictionTemplate({ onBack, initialValues }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const normalizeProtenixModel = (model?: string) => {
+        if (!model) return 'protenix_base_20250630_v1.0.0';
+        if (model === 'protenix_base_20241211_v0.2.1') return 'protenix_base_default_v1.0.0';
+        if (model === 'protenix_esm_20241211_v0.2.1') return 'protenix_mini_esm_v0.5.0';
+        return model;
+    };
 
     // Core state
     const [jobName, setJobName] = useState(initialValues?.name || 'structure_prediction');
@@ -41,7 +47,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [rf3NumSamples, setRf3NumSamples] = useState(initialValues?.rf3_num_samples ?? 1);
 
     // Protenix parameters
-    const [protenixModelWeights, setProtenixModelWeights] = useState(initialValues?.protenix_model_weights || 'protenix_base_20250630_v1.0.0');
+    const [protenixModelWeights, setProtenixModelWeights] = useState(normalizeProtenixModel(initialValues?.protenix_model_weights));
     const [protenixSeeds, setProtenixSeeds] = useState(initialValues?.protenix_seeds || '42');
     const [protenixNSample, setProtenixNSample] = useState(initialValues?.protenix_n_sample ?? 5);
     const [protenixNStep, setProtenixNStep] = useState(initialValues?.protenix_n_step ?? 200);
@@ -57,7 +63,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
 
     // MSA Quality Options (advanced)
     const [showMsaOptions, setShowMsaOptions] = useState(false);
-    const [msaPreset, setMsaPreset] = useState<'maximum' | 'balanced' | 'fast'>(initialValues?.msa_preset || 'balanced');
+    const [msaPreset, setMsaPreset] = useState<'maximum' | 'balanced' | 'fast'>(initialValues?.msa_preset || 'fast');
     const [msaTaxonomy, setMsaTaxonomy] = useState<string>(initialValues?.msa_taxon_list || '');
     // Empty means "use preset default" from run_local_msa.py
     const [msaEvalue, setMsaEvalue] = useState<string>(initialValues?.msa_evalue?.toString() || '');
@@ -153,7 +159,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             ((predictor === 'rf3' || predictor === 'both' || predictor === 'all') && rf3UseMsa) ||
             ((predictor === 'protenix' || predictor === 'all') && protenixUseMsa);
         if (msaNeeded) {
-            params.msa_preset = msaPreset;  // Balanced (default), Maximum, or Fast
+            params.msa_preset = msaPreset;  // Fast (default), Balanced, or Maximum
             if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
             if (msaEvalue) params.msa_evalue = parseFloat(msaEvalue);
             if (msaMinSeqId) params.msa_min_seq_id = parseFloat(msaMinSeqId);
@@ -616,10 +622,10 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                     onChange={(e) => setProtenixModelWeights(e.target.value)}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 >
-                                    <option value="protenix_base_20250630_v1.0.0">Base v1.0.0 (Latest)</option>
-                                    <option value="protenix_base_20241211_v0.2.1">Base v0.2.1 (CASP16)</option>
-                                    <option value="protenix_esm_20241211_v0.2.1">ESM v0.2.1 (No-MSA)</option>
+                                    <option value="protenix_base_20250630_v1.0.0">Base 2025-06-30 v1.0.0 (Latest)</option>
+                                    <option value="protenix_base_default_v1.0.0">Base Default v1.0.0</option>
                                     <option value="protenix_mini_esm_v0.5.0">Mini ESM v0.5.0 (Light)</option>
+                                    <option value="protenix_mini_default_v0.5.0">Mini Default v0.5.0</option>
                                 </select>
                             </div>
                             <div>
@@ -631,7 +637,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                         setProtenixUseMsa(useMsa);
                                         // Auto-switch to ESM model when MSA disabled
                                         if (!useMsa && !protenixModelWeights.includes('esm')) {
-                                            setProtenixModelWeights('protenix_esm_20241211_v0.2.1');
+                                            setProtenixModelWeights('protenix_mini_esm_v0.5.0');
                                         }
                                     }}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
@@ -652,6 +658,12 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                 </select>
                             </div>
                         </div>
+                        {protenixUseTemplate && (
+                            <p className="text-xs text-amber-300/90">
+                                Template mode needs local mmCIF data at <code className="text-amber-200">.protenix_cache/mmcif</code>. If this
+                                directory is empty, submission will be rejected.
+                            </p>
+                        )}
 
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <div>
