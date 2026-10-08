@@ -200,7 +200,13 @@ class MetadataConverter:
             logging.info("Creating DataFrame from combined entries")
             # Preserve canonical nullable integer ranks; float coercion would
             # turn rank 0 into "0.0" and invalidate the terminal identity.
-            df = pd.DataFrame(list(combined_entries.values()), dtype=object)
+            csv_rows = [
+                {key: json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
+                 if isinstance(value, (dict, list)) else value
+                 for key, value in row.items()}
+                for row in combined_entries.values()
+            ]
+            df = pd.DataFrame(csv_rows, dtype=object)
             logging.debug(f"Initial DataFrame shape: {df.shape}")
 
             # Column Cleaning
