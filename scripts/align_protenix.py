@@ -81,12 +81,81 @@ def get_ca_atoms_by_key(structure, chains: Iterable[str] | None = None):
     return ca_atoms
 
 
+def get_ca_atoms_by_chain_order(structure, chains: Iterable[str] | None = None):
+    allowed = set(chains) if chains is not None else None
+    ca_atoms = {}
+    for model in structure:
+        for chain in model:
+            if allowed is not None and chain.id not in allowed:
+                continue
+            ordered = []
+            for residue in chain:
+                if "CA" not in residue:
+                    continue
+                ordered.append(residue["CA"])
+            if ordered:
+                ca_atoms[chain.id] = ordered
+    return ca_atoms
+
+
+def renumber_mobile_residues_by_order(ref_structure, mobile_structure, chains: Iterable[str] | None = None) -> bool:
+    allowed = set(chains) if chains is not None else None
+    changed = False
+    ref_by_chain = {}
+    mobile_by_chain = {}
+
+    for model in ref_structure:
+        for chain in model:
+            if allowed is not None and chain.id not in allowed:
+                continue
+            residues = [res for res in chain if "CA" in res]
+            if residues:
+                ref_by_chain[chain.id] = residues
+
+    for model in mobile_structure:
+        for chain in model:
+            if allowed is not None and chain.id not in allowed:
+                continue
+            residues = [res for res in chain if "CA" in res]
+            if residues:
+                mobile_by_chain[chain.id] = residues
+
+    for chain_id in sorted(set(ref_by_chain) & set(mobile_by_chain)):
+        ref_residues = ref_by_chain[chain_id]
+        mobile_residues = mobile_by_chain[chain_id]
+        if len(ref_residues) != len(mobile_residues):
+            continue
+        for ref_residue, mobile_residue in zip(ref_residues, mobile_residues):
+            if mobile_residue.id != ref_residue.id:
+                mobile_residue.id = ref_residue.id
+                changed = True
+
+    return changed
+
+
 def get_matched_ca_atoms(ref_structure, mobile_structure, chains: list[str] | None = None):
     ref_map = get_ca_atoms_by_key(ref_structure, chains=chains)
     mobile_map = get_ca_atoms_by_key(mobile_structure, chains=chains)
     common_keys = sorted(set(ref_map.keys()) & set(mobile_map.keys()), key=lambda k: (k[0], k[1], k[2]))
 
     if len(common_keys) < 3:
+        ref_ordered = get_ca_atoms_by_chain_order(ref_structure, chains=chains)
+        mobile_ordered = get_ca_atoms_by_chain_order(mobile_structure, chains=chains)
+        shared_chains = [chain_id for chain_id in ref_ordered if chain_id in mobile_ordered]
+
+        if shared_chains:
+            ref_atoms = []
+            mobile_atoms = []
+            for chain_id in shared_chains:
+                ref_chain_atoms = ref_ordered[chain_id]
+                mobile_chain_atoms = mobile_ordered[chain_id]
+                if len(ref_chain_atoms) != len(mobile_chain_atoms):
+                    continue
+                ref_atoms.extend(ref_chain_atoms)
+                mobile_atoms.extend(mobile_chain_atoms)
+            if len(ref_atoms) >= 3 and len(ref_atoms) == len(mobile_atoms):
+                return ref_atoms, mobile_atoms
+
         region = f"chains {chains}" if chains is not None else "all chains"
         raise ValueError(
             f"Insufficient matched CA atoms in {region}: "
@@ -190,6 +259,12 @@ def align_structure(args):
                         f"design_chains={sorted(ref_chain_ids)} protenix_chains={sorted(mobile_chain_ids)}"
                     )
 
+            renumber_mobile_residues_by_order(
+                ref_structure,
+                mobile_structure,
+                chains=sorted(set(binder_chains + target_chains)),
+            )
+
             ref_target, mobile_target = get_matched_ca_atoms(ref_structure, mobile_structure, target_chains)
             superimposer = Superimposer()
             superimposer.set_atoms(ref_target, mobile_target)
@@ -211,6 +286,7 @@ def align_structure(args):
                 "protenix_binder_rmsd": round(rmsd_binder, 2),
             }
         else:
+            renumber_mobile_residues_by_order(ref_structure, mobile_structure, chains=None)
             ref_atoms, mobile_atoms = get_matched_ca_atoms(ref_structure, mobile_structure, None)
             superimposer = Superimposer()
             superimposer.set_atoms(ref_atoms, mobile_atoms)

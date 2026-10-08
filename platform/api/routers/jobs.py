@@ -2070,26 +2070,21 @@ async def get_children_status(
         - child_output_dirs: List of output directories for aggregation
         - success_rate: Percentage of children that completed successfully
     """
-    from sqlalchemy import or_
-    
-    # Build query for children - match by parent_id OR batch_name
-    if batch_name:
-        # Resume mode: search by batch_name to find children from original run
-        query = select(Job).where(
-            or_(
-                Job.parent_job_id == parent_id,
-                Job.batch_name == batch_name
-            )
-        )
-    else:
-        # Normal mode: just search by parent_id
-        query = select(Job).where(Job.parent_job_id == parent_id)
-    
+    # Prefer exact parent matches. Only fall back to batch_name for resume cases
+    # where the current parent has no children of its own yet.
+    query = select(Job).where(Job.parent_job_id == parent_id)
     if stage:
         query = query.where(Job.child_stage == stage)
-    
+
     result = await session.execute(query)
     children = result.scalars().all()
+
+    if not children and batch_name:
+        fallback_query = select(Job).where(Job.batch_name == batch_name)
+        if stage:
+            fallback_query = fallback_query.where(Job.child_stage == stage)
+        fallback_result = await session.execute(fallback_query)
+        children = fallback_result.scalars().all()
     
     if not children:
         return {
