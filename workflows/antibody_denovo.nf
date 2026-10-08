@@ -846,9 +846,14 @@ process StageStructureValidationArtifacts {
     path "validation_artifacts", emit: dir
 
     script:
+    def pdbList = (pdbs instanceof Collection ? pdbs : [pdbs]).collect { it.toString() }.join('\n')
     """
     mkdir -p validation_artifacts
-    for pdb in ${pdbs}; do
+    cat > pdbs.list <<'EOF'
+${pdbList}
+EOF
+    while IFS= read -r pdb; do
+        [ -n "\$pdb" ] || continue
         [ -f "\$pdb" ] || continue
         base="\$(basename "\$pdb")"
         stem="\${base%.*}"
@@ -859,7 +864,7 @@ process StageStructureValidationArtifacts {
                 cp "\$sibling" "validation_artifacts/\${stem}.\$ext"
             fi
         done
-    done
+    done < pdbs.list
     """
 }
 
@@ -994,7 +999,8 @@ process SpawnChildJobs {
     SPAWN_EXIT=\${PIPESTATUS[0]}
     
     if [ "\$SPAWN_EXIT" -eq 0 ]; then
-        echo '{"spawned_jobs": '\$PDB_COUNT', "status": "complete", "error": null}' > spawn_result.json
+        CREATED_CHILDREN=\$(awk 'index(\$0, "[SPAWN] Created ") == 1 {count++} END {print count+0}' spawn.log)
+        echo '{"spawned_jobs": '\$CREATED_CHILDREN', "status": "complete", "error": null}' > spawn_result.json
     else
         echo '{"spawned_jobs": 0, "status": "failed", "error": "spawn script exited with '\$SPAWN_EXIT'"}' > spawn_result.json
     fi
@@ -1034,6 +1040,36 @@ process WaitAndAggregateChildResults {
     echo "Waiting for ${expected_child_count} child validation jobs to complete..."
     
     mkdir -p validated_designs intermediates/boltz intermediates/scores
+    declare -A COPIED_BASENAMES
+
+    choose_dest_name() {
+        local child_idx="\$1"
+        local filename="\$2"
+        local stem="\${filename%.*}"
+        local ext=""
+        if [ "\$stem" != "\$filename" ]; then
+            ext=".\${filename##*.}"
+        fi
+        local candidate="validated_designs/\$filename"
+        if [ ! -e "\$candidate" ]; then
+            printf '%s\n' "\$candidate"
+            return
+        fi
+        candidate="validated_designs/\${child_idx}_\$filename"
+        if [ ! -e "\$candidate" ]; then
+            printf '%s\n' "\$candidate"
+            return
+        fi
+        local counter=2
+        while true; do
+            candidate="validated_designs/\${child_idx}_\${stem}_\${counter}\${ext}"
+            if [ ! -e "\$candidate" ]; then
+                printf '%s\n' "\$candidate"
+                return
+            fi
+            counter=\$((counter + 1))
+        done
+    }
     
     # Wait for all children using the wait script
     python3 ${params.code_root}/scripts/wait_for_children.py \\
@@ -1069,22 +1105,36 @@ with open('wait_result.json') as f:
                 if [ -d "\$search_path" ]; then
                     for pdb in \$search_path/*.pdb; do
                         if [ -f "\$pdb" ]; then
-                            # Copy with unique naming
                             basename=\$(basename "\$pdb")
-                            cp "\$pdb" "validated_designs/\${child_idx}_\$basename"
+                            if [ -n "\${COPIED_BASENAMES[\$basename]:-}" ]; then
+                                continue
+                            fi
+                            dest_path=\$(choose_dest_name "\$child_idx" "\$basename")
+                            cp "\$pdb" "\$dest_path"
+                            COPIED_BASENAMES[\$basename]=1
                             TOTAL_PDBS=\$((TOTAL_PDBS + 1))
                         fi
                     done
                     for cif in \$search_path/*.cif; do
                         if [ -f "\$cif" ]; then
                             basename=\$(basename "\$cif")
-                            cp "\$cif" "validated_designs/\${child_idx}_\$basename" 2>/dev/null || true
+                            if [ -n "\${COPIED_BASENAMES[\$basename]:-}" ]; then
+                                continue
+                            fi
+                            dest_path=\$(choose_dest_name "\$child_idx" "\$basename")
+                            cp "\$cif" "\$dest_path" 2>/dev/null || true
+                            COPIED_BASENAMES[\$basename]=1
                         fi
                     done
                     for json_path in \$search_path/*.json; do
                         if [ -f "\$json_path" ]; then
                             basename=\$(basename "\$json_path")
-                            cp "\$json_path" "validated_designs/\${child_idx}_\$basename" 2>/dev/null || true
+                            if [ -n "\${COPIED_BASENAMES[\$basename]:-}" ]; then
+                                continue
+                            fi
+                            dest_path=\$(choose_dest_name "\$child_idx" "\$basename")
+                            cp "\$json_path" "\$dest_path" 2>/dev/null || true
+                            COPIED_BASENAMES[\$basename]=1
                         fi
                     done
                 fi
@@ -1876,7 +1926,7 @@ workflow ANTIBODY_DENOVO {
                 msa_for_spawn = msa_file_ch
 
                 def parent_id = params.job_id ?: "unknown_${System.currentTimeMillis()}"
-                def batch = params.job_name ?: "antibody_batch"
+                def batch = orchestrator_batch_name
 
                 def child_params = groovy.json.JsonOutput.toJson([
                     structure_validator: structure_validator,

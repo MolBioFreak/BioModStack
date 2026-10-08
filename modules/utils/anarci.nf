@@ -42,7 +42,7 @@ chain_timeout = int("${chainTimeout}")
 # Suppress PDB warnings
 warnings.simplefilter("ignore", PDB.PDBExceptions.PDBConstructionWarning)
 
-ANARCII_SUBPROCESS = r"""
+ANARCII_SUBPROCESS = r'''
 import json
 import sys
 
@@ -60,7 +60,7 @@ print(json.dumps({
     "alignments": alignments,
     "hit_tables": hit_tables,
 }))
-"""
+'''
 
 def get_seq_from_chain(chain):
     seq = ""

@@ -36,7 +36,9 @@ process PrepFAMPNN {
         --design_loops "${designLoops}" \\
         ${customCdrFlag} \\
         --protect_tetrad "${protectTetrad}" \\
-        --antibody_chains "${antibodyChains}"
+        --antibody_chains "${antibodyChains}" \\
+        --lock_target_chains "${params.lock_target_chains != null ? params.lock_target_chains : true}" \\
+        --lock_antibody_framework "${params.lock_antibody_framework != null ? params.lock_antibody_framework : true}"
     """
         : """
     # Generate generic constraints (no fixed residues)

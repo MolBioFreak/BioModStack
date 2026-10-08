@@ -341,6 +341,8 @@ process PrepMaturationRedesign {
         --design_mode "${designMode}" \\
         --protect_tetrad "${protectTetrad}" \\
         --antibody_chains "${antibodyChains}" \\
+        --lock_target_chains "${params.lock_target_chains != null ? params.lock_target_chains : true}" \\
+        --lock_antibody_framework "${params.lock_antibody_framework != null ? params.lock_antibody_framework : true}" \\
         --extra_fixed_positions "\${anchors_spec}" \\
         --cdr_positions "\${cdr_positions}" \\
         --cdr_positions_by_loop "${cdr_positions_by_loop}"
@@ -351,8 +353,11 @@ process RunMaturationFAMPNN {
     label 'FAMPNN'
     label 'gpu_light'
     publishDir "${params.out_dir}/run/ppiflow", mode: 'copy', pattern: "*.log"
-    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
-    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
+    // Keep pre-filter redesign artifacts out of the final results directory.
+    // FilterByMaturation is the stage that should decide which matured designs
+    // are exposed as child outputs to the parent workflow and ingester.
+    publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
 
     input:
     tuple val(meta), path(pdbs), path(csv)
@@ -416,9 +421,9 @@ process RunMaturationFAMPNN {
     cp results/*.json matured_jsons/
 
     if [ -n "${params.out_dir}" ]; then
-        mkdir -p "${params.out_dir}/run/ppiflow/results" 2>/dev/null || true
-        cp results/*.pdb "${params.out_dir}/run/ppiflow/results/" 2>/dev/null || true
-        cp results/*.json "${params.out_dir}/run/ppiflow/results/" 2>/dev/null || true
+        mkdir -p "${params.out_dir}/run/ppiflow/redesign_debug" 2>/dev/null || true
+        cp results/*.pdb "${params.out_dir}/run/ppiflow/redesign_debug/" 2>/dev/null || true
+        cp results/*.json "${params.out_dir}/run/ppiflow/redesign_debug/" 2>/dev/null || true
     fi
     """
 }
@@ -494,7 +499,7 @@ process ScorePartialFlowImprovement {
 process FilterByMaturation {
     label 'process_low'
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "filtered_output/*.pdb", saveAs: { fn -> fn.replace('filtered_output/', '') }
-    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*maturation_filter.json"
+    publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "filter_reports/*_maturation_filter.json", saveAs: { fn -> fn.replace('filter_reports/', '') }
 
     input:
     tuple val(meta), path(matured_pdbs), path(score_jsons)

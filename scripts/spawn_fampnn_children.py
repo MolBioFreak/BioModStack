@@ -38,6 +38,26 @@ def _normalize_pinned_gpus(raw_value):
     return normalized or None
 
 
+def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_name: str = None):
+    try:
+        params = {"stage": stage}
+        if batch_name:
+            params["batch_name"] = batch_name
+        resp = requests.get(
+            f"{api_url}/api/jobs/{parent_job_id}/children/status",
+            params=params,
+            timeout=10,
+        )
+        if not resp.ok:
+            return False, [], {}
+        data = resp.json()
+        children = data.get("children", [])
+        return data.get("all_done", False), children, data
+    except Exception as e:
+        print(f"[SPAWN-FAMPNN] Warning: Could not check existing child status: {e}", file=sys.stderr)
+        return False, [], {}
+
+
 def spawn_fampnn_jobs(
     parent_job_id: str,
     pdb_dir: str,
@@ -66,6 +86,33 @@ def spawn_fampnn_jobs(
     if not pdbs:
         print(f"[SPAWN-FAMPNN] No PDBs found in {pdb_dir}", file=sys.stderr)
         return {"status": "error", "message": "No PDBs found"}
+
+    all_done, existing_children, child_status = check_existing_children(
+        parent_job_id, "fampnn", api_url, batch_name=batch_name
+    )
+    existing_count = len(existing_children)
+    if existing_count > 0:
+        if all_done:
+            print(f"[SPAWN-FAMPNN] RESUME: All {existing_count} children already completed.")
+            return {
+                "status": "resumed",
+                "spawned_jobs": 0,
+                "reused_jobs": existing_count,
+                "child_jobs": existing_children,
+                "resumed": True,
+            }
+
+        running = child_status.get("running", 0)
+        pending = child_status.get("pending", 0)
+        if running > 0 or pending > 0:
+            print(f"[SPAWN-FAMPNN] RESUME: {running + pending} children already in progress.")
+            return {
+                "status": "in_progress",
+                "spawned_jobs": 0,
+                "reused_jobs": existing_count,
+                "child_jobs": existing_children,
+                "resumed": True,
+            }
     
     # Check for already-completed FAMPNN jobs for this parent
     # This prevents re-spawning on resume
