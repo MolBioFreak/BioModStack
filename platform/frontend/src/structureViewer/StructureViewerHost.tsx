@@ -104,6 +104,7 @@ export default function StructureViewerHost({
     const [selectedMetricId, setSelectedMetricId] = useState(activeMetricId);
     const [layerVisible, setLayerVisible] = useState(true);
     const [layerOpacity, setLayerOpacity] = useState(1);
+    const [cameraResetToken, setCameraResetToken] = useState(0);
     const filters = controlledFilters ?? localFilters;
     useEffect(() => setSelectedMetricId(activeMetricId), [activeMetricId]);
     const setFilters = (next: StructureFilterState) => { setLocalFilters(next); onFiltersChange?.(next); };
@@ -231,6 +232,7 @@ export default function StructureViewerHost({
         setLayerVisible(true);
         setLayerOpacity(1);
         setFilters(DEFAULT_FILTERS);
+        setCameraResetToken((value) => value + 1);
     };
     const handleResidueClick: NonNullable<MolstarViewerProps['onResidueClick']> = (residue) => {
         const identity: ResidueRef = {
@@ -275,7 +277,7 @@ export default function StructureViewerHost({
 
     return (
         <div className="relative h-full w-full" data-bms-structure-viewer-host="direct-4.5.0">
-            <MolstarViewerImpl {...viewerProps} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} scenePresentation={scenePresentation} onResidueClick={handleResidueClick} />
+            <MolstarViewerImpl {...viewerProps} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} scenePresentation={scenePresentation} cameraResetToken={cameraResetToken} onResidueClick={handleResidueClick} />
             {!showMetricWorkbench && (activeLayer || structureSummaryLayers.length > 0) && onMetricWorkbenchVisibilityChange && (
                 <button
                     type="button"

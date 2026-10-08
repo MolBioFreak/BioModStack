@@ -1211,9 +1211,48 @@ export default function StructureViewerPane({
             }];
         });
     }, [activeJob?.id, selectedDesign, structureAnalysis]);
+    const subunitMeanPlddtLayer = useMemo<MetricLayer | null>(() => {
+        const eligibleChains = Object.entries(chainMetrics).filter(([, metric]) => (
+            typeof metric.avg_plddt === 'number'
+            && Number.isFinite(metric.avg_plddt)
+            && metric.residue_numbers.length > 0
+        ));
+        if (eligibleChains.length < 2) return null;
+        return {
+            descriptor: {
+                id: 'subunit-mean-plddt',
+                label: 'Subunit mean pLDDT',
+                dimension: 'residue-scalar',
+                units: 'score',
+                direction: 'higher_is_better',
+                description: 'Each chain is colored uniformly by its authoritative chain-level mean pLDDT.',
+                valueRange: [0, 100],
+                projectionPolicy: 'direct',
+                normalization: 'none',
+                provenance: {
+                    source: 'BioModStack persisted chain_metrics analysis',
+                    jobId: activeJob?.id,
+                    artifactId: selectedDesign?.id,
+                },
+            },
+            values: eligibleChains.flatMap(([chainId, metric]) => metric.residue_numbers.map((residueNumber) => ({
+                identity: {
+                    documentId: 'primary',
+                    labelAsymId: chainId,
+                    labelSeqId: residueNumber,
+                },
+                value: metric.avg_plddt as number,
+                displayColor: plddtColor(metric.avg_plddt as number),
+            }))),
+        };
+    }, [activeJob?.id, chainMetrics, selectedDesign?.id]);
     const allMetricLayers = useMemo<readonly MetricLayer[]>(
-        () => [...structureScalarMetricLayers, ...pairMetricLayers],
-        [pairMetricLayers, structureScalarMetricLayers],
+        () => [
+            ...structureScalarMetricLayers,
+            ...(subunitMeanPlddtLayer ? [subunitMeanPlddtLayer] : []),
+            ...pairMetricLayers,
+        ],
+        [pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
     );
 
     const topFrustratedResidues = (() => {

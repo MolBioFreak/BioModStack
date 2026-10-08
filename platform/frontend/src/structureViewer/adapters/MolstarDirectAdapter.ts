@@ -475,6 +475,13 @@ export class MolstarDirectAdapter {
         return viewerOk(undefined);
     }
 
+    resetCamera(durationMs = 250): ViewerResult<void> {
+        const canvas = this.requirePlugin().canvas3d;
+        if (!canvas) return viewerUnsupported('Mol* canvas is unavailable for camera reset', 'camera');
+        canvas.requestCameraReset({ durationMs });
+        return viewerOk(undefined);
+    }
+
     dispose(): void {
         if (this.disposed) return;
         this.disposed = true;

@@ -64,6 +64,7 @@ test('structure viewer separates persisted structure summaries from spatial visu
     assert.match(host, /structureSummaryLayers/);
     assert.match(host, /Structure summary/);
     assert.match(host, /setSelection\(null\).*setSelectedMetricId/s);
+    assert.match(host, /setCameraResetToken/);
 });
 
 test('structure tab does not render legacy result-table filter controls outside the viewer', () => {

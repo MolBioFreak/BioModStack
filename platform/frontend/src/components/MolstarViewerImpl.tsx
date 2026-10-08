@@ -63,6 +63,8 @@ export interface MolstarViewerProps {
     measurements?: readonly ViewerMeasurement[];
     /** Complete declarative presentation state owned by the shared scene controller. */
     scenePresentation?: StructureScenePresentation;
+    /** Monotonic token; changing it resets the camera to the complete scene bounds. */
+    cameraResetToken?: number;
     /** Governed, hash-bound MD metadata; playback remains capability-gated by the direct adapter. */
     molecularDynamics?: MDSceneState;
 }
@@ -102,12 +104,14 @@ export default function MolstarViewer({
     onViewerEvent,
     measurements,
     scenePresentation,
+    cameraResetToken,
     molecularDynamics,
 }: MolstarViewerProps) {
     const mountRef = useRef<HTMLDivElement>(null);
     const adapterRef = useRef<MolstarDirectAdapter | null>(null);
     const controllerRef = useRef<StructureSceneController | null>(null);
     const sceneRequestGenerationRef = useRef(0);
+    const appliedCameraResetTokenRef = useRef(cameraResetToken);
     const viewerIdRef = useRef(`molstar-viewer-${crypto.randomUUID()}`);
     const [status, setStatus] = useState<ViewerStatus>('idle');
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -292,6 +296,12 @@ export default function MolstarViewer({
             cancelled = true;
         };
     }, [adapterEpoch, documents, measurements, molecularDynamics, scenePresentation]);
+
+    useEffect(() => {
+        if (status !== 'ready' || cameraResetToken === undefined || cameraResetToken === appliedCameraResetTokenRef.current) return;
+        const result = adapterRef.current?.resetCamera();
+        if (result?.status === 'ok') appliedCameraResetTokenRef.current = cameraResetToken;
+    }, [cameraResetToken, status]);
 
 
     useEffect(() => {
