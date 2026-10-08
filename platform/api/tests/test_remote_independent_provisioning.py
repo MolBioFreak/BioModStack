@@ -50,7 +50,7 @@ async def test_mounted_independent_readback_reuse_corruption_and_staleness(store
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         catalog = (await client.get('/execution-targets/provision/catalog')).json()
         assert {'kind':'model','model_id':'protenix'} in catalog
-        assert all(item['model_id'] != 'boltz2' for item in catalog)
+        assert {'kind':'model','model_id':'boltz2'} in catalog
         assert (await client.get(prefix + '/artifact-inventory')).json() is None
         selection = {'kind':'model','model_id':'protenix'}
         for bad in ({**selection, 'url':'https://example.invalid'}, {**selection, 'path':'/etc/passwd'}):
@@ -142,7 +142,13 @@ def test_launch_and_independent_resolve_identical_reviewed_assets(assets, monkey
     monkeypatch.setattr(bundle,'get_container_dir',lambda: assets[0])
     monkeypatch.setattr(bundle,'get_weights_root',lambda: assets[1])
     monkeypatch.setattr(bundle,'get_data_root',lambda: data)
-    launched = bundle._runtime_assets('protenix','predict',{})
+    from component_runtime import SourceIdentity
+    from services.nextflow import build_selected_execution_plan
+    settings = {'pred_method': 'protenix', 'protenix_use_msa': False, 'run_frustrampnn': False}
+    plan = build_selected_execution_plan(model_id='protenix', mode='predict',
+        entrypoint='workflows/structure_prediction.nf', requested=settings,
+        effective=settings, native_parameters={}, source_identity=SourceIdentity('a'*40, 'b'*40))
+    launched = bundle._runtime_assets('protenix', 'predict', {}, selected_plan=plan)
     records = [r for path, prefix in launched if prefix != 'support-python'
                for r in bundle._records_for_source(path,prefix,'runtime')]
     provisioned = cache.independent_plan(ProvisionSelection(kind='model',model_id='protenix'))

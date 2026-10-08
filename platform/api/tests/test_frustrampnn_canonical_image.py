@@ -139,5 +139,13 @@ def test_canonical_source_used_for_registered_stage(selected, package, monkeypat
     monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(canonical.parents[3]))
     monkeypatch.setenv('BMS_FRUSTRAMPNN_SIF', str(canonical))
     monkeypatch.setattr(runtime, 'FRUSTRAMPNN_RUNTIME_IDENTITY', identity)
-    entries = bundle._runtime_assets('protenix', 'predict', {'run_frustrampnn': True})
+    from test_remote_bundle_runtime_gaps import compile_native
+    from services.frustrampnn.settings import default_settings
+    _, _, job, _, _ = package
+    settings = {'sequence': 'AAAA', 'pred_method': 'protenix', 'protenix_use_msa': False,
+                'gpu_id': job.assigned_gpu,
+                'run_frustrampnn': True, 'frustrampnn_settings': default_settings().model_dump_json()}
+    compile_native(job, settings)  # Also retains real selected source helper bytes in the archive.
+    entries = bundle._runtime_assets('protenix', 'predict', job.native_invocation.native_parameters,
+                                    native_invocation=job.native_invocation)
     assert (canonical, 'containers/frustrampnn.sif') in entries

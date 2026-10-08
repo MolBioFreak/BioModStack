@@ -636,9 +636,11 @@ async def test_dorado_typed_selector_passes_actual_strict_sif_gate(package, loca
     command, native = bundle.compile_remote_dependencies('protenix', 'predict', command,
                                                         native_invocation=job.native_invocation)
     from component_runtime import SelectedDependency
-    fixture_metadata = replace(job.native_invocation.execution_plan.metadata, dependencies=(
-        SelectedDependency('fixture:dorado', 'image', 'dorado.sif', __file__, selector='dorado_runtime_sif'),
-        SelectedDependency('fixture:support', 'support_python', None, __file__)))
+    from test_remote_bundle_runtime_gaps import bundle_metadata_fixture
+    cpu_metadata = bundle_metadata_fixture()
+    fixture_metadata = replace(cpu_metadata, dependencies=cpu_metadata.dependencies + (
+        SelectedDependency('fixture:dorado', 'image', 'dorado.sif',
+            'scripts/dorado_p4_preflight.py', selector='dorado_runtime_sif'),))
     job.model_id = 'ont_basecall_dna'
     monkeypatch.delenv('BMS_NGS_RUNTIME_SIF', raising=False)
     if explicit_selector:

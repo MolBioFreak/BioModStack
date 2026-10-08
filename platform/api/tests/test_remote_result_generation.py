@@ -23,13 +23,15 @@ def job_at(root):
         child_output_dir=None, provenance={})
 
 
-def package(job):
+def package(job, *, state="succeeded"):
+    status = success().model_copy(update={"state": state, "exit_code": 0 if state == "succeeded" else 1})
     artifacts = [dict(relative_path=name, size_bytes=len(data), sha256=hashlib.sha256(data).hexdigest(), role="result")
                  for name, data in [("first.txt", b"first"), ("second.txt", b"second")]]
+    assert status.exit_code is not None and status.completed_at is not None
     manifest = RemoteResultManifest(job_id=job.id, attempt_id=job.remote_attempt_id,
         source_revision=job.execution_source_revision, source_tree=job.execution_source_tree,
         execution_envelope_sha256=job.execution_bundle_sha256, artifacts=artifacts,
-        exit_code=0, completed_at=success().completed_at)
+        exit_code=status.exit_code, completed_at=status.completed_at)
     encoded = manifest.model_dump_json().encode()
     digest = hashlib.sha256(encoded).hexdigest()
     incoming = gen.staging_path(job, digest)
@@ -37,7 +39,7 @@ def package(job):
     (incoming / "result-manifest.json").write_bytes(encoded)
     (incoming / "first.txt").write_bytes(b"first")
     (incoming / "second.txt").write_bytes(b"second")
-    return manifest, incoming, success().model_copy(update={"result_manifest_sha256": digest})
+    return manifest, incoming, status.model_copy(update={"result_manifest_sha256": digest})
 
 
 @pytest.mark.parametrize("point", ["prepared", "prior_moved", "new_moved"])

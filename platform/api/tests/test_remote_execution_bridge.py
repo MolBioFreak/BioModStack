@@ -492,16 +492,10 @@ def test_bundle_preserves_committed_source_and_relocates_managed_paths(
         native_parameters={"input": str(job_input), "out": str(output_dir)},
         entrypoint="main.nf",
     ), source_identity=SourceIdentity(revision, tree))
-    from component_runtime import SelectedDependency, SelectedExecutionMetadata, SelectedExecutionPlan
-    # Declared fixture closure: only the support interpreter is relocated here.
-    # This tests archive/path mechanics, not scientific descriptor completeness.
-    from test_remote_bundle_runtime_gaps import bundle_resource_components_fixture
-    metadata = SelectedExecutionMetadata(
-        availability='fixture', settings_authority=__file__, static_components=bundle_resource_components_fixture(),
-        dynamic_templates=(), dependencies=(SelectedDependency(
-            'fixture:support', 'support_python', None, __file__),),
-        artifact_roles=(), external_services=(), result_contract_json=b'{}',
-        admission_authority=None, retrieval_authority=None, blockers=(), closure_reviewed=True)
+    from component_runtime import SelectedExecutionPlan
+    # Transport-only projection retains the real CPU descriptor closure.
+    from test_remote_bundle_runtime_gaps import bundle_metadata_fixture
+    metadata = bundle_metadata_fixture()
     assert invocation.source_identity is not None and invocation.entrypoint is not None
     invocation = replace(invocation, execution_plan=SelectedExecutionPlan(
         source_identity=invocation.source_identity, workflow='fixture',

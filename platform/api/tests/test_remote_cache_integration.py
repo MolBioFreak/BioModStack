@@ -18,11 +18,10 @@ from dataclasses import replace
 
 
 def cache_only_plan_fixture(invocation):
-    """Typed asset-free view with a real CPU policy for transport-only tests."""
-    from component_runtime import SelectedExecutionMetadata, SelectedExecutionPlan, canonical_bytes
-    from test_remote_bundle_runtime_gaps import bundle_resource_components_fixture
-    metadata = SelectedExecutionMetadata('fixture', 'explicit cache/input test boundary',
-        bundle_resource_components_fixture(), (), (), (), (), b'{}', None, None, ())
+    """Source/support-only CPU projection for transport tests, not science."""
+    from component_runtime import SelectedExecutionPlan, canonical_bytes
+    from test_remote_bundle_runtime_gaps import bundle_metadata_fixture
+    metadata = bundle_metadata_fixture()
     plan = SelectedExecutionPlan(invocation.source_identity, Path(invocation.entrypoint).stem,
         invocation.model_id, invocation.mode, invocation.entrypoint, invocation.requested_json,
         invocation.effective_json, canonical_bytes(invocation.native_parameters), metadata)
@@ -36,7 +35,22 @@ def cache_invocation_fixture():
         native_parameters={}, entrypoint='workflow.nf'),
         source_identity=SourceIdentity('a'*40, 'b'*40)))
 
-from test_remote_bundle_runtime_gaps import package, bundle_resource_components_fixture
+@pytest.mark.parametrize('missing', ['plan', 'descriptors_reviewed', 'dependencies', 'artifact_roles'])
+def test_transport_projection_does_not_bypass_missing_authority(missing):
+    invocation = cache_invocation_fixture()
+    plan = invocation.execution_plan
+    assert plan is not None and plan.complete
+    if missing == 'plan':
+        invocation = replace(invocation, execution_plan=None)
+    else:
+        metadata = replace(plan.metadata, **{missing: False if missing == 'descriptors_reviewed' else ()})
+        invocation = replace(invocation, execution_plan=replace(plan, metadata=metadata))
+    with pytest.raises(bundle_module.RemoteBundleError, match='complete selected native execution plan'):
+        bundle_module.compile_remote_dependencies(invocation.model_id, invocation.mode,
+            list(invocation.command), native_invocation=invocation)
+
+
+from test_remote_bundle_runtime_gaps import package
 from services.remote_execution.bundle import CacheTransferArtifact, TransferPlan, cache_transfer_artifacts, uncached_runtime_transfers
 
 
@@ -210,22 +224,8 @@ def test_prewarm_plan_pins_source_and_excludes_support(tmp_path, monkeypatch, id
 @pytest.mark.asyncio
 async def test_real_bundle_generations_exclude_stale_files(package, local_transport):
     roots, release, job, target, command = package
-    from component_runtime import SelectedDependency, SelectedExecutionMetadata, SelectedExecutionPlan
-    # Explicit lower-layer fixture assets, not a second scientific planner.
-    invocation = job.native_invocation
-    metadata = SelectedExecutionMetadata(
-        availability='fixture', settings_authority=__file__, static_components=bundle_resource_components_fixture(),
-        dynamic_templates=(), dependencies=(
-            SelectedDependency('fixture:image', 'image', 'protenix.sif', __file__),
-            SelectedDependency('fixture:weights', 'weights', 'protenix', __file__),
-            SelectedDependency('fixture:support', 'support_python', None, __file__)),
-        artifact_roles=(), external_services=(), result_contract_json=b'{}',
-        admission_authority=None, retrieval_authority=None, blockers=(), closure_reviewed=True)
-    job.native_invocation = replace(invocation, execution_plan=SelectedExecutionPlan(
-        source_identity=invocation.source_identity, workflow='fixture',
-        model_id=invocation.model_id, mode=invocation.mode, entrypoint=invocation.entrypoint,
-        requested_json=invocation.requested_json, effective_json=invocation.effective_json,
-        native_parameters_json=invocation.native_parameters_json, metadata=metadata))
+    # Reuse the package's reviewed transport projection instead of replacing
+    # it with a second, incomplete metadata double.
     first = bundle_module.prepare_remote_bundle(job=job, target=target, command=command,
                                                   native_invocation=job.native_invocation)
     await cache.stage_cached_bundle(connection=target, bundle=first)
