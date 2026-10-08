@@ -57,6 +57,8 @@ class GeneratedInput:
     payload: bytes
 
     def __post_init__(self) -> None:
+        if type(self.relative_path) is not str or '\x00' in self.relative_path:
+            raise ValueError('generated input path must be text without NUL')
         path = PurePosixPath(self.relative_path)
         if (not self.relative_path or path.is_absolute() or '..' in path.parts
                 or '\\' in self.relative_path or path.as_posix() != self.relative_path
@@ -69,13 +71,50 @@ class GeneratedInput:
                 'sha256': hashlib.sha256(self.payload).hexdigest(), 'role': 'input'}
 
     def materialize(self, root: Path) -> None:
+        from secrets import token_hex
+        from stat import S_ISLNK
+
         root = Path(root).absolute()
-        target = root / self.relative_path
-        # No symlink traversal through either an existing root or its children.
-        for path in (root, *root.parents, target, *target.parents):
-            if path.is_symlink():
-                raise ValueError('generated input materialization cannot traverse symlinks')
-        durable_write(target, self.payload)
+        if '..' in root.parts:
+            raise ValueError('generated input root must not contain parent traversal')
+        # Bind every directory with O_NOFOLLOW. A prior is_symlink() check
+        # followed by a pathname write would permit a concurrent substitution.
+        directory = os.open(root.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            parts = (*root.parts[1:], *PurePosixPath(self.relative_path).parts[:-1])
+            for part in parts:
+                try:
+                    os.mkdir(part, mode=0o755, dir_fd=directory)
+                    os.fsync(directory)
+                except FileExistsError:
+                    pass
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=directory)
+                os.close(directory)
+                directory = child
+            leaf = PurePosixPath(self.relative_path).name
+            try:
+                if S_ISLNK(os.stat(leaf, dir_fd=directory, follow_symlinks=False).st_mode):
+                    raise ValueError('generated input target cannot be a symlink')
+            except FileNotFoundError:
+                pass
+            temporary = '.bms-input-' + token_hex(16)
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory)
+            try:
+                with os.fdopen(fd, 'wb') as handle:
+                    handle.write(self.payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, leaf, src_dir_fd=directory, dst_dir_fd=directory)
+                os.fsync(directory)
+            finally:
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+        finally:
+            os.close(directory)
 
 
 @dataclass(frozen=True)
@@ -106,6 +145,10 @@ class NativeInvocation:
         paths = [item.relative_path for item in self.generated_inputs]
         if len(paths) != len(set(paths)):
             raise ValueError('generated input paths must be unique')
+        path_set = set(paths)
+        if any(parent.as_posix() in path_set for path in paths
+               for parent in PurePosixPath(path).parents if parent.as_posix() != '.'):
+            raise ValueError('generated input files cannot also be parent directories')
         for payload in (self.requested_json, self.effective_json, self.native_parameters_json):
             if type(payload) is not bytes:
                 raise ValueError('native invocation snapshots must be immutable bytes')
