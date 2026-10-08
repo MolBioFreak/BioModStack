@@ -5,6 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUNTIME="${BMS_ONT_CONTAINER_RUNTIME:-docker}"
 TAG="${BMS_ONT_SLOW5TOOLS_IMAGE_TAG:-biomodstack/ont-raw-signal:blue-crab-0.5.0-slow5tools-1.4.0}"
+POLICY_PATH="$REPO_ROOT/platform/api/config/ont_signal_workbench/raw_signal_runtime_policy_v1.json"
+EXPECTED_POLICY_SHA256="6257135ec3f0669f7579e3c1d4d44742fa78c7913d32108b158da08e01ccdc05"
+ACTUAL_POLICY_SHA256="$(sha256sum "$POLICY_PATH" | awk '{print $1}')"
+if [ "$ACTUAL_POLICY_SHA256" != "$EXPECTED_POLICY_SHA256" ]; then
+    echo "ONT raw-signal runtime policy bytes do not match the checked-in authority" >&2
+    exit 69
+fi
 
 case "$RUNTIME" in
     docker|podman) ;;
@@ -17,6 +24,29 @@ if ! command -v "$RUNTIME" >/dev/null 2>&1; then
     echo "Container runtime is unavailable: $RUNTIME" >&2
     exit 69
 fi
+if ! POLICY_VALUES="$(python3 - "$POLICY_PATH" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    policy = json.load(handle)
+runtime_id = policy.get("runtime_id")
+oci_digest = policy.get("oci_digest")
+if (
+    not isinstance(runtime_id, str)
+    or not isinstance(oci_digest, str)
+    or runtime_id != oci_digest
+    or not re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id)
+):
+    raise SystemExit(1)
+print(runtime_id, oci_digest.removeprefix("sha256:"), sep="\t")
+PY
+)"; then
+    echo "ONT raw-signal runtime policy cannot be read or is invalid: $POLICY_PATH" >&2
+    exit 69
+fi
+IFS="$(printf '\t')" read -r APPROVED_RUNTIME_ID APPROVED_DIGEST <<< "$POLICY_VALUES"
 
 "$RUNTIME" build \
     --file "$REPO_ROOT/docker/ont-raw-signal.Dockerfile" \
@@ -34,6 +64,10 @@ esac
 DIGEST="${IMAGE_ID#sha256:}"
 if [ "${#DIGEST}" -ne 64 ]; then
     echo "Built image digest has an invalid length" >&2
+    exit 70
+fi
+if [ "$IMAGE_ID" != "$APPROVED_RUNTIME_ID" ] || [ "$DIGEST" != "$APPROVED_DIGEST" ]; then
+    echo "Built image ID does not match the approved raw-signal runtime policy" >&2
     exit 70
 fi
 
