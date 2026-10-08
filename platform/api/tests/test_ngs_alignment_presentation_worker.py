@@ -490,6 +490,7 @@ def test_product_lifecycle_has_no_deadline_or_automatic_retry_schedule_contract(
 async def test_worker_preserves_legacy_combined_packages_without_adoption_or_rewrite(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    ngs_resources,
     native_http,
 ) -> None:
     from tests.test_ngs_alignment_sessions import _write_governed_alignment_fixture
