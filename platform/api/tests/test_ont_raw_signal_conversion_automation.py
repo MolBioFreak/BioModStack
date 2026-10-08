@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import asyncio
 import hashlib
 import importlib.util
 import inspect
@@ -408,6 +409,208 @@ async def test_live_chunk_registration_is_idempotent_and_queues_one_conversion(
     assert len(representations) == 1
     assert len(jobs) == 1
     assert jobs[0].consumer_id == "ont-live-minknow-conversion"
+
+
+@pytest.mark.asyncio
+async def test_live_chunk_registration_reassesses_failed_derivation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'retry.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    pod5 = tmp_path / "chunk.pod5"
+    pod5.write_bytes(b"closed-pod5")
+    identities = ont_raw_signal.live_pod5_identity_snapshot([str(pod5)])
+    observed_at = datetime.utcnow()
+    monkeypatch.setattr(ont_raw_signal, "_qualification_gate", lambda _snapshot: None)
+    monkeypatch.setattr(
+        ont_raw_signal,
+        "_derivation_resource_snapshot",
+        lambda _run, _source: {"conversion_mode": "live_minknow_pod5_chunk"},
+    )
+    async with session_factory() as session:
+        session.add_all([
+            OntInstrumentRun(
+                id="ont-run-live-retry", position_id="position-1", minknow_run_id="minknow-live",
+                state="running", observed_at=observed_at, observed_generation=2,
+                output_directories={"reads": str(tmp_path)},
+                output_files={"fastq": [], "pod5": [str(pod5)], "bam": []},
+                handoff_ready=False, last_minknow_payload={"acquisition_id": "acquisition-live"},
+            ),
+            OntInstrumentRunEvent(
+                id="ont-event-live-retry", run_id="ont-run-live-retry", event_type="active_observed",
+                state="running", observed_at=observed_at, observed_generation=2,
+                minknow_payload={"acquisition_id": "acquisition-live"},
+                output_files={"fastq": [], "pod5": [str(pod5)], "bam": []},
+            ),
+        ])
+        await session.commit()
+        await ont_raw_signal.register_live_pod5_chunks(
+            session, run_id="ont-run-live-retry", observed_generation=2,
+            stable_paths=[pod5], identity_snapshot=identities,
+        )
+        await session.commit()
+        job = (await session.execute(ont_raw_signal.select(OntRawSignalDerivationJob))).scalar_one()
+        job.state = "failed"
+        job.reason_code = "lease_expired_partial_attempt_discarded"
+        job.completed_at = datetime.utcnow()
+        await session.commit()
+        replay = await ont_raw_signal.register_live_pod5_chunks(
+            session, run_id="ont-run-live-retry", observed_generation=2,
+            stable_paths=[pod5], identity_snapshot=identities,
+        )
+        await session.commit()
+        representations = (await session.execute(
+            ont_raw_signal.select(OntRawSignalRepresentation).where(
+                OntRawSignalRepresentation.source_kind == "minknow_live"
+            )
+        )).scalars().all()
+        await session.refresh(job)
+    await engine.dispose()
+    assert replay == []
+    assert len(representations) == 1
+    assert job.state == "requested"
+    assert job.completed_at is None
+
+
+@pytest.mark.asyncio
+async def test_live_chunk_registration_rejects_intermediate_symlink_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "approved"
+    reads = root / "reads"
+    reads.mkdir(parents=True)
+    pod5 = reads / "chunk.pod5"
+    pod5.write_bytes(b"closed-pod5")
+    identities = ont_raw_signal.live_pod5_identity_snapshot([str(pod5)])
+    outside = tmp_path / "outside"
+    reads.rename(outside)
+    reads.symlink_to(outside, target_is_directory=True)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'escape.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    observed_at = datetime.utcnow()
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        session.add_all([
+            OntInstrumentRun(
+                id="ont-run-live-escape", position_id="position-1", minknow_run_id="minknow-live",
+                state="running", observed_at=observed_at, observed_generation=2,
+                output_directories={"reads": str(root)},
+                output_files={"fastq": [], "pod5": [str(pod5)], "bam": []},
+                handoff_ready=False, last_minknow_payload={"acquisition_id": "acquisition-live"},
+            ),
+            OntInstrumentRunEvent(
+                id="ont-event-live-escape", run_id="ont-run-live-escape", event_type="active_observed",
+                state="running", observed_at=observed_at, observed_generation=2,
+                minknow_payload={"acquisition_id": "acquisition-live"}, output_files={},
+            ),
+        ])
+        await session.commit()
+        registered = await ont_raw_signal.register_live_pod5_chunks(
+            session, run_id="ont-run-live-escape", observed_generation=2,
+            stable_paths=[pod5], identity_snapshot=identities,
+        )
+        representations = (await session.execute(
+            ont_raw_signal.select(OntRawSignalRepresentation).where(
+                OntRawSignalRepresentation.source_kind == "minknow_live"
+            )
+        )).scalars().all()
+    await engine.dispose()
+    assert registered == []
+    assert representations == []
+
+
+@pytest.mark.asyncio
+async def test_live_chunk_registration_waits_for_open_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pod5 = tmp_path / "chunk.pod5"
+    pod5.write_bytes(b"quiescent-open-pod5")
+    identities = ont_raw_signal.live_pod5_identity_snapshot([str(pod5)])
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'writer.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    observed_at = datetime.utcnow()
+    writer_fd = os.open(pod5, os.O_WRONLY)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            session.add_all([
+                OntInstrumentRun(
+                    id="ont-run-live-writer", position_id="position-1", minknow_run_id="minknow-live",
+                    state="running", observed_at=observed_at, observed_generation=2,
+                    output_directories={"reads": str(tmp_path)},
+                    output_files={"fastq": [], "pod5": [str(pod5)], "bam": []},
+                    handoff_ready=False, last_minknow_payload={"acquisition_id": "acquisition-live"},
+                ),
+                OntInstrumentRunEvent(
+                    id="ont-event-live-writer", run_id="ont-run-live-writer", event_type="active_observed",
+                    state="running", observed_at=observed_at, observed_generation=2,
+                    minknow_payload={"acquisition_id": "acquisition-live"}, output_files={},
+                ),
+            ])
+            await session.commit()
+            registered = await ont_raw_signal.register_live_pod5_chunks(
+                session, run_id="ont-run-live-writer", observed_generation=2,
+                stable_paths=[pod5], identity_snapshot=identities,
+            )
+            representations = (await session.execute(
+                ont_raw_signal.select(OntRawSignalRepresentation).where(
+                    OntRawSignalRepresentation.source_kind == "minknow_live"
+                )
+            )).scalars().all()
+    finally:
+        os.close(writer_fd)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        after_close = await ont_raw_signal.register_live_pod5_chunks(
+            session, run_id="ont-run-live-writer", observed_generation=2,
+            stable_paths=[pod5], identity_snapshot=identities,
+        )
+        await session.commit()
+    await engine.dispose()
+    assert registered == []
+    assert representations == []
+    assert len(after_close) == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_cancellation_terminates_and_reaps_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = asyncio.Event()
+
+    class Child:
+        returncode: int | None = None
+        terminated = False
+        waited = False
+
+        async def communicate(self):
+            started.set()
+            await asyncio.Event().wait()
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        async def wait(self):
+            self.waited = True
+            return self.returncode
+
+    child = Child()
+
+    async def fake_create(*_args, **_kwargs):
+        return child
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    worker = OntRawSignalWorker(lambda: None)
+    task = asyncio.create_task(worker._execute(["fake"], "job", "claim"))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert child.terminated is True
+    assert child.waited is True
+    assert worker._child is None
 
 
 @pytest.mark.asyncio
