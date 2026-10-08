@@ -716,32 +716,7 @@ def _resolve_loop_region_map(root_job: Job) -> Dict[str, tuple[int, int]]:
             if loop_id and residue_numbers:
                 region_map[loop_id] = (min(residue_numbers), max(residue_numbers))
 
-    if region_map:
-        return region_map
-
-    selected_loops_raw = params.get("selected_cdr_loops")
-    if isinstance(selected_loops_raw, list):
-        selected_loops = [str(loop_id).strip().upper() for loop_id in selected_loops_raw if str(loop_id).strip()]
-    else:
-        selected_loops = [str(loop_id).strip().upper() for loop_id in str(params.get("antibody_design_loops") or "").split(",") if str(loop_id).strip()]
-
-    raw_spec = str(params.get("rfantibody_design_loops_custom") or "").strip()
-    if raw_spec.startswith("[") and raw_spec.endswith("]") and selected_loops:
-        tokens = [token.strip() for token in raw_spec[1:-1].split(",") if token.strip()]
-        for loop_id, token in zip(selected_loops, tokens):
-            match = re.match(r"^([A-Za-z])(\d+)-(\d+)$", token)
-            if not match:
-                continue
-            start = int(match.group(2))
-            end = int(match.group(3))
-            if end < start:
-                start, end = end, start
-            region_map[loop_id] = (start, end)
-
-    if region_map:
-        return region_map
-
-    return dict(DEFAULT_CDR_POSITION_RANGES)
+    return region_map
 
 
 def _resolve_loop_target_chain(root_job: Job, loop_ids: List[str], available_chain_ids: List[str]) -> str:
@@ -782,8 +757,8 @@ def _build_mutation_regions(
     chain_records: List[Dict[str, Any]],
     region_map: Dict[str, tuple[int, int]],
     loop_ids: List[str],
-) -> List[tuple[int, int]]:
-    regions: List[tuple[int, int]] = []
+) -> Dict[str, tuple[int, int]]:
+    regions: Dict[str, tuple[int, int]] = {}
     for loop_id in loop_ids:
         loop_key = loop_id.strip().upper()
         bounds = region_map.get(loop_key) or DEFAULT_CDR_POSITION_RANGES.get(loop_key)
@@ -796,8 +771,46 @@ def _build_mutation_regions(
             if start_resseq <= int(residue["resseq"]) <= end_resseq
         ]
         if positions:
-            regions.append((min(positions), max(positions)))
+            regions[loop_key] = (min(positions), max(positions))
     return regions
+
+
+def _detect_loop_sequence_regions(
+    design_path: Path,
+    binder_chain_id: str,
+    loop_ids: List[str],
+) -> Dict[str, tuple[int, int]]:
+    try:
+        from services.cdr_annotator import annotate_pdb
+    except Exception:
+        return {}
+
+    prefixes = {loop_id[:1].upper() for loop_id in loop_ids if loop_id}
+    if len(prefixes) != 1:
+        return {}
+
+    preferred_key = next(iter(prefixes))
+    try:
+        annotation = annotate_pdb(str(design_path), preferred_chains={preferred_key: binder_chain_id})
+    except Exception:
+        return {}
+    if not annotation:
+        return {}
+
+    detected: Dict[str, tuple[int, int]] = {}
+    for loop_id in loop_ids:
+        attr_name = f"cdr_{loop_id.strip().lower()}_seq_range"
+        seq_range = getattr(annotation, attr_name, None)
+        if not seq_range or len(seq_range) != 2:
+            continue
+        try:
+            start = int(seq_range[0]) + 1
+            end = int(seq_range[1]) + 1
+        except (TypeError, ValueError):
+            continue
+        if start > 0 and end >= start:
+            detected[loop_id.strip().upper()] = (start, end)
+    return detected
 
 
 def _normalize_aa_pool(allowed_aas: List[str], blocked_aas: List[str]) -> List[str]:
@@ -1499,7 +1512,21 @@ def _build_cdr_indel_iteration_job(
         available_chain_ids = list(chain_records.keys())
         binder_chain_id = _resolve_loop_target_chain(root_job, loop_ids, available_chain_ids)
         binder_records = chain_records.get(binder_chain_id) or []
-        mutation_regions = _build_mutation_regions(binder_records, region_map, loop_ids)
+        fallback_regions = _build_mutation_regions(binder_records, region_map, loop_ids)
+        detected_regions = _detect_loop_sequence_regions(design_path, binder_chain_id, loop_ids)
+        mutation_regions = [
+            detected_regions.get(loop_id) or fallback_regions.get(loop_id)
+            for loop_id in loop_ids
+            if detected_regions.get(loop_id) or fallback_regions.get(loop_id)
+        ]
+        if not mutation_regions:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Could not resolve CDR regions for '{design.name}'. "
+                    "Provide manual CDR residue definitions or use a structure with detectable antibody numbering."
+                ),
+            )
         base_sequence = "".join(record["aa"] for record in binder_records)
 
         design_variants = _generate_cdr_indel_variants(

@@ -178,11 +178,14 @@ process NormalizeTargetPDB {
 
     script:
     def chainArg = params.antigen_chains ? "--chains \"${params.antigen_chains}\" \\\n        " : ""
+    def modelArg = params.target_model_number ? "--model-number ${params.target_model_number} \\\n        " : ""
+    def firstModelArg = params.target_model_number ? "" : "--first-model-only \\\n        "
     """
     python3 ${params.code_root}/scripts/normalize_target_pdb.py \\
         --input "\$(readlink -f ${target_pdb})" \\
         --output normalized_target.pdb \\
-        --first-model-only \\
+        ${firstModelArg}\
+        ${modelArg}\
         ${chainArg}\
         2>&1 | tee normalize_target.log
     """
@@ -1260,6 +1263,7 @@ if (!params.containsKey('interactive_gating')) params.interactive_gating = false
 if (!params.containsKey('interactive_swa')) params.interactive_swa = false
 if (!params.containsKey('interactive_gate_stage') || !params.interactive_gate_stage) params.interactive_gate_stage = 'post_fampnn'
 if (!params.containsKey('interactive_gate_continue')) params.interactive_gate_continue = false
+if (!params.containsKey('target_model_number')) params.target_model_number = null
 
 // Orchestrator-based parallelism settings
 // 'standard' = Nextflow-internal parallelism (current behavior)

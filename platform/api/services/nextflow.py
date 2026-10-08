@@ -746,7 +746,7 @@ async def run_batch_frustrampnn(pdb_paths: list, batch_id: str, parent_session) 
             cmd = [
                 "apptainer", "run", "--nv",
                 str(container_path),
-                "frustrampnn", "predict",
+                "predict",
                 "--pdb", pdb_path,
                 "--checkpoint", "/opt/frustrampnn_weights/megascale.ckpt",
                 "--output", str(output_csv)
@@ -779,6 +779,7 @@ async def run_batch_frustrampnn(pdb_paths: list, batch_id: str, parent_session) 
                             design.frustration_high_count = frust_data.get("high_count")
                             design.frustration_min_count = frust_data.get("min_count")
                             design.frustration_residues = frust_data.get("residues")
+                            design.frustration_csv_path = str(output_csv)
                             await session.commit()
                             logger.info(f"[FRUST BATCH] Updated frustration for {design.name}")
         

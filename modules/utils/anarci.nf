@@ -73,6 +73,24 @@ def get_seq_from_chain(chain):
             residues.append(residue)
     return seq, residues
 
+def normalize_insertion(value):
+    if value is None:
+        return ""
+    value = str(value).strip()
+    return "" if value in ("", "-") else value
+
+def position_key(pos, insertion):
+    return (int(pos), normalize_insertion(insertion))
+
+def between(current, lower, upper):
+    return lower < current < upper
+
+CDR_ANCHORS = {
+    "1": ((26, ""), (39, "")),
+    "2": ((55, ""), (66, "")),
+    "3": ((104, ""), (118, "")),
+}
+
 def run_anarcii(seq, chain_id):
     env = os.environ.copy()
     env["OMP_NUM_THREADS"] = "1"
@@ -199,7 +217,7 @@ for model in structure:
         
         new_chain = PDB.Chain.Chain(new_chain_id)
         
-        cdrs = {"1": "", "2": "", "3": ""}
+        cdr_entries = {"1": [], "2": [], "3": []}
         
         for i, ((imgt_num, insert_code), aa) in enumerate(real_mapping):
             original_res = domain_residues[i]
@@ -213,23 +231,19 @@ for model in structure:
                 new_res.add(new_atom)
             
             new_chain.add(new_res)
-            
-            if 27 <= imgt_num <= 38:
-                cdrs["1"] += aa
-                cdr_positions[f"{suffix}1"].append(original_res.get_id()[1])
-            elif 56 <= imgt_num <= 65:
-                cdrs["2"] += aa
-                cdr_positions[f"{suffix}2"].append(original_res.get_id()[1])
-            elif 105 <= imgt_num <= 117:
-                cdrs["3"] += aa
-                cdr_positions[f"{suffix}3"].append(original_res.get_id()[1])
+
+            current_key = position_key(imgt_num, insert_code)
+            for loop_idx, (lower, upper) in CDR_ANCHORS.items():
+                if between(current_key, position_key(*lower), position_key(*upper)):
+                    cdr_entries[loop_idx].append((aa, original_res.get_id()[1]))
+                    break
                 
         renumbered_model.add(new_chain)
         processed_chains.append(new_chain_id)
-        
-        cdr_data["cdrs"][f"{suffix}1"] = cdrs["1"]
-        cdr_data["cdrs"][f"{suffix}2"] = cdrs["2"]
-        cdr_data["cdrs"][f"{suffix}3"] = cdrs["3"]
+
+        for loop_idx, entries in cdr_entries.items():
+            cdr_data["cdrs"][f"{suffix}{loop_idx}"] = "".join(aa for aa, _original_pos in entries)
+            cdr_positions[f"{suffix}{loop_idx}"].extend(original_pos for _aa, original_pos in entries)
 
 io = PDBIO()
 if processed_chains:

@@ -19,7 +19,8 @@ process FrustrampnnQC {
     python3 -c "
 import pandas as pd, json
 df = pd.read_csv('${meta.id}_frustration.csv')
-pos = df.groupby(['position','chain'])['frustration_pred'].mean()
+native_df = df[df['mutation'].astype(str) == df['wildtype'].astype(str)] if {'mutation', 'wildtype'}.issubset(df.columns) else df
+pos = native_df.groupby(['position','chain'])['frustration_pred'].mean()
 json.dump({
     'pdb': '${meta.id}',
     'n_high_frust': int((pos <= -1.0).sum()),

@@ -17,6 +17,7 @@ from pathlib import Path
 import math
 
 from database import get_session, Design, Job
+from paths import to_allowed_relative
 from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows
 
 
@@ -131,6 +132,7 @@ class DesignResponse(BaseModel):
     frustration_pct_high: Optional[float] = None
     frustration_residues: Optional[List[dict]] = None  # [{pos, chain, frust, frustClass}]
     frustration_csv_path: Optional[str] = None
+    frustration_csv_relpath: Optional[str] = None
     
     # PPIFlow Maturation
     maturation_delta_interface: Optional[float] = None
@@ -363,6 +365,21 @@ def _design_summary_sort_key(design: Design) -> tuple:
     )
 
 
+def _safe_allowed_relative(path_str: Optional[str]) -> Optional[str]:
+    if not path_str:
+        return None
+    try:
+        return to_allowed_relative(Path(path_str))
+    except Exception:
+        return None
+
+
+def _design_to_response(design: Design) -> DesignResponse:
+    data = DesignResponse.model_validate(design).model_dump()
+    data["frustration_csv_relpath"] = _safe_allowed_relative(design.frustration_csv_path)
+    return DesignResponse.model_validate(data)
+
+
 # --- Endpoints ---
 
 @router.get("", response_model=DesignList)
@@ -489,7 +506,7 @@ async def list_designs(
     designs = result.scalars().all()
     
     return DesignList(
-        designs=[DesignResponse.model_validate(d) for d in designs],
+        designs=[_design_to_response(d) for d in designs],
         total=total
     )
 
@@ -635,7 +652,7 @@ async def get_design(
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
     
-    return DesignResponse.model_validate(design)
+    return _design_to_response(design)
 
 
 @router.get("/{design_id}/pdb")
@@ -808,7 +825,7 @@ async def get_designs_for_job(
     total = (await session.execute(count_query)).scalar()
     
     return DesignList(
-        designs=[DesignResponse.model_validate(d) for d in designs],
+        designs=[_design_to_response(d) for d in designs],
         total=total
     )
 
