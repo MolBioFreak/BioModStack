@@ -58,8 +58,10 @@ process RunPartialFlow {
     fixed_positions=\$(cat fixed_positions.txt | tr -d '\\n')
     cdr_positions=\$(cat "${cdr_positions}" | tr -d '\\n')
 
-    if [ -z "${antigenChain}" ]; then
-        antigenChain=\$(python - <<'PY'
+    antigenChainBash="${antigenChain}"
+
+    if [ -z "\${antigenChainBash}" ]; then
+        antigenChainBash=\$(python - <<'PY'
 from pathlib import Path
 
 pdb_path = Path("${complex_pdb}")
@@ -98,7 +100,7 @@ PY
         --retry_Limit ${retryLimit} \\
         --config "${configPath}" \\
         --model_weights "${checkpointPath}" \\
-        --antigen_chain "\${antigenChain}" \\
+        --antigen_chain "\${antigenChainBash}" \\
         --heavy_chain "${heavyChain}" \\
         ${lightChainArg} \\
         ${hotspotArg} \\
