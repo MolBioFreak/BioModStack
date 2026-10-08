@@ -63,6 +63,26 @@ def _runtime() -> ComponentRuntime:
     return runtime
 
 
+def await_external_service(service_id: str, native_input: Any) -> tuple[Path, str]:
+    """Wait for declared controller data through the existing attempt journal.
+
+    No provider import, credentials, HTTP callback or worker search lives here.
+    The attempt supervisor continues to own cancellation of this native waiter.
+    """
+    import time
+    from component_runtime import ResultReference
+    runtime = _runtime()
+    request_id = runtime.submit_external_service(service_id, native_input)
+    while True:
+        state = runtime.external_service(request_id)  # includes cancellation fence
+        if state['result'] is not None:
+            if state['result'].get('error'):
+                raise RuntimeError(state['result']['error'])
+            reference = ResultReference(**state['result'])
+            return reference.resolve(runtime.artifact_root).parent, reference.sha256
+        time.sleep(0.2)
+
+
 def submit_child(payload: Mapping[str, Any], *, parent_job_id: str, stage: str,
                  child_key: str, required: bool = True) -> str:
     return _runtime().submit(ComponentRequest.capture(parent_job_id=parent_job_id,

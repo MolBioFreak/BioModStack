@@ -14,6 +14,123 @@ from biomodstack_boltz_msa import a3m_rows, validate_boltz_msa, write_paired_csv
 from biomodstack_msa_handoff import validate_a3m
 
 
+def generated_msa_service_supported(service) -> bool:
+    """Read-only resolver for the generated native consumer actually connected."""
+    get = service.get if isinstance(service, dict) else lambda key: getattr(service, key, None)
+    return (get('logical_id') == 'protenix:generated_msa'
+            and get('state') == 'planned_from_generated_candidates'
+            and get('provider') in {'colabfold_api', 'neurosnap_api'}
+            and 'modules/antibody_batch.nf:BatchProtenixValidation' in (get('authority') or '').split('; '))
+
+
+def generated_protenix_request(payload: list) -> list:
+    """Validate the native generated roster without changing names/chains/science.
+
+    This boundary carries generated sequences, not worker filesystem authority.
+    Supplied alignments continue through the existing prepared-input path.
+    """
+    from prepare_protenix_msa import build_native_protenix_input, iter_protein_chains
+    native = build_native_protenix_input(seeds=[], native_payload=payload)
+    chains = list(iter_protein_chains(native))
+    if not chains:
+        raise ValueError('Generated MSA roster requires protein chains')
+    for _, _, chain in chains:
+        if any(chain.get(key) for key in ('pairedMsaPath', 'unpairedMsaPath', 'msa')):
+            raise ValueError('Generated service cannot read worker supplied alignment paths')
+        sequence = chain.get('sequence')
+        if not isinstance(sequence, str) or not sequence or not sequence.isascii() or not sequence.isalpha() or not sequence.isupper():
+            raise ValueError('Generated MSA requires exact native protein sequences')
+    return native
+
+
+def prepare_generated_msa(request: dict, destination: Path) -> str:
+    """Controller-only adapter for an already declared native external service."""
+    from component_runtime import canonical_bytes, digest as request_digest
+    from services.msa_preparation import prepare_protenix_inputs
+    import tempfile
+    identity = request.get('request_id')
+    original = {key: value for key, value in request.items() if key != 'request_id'}
+    if not identity or request_digest(original) != identity:
+        raise ValueError('Generated MSA request identity mismatch')
+    service = request['service']
+    if not generated_msa_service_supported(service):
+        raise ValueError('Unsupported generated native service')
+    payload = generated_protenix_request(request['native_input'])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=destination.parent, prefix='.generated-roster-') as scratch:
+        input_json = Path(scratch) / 'input.json'
+        input_json.write_bytes(canonical_bytes(payload))
+        manifest = prepare_protenix_inputs(None, input_json, destination, service['settings_json'])
+    manifest['external_service_request_id'] = identity
+    path = destination / 'msa-inputs.json'
+    path.write_text(json.dumps(manifest, sort_keys=True, indent=2))
+    return digest(path.read_bytes())
+
+
+def accept_generated_msa(runtime, request_id: str, manifest_sha256: str) -> dict:
+    """Verify delivered bytes and native identities before ledger publication."""
+    from component_runtime import ResultReference, file_identity
+    from biomodstack_msa_handoff import hydrate_prepared_protenix_task
+    from biomodstack_msa_policy import apply_msa_policy
+    import re
+    if not re.fullmatch('[0-9a-f]{64}', manifest_sha256):
+        raise ValueError('Generated MSA manifest digest is invalid')
+    request = runtime.external_service(request_id)
+    source = runtime.artifact_root / 'external-services' / request_id / manifest_sha256
+    manifest_path = source / 'msa-inputs.json'
+    manifest = json.loads(manifest_path.read_bytes())
+    if (manifest.get('external_service_request_id') != request_id
+            or manifest.get('settings') != apply_msa_policy('protenix', request['service']['settings_json'])
+            or manifest.get('model_input') != request['native_input']):
+        raise ValueError('Generated MSA roster/settings/request binding conflicts')
+    hydrate_prepared_protenix_task(request['native_input'], source, manifest_sha256)
+    sha, size = file_identity(manifest_path)
+    reference = ResultReference(request_id, str(manifest_path.relative_to(runtime.artifact_root)), sha, size,
+                                'bms.msa-inputs.v1')
+    runtime.complete_external_service(request_id, reference)
+    return runtime.external_service(request_id)['result']
+
+
+async def await_controller_service_operation(task, check_fence, *, stop=None):
+    """Join this operation on cancellation; a stopped ticket is not a refund."""
+    import asyncio
+    try:
+        while not task.done():
+            await asyncio.wait({task}, timeout=0.2)
+            await check_fence()
+        result = await asyncio.shield(task)
+        await check_fence()
+        return result
+    except BaseException:
+        if stop is not None:
+            stop.set()  # existing provider polling interruption/ticket authority
+        else:
+            task.cancel()  # transport owns process-group stop and join
+        cleanup = asyncio.gather(task, return_exceptions=True)
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        cleanup.result()
+        raise
+
+
+async def prepare_generated_msa_on_controller(request, destination, check_fence):
+    import asyncio
+    import threading
+    from biomodstack_msa_api import PendingMSA, preparation_stop_scope
+    await check_fence()
+    stop = threading.Event()
+    with preparation_stop_scope(stop):
+        task = asyncio.create_task(asyncio.to_thread(prepare_generated_msa, request, destination))
+    try:
+        return await await_controller_service_operation(task, check_fence, stop=stop)
+    except PendingMSA:
+        # The next ordinary reconciliation resumes the existing durable ticket.
+        return None
+
+
 def enabled(value, default=False):
     return default if value is None else str(value).lower() in {'true', '1', 'yes', 'on'}
 
