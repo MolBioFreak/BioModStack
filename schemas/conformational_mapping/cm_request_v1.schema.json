@@ -36,6 +36,7 @@
     "feature_policy": {"$ref": "#/$defs/feature_policy"},
     "runtime_policy": {"$ref": "#/$defs/runtime_policy"},
     "analysis_policy": {"$ref": "#/$defs/analysis_policy"},
+    "state_landscape_comparison": {"$ref": "#/$defs/state_landscape_comparison"},
     "confornets": {"$ref": "#/$defs/confornets"},
     "protenix_snapshot_id": {"type": "string", "minLength": 1},
     "import_receipt_id": {"type": "string", "minLength": 1},
@@ -168,6 +169,64 @@
         "rank_stability_minimum": {"type": "number", "minimum": -1, "maximum": 1},
         "minimum_common_ranked_universe_size": {"type": "integer", "minimum": 3}
       }
+    },
+    "state_landscape_comparison": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["mode", "target_id", "scope"],
+          "properties": {
+            "mode": {"const": "pairwise"},
+            "target_id": {"type": "string", "minLength": 1},
+            "scope": {"const": "all_within_target"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["mode", "target_id", "scope", "reference_backend_coordinates"],
+          "properties": {
+            "mode": {"const": "reference"},
+            "target_id": {"type": "string", "minLength": 1},
+            "scope": {"const": "all_other_within_target"},
+            "reference_backend_coordinates": {"$ref": "#/$defs/backend_coordinates"}
+          }
+        }
+      ]
+    },
+    "protenix_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "ordered_seed", "sample_index"],
+      "properties": {
+        "backend": {"const": "protenix_v2_ensemble"}, "target_id": {"type": "string", "minLength": 1},
+        "ordered_seed": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+        "sample_index": {"type": "integer", "minimum": 0}
+      }
+    },
+    "confornets_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "task", "test_case_id", "reference_id", "run_index", "saved_step", "confornet_index", "sample_index"],
+      "properties": {
+        "backend": {"const": "confornets"}, "target_id": {"type": "string", "minLength": 1},
+        "task": {"type": "string", "minLength": 1}, "test_case_id": {"type": "string", "minLength": 1},
+        "reference_id": {"type": ["string", "null"]}, "run_index": {"type": "integer", "minimum": 0},
+        "saved_step": {"type": "integer", "minimum": 0}, "confornet_index": {"type": "integer", "minimum": 0},
+        "sample_index": {"type": "integer", "minimum": 0}
+      }
+    },
+    "import_coordinates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "target_id", "staged_index", "source_content_sha256", "staged_receipt_sha256"],
+      "properties": {
+        "backend": {"const": "external_import"}, "target_id": {"type": "string", "minLength": 1},
+        "staged_index": {"type": "integer", "minimum": 0}, "source_content_sha256": {"$ref": "#/$defs/sha256"},
+        "staged_receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "backend_coordinates": {
+      "oneOf": [
+        {"$ref": "#/$defs/protenix_coordinates"}, {"$ref": "#/$defs/confornets_coordinates"},
+        {"$ref": "#/$defs/import_coordinates"}
+      ]
     }
   }
 }

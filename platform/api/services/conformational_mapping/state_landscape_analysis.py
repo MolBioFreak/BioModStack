@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
-from .contracts import AA_ORDER, canonical_sha256, validate_schema
+from .contracts import AA_ORDER, canonical_json_bytes, canonical_sha256, parse_backend_coordinates, validate_schema
 
 
 class StateLandscapeAnalysisError(ValueError):
@@ -26,6 +26,81 @@ _THREE_TO_ONE = {
     "PRO": "P", "GLN": "Q", "ARG": "R", "SER": "S", "THR": "T", "VAL": "V",
     "TRP": "W", "TYR": "Y",
 }
+
+
+def resolve_state_landscape_comparison(
+    ensemble: Mapping[str, Any], authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Resolve explicit same-target comparison authority against final candidates only."""
+
+    if not isinstance(ensemble, Mapping) or not isinstance(ensemble.get("candidates"), list):
+        raise StateLandscapeAnalysisError("state comparison requires final canonical ensemble candidates")
+    if not isinstance(authority, Mapping):
+        raise StateLandscapeAnalysisError("state comparison authority must be explicit")
+    mode, target_id, scope = authority.get("mode"), authority.get("target_id"), authority.get("scope")
+    if not isinstance(target_id, str) or not target_id:
+        raise StateLandscapeAnalysisError("state comparison requires an explicit target")
+    candidates: list[tuple[str, Mapping[str, Any]]] = []
+    seen_ids: set[str] = set()
+    for candidate in ensemble["candidates"]:
+        if not isinstance(candidate, Mapping):
+            raise StateLandscapeAnalysisError("canonical ensemble candidate is invalid")
+        candidate_id = candidate.get("candidate_id")
+        coordinates = candidate.get("backend_coordinates")
+        if not isinstance(candidate_id, str) or not candidate_id or not isinstance(coordinates, Mapping):
+            raise StateLandscapeAnalysisError("canonical ensemble candidate identity is invalid")
+        try:
+            parsed = parse_backend_coordinates(coordinates)
+        except Exception as exc:
+            raise StateLandscapeAnalysisError("canonical ensemble candidate coordinates are invalid") from exc
+        if candidate_id in seen_ids:
+            raise StateLandscapeAnalysisError("canonical ensemble contains duplicate candidate IDs")
+        seen_ids.add(candidate_id)
+        if parsed.target_id == target_id:
+            candidates.append((candidate_id, coordinates))
+    candidates.sort(key=lambda item: item[0])
+
+    if mode == "pairwise":
+        if scope != "all_within_target":
+            raise StateLandscapeAnalysisError("pairwise state comparison scope must be all_within_target")
+        if len(candidates) < 2:
+            raise StateLandscapeAnalysisError("pairwise state comparison resolved fewer than two candidates")
+        return {
+            "mode": "pairwise",
+            "pairs": [
+                {
+                    "pair_id": f"{candidate_a_id}__{candidate_b_id}",
+                    "candidate_a_id": candidate_a_id,
+                    "candidate_b_id": candidate_b_id,
+                }
+                for index, (candidate_a_id, _) in enumerate(candidates)
+                for candidate_b_id, _ in candidates[index + 1:]
+            ],
+        }
+    if mode != "reference" or scope != "all_other_within_target":
+        raise StateLandscapeAnalysisError("state comparison mode and scope must be explicit")
+    selector = authority.get("reference_backend_coordinates")
+    if not isinstance(selector, Mapping):
+        raise StateLandscapeAnalysisError("reference state comparison requires full backend coordinates")
+    try:
+        reference_coordinates = parse_backend_coordinates(selector)
+    except Exception as exc:
+        raise StateLandscapeAnalysisError("reference state comparison coordinates are invalid") from exc
+    if reference_coordinates.target_id != target_id:
+        raise StateLandscapeAnalysisError("reference state comparison target mismatch")
+    selector_bytes = canonical_json_bytes(selector)
+    references = [candidate_id for candidate_id, coordinates in candidates if canonical_json_bytes(coordinates) == selector_bytes]
+    if not references:
+        raise StateLandscapeAnalysisError("reference state comparison selector is absent from final candidates")
+    if len(references) != 1:
+        raise StateLandscapeAnalysisError("reference state comparison selector is ambiguous")
+    reference_candidate_id = references[0]
+    candidate_ids = [candidate_id for candidate_id, _ in candidates if candidate_id != reference_candidate_id]
+    if not candidate_ids:
+        raise StateLandscapeAnalysisError("reference state comparison resolved no other candidates")
+    return {
+        "mode": "reference", "reference_candidate_id": reference_candidate_id, "candidate_ids": candidate_ids,
+    }
 
 
 def _residue_key(row: Mapping[str, Any]) -> tuple[str, str, int, str, int]:

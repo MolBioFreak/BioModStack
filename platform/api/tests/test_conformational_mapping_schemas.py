@@ -70,6 +70,36 @@ def test_cm001_rejects_seed_conflicts() -> None:
         validate_schema("cm_request_v1", conflicting_modes)
 
 
+def test_cm001b_state_landscape_comparison_authority_is_structural_and_target_bound() -> None:
+    request = _json(SCHEMA_FIXTURES / "positive" / "all_schemas.json")["cm_request_v1"]
+    assert request["state_landscape_comparison"] == {
+        "mode": "pairwise", "target_id": "target-a", "scope": "all_within_target",
+    }
+    validate_schema("cm_request_v1", request)
+
+    malformed = copy.deepcopy(request)
+    malformed["state_landscape_comparison"]["scope"] = "all_other_within_target"
+    malformed["request_sha256"] = request_sha256(malformed)
+    with pytest.raises(ContractValidationError, match="state_landscape_comparison"):
+        validate_schema("cm_request_v1", malformed)
+
+    reference = copy.deepcopy(request)
+    reference["state_landscape_comparison"] = {
+        "mode": "reference", "target_id": "target-a", "scope": "all_other_within_target",
+        "reference_backend_coordinates": {
+            "backend": "protenix_v2_ensemble", "target_id": "target-a", "ordered_seed": 101, "sample_index": 0,
+        },
+    }
+    reference["request_sha256"] = request_sha256(reference)
+    validate_schema("cm_request_v1", reference)
+
+    mismatched_reference = copy.deepcopy(reference)
+    mismatched_reference["state_landscape_comparison"]["reference_backend_coordinates"]["target_id"] = "other-target"
+    mismatched_reference["request_sha256"] = request_sha256(mismatched_reference)
+    with pytest.raises(ContractValidationError, match="reference target"):
+        validate_schema("cm_request_v1", mismatched_reference)
+
+
 def test_cm002_instance_ids_equal_count() -> None:
     cases = _json(PHASE_0 / "complex_cases.json")["cases"]
     for case in cases:
