@@ -332,9 +332,11 @@ def test_begin_position_hardware_check_requires_confirmation_and_proxies_host_ag
     def fake_request(method, path, payload=None, *, query=None):
         calls.append((method, path, payload))
         return {
-            "action": "begin_hardware_check",
+            "action": "start_hardware_check",
             "position": "MD-105428",
+            "hardware_check_id": "HC-001",
             "hardware_check_run_id": "HC-001",
+            "result_source": "minknow.hardware_check.start_hardware_check",
             "fake_or_demo_devices": False,
         }
 
@@ -349,7 +351,7 @@ def test_begin_position_hardware_check_requires_confirmation_and_proxies_host_ag
 
     payload = ont_run_control.begin_position_hardware_check("MD-105428", {"confirm_hardware_check": True})
 
-    assert payload["action"] == "begin_hardware_check"
+    assert payload["action"] == "start_hardware_check"
     assert calls == [("POST", "/ont/positions/MD-105428/hardware-check", {"confirm_hardware_check": True})]
 
 

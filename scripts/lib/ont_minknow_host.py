@@ -377,13 +377,16 @@ def begin_hardware_check(position_name: str, payload: dict[str, Any]) -> tuple[i
                 target = next((p for p in manager.flow_cell_positions() if str(_safe_get(p, "name") or "") == str(position_name)), None)
                 if target is None:
                     return 404, {"detail": f"unknown ONT position: {position_name}", "fake_or_demo_devices": False}
-                response = target.connect().protocol.begin_hardware_check()
-                run_id = _string_or_none(_safe_get(response, "run_id"))
+                hardware_check_service = manager.hardware_check()
+                response = hardware_check_service.start_hardware_check(position_ids=[position_name])
+                hardware_check_id = _string_or_none(_safe_get(response, "hardware_check_id")) or _string_or_none(_safe_get(response, "run_id"))
                 return 202, {
-                    "action": "begin_hardware_check",
-                    "detail": "Started MinKNOW hardware check through BMS host-agent. This is a diagnostic check, not a sequencing run.",
+                    "action": "start_hardware_check",
+                    "detail": "Started the full MinKNOW hardware-check service through BMS host-agent. This is a diagnostic check, not a sequencing run.",
                     "position": position_name,
-                    "hardware_check_run_id": run_id,
+                    "hardware_check_id": hardware_check_id,
+                    "hardware_check_run_id": hardware_check_id,
+                    "result_source": "minknow.hardware_check.start_hardware_check",
                     "fake_or_demo_devices": False,
                 }
             except Exception as exc:  # noqa: BLE001 - MinKNOW/grpc exceptions vary by version
