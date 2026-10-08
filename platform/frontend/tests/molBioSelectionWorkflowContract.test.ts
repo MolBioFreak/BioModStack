@@ -9,6 +9,7 @@ const dialogSource = readSource('src/components/MolBioToolkit/SelectionActionDia
 const toolkitSource = readSource('src/components/MolBioToolkit/MolBioToolkitV2.tsx');
 const viewerSource = readSource('src/components/MolBioToolkit/SequenceViewer.tsx');
 const gcTrackSource = readSource('src/components/MolBioToolkit/GCContentTrack.tsx');
+const primerPanelSource = readSource('src/components/MolBioToolkit/panels/PrimerPanel.tsx');
 
 test('selection actions are configuration-gated rather than immediate default creation', () => {
     assert.match(toolkitSource, /openSelectionAction\('forward_primer'\)/);
@@ -60,4 +61,15 @@ test('viewer and Plotly track retain a durable range without controlled SeqViz f
     assert.match(gcTrackSource, /onSelected=\{handleSelected\}/);
     assert.match(gcTrackSource, /scrollZoom: false/);
     assert.match(gcTrackSource, /selectionSnapshot\.ranges\.forEach/);
+});
+
+test('primer panel delegates single and all-primer highlights to authoritative split sites', () => {
+    const highlightPrimerSource = primerPanelSource.match(
+        /const highlightPrimer = [\s\S]*?(?=\n\s*const addLibraryPrimerToSequence)/,
+    )?.[0];
+    assert.ok(highlightPrimerSource);
+    assert.match(highlightPrimerSource, /getPrimerHighlightRegions/);
+    assert.match(highlightPrimerSource, /primersToHighlight\.flatMap/);
+    assert.doesNotMatch(highlightPrimerSource, /start:\s*existingPrimer\.start/);
+    assert.doesNotMatch(highlightPrimerSource, /start:\s*primer\.start/);
 });

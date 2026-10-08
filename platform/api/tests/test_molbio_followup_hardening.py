@@ -213,6 +213,56 @@ async def test_health_rejects_same_name_conditional_noop_immutable_trigger(
 
 
 @pytest.mark.asyncio
+async def test_migration_replaces_same_name_conditional_noop_immutable_trigger(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "conditional-trigger-migration.db"
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{database}")
+    try:
+        await init_molbio_db(engine=engine)
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("DROP TRIGGER molbio_immutable_primer_revisions_update")
+            )
+            await connection.execute(
+                text(
+                    """
+                    CREATE TRIGGER molbio_immutable_primer_revisions_update
+                    BEFORE UPDATE ON primer_revisions
+                    WHEN 0
+                    BEGIN
+                        SELECT RAISE(ABORT, 'primer_revisions is immutable');
+                    END
+                    """
+                )
+            )
+            await connection.execute(
+                text(
+                    "DELETE FROM molbio_schema_migrations "
+                    "WHERE version='0002_append_only_guards'"
+                )
+            )
+
+        await init_molbio_db(engine=engine)
+        health = await molbio_health(engine=engine)
+        assert health["immutable_triggers_current"] is True
+        assert health["status"] == "healthy"
+        async with engine.connect() as connection:
+            assert int(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT COUNT(*) FROM molbio_schema_migrations "
+                            "WHERE version='0002_append_only_guards'"
+                        )
+                    )
+                ).scalar_one()
+            ) == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_health_rejects_claimed_migration_when_sequence_self_fk_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -397,6 +447,92 @@ async def test_migration_replaces_composite_counterfeit_sequence_parent_fk(
             "NO ACTION",
             "RESTRICT",
         )
+
+
+@pytest.mark.asyncio
+async def test_migration_replaces_inline_counterfeit_sequence_parent_fk(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "inline-counterfeit-parent-fk.db"
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{database}")
+    await init_molbio_db(engine=engine)
+    await engine.dispose()
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='nucleotide_sequences'"
+        ).fetchone()[0]
+        replacement_sql = table_sql.replace(
+            "CREATE TABLE nucleotide_sequences",
+            "CREATE TABLE nucleotide_sequences_inline_parent_fk",
+            1,
+        )
+        replacement_sql = re.sub(
+            r",\s*FOREIGN KEY\(parent_id\) REFERENCES nucleotide_sequences \(id\) "
+            r"ON DELETE RESTRICT",
+            "",
+            replacement_sql,
+            count=1,
+        )
+        replacement_sql = re.sub(
+            r"\bparent_id\s+VARCHAR\(36\)",
+            "parent_id VARCHAR(36) REFERENCES nucleotide_sequences (id) "
+            "ON UPDATE CASCADE ON DELETE CASCADE",
+            replacement_sql,
+            count=1,
+        )
+        assert "parent_id VARCHAR(36) REFERENCES" in replacement_sql
+        connection.execute(replacement_sql)
+        connection.execute("DROP TABLE nucleotide_sequences")
+        connection.execute(
+            "ALTER TABLE nucleotide_sequences_inline_parent_fk "
+            "RENAME TO nucleotide_sequences"
+        )
+        connection.execute(
+            "DELETE FROM molbio_schema_migrations "
+            "WHERE version='0004_sequence_parent_foreign_key'"
+        )
+        connection.commit()
+        counterfeit_rows = connection.execute(
+            "PRAGMA foreign_key_list(nucleotide_sequences)"
+        ).fetchall()
+        assert len(counterfeit_rows) == 1
+        assert counterfeit_rows[0][2:7] == (
+            "nucleotide_sequences",
+            "parent_id",
+            "id",
+            "CASCADE",
+            "CASCADE",
+        )
+
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{database}")
+    try:
+        await init_molbio_db(engine=engine)
+        health = await molbio_health(engine=engine)
+        assert health["sequence_parent_foreign_key_current"] is True
+        assert health["status"] == "healthy"
+    finally:
+        await engine.dispose()
+
+    with sqlite3.connect(database) as connection:
+        repaired_rows = connection.execute(
+            "PRAGMA foreign_key_list(nucleotide_sequences)"
+        ).fetchall()
+        assert len(repaired_rows) == 1
+        assert repaired_rows[0][0:7] == (
+            0,
+            0,
+            "nucleotide_sequences",
+            "parent_id",
+            "id",
+            "NO ACTION",
+            "RESTRICT",
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM molbio_schema_migrations "
+            "WHERE version='0004_sequence_parent_foreign_key'"
+        ).fetchone() == (1,)
 
 
 @pytest.mark.asyncio

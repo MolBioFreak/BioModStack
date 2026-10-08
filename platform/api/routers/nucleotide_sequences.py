@@ -754,6 +754,15 @@ async def update_sequence(
         len(next_sequence),
         next_is_circular,
     )
+    normalized_features = normalize_feature_payloads(
+        data.features if data.features is not None else seq.features,
+        len(next_sequence),
+    )
+    normalized_analysis_tracks = (
+        normalize_analysis_tracks(data.analysis_tracks, len(next_sequence))
+        if data.analysis_tracks is not None
+        else [] if data.sequence is not None else None
+    )
 
     # Update fields if provided
     if data.name is not None:
@@ -766,8 +775,6 @@ async def update_sequence(
         seq.sequence = next_sequence
         seq.length = len(next_sequence)
         seq.gc_content = calculate_gc_content(next_sequence)
-        if data.analysis_tracks is None:
-            seq.analysis_tracks = []
         changed = True
     if data.sequence_type is not None:
         seq.sequence_type = next_sequence_type
@@ -793,14 +800,14 @@ async def update_sequence(
     if data.is_circular is not None:
         seq.is_circular = data.is_circular
         changed = True
-    if data.features is not None:
-        seq.features = normalize_feature_payloads(data.features, seq.length)
+    if data.features is not None or data.sequence is not None:
+        seq.features = normalized_features
         changed = True
     if data.primers is not None or data.sequence is not None or data.is_circular is not None:
         seq.primers = normalized_primers
         changed = True
-    if data.analysis_tracks is not None:
-        seq.analysis_tracks = normalize_analysis_tracks(data.analysis_tracks, seq.length)
+    if normalized_analysis_tracks is not None:
+        seq.analysis_tracks = normalized_analysis_tracks
         changed = True
     if data.organism is not None:
         seq.organism = data.organism
