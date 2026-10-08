@@ -77,3 +77,15 @@ def test_built_images_publish_oci_revision_labels() -> None:
             assert "COPY docker/web/nginx.conf " in source
         assert "org.opencontainers.image.revision=$BMS_BUILD_SHA" in source, relative_path
         assert "org.opencontainers.image.created=$BMS_BUILD_TIME" in source, relative_path
+
+
+def test_api_final_scratch_stage_retains_build_identity() -> None:
+    source = (REPO_ROOT / "docker/api.Dockerfile").read_text(encoding="utf-8")
+    final_stage = source.split("FROM scratch AS api-runtime", 1)[1]
+
+    for name in ("BMS_BUILD_SHA", "BMS_BUILD_ID", "BMS_BUILD_TIME"):
+        assert f"ARG {name}" in final_stage
+        assert f"{name}=${name}" in final_stage
+    assert "org.opencontainers.image.revision=$BMS_BUILD_SHA" in final_stage
+    assert "org.opencontainers.image.created=$BMS_BUILD_TIME" in final_stage
+    assert "org.opencontainers.image.version=$BMS_BUILD_ID" in final_stage
