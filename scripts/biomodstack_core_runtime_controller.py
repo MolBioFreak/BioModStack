@@ -24,6 +24,7 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = PROJECT_ROOT / "compose.core-runtime.yml"
+GENERATED_OWNERSHIP_NORMALIZER = PROJECT_ROOT / "scripts" / "normalize_generated_ownership.py"
 ALL_SERVICES = (
     "bms-api",
     "bms-host-agent",
@@ -413,6 +414,21 @@ def supervise() -> int:
         return 70
 
 
+def normalize_generated_ownership(*, check_only: bool) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, str(GENERATED_OWNERSHIP_NORMALIZER)]
+    if check_only:
+        command.append("--check")
+    result = run_command(command, check=False, timeout=300)
+    if result.returncode != 0:
+        reason = "generated-ownership-drift" if check_only else "generated-ownership-repair-failed"
+        raise RuntimeBlockedError(
+            reason,
+            "Generated build/test ownership is not normalized",
+            context={"output": redact(f"{result.stdout}\n{result.stderr}".strip())},
+        )
+    return result
+
+
 def perform_once(action: str, services: Sequence[str]) -> int:
     try:
         if action in {"up", "rebuild"}:
@@ -437,6 +453,11 @@ def perform_once(action: str, services: Sequence[str]) -> int:
         elif action == "preflight":
             print(json.dumps(run_preflight(), indent=2, sort_keys=True))
             return 0
+        elif action in {"ownership-check", "ownership-repair"}:
+            result = normalize_generated_ownership(check_only=action == "ownership-check")
+            sys.stdout.write(result.stdout)
+            sys.stderr.write(result.stderr)
+            return 0
         else:
             raise ValueError(action)
         result = run_command(compose_command(*args), check=False, timeout=600)
@@ -454,7 +475,20 @@ def perform_once(action: str, services: Sequence[str]) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("supervise", "preflight", "status", "up", "rebuild", "stop", "down"))
+    parser.add_argument(
+        "action",
+        choices=(
+            "supervise",
+            "preflight",
+            "status",
+            "up",
+            "rebuild",
+            "stop",
+            "down",
+            "ownership-check",
+            "ownership-repair",
+        ),
+    )
     parser.add_argument("services", nargs="*")
     return parser
 
