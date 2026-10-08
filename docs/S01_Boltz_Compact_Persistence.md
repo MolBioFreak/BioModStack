@@ -4,7 +4,11 @@
 `Job.provenance.core_protein_scientific_contract == 1` (integer, not Boolean)
 Boltz2 predict/complex results to the private
 `services.boltz_scientific_persistence.ingest_verified_boltz` adapter. Existing
-explicit FrustraMPNN terminal owners retain precedence. CM is not routed here.
+FrustraMPNN terminal results attach only after native Boltz publication, in the
+same transaction. Their normalized source Designs are derived representations
+with an exact `parent_design_id` link to the native predictor Design. The link
+requires matching producer method/sample/rank/document and original source hash.
+CM is not routed here.
 New supported Boltz jobs receive revision 1 automatically; no rollout flag is required.
 
 ## Producer transport and inventory
@@ -224,7 +228,7 @@ document IDs and artifact hashes. The shared validator recognizes only the four
 additional Boltz evidence roles without pretending they are `Design.json_path`;
 structure and metrics still require their real column bindings. No new
 `core_protein_native_prevalidated` bypass is set by the Boltz adapter and no
-finalizer precedence or filter integration is changed.
+publication-validation bypass or filter integration is introduced.
 
 ## Data-only software transport acceptance
 
@@ -262,10 +266,20 @@ outside this boundary; the PAE-only consumer continuation is described below.
 
 `boltz_scientific_consumer` re-verifies launch/task/publication authority and
 native source/ledger/artifact bytes from the owning Job. It compares the exact
-persisted candidate set and compact blocks without ingestion, UUID allocation,
-or writes. `_verified_publication` is the shared read-only factor; only the
-writer's `_prepare` allocates Design identities. Reads currently verify the
-whole publication, not a cached selected-task claim.
+selected candidate compact block, artifact descriptors and physical columns
+without ingestion, UUID allocation, or writes. `_verified_publication` is the
+shared read-only factor; only the writer's `_prepare` allocates Design identities.
+Addressed reads verify the selected task manifest/binding and launch inventory,
+then parse only the selected native payloads. Unreadable siblings cannot disable
+a healthy selected view. Full-cohort admission and retry still validate all
+expected tasks, candidates, rows and artifacts. No mutable-path cache is used.
+
+The worker passes one selected snapshot through signature and projection.
+Structure/residue/chain responses use its retained bytes; PAE and ipSAE loaders
+that reopen paths revalidate the selected receipt after their read.
+Model applicability is owned by `core_protein_scientific_contract`: revision 1
+alone does not grant Boltz spatial axes. Other marked model families explicitly
+report `unsupported_model_native_spatial_metric`; scalar dialects are unchanged.
 
 Design list, by-job list, and detail attach a compact `ViewerDocument` with
 `documentId=primary`, the actual selected DB Design ID, and verified structure

@@ -356,7 +356,9 @@ def test_every_active_workflow_consumer_is_v3_only_for_new_writes() -> None:
         source = path.read_text(encoding="utf-8")
         assert "SchedulerFrustraMPNNParentFanout" in source, consumer
         assert "CanonicalFrustraMPNNV2(" not in source, consumer
-        assert "CanonicalFrustraMPNN(" not in source, consumer
+        # Match the retired owner, not the supported RemoteCanonicalFrustraMPNN
+        # v3 transport whose identifier contains the historical suffix.
+        assert __import__('re').search(r'\bCanonicalFrustraMPNN\s*\(', source) is None, consumer
         assert "workflow_component_request_v1.json" not in source, consumer
 
     analysis = (REPO_ROOT / "workflows" / "frustrampnn_analysis.nf").read_text(encoding="utf-8")

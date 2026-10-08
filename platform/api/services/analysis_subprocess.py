@@ -359,16 +359,18 @@ def _compute_pae_matrix(
     return result, summary, None
 
 
-async def _dispatch_ipsae_interface(design, params, session):
+async def _dispatch_ipsae_interface(design, params, session, *, selected=None):
     from types import SimpleNamespace
     from services.analysis_registry import scientific_contract_revision
-    from services.boltz_scientific_consumer import verified_boltz_design
+    from services.core_protein_scientific_contract import verified_native_spatial_design
     from services.boltz_scientific_persistence import _revalidate
 
     if await scientific_contract_revision(design, session) != 1:
         return _compute_ipsae_interface(design, params)
     try:
-        selected = await verified_boltz_design(design, session)
+        selected = selected or await verified_native_spatial_design(design, session)
+        if selected["design_id"] != design.id:
+            raise ValueError("foreign selected snapshot")
         native = selected["native"]
         # Use the existing verified producer descriptors, not Design paths or
         # inferred matrix/structure order. No additional producer is admitted.
@@ -389,10 +391,12 @@ async def _dispatch_ipsae_interface(design, params, session):
         # Marked derived evidence lives in the bound analysis artifact, never
         # backfilled into historical scalar interpretations.
         return result, dict(summary, status="ok", reason=None), result, {}
-    except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError):
+    except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError) as exc:
         result = {"design_id": design.id, "design_name": design.name,
             "contract_revision": 1, "status": "unavailable", "ipsae": None,
-            "reason": "missing_or_invalid_producer_identity_or_roles"}
+            "reason": ("unsupported_model_native_spatial_metric"
+                       if str(exc) == "unsupported_model_native_spatial_metric"
+                       else "missing_or_invalid_producer_identity_or_roles")}
         return result, {"status": result["status"], "reason": result["reason"]}, result, {}
 
 
@@ -853,7 +857,18 @@ async def _run_analysis(run_id: str) -> int:
             definition = get_analysis_definition(run.analysis_type)
             if definition is None or definition.subject_kind != "design":
                 raise ValueError(f"Unsupported design analysis type: {run.analysis_type}")
-            current_signature = await build_analysis_input_signature(definition, design, params, session)
+            native_selection = None
+            if run.analysis_type in {CHAIN_METRICS_ANALYSIS, PAE_MATRIX_ANALYSIS, IPSAE_INTERFACE_ANALYSIS}:
+                from services.analysis_registry import scientific_contract_revision
+                if await scientific_contract_revision(design, session) == 1:
+                    from services.core_protein_scientific_contract import verified_native_spatial_design
+                    try:
+                        native_selection = await verified_native_spatial_design(design, session)
+                    except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError):
+                        pass  # Signature below occupies the unavailable namespace.
+            current_signature = await build_analysis_input_signature(
+                definition, design, params, session,
+                **({"native_selection": native_selection} if native_selection is not None else {}))
             if current_signature != run.input_signature:
                 raise ValueError("Design analysis input signature changed after queueing")
             structure_path = _resolve_design_structure_path(design)
@@ -867,8 +882,8 @@ async def _run_analysis(run_id: str) -> int:
             elif run.analysis_type == CHAIN_METRICS_ANALYSIS:
                 from services.analysis_registry import scientific_contract_revision
                 if await scientific_contract_revision(design, session) == 1:
-                    from services.boltz_scientific_consumer import compute_persisted_native_metric
-                    metric = await compute_persisted_native_metric(design, 'chain_metrics', session)
+                    from services.core_protein_scientific_contract import compute_persisted_native_metric
+                    metric = await compute_persisted_native_metric(design, 'chain_metrics', session, selected=native_selection)
                     result_payload = metric.model_dump(mode='json')
                     summary_payload = {'status': metric.status, 'reason': metric.reason}
                     inline_payload = None
@@ -879,12 +894,12 @@ async def _run_analysis(run_id: str) -> int:
             elif run.analysis_type == PAE_MATRIX_ANALYSIS:
                 from services.analysis_registry import scientific_contract_revision
                 if await scientific_contract_revision(design, session) == 1:
-                    from services.boltz_scientific_consumer import compute_persisted_pae
-                    result_payload, summary_payload, inline_payload = await compute_persisted_pae(design, params, session)
+                    from services.core_protein_scientific_contract import compute_persisted_pae
+                    result_payload, summary_payload, inline_payload = await compute_persisted_pae(design, params, session, selected=native_selection)
                 else:
                     result_payload, summary_payload, inline_payload = _compute_pae_matrix(design, params)
             elif run.analysis_type == IPSAE_INTERFACE_ANALYSIS:
-                result_payload, summary_payload, inline_payload, design_updates = await _dispatch_ipsae_interface(design, params, session)
+                result_payload, summary_payload, inline_payload, design_updates = await _dispatch_ipsae_interface(design, params, session, selected=native_selection)
             elif run.analysis_type == ANTIBODY_ANNOTATION_PACK_ANALYSIS:
                 result_payload, summary_payload, inline_payload, design_updates = _compute_antibody_annotation_pack(design)
             else:
