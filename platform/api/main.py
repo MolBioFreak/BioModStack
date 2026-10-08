@@ -15,7 +15,7 @@ from experiment_database import init_experiment_db
 from molbio_database import init_molbio_db, molbio_health
 from build_identity import current_build_identity
 from readiness import collect_runtime_readiness
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, templates, user_sequences, user_templates, viewer_resources
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ops, msa, ngs_alignment_sessions, nucleotide_sequences, ont_devices, ont_runs, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
@@ -200,6 +200,8 @@ app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"]
 app.include_router(user_sequences.router, prefix="/api/user-sequences", tags=["user-sequences"])
 app.include_router(user_templates.router, prefix="/api/user-templates", tags=["user-templates"])
 app.include_router(experiment_workspaces.router)
+app.include_router(projects.router)
+app.include_router(project_manager.router)
 # msa_cache router removed - now using file-based caching
 app.include_router(smiles_converter.router, prefix="/api/smiles", tags=["smiles"])
 app.include_router(queue.router, prefix="/api", tags=["queue"])  # /api/queue/*

@@ -287,7 +287,36 @@ class ExperimentExternalEntityReceipt(ExperimentBase):
     generation_or_revision = Column(String(255), nullable=False)
     content_digest = Column(String(64), nullable=False)
     availability = Column(String(32), nullable=False, default="unknown")
+    verification_authority = Column(String(255), nullable=False, default="legacy_unverified")
     acknowledgement_json = Column(Text, nullable=True)
+    created_at = Column(String(64), nullable=False, default=_timestamp)
+
+
+class ExperimentResearchRecord(ExperimentBase):
+    __tablename__ = "research_records"
+
+    resource_id = Column(String(128), ForeignKey("resources.id"), primary_key=True)
+    workspace_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    subject_resource_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    record_kind = Column(String(32), nullable=False)
+    body = Column(Text, nullable=False)
+    author = Column(String(255), nullable=True)
+    source_receipt_ids_json = Column(Text, nullable=False, default="[]")
+    supersedes_record_id = Column(String(128), ForeignKey("research_records.resource_id"), nullable=True)
+    created_at = Column(String(64), nullable=False, default=_timestamp)
+
+
+class ExperimentDomainAdapterReceipt(ExperimentBase):
+    __tablename__ = "domain_adapter_receipts"
+
+    resource_id = Column(String(128), ForeignKey("resources.id"), primary_key=True)
+    workspace_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    domain_experiment_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    adapter_id = Column(String(255), nullable=False)
+    adapter_version = Column(String(64), nullable=False)
+    operation_kind = Column(String(64), nullable=False)
+    normalized_request_sha256 = Column(String(64), nullable=False)
+    receipt_json = Column(Text, nullable=False)
     created_at = Column(String(64), nullable=False, default=_timestamp)
 
 
