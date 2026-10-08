@@ -19,6 +19,7 @@ from services.nextflow import (  # noqa: E402
 
 
 EXPECTED_MIGRATED_ENTRYPOINTS = {
+    "oligo_design": "workflows/oligo_design.nf",
     "nanopore_methylation": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
     "ont_basecall_rna": "workflows/ngs/ont_basecall_rna.nf",
@@ -49,7 +50,7 @@ def test_resolver_keeps_current_migrated_workflows_off_main() -> None:
 
 
 def test_resolver_fallback_is_explicit_for_unmigrated_profiles() -> None:
-    assert resolve_nextflow_entrypoint(effective_profile="oligo_design") == "main.nf"
+    assert resolve_nextflow_entrypoint(effective_profile="bindcraft") == "main.nf"
     assert resolve_nextflow_entrypoint(effective_profile="binder_denovo") == "main.nf"
     assert resolve_nextflow_entrypoint(effective_profile="protenix") == "main.nf"
 
@@ -110,4 +111,30 @@ def test_build_nextflow_command_uses_registry_for_fresh_and_resume_launches() ->
 
     assert fresh_cmd[:4] == ["nextflow", "run", WORKFLOW_ENTRYPOINTS["protein_local_redesign"], "-profile"]
     assert resume_cmd[:4] == ["nextflow", "run", WORKFLOW_ENTRYPOINTS["protein_local_redesign"], "-profile"]
+    assert "-resume" in resume_cmd
+
+
+def test_oligo_design_fresh_and_resume_launches_are_direct_entrypoint() -> None:
+    fresh_cmd = build_nextflow_command(
+        "oligo_design",
+        "oligo_design",
+        {"rfdpoly_contigs": "10", "rfdpoly_polymer_chains": "A"},
+        "/tmp/out",
+        job_id="job-oligo-fresh",
+    )
+    resume_cmd = build_nextflow_command(
+        "oligo_design",
+        "oligo_design",
+        {
+            "rfdpoly_contigs": "10",
+            "rfdpoly_polymer_chains": "A",
+            "resume_work_dir": "/tmp/nxf-work",
+        },
+        "/tmp/out",
+        job_id="job-oligo-resume",
+    )
+
+    assert fresh_cmd[:4] == ["nextflow", "run", "workflows/oligo_design.nf", "-profile"]
+    assert resume_cmd[:4] == ["nextflow", "run", "workflows/oligo_design.nf", "-profile"]
+    assert "-resume" not in fresh_cmd
     assert "-resume" in resume_cmd

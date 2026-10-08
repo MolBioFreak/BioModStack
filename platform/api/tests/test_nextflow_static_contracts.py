@@ -13,6 +13,7 @@ INCLUDE_RE = re.compile(
 )
 
 MIGRATED_ENTRYPOINTS = {
+    "oligo_design": "workflows/oligo_design.nf",
     "nanopore_methylation": "workflows/ngs/ont_methylation_analysis.nf",
     "ont_basecall_dna": "workflows/ngs/ont_basecall_dna.nf",
     "ont_basecall_rna": "workflows/ngs/ont_basecall_rna.nf",
@@ -29,6 +30,7 @@ MIGRATED_ENTRYPOINTS = {
 }
 
 MIGRATED_SYMBOLS = (
+    "OLIGO_DESIGNER",
     "PROTEIN_LOCAL_REDESIGN",
     "PROTEIN_CAD_EXPERIMENTAL",
     "CALIBY_EXPERIMENTAL",

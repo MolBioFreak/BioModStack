@@ -36,8 +36,6 @@ include { structure_prediction_wf ; complex_prediction_wf } from './modules/stru
 include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
 include { FrustrampnnQC ; AggregateFrustrationReports } from './modules/frustrampnn.nf'
 
-include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
-
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
 include { ANTIBODY_DENOVO ; NormalizeTargetPDB as NormalizeAntibodyTargetPDB } from './workflows/antibody_denovo.nf'
@@ -134,40 +132,6 @@ workflow {
         println("* Trajectories: ${params.bindcraft_num_final_designs}")
 
         BINDCRAFT_DESIGN()
-
-        return null
-    }
-
-    if (params.rfd_mode == 'oligo_design' || params.rfdpoly_enabled) {
-        println("Running Oligo Designer (RFDpoly + Boltz-2)")
-        println("* Contigs: ${params.rfdpoly_contigs}")
-        println("* Polymer chains: ${params.rfdpoly_polymer_chains}")
-        println("* Num designs: ${params.rfdpoly_num_designs}")
-        println("* Checkpoint: ${params.rfdpoly_checkpoint}")
-        println("* Noise schedule: ${params.rfdpoly_noise_schedule ?: 'linear'}")
-        println("* Binding guidance: ${params.binding_guidance ?: false}")
-        println("* Validate with Boltz: ${params.oligo_validate_boltz}")
-        if (params.target_pdb) {
-            println("* Target PDB: ${params.target_pdb}")
-        }
-
-        def input_pdb = params.scaffold_pdb 
-            ? channel.fromPath(params.scaffold_pdb)
-            : (params.rfdpoly_input_pdb
-                ? channel.fromPath(params.rfdpoly_input_pdb)
-                : channel.of(file("${params.code_root}/NO_FILE")))
-
-        def target_pdb = params.target_pdb 
-            ? channel.fromPath(params.target_pdb)
-            : channel.of(file("${params.code_root}/NO_FILE"))
-
-        OLIGO_DESIGNER(
-            channel.of(params.design_id ?: 'oligo_design'),
-            channel.of(params.rfdpoly_contigs),
-            channel.of(params.rfdpoly_polymer_chains),
-            input_pdb,
-            target_pdb
-        )
 
         return null
     }
