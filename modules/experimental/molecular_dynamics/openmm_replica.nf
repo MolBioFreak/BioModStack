@@ -1,9 +1,10 @@
 nextflow.enable.dsl=2
 
 process MD_OPENMM_REPLICA {
+    maxForks 1
     tag "openmm-replica:${replica_index}"
     label 'MolecularDynamicsOpenMM'
-    publishDir "${params.out_dir}/replicas/replica_${replica_index}", mode: 'copy', overwrite: true
+    publishDir "${params.out_dir}/replicas/replica_${replica_index}", mode: 'copy', overwrite: false, enabled: !params.md_composed
 
     input:
     tuple val(replica_index), path(normalized_config), path(preparation_bundle)

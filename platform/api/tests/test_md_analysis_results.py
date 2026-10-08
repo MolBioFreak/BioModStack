@@ -346,9 +346,11 @@ def test_analysis_workflow_is_cpu_hash_bound_retryable_and_separate() -> None:
     assert "--report-failure-as-output" not in module
     orchestrator = (REPO_ROOT / "workflows/experimental/molecular_dynamics/orchestrator.nf").read_text()
     assert "MD_ANALYZE_REPLICA(analysis_items)" not in orchestrator
-    assert "scripts.bms_md.spawn_analysis" in orchestrator
-    assert "--stage md_analysis" in orchestrator
-    assert "scripts.bms_md.collect_analysis" in orchestrator
+    assert "MD_ANALYZE_REPLICA(analysis_requests)" in orchestrator
+    assert "MD_JOIN_REPLICAS" in orchestrator
+    assert "MD_SEAL_RESULTS" in orchestrator
+    assert "spawn_analysis" not in orchestrator
+    assert "api_url" not in orchestrator
     assert "(\"molecular_dynamics\", \"analyze\")" in nextflow_service
     assert "molecular_dynamics_analysis" in config
     analysis_label = config.rindex("withLabel: MolecularDynamicsAnalysis")

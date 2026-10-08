@@ -45,62 +45,8 @@ MAX_ANALYSIS_POINTS = 10_000
 MAX_RESIDUE_METRICS = 10_000
 
 
-def _replica_protocol_matches(
-    requested: Mapping[str, Any],
-    observed: Any,
-    *,
-    qualified_gpu_offload: str | None = None,
-) -> bool:
-    if observed == requested:
-        return True
-    if requested.get("schema") != "bms.md.job.v2" or not isinstance(observed, Mapping):
-        return False
-    if observed.get("schema") != "bms.md.job.v2":
-        return False
-    requested_input = requested.get("input")
-    observed_input = observed.get("input")
-    if not isinstance(requested_input, Mapping) or not isinstance(observed_input, Mapping):
-        return False
-    requested_sha = requested_input.get("structure_sha256")
-    observed_sha = observed_input.get("structure_sha256")
-    requested_bytes = requested_input.get("structure_bytes")
-    observed_bytes = observed_input.get("structure_bytes")
-    if (
-        not isinstance(requested_sha, str)
-        or SHA256.fullmatch(requested_sha) is None
-        or observed_sha != requested_sha
-        or type(requested_bytes) is not int
-        or requested_bytes < 1
-        or observed_bytes != requested_bytes
-        or not isinstance(requested_input.get("structure"), str)
-        or not isinstance(observed_input.get("structure"), str)
-    ):
-        return False
-    normalized_observed = dict(observed)
-    normalized_observed["input"] = {
-        **observed_input,
-        "structure": requested_input["structure"],
-    }
-    if normalized_observed == requested:
-        return True
-    requested_execution = requested.get("execution")
-    observed_execution = observed.get("execution")
-    if not isinstance(requested_execution, Mapping) or not isinstance(observed_execution, Mapping):
-        return False
-    scheduler_gpu_id = requested_execution.get("gpu_id")
-    if not isinstance(scheduler_gpu_id, str):
-        return False
-    expected_execution = {
-        **requested_execution,
-        "gpu_id": "0",
-        "scheduler_gpu_id": scheduler_gpu_id,
-    }
-    if qualified_gpu_offload is not None:
-        expected_execution["gpu_offload"] = qualified_gpu_offload
-    expected_observed = dict(requested)
-    expected_observed["input"] = normalized_observed["input"]
-    expected_observed["execution"] = expected_execution
-    return normalized_observed == expected_observed
+from scripts.bms_md.native_contract import replica_protocol_matches as _replica_protocol_matches
+from scripts.bms_md.runner import replica_seed
 
 
 def _qualified_gpu_offload(root: Path, requested: Mapping[str, Any]) -> str | None:
@@ -636,7 +582,7 @@ def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
             or engine.get("runtime") != job_spec.get("engine_runtime")
         ):
             raise MDResultError("MD_COMPLETION_BLOCKED", "MD replica engine identity does not match the requested scientific protocol", 409)
-        if type(seed) is not int or manifest.get("replica_index") != index or seed != base_seed + index or seed in replica_seeds:
+        if type(seed) is not int or manifest.get("replica_index") != index or seed != replica_seed(base_seed, index) or seed in replica_seeds:
             raise MDResultError("MD_COMPLETION_BLOCKED", "MD replica index or seed lineage is invalid", 409)
         if not required_roles.issubset(roles_by_replica[index]):
             raise MDResultError("MD_COMPLETION_BLOCKED", f"MD replica {index} is missing required artifact roles", 409)

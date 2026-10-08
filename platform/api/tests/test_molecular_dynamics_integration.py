@@ -116,27 +116,17 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
     assert ".flatten" not in replica_entrypoint
 
     orchestrator = (workflow_root / "orchestrator.nf").read_text(encoding="utf-8")
-    assert "scripts.bms_md.spawn_replicas" in orchestrator
-    assert "scripts/wait_for_children.py" in orchestrator
-    assert orchestrator.count("--expected_children ${spawn_result}") == 2
-    assert "--batch_name" not in orchestrator
-    assert "scripts.bms_md.aggregate_children" in orchestrator
-    assert "MD_ASSERT_REPLICA_OUTCOME" in orchestrator
-    assert "MD_GROMACS_REPLICA" not in orchestrator
-    assert "MD_ANALYZE_REPLICA" not in orchestrator
-    ordered_tokens = [
-        "scripts.bms_md.spawn_replicas",
-        "--stage md_replica",
-        "scripts.bms_md.aggregate_children",
-        "MD_ASSERT_REPLICA_OUTCOME",
-        "scripts.bms_md.spawn_analysis",
-        "--stage md_analysis",
-        "scripts.bms_md.collect_analysis",
-        "MD_ASSERT_ANALYSIS_OUTCOME",
-        "MD_COMPLETION_BARRIER",
-    ]
-    offsets = [orchestrator.index(token) for token in ordered_tokens]
+    assert "spawn_replicas" not in orchestrator
+    assert "wait_for_children" not in orchestrator
+    assert "api_url" not in orchestrator
+    body = orchestrator[orchestrator.index("workflow MD_CLOSURE {"):]
+    ordered_tokens = ["MD_PREPARE_CONFIG(config_ch", "MD_GROMACS_REPLICA(engines",
+                      "MD_JOIN_REPLICAS(MD_PREPARE_CONFIG", "MD_ANALYZE_REPLICA(analysis_requests)",
+                      "MD_SEAL_RESULTS(MD_JOIN_REPLICAS"]
+    offsets = [body.index(token) for token in ordered_tokens]
     assert offsets == sorted(offsets)
+    assert "out.artifacts).toList()" in body
+    assert "out.native_results.toList()" in body
 
     analyze_entrypoint = (workflow_root / "analyze.nf").read_text(encoding="utf-8")
     assert "params.md_analysis_work_item" in analyze_entrypoint
