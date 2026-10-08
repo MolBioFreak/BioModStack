@@ -1,0 +1,47 @@
+Bootstrap: docker
+From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+%labels
+    Author BioModStack
+    Description IgGM - Generative Foundation Model for Antibody Design (Tencent AI4S)
+    Version 1.0.0
+
+%post
+    apt-get update && apt-get install -y \
+        wget \
+        git \
+        python3 \
+        python3-pip \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install PyTorch with CUDA support
+    pip3 install torch==2.0.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+    # Clone IgGM repository
+    git clone https://github.com/TencentAI4S/IgGM.git /opt/IgGM
+    cd /opt/IgGM
+
+    # Install PyTorch Geometric dependencies
+    pip3 install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv \
+        -f https://data.pyg.org/whl/torch-2.0.1+cu118.html
+
+    # Install IgGM dependencies
+    pip3 install hydra-core omegaconf biopython scipy pandas numpy einops
+    pip3 install fair-esm  # For ESM embeddings
+    
+    # Install additional requirements if present
+    if [ -f requirements.txt ]; then
+        pip3 install -r requirements.txt || true
+    fi
+
+    # Cleanup
+    rm -rf /root/.cache/pip
+
+%environment
+    export PYTHONPATH="/opt/IgGM:$PYTHONPATH"
+    export PATH="/opt/IgGM:$PATH"
+
+%runscript
+    cd /opt/IgGM
+    python3 "$@"
