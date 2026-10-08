@@ -47,11 +47,12 @@ process RFDPolyDesign {
         : 'train_session2024-07-08_1720455712_BFF_3.00.pt'
 
     // Handle optional input PDB (scaffold)
-    // Must use Hydra ~key syntax to DELETE the default test_data/DBP035.pdb
-    // (setting to null causes TypeError - code doesn't handle NoneType)
+    // RFDpoly ALWAYS requires a valid input_pdb, even for de novo design (per README)
+    // Default relative path doesn't work from Nextflow work dir - use absolute path
     def input_arg = use_input_pdb && !input_pdb.name.startsWith('NO_')
         ? "inference.input_pdb=${input_pdb}"
-        : "~inference.input_pdb"
+        : "inference.input_pdb=/RFDpoly/rf_diffusion/test_data/DBP035.pdb"
+    // Dummy for de novo
 
     // Handle target PDB for binding design
     def target_arg = use_target_pdb && !target_pdb.name.startsWith('NO_')
