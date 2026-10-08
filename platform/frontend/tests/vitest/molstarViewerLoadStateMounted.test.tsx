@@ -73,6 +73,19 @@ describe('Mol* public load-state contract', () => {
         });
     });
 
+    it('passes native SDF through the public host without reinterpreting it as protein PDB', async () => {
+        const onLoadStateChange = vi.fn();
+        await act(async () => {
+            root.render(<StructureViewerHost structureUrl="/api/jobs/dock/docking-results/run/diffdock/results/complex-b/rank1.sdf"
+                format="sdf" onLoadStateChange={onLoadStateChange} showMetricWorkbench={false}
+                showSequenceTrack={false} showMeasurements={false} showComplexWorkbench={false} showM6Workbench={false} />);
+        });
+        await vi.waitFor(() => expect(onLoadStateChange).toHaveBeenLastCalledWith('loaded', undefined));
+        expect(controllerState.loadedScenes[0]).toMatchObject({
+            documents: [{ sourceKind: 'sdf', sourceUrl: new URL('/api/jobs/dock/docking-results/run/diffdock/results/complex-b/rank1.sdf', window.location.href).href }],
+        });
+    });
+
     it('publishes a bounded failed state when the active scene load fails', async () => {
         controllerState.loadResult = { status: 'error', error: new Error('decoder rejected current structure') };
         const onLoadStateChange = vi.fn();
