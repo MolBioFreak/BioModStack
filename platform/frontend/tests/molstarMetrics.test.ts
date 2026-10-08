@@ -143,8 +143,3 @@ test('chain-series builder never invents residue numbering', () => {
     assert.equal(result.rejected.length, 1);
     assert.equal(result.rejected[0].point.value, 66);
 });
-
-test('pairwise matrices are not representable as residue scalar layers', () => {
-    const source = JSON.stringify({ scope: 'chain-pair-matrix', values: [[0.9, 0.2]] });
-    assert.doesNotMatch(source, /"scope":"residue-scalar"/);
-});

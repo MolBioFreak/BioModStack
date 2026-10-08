@@ -200,6 +200,7 @@ export default defineConfig({
             './tests/vitest/molBioBodyScrollLock.test.tsx',
             './tests/vitest/molBioMobileConstructs.test.tsx',
             './tests/vitest/molBioSequenceSelectionRace.test.tsx',
+            './tests/vitest/molecularWorkspaceRestoreStrictMode.test.tsx',
         ],
     },
 });

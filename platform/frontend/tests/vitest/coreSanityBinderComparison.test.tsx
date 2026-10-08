@@ -28,7 +28,7 @@ async function mount(props: React.ComponentProps<typeof BinderResultComparison>)
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => root!.render(<QueryClientProvider client={client}><BinderResultComparison {...props} /></QueryClientProvider>)); await settle();
 }
-function fixture() {
+function fixture(shape: 'legacy' | 'native' | 'mixed' = 'legacy') {
     requests.length = 0; localStorage.clear();
     api.defaults.adapter = async config => {
         requests.push({ url: config.url, data: config.data ? JSON.parse(config.data) : undefined, params: config.params });
@@ -40,7 +40,19 @@ function fixture() {
         else if (config.url === '/api/jobs/boltzgen') data = { id: 'boltzgen', model_id: 'boltzgen', mode: 'protein_binder' };
         else if (config.url === '/api/jobs/boltzgen/generation-results') data = { records: [{ candidate_key: 'observation-only', metrics: { native_score: null }, structures: [] }], total: 1, offset: 0, limit: 1000, receipt: {}, publication: {} };
         else if (config.url === '/api/designs') { const job = config.params.job_id; data = { designs: [{ id: `${job}-design`, job_id: job, name: 'Same name', plddt_overall: null }], total: 1 }; }
-        else if (config.url?.endsWith('/residue-metrics')) data = { residue_numbers: [10, 12], plddt: [88, null], length: 2 };
+        else if (config.url?.endsWith('/residue-metrics')) {
+            const native = shape === 'native' || (shape === 'mixed' && config.url.includes('boltzgen'));
+            data = native ? {
+                schema_name: 'core_protein_viewer_metric', schema_version: 1, contract_revision: 1,
+                design_id: config.url.split('/')[3], design_name: 'Same name', status: 'ok', reason: null,
+                document: { documentId: 'document', candidateId: 'native', contentSha256: 'a'.repeat(64), sourceKind: 'mmcif' },
+                producer_binding: { candidate_id: 'producer', document_id: 'source' }, artifact_sha256: 'b'.repeat(64),
+                axis: { candidate_id: 'producer', document_id: 'source', source_sha256: 'a'.repeat(64), residues: [{
+                    index: 0, chain_id: 'A', residue_name: 'ALA', insertion_code: '', selected_model: 1, selected_altloc: '',
+                    auth_asym_id: 'A', auth_seq_id: 10, label_asym_id: 'A', label_seq_id: 1, source_entity_id: '1', entity_instance_id: '1',
+                }] }, native_positions: [0], metric: 'residue_plddt', units: 'fraction', values: [0.85],
+            } : { residue_numbers: [10, 12], plddt: [88, null], length: 2 };
+        }
         else throw new Error(`Unexpected transport ${config.url}`);
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
@@ -64,7 +76,7 @@ it('demand-mounts real batch comparison for all native families and explicit pre
     expect(container.textContent).not.toContain('Success Rate');
     await click('Native observations · boltzgen');
     expect(requests.find(r => r.url === '/api/jobs/boltzgen/generation-results')?.params).toEqual({ offset: 0, limit: 1000 });
-    expect(container.textContent).toContain('observation-only');
+    await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('observation-only'); });
     expect(requests.some(r => r.url?.includes('observation-only/residue-metrics'))).toBe(false);
     await click('Return to native results');
     expect(container.textContent).not.toContain('Scientific result analytics');
@@ -95,16 +107,21 @@ it('compares two zero-retained BC2 campaigns through their native stage selector
     await vi.waitFor(async () => { await settle(); expect([...container.querySelectorAll('button')].filter(button => button.textContent === 'Trajectory 1')).toHaveLength(2); });
 });
 
-it('reuses actual design comparison with exact IDs, explicit descendant scope, missing values and fresh reopen', async () => {
-    fixture(); await mount({ jobId: 'boltzgen', jobIds: ['boltzgen', 'protenix'], selectedDesignIds: ['boltzgen-design', 'protenix-design', 'observation-only'] });
+it.each(['legacy', 'native', 'mixed'] as const)('reuses actual design comparison with %s wire, exact IDs, explicit descendant scope, missing values and fresh reopen', async shape => {
+    fixture(shape); await mount({ jobId: 'boltzgen', jobIds: ['boltzgen', 'protenix'], selectedDesignIds: ['boltzgen-design', 'protenix-design', 'observation-only'] });
     await click('Compare result sets'); await click('Candidate confidence');
     expect(requests.filter(r => r.url === '/api/designs').map(r => r.params)).toEqual([
         { job_id: 'boltzgen', include_children: false, limit: 100, offset: 0, include_summary: false },
         { job_id: 'protenix', include_children: false, limit: 100, offset: 0, include_summary: false },
     ]);
     expect(requests.filter(r => r.url?.endsWith('/residue-metrics')).map(r => r.url)).toEqual(['/api/designs/boltzgen-design/residue-metrics', '/api/designs/protenix-design/residue-metrics']);
-    const chart = JSON.parse(container.querySelector('[data-chart]')!.textContent!);
-    expect(chart.data).toEqual([{ residue: 10, 'Same name (boltzgen-design)': 88, 'Same name (protenix-design)': 88 }, { residue: 12 }]);
+    const renderedChart = container.querySelector('[data-chart]');
+    expect(renderedChart, 'selected supported confidence must render a chart').not.toBeNull();
+    const chart = JSON.parse(renderedChart!.textContent!);
+    expect(chart.data).toEqual([
+        { residue: 10, 'Same name (boltzgen-design)': shape === 'legacy' ? 88 : 85, 'Same name (protenix-design)': shape === 'native' ? 85 : 88 },
+        ...(shape === 'native' ? [] : [{ residue: 12 }]),
+    ]);
     await act(async () => root!.unmount()); root = undefined; client.clear(); container.remove(); requests.length = 0;
     await mount({ jobId: 'boltzgen' }); expect(requests).toEqual([]);
     await click('Compare result sets');

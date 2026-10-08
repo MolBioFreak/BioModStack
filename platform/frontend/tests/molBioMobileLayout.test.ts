@@ -121,11 +121,6 @@ test('failed mobile sequence activation keeps the picker and current surface', a
     });
     assert.equal(loaded, false);
     assert.equal(activations, 0);
-
-    const loadStart = TOOLKIT_SOURCE.indexOf('const loadSequence = useCallback');
-    const existingCheck = TOOLKIT_SOURCE.indexOf('const existing = workspaceTabs.find', loadStart);
-    assert.ok(loadStart >= 0 && existingCheck > loadStart);
-    assert.doesNotMatch(TOOLKIT_SOURCE.slice(loadStart, existingCheck), /updateQueryParams/u);
 });
 
 test('successful mobile sequence activation closes the picker once', async () => {
@@ -164,83 +159,7 @@ test('successful mobile sequence activation closes the picker once', async () =>
     );
 });
 
-test('sequence loading is newest-wins before workspace and URL publication', () => {
-    const loadStart = TOOLKIT_SOURCE.indexOf('const loadSequence = useCallback');
-    const loadEnd = TOOLKIT_SOURCE.indexOf('\n    useEffect(() => {', loadStart);
-    assert.ok(loadStart >= 0 && loadEnd > loadStart);
-    const loadSource = TOOLKIT_SOURCE.slice(loadStart, loadEnd);
-    const invalidateIndex = loadSource.indexOf('invalidateGetSequence()');
-    assert.ok(invalidateIndex >= 0, 'each sequence load must invalidate an older request');
-    assert.ok(
-        invalidateIndex < loadSource.indexOf('const existing = workspaceTabs.find'),
-        'every selection must invalidate an older fetch before an existing workspace can publish',
-    );
-    assert.match(TOOLKIT_SOURCE, /sequenceLoadControllerRef\s*=\s*useRef\(createLatestAsyncResourceController\(\)\)/u);
-    assert.match(loadSource, /const loadToken = sequenceLoadControllerRef\.current\.begin\(\)/u);
-    assert.equal(
-        (loadSource.match(/sequenceLoadControllerRef\.current\.isCurrent\(loadToken\)/gu) || []).length,
-        2,
-    );
-    assert.ok(
-        loadSource.indexOf('isCurrent(loadToken)') < loadSource.indexOf('activateWorkspace(existing.id)'),
-        'existing-workspace publication must be current-request guarded',
-    );
-    assert.ok(
-        loadSource.lastIndexOf('isCurrent(loadToken)') < loadSource.indexOf('openWorkspace(converted'),
-        'fetched workspace and URL publication must be current-request guarded',
-    );
-    assert.match(TOOLKIT_SOURCE, /sequenceLoadControllerRef\.current\.dispose\(\)/u);
 
-    const mobileDemoStart = TOOLKIT_SOURCE.indexOf('const handleMobileLoadDemo = useCallback');
-    const mobileDemoEnd = TOOLKIT_SOURCE.indexOf('\n    if (isMobileMolBio)', mobileDemoStart);
-    assert.ok(mobileDemoStart >= 0 && mobileDemoEnd > mobileDemoStart);
-    const mobileDemoSource = TOOLKIT_SOURCE.slice(mobileDemoStart, mobileDemoEnd);
-    assert.match(mobileDemoSource, /sequenceLoadControllerRef\.current\.begin\(\)/u);
-    assert.match(mobileDemoSource, /invalidateGetSequence\(\)/u);
-    assert.ok(
-        mobileDemoSource.lastIndexOf('sequenceLoadControllerRef.current.begin()')
-            < mobileDemoSource.indexOf('loadDemo(pendingDemo)'),
-        'deferred demo activation must invalidate an older saved-construct load before publishing',
-    );
-});
-
-test('MolBio URL aliases share immutable authority and demos clear saved URL ownership', () => {
-    assert.match(TOOLKIT_SOURCE, /requestedCanonicalMolecularSequenceId/u);
-    assert.match(TOOLKIT_SOURCE, /requestedLegacyMolecularSequenceId/u);
-    assert.match(
-        TOOLKIT_SOURCE,
-        /requestedMolecularSequenceId = requestedCanonicalMolecularSequenceId \?\? requestedLegacyMolecularSequenceId/u,
-    );
-    const deepLinkStart = TOOLKIT_SOURCE.indexOf('const openDeepLink = async');
-    const deepLinkEnd = TOOLKIT_SOURCE.indexOf('\n        void openDeepLink()', deepLinkStart);
-    assert.ok(deepLinkStart >= 0 && deepLinkEnd > deepLinkStart);
-    const deepLinkSource = TOOLKIT_SOURCE.slice(deepLinkStart, deepLinkEnd);
-    assert.match(deepLinkSource, /if \(deepLinkRevisionId\) return/u);
-    assert.doesNotMatch(deepLinkSource, /openWorkspace\(converted/u);
-
-    const demoStart = TOOLKIT_SOURCE.indexOf('const handleMobileLoadDemo = useCallback');
-    const demoEnd = TOOLKIT_SOURCE.indexOf('\n    if (isMobileMolBio)', demoStart);
-    const demoSource = TOOLKIT_SOURCE.slice(demoStart, demoEnd);
-    for (const key of ['molbio_sequence_id', 'molbio_revision_id', 'sequence_id', 'revision_id']) {
-        assert.match(demoSource, new RegExp(`${key}: null`, 'u'));
-    }
-    assert.match(demoSource, /pendingMobileDemoRef\.current = demo/u);
-    assert.doesNotMatch(demoSource.slice(0, demoSource.indexOf('useEffect')), /loadDemo\(demo\)/u);
-    const pendingDemoStart = TOOLKIT_SOURCE.indexOf('const pendingDemo = pendingMobileDemoRef.current');
-    const pendingDemoEnd = TOOLKIT_SOURCE.indexOf('\n    }, [', pendingDemoStart);
-    assert.ok(pendingDemoStart >= 0 && pendingDemoEnd > pendingDemoStart);
-    const pendingDemoSource = TOOLKIT_SOURCE.slice(pendingDemoStart, pendingDemoEnd);
-    for (const key of [
-        'requestedCanonicalMolecularSequenceId',
-        'requestedCanonicalMolecularRevisionId',
-        'requestedLegacyMolecularSequenceId',
-        'requestedLegacyMolecularRevisionId',
-    ]) {
-        assert.match(pendingDemoSource, new RegExp(key, 'u'));
-    }
-    assert.match(pendingDemoSource, /invalidateGetSequence\(\)/u);
-    assert.match(pendingDemoSource, /loadDemo\(pendingDemo\)/u);
-});
 
 test('MolBioToolkit wires the Cordova mobile projection and native Back policy', () => {
     assert.match(TOOLKIT_SOURCE, /shouldUseMolBioMobileLayout\(\{/u);

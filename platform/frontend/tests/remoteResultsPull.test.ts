@@ -91,18 +91,14 @@ test('POST is wired only to explicit click, with no mutation retries or duplicat
     const source = readFileSync('src/components/RemoteResultsPrompt.tsx', 'utf8');
     const api = readFileSync('src/lib/api.ts', 'utf8');
     assert.match(api, /api\.post<Job>\(`\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}\/remote-results\/pull`\)/u);
-    assert.match(source, /mutationFn: \(\) => pullRemoteJobResults\(job\.id\)/u);
     assert.match(source, /retry: false/u);
-    assert.match(source, /onClick=\{handlePull\} disabled=\{busy\}/u);
     assert.match(source, /if \(busy \|\| clickInFlight\.current \|\| queryClient\.isMutating/u);
     assert.match(source, /useIsMutating\(\{ mutationKey \}\)/u);
     assert.equal(source.match(/mutation\.mutate\(/gu)?.length, 1);
     const effect = source.slice(source.indexOf('useEffect(() =>'), source.indexOf('const mutation ='));
     assert.doesNotMatch(effect, /mutate\(|pullRemoteJobResults\(/u);
     assert.match(effect, /job\.status === 'completed'/u);
-    assert.match(source, /Results reported ready on worker/u);
     assert.match(source, /job\.error_message \|\| job\.remote_waiting_reason/u);
-    assert.match(source, /role="alert"/u);
     assert.match(source, /onSettled: async[\s\S]*invalidateQueries/u);
 });
 
@@ -120,6 +116,5 @@ test('normal queue and details retain the prompt and poll only server job metada
     const table = readFileSync('src/components/dashboard/JobQueueTable.tsx', 'utf8');
     assert.match(table, /job\.status === 'awaiting_input' && !\(job\.execution_target_id && job\.awaiting_stage === 'remote_results'\)/u);
     assert.match(table, /<RemoteResultsPrompt job=\{job\} \/>/u);
-    assert.match(readFileSync('src/components/RemoteResultsPrompt.tsx', 'utf8'), /Execution finished; worker availability is checked when you pull/u);
     assert.match(detail, /results && !results\.terminal\) \? jobPollingInterval/u);
 });

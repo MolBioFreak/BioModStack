@@ -77,7 +77,7 @@ describe('Project Manager API contract', () => {
         const contract = projectManagerContract as unknown as {
             listProteinProjectCapabilities: () => Promise<unknown>;
             createProjectWorkflowSetup: (projectId: string, request: unknown) => Promise<unknown>;
-            getProjectWorkflowSetup: (projectId: string, setupId: string) => Promise<unknown>;
+            getProjectWorkflowSetup: (projectId: string, setupId: string, signal?: AbortSignal) => Promise<unknown>;
         };
         const row = {
             capability_id: 'protein.structure_prediction.esmfold2', label: 'ESMFold2 structure prediction',
@@ -103,7 +103,14 @@ describe('Project Manager API contract', () => {
         })).resolves.toEqual(created);
         const detail = { ...created, schema: 'bms.project-workflow-setup.detail.v1', project_label: 'Project', experiment_label: 'Fold', workflow_label: row.label, draft: {}, field_errors: {}, diagnostics: {} };
         transport.get.mockResolvedValueOnce({ data: detail });
-        await expect(contract.getProjectWorkflowSetup('project-1', 'setup-1')).resolves.toEqual(detail);
+        const signal = new AbortController().signal;
+        await expect(contract.getProjectWorkflowSetup('project / one', 'setup?one', signal)).resolves.toEqual(detail);
+        expect(transport.get).toHaveBeenLastCalledWith(
+            '/api/projects/project%20%2F%20one/workflow-setups/setup%3Fone', { signal },
+        );
+        expect(transport.get).toHaveBeenCalledTimes(2);
+        expect(transport.put).not.toHaveBeenCalled();
+        expect(transport.post).toHaveBeenCalledTimes(1);
     });
 
     it('rejects a ready workflow whose destination does not match its native owner', async () => {
@@ -318,7 +325,7 @@ describe('Project Manager API contract', () => {
         model.source_digest_set_sha256 = 'not-a-digest';
         expect(() => normalizeProjectManagerReadModel(model)).toThrow(/source_digest_set_sha256/);
     });
-    it('keeps result-surface and reconciliation contracts closed to the frozen schemas', () => {
+    it('declares closed result-surface and reconciliation types (source policy only)', () => {
         const source = readFileSync(resolve(process.cwd(), 'src/lib/projectManager.ts'), 'utf8');
         expect(source).toContain("export type ResultSurfaceKind = 'protein_design' | 'molecular_dynamics' | 'conformational_mapping' | 'frustrampnn' | 'ngs' | 'molbio' | 'artifact' | 'unsupported';");
         expect(source).toContain("export type ResultReadiness = 'running' | 'partial' | 'ready' | 'failed' | 'blocked' | 'unsupported';");
@@ -329,14 +336,14 @@ describe('Project Manager API contract', () => {
         expect(source).not.toMatch(/scientific_acceptance:[\s\S]{0,160}\|\s*string/);
     });
 
-    it('does not fabricate authority-bearing inspector selections in the browser', () => {
+    it('forbids local inspector authority construction (source policy only)', () => {
         const pageSource = readFileSync(resolve(process.cwd(), 'src/pages/ProjectManager.tsx'), 'utf8');
         expect(pageSource).not.toContain('localSelection');
         expect(pageSource).not.toContain('setSelection(nodeKey, kind, null, {');
         expect(pageSource).not.toContain("reconciliation: { state: 'current' }");
     });
 
-    it('binds every dedicated launcher through the server return helper', () => {
+    it('requires the server-return helper in each dedicated launcher (source policy only)', () => {
         const launcherPaths = [
             'src/components/AntibodyDenovoTemplate.tsx',
             'src/components/StructurePredictionTemplate.tsx',

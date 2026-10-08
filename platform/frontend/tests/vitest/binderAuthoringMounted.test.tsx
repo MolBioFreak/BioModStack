@@ -4,7 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ submit: vi.fn(async (_body: any) => ({ data: {} })), iteration: vi.fn(async (_body: any) => ({ data: {} })), select: null as any }));
+const mocks = vi.hoisted(() => ({ submit: vi.fn(async (_body: any) => ({ data: {} })), iteration: vi.fn(async (_body: any) => ({ data: {} })), select: null as any, request: null as any }));
+vi.mock('../../src/components/ExecutionTargetPicker', () => ({ ExecutionTargetPicker: ({ workflowRequest }: any) => { mocks.request = workflowRequest; return null; } }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(), fetchModelById: vi.fn(async (id: string) => ({ data: { id, params: [] } })), fetchInputPresets: vi.fn(async () => ({ data: [] })), listCachedRcsbPdbs: vi.fn(async () => ({ data: { cached: [] } })), uploadImmutableFile: vi.fn(async () => ({ data: { path: 'inputs/protein_local_redesign/source.pdb' } })), uploadFile: vi.fn(async () => ({ data: { path: 'source.pdb' } })), submitJob: mocks.submit, fetchExecutionTargets: vi.fn(async () => ({ data: [] })), launchAntibodyIteration: mocks.iteration, completeCurrentLaunchContext: vi.fn(async () => null) }));
 vi.mock('../../src/components/useLiveGpuCatalog', () => ({ useLiveGpuCatalog: () => ({ gpuOptions: [], isLoading: false, isError: false }) }));
 vi.mock('../../src/components/ModelIntegrationControl', () => ({ ModelIntegrationControl: () => null, useModelIntegrationConfig: () => ({ data: { workflows: {} }, isFetching: false, isError: false }) }));
@@ -33,6 +34,48 @@ async function inspectDisclosure(details: HTMLDetailsElement) {
     // jsdom does not synchronously deliver the browser's native toggle event.
     await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); });
 }
+
+// The real parent builds the request observed by its execution-target child.
+// This replaces closure extraction with real hydration; no file/network execution.
+it.each([0, '', 1.31])('legacy BoltzGen request preserves optional value %j, incompatible settings and pinned GPU on clone', async value => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    const optional = Object.fromEntries(['step_scale', 'noise_scale', 'budget', 'max_rmsd', 'min_conf_score'].map(key => [`boltzgen_${key}`, value]));
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{
+        denovo_generator: 'boltzgen', target_pdb: 'inputs/target.pdb', selected_residues: ['T12', 'T15'],
+        selected_chain: 'T', pinned_gpus: [2], seq_designer: 'none', run_structure_validation: false,
+        boltzgen_use_framework_template: false, boltzgen_min_plddt: value === '' ? '' : 70, ...optional,
+    }} />);
+    expect(mocks.request).toMatchObject({ model_id: 'antibody_denovo', mode: 'nanobody_binder', pinned_gpu: 2,
+        params: { diffusion_method: 'boltzgen', boltzgen_min_plddt: value === '' ? null : 70, boltzgen_target_pdb_path: 'inputs/target.pdb' } });
+    for (const key of Object.keys(optional)) expect(mocks.request.params[key], key).toBe(value === '' ? null : value);
+    const { prepareJobSubmission } = await import('../../src/lib/api');
+    for (const policy of ['manual', 'automatic'] as const) {
+        const saved = { ...mocks.request, execution_target_id: 'worker-one', execution_policy: { remote_result_policy: policy } };
+        expect(prepareJobSubmission(saved, { launchContext: false })).toEqual(saved);
+    }
+    const request = structuredClone(mocks.request);
+    await act(async () => mocks.select({ name: 'reopened', params: request.params }));
+    expect(mocks.request?.mode).toBe('nanobody_binder');
+});
+
+it('legacy PPIFlow clone emits native seed, sampling and pinned GPU settings through the real parent', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{
+        denovo_generator: 'ppiflow', ppiflow_seed_complex_path: 'inputs/seed.pdb',
+        antibody_chains: 'H', antigen_chains: 'T', pinned_gpus: [2], seq_designer: 'none', run_structure_validation: false,
+        ppiflow_samples_per_target: 7, ppiflow_start_t: 0.61, ppiflow_retry_limit: 3,
+        ppiflow_require_anchors: false, ppiflow_rotamer_enrichment_enabled: true,
+        ppiflow_rotamer_shell_cutoff: 7.5, ppiflow_objective_mode: 'loop_epitope', ppiflow_objective_threshold: -0.25,
+    }} />);
+    expect(mocks.request).toMatchObject({ model_id: 'antibody_denovo', mode: 'generator_backbone_refine', pinned_gpu: 2,
+        params: { ppiflow_seed_complex_path: 'inputs/seed.pdb', ppiflow_heavy_chain: 'H', ppiflow_antigen_chain: 'T',
+            ppiflow_samples_per_target: 7, ppiflow_start_t: 0.61, ppiflow_retry_limit: 3,
+            ppiflow_require_anchors: false, ppiflow_rotamer_enrichment_enabled: true,
+            ppiflow_rotamer_shell_cutoff: 7.5, ppiflow_objective_mode: 'loop_epitope', ppiflow_objective_threshold: -0.25 } });
+    const request = structuredClone(mocks.request);
+    await act(async () => mocks.select({ name: 'reopened', params: request.params }));
+    expect(mocks.request?.mode).toBe('generator_backbone_refine');
+});
 
 it('shared quality panel keeps ThermoMPNN visible by default for other callers', async () => {
     const change = vi.fn();

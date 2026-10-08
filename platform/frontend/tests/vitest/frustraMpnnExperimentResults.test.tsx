@@ -46,7 +46,11 @@ describe('whole-experiment FrustraMPNN projection', () => {
         expect(container.textContent).toContain('Analysis: analysis failed');
         expect(container.textContent).toContain('Job not started');
         expect(container.textContent).toContain('Manifest not published');
-        expect(container.querySelectorAll('a')).toHaveLength(3);
+        expect([...container.querySelectorAll('a')].map(link => link.getAttribute('href'))).toEqual([
+            '/designs/job-1?result_model=frustrampnn',
+            '/designs/job-2?result_model=frustrampnn',
+            '/designs/job-5?result_model=frustrampnn',
+        ]);
         await act(async () => root.unmount());
     });
 });

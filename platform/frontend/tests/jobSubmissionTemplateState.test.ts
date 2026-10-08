@@ -19,10 +19,14 @@ test('dedicated launcher templates all suppress the generic launcher chrome', ()
     assert.equal(isDedicatedLauncherTemplate(null), false);
 });
 
-test('dedicated template initial values seed canonical and compatibility structure variants with workflow identity', () => {
-    assert.equal(getDedicatedTemplateInitialValues('boltz_cp_experimental'), undefined);
-    assert.equal(getDedicatedTemplateInitialValues('esmfold2_experimental'), undefined);
-    assert.equal(getDedicatedTemplateInitialValues('esmfold2'), undefined);
+test('dedicated template seeds are returned as fresh top-level drafts, with unsupported and unseeded templates distinct', () => {
+    const initial = getDedicatedTemplateInitialValues('conformational_mapping')!;
+    assert.equal(initial.backend, 'protenix_v2_ensemble');
+    assert.deepEqual(initial.ordered_seeds, [101, 202, 303, 404, 505]);
+    initial.name = 'operator draft';
+    const reopened = getDedicatedTemplateInitialValues('conformational_mapping')!;
+    assert.notEqual(initial, reopened);
+    assert.equal(reopened.name, 'Conformational mapping');
     assert.equal(getDedicatedTemplateInitialValues('structure_prediction'), undefined);
     assert.equal(getDedicatedTemplateInitialValues('unknown_template'), undefined);
 });

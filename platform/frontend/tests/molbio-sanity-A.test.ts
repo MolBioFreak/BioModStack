@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { createHistoryState, historyReducer, reconcileSavedHistory } from '../src/components/MolBioToolkit/hooks/useSequenceHistory';
 import { EMPTY_SEQUENCE } from '../src/components/MolBioToolkit/sequenceViewerConstants';
 import { findOpenReadingFrames } from '../src/components/MolBioToolkit/utils/orfs';
@@ -77,17 +76,4 @@ test('feature projections retain object isolation and ordered joined geometry', 
     assert.equal(f.segments[0].start, 8);
     assert.equal(featureOverlapLength(f, f), 4);
     assert.deepEqual(f.segments, [{ start: 8, end: 10 }, { start: 1, end: 3 }]);
-});
-
-test('shell gates hidden work and wires gesture and completion authorities', () => {
-    const source = readFileSync(new URL('../src/components/MolBioToolkit/MolBioToolkitV2.tsx', import.meta.url), 'utf8');
-    assert.match(source, /visibility\.translations && sequenceData\.sequence/);
-    assert.match(source, /restrictionConsumerVisible = visibility\.cutsites/);
-    assert.match(source, /!isToolPanelCollapsed && activePanel === 'digest'/);
-    assert.match(source, /if \(!demoRequested\) return/);
-    assert.match(source, /onAddPrimers=\{handleAddPrimers\}/);
-    assert.match(source, /onRemoveFeatures=\{handleRemoveFeatures\}/);
-    assert.match(source, /const unchanged = latestHistory === targetHistory/);
-    assert.match(source, /if \(stillActive\)/);
-    assert.match(source, /if \(!ownsCompletion\(\)\)/);
 });

@@ -1,10 +1,10 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
-    digest: {} as any, input: {} as any, header: {} as any, annotation: {} as any, visibility: {} as any, orfs: vi.fn(),
+    navigate: null as any, revision: vi.fn(), primer: {} as any, feature: {} as any, digest: {} as any, input: {} as any, header: {} as any, annotation: {} as any, visibility: {} as any, orfs: vi.fn(),
     create: vi.fn(), update: vi.fn(), get: vi.fn(), catalog: vi.fn(), products: vi.fn(), analyze: vi.fn(), tmOptions: vi.fn(), demos: vi.fn(), annotationDownload: vi.fn(),
 }));
 vi.mock('../../src/components/MolBioToolkit/SequenceViewer', () => ({SequenceViewer:()=>null}));
@@ -14,7 +14,7 @@ vi.mock('../../src/components/MolBioToolkit/GCContentTrack', () => ({GCContentTr
 vi.mock('../../src/components/MolBioToolkit/SequenceHeader', () => ({SequenceHeader:(props:any)=>{mocks.header=props;return null}}));
 vi.mock('../../src/components/MolBioToolkit/MolecularInputModal', () => ({MolecularInputModal:(props:any)=>{mocks.input=props;return null}}));
 vi.mock('../../src/components/MolBioToolkit/AutoAnnotatePanel', () => ({AutoAnnotatePanel:(props:any)=>{mocks.annotation=props;return null}}));
-vi.mock('../../src/components/MolBioToolkit/panels', () => Object.fromEntries(['AlignmentPanel','AssemblyPanel','DigestPanel','HistoryPanel','PCRPanel','PrimerPanel','RnaStructurePanel','FeaturePanel','EditPanel','SearchPanel'].map(name=>[name,(props:any)=>{if(name==='DigestPanel')mocks.digest=props;return null}])));
+vi.mock('../../src/components/MolBioToolkit/panels', () => Object.fromEntries(['AlignmentPanel','AssemblyPanel','DigestPanel','HistoryPanel','PCRPanel','PrimerPanel','RnaStructurePanel','FeaturePanel','EditPanel','SearchPanel'].map(name=>[name,(props:any)=>{if(name==='DigestPanel')mocks.digest=props;if(name==='PrimerPanel')mocks.primer=props;if(name==='FeaturePanel')mocks.feature=props;return null}])));
 vi.mock('../../src/components/MolBioToolkit/RnaStructureViewer', () => ({RnaStructureViewer:()=>null}));
 vi.mock('../../src/components/MolBioToolkit/demoConstructs', () => ({loadDemoPlasmids:mocks.demos}));
 vi.mock('../../src/components/experiments/GlobalExperimentContext', async () => {
@@ -30,16 +30,16 @@ vi.mock('../../src/components/experiments/GlobalExperimentContext', async () => 
 });
 vi.mock('../../src/components/MolBioToolkit/utils/annotationSources', async (original) => ({...await original<any>(),fetchAnnotationSourceStatus:vi.fn().mockResolvedValue({}),retrieveNcbiAnnotationSource:mocks.annotationDownload}));
 vi.mock('../../src/lib/restrictionAnalysis', async (original) => ({...await original<any>(),fetchRestrictionCatalogBrowse:mocks.catalog,fetchRestrictionProducts:mocks.products,fetchRestrictionAnalysisBatch:mocks.analyze}));
-vi.mock('../../src/lib/api', async (original) => ({...await original<any>(),fetchNucleotideSequences:vi.fn().mockResolvedValue({data:[]}),fetchNucleotideSequence:mocks.get,createNucleotideSequence:mocks.create,updateNucleotideSequence:mocks.update,fetchPrimerTmOptions:mocks.tmOptions}));
+vi.mock('../../src/lib/api', async (original) => ({...await original<any>(),fetchNucleotideSequences:vi.fn().mockResolvedValue({data:[]}),fetchNucleotideSequence:mocks.get,fetchMolecularRevision:mocks.revision,createNucleotideSequence:mocks.create,updateNucleotideSequence:mocks.update,fetchPrimerTmOptions:mocks.tmOptions}));
 import { RECEIPT, SUMMARY } from './molBioRestrictionCatalogFixture';
 import { MolBioToolkitV2 } from '../../src/components/MolBioToolkit/MolBioToolkitV2';
 let root:Root, host:HTMLDivElement, client:QueryClient;
-function RouteProbe(){const location=useLocation();return <output data-route-search>{location.search}</output>}
+function RouteProbe(){const location=useLocation();mocks.navigate=useNavigate();return <output data-route-search>{location.search}</output>}
 function deferred<T>() {let resolve!:(value:T)=>void;const promise=new Promise<T>(r=>resolve=r);return {promise,resolve};}
 const saved = {id:'saved-a',name:'A',sequence:'ACGT'.repeat(30),sequence_type:'dna',is_circular:false,features:[],primers:[],version:2};
 async function create(name='A'){await act(async()=>mocks.input.onCreateSequence({name,sequence:'ACGT'.repeat(30),sequenceType:'dna',circular:false}));}
 beforeEach(async()=>{
- localStorage.clear(); window.innerWidth=1400;
+ localStorage.clear(); window.innerWidth=1400;mocks.revision.mockReset();
  mocks.create.mockReset();mocks.update.mockReset();mocks.get.mockReset().mockResolvedValue({data:saved});mocks.catalog.mockReset().mockResolvedValue({catalog:{catalog_id:'test'},items:[]});mocks.products.mockReset().mockResolvedValue({product_release:null});mocks.analyze.mockReset().mockResolvedValue({});mocks.orfs.mockReset().mockReturnValue([]);mocks.demos.mockReset().mockResolvedValue([]);mocks.annotationDownload.mockReset();
  mocks.tmOptions.mockReset().mockResolvedValue({data:{algorithms:[{id:'nn_santalucia_hicks_2004',sequence_types:['dna','rna']}],defaults:{}}});
  vi.stubGlobal('fetch',vi.fn().mockImplementation(async (url:string) => {
@@ -75,6 +75,71 @@ it('opening another construct switches the route and closing tabs leaves no phan
  expect(host.querySelectorAll('button[title="Close workspace"]')).toHaveLength(0);
  expect(host.querySelector('[data-route-search]')?.textContent).not.toContain('molbio_sequence_id');
 });
+it('failed selection cannot publish a workspace or its URL', async () => {
+ await act(async()=>mocks.input.onSelectSequence('saved-a'));
+ const before=host.querySelector('[data-route-search]')!.textContent;
+ mocks.get.mockRejectedValueOnce(new Error('sequence unavailable'));
+ await act(async()=>mocks.input.onSelectSequence('missing'));
+ expect(mocks.header.sequenceData.name).toBe('A');
+ expect(host.querySelector('[data-route-search]')!.textContent).toBe(before);
+});
+it('superseded selection cannot replace an already-open workspace or its URL', async () => {
+ await act(async()=>mocks.input.onSelectSequence('saved-a'));
+ const before=host.querySelector('[data-route-search]')!.textContent;
+ const old=deferred<any>();mocks.get.mockReturnValueOnce(old.promise);
+ let pending!:Promise<unknown>;await act(async()=>{pending=mocks.input.onSelectSequence('old')});
+ await act(async()=>mocks.input.onSelectSequence('saved-a'));
+ await act(async()=>old.resolve({data:{...saved,id:'old',name:'Old'}}));await pending;
+ expect(mocks.header.sequenceData.name).toBe('A');
+ expect(host.querySelector('[data-route-search]')!.textContent).toBe(before);
+});
+
+it('demo activation supersedes an older saved load and clears all saved URL keys', async () => {
+ await act(async()=>mocks.input.onSelectSequence('saved-a'));
+ const old=deferred<any>();mocks.get.mockReturnValueOnce(old.promise);
+ let pending!:Promise<unknown>;await act(async()=>{pending=mocks.input.onSelectSequence('old')});
+ await act(async()=>mocks.input.onLoadDemo({name:'Demo',sequence:'TTTT',sequenceType:'dna',circular:false,features:[],primers:[]}));
+ await act(async()=>old.resolve({data:{...saved,id:'old',name:'Old'}}));await pending;
+ expect(mocks.header.sequenceData.name).toBe('Demo');
+ const query=new URLSearchParams(host.querySelector('[data-route-search]')!.textContent!);
+ for(const key of ['molbio_sequence_id','molbio_revision_id','sequence_id','revision_id']) expect(query.has(key),key).toBe(false);
+});
+
+it.each(['molbio_', ''])('exact %sURL revision stays immutable rather than publishing current editable content', async prefix => {
+ const revision={sequence_id:'saved-a',document_id:'saved-a',revision_id:'revision-a',revision_number:3,document_name:'Historical',
+   change_kind:'import',created_at:'2026-01-01T00:00:00Z',relation:'root',content_sha256:'a'.repeat(64),
+   reopen_destination:{params:{sequence_id:'saved-a',revision_id:'revision-a'}},
+   snapshot:{...saved,name:'Historical',sequence:'TTTT'.repeat(30)}};
+ mocks.revision.mockResolvedValue(revision);
+ vi.mocked(fetch).mockResolvedValue({ok:true,json:async()=>revision} as Response);
+ await act(async()=>mocks.navigate(`/?${prefix}sequence_id=saved-a&${prefix}revision_id=revision-a`));
+ await act(async()=>{await new Promise(resolve=>setTimeout(resolve,30));});
+ expect(mocks.header.sequenceData.name).toBe('Historical');
+ expect(mocks.header.sequenceData.sequence).toBe('TTTT'.repeat(30));
+ expect(mocks.header.onSave).toBeUndefined();
+ expect(host.querySelector('[data-route-search]')!.textContent).toContain('revision_id=revision-a');
+});
+
+it('real panel batch callbacks preserve one undo step and completion ownership', async () => {
+ await create();
+ const tool=(label:string)=>[...host.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent?.trim()===label)!;
+ await act(async()=>tool('Primers').click());
+ const primers=['forward','reverse'].map(id=>({id,name:id,sequence:'ACGT',start:0,end:4,strand:1}));
+ await act(async()=>mocks.primer.onAddPrimers(primers));
+ expect(mocks.header.sequenceData.primers).toHaveLength(2);
+ await act(async()=>mocks.header.onUndo());
+ expect(mocks.header.sequenceData.primers).toHaveLength(0);
+ await act(async()=>tool('Features').click());
+ for(const feature of [{id:'one',name:'one',type:'misc_feature',start:0,end:4,strand:1},{id:'two',name:'two',type:'misc_feature',start:5,end:9,strand:1}]) {
+   await act(async()=>mocks.feature.onAddFeature(feature));
+ }
+ expect(mocks.header.sequenceData.features).toHaveLength(2);
+ await act(async()=>mocks.feature.onRemoveFeatures(['one','two']));
+ expect(mocks.header.sequenceData.features).toHaveLength(0);
+ await act(async()=>mocks.header.onUndo());
+ expect(mocks.header.sequenceData.features.map((f:any)=>f.id)).toEqual(['one','two']);
+});
+
 it('switches between saved constructs without reopening the previously selected route',async()=>{
  const second={...saved,id:'saved-b',name:'B',sequence:'TTTT'.repeat(30)};
  mocks.get.mockImplementation(async(id:string)=>({data:id==='saved-b'?second:saved}));
