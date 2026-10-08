@@ -84,6 +84,8 @@ gpu_debug.log
 api.log
 completion_log.txt
 submission_log.txt
+/screening_summary.json
+/rfantibody_screening_summary.csv
 NO_MSA
 verify_parsing.nf
 *.db
