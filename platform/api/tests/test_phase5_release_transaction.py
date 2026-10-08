@@ -81,12 +81,14 @@ def test_release_materializes_exact_blobs_without_hooks_or_private_attributes(
         identity: release.BuildIdentity,
         *,
         image_refs,
+        source_tree,
     ) -> None:
         observed["root"] = materialized_root
         observed["tracked"] = (materialized_root / "tracked.txt").read_text(encoding="utf-8")
         observed["has_git_metadata"] = (materialized_root / ".git").exists()
         observed["link_target"] = (materialized_root / "tracked-link").readlink()
         observed["image_refs"] = image_refs
+        assert source_tree == subprocess.run(["git", "rev-parse", f"{identity.revision}^{{tree}}"], cwd=tmp_path, check=True, text=True, capture_output=True).stdout.strip()
 
     monkeypatch.setattr(backend, "_build_materialized_images", fake_build)
     identity = release.BuildIdentity(head, "materialized", "2026-07-19T00:00:00Z")
@@ -129,6 +131,7 @@ def test_release_backend_loads_configured_image_refs_and_build_uses_same_refs(
 
     def fake_run(command, *, cwd, env, check):
         observed.update({key: env[key] for key in release.IMAGE_REFS.values()})
+        assert env['BMS_BUILD_TREE'] == 'b' * 40
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -137,7 +140,7 @@ def test_release_backend_loads_configured_image_refs_and_build_uses_same_refs(
         build_id="release-42",
         build_time="2026-07-22T23:00:00Z",
     )
-    backend._build_materialized_images(tmp_path, identity, image_refs=backend.image_refs)
+    backend._build_materialized_images(tmp_path, identity, image_refs=backend.image_refs, source_tree='b' * 40)
 
     assert observed == {
         release.IMAGE_REFS[service]: image_ref

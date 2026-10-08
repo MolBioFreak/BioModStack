@@ -161,7 +161,7 @@ async function renderWorkspace(search?: string) {
     if (search) window.history.replaceState({}, '', `/designer?${search}`);
     await act(async () => {
         root.render(
-            <MemoryRouter>
+            <MemoryRouter key={window.location.search} initialEntries={[window.location.pathname + window.location.search]}>
                 <QueryClientProvider client={queryClient}>
                     <DomainExperimentWorkspace />
                 </QueryClientProvider>
@@ -269,7 +269,7 @@ describe('mounted MolBio project hub', () => {
         expect(container.textContent).toContain('Clone assessment');
         expect(container.textContent).toContain('Viewer evidence');
         expect(container.querySelector('a[href*="action=import-ont"]')?.textContent).toContain('Import ONT data');
-        expect(container.querySelector('a[href^="/ngs?"][href*="state_revision_id=state-current"]:not([href*="action=import-ont"])')?.textContent).toContain('Open NGS launcher');
+        expect(container.querySelector('[role="tabpanel"] a[href^="/ngs?"][href*="state_revision_id=state-current"]:not([href*="action=import-ont"])')?.textContent).toContain('Open NGS launcher');
         expect(container.textContent).not.toContain('canonical plasmid sequence data');
     });
 
@@ -423,7 +423,7 @@ describe('mounted MolBio project hub', () => {
 
         window.history.replaceState({}, '', '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=activity');
         await act(async () => root.render(
-            <MemoryRouter>
+            <MemoryRouter key={window.location.search} initialEntries={[window.location.pathname + window.location.search]}>
                 <QueryClientProvider client={queryClient}><DomainExperimentWorkspace /></QueryClientProvider>
             </MemoryRouter>,
         ));

@@ -997,6 +997,7 @@ describe('ProjectManager', () => {
         await act(async () => create?.click());
         await waitUntil(() => expect(container.querySelector('[aria-label="Protein source adapter"]')).not.toBeNull());
 
+        await act(async()=>Array.from(container.querySelectorAll('button')).find(button=>button.textContent==='Add target')?.click());
         const searchInput = container.querySelector<HTMLInputElement>('[aria-label="Search Protein source records"]');
         await act(async () => {
             if (searchInput) {
@@ -1010,13 +1011,20 @@ describe('ProjectManager', () => {
         await waitUntil(() => expect(container.textContent).toContain('Ubiquitin 1UBQ'));
         const choice = container.querySelector<HTMLInputElement>('input[type="radio"][value="job-1ubq"]');
         await act(async () => choice?.click());
-        const issue = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Verify and add to target');
+        const issue = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Use verified target source');
         await act(async () => issue?.click());
         await waitUntil(() => expect(managerApi.issueAdapterReceipt).toHaveBeenCalledWith(
             'bms.core-job.esmfold2.adapter.v1', 'job-1ubq', 'project-1',
         ));
-        await waitUntil(() => expect(container.querySelector<HTMLInputElement>('[aria-label="Protein source receipt IDs 1"]')?.value).toBe('receipt-1ubq'));
-        expect(container.querySelector<HTMLInputElement>('[aria-label="Protein expected content SHA-256 1"]')?.value).toBe('d'.repeat(64));
+        await waitUntil(() => expect(container.textContent).toContain('receipt-1ubq'));
+        expect(container.textContent).toContain('receipt-1ubq');
+        expect(container.textContent).toContain('d'.repeat(64));
+        expect(container.querySelector('[aria-label="Protein source receipt IDs 1"]')).toBeNull();
+        managerApi.issueAdapterReceipt.mockResolvedValue({receipt_id: 'no-map', receipt: {content_digest: 'not-a-digest'}});
+        await act(async () => issue?.click());
+        await waitUntil(() => expect(container.textContent).toContain('no exact content digest'));
+        expect(container.textContent).toContain('receipt-1ubq');
+        expect(container.textContent).not.toContain('map-ubq');
     });
 
     it('reverifies stale Protein source receipts from the Overview', async () => {
@@ -1040,7 +1048,7 @@ describe('ProjectManager', () => {
         ));
     });
 
-    it('edits typed Protein entity-map display rows in the browser', async () => {
+    it.each([false, true])('preserves historical map metadata unless its source is replaced (%s)', async (replaceSource) => {
         const sourceDigest = 'd'.repeat(64);
         managerApi.getProjectSummary.mockImplementation(() => {
             const value = summaryFor('domain_experiment:domain-1');
@@ -1103,97 +1111,38 @@ describe('ProjectManager', () => {
             (button) => button.textContent?.trim() === 'Edit revision',
         );
         await act(async () => edit?.click());
-        await waitUntil(() => expect(container.querySelector<HTMLInputElement>('[aria-label="Protein entity auth chain 1.1"]')?.value).toBe('A'));
-        const authChain = container.querySelector<HTMLInputElement>('[aria-label="Protein entity auth chain 1.1"]');
-        await act(async () => {
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-            setter?.call(authChain, 'B');
-            authChain?.dispatchEvent(new Event('input', { bubbles: true }));
-        });
+        await waitUntil(() => expect(container.textContent).toContain('map-receipt-1'));
+        expect(container.querySelector('[aria-label="Protein entity auth chain 1.1"]')).toBeNull();
+        expect(container.textContent).toContain('Historical entity-map metadata (read-only)');
+        if (replaceSource) {
+            managerApi.issueAdapterReceipt.mockResolvedValue({receipt_id:'replacement-source',receipt:{content_digest:'e'.repeat(64)}});
+            await act(async()=>Array.from(container.querySelectorAll('button')).find(button=>button.textContent==='Search')?.click());
+            await waitUntil(()=>expect(container.querySelector('input[type="radio"][value="request-10"]')).not.toBeNull());
+            await act(async()=>container.querySelector<HTMLInputElement>('input[type="radio"][value="request-10"]')?.click());
+            await act(async()=>Array.from(container.querySelectorAll('button')).find(button=>button.textContent==='Use verified target source')?.click());
+            await waitUntil(()=>expect(container.textContent).toContain('replacement-source'));
+            expect(container.textContent).not.toContain('Historical entity-map metadata (read-only)');
+        }
         const save = Array.from(container.querySelectorAll('button')).find(
             (button) => button.textContent?.trim() === 'Save immutable revision',
         );
         await act(async () => save?.click());
         await waitUntil(() => expect(managerApi.updateDomainExperiment).toHaveBeenCalled());
-        expect(managerApi.updateDomainExperiment.mock.calls[0][3].domain_payload.targets[0].entity_map_reference.display_entities).toEqual([{
+        const savedTarget=managerApi.updateDomainExperiment.mock.calls[0][3].domain_payload.targets[0];
+        if (replaceSource) {
+            expect(savedTarget.entity_map_reference).toBeUndefined();
+            expect(savedTarget.source_receipt_ids).toEqual(['replacement-source']);
+            expect(savedTarget.expected_content_sha256).toBe('e'.repeat(64));
+        } else expect(savedTarget.entity_map_reference.display_entities).toEqual([{
             entity_instance_id: 'A',
             source_entity_id: '1',
             entity_type: 'protein',
             label_asym_id: 'A',
-            auth_asym_id: 'B',
+            auth_asym_id: 'A',
         }]);
     });
 
-    it('fails closed when Protein entity-map display rows use unsupported data', async () => {
-        const sourceDigest = 'd'.repeat(64);
-        managerApi.getProjectSummary.mockImplementation(() => {
-            const value = summaryFor('domain_experiment:domain-1');
-            value.selection.available_actions = ['edit'];
-            const domainNode = value.tree.nodes.find((node) => node.node_key === 'domain_experiment:domain-1');
-            if (domainNode) domainNode.allowed_actions = ['edit'];
-            return Promise.resolve(normalizeProjectManagerReadModel(value));
-        });
-        managerApi.getDomainExperiment.mockResolvedValue({
-            id: 'domain-1',
-            parent_id: 'global-1',
-            current_revision_id: 'revision-domain-1',
-            head_generation: 2,
-            name: 'Protein In Silico',
-            payload: {
-                domain_kind: 'protein_in_silico',
-                objective: 'Design stable variants',
-                domain_payload: {
-                    schema: 'bms.protein-in-silico-experiment.v3',
-                    experiment_mode: 'redesign',
-                    scientific_objective: 'Design stable variants',
-                    targets: [{
-                        target_id: 'PLM-07',
-                        label: 'PLM-07',
-                        role: 'target',
-                        source_receipt_ids: ['receipt-9'],
-                        dataset_member_refs: [],
-                        entity_map_reference: {
-                            schema: 'bms.protein-entity-map-reference.v1',
-                            authority_kind: 'governed_artifact_receipt',
-                            receipt_id: 'map-receipt-1',
-                            receipt_sha256: 'a'.repeat(64),
-                            content_sha256: 'b'.repeat(64),
-                            canonical_size_bytes: 200,
-                            entity_count: 1,
-                            residue_mapping_count: 540,
-                            display_entities: [{
-                                entity_instance_id: 'A',
-                                source_entity_id: '1',
-                                entity_type: 'future-polymer',
-                                label_asym_id: 'A',
-                                auth_asym_id: 'A',
-                            }],
-                        },
-                        expected_content_sha256: sourceDigest,
-                    }],
-                    planned_capability_ids: [],
-                    validation_capability_ids: [],
-                    comparison_groups: [],
-                    acceptance_criteria: [],
-                    evidence_plan: [],
-                },
-            },
-        });
-
-        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
-        await waitUntil(() => expect(container.textContent).toContain('Edit revision'));
-        const edit = Array.from(container.querySelectorAll('button')).find(
-            (button) => button.textContent?.trim() === 'Edit revision',
-        );
-        await act(async () => edit?.click());
-        await waitUntil(() => expect(container.textContent).toContain('Entity rows use unsupported data'));
-        const save = Array.from(container.querySelectorAll('button')).find(
-            (button) => button.textContent?.trim() === 'Save immutable revision',
-        );
-        expect(save?.hasAttribute('disabled')).toBe(true);
-    });
-
-    it('accumulates and deduplicates map pages while preserving stable root and focus context', async () => {
+    it('replaces bounded map pages while preserving server-issued root and focus context', async () => {
         const first = structuredClone(baseSummary);
         first.map.nodes = first.map.nodes.slice(0, 3);
         first.map.edges = first.map.edges.slice(0, 2);
@@ -1215,7 +1164,7 @@ describe('ProjectManager', () => {
         expect(container.querySelectorAll('[aria-label="Select Catalytic-loop redesign"]')).toHaveLength(1);
     });
 
-    it('accumulates bounded run pages and keeps both pages selectable', async () => {
+    it('replaces bounded run pages without retaining the prior page', async () => {
         const first = structuredClone(baseSummary);
         first.runs.next_cursor = 'run:1';
         const second = structuredClone(baseSummary);
@@ -1235,7 +1184,7 @@ describe('ProjectManager', () => {
         const loadMore = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Load next run page'));
         await act(async () => loadMore?.click());
         await waitUntil(() => expect(container.querySelector('[aria-label="Inspect run run-2"]')).not.toBeNull());
-        expect(container.querySelector('[aria-label="Inspect run run-1"]')).not.toBeNull();
+        expect(container.querySelector('[aria-label="Inspect run run-1"]')).toBeNull();
         expect(managerApi.getProjectSummary).toHaveBeenCalledWith('project-1', expect.objectContaining({ runCursor: 'run:1' }));
     });
 
@@ -1273,11 +1222,90 @@ describe('ProjectManager', () => {
         await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('selected=virtual_folder%3Adomain-1%3Aactivity'));
         expect(container.querySelector('[aria-label="Collapse Activity"]')?.getAttribute('aria-expanded')).toBe('true');
         await waitUntil(() => expect(container.textContent).toContain('Source attached'));
-        await waitUntil(() => expect(container.textContent).toContain('Load more activity'));
-        const loadMore = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Load more activity');
+        await waitUntil(() => expect(container.textContent).toContain('Next activity page'));
+        const loadMore = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Next activity page');
         await act(async () => loadMore?.click());
         await waitUntil(() => expect(container.textContent).toContain('Run completed'));
-        expect(container.textContent).toContain('Source attached');
+        expect(container.textContent).not.toContain('Source attached');
         expect(managerApi.getProjectSummary).toHaveBeenCalledWith('project-1', expect.objectContaining({ activityCursor: 'activity:1' }));
     });
+    it('renders a single detailed Run list when the Runs folder is selected', async () => {
+        await renderAt('/projects/project-1?focus=global-1&selected=virtual_folder%3Adomain-1%3Aruns');
+        await waitUntil(() => expect(container.querySelector('[aria-label="Inspect run run-1"]')).not.toBeNull());
+        expect(container.querySelector('[aria-label="Runs bounded records"]')).toBeNull();
+        expect(container.querySelectorAll('[aria-label="Inspect run run-1"]')).toHaveLength(1);
+    });
+
+    it('navigates server-owned tree branches and replaces continuation pages', async () => {
+        managerApi.getProjectSummary.mockImplementation((_projectId: string, options: { treeParentNodeKey?: string; treeCursor?: string }) => {
+            const value = structuredClone(baseSummary) as any;
+            value.tree.parent_node_key = options.treeParentNodeKey ?? 'project:project-1';
+            value.tree.next_cursor = options.treeCursor ? null : 'tree-next';
+            value.tree.has_more = !options.treeCursor;
+            value.tree.total = 2;
+            return Promise.resolve(normalizeProjectManagerReadModel(value));
+        });
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
+        await waitUntil(() => expect(container.textContent).toContain('Browse Catalytic-loop redesign children'));
+        const browse = Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Browse Catalytic-loop redesign children');
+        await act(async () => browse?.click());
+        await waitUntil(() => expect(managerApi.getProjectSummary).toHaveBeenCalledWith('project-1', expect.objectContaining({ treeParentNodeKey: 'global_experiment:global-1', treeLimit: 100 })));
+        await waitUntil(() => expect(Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Next tree page')?.disabled).toBe(false));
+        await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Next tree page')?.click());
+        await waitUntil(() => expect(managerApi.getProjectSummary).toHaveBeenCalledWith('project-1', expect.objectContaining({ treeParentNodeKey: 'global_experiment:global-1', treeCursor: 'tree-next' })));
+    });
+
+    it('keeps native Project data available when optional relationship discovery fails', async () => {
+        managerApi.listNgsMolBioProjectLinks.mockRejectedValue(new Error('link projection unavailable'));
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = summaryFor('project:project-1'); value.project.project_scope = 'ngs_molbio_local';
+            return Promise.resolve(normalizeProjectManagerReadModel(value));
+        });
+        await renderAt('/projects/project-1?selected=project%3Aproject-1');
+        await waitUntil(() => expect(container.textContent).toContain('Project relationships unavailable'));
+        expect(container.textContent).toContain('NGS/MolBio Project');
+        expect(container.querySelector('[aria-label="Project tree"]')).toBeNull();
+        expect(Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Attach existing record')?.disabled).toBe(true);
+        expect(container.textContent).not.toContain('Link Project or attach record');
+    });
+
+    it('edits historical Project organization without implicit scientific upgrade', async () => {
+        managerApi.getProject.mockResolvedValue({...project,payload:{...project.payload,schema:'bms.project.v1'}});
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value=structuredClone(baseSummary);
+            value.selection={...value.selection,node_key:'project:project-1',node_type:'project',title:'DNA Polymerase Design',canonical_identity:{store_id:'global',entity_id:'project-1'},available_actions:['edit']};
+            return Promise.resolve(normalizeProjectManagerReadModel(value));
+        });
+        managerApi.updateProject.mockResolvedValue({id:'project-1'});
+        await renderAt('/projects/project-1?focus=global-1&selected=project%3Aproject-1');
+        await waitUntil(()=>expect(Array.from(container.querySelectorAll('button')).find(button=>button.textContent?.trim()==='Edit revision')?.disabled).toBe(false));
+        await act(async()=>Array.from(container.querySelectorAll('button')).find(button=>button.textContent?.trim()==='Edit revision')?.click());
+        await waitUntil(()=>expect(container.textContent).toContain('without upgrading this historical scientific revision'));
+        await act(async()=>Array.from(container.querySelectorAll('button')).find(button=>button.textContent==='Save immutable revision')?.click());
+        await waitUntil(()=>expect(managerApi.updateProject).toHaveBeenCalled());
+        expect(Object.keys(managerApi.updateProject.mock.calls[0][1]).sort()).toEqual(['change_summary','description','expected_head_generation','name','tags']);
+    });
+
+    it.each(['protein_in_silico', 'ngs_molbio'])('creates incomplete organizational %s Domains without fabricated science', async (kind) => {
+        managerApi.createDomainExperiment.mockResolvedValue({id:'new-domain'});
+        await renderAt('/projects/project-1?focus=global-1&selected=global_experiment%3Aglobal-1');
+        await waitUntil(()=>expect(container.textContent).toContain('New Domain Experiment'));
+        await act(async()=>Array.from(container.querySelectorAll('button')).find(button=>button.textContent?.trim()==='New Domain Experiment')?.click());
+        const dialog=container.querySelector('[role="dialog"]')!;
+        await act(async()=>{
+            const name=Array.from(dialog.querySelectorAll('label')).find(label=>label.textContent?.trim().startsWith('Name'))?.querySelector('input');
+            expect(name).not.toBeNull();Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(name,'Exploratory organization');name!.dispatchEvent(new Event('input',{bubbles:true}));
+            const type=Array.from(dialog.querySelectorAll('label')).find(label=>label.textContent?.trim().startsWith('Domain type'))?.querySelector('select');
+            expect(type).not.toBeNull();type!.value=kind;type!.dispatchEvent(new Event('change',{bubbles:true}));
+        });
+        const create=dialog.querySelector<HTMLButtonElement>('button[type="submit"]');
+        expect(create).not.toBeUndefined();expect(create?.disabled).toBe(false);
+        await act(async()=>create?.click());
+        await waitUntil(()=>expect(managerApi.createDomainExperiment).toHaveBeenCalled());
+        const request=managerApi.createDomainExperiment.mock.calls[0][2];
+        expect(request.schema).toBe('bms.domain-experiment.v4');expect(request.source_receipt_ids).toEqual([]);
+        expect(request.domain_payload.planned_capability_ids).toEqual([]);expect(request.domain_payload.acceptance_criteria).toEqual([]);expect(request.domain_payload.evidence_plan).toEqual([]);
+        if(kind==='protein_in_silico')expect(request.domain_payload.targets).toEqual([]);
+    });
+
 });

@@ -435,7 +435,7 @@ describe('Project Manager API contract', () => {
         expect(receipt.source_receipt_id).toBe('external-receipt-9');
         expect(receipt.project_head_generation).toBe(4);
         await createProject({
-            schema: 'bms.project.v1',
+            schema: 'bms.project.v2', project_scope: 'global',
             name: 'Polymerase program',
             research_objective: 'Improve catalytic stability',
         });
@@ -452,7 +452,7 @@ describe('Project Manager API contract', () => {
             { adapter_id: 'core.rfd3-local-redesign.v1', entity_id: 'job-9', operation: 'attach_evidence', role: 'validated_by', note: 'Reviewed', expected_head_generation: 3 },
         );
         expect(transport.post).toHaveBeenNthCalledWith(2, '/api/projects', {
-            schema: 'bms.project.v1',
+            schema: 'bms.project.v2', project_scope: 'global',
             name: 'Polymerase program',
             research_objective: 'Improve catalytic stability',
         });
@@ -502,4 +502,13 @@ describe('Project Manager API contract', () => {
         );
         expect(transport.post.mock.calls[0]?.[1]).not.toHaveProperty('name');
     });
+});
+
+it('accepts bounded branch/task provenance without duplicating collections and forwards scoped cursors', async () => {
+ const data={...minimalSummary,source_projection:{scope:'displayed_receipts',complete:false,total:300},tree:{nodes:[],parent_node_key:'project:project-1',next_cursor:null,has_more:false,total:0},pagination:{...minimalSummary.pagination,task_next_cursor:'task-next'}};
+ transport.get.mockResolvedValue({data});
+ const model=await getProjectSummary('project-1',{treeParentNodeKey:'project:project-1',treeCursor:'tree-next',treeLimit:100,taskCursor:'task-next',taskLimit:25});
+ expect(model.source_projection).toEqual(data.source_projection);expect(model.pagination.task_next_cursor).toBe('task-next');
+ expect(transport.get).toHaveBeenCalledWith('/api/projects/project-1/summary',expect.objectContaining({params:expect.objectContaining({tree_parent_node_key:'project:project-1',tree_cursor:'tree-next',tree_limit:100,task_cursor:'task-next',task_limit:25})}));
+ expect(()=>normalizeProjectManagerReadModel({...data,source_projection:{...data.source_projection,scope:'all'}})).toThrow();
 });

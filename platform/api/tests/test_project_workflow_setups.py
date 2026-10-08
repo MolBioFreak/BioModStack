@@ -43,12 +43,12 @@ def test_migration_v21_persists_and_attests_workflow_setup_contexts(tmp_path: Pa
     experiment_migrations.run_all(db_path)
     connection = sqlite3.connect(db_path)
     try:
-        assert experiment_migrations.LATEST_MIGRATION_VERSION == 21
+        assert experiment_migrations.LATEST_MIGRATION_VERSION == 22
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_setup_contexts'"
         ).fetchone() == ("workflow_setup_contexts",)
         assert connection.execute(
-            "SELECT version, name FROM experiment_schema_migrations ORDER BY version DESC LIMIT 1"
+            "SELECT version, name FROM experiment_schema_migrations WHERE version = 21"
         ).fetchone() == (21, "project_workflow_setup_context_authority")
         assert experiment_migrations.attest_schema(connection)["ok"] is True
     finally:
@@ -376,7 +376,7 @@ async def test_primary_setup_atomically_creates_shell_context_and_no_execution(s
     async with setup_store() as session:
         project = await _project(session)
         document = await workflow_setups.create_workflow_setup(
-            session,
+            session, actor_id="test-owner",
             project_id=project.id,
             relationship_kind="primary",
             global_experiment_id=None,
@@ -387,7 +387,7 @@ async def test_primary_setup_atomically_creates_shell_context_and_no_execution(s
             idempotency_key="primary-create-0001",
         )
         replay = await workflow_setups.create_workflow_setup(
-            session,
+            session, actor_id="test-owner",
             project_id=project.id,
             relationship_kind="primary",
             global_experiment_id=None,
@@ -435,7 +435,7 @@ async def test_primary_failure_rolls_back_without_orphan_experiment(
         )
         with pytest.raises(ValidationFailure, match="forced post-experiment failure"):
             await workflow_setups.create_workflow_setup(
-                session, project_id=project_id, relationship_kind="primary",
+                session, actor_id="test-owner", project_id=project_id, relationship_kind="primary",
                 global_experiment_id=None, experiment_name="Rollback", experiment_objective="No orphan",
                 domain_kind="protein_in_silico", capability_id="protein.structure_prediction.boltz2",
                 idempotency_key="failed-primary-0001",
@@ -456,13 +456,13 @@ async def test_follow_up_reuses_owned_global_experiment_and_cross_project_fails_
         project = await _project(session, "One")
         other = await _project(session, "Two")
         primary = await workflow_setups.create_workflow_setup(
-            session, project_id=project.id, relationship_kind="primary",
+            session, actor_id="test-owner", project_id=project.id, relationship_kind="primary",
             global_experiment_id=None, experiment_name="Target", experiment_objective="Fold",
             domain_kind="protein_in_silico", capability_id="protein.structure_prediction.boltz2",
             idempotency_key="primary-one-0001",
         )
         follow_up = await workflow_setups.create_workflow_setup(
-            session, project_id=project.id, relationship_kind="follow_up",
+            session, actor_id="test-owner", project_id=project.id, relationship_kind="follow_up",
             global_experiment_id=primary["global_experiment_id"], experiment_name=None,
             experiment_objective=None, domain_kind="protein_in_silico",
             capability_id="protein.conformational_mapping.confornets",
@@ -476,7 +476,7 @@ async def test_follow_up_reuses_owned_global_experiment_and_cross_project_fails_
             )
         with pytest.raises(ValidationFailure, match="Project"):
             await workflow_setups.create_workflow_setup(
-                session, project_id=other.id, relationship_kind="follow_up",
+                session, actor_id="test-owner", project_id=other.id, relationship_kind="follow_up",
                 global_experiment_id=primary["global_experiment_id"], experiment_name=None,
                 experiment_objective=None, domain_kind="protein_in_silico",
                 capability_id="protein.structure_prediction.protenix_v2",
@@ -489,7 +489,7 @@ async def test_draft_save_is_optimistic_idempotent_and_adapter_validated(setup_s
     async with setup_store() as session:
         project = await _project(session)
         setup = await workflow_setups.create_workflow_setup(
-            session, project_id=project.id, relationship_kind="primary",
+            session, actor_id="test-owner", project_id=project.id, relationship_kind="primary",
             global_experiment_id=None, experiment_name="Target", experiment_objective="Fold",
             domain_kind="protein_in_silico", capability_id="protein.structure_prediction.esmfold2",
             idempotency_key="primary-save-0001",
@@ -522,7 +522,7 @@ async def test_prepare_launch_freezes_authorities_without_run_or_job_submission(
     async with setup_store() as session:
         project = await _project(session)
         setup = await workflow_setups.create_workflow_setup(
-            session, project_id=project.id, relationship_kind="primary",
+            session, actor_id="test-owner", project_id=project.id, relationship_kind="primary",
             global_experiment_id=None, experiment_name="Target", experiment_objective="Fold",
             domain_kind="protein_in_silico", capability_id="protein.structure_prediction.esmfold2",
             idempotency_key="primary-prepare-0001",
@@ -560,7 +560,7 @@ async def test_managed_preparation_issues_no_typed_launch_context(setup_store, m
     async with setup_store() as session:
         project = await _project(session)
         setup = await workflow_setups.create_workflow_setup(
-            session, project_id=project.id, relationship_kind="primary",
+            session, actor_id="test-owner", project_id=project.id, relationship_kind="primary",
             global_experiment_id=None, experiment_name="Managed target", experiment_objective="Fold",
             domain_kind="protein_in_silico", capability_id="protein.structure_prediction.esmfold2",
             idempotency_key="managed-create-0001",
@@ -584,7 +584,7 @@ async def test_setup_becomes_submitted_only_after_authoritative_job_binding(setu
     async with setup_store() as session:
         project = await _project(session)
         setup = await workflow_setups.create_workflow_setup(
-            session, project_id=project.id, relationship_kind="primary",
+            session, actor_id="test-owner", project_id=project.id, relationship_kind="primary",
             global_experiment_id=None, experiment_name="Bind target", experiment_objective="Fold",
             domain_kind="protein_in_silico", capability_id="protein.structure_prediction.esmfold2",
             idempotency_key="primary-bind-0001",
@@ -618,7 +618,7 @@ async def test_resume_is_hydrated_but_create_stays_navigation_bounded(setup_stor
     async with setup_store() as session:
         project = await _project(session)
         created = await workflow_setups.create_workflow_setup(
-            session, project_id=project.id, relationship_kind="primary",
+            session, actor_id="test-owner", project_id=project.id, relationship_kind="primary",
             global_experiment_id=None, experiment_name="Hydrated target",
             experiment_objective="Preserve exact native values",
             domain_kind="protein_in_silico",
@@ -647,7 +647,7 @@ async def test_task_first_read_model_projects_setup_relationship_and_actions(set
     async with setup_store() as session:
         project = await _project(session)
         setup = await workflow_setups.create_workflow_setup(
-            session, project_id=project.id, relationship_kind="primary",
+            session, actor_id="test-owner", project_id=project.id, relationship_kind="primary",
             global_experiment_id=None, experiment_name="Familiar experiment",
             experiment_objective="Configure folding", domain_kind="protein_in_silico",
             capability_id="protein.structure_prediction.boltz2",
@@ -684,7 +684,7 @@ async def test_delete_is_bounded_to_unsubmitted_setup_and_idempotent(setup_store
     async with setup_store() as session:
         project = await _project(session)
         setup = await workflow_setups.create_workflow_setup(
-            session, project_id=project.id, relationship_kind="primary",
+            session, actor_id="test-owner", project_id=project.id, relationship_kind="primary",
             global_experiment_id=None, experiment_name="Delete me", experiment_objective="No launch",
             domain_kind="protein_in_silico", capability_id="protein.structure_prediction.boltz2",
             idempotency_key="primary-delete-0001",

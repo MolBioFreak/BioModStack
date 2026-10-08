@@ -602,6 +602,7 @@ def test_operator_runtime_mode_falls_back_to_default_when_no_runtime_is_fully_ac
 def test_git_build_identity_normalizes_commit_time_to_utc_z(monkeypatch, tmp_path: Path) -> None:
     values = {
         ("rev-parse", "HEAD"): "9be20f7774a56e5067011e6748b2a6a989095cbc\n",
+        ("rev-parse", "9be20f7774a56e5067011e6748b2a6a989095cbc^{tree}"): "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
         ("symbolic-ref", "--quiet", "--short", "HEAD"): "test\n",
         ("show", "-s", "--format=%cI", "HEAD"): "2026-07-27T16:08:27-05:00\n",
     }
@@ -614,6 +615,7 @@ def test_git_build_identity_normalizes_commit_time_to_utc_z(monkeypatch, tmp_pat
 
     assert identity == {
         "revision": "9be20f7774a56e5067011e6748b2a6a989095cbc",
+        "source_tree": "a" * 40,
         "build_id": "test-9be20f7774a5",
         "build_time": "2026-07-27T21:08:27Z",
     }
@@ -623,6 +625,8 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     project_root = tmp_path / "biomodstack"
     telemetry_db = tmp_path / "telemetry.sqlite3"
     monkeypatch.setenv("BMS_TELEMETRY_DB_PATH", str(telemetry_db))
+    monkeypatch.setenv("BMS_RUNTIME_IMAGE_STORE", str(tmp_path / '.image-store'))
+    monkeypatch.setenv("BMS_DEVELOPMENT_RUNTIME_IMAGE_REFERENCE_FILE", str(tmp_path / '.image-store/references/development.env'))
     monkeypatch.setattr(
         services,
         "git_build_identity",

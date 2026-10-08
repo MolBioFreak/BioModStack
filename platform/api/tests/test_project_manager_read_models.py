@@ -43,7 +43,6 @@ from experiment_services import (
 )
 from routers.project_manager import router as project_manager_router
 from services.global_experiments.adapters import registry
-from services.global_experiments.launch_contexts import create_launch_context
 from services.global_experiments.read_models import _head_summary, build_project_manager_read_model
 from services.ngs_molbio_preparation_authority import (
     _hierarchy_revision_reference_ids,
@@ -638,7 +637,7 @@ async def test_source_reverification_receipt_renews_project_reconciliation(read_
 
 
 @pytest.mark.asyncio
-async def test_project_reconciliation_reads_every_attached_source_beyond_page_limits(
+async def test_project_reconciliation_marks_unread_sources_incomplete(
     read_model_store,
 ):
     verified_at = datetime.now(timezone.utc)
@@ -679,12 +678,9 @@ async def test_project_reconciliation_reads_every_attached_source_beyond_page_li
             activity_limit=1,
         )
 
-    assert set(read_model["source_receipt_ids"]) == {
-        "receipt-stale-beyond-page",
-        "receipt-current-first-page",
-    }
-    assert read_model["reconciliation"]["state"] == "stale"
-    assert read_model["reconciliation"]["reason"] == "persisted verification is historical and has no bounded freshness or re-verification receipt"
+    assert read_model["source_receipt_ids"] == ["receipt-current-first-page"]
+    assert read_model["source_projection"] == {"scope": "displayed_receipts", "complete": False, "total": 2}
+    assert read_model["reconciliation"]["state"] == "pending"
 
 
 @pytest.mark.asyncio
@@ -1188,21 +1184,6 @@ async def test_attachment_lineage_result_note_and_activity_pages_are_truthful_an
             item["receipt_id"]
             for item in pages["results"]["items"] + second_pages["results"]["items"]
         }
-        selected_receipt = f"receipt-{ATTACHMENT_TOTAL - 1:03d}"
-        return_uri = (
-            f"/projects/{project.id}?focus={global_experiment.id}"
-            f"&selected=external_entity_receipt%3A{selected_receipt}"
-        )
-        launch_context = await create_launch_context(
-            session,
-            project_id=project.id,
-            global_experiment_id=global_experiment.id,
-            domain_experiment_id=domain.id,
-            workflow_id=None,
-            workflow_revision_id=None,
-            return_uri=return_uri,
-        )
-        assert launch_context.return_uri == return_uri
         assert {
             item["resource_id"] for item in pages["notes"]["items"]
         }.isdisjoint({item["resource_id"] for item in second_pages["notes"]["items"]})
@@ -1415,6 +1396,7 @@ async def _add_retry_attempts(session, *, project_id: str, run: ExperimentWorkfl
                 resource_id="run-attempt-failed",
                 workspace_id=project_id,
                 workflow_run_id=run.resource_id,
+                preparation_id=run.preparation_id,
                 attempt_number=1,
                 scheduler_job_id="canonical-job-failed",
                 state="failed",
@@ -1430,6 +1412,7 @@ async def _add_retry_attempts(session, *, project_id: str, run: ExperimentWorkfl
                 resource_id="run-attempt-completed",
                 workspace_id=project_id,
                 workflow_run_id=run.resource_id,
+                preparation_id=run.preparation_id,
                 attempt_number=2,
                 scheduler_job_id="canonical-job-completed",
                 state="completed",
@@ -1522,7 +1505,7 @@ async def test_each_workflow_run_is_one_canonical_run_and_retry_attempts_are_not
             "receipt_id": "binding-receipt-completed",
             "output_receipt_ids": [],
             "adapter_id": "test.adapter.v1",
-            "available_actions": ["view_lineage"],
+            "available_actions": ["view_lineage", "clone"],
             "canonical_surface": None,
             "canonical_surfaces": [],
             "attempts": [

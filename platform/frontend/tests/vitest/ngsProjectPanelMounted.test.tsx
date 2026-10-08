@@ -1,4 +1,5 @@
 import React, { act } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -57,7 +58,7 @@ afterEach(() => {
 
 async function renderHub(presentation: 'inline' | 'launcher-dialog' = 'inline') {
     await act(async () => {
-        root.render(<QueryClientProvider client={queryClient}><NgsMolBioProjectHub presentation={presentation} /></QueryClientProvider>);
+        root.render(<MemoryRouter><QueryClientProvider client={queryClient}><NgsMolBioProjectHub presentation={presentation} /></QueryClientProvider></MemoryRouter>);
         await Promise.resolve();
     });
 }
@@ -73,7 +74,7 @@ describe('NGS/MolBio Project context bridge', () => {
         expect(container.textContent).not.toContain('Advanced project and experiment metadata');
     });
 
-    it('shows selected Project context, dedicated-manager navigation, and the scientific workspace', async () => {
+    it('shows compact selected Project context without stacking a scientific workspace', async () => {
         contextState.current = {
             workspaceId: 'local-project-1',
             globalExperimentId: 'experiment-1',
@@ -84,8 +85,8 @@ describe('NGS/MolBio Project context bridge', () => {
         };
         await renderHub();
         expect(container.textContent).toContain('Syenex New Plasmids');
-        expect(container.querySelector<HTMLAnchorElement>('a[href^="/projects/local-project-1"]')?.textContent).toBe('Open in Project Manager');
-        expect(container.querySelector('[data-testid="domain-experiment-workspace"]')).not.toBeNull();
+        expect(container.querySelector<HTMLAnchorElement>('a[href^="/projects/local-project-1"]')?.textContent).toBe('Project Manager');
+        expect(container.querySelector('[data-testid="domain-experiment-workspace"]')).toBeNull();
         expect(container.textContent).not.toContain('Create governed link');
     });
 
