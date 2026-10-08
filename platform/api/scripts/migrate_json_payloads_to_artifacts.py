@@ -953,6 +953,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.store == "telemetry":
+        raise SystemExit(
+            "telemetry JSON/scientific-artifact migration is retired; initialize the typed telemetry store"
+        )
     if not args.apply:
         raise SystemExit("refusing to mutate without --apply")
     args.artifact_root.mkdir(parents=True, exist_ok=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,21 @@ def test_history_endpoint_rejects_unbounded_raw_range(tmp_path: Path, monkeypatc
 
 def test_history_endpoint_reports_unavailable_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("BMS_TELEMETRY_DB_PATH", str(tmp_path / "missing.sqlite3"))
+    with pytest.raises(HTTPException) as error:
+        telemetry.telemetry_history(start_ms=1, end_ms=2, resolution="raw", limit=10)
+    assert error.value.status_code == 503
+
+
+def test_history_endpoint_reports_invalid_schema_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "invalid.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE raw_samples(timestamp_ms INTEGER PRIMARY KEY, payload_json TEXT NOT NULL)"
+        )
+    monkeypatch.setenv("BMS_TELEMETRY_DB_PATH", str(path))
     with pytest.raises(HTTPException) as error:
         telemetry.telemetry_history(start_ms=1, end_ms=2, resolution="raw", limit=10)
     assert error.value.status_code == 503
