@@ -63,10 +63,16 @@ BMS is not just a protein-design launcher. The live repo covers:
 - a BioXP cockpit plus workstation infra/runtime controls
 
 The BioXP surface in BMS should be read as the current robot-linkage and
-cockpit/proxy layer, not as a full mirror of every robot-local endpoint. Live
-robot-local surfaces such as motion reference-state and liquid-handling routes
-still extend beyond what BMS currently exposes under `/api/bioxp/*`, and status
-surfaces can diverge briefly during reconnect/recovery windows.
+cockpit/proxy layer, not as a full mirror of every robot-local endpoint. The
+robot-local runtime remains the source of truth for OEM-compat control prep,
+including `/oem-compat/capabilities/test-prep`; BMS should surface that as a
+thin operator/control-plane capability matrix rather than infer its own robot
+truth. Live robot-local surfaces such as motion reference-state and
+liquid-handling routes still extend beyond what BMS currently exposes under
+`/api/bioxp/*`, and status surfaces can diverge briefly during
+reconnect/recovery windows. The BioXP3200 hardware is treated as functional
+under OEM control; unresolved native-Linux parity or reconnect work should not
+be framed in BMS as a bad-component verdict.
 
 For the full live model inventory, see
 [docs/ai_guidance/Model_Integrations.md](docs/ai_guidance/Model_Integrations.md).
