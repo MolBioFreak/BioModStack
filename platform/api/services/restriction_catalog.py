@@ -15,7 +15,7 @@ from typing import Literal, Mapping, TypeVar
 
 import rfc8785
 from jsonschema import Draft202012Validator
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from restriction_catalog_integrity import validate_catalog_integrity
 
@@ -28,7 +28,7 @@ ACTIVE_CATALOG_ID = "biopython-rebase-404-bms-v1"
 APPROVED_CATALOG_CONTENT_SHA256 = "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f"
 APPROVED_CATALOG_RAW_SHA256 = "afa440bbbf47d9368e85f300e5abcb4f630b5cb3828e832feaa9e13f71d520c8"
 APPROVED_MANIFEST_RAW_SHA256 = "f79eb4a611b8e6bc28e906afafc24c7e38723b4d0b8aeb40dbc541ea8c19e983"
-APPROVED_SCHEMA_RAW_SHA256 = "7bdbd4d1bd7206eba5b5efdf1da050580ac73a5f0d4014233c3394eabfe2d346"
+APPROVED_SCHEMA_RAW_SHA256 = "792b040db2cc3e3ae43a20061729cc46e8905dc895698917db0acc1c425a1b7a"
 CATALOG_MAX_BYTES = 2 * 1024 * 1024
 MANIFEST_MAX_BYTES = 256 * 1024
 SCHEMA_MAX_BYTES = 512 * 1024
@@ -241,6 +241,37 @@ class RecordSource(StrictFrozenModel):
     source_notation: str | None
 
 
+def _golden_gate_geometry_supported(
+    *,
+    enzyme_kind: str,
+    analysis_capability: str,
+    cleavage_status: str,
+    motifs: tuple[str, ...],
+    events: tuple[CleavageEvent, ...],
+) -> bool:
+    """Classify the exact external 5' DSB geometry supported by Golden Gate."""
+    if (
+        enzyme_kind != "double_strand_endonuclease"
+        or analysis_capability != "digest_simulation"
+        or cleavage_status != "known_double_strand"
+        or len(motifs) != 1
+        or len(events) != 1
+    ):
+        return False
+    event = events[0]
+    motif_length = len(motifs[0])
+    external = (
+        min(event.top_offset, event.bottom_offset) >= motif_length
+        or max(event.top_offset, event.bottom_offset) <= 0
+    )
+    return (
+        external
+        and event.overhang_kind == "five_prime"
+        and event.overhang_length_nt > 0
+        and abs(event.top_offset - event.bottom_offset) == event.overhang_length_nt
+    )
+
+
 class RestrictionRecord(StrictFrozenModel):
     enzyme_id: str
     id_policy: Literal["canonical_name_v1_casefold_unique"]
@@ -254,11 +285,25 @@ class RestrictionRecord(StrictFrozenModel):
         "restriction_enzyme_geometry_unresolved",
     ]
     analysis_capability: Literal["digest_simulation", "nicking_analysis", "recognition_only"]
+    golden_gate_compatible: bool
     exclusion_reason: str | None
     supplier_provenance: SupplierProvenance
     relationships: Relationships
     source: RecordSource
     record_sha256: str
+
+    @model_validator(mode="after")
+    def validate_golden_gate_compatibility(self) -> "RestrictionRecord":
+        expected = _golden_gate_geometry_supported(
+            enzyme_kind=self.enzyme_kind,
+            analysis_capability=self.analysis_capability,
+            cleavage_status=self.cleavage.status,
+            motifs=self.recognition.site_alternatives_iupac,
+            events=self.cleavage.events,
+        )
+        if self.golden_gate_compatible is not expected:
+            raise ValueError("golden_gate_compatible does not match immutable record geometry")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,7 +424,20 @@ def _public_counts(counts: Mapping[str, int], records: tuple[RestrictionRecord, 
 
 
 def _build_view(catalog: dict[str, object]) -> CatalogView:
-    records = tuple(RestrictionRecord.model_validate(row) for row in catalog["records"])  # type: ignore[arg-type]
+    projected_rows: list[dict[str, object]] = []
+    for raw_row in catalog["records"]:  # type: ignore[union-attr]
+        row = dict(raw_row)
+        recognition = Recognition.model_validate(row["recognition"])
+        cleavage = Cleavage.model_validate(row["cleavage"])
+        row["golden_gate_compatible"] = _golden_gate_geometry_supported(
+            enzyme_kind=str(row["enzyme_kind"]),
+            analysis_capability=str(row["analysis_capability"]),
+            cleavage_status=cleavage.status,
+            motifs=recognition.site_alternatives_iupac,
+            events=cleavage.events,
+        )
+        projected_rows.append(row)
+    records = tuple(RestrictionRecord.model_validate(row) for row in projected_rows)
     ordered_records = tuple(
         sorted(records, key=lambda row: (row.canonical_name.casefold(), row.enzyme_id.casefold()))
     )

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from services.restriction_analysis import analyze_sequence
+from services.restriction_analysis import AnalysisLimitError, InvalidDNAError, analyze_sequence
 from services.restriction_catalog import (
     CatalogUnavailable,
     CatalogView,
@@ -13,7 +13,20 @@ from services.restriction_catalog import (
 
 from .common import orient_fragment
 from .ligation import simulate_ligation
-from .types import AssemblyError, AssemblyFragment, AssemblyProduct
+from .types import (
+    AssemblyError,
+    AssemblyFragment,
+    AssemblyProduct,
+    GoldenGateCatalogAuthority,
+)
+
+
+class GoldenGateInvalidDNAError(AssemblyError):
+    """Sanitized invalid-DNA boundary for public Golden Gate routes."""
+
+
+class GoldenGateAnalysisLimitError(AssemblyError):
+    """Sanitized resource-limit boundary for public Golden Gate routes."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +38,7 @@ class TypeIISEnzyme:
     catalog_id: str
     catalog_sha256: str
     record: RestrictionRecord
+    catalog: CatalogView
 
     @property
     def name(self) -> str:
@@ -38,25 +52,12 @@ def _resolve_from_catalog(catalog: CatalogView, enzyme_id: str) -> TypeIISEnzyme
         raise AssemblyError(f"Unsupported Golden Gate enzyme identity '{enzyme_id}'")
     motifs = record.recognition.site_alternatives_iupac
     events = record.cleavage.events
-    if (
-        record.analysis_capability != "digest_simulation"
-        or record.cleavage.status != "known_double_strand"
-        or len(motifs) != 1
-        or len(events) != 1
-    ):
+    if not record.golden_gate_compatible:
         raise AssemblyError(
-            f"Golden Gate enzyme '{identity}' is not exact geometry-ready double-strand catalog authority"
+            f"Golden Gate enzyme '{identity}' is not exact supported external 5-prime cleavage authority"
         )
     event = events[0]
     motif = motifs[0]
-    if (
-        event.overhang_kind != "five_prime"
-        or event.overhang_length_nt <= 0
-        or max(event.top_offset, event.bottom_offset) <= len(motif)
-    ):
-        raise AssemblyError(
-            f"Golden Gate enzyme '{identity}' does not have supported Type IIS cleavage geometry"
-        )
     return TypeIISEnzyme(
         enzyme_id=record.enzyme_id,
         canonical_name=record.canonical_name,
@@ -65,6 +66,7 @@ def _resolve_from_catalog(catalog: CatalogView, enzyme_id: str) -> TypeIISEnzyme
         catalog_id=catalog.catalog_id,
         catalog_sha256=catalog.content_sha256,
         record=record,
+        catalog=catalog,
     )
 
 
@@ -91,13 +93,20 @@ def golden_gate_options() -> tuple[TypeIISEnzyme, ...]:
 
 
 def _site_count(sequence: str, *, circular: bool, enzyme: TypeIISEnzyme) -> int:
-    result = analyze_sequence(
-        sequence=sequence,
-        topology="circular" if circular else "linear",
-        catalog=catalog_authority.require(),
-        records=(enzyme.record,),
-        include_possible_sites=True,
-    )
+    try:
+        result = analyze_sequence(
+            sequence=sequence,
+            topology="circular" if circular else "linear",
+            catalog=enzyme.catalog,
+            records=(enzyme.record,),
+            include_possible_sites=True,
+        )
+    except InvalidDNAError as exc:
+        raise GoldenGateInvalidDNAError("Golden Gate fragment DNA is invalid") from exc
+    except AnalysisLimitError as exc:
+        raise GoldenGateAnalysisLimitError(
+            "Golden Gate fragment exceeds supported analysis limits"
+        ) from exc
     return (
         result.counts.recognition_site_count_definite
         + result.counts.recognition_site_count_possible
@@ -114,7 +123,12 @@ def simulate_golden_gate(
         raise AssemblyError("Golden Gate assembly requires at least two fragments")
 
     enzyme = get_type_iis_enzyme(enzyme_id)
-    oriented = [orient_fragment(fragment) for fragment in fragments]
+    try:
+        oriented = [orient_fragment(fragment) for fragment in fragments]
+    except AssemblyError:
+        raise
+    except ValueError as exc:
+        raise GoldenGateInvalidDNAError("Golden Gate fragment DNA is invalid") from exc
 
     for fragment in oriented:
         recognition_site_count = _site_count(fragment.sequence, circular=False, enzyme=enzyme)
@@ -158,4 +172,9 @@ def simulate_golden_gate(
             f"Validated catalog enzyme {enzyme.enzyme_id} overhang length: {enzyme.overhang_length} nt",
             f"Restriction catalog {enzyme.catalog_id} sha256:{enzyme.catalog_sha256}",
         ],
+        golden_gate_authority=GoldenGateCatalogAuthority(
+            enzyme_id=enzyme.enzyme_id,
+            catalog_id=enzyme.catalog_id,
+            catalog_sha256=enzyme.catalog_sha256,
+        ),
     )

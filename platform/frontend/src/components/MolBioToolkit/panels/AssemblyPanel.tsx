@@ -18,6 +18,7 @@ import {
     type GoldenGateAssemblyOptionsResponse,
     type SavedGibsonWorkupListItem,
 } from '../../../lib/api';
+import { buildGoldenGateAssemblyRequest } from '../../../lib/goldenGateAuthority';
 import type { SequenceData, SelectionInfo } from '../types';
 import { GibsonDesignWorkspace } from './GibsonDesignWorkspace';
 
@@ -335,7 +336,7 @@ export function AssemblyPanel({
     const [saveName, setSaveName] = useState('');
     const [saveDescription, setSaveDescription] = useState('');
     const [goldenGateOptions, setGoldenGateOptions] = useState<GoldenGateAssemblyOptionsResponse | null>(null);
-    const [goldenGateEnzyme, setGoldenGateEnzyme] = useState('BsaI');
+    const [goldenGateEnzyme, setGoldenGateEnzyme] = useState('');
     const [gibsonMinOverlap, setGibsonMinOverlap] = useState(20);
     const [gibsonPreferredOverlap, setGibsonPreferredOverlap] = useState(28);
     const [gibsonMaxOverlap, setGibsonMaxOverlap] = useState(80);
@@ -388,9 +389,11 @@ export function AssemblyPanel({
                 const response = await fetchGoldenGateAssemblyOptions();
                 if (!cancelled) {
                     setGoldenGateOptions(response.data);
-                    if (response.data.enzymes.length > 0) {
-                        setGoldenGateEnzyme((current) => current || response.data.enzymes[0].enzyme_id);
-                    }
+                    setGoldenGateEnzyme((current) => (
+                        response.data.enzymes.some((enzyme) => enzyme.enzyme_id === current)
+                            ? current
+                            : (response.data.enzymes[0]?.enzyme_id ?? '')
+                    ));
                 }
             } catch (loadError) {
                 console.error('Failed to load Golden Gate options:', loadError);
@@ -620,13 +623,14 @@ export function AssemblyPanel({
                     ? await saveGibsonAssembly(payload)
                     : await simulateGibsonAssembly(payload);
             } else {
-                const payload = {
+                const payload = buildGoldenGateAssemblyRequest({
                     fragments,
                     circular: sequenceData.circular,
-                    enzyme_id: goldenGateEnzyme,
-                    new_name: saveName || undefined,
-                    save_description: saveDescription || undefined,
-                };
+                    selectedEnzymeId: goldenGateEnzyme,
+                    options: goldenGateOptions,
+                    newName: saveName,
+                    saveDescription,
+                });
                 response = action === 'save'
                     ? await saveGoldenGateAssembly(payload)
                     : await simulateGoldenGateAssembly(payload);

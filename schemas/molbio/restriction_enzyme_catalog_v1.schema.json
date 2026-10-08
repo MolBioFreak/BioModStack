@@ -192,6 +192,7 @@
         "cleavage": {"$ref": "#/$defs/cleavage"},
         "enzyme_kind": {"enum": ["double_strand_endonuclease", "nicking_endonuclease", "restriction_enzyme_geometry_unresolved"]},
         "analysis_capability": {"enum": ["digest_simulation", "nicking_analysis", "recognition_only"]},
+        "golden_gate_compatible": {"type": "boolean"},
         "exclusion_reason": {"oneOf": [{"enum": ["primary_cut_geometry_incomplete", "nicking_enzyme_not_digestible"]}, {"type": "null"}]},
         "supplier_provenance": {"$ref": "#/$defs/supplierProvenance"},
         "relationships": {"$ref": "#/$defs/relationships"},

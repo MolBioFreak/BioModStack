@@ -51,8 +51,7 @@ export function getQuickMapEnzymeNames(enzymes: EnzymeCutData[], group: QuickMap
         if (group === 'double') return summary.double_strand_break_count === 2;
         if (group === 'three_plus') return summary.double_strand_break_count >= 3;
         if (group === 'nicking') return summary.nick_count > 0;
-        return record.cleavage.events.some((event) => Math.abs(Number(event.top_offset) - Number(event.bottom_offset)) > 0)
-            && !record.recognition.palindromic;
+        return record.golden_gate_compatible;
     }).map(({ record }) => record.enzyme_id);
 }
 export function mergeMappedEnzymes(current: string[], additions: string[]): string[] { return Array.from(new Set([...current, ...additions])); }
@@ -83,7 +82,7 @@ function inSelection(position: number, selection: SelectionInfo | null | undefin
 
 const CUT_FILTERS: Array<[CutFilter, string]> = [['all','All'],['unique','1x'],['double','2x'],['three_plus','3x+'],['zero','0x'],['selection','In Selection']];
 const GROUP_FILTERS: Array<[GroupFilter, string]> = [['all','All Types'],['digest','Digest-ready'],['nicking','Nicking'],['recognition_only','Recognition only'],['commercial','Commercial reported']];
-const QUICK: Array<[QuickMapGroup, string]> = [['unique','1x'],['double','2x'],['three_plus','3x+'],['nicking','Nicking'],['type_iis','Type IIS']];
+const QUICK: Array<[QuickMapGroup, string]> = [['unique','1x'],['double','2x'],['three_plus','3x+'],['nicking','Nicking'],['type_iis','Golden Gate compatible']];
 
 export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, catalog, productEvidence = null, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest }: DigestPanelProps) {
     const [digestEnzymes, setDigestEnzymes] = useState<string[]>([]);

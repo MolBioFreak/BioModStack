@@ -143,25 +143,30 @@
       "capability_kind": "domain_operation",
       "capability_version": "1",
       "classified_parameter_keys": [
+        "catalog_id",
+        "catalog_sha256",
         "change_summary",
         "circular",
         "enzyme_id",
         "fragment_revision_ids",
+        "fragments",
         "orientations"
       ],
       "entrypoint_owner": null,
       "exposure_state": "internal",
-      "inventory_sha256": "b269702fb9bfde35574c5ab3d269b03433ee684e933c84205c9e07ea43e97224",
+      "inventory_sha256": "e5e65c2458e7f24aaceba1ac5ef6b8fe5b822b5a18f36dc3d6f0c2e2b8db8493",
       "label": "Golden Gate Assembly",
       "launch_mode": "domain_operation",
       "materializer_owner": null,
       "native_mapping": {
         "id": "molbio.assembly.golden_gate",
         "kind": "domain_operation",
-        "native_request_compatibility": "exact",
+        "native_request_compatibility": "partial_native_mapping",
         "source": "POST /api/molbio/assembly/golden-gate/save"
       },
       "observed_parameter_keys": [
+        "catalog_id",
+        "catalog_sha256",
         "change_summary",
         "circular",
         "enzyme_id",
@@ -172,7 +177,7 @@
         "save_description"
       ],
       "parameter_schema_id": "bms.operation-parameters.molbio.assembly.golden_gate.v1",
-      "parameter_schema_sha256": "f50bfb3014113a110c641a90ec107b0267dfc8e86efa3945d3bab3fd5a0cd61d",
+      "parameter_schema_sha256": "dc0c436568ddf431a87658a91b50c5d4db8abecc957f61c0b2255ea9ca5bea5c",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -240,9 +245,7 @@
         "save_description"
       ],
       "submission_owner": "routers.molbio_ops.save_golden_gate_assembly",
-      "unclassified_parameter_keys": [
-        "fragments"
-      ],
+      "unclassified_parameter_keys": [],
       "unsupported_parameter_keys": [],
       "viewer_destination": "/molbio?operation_id={operation_id}"
     },
@@ -2905,7 +2908,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "9f8bfc9122526e1872d4ad23169b786e63f3b26e2725baa38788224aca86c46f",
+  "content_sha256": "87508fef427fd38e9f43b55ed40a5acdbcfcced57c459d4e8c2885825bf8ae9a",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
@@ -2931,7 +2934,7 @@
   ],
   "payload_ownership_manifest_sha256": "a0a8e0ae952565e5f8dacbd84567e65853c8fbd1ab6b1bb7454ceefcab4aa6cb",
   "schema": "bms.ngs-molbio.capability-inventory.v2",
-  "schema_registry_sha256": "2e13f217668134ef72404526b4242f41d5a6cbc77bc92549a1740423c34e22a5",
+  "schema_registry_sha256": "044a4e2f01341eb23202b64cc3a84e294a2186446dee8dfbd48209dec8f955a2",
   "schema_version": 2,
   "source_pin_sha256": "c24afa91cc42054da3899c0f9a024769be96b444a444e8ab714443836856f1a4"
 }
