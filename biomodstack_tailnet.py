@@ -65,6 +65,14 @@ class TailnetEnvironmentError(ServiceManagerError):
     """Raised when an environment switch cannot be completed safely."""
 
 
+def _managed_image_id(environment_name: str, sealed_default: str) -> str:
+    """Resolve a deploy-time image receipt without weakening its exact-ID contract."""
+    value = os.environ.get(environment_name, sealed_default)
+    if not _IMAGE_ID_PATTERN.fullmatch(value):
+        raise TailnetEnvironmentError(f"{environment_name} is not an exact Docker image ID")
+    return value
+
+
 def _host_user_systemd_dir() -> Path:
     # systemd --user always reads the login manager's real home configuration;
     # never let a Cordova/Gradle XDG_CONFIG_HOME override redirect ownership files.
@@ -1024,7 +1032,8 @@ for proc_entry in os.scandir('/host-proc'):
         "docker", "run", "--rm", "--pull=never", "--network=none", "--read-only",
         "--privileged", "--user", "0:0",
         "--mount", "type=bind,src=/proc,dst=/host-proc,readonly",
-        "--entrypoint", "/usr/local/bin/python3.10", MANAGED_API_IMAGE_ID,
+        "--entrypoint", "/usr/local/bin/python3.10",
+        _managed_image_id("BMS_MANAGED_API_IMAGE_ID", MANAGED_API_IMAGE_ID),
         "-c", helper, *(str(inode) for inode in inodes),
     ])
     owners: dict[int, set[int]] = {inode: set() for inode in inodes}
@@ -1768,8 +1777,8 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
         "biomodstack-web": ("/docker-entrypoint.sh nginx -g daemon off;", "/"),
     }
     expected_image_ids = {
-        "biomodstack-api": MANAGED_API_IMAGE_ID,
-        "biomodstack-web": MANAGED_WEB_IMAGE_ID,
+        "biomodstack-api": _managed_image_id("BMS_MANAGED_API_IMAGE_ID", MANAGED_API_IMAGE_ID),
+        "biomodstack-web": _managed_image_id("BMS_MANAGED_WEB_IMAGE_ID", MANAGED_WEB_IMAGE_ID),
     }
     expected_mounts = {
         "biomodstack-api": [{
