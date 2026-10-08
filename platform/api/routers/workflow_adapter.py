@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 import subprocess
 import threading
@@ -97,7 +98,12 @@ async def workflow_adapter_start_runtime_target(
     _require_local_adapter_request(request)
     normalized_target = str(target or (payload.target if payload else None) or "prod").strip().lower()
     try:
-        start_runtime_target(target=normalized_target, skip_api_wait=True, skip_workflow_adapter_wait=True)
+        await asyncio.to_thread(
+            start_runtime_target,
+            target=normalized_target,
+            skip_api_wait=True,
+            skip_workflow_adapter_wait=True,
+        )
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"target": normalized_target, "control_mode": "host-adapter"}
@@ -174,7 +180,8 @@ async def workflow_adapter_runtime_state(
     _require_local_adapter_request(request)
     runtime_mode = resolve_runtime_mode(runtime)
     try:
-        payload = _mark_current_adapter_ready(runtime_descriptor(runtime_mode=runtime_mode))
+        descriptor = await asyncio.to_thread(runtime_descriptor, runtime_mode=runtime_mode)
+        payload = _mark_current_adapter_ready(descriptor)
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     payload["control_mode"] = "host-adapter"
@@ -206,8 +213,8 @@ async def workflow_adapter_runtime_action(
         return _run_container_api_web_action(normalized_action)
 
     try:
-        actions[normalized_action](runtime_mode=runtime_mode)
-        payload_out = runtime_descriptor(runtime_mode=runtime_mode)
+        await asyncio.to_thread(actions[normalized_action], runtime_mode=runtime_mode)
+        payload_out = await asyncio.to_thread(runtime_descriptor, runtime_mode=runtime_mode)
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     payload_out["control_mode"] = "host-adapter"

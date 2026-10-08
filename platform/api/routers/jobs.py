@@ -4527,10 +4527,20 @@ async def list_jobs(
         Job.awaiting_stage,
     )
     selected_entities = summary_columns if summary else (Job,)
+    design_counts = (
+        select(
+            Design.job_id.label("job_id"),
+            func.count(Design.id).label("design_count"),
+        )
+        .group_by(Design.job_id)
+        .subquery()
+    )
     query = (
-        select(*selected_entities, func.count(Design.id).label("design_count"))
-        .outerjoin(Design, Design.job_id == Job.id)
-        .group_by(Job.id)
+        select(
+            *selected_entities,
+            func.coalesce(design_counts.c.design_count, 0).label("design_count"),
+        )
+        .outerjoin(design_counts, design_counts.c.job_id == Job.id)
         .order_by(Job.created_at.desc())
     )
     
