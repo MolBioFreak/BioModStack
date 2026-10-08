@@ -10,11 +10,23 @@ UPDATER_ANDROID_TEST_SOURCE="$PROJECT_DIR/local-plugins/cordova-plugin-bms-apk-u
 
 cd "$PROJECT_DIR"
 
-# Ignore inherited desktop/configstore scope. The internal updater's signer is
-# deliberately anchored to this user-private durable build location so an
-# unrelated XDG_CONFIG_HOME cannot silently select another debug keystore.
+# Ignore inherited HOME and desktop/configstore scope. Long-lived agent shells
+# can retain both variables from hostile build probes, so resolve the account
+# home from passwd before selecting the durable internal-updater signer.
+CANONICAL_HOME="$(python3 - <<'PY'
+import os
+import pwd
+
+print(pwd.getpwuid(os.getuid()).pw_dir)
+PY
+)"
+if [[ "$CANONICAL_HOME" != /* ]] || [[ ! -d "$CANONICAL_HOME" ]]; then
+  echo "Could not resolve a canonical account home for Android signing" >&2
+  exit 1
+fi
+HOME="$CANONICAL_HOME"
 XDG_CONFIG_HOME="$HOME/.local/share/biomodstack/cordova-build-config"
-export XDG_CONFIG_HOME
+export HOME XDG_CONFIG_HOME
 mkdir -p "$XDG_CONFIG_HOME"
 chmod 700 "$XDG_CONFIG_HOME"
 INTERNAL_UPDATE_SIGNER_SHA256="43cce218275179b99aad810bfc246732226a9a408e616d9d5615d5b0709b595a"
