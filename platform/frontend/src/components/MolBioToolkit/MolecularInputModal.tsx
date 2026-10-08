@@ -16,6 +16,7 @@ import {
     sequenceUnitLabel,
 } from './utils/nucleotides';
 import { canonicalizePrimerPlacement } from './utils/selectionActions';
+import type { ImportTopology } from './utils/topology';
 import {
     focusTrapTarget,
     restoreFocusIfConnected,
@@ -27,7 +28,7 @@ interface MolecularInputModalProps {
     isOpen: boolean;
     onClose: () => void;
     onSelectSequence: (id: string) => void | Promise<void>;
-    onImportFile: (file: File) => void | Promise<void>;
+    onImportFile: (file: File, topology: ImportTopology) => void | Promise<void>;
     onCreateSequence: (data: {
         name: string;
         sequence: string;
@@ -105,6 +106,7 @@ export function MolecularInputModal({
     const [libraryError, setLibraryError] = useState<string | null>(null);
 
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [importTopology, setImportTopology] = useState<ImportTopology>('preserve');
 
     const [buildName, setBuildName] = useState('');
     const [buildDescription, setBuildDescription] = useState('');
@@ -237,8 +239,9 @@ export function MolecularInputModal({
 
     const handleImportSelectedFile = async () => {
         if (!selectedFile) return;
-        await onImportFile(selectedFile);
+        await onImportFile(selectedFile, importTopology);
         setSelectedFile(null);
+        setImportTopology('preserve');
         onClose();
     };
 
@@ -472,6 +475,19 @@ export function MolecularInputModal({
                                     <div className="text-sm text-slate-400">Selected file</div>
                                     <div className="mt-1 text-base font-medium text-slate-100">{selectedFile.name}</div>
                                     <div className="mt-1 text-xs text-slate-500">{(selectedFile.size / 1024).toFixed(1)} KB</div>
+                                    <label className="mt-4 block text-xs uppercase tracking-wide text-slate-500" htmlFor="import-topology">
+                                        Import topology
+                                    </label>
+                                    <select
+                                        id="import-topology"
+                                        value={importTopology}
+                                        onChange={(event) => setImportTopology(event.target.value as ImportTopology)}
+                                        className="mt-1 w-full rounded-xl border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500"
+                                    >
+                                        <option value="preserve">Preserve file topology</option>
+                                        <option value="circular">Force circular</option>
+                                        <option value="linear">Force linear</option>
+                                    </select>
                                     <button
                                         onClick={handleImportSelectedFile}
                                         className="mt-4 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500"
