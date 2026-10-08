@@ -23,6 +23,8 @@ for root in (REPO_ROOT, API_ROOT):
 from biomodstack_runtime_profile import install_profile_snapshot, save_install_profile
 from services.workflow_adapter import WorkflowAdapterRequestError, request_via_workflow_adapter, workflow_adapter_enabled
 from biomodstack_services import (
+    CORE_RUNTIME_SERVICE,
+    WORKFLOW_ADAPTER_SERVICE,
     ServiceManagerError,
     resolve_runtime_mode,
     restart_all,
@@ -132,6 +134,59 @@ def _system_control_should_proxy_to_workflow_adapter() -> bool:
     return _core_runtime_mode_enabled() and workflow_adapter_enabled()
 
 
+def _mark_current_api_ready(payload: dict[str, object]) -> dict[str, object]:
+    """Normalize runtime status for responses served by this API process.
+
+    `runtime_descriptor()` is also used by CLI/status paths, where probing
+    http://127.0.0.1:8000/api/health is appropriate.  From inside the FastAPI
+    route that is currently serving `/api/system/runtime-state`, however, that
+    same self-HTTP probe can time out on a single-worker server even though the
+    API is obviously reachable.  The route is live if it is returning this
+    payload, so mark API health as ready and derive container-runtime service
+    readiness from the live HTTP surfaces instead of container-local systemd.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    normalized = dict(payload)
+    health_raw = normalized.get("health")
+    if not isinstance(health_raw, dict):
+        return normalized
+
+    health = dict(health_raw)
+    if "api_ready" in health:
+        health["api_ready"] = True
+    normalized["health"] = health
+
+    if normalized.get("runtime_mode") != "container":
+        return normalized
+
+    services_raw = normalized.get("services")
+    if not isinstance(services_raw, list):
+        return normalized
+
+    derived_active = {
+        WORKFLOW_ADAPTER_SERVICE: bool(health.get("adapter_ready")),
+        CORE_RUNTIME_SERVICE: bool(health.get("api_ready") and health.get("frontend_ready")),
+    }
+    services: list[object] = []
+    for service in services_raw:
+        if not isinstance(service, dict):
+            services.append(service)
+            continue
+        item = dict(service)
+        name = str(item.get("name") or "")
+        if name in derived_active:
+            item["active"] = bool(item.get("active")) or derived_active[name]
+            if derived_active[name] and not service.get("active"):
+                item["active_source"] = "http-health"
+        services.append(item)
+    normalized["services"] = services
+    if services and all(isinstance(service, dict) for service in services):
+        normalized["runtime_active"] = all(bool(service.get("active")) for service in services if isinstance(service, dict))
+    return normalized
+
+
 def _start_runtime_target_via_workflow_adapter(target: str) -> dict[str, object]:
     response = request_via_workflow_adapter(
         "POST",
@@ -152,7 +207,7 @@ def _run_runtime_action(
     runtime_mode = _resolve_runtime(runtime)
     try:
         action(runtime_mode=runtime_mode)
-        return runtime_descriptor(runtime_mode=runtime_mode)
+        return _mark_current_api_ready(runtime_descriptor(runtime_mode=runtime_mode))
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -220,7 +275,7 @@ async def get_runtime_state(request: Request, runtime: str | None = None):
     _require_local_admin(request)
     runtime_mode = _resolve_runtime(runtime)
     try:
-        return runtime_descriptor(runtime_mode=runtime_mode)
+        return _mark_current_api_ready(runtime_descriptor(runtime_mode=runtime_mode))
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

@@ -76,7 +76,7 @@ async def workflow_adapter_start_runtime_target(
     _require_local_adapter_request(request)
     normalized_target = str(target or (payload.target if payload else None) or "prod").strip().lower()
     try:
-        start_runtime_target(target=normalized_target)
+        start_runtime_target(target=normalized_target, skip_api_wait=True, skip_workflow_adapter_wait=True)
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"target": normalized_target, "control_mode": "host-adapter"}
