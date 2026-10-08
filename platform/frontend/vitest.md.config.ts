@@ -7,6 +7,7 @@ export default defineConfig({
         include: [
             './tests/vitest/mdResultsMolstarMounted.test.tsx',
             './tests/vitest/boltzApiNativeControls.test.tsx',
+            './tests/vitest/stateLandscapeWorkspacePanel.test.tsx',
         ],
     },
 });
