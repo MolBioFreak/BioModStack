@@ -1,13 +1,30 @@
+"""Worker regressions for independent products, not retired combined jobs.
+
+Injected builders isolate lifecycle/CAS behavior; they are not scientific package
+validation evidence. The legacy package regression below uses real sealed bytes.
+All cooperative test builders have a hard test-only deadline and cleanup joins.
+"""
 from __future__ import annotations
 
+import asyncio
+import inspect
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+import pytest_asyncio
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from database import Base, Job
+from database import Base, Job, NgsAlignmentDerivedProduct as Product
+from tests.ngs_resource_fixture import ngs_resources  # noqa: F401
+from services import ngs_alignment_derived_products as lifecycle
+from services.ngs_alignment_presentation import PresentationClaimLost, PresentationSourceStale
+from services.ngs_alignment_presentation_worker import (
+    NgsAlignmentPresentationWorker, PresentationBuildFailure,
+)
 
 
 async def _database(tmp_path: Path):
@@ -18,971 +35,462 @@ async def _database(tmp_path: Path):
 
 
 def _job(job_id: str = "job-1") -> Job:
-    return Job(
-        id=job_id,
-        name="NGS",
-        model_id="nanopore",
-        mode="analysis",
-        params={},
-        status="completed",
-        queue_status="completed",
-        provenance={"result_integrity": {"state": "validated"}},
+    return Job(id=job_id, name="NGS", model_id="nanopore", mode="analysis", params={},
+               status="completed", queue_status="completed",
+               provenance={"result_integrity": {"state": "validated"}})
+
+
+def _source():
+    return lifecycle.source_identity(
+        job_id="job-1", session_id="session-1", mode="primary",
+        reference={"contig": "ref", "length_bp": 1000, "topology": "linear",
+                   "normalized_sequence_sha256": "1" * 64,
+                   "fasta_sha256": "2" * 64, "fai_sha256": "3" * 64},
+        source_manifest_sha256="a" * 64, source_artifact_set_sha256="b" * 64,
+        package_artifact_set_sha256="c" * 64, alignment_pair_sha256="d" * 64,
+        alignment_sha256="e" * 64, alignment_size_bytes=100,
+        alignment_index_sha256="f" * 64, alignment_index_size_bytes=80,
     )
 
 
-@pytest.mark.asyncio
-async def test_requested_presentation_claim_is_atomic_and_increments_attempt(tmp_path: Path) -> None:
-    from database import NgsAlignmentPresentationJob
-    from services.ngs_alignment_presentation import claim_next_presentation, request_presentation
+def _package(row):
+    return {"source_authority_sha256": row.source_authority_sha256,
+            "authority_sha256": "4" * 64, "manifest_sha256": "5" * 64}
 
+
+def _worker(sessions, **kwargs):
+    return NgsAlignmentPresentationWorker(
+        sessions, resolve_source_authority=kwargs.pop(
+            "resolve_source_authority", lambda row: row.source_authority_sha256), **kwargs)
+
+
+async def _run(worker):
+    return await asyncio.wait_for(worker.run_once(), timeout=5)
+
+
+async def _stored(sessions, row):
+    async with sessions() as session:
+        return await session.get(Product, row.id)
+
+
+async def _claim(sessions, row, *, token="claim-1", now=None, lease_seconds=30):
+    async with sessions() as session:
+        claimed = await lifecycle.claim_next_product(
+            session, product=row.product, claim_token=token, now=now,
+            lease_seconds=lease_seconds)
+    assert claimed is not None and claimed.id == row.id
+    return claimed
+
+
+@pytest_asyncio.fixture(params=["catalog", "preview"])
+async def product_case(tmp_path, request):
     engine, sessions = await _database(tmp_path)
-    now = datetime(2026, 9, 1, 12, 0, 0)
     try:
         async with sessions() as session:
             session.add(_job())
             await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
+            catalog = await lifecycle.request_catalog(session, _source())
             await session.commit()
-
-        async with sessions() as first:
-            claimed = await claim_next_presentation(
-                first, now=now, lease_seconds=30, claim_token="claim-1"
-            )
-        async with sessions() as second:
-            lost = await claim_next_presentation(
-                second, now=now, lease_seconds=30, claim_token="claim-2"
-            )
-            stored = (
-                await second.execute(
-                    select(NgsAlignmentPresentationJob).where(
-                        NgsAlignmentPresentationJob.id == request.id
-                    )
-                )
-            ).scalar_one()
-
-        assert claimed is not None
-        assert claimed.id == request.id
-        assert claimed.state == "running"
-        assert claimed.claim_token == "claim-1"
-        assert claimed.attempt_count == 1
-        assert claimed.lease_expires_at == now + timedelta(seconds=30)
-        assert lost is None
-        assert stored.state == "running"
-        assert stored.claim_token == "claim-1"
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_lease_renewal_and_ready_publication_require_live_claim_cas(tmp_path: Path) -> None:
-    from database import NgsAlignmentPresentationJob
-    from services.ngs_alignment_presentation import (
-        PresentationClaimLost,
-        claim_next_presentation,
-        mark_presentation_ready,
-        renew_presentation_lease,
-        request_presentation,
-    )
-
-    engine, sessions = await _database(tmp_path)
-    now = datetime(2026, 9, 1, 12, 0, 0)
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
-            await session.commit()
-        async with sessions() as session:
-            await claim_next_presentation(
-                session, now=now, lease_seconds=30, claim_token="claim-1"
-            )
-        async with sessions() as session:
-            renewed = await renew_presentation_lease(
-                session,
-                request.id,
-                "claim-1",
-                now=now + timedelta(seconds=10),
-                lease_seconds=40,
-            )
-            assert renewed == now + timedelta(seconds=50)
-        async with sessions() as session:
-            with pytest.raises(PresentationClaimLost):
-                await mark_presentation_ready(
-                    session,
-                    request.id,
-                    "losing-claim",
-                    source_authority_sha256="a" * 64,
-                    authority_sha256="d" * 64,
-                    manifest_sha256="e" * 64,
-                    now=now + timedelta(seconds=20),
-                )
-        async with sessions() as session:
-            ready = await mark_presentation_ready(
-                session,
-                request.id,
-                "claim-1",
-                source_authority_sha256="a" * 64,
-                authority_sha256="d" * 64,
-                manifest_sha256="e" * 64,
-                now=now + timedelta(seconds=20),
-            )
-            assert ready.state == "ready"
-            assert ready.claim_token is None
-            assert ready.lease_expires_at is None
-            assert ready.authority_sha256 == "d" * 64
-        async with sessions() as session:
-            stored = await session.get(NgsAlignmentPresentationJob, request.id)
-            assert stored is not None and stored.manifest_sha256 == "e" * 64
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_expired_running_claim_fails_terminally_with_cas(tmp_path: Path) -> None:
-    from services.ngs_alignment_presentation import (
-        claim_next_presentation,
-        recover_expired_presentations,
-        request_presentation,
-    )
-
-    engine, sessions = await _database(tmp_path)
-    now = datetime(2026, 9, 1, 12, 0, 0)
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
-            await session.commit()
-        async with sessions() as session:
-            await claim_next_presentation(
-                session, now=now, lease_seconds=10, claim_token="claim-1"
-            )
-        async with sessions() as session:
-            assert await recover_expired_presentations(
-                session, now=now + timedelta(seconds=11)
-            ) == 1
-        async with sessions() as session:
-            stored = await session.get(type(request), request.id)
-            assert stored is not None
-            assert stored.state == "failed"
-            assert stored.attempt_count == 1
-            assert stored.claim_token is None
-            assert stored.lease_expires_at is None
-            assert stored.error_code == "infrastructure_failed"
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_expired_claim_is_terminal_on_first_attempt_and_not_claimed_again(
-    tmp_path: Path,
-) -> None:
-    from services.ngs_alignment_presentation import (
-        claim_next_presentation,
-        recover_expired_presentations,
-        request_presentation,
-    )
-
-    engine, sessions = await _database(tmp_path)
-    now = datetime(2026, 9, 1, 12, 0, 0)
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
-            await session.commit()
-
-        async with sessions() as session:
-            claimed = await claim_next_presentation(
-                session, now=now, lease_seconds=1, claim_token="claim-1"
-            )
-            assert claimed is not None and claimed.attempt_count == 1
-        async with sessions() as session:
-            assert await recover_expired_presentations(
-                session, now=now + timedelta(seconds=2)
-            ) == 1
-        async with sessions() as session:
-            stored = await session.get(type(request), request.id)
-            another = await claim_next_presentation(
-                session, now=now + timedelta(minutes=10), claim_token="claim-2"
-            )
-            assert stored is not None
-            assert stored.state == "failed"
-            assert stored.attempt_count == 1
-            assert stored.error_code == "infrastructure_failed"
-            assert another is None
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_infrastructure_failure_retries_twice_then_fails_terminally(tmp_path: Path) -> None:
-    from services.ngs_alignment_presentation import (
-        claim_next_presentation,
-        record_presentation_failure,
-        request_presentation,
-    )
-
-    engine, sessions = await _database(tmp_path)
-    now = datetime(2026, 9, 1, 12, 0, 0)
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
-            await session.commit()
-
-        for attempt in range(1, 4):
-            attempt_now = now + timedelta(minutes=attempt)
+        row = catalog
+        if request.param == "preview":
+            catalog = await _claim(sessions, catalog)
             async with sessions() as session:
-                claimed = await claim_next_presentation(
-                    session,
-                    now=attempt_now,
-                    lease_seconds=30,
-                    claim_token=f"claim-{attempt}",
-                )
-                assert claimed is not None
+                await lifecycle.publish_product(session, catalog, "claim-1", **_package(catalog))
             async with sessions() as session:
-                failed = await record_presentation_failure(
-                    session,
-                    request.id,
-                    f"claim-{attempt}",
-                    error_code="infrastructure_failed",
-                    retryable=True,
-                    now=attempt_now + timedelta(seconds=1),
-                    retry_delay_seconds=10,
-                )
-                assert failed.attempt_count == attempt
-                if attempt < 3:
-                    assert failed.state == "requested"
-                    assert failed.next_retry_at == attempt_now + timedelta(seconds=11)
-                else:
-                    assert failed.state == "failed"
-                    assert failed.next_retry_at is None
-                    assert failed.error_code == "infrastructure_failed"
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_worker_refuses_stale_source_without_changing_scientific_job(tmp_path: Path) -> None:
-    from services.ngs_alignment_presentation import request_presentation
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
-
-    engine, sessions = await _database(tmp_path)
-    build_calls = 0
-
-    def build(_request):
-        nonlocal build_calls
-        build_calls += 1
-        raise AssertionError("stale source must not be built")
-
-    async def current_source(_request):
-        return "f" * 64
-
-    try:
+                catalog = await session.get(Product, catalog.id)
+                row = await lifecycle.request_default_preview(session, catalog)
+                await session.commit()
+        yield sessions, row
+        # A derived disposition must never rewrite accepted scientific status.
         async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
-            await session.commit()
-
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=build,
-            resolve_source_authority=current_source,
-            poll_interval=0.05,
-        )
-        assert await worker.run_once() == request.id
-
-        async with sessions() as session:
-            stored = await session.get(type(request), request.id)
             job = await session.get(Job, "job-1")
-            assert stored is not None and stored.state == "failed"
-            assert stored.error_code == "source_invalid"
-            assert job is not None
             assert (job.status, job.queue_status) == ("completed", "completed")
             assert job.provenance == {"result_integrity": {"state": "validated"}}
-        assert build_calls == 0
+            if row.product == "preview":
+                dependency = await session.get(Product, row.catalog_request_id)
+                assert dependency.state == "ready"
+                assert dependency.claim_token is None
+                assert dependency.authority_sha256 == "4" * 64
+                assert dependency.manifest_sha256 == "5" * 64
+                assert dependency.attempt_count == 1
+                assert dependency.manual_retry_count == 0
     finally:
         await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_worker_resolver_exception_releases_claim_through_retry_budget(tmp_path: Path) -> None:
-    from services.ngs_alignment_presentation import request_presentation
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
-
-    engine, sessions = await _database(tmp_path)
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session, job_id="job-1", session_id="session-1", mode="primary",
-                source_authority_sha256="a" * 64, source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64, policy_version=5,
-            )
-            await session.commit()
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=lambda _row: pytest.fail("resolver failure must prevent build"),
-            resolve_source_authority=lambda _row: (_ for _ in ()).throw(OSError("resolver failed")),
-        )
-        assert await worker.run_once() == request.id
-        async with sessions() as session:
-            stored = await session.get(type(request), request.id)
-            assert stored is not None
-            assert stored.state == "requested"
-            assert stored.attempt_count == 1
-            assert stored.claim_token is None
-            assert stored.lease_expires_at is None
-    finally:
-        await engine.dispose()
+async def test_requested_product_claim_is_atomic_and_increments_attempt(product_case):
+    sessions, row = product_case
+    now = datetime(2026, 9, 1, 12)
+    claimed = await _claim(sessions, row, now=now)
+    async with sessions() as session:
+        lost = await lifecycle.claim_next_product(
+            session, product=row.product, now=now, claim_token="loser")
+    stored = await _stored(sessions, row)
+    assert lost is None
+    assert claimed.state == stored.state == "running"
+    assert claimed.claim_token == stored.claim_token == "claim-1"
+    assert stored.attempt_count == 1
+    assert stored.lease_expires_at == now + timedelta(seconds=30)
+    if row.product == "preview":
+        assert claimed.catalog_authority_sha256 == "4" * 64
+        assert claimed.request_sha256 is not None
 
 
 @pytest.mark.asyncio
-async def test_poll_iteration_recovers_expired_claim_without_service_restart(tmp_path: Path) -> None:
-    from services.ngs_alignment_presentation import claim_next_presentation, request_presentation
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
+async def test_renewal_and_publication_require_live_claim_cas(product_case):
+    sessions, row = product_case
+    now = datetime(2026, 9, 1, 12)
+    row = await _claim(sessions, row, now=now)
+    async with sessions() as session:
+        await lifecycle.renew_product_lease(session, row, "claim-1", now=now + timedelta(seconds=10), lease_seconds=40)
+    assert (await _stored(sessions, row)).lease_expires_at == now + timedelta(seconds=50)
+    for operation in (lifecycle.renew_product_lease, lifecycle.publish_product):
+        async with sessions() as session:
+            with pytest.raises(PresentationClaimLost):
+                await operation(session, row, "loser", now=now + timedelta(seconds=20),
+                                **(_package(row) if operation == lifecycle.publish_product else {}))
+    async with sessions() as session:
+        await lifecycle.publish_product(session, row, "claim-1", now=now + timedelta(seconds=20), **_package(row))
+    stored = await _stored(sessions, row)
+    assert stored.state == "ready"
+    assert stored.claim_token is stored.lease_expires_at is None
+    assert stored.authority_sha256 == "4" * 64
+    assert stored.manifest_sha256 == "5" * 64
 
-    engine, sessions = await _database(tmp_path)
+
+@pytest.mark.asyncio
+async def test_expiry_rejects_old_owner_and_never_automatically_requeues(product_case):
+    sessions, row = product_case
     old = datetime(2020, 1, 1)
-    try:
+    row = await _claim(sessions, row, now=old, lease_seconds=1)
+    for operation in (lifecycle.renew_product_lease, lifecycle.publish_product, lifecycle.fail_product):
         async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session, job_id="job-1", session_id="session-1", mode="primary",
-                source_authority_sha256="a" * 64, source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64, policy_version=5,
-            )
-            await session.commit()
-        async with sessions() as session:
-            await claim_next_presentation(
-                session, now=old, lease_seconds=1, claim_token="abandoned-claim"
-            )
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=lambda row: {
-                "source_authority_sha256": row.source_authority_sha256,
-                "authority_sha256": "d" * 64,
-                "manifest_sha256": "e" * 64,
-            },
-            resolve_source_authority=lambda row: row.source_authority_sha256,
-        )
-        assert await worker.run_once() == request.id
-        async with sessions() as session:
-            stored = await session.get(type(request), request.id)
-            assert stored is not None and stored.state == "ready"
-            assert stored.attempt_count == 2
-    finally:
-        await engine.dispose()
+            kwargs = _package(row) if operation == lifecycle.publish_product else (
+                {"error_code": "cancelled"} if operation == lifecycle.fail_product else {})
+            with pytest.raises(PresentationClaimLost):
+                await operation(session, row, "claim-1", now=old + timedelta(seconds=2), **kwargs)
+    worker = _worker(sessions, build=lambda row: pytest.fail("expired work must not build"))
+    assert await _run(worker) is None  # Poll recovery, without a service restart.
+    assert await _run(worker) is None
+    stored = await _stored(sessions, row)
+    assert stored.state == "failed" and stored.error_code == "infrastructure_failed"
+    assert stored.attempt_count == 1
+    assert stored.claim_token is stored.lease_expires_at is None
+    assert stored.authority_sha256 is stored.manifest_sha256 is None
+    async with sessions() as session:
+        assert await lifecycle.recover_expired_products(session) == 0
 
 
 @pytest.mark.asyncio
-async def test_deferred_adoption_renews_lease_before_build(tmp_path: Path) -> None:
-    import asyncio
-    import threading
-
-    from services.ngs_alignment_presentation import request_presentation
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
-
-    engine, sessions = await _database(tmp_path)
-    entered = threading.Event()
-    release = threading.Event()
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session, job_id="job-1", session_id="session-1", mode="primary",
-                source_authority_sha256="a" * 64, source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64, policy_version=5,
-            )
-            await session.commit()
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=lambda row: {
-                "source_authority_sha256": row.source_authority_sha256,
-                "authority_sha256": "d" * 64,
-                "manifest_sha256": "e" * 64,
-            },
-            resolve_source_authority=lambda row: row.source_authority_sha256,
-            lease_seconds=1,
-        )
-
-        def delayed_adoption(_request, abort):
-            entered.set()
-            while not release.wait(0.01):
-                abort.checkpoint()
-            return None
-
-        worker._adopt_current_presentation = delayed_adoption  # type: ignore[method-assign]
-        task = asyncio.create_task(worker.run_once())
-        assert await asyncio.to_thread(entered.wait, 2)
-        await asyncio.sleep(0.45)
-        async with sessions() as session:
-            running = await session.get(type(request), request.id)
-            assert running is not None
-            assert running.lease_expires_at is not None
-            assert running.lease_expires_at > datetime.utcnow() + timedelta(seconds=0.3)
-        release.set()
-        assert await task == request.id
-    finally:
-        release.set()
-        await engine.dispose()
+async def test_failure_is_terminal_and_only_explicit_retry_runs_again(product_case):
+    sessions, row = product_case
+    def fail(_row):
+        raise PresentationBuildFailure("publication_failed", retryable=True)
+    worker = _worker(sessions, build=fail)
+    assert await _run(worker) == row.id
+    assert await _run(worker) is None
+    stored = await _stored(sessions, row)
+    assert stored.state == "failed" and stored.error_code == "publication_failed"
+    assert stored.attempt_count == 1
+    assert stored.claim_token is stored.lease_expires_at is None
+    async with sessions() as session:
+        current = await session.get(Product, row.id)
+        with pytest.raises(PresentationSourceStale):
+            await lifecycle.retry_product(session, current, current_source_authority_sha256="0" * 64)
+        retried = await lifecycle.retry_product(session, current, current_source_authority_sha256=row.source_authority_sha256)
+        assert retried.state == "requested"
+        assert retried.attempt_count == 1  # Attempt history is not reset by manual retry.
+        assert retried.manual_retry_count == 1 and retried.error_code is None
+        replay = await lifecycle.retry_product(session, retried, current_source_authority_sha256=row.source_authority_sha256)
+        assert replay.manual_retry_count == 1
+    worker._build = _package
+    assert await _run(worker) == row.id
+    stored = await _stored(sessions, row)
+    assert stored.state == "ready" and stored.attempt_count == 2
+    assert stored.manual_retry_count == 1
 
 
 @pytest.mark.asyncio
-async def test_worker_renews_lease_during_threadpool_build_and_publishes_ready(tmp_path: Path) -> None:
-    import time
-
-    from services.ngs_alignment_presentation import request_presentation
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
-
-    engine, sessions = await _database(tmp_path)
-
-    def build(request):
-        time.sleep(1.2)
-        return {
-            "source_authority_sha256": request.source_authority_sha256,
-            "authority_sha256": "d" * 64,
-            "manifest_sha256": "e" * 64,
-        }
-
-    async def current_source(request):
+@pytest.mark.parametrize("phase", ["before_build", "before_publication", "package"])
+async def test_worker_refuses_stale_source_without_scientific_mutation(product_case, phase):
+    sessions, row = product_case
+    calls = []
+    def resolve(request):
+        calls.append("resolve")
+        if phase == "before_build" or (phase == "before_publication" and calls.count("resolve") == 2):
+            return "0" * 64
         return request.source_authority_sha256
-
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
-            await session.commit()
-
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=build,
-            resolve_source_authority=current_source,
-            lease_seconds=1,
-            poll_interval=0.05,
-        )
-        assert await worker.run_once() == request.id
-
-        async with sessions() as session:
-            stored = await session.get(type(request), request.id)
-            assert stored is not None
-            assert stored.state == "ready"
-            assert stored.attempt_count == 1
-            assert stored.authority_sha256 == "d" * 64
-            assert stored.manifest_sha256 == "e" * 64
-    finally:
-        await engine.dispose()
+    def build(request):
+        calls.append("build")
+        package = _package(request)
+        if phase == "package":
+            package["source_authority_sha256"] = "0" * 64
+        return package
+    worker = _worker(sessions, build=build, resolve_source_authority=resolve)
+    assert await _run(worker) == row.id
+    stored = await _stored(sessions, row)
+    assert stored.state == "failed" and stored.error_code == "source_invalid"
+    assert stored.authority_sha256 is stored.manifest_sha256 is None
+    assert ("build" in calls) == (phase != "before_build")
+    assert await _run(worker) is None
 
 
 @pytest.mark.asyncio
-async def test_worker_claim_loss_never_publishes_package_authority(tmp_path: Path) -> None:
-    from sqlalchemy import update
+async def test_resolver_exception_terminalizes_without_build_or_automatic_retry(product_case):
+    sessions, row = product_case
+    def resolve(_row):
+        raise OSError("resolver failed")
+    worker = _worker(sessions, build=lambda row: pytest.fail("must not build"), resolve_source_authority=resolve)
+    assert await _run(worker) == row.id
+    stored = await _stored(sessions, row)
+    assert stored.state == "failed" and stored.error_code == "infrastructure_failed"
+    assert stored.claim_token is stored.lease_expires_at is None
+    assert stored.attempt_count == 1
+    assert await _run(worker) is None
 
-    from database import NgsAlignmentPresentationJob
-    from services.ngs_alignment_presentation import request_presentation
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
 
-    engine, sessions = await _database(tmp_path)
-    resolves = 0
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", sorted(lifecycle.ERROR_CODES) + ["build_timeout"])
+async def test_closed_failure_taxonomy_is_terminal_even_with_retryable_hint(product_case, code):
+    sessions, row = product_case
+    def build(_row):
+        if code == "cancelled":
+            from services.ngs_alignment_presentation_worker import PresentationBuildAborted
+            raise PresentationBuildAborted("builder observed revocation")
+        raise PresentationBuildFailure(code, retryable=True)
+    worker = _worker(sessions, build=build)
+    assert await _run(worker) == row.id
+    stored = await _stored(sessions, row)
+    assert stored.state == "failed"
+    assert stored.error_code == (code if code in lifecycle.ERROR_CODES else "integrity_mismatch")
+    assert stored.attempt_count == 1
+    assert stored.claim_token is stored.lease_expires_at is None
+    assert stored.authority_sha256 is stored.manifest_sha256 is None
+    assert await _run(worker) is None
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["authority_sha256", "manifest_sha256"])
+async def test_invalid_package_digest_never_publishes_authority(product_case, field):
+    sessions, row = product_case
     def build(request):
-        return {
-            "source_authority_sha256": request.source_authority_sha256,
-            "authority_sha256": "d" * 64,
-            "manifest_sha256": "e" * 64,
-        }
+        return {**_package(request), field: "not-a-digest"}
+    worker = _worker(sessions, build=build)
+    assert await _run(worker) == row.id
+    stored = await _stored(sessions, row)
+    assert stored.state == "failed" and stored.error_code == "integrity_mismatch"
+    assert stored.authority_sha256 is stored.manifest_sha256 is None
 
-    async def current_source(request):
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["resolve", "build"])
+async def test_worker_renews_lease_during_source_resolution_and_build(product_case, phase):
+    sessions, row = product_case
+    entered, release = threading.Event(), threading.Event()
+    async def resolve(request):
+        if phase == "resolve" and not release.is_set():
+            entered.set()
+            assert await asyncio.to_thread(release.wait, 3)
+        return request.source_authority_sha256
+    def build(request):
+        if phase == "build":
+            entered.set()
+            assert release.wait(3), "test build was not released"
+        return _package(request)
+    worker = _worker(sessions, build=build, resolve_source_authority=resolve, lease_seconds=1)
+    task = asyncio.create_task(_run(worker))
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        original = (await _stored(sessions, row)).lease_expires_at
+        await asyncio.sleep(1.15)  # Outlive the original one-second lease.
+        running = await _stored(sessions, row)
+        assert running.state == "running"
+        assert running.lease_expires_at > original
+        assert running.lease_expires_at > datetime.utcnow()
+        release.set()
+        assert await task == row.id
+        stored = await _stored(sessions, row)
+        assert stored.state == "ready" and stored.attempt_count == 1
+        assert stored.authority_sha256 == "4" * 64
+        assert stored.manifest_sha256 == "5" * 64
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", ["claim_token", "source_authority_sha256", "request_sha256"])
+async def test_publication_cas_never_overwrites_changed_owner_or_identity(product_case, changed):
+    sessions, row = product_case
+    resolves = 0
+    async def resolve(request):
         nonlocal resolves
         resolves += 1
         if resolves == 2:
             async with sessions() as session:
-                await session.execute(
-                    update(NgsAlignmentPresentationJob)
-                    .where(NgsAlignmentPresentationJob.id == request.id)
-                    .values(claim_token="winner-claim")
-                )
+                await session.execute(update(Product).where(Product.id == row.id).values(
+                    **{changed: "winner-claim" if changed == "claim_token" else "0" * 64}))
                 await session.commit()
         return request.source_authority_sha256
-
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
-            await session.commit()
-        worker = NgsAlignmentPresentationWorker(
-            sessions, build=build, resolve_source_authority=current_source
-        )
-        assert await worker.run_once() == request.id
-        async with sessions() as session:
-            stored = await session.get(NgsAlignmentPresentationJob, request.id)
-            assert stored is not None
-            assert stored.state == "running"
-            assert stored.claim_token == "winner-claim"
-            assert stored.authority_sha256 is None
-            assert stored.manifest_sha256 is None
-    finally:
-        await engine.dispose()
+    worker = _worker(sessions, build=_package, resolve_source_authority=resolve)
+    assert await _run(worker) == row.id
+    stored = await _stored(sessions, row)
+    assert stored.state == "running"
+    assert getattr(stored, changed) == ("winner-claim" if changed == "claim_token" else "0" * 64)
+    assert stored.authority_sha256 is stored.manifest_sha256 is None
 
 
 @pytest.mark.asyncio
-async def test_manual_retry_resets_failed_request_once_for_same_source(tmp_path: Path) -> None:
-    from services.ngs_alignment_presentation import (
-        claim_next_presentation,
-        record_presentation_failure,
-        request_presentation,
-        retry_failed_presentation,
-    )
+@pytest.mark.parametrize("action", ["stop", "cancel", "repeated_cancel", "claim_loss"])
+async def test_revocation_joins_cooperative_builder_and_prevents_late_writes(product_case, tmp_path, action):
+    sessions, row = product_case
+    started, quiesced, observed_abort, release = (threading.Event() for _ in range(4))
+    late = tmp_path / "forbidden-late-write"
+    def build(_row, abort):
+        started.set()
+        deadline = time.monotonic() + 3
+        try:
+            while not abort.is_set() and not release.wait(0.005):
+                assert time.monotonic() < deadline, "worker never revoked build"
+            if abort.is_set():
+                observed_abort.set()
+                assert release.wait(3), "test failed to release quiescing builder"
+            abort.checkpoint()
+            late.write_text("forbidden", encoding="utf-8")
+            return _package(_row)
+        finally:
+            quiesced.set()
+    worker = _worker(sessions, build=build, lease_seconds=1, poll_interval=0.05)
+    task = asyncio.create_task(worker.run_once())
+    stop_task = None
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        if action == "stop":
+            # stop() joins the lifecycle task normally owned by start().
+            worker._task = task
+            stop_task = asyncio.create_task(worker.stop())
+        elif action in {"cancel", "repeated_cancel"}:
+            task.cancel()
+        else:
+            async with sessions() as session:
+                await session.execute(update(Product).where(Product.id == row.id).values(claim_token="winner-claim"))
+                await session.commit()
+        assert await asyncio.to_thread(observed_abort.wait, 2)
+        assert not task.done() and not quiesced.is_set()
+        if action == "repeated_cancel":
+            task.cancel()
+            await asyncio.sleep(0.02)
+            assert not task.done()
+        release.set()
+        if action in {"cancel", "repeated_cancel"}:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 3)
+        else:
+            assert await asyncio.wait_for(task, 3) == row.id
+        if stop_task:
+            await asyncio.wait_for(stop_task, 3)
+        assert quiesced.is_set() and not late.exists()
+        await asyncio.sleep(0.05)
+        assert not late.exists()
+        stored = await _stored(sessions, row)
+        if action == "claim_loss":
+            assert stored.state == "running" and stored.claim_token == "winner-claim"
+        else:
+            assert stored.state == "failed" and stored.error_code == "cancelled"
+            assert stored.claim_token is stored.lease_expires_at is None
+            assert await _run(worker) is None
+        assert stored.authority_sha256 is stored.manifest_sha256 is None
+        assert worker._active_abort is None
+        assert row.id not in worker._build_inputs
+    finally:
+        if worker._active_abort is not None:
+            worker._active_abort.abort()
+        release.set()
+        await asyncio.wait_for(asyncio.gather(task, *([stop_task] if stop_task else []), return_exceptions=True), 5)
 
+
+@pytest.mark.asyncio
+async def test_preview_waits_without_lease_then_worker_alternates_independent_products(tmp_path):
     engine, sessions = await _database(tmp_path)
     try:
         async with sessions() as session:
             session.add(_job())
             await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
+            catalog = await lifecycle.request_catalog(session, _source())
+            preview = await lifecycle.request_default_preview(session, catalog)
             await session.commit()
         async with sessions() as session:
-            await claim_next_presentation(session, claim_token="claim-1")
-        async with sessions() as session:
-            await record_presentation_failure(
-                session,
-                request.id,
-                "claim-1",
-                error_code="integrity_mismatch",
-            )
-        async with sessions() as session:
-            retried = await retry_failed_presentation(
-                session,
-                request.id,
-                current_source_authority_sha256="a" * 64,
-            )
-            assert retried.state == "requested"
-            assert retried.attempt_count == 0
-            assert retried.manual_retry_count == 1
-            assert retried.error_code is None
-        async with sessions() as session:
-            replay = await retry_failed_presentation(
-                session,
-                request.id,
-                current_source_authority_sha256="a" * 64,
-            )
-            assert replay.state == "requested"
-            assert replay.manual_retry_count == 1
+            assert await lifecycle.claim_next_product(session, product="preview", claim_token="too-early") is None
+        waiting = await _stored(sessions, preview)
+        assert waiting.state == "requested" and waiting.attempt_count == 0
+        assert waiting.claim_token is waiting.lease_expires_at is waiting.request_sha256 is None
+        calls = []
+        def build(row):
+            calls.append(row.product)
+            return _package(row)
+        worker = _worker(sessions, build=build)
+        assert await _run(worker) == catalog.id
+        assert await _run(worker) == preview.id
+        assert await _run(worker) is None
+        assert calls == ["catalog", "preview"]
+        for row in (catalog, preview):
+            stored = await _stored(sessions, row)
+            assert stored.state == "ready" and stored.attempt_count == 1
+            assert stored.claim_token is stored.lease_expires_at is None
     finally:
         await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_concurrent_manual_retry_replays_the_winning_requested_row(tmp_path: Path) -> None:
-    import asyncio
-
-    from services.ngs_alignment_presentation import (
-        claim_next_presentation,
-        record_presentation_failure,
-        request_presentation,
-        retry_failed_presentation,
-    )
-
+@pytest.mark.parametrize("state", ["requested", "running", "ready", "failed"])
+async def test_worker_leaves_all_legacy_combined_rows_untouched(tmp_path, state):
+    from services.ngs_alignment_presentation import request_presentation
     engine, sessions = await _database(tmp_path)
     try:
         async with sessions() as session:
             session.add(_job())
             await session.flush()
-            request = await request_presentation(
+            row = await request_presentation(
                 session, job_id="job-1", session_id="session-1", mode="primary",
                 source_authority_sha256="a" * 64, source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64, policy_version=5,
-            )
+                source_artifact_set_sha256="c" * 64, policy_version=5)
+            row.state = state
+            if state == "running":
+                row.claim_token = "legacy-expired-owner"
+                row.lease_expires_at = datetime(2020, 1, 1)
+                row.attempt_count = 1
+            if state == "ready":
+                row.authority_sha256, row.manifest_sha256 = "d" * 64, "e" * 64
             await session.commit()
+            before = {column.name: getattr(row, column.name) for column in row.__table__.columns}
+        worker = _worker(sessions, build=lambda row: pytest.fail("legacy rows must not build"))
+        await asyncio.wait_for(worker.start(), 5)
+        try:
+            assert await _run(worker) is None
+        finally:
+            await asyncio.wait_for(worker.stop(), 5)
         async with sessions() as session:
-            await claim_next_presentation(session, claim_token="claim-1")
-        async with sessions() as session:
-            await record_presentation_failure(
-                session, request.id, "claim-1", error_code="source_invalid"
-            )
-
-        arrived = 0
-        release = asyncio.Event()
-        lock = asyncio.Lock()
-
-        class BarrierSession:
-            def __init__(self, real):
-                self.real = real
-                self.waited = False
-
-            async def get(self, *args, **kwargs):
-                return await self.real.get(*args, **kwargs)
-
-            async def execute(self, statement, *args, **kwargs):
-                nonlocal arrived
-                if not self.waited and statement.__class__.__name__ == "Update":
-                    self.waited = True
-                    async with lock:
-                        arrived += 1
-                        if arrived == 2:
-                            release.set()
-                    await release.wait()
-                return await self.real.execute(statement, *args, **kwargs)
-
-            def __getattr__(self, name):
-                return getattr(self.real, name)
-
-        async with sessions() as first, sessions() as second:
-            results = await asyncio.gather(
-                retry_failed_presentation(
-                    BarrierSession(first), request.id,
-                    current_source_authority_sha256="a" * 64,
-                ),
-                retry_failed_presentation(
-                    BarrierSession(second), request.id,
-                    current_source_authority_sha256="a" * 64,
-                ),
-            )
-        assert [row.state for row in results] == ["requested", "requested"]
-        assert [row.manual_retry_count for row in results] == [1, 1]
+            stored = await session.get(type(row), row.id)
+            assert {column.name: getattr(stored, column.name) for column in row.__table__.columns} == before
+            assert (await session.scalars(select(Product))).all() == []
     finally:
         await engine.dispose()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("state", ["requested", "running"])
-async def test_retry_replay_returns_active_state_without_comparing_current_source(
-    tmp_path: Path,
-    state: str,
-) -> None:
+def test_product_lifecycle_has_no_deadline_or_automatic_retry_schedule_contract():
     from database import NgsAlignmentPresentationJob
-    from services.ngs_alignment_presentation import (
-        claim_next_presentation,
-        request_presentation,
-        retry_failed_presentation,
-    )
-
-    engine, sessions = await _database(tmp_path)
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1", session_id="session-1", mode="primary",
-                source_authority_sha256="a" * 64, source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64, policy_version=5,
-            )
-            await session.commit()
-        if state == "running":
-            async with sessions() as session:
-                await claim_next_presentation(session, claim_token="claim-1")
-
-        async with sessions() as session:
-            replay = await retry_failed_presentation(
-                session,
-                request.id,
-                current_source_authority_sha256="f" * 64,
-            )
-            assert replay.state == state
-            assert replay.manual_retry_count == 0
-        async with sessions() as session:
-            stored = await session.get(NgsAlignmentPresentationJob, request.id)
-            assert stored is not None and stored.state == state
-    finally:
-        await engine.dispose()
+    for table in (Product, NgsAlignmentPresentationJob):
+        assert "next_retry_at" not in table.__table__.columns
+    assert "max_build_seconds" not in inspect.signature(NgsAlignmentPresentationWorker.__init__).parameters
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("code", "retryable", "expected_state", "expected_error"),
-    [
-        ("source_invalid", False, "failed", "source_invalid"),
-        ("resource_limit", False, "failed", "resource_limit"),
-        ("build_timeout", False, "failed", "build_timeout"),
-        ("publication_failed", True, "requested", None),
-        ("integrity_mismatch", False, "failed", "integrity_mismatch"),
-        ("infrastructure_failed", True, "requested", None),
-    ],
-)
-async def test_worker_uses_closed_typed_failure_taxonomy_and_retry_policy(
-    tmp_path: Path,
-    code: str,
-    retryable: bool,
-    expected_state: str,
-    expected_error: str | None,
-) -> None:
-    from services.ngs_alignment_presentation import request_presentation
-    from services.ngs_alignment_presentation_worker import (
-        NgsAlignmentPresentationWorker,
-        PresentationBuildFailure,
-    )
-
-    engine, sessions = await _database(tmp_path)
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
-            await session.commit()
-
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=lambda _row: (_ for _ in ()).throw(
-                PresentationBuildFailure(code, retryable=retryable)
-            ),
-            resolve_source_authority=lambda row: row.source_authority_sha256,
-        )
-        assert await worker.run_once() == request.id
-        async with sessions() as session:
-            stored = await session.get(type(request), request.id)
-            assert stored is not None
-            assert stored.state == expected_state
-            assert stored.error_code == expected_error
-            assert stored.attempt_count == 1
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_publication_failure_retries_until_third_attempt_then_terminalizes(
-    tmp_path: Path,
-) -> None:
-    from services.ngs_alignment_presentation import request_presentation
-    from services.ngs_alignment_presentation_worker import (
-        NgsAlignmentPresentationWorker,
-        PresentationBuildFailure,
-    )
-
-    engine, sessions = await _database(tmp_path)
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1", session_id="session-1", mode="primary",
-                source_authority_sha256="a" * 64, source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64, policy_version=5,
-            )
-            await session.commit()
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=lambda _row: (_ for _ in ()).throw(
-                PresentationBuildFailure("publication_failed", retryable=True)
-            ),
-            resolve_source_authority=lambda row: row.source_authority_sha256,
-        )
-        for attempt in range(1, 4):
-            assert await worker.run_once() == request.id
-            async with sessions() as session:
-                stored = await session.get(type(request), request.id)
-                assert stored is not None and stored.attempt_count == attempt
-                if attempt < 3:
-                    assert stored.state == "requested"
-                    stored.next_retry_at = None
-                    await session.commit()
-                else:
-                    assert stored.state == "failed"
-                    assert stored.error_code == "publication_failed"
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_worker_marks_invalid_package_digests_as_terminal_integrity_failure(tmp_path: Path) -> None:
-    from services.ngs_alignment_presentation import request_presentation
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
-
-    engine, sessions = await _database(tmp_path)
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
-            await session.commit()
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=lambda row: {
-                "source_authority_sha256": row.source_authority_sha256,
-                "authority_sha256": "not-a-digest",
-                "manifest_sha256": "e" * 64,
-            },
-            resolve_source_authority=lambda row: row.source_authority_sha256,
-        )
-        assert await worker.run_once() == request.id
-        async with sessions() as session:
-            stored = await session.get(type(request), request.id)
-            assert stored is not None
-            assert stored.state == "failed"
-            assert stored.error_code == "integrity_mismatch"
-            assert stored.authority_sha256 is None
-            assert stored.manifest_sha256 is None
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_restart_recovery_reuses_already_published_package_then_marks_ready(tmp_path: Path) -> None:
-    from services.ngs_alignment_presentation import (
-        claim_next_presentation,
-        recover_expired_presentations,
-        request_presentation,
-    )
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
-
-    engine, sessions = await _database(tmp_path)
-    old = datetime(2020, 1, 1, 0, 0, 0)
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
-            await session.commit()
-        async with sessions() as session:
-            await claim_next_presentation(
-                session, now=old, lease_seconds=1, claim_token="crashed-claim"
-            )
-        async with sessions() as session:
-            assert await recover_expired_presentations(
-                session, now=old + timedelta(seconds=2)
-            ) == 1
-
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=lambda row: {
-                "source_authority_sha256": row.source_authority_sha256,
-                "authority_sha256": "d" * 64,
-                "manifest_sha256": "e" * 64,
-            },
-            resolve_source_authority=lambda row: row.source_authority_sha256,
-        )
-        assert await worker.run_once() == request.id
-        async with sessions() as session:
-            stored = await session.get(type(request), request.id)
-            assert stored is not None
-            assert stored.state == "ready"
-            assert stored.attempt_count == 2
-            assert stored.authority_sha256 == "d" * 64
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_restart_adopts_atomically_renamed_valid_package_without_rewrite_or_reindex(
+@pytest.mark.native_http
+async def test_worker_preserves_legacy_combined_packages_without_adoption_or_rewrite(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    native_http,
 ) -> None:
     from tests.test_ngs_alignment_sessions import _write_governed_alignment_fixture
     from services import ngs_alignment_sessions
@@ -1087,13 +595,15 @@ async def test_restart_adopts_atomically_renamed_valid_package_without_rewrite_o
             "result_root": result_root,
             "alignment_path": source,
         }
-        assert await worker.run_once() == request.id
+        assert await asyncio.wait_for(worker.run_once(), 5) is None
 
         async with sessions() as session:
             stored = await session.get(type(request), request.id)
-            assert stored is not None and stored.state == "ready"
-            assert stored.authority_sha256 == package["manifest"]["authority_sha256"]
-            assert stored.manifest_sha256 == package["manifest_metadata"]["sha256"]
+            assert stored is not None and stored.state == "requested"
+            assert stored.attempt_count == 0
+            assert stored.claim_token is None
+            assert stored.authority_sha256 is None
+            assert stored.manifest_sha256 is None
         after = {
             path.relative_to(published).as_posix(): (
                 path.stat().st_ino,
@@ -1111,225 +621,139 @@ async def test_restart_adopts_atomically_renamed_valid_package_without_rewrite_o
         await engine.dispose()
 
 
+
+
 @pytest.mark.asyncio
-async def test_worker_build_timeout_is_terminal_and_never_publishes_ready(tmp_path: Path) -> None:
-    import time
+async def test_concurrent_manual_retry_has_one_cas_winner_and_preserves_attempts(product_case):
+    sessions, row = product_case
+    row = await _claim(sessions, row)
+    async with sessions() as session:
+        await lifecycle.fail_product(session, row, "claim-1", error_code="publication_failed")
+    arrived = 0
+    release = asyncio.Event()
+    class BarrierSession:
+        def __init__(self, real):
+            self.real = real
+        def __getattr__(self, name):
+            return getattr(self.real, name)
+        async def execute(self, statement, *args, **kwargs):
+            nonlocal arrived
+            if statement.__class__.__name__ == "Update":
+                arrived += 1
+                if arrived == 2:
+                    release.set()
+                await asyncio.wait_for(release.wait(), 2)
+            return await self.real.execute(statement, *args, **kwargs)
+    async def retry(session):
+        current = await session.get(Product, row.id)
+        return await lifecycle.retry_product(BarrierSession(session), current,
+            current_source_authority_sha256=row.source_authority_sha256)
+    async with sessions() as first, sessions() as second:
+        results = await asyncio.wait_for(asyncio.gather(retry(first), retry(second), return_exceptions=True), 5)
+    assert sum(isinstance(result, Product) for result in results) == 1
+    assert sum(isinstance(result, PresentationClaimLost) for result in results) == 1
+    stored = await _stored(sessions, row)
+    assert stored.state == "requested"
+    assert stored.manual_retry_count == 1 and stored.attempt_count == 1
+    assert stored.claim_token is stored.lease_expires_at is None
 
-    from services.ngs_alignment_presentation import request_presentation
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["requested", "running"])
+async def test_retry_replay_preserves_active_row_but_still_requires_current_source(product_case, state):
+    sessions, row = product_case
+    if state == "running":
+        row = await _claim(sessions, row)
+    async with sessions() as session:
+        current = await session.get(Product, row.id)
+        with pytest.raises(PresentationSourceStale):
+            await lifecycle.retry_product(session, current, current_source_authority_sha256="0" * 64)
+        replay = await lifecycle.retry_product(session, current,
+            current_source_authority_sha256=row.source_authority_sha256)
+        assert replay.state == state and replay.manual_retry_count == 0
+        assert replay.attempt_count == (1 if state == "running" else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.native_http
+@pytest.mark.parametrize("kind", ["catalog", "preview"])
+async def test_explicit_retry_semantically_adopts_sealed_product_without_rewriting(
+    tmp_path, monkeypatch, native_http, ngs_resources, kind,
+):
+    import hashlib
+    import pysam
+    from services import ngs_alignment_product_builder as builder
+    from services.verified_native_reads import run_in_threadpool
+
+    root = ngs_resources / "job-1"
+    root.mkdir()
+    bam = root / "source.bam"
+    with pysam.AlignmentFile(bam, "wb", header={"HD": {"VN": "1.6", "SO": "coordinate"},
+                                              "SQ": [{"SN": "ref", "LN": 1000}]}) as output:
+        record = pysam.AlignedSegment(output.header)
+        record.query_name, record.query_sequence = "literal/read", "ACGT"
+        record.flag, record.reference_id, record.reference_start = 0, 0, 2
+        record.mapping_quality, record.cigarstring = 60, "4M"
+        record.query_qualities = pysam.qualitystring_to_array("IIII")
+        output.write(record)
+    pysam.index(str(bam))
+    bai = root / "source.bam.bai"
+    source = _source()
+    for path, prefix in ((bam, "alignment"), (bai, "alignment_index")):
+        source[prefix + "_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        source[prefix + "_size_bytes"] = path.stat().st_size
+    inputs = {"alignment_path": bam, "index_path": bai, "result_root": root}
+    monkeypatch.setattr(builder.storage, "_creation_authority", lambda: ("1" * 40, "2" * 40))
     engine, sessions = await _database(tmp_path)
     try:
         async with sessions() as session:
             session.add(_job())
             await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1",
-                session_id="session-1",
-                mode="primary",
-                source_authority_sha256="a" * 64,
-                source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64,
-                policy_version=5,
-            )
+            catalog = await lifecycle.request_catalog(session, source)
             await session.commit()
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=lambda row: time.sleep(0.2) or {
-                "source_authority_sha256": row.source_authority_sha256,
-                "authority_sha256": "d" * 64,
-                "manifest_sha256": "e" * 64,
-            },
-            resolve_source_authority=lambda row: row.source_authority_sha256,
-            max_build_seconds=0.05,
-        )
-        assert await worker.run_once() == request.id
+        row = await _claim(sessions, catalog)
+        package = await asyncio.wait_for(run_in_threadpool(builder.build_product, row, inputs, lambda: None), 20)
+        if kind == "preview":
+            async with sessions() as session:
+                await lifecycle.publish_product(session, row, "claim-1", **package)
+            async with sessions() as session:
+                catalog = await session.get(Product, catalog.id)
+                preview = await lifecycle.request_default_preview(session, catalog)
+                await session.commit()
+            row = await _claim(sessions, preview)
+            package = await asyncio.wait_for(run_in_threadpool(builder.build_product, row, inputs,
+                lambda: None, catalog_request=catalog), 20)
+        sealed = root / ".alignment-products" / row.id / "sealed"
+        def preimage():
+            return {path.name: (path.stat().st_ino, path.stat().st_mtime_ns, path.read_bytes())
+                    for path in sealed.iterdir()}
+        before = preimage()
+        # Simulate a crash after atomic rename but before DB publication.
         async with sessions() as session:
-            stored = await session.get(type(request), request.id)
-            assert stored is not None
-            assert stored.state == "failed"
-            assert stored.error_code == "build_timeout"
-            assert stored.authority_sha256 is None
+            await session.execute(update(Product).where(Product.id == row.id).values(
+                lease_expires_at=datetime(2020, 1, 1)))
+            await session.commit()
+        worker = _worker(sessions)
+        assert await _run(worker) is None
+        stored = await _stored(sessions, row)
+        assert stored.state == "failed" and stored.error_code == "infrastructure_failed"
+        assert stored.authority_sha256 is stored.manifest_sha256 is None
+        assert preimage() == before
+        async with sessions() as session:
+            current = await session.get(Product, row.id)
+            await lifecycle.retry_product(session, current,
+                current_source_authority_sha256=row.source_authority_sha256)
+        worker._build_inputs[row.id] = inputs
+        # The default production builder rechecks source hashes, contract and
+        # semantic rows before adoption. No scientific validators are replaced.
+        assert await asyncio.wait_for(worker.run_once(), 20) == row.id
+        stored = await _stored(sessions, row)
+        assert stored.state == "ready", stored.error_code
+        assert stored.attempt_count == 2 and stored.manual_retry_count == 1
+        assert stored.authority_sha256 == package["authority_sha256"]
+        assert stored.manifest_sha256 == package["manifest_sha256"]
+        assert preimage() == before
+        assert not list(sealed.parent.glob(".attempt-*"))
+        assert hashlib.sha256(bam.read_bytes()).hexdigest() == source["alignment_sha256"]
     finally:
         await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_stop_waits_for_cooperative_builder_quiescence_and_prevents_late_writes(
-    tmp_path: Path,
-) -> None:
-    import asyncio
-    import threading
-    import time
-
-    from services.ngs_alignment_presentation import request_presentation
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
-
-    engine, sessions = await _database(tmp_path)
-    started = threading.Event()
-    stopped = threading.Event()
-    late = tmp_path / "late-stop-write"
-
-    def build(_row, abort):
-        started.set()
-        try:
-            while not abort.is_set():
-                time.sleep(0.005)
-            abort.checkpoint()
-            late.write_text("late", encoding="utf-8")
-        finally:
-            stopped.set()
-
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            await request_presentation(
-                session,
-                job_id="job-1", session_id="session-1", mode="primary",
-                source_authority_sha256="a" * 64, source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64, policy_version=5,
-            )
-            await session.commit()
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=build,
-            resolve_source_authority=lambda row: row.source_authority_sha256,
-            poll_interval=0.01,
-        )
-        await worker.start()
-        assert await asyncio.to_thread(started.wait, 2)
-        await worker.stop()
-        assert stopped.is_set()
-        assert not late.exists()
-        await asyncio.sleep(0.05)
-        assert not late.exists()
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_timeout_aborts_and_joins_builder_before_terminalizing(
-    tmp_path: Path,
-) -> None:
-    import threading
-    import time
-
-    from services.ngs_alignment_presentation import request_presentation
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
-
-    engine, sessions = await _database(tmp_path)
-    stopped = threading.Event()
-    late = tmp_path / "late-timeout-write"
-
-    def build(_row, abort):
-        try:
-            while not abort.is_set():
-                time.sleep(0.005)
-            time.sleep(0.02)
-            abort.checkpoint()
-            late.write_text("late", encoding="utf-8")
-        finally:
-            stopped.set()
-
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1", session_id="session-1", mode="primary",
-                source_authority_sha256="a" * 64, source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64, policy_version=5,
-            )
-            await session.commit()
-        worker = NgsAlignmentPresentationWorker(
-            sessions,
-            build=build,
-            resolve_source_authority=lambda row: row.source_authority_sha256,
-            max_build_seconds=0.03,
-        )
-        assert await worker.run_once() == request.id
-        assert stopped.is_set()
-        assert not late.exists()
-        async with sessions() as session:
-            stored = await session.get(type(request), request.id)
-            assert stored is not None and stored.state == "failed"
-            assert stored.error_code == "build_timeout"
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_lease_claim_loss_aborts_and_joins_builder_before_return(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
-    import threading
-    import time
-
-    from services.ngs_alignment_presentation import PresentationClaimLost, request_presentation
-    from services import ngs_alignment_presentation_worker as worker_module
-
-    engine, sessions = await _database(tmp_path)
-    started = threading.Event()
-    quiesced = threading.Event()
-    post_loss_write = tmp_path / "post-loss-write"
-
-    def build(_row, abort):
-        started.set()
-        try:
-            while not abort.is_set():
-                time.sleep(0.005)
-            time.sleep(0.02)
-            abort.checkpoint()
-            post_loss_write.write_text("forbidden", encoding="utf-8")
-        finally:
-            quiesced.set()
-
-    async def lose_claim(*_args, **_kwargs):
-        assert started.is_set()
-        raise PresentationClaimLost("forced lease loss")
-
-    monkeypatch.setattr(worker_module, "renew_presentation_lease", lose_claim)
-    try:
-        async with sessions() as session:
-            session.add(_job())
-            await session.flush()
-            request = await request_presentation(
-                session,
-                job_id="job-1", session_id="session-1", mode="primary",
-                source_authority_sha256="a" * 64, source_manifest_sha256="b" * 64,
-                source_artifact_set_sha256="c" * 64, policy_version=5,
-            )
-            await session.commit()
-        worker = worker_module.NgsAlignmentPresentationWorker(
-            sessions,
-            build=build,
-            resolve_source_authority=lambda row: row.source_authority_sha256,
-            lease_seconds=1,
-        )
-        assert await asyncio.wait_for(worker.run_once(), timeout=2) == request.id
-        assert quiesced.is_set()
-        assert not post_loss_write.exists()
-        async with sessions() as session:
-            stored = await session.get(type(request), request.id)
-            assert stored is not None and stored.state == "running"
-            assert stored.authority_sha256 is None
-            assert stored.manifest_sha256 is None
-    finally:
-        await engine.dispose()
-
-
-def test_v5_lifecycle_has_no_deadline_or_retry_schedule_contract() -> None:
-    import inspect
-
-    from database import NgsAlignmentPresentationJob
-    from services.ngs_alignment_presentation_worker import NgsAlignmentPresentationWorker
-
-    assert "next_retry_at" not in NgsAlignmentPresentationJob.__table__.columns
-    assert "max_build_seconds" not in inspect.signature(
-        NgsAlignmentPresentationWorker.__init__
-    ).parameters
