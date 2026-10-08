@@ -16,6 +16,7 @@ import re
 from typing import Any
 
 import pysam
+from services import verified_native_reads as native
 import rfc8785
 
 from services import ngs_alignment_sessions
@@ -147,7 +148,7 @@ def _validate_modkit(root: Path, persisted: Path, job: Any, alignment: dict) -> 
         import runpy
         admission = runpy.run_path(str(DORADO_LOCK_PATH.parents[2] / "scripts/validate_modified_base_bam.py"))
         handle = handles['methylation/modified_base_input.bam']
-        with pysam.AlignmentFile(handle, 'rb') as bam:
+        with native.alignment(handle) as bam:
             expected_tags, available = admission["inspect_bam"](bam)
         from services.ont_ngs_native_completion import _validate_producer
         tag_text = text('modified_base_tag_check.log')

@@ -30,6 +30,10 @@ RUN apt-get update \
         git \
         openssh-client \
         libcurl4-openssl-dev \
+        libbz2-dev \
+        liblzma-dev \
+        zlib1g-dev \
+        patch \
         libfontconfig1-dev \
         libfreetype6-dev \
         libfribidi-dev \
@@ -67,7 +71,9 @@ USER biomodstack
 
 RUN --mount=type=bind,source=.,target=/src,readonly \
     cp -R --no-preserve=ownership,timestamps /src/. /app \
-    && uv sync --frozen --no-dev \
+    && uv venv .venv \
+    && uv pip install --python .venv/bin/python --require-hashes -r vendor/pysam/build-requirements.lock \
+    && uv sync --frozen --no-dev --inexact --no-build-isolation-package pysam \
     && python /app/scripts/check_removed_vocabulary.py --mode sanitize \
         /app/platform/api/.venv/lib/python3.10/site-packages \
     && rm -rf "${UV_CACHE_DIR}" /home/biomodstack/.cache/uv \

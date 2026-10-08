@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from services import verified_native_reads as native
+
 import base64
 import hashlib
 import fcntl
@@ -126,7 +128,6 @@ _snapshot_receipts: dict[str, _SnapshotReceipt] = {}
 _snapshot_invalid: set[str] = set()
 _snapshot_cache_bytes = 0
 _snapshot_allocations: dict[str, Any] = {}
-_snapshot_native: dict[str, tuple[int, Any]] = {}
 _snapshot_storage_locks: dict[str, int] = {}
 _snapshot_sources: dict[tuple[str, str], tuple[int, int, int, int, int]] = {}
 _snapshot_inflight: set[str] = set()
@@ -191,10 +192,9 @@ class _SnapshotLease:
     bytes already yielded. Metadata additionally invalidates replaced/modified
     cache objects, but is not the cryptographic integrity mechanism.
 
-    Python readers use portable chunk verification. Descriptor-only native
-    consumers receive a separately admitted, kernel-sealed memory image, never
-    the mutable disk descriptor. This optional adapter requires memfd sealing;
-    unsupported platforms fail explicitly rather than downgrade byte integrity.
+    Python readers use portable chunk verification. Native consumers use the
+    managed API's generation-scoped HTTP delivery. No raw descriptor or
+    artifact-sized memory image is exposed to a scientific parser.
     """
     def __init__(self, handle: BinaryIO, digest: str, receipt: _SnapshotReceipt) -> None:
         self._handle = handle
@@ -290,54 +290,20 @@ class _SnapshotLease:
         self.remember_semantic_value(key, None, peer)
 
     def fileno(self) -> int:
-        self._check()
+        raise AlignmentSessionError("verified bytes require callback or managed native delivery")
+
+    def fork(self):
+        """Independent cursor on the SAME trusted generation, never a reimport."""
         with _snapshot_cache_condition:
-            existing = _snapshot_native.get(self._digest)
-            if existing is not None:
-                return existing[0]
-            import fcntl
-            from services import global_resource_admission as resources
-            if not hasattr(os, "memfd_create") or not all(hasattr(fcntl, name) for name in
-                    ("F_ADD_SEALS", "F_GET_SEALS", "F_SEAL_WRITE", "F_SEAL_GROW", "F_SEAL_SHRINK", "F_SEAL_SEAL")):
-                raise AlignmentCapacityUnavailable("native reader capacity unavailable: kernel file sealing unsupported")
-            allocation = None
-            descriptor = None
-            position = self._position
-            try:
-                allocation = resources.reserve(owner="artifact-native:" + self._digest,
-                    storage_root=_snapshot_cache_directory(), cpu_threads=1,
-                    dram_bytes=self._receipt.identity[2] + 2 * SNAPSHOT_CHUNK_BYTES, disk_bytes=0)
-                descriptor = os.memfd_create("bms-verified-artifact", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
-                self.seek(0)
-                while True:
-                    block = self.read(SNAPSHOT_CHUNK_BYTES)
-                    if not block:
-                        break
-                    pending = memoryview(block)
-                    while pending:
-                        written = os.write(descriptor, pending)
-                        if written <= 0:
-                            raise OSError("native snapshot short write")
-                        pending = pending[written:]
-                seals = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
-                fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, seals)
-                if fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) & seals != seals:
-                    raise AlignmentSessionError("verified native reader sealing failed")
-                os.lseek(descriptor, 0, os.SEEK_SET)
-                allocation.retain(disk_bytes=0, dram_bytes=self._receipt.identity[2])
-                _snapshot_native[self._digest] = (descriptor, allocation)
-                return descriptor
-            except resources.ResourceCapacityUnavailable as exc:
-                raise AlignmentCapacityUnavailable("native snapshot capacity unavailable") from exc
-            except OSError as exc:
-                raise AlignmentCapacityUnavailable("native snapshot capacity unavailable: sealed image could not be created") from exc
-            finally:
-                self._position = position
-                if self._digest not in _snapshot_native:
-                    if descriptor is not None:
-                        os.close(descriptor)
-                    if allocation is not None:
-                        allocation.release(storage_removed=True)
+            self._check()
+            if _snapshot_receipts.get(self._digest) is not self._receipt:
+                self._invalidate()
+            child = _cached_snapshot_locked(self._digest, self._receipt.identity[2])
+            if child is None or child._receipt is not self._receipt:
+                if child is not None:
+                    child.close()
+                self._invalidate()
+            return child
 
     def readline(self, size: int = -1) -> bytes:
         # Verify at chunk granularity, not once per character. Preserve the
@@ -395,7 +361,48 @@ class _SnapshotLease:
         self.close()
 
 
+class _DescriptorImport:
+    """Private import-only identity; never passed to a scientific engine."""
+    def __init__(self, handle):
+        self.handle = handle
+        self.identity = _snapshot_file_identity(handle)
+
+    def key(self):
+        return "descriptor:" + repr(self.identity)
+
+
+class _ImportReader:
+    def __init__(self, handle):
+        self.fd = os.dup(handle.fileno())
+        self.position = 0
+
+    def fileno(self):
+        return self.fd
+
+    def read(self, size):
+        block = os.pread(self.fd, size, self.position)
+        self.position += len(block)
+        return block
+
+    def close(self):
+        os.close(self.fd)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+def _snapshot_source_key(path):
+    return path.key() if isinstance(path, _DescriptorImport) else str(Path(path).resolve(strict=True))
+
+
 def _open_regular_file_no_symlinks(path: Path) -> BinaryIO:
+    if isinstance(path, _DescriptorImport):
+        if _snapshot_file_identity(path.handle) != path.identity:
+            raise AlignmentSessionError("source changed before snapshot import")
+        return _ImportReader(path.handle)
     absolute = Path(os.path.abspath(path))
     if not absolute.is_absolute():
         raise AlignmentSessionError("unsafe artifact path")
@@ -578,11 +585,6 @@ def _discard_cached_snapshot_locked(digest: str) -> None:
                 pass
         if exclusive:
             _snapshot_storage_path(digest).unlink(missing_ok=True)
-        native = _snapshot_native.pop(digest, None)
-        if native is not None:
-            native_descriptor, native_allocation = native
-            os.close(native_descriptor)
-            native_allocation.release(storage_removed=True)
         allocation = _snapshot_allocations.pop(digest, None)
         if allocation is not None:
             allocation.release(storage_removed=exclusive)
@@ -716,7 +718,7 @@ def _reserve_snapshot(digest: str, size: int) -> BinaryIO | None:
             try:
                 allocation = resources.reserve(owner="artifact-snapshot:" + digest,
                     storage_root=_snapshot_cache_directory(),
-                    owned_path=_snapshot_cache_directory() / digest, cpu_threads=1,
+                    owned_path=_snapshot_cache_directory() / digest, cpu_threads=0 if resources.current_compute() else 1,
                     dram_bytes=ram, disk_bytes=size if exclusive else 0, adopt_quiescent=exclusive)
             except resources.ResourceCapacityUnavailable as exc:
                 os.close(descriptor)
@@ -840,7 +842,7 @@ def _check_snapshot_source(path: Path, digest: str, size: int, *, allocation=Non
     """
     from services import global_resource_admission as resources
     with _open_regular_file_no_symlinks(path) as source:
-        key = (digest, str(Path(path).resolve(strict=True)))
+        key = (digest, _snapshot_source_key(path))
         before = _snapshot_file_identity(source)
         with _snapshot_cache_condition:
             known = _snapshot_sources.get(key)
@@ -854,7 +856,7 @@ def _check_snapshot_source(path: Path, digest: str, size: int, *, allocation=Non
             from contextlib import nullcontext
             admission = nullcontext(allocation) if allocation is not None else resources.derived_work(
                 owner="artifact-source-verification:" + digest,
-                storage_root=_snapshot_cache_directory(), cpu_threads=1,
+                storage_root=_snapshot_cache_directory(), cpu_threads=0 if resources.current_compute() else 1,
                 dram_bytes=2 * SNAPSHOT_CHUNK_BYTES, disk_bytes=0)
             with admission:
                 actual = hashlib.sha256()
@@ -999,7 +1001,7 @@ def open_verified_artifact_snapshot(
                 or copied != expected_size or digest.hexdigest() != expected_sha256):
             raise AlignmentSessionError("artifact integrity digest mismatch")
         with _snapshot_cache_condition:
-            source_key = (expected_sha256, str(Path(path).resolve(strict=True)))
+            source_key = (expected_sha256, _snapshot_source_key(path))
             previous = _snapshot_sources.setdefault(source_key, source_identity)
             if previous != source_identity:
                 raise AlignmentSessionError("source artifact integrity changed during import")
@@ -1336,77 +1338,6 @@ def _runtime_stat_identity(metadata: os.stat_result) -> tuple[int, int, int, int
     )
 
 
-@dataclass(frozen=True)
-class _PinnedSamtoolsCommand:
-    argv: tuple[str, ...]
-    pass_fds: tuple[int, ...]
-    runtime_sha256: str | None
-    runtime_size: int | None
-    runtime_path: Path | None = None
-    runtime_identity: tuple[int, int, int, int, int] | None = None
-    runtime_directory_fd: int | None = None
-    runtime_directory_identity: tuple[int, int, int, int, int] | None = None
-
-    def __iter__(self):
-        return iter(self.argv)
-
-    def verify_runtime(self) -> None:
-        authority = (
-            self.runtime_sha256,
-            self.runtime_size,
-            self.runtime_path,
-            self.runtime_identity,
-            self.runtime_directory_fd,
-            self.runtime_directory_identity,
-        )
-        if all(value is None for value in authority) and not self.pass_fds:
-            return
-        if any(value is None for value in authority) or not self.pass_fds:
-            raise AlignmentSessionError("pinned NGS runtime authority is incomplete")
-        assert self.runtime_path is not None
-        assert self.runtime_identity is not None
-        assert self.runtime_directory_fd is not None
-        assert self.runtime_directory_identity is not None
-        runtime_fd = self.pass_fds[0]
-        metadata = os.fstat(runtime_fd)
-        path_metadata = os.stat(self.runtime_path, follow_symlinks=False)
-        directory_metadata = os.fstat(self.runtime_directory_fd)
-        directory_path_metadata = os.stat(self.runtime_path.parent, follow_symlinks=False)
-        if (
-            _runtime_stat_identity(metadata) != self.runtime_identity
-            or _runtime_stat_identity(path_metadata) != self.runtime_identity
-            or not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_size != self.runtime_size
-            or stat.S_IMODE(metadata.st_mode) & 0o222
-            or _runtime_stat_identity(directory_metadata) != self.runtime_directory_identity
-            or _runtime_stat_identity(directory_path_metadata) != self.runtime_directory_identity
-            or not stat.S_ISDIR(directory_metadata.st_mode)
-            or stat.S_IMODE(directory_metadata.st_mode) & 0o222
-        ):
-            raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
-
-
-_samtools_runtime_lock = threading.RLock()
-_samtools_runtime_cache: dict[tuple[str, str], _PinnedSamtoolsCommand] = {}
-
-
-def _clear_samtools_runtime_cache() -> None:
-    with _samtools_runtime_lock:
-        commands = tuple(_samtools_runtime_cache.values())
-        _samtools_runtime_cache.clear()
-    for command in commands:
-        for descriptor in command.pass_fds:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-        if command.runtime_directory_fd is not None:
-            try:
-                os.close(command.runtime_directory_fd)
-            except OSError:
-                pass
-
-
 def _open_nofollow(path: Path, *, directory: bool, label: str) -> int:
     raw = os.fspath(path)
     if not path.is_absolute() or not raw or "\x00" in raw:
@@ -1449,226 +1380,6 @@ def _sha256_descriptor(descriptor: int) -> str:
         digest.update(chunk)
         offset += len(chunk)
     return digest.hexdigest()
-
-
-def _private_runtime_snapshot(
-    source_fd: int,
-    *,
-    directory: Path,
-    expected_digest: str,
-) -> tuple[int, int, Path, tuple[int, int, int, int, int], int, tuple[int, int, int, int, int]]:
-    """Copy one stable source generation into one private named read-only image."""
-    metadata_before = os.fstat(source_fd)
-    process_directory = directory / f".bms-ngs-runtime-{expected_digest}"
-    runtime_path = process_directory / "runtime.sif"
-    if process_directory.exists():
-        source_digest = _sha256_descriptor(source_fd)
-        metadata_after = os.fstat(source_fd)
-        if (
-            _runtime_stat_identity(metadata_before) != _runtime_stat_identity(metadata_after)
-            or source_digest != expected_digest
-        ):
-            raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
-        runtime_fd = _open_nofollow(runtime_path, directory=False, label="private pinned NGS runtime")
-        directory_fd = _open_nofollow(
-            process_directory,
-            directory=True,
-            label="private pinned NGS runtime directory",
-        )
-        try:
-            private_metadata = os.fstat(runtime_fd)
-            directory_metadata = os.fstat(directory_fd)
-            if (
-                _sha256_descriptor(runtime_fd) != expected_digest
-                or not stat.S_ISREG(private_metadata.st_mode)
-                or private_metadata.st_size != metadata_after.st_size
-                or stat.S_IMODE(private_metadata.st_mode) & 0o222
-                or not stat.S_ISDIR(directory_metadata.st_mode)
-                or stat.S_IMODE(directory_metadata.st_mode) & 0o222
-            ):
-                raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
-            return (
-                runtime_fd,
-                private_metadata.st_size,
-                runtime_path,
-                _runtime_stat_identity(private_metadata),
-                directory_fd,
-                _runtime_stat_identity(directory_metadata),
-            )
-        except Exception:
-            os.close(runtime_fd)
-            os.close(directory_fd)
-            raise
-    digest = hashlib.sha256()
-    size = 0
-    staging_directory = Path(
-        tempfile.mkdtemp(prefix=f".bms-ngs-runtime-{expected_digest}.partial-", dir=directory)
-    )
-    os.chmod(staging_directory, 0o700)
-    temporary_path = staging_directory / "runtime.sif"
-    runtime_fd: int | None = None
-    directory_fd: int | None = None
-    try:
-        with temporary_path.open("xb") as snapshot:
-            while chunk := os.pread(source_fd, SNAPSHOT_CHUNK_BYTES, size):
-                snapshot.write(chunk)
-                digest.update(chunk)
-                size += len(chunk)
-            snapshot.flush()
-            os.fsync(snapshot.fileno())
-            metadata_after = os.fstat(source_fd)
-            if _runtime_stat_identity(metadata_before) != _runtime_stat_identity(metadata_after):
-                raise AlignmentSessionError("pinned NGS runtime changed during snapshot validation")
-            if size != metadata_after.st_size or digest.hexdigest() != expected_digest:
-                raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
-            os.fchmod(snapshot.fileno(), 0o400)
-        os.chmod(staging_directory, 0o500)
-        try:
-            os.rename(staging_directory, process_directory)
-        except OSError:
-            if not process_directory.exists():
-                raise
-            os.chmod(staging_directory, 0o700)
-            temporary_path.unlink(missing_ok=True)
-            staging_directory.rmdir()
-            return _private_runtime_snapshot(
-                source_fd,
-                directory=directory,
-                expected_digest=expected_digest,
-            )
-        runtime_fd = _open_nofollow(runtime_path, directory=False, label="private pinned NGS runtime")
-        directory_fd = _open_nofollow(process_directory, directory=True, label="private pinned NGS runtime directory")
-        runtime_identity = _runtime_stat_identity(os.fstat(runtime_fd))
-        directory_identity = _runtime_stat_identity(os.fstat(directory_fd))
-        private_metadata = os.fstat(runtime_fd)
-        if (
-            not stat.S_ISREG(private_metadata.st_mode)
-            or private_metadata.st_size != size
-            or stat.S_IMODE(private_metadata.st_mode) & 0o222
-        ):
-            raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
-        return runtime_fd, size, runtime_path, runtime_identity, directory_fd, directory_identity
-    except Exception:
-        if runtime_fd is not None:
-            os.close(runtime_fd)
-        if directory_fd is not None:
-            os.close(directory_fd)
-        try:
-            os.chmod(staging_directory, 0o700)
-            temporary_path.unlink(missing_ok=True)
-            staging_directory.rmdir()
-        except OSError:
-            pass
-        raise
-
-
-def _ngs_runtime_identity() -> tuple[str, str]:
-    try:
-        lock = json.loads(DORADO_LOCK_PATH.read_text(encoding="utf-8"))
-        expected_digest = lock["dorado"]["sif_sha256"]
-        expected_version = lock["scientific_tools"]["samtools"]["version"]
-    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
-        raise AlignmentSessionError("canonical NGS runtime lock is unavailable") from exc
-    if not isinstance(expected_digest, str) or re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None:
-        raise AlignmentSessionError("canonical NGS runtime digest is invalid")
-    if expected_version != "1.24":
-        raise AlignmentSessionError("canonical NGS samtools version is not 1.24")
-    return expected_digest, expected_version
-
-
-def _samtools_command() -> _PinnedSamtoolsCommand:
-    runtime_raw = os.environ.get("BMS_NGS_RUNTIME_SIF", "").strip()
-    runtime_sif = Path(runtime_raw).expanduser()
-    if not runtime_sif.is_absolute():
-        raise AlignmentSessionError("pinned NGS samtools runtime path is invalid")
-    key = (os.fspath(runtime_sif), "descriptor-only")
-    with _samtools_runtime_lock:
-        cached = _samtools_runtime_cache.get(key)
-        if cached is not None:
-            cached.verify_runtime()
-            return cached
-        apptainer = shutil.which("apptainer")
-        if not apptainer:
-            raise AlignmentSessionError("Apptainer is unavailable for the pinned NGS runtime")
-        expected_digest, expected_version = _ngs_runtime_identity()
-        source_fd = _open_nofollow(runtime_sif, directory=False, label="pinned NGS runtime")
-        runtime_fd: int | None = None
-        directory_fd: int | None = None
-        runtime_path: Path | None = None
-        try:
-            (
-                runtime_fd,
-                runtime_size,
-                runtime_path,
-                runtime_identity,
-                directory_fd,
-                directory_identity,
-            ) = _private_runtime_snapshot(
-                source_fd,
-                directory=runtime_sif.parent,
-                expected_digest=expected_digest,
-            )
-        finally:
-            os.close(source_fd)
-        if runtime_fd is None or directory_fd is None or runtime_path is None:
-            raise AlignmentSessionError("private pinned NGS runtime snapshot is unavailable")
-        try:
-            command = _PinnedSamtoolsCommand(
-                argv=(
-                    apptainer,
-                    "exec",
-                    "--no-home",
-                    "--pid",
-                    "--net",
-                    "--network",
-                    "none",
-                    f"/proc/self/fd/{runtime_fd}",
-                    "samtools",
-                ),
-                pass_fds=(runtime_fd,),
-                runtime_sha256=expected_digest,
-                runtime_size=runtime_size,
-                runtime_path=runtime_path,
-                runtime_identity=runtime_identity,
-                runtime_directory_fd=directory_fd,
-                runtime_directory_identity=directory_identity,
-            )
-            try:
-                command.verify_runtime()
-                probe = subprocess.run(
-                    [*command, "--version"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    pass_fds=command.pass_fds,
-                )
-                command.verify_runtime()
-            except (OSError, subprocess.SubprocessError) as exc:
-                raise AlignmentSessionError("pinned NGS runtime samtools probe failed") from exc
-            if not probe.stdout.startswith(f"samtools {expected_version}\n"):
-                raise AlignmentSessionError("pinned NGS runtime samtools version mismatch")
-            _samtools_runtime_cache[key] = command
-            return command
-        except Exception:
-            os.close(runtime_fd)
-            os.close(directory_fd)
-            raise
-
-
-def _run_pinned_samtools(
-    command: _PinnedSamtoolsCommand,
-    args: list[str],
-    **kwargs: Any,
-) -> subprocess.CompletedProcess[Any]:
-    command.verify_runtime()
-    completed = subprocess.run([*command, *args], **kwargs)
-    command.verify_runtime()
-    return completed
-
-
-def _descriptor_path(descriptor: int) -> str:
-    return f"/proc/self/fd/{descriptor}"
 
 
 def _fasta_contigs_from_handle(handle: BinaryIO) -> tuple[dict[str, tuple[int, str]], bytes]:
@@ -1773,8 +1484,6 @@ def _validate_alignment_bundle_uncached(
     reference_sha256: str | None = None,
     reference_size: int | None = None,
 ) -> tuple[bool, str | None]:
-    samtools = _samtools_command()
-    samtools.verify_runtime()
     snapshots: list[BinaryIO] = []
     try:
         if bam_sha256 is None or bam_size is None:
@@ -1793,36 +1502,16 @@ def _validate_alignment_bundle_uncached(
             expected_sha256=reference_sha256,
         )
         snapshots.append(reference_snapshot)
-        bam_path = _descriptor_path(bam_snapshot.fileno())
-        index_path = _descriptor_path(index_snapshot.fileno())
-        pass_fds = (*samtools.pass_fds, *(snapshot.fileno() for snapshot in snapshots))
-        _run_pinned_samtools(
-            samtools,
-            ["quickcheck", "-v", bam_path],
-            check=True,
-            capture_output=True,
-            timeout=30,
-            pass_fds=pass_fds,
-        )
-        _run_pinned_samtools(
-            samtools,
-            ["idxstats", "-X", bam_path, index_path],
-            check=True,
-            capture_output=True,
-            timeout=30,
-            pass_fds=pass_fds,
-        )
-        header = _run_pinned_samtools(
-            samtools,
-            ["view", "-H", bam_path],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            pass_fds=pass_fds,
-        )
+        with native.alignment(bam_snapshot, index_snapshot) as parsed:
+            # AlignmentFile's default truncation check exercises the BGZF EOF
+            # marker (quickcheck), and opening/check_index plus statistics use
+            # the explicit receipt-bound index (idxstats) without SAVE_REMOTE.
+            if not parsed.is_bam or not parsed.check_index():
+                raise AlignmentSessionError("alignment/index integrity mismatch")
+            parsed.get_index_statistics()
+            header_text = str(parsed.header)
         bam_contigs: dict[str, tuple[int, str | None]] = {}
-        for line in header.stdout.splitlines():
+        for line in header_text.splitlines():
             if not line.startswith("@SQ\t"):
                 continue
             fields = dict(field.split(":", 1) for field in line.split("\t")[1:] if ":" in field)
@@ -2853,8 +2542,8 @@ def open_presentation_source_bundle(
         ):
             raise AlignmentSessionError("alignment presentation source identity changed")
         yield (
-            Path(f"/proc/self/fd/{alignment_handle.fileno()}"),
-            Path(f"/proc/self/fd/{index_handle.fileno()}"),
+            alignment_path,
+            index_path,
             alignment_identity,
             index_identity,
         )
@@ -2881,6 +2570,10 @@ def _verify_descriptor(handle: BinaryIO, expected_size: int, expected_sha256: st
     if digest.hexdigest() != expected_sha256:
         raise AlignmentSessionError("artifact integrity digest mismatch")
     handle.seek(0)
+    verified_identity = _snapshot_file_identity(handle)
+    if verified_identity != (observed.st_dev, observed.st_ino, observed.st_size, observed.st_mtime_ns, observed.st_ctime_ns):
+        raise AlignmentSessionError("artifact changed during descriptor verification")
+    handle._bms_verified_identity = (expected_sha256, verified_identity)
     return identity
 
 
@@ -2928,14 +2621,18 @@ import sys
 
 import pysam
 
-source_path, output_path, ids_path, index_path, contig, start, end, include_supplementary, byte_limit = sys.argv[1:]
+_, output_path, ids_path, _, contig, start, end, include_supplementary, byte_limit = sys.argv[1:]
+source_path, index_path = json.load(sys.stdin)
+if pysam.__version__ != "0.23.3+bms1" or not hasattr(pysam.AlignmentFile, "save_remote_index"):
+    raise RuntimeError("unsupported native child runtime")
+pysam.set_verbosity(0)
 limit = int(byte_limit)
 resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
 with open(ids_path, "r", encoding="utf-8") as handle:
     selected_ids = set(json.load(handle))
 open_kwargs = {} if index_path == "-" else {"index_filename": index_path}
 written = 0
-with pysam.AlignmentFile(source_path, "rb", **open_kwargs) as source:
+with pysam.AlignmentFile(source_path, "rb", save_remote_index=False, **open_kwargs) as source:
     with pysam.AlignmentFile(output_path, "wb", header=source.header) as output:
         records = (
             source.fetch(until_eof=True)
@@ -2983,7 +2680,27 @@ def _terminate_subprocess_tree(process: subprocess.Popen[Any]) -> None:
     process.communicate()
 
 
-def _write_bam_for_ids_bounded(
+def _write_bam_for_ids_bounded(path, source_path, ids, **kwargs):
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        def snapshot(value):
+            if hasattr(value, "read"):
+                return stack.enter_context(native.snapshot_handle(value))
+            digest, size = _sha256_file_and_size(value)
+            return stack.enter_context(open_verified_artifact_snapshot(value,
+                expected_sha256=digest, expected_size=size))
+        handles = {"data.bam": snapshot(source_path)}
+        index = kwargs.pop("index_path", None)
+        if index is not None:
+            handles["data.bam.bai"] = snapshot(index)
+        stack.enter_context(native.compute())
+        native.require_bam_bytes(handles["data.bam"])
+        urls = stack.enter_context(native.delivery.grant(handles))
+        return _write_bam_for_ids_native(path, urls["data.bam"], ids,
+            index_path=urls.get("data.bam.bai"), **kwargs)
+
+
+def _write_bam_for_ids_native(
     path: Path,
     source_path: Path,
     ids: list[str],
@@ -3016,10 +2733,10 @@ def _write_bam_for_ids_bounded(
                 sys.executable,
                 "-c",
                 _BOUNDED_BAM_WRITER,
-                os.fspath(source_path),
+                "-",
                 os.fspath(path),
                 os.fspath(ids_path),
-                os.fspath(index_path) if index_path is not None else "-",
+                "-",
                 contig or "-",
                 str(start or 0),
                 str(end or 0),
@@ -3029,9 +2746,14 @@ def _write_bam_for_ids_bounded(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            pass_fds=_path_descriptor_fds(source_path, index_path, path, ids_path),
+            stdin=subprocess.PIPE,
+            pass_fds=_path_descriptor_fds(path, ids_path),
             start_new_session=True,
         )
+        assert process.stdin is not None
+        process.stdin.write(json.dumps([source_path, index_path or "-"]))
+        process.stdin.close()
+        process.stdin = None
         while process.poll() is None:
             try:
                 checkpoint()
@@ -3049,6 +2771,11 @@ def _write_bam_for_ids_bounded(
     except OSError as exc:
         raise AlignmentSessionError(f"{label} BAM generation failed") from exc
     finally:
+        if process is not None:
+            if process.poll() is None:
+                _terminate_subprocess_tree(process)
+            else:
+                process.wait()
         ids_path.unlink(missing_ok=True)
     observed_size = path.stat().st_size if path.exists() else 0
     byte_limited = (
@@ -3059,8 +2786,7 @@ def _write_bam_for_ids_bounded(
     if process.returncode != 0:
         if byte_limited:
             raise _AlignmentDerivativeByteLimit(f"{label} byte ceiling exceeded")
-        detail = stderr.strip() or stdout.strip() or "unknown error"
-        raise AlignmentSessionError(f"{label} BAM generation failed: {detail}")
+        raise AlignmentSessionError(f"{label} BAM generation failed")
     if observed_size > byte_limit:
         raise _AlignmentDerivativeByteLimit(f"{label} byte ceiling exceeded")
     try:
@@ -3080,6 +2806,7 @@ def _index_bam_with_deadline(
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise _AlignmentDerivativeTimeout(f"{label} time limit exceeded")
+    native.require_runtime()
     parts = path.parts
     pass_fds: tuple[int, ...] = ()
     if len(parts) >= 5 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit():
@@ -3088,25 +2815,33 @@ def _index_bam_with_deadline(
     # during indexing, restart cleanup cannot remove its still-live workspace.
     pass_fds = tuple(dict.fromkeys((*pass_fds, *ownership_fds)))
     try:
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                (
-                    "import resource,sys,pysam; "
-                    "limit=int(sys.argv[2]); "
-                    "resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit)) if limit else None; "
-                    "pysam.index(sys.argv[1])"
-                ),
-                os.fspath(path),
-                str(byte_limit or 0),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=remaining,
-            pass_fds=pass_fds,
-        )
+        with native.path_urls(path) as urls, native.compute():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _AlignmentDerivativeTimeout(f"{label} time limit exceeded")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import resource,sys,pysam; "
+                        "from pysam.bms_native_build import IDENTITY; "
+                        "assert pysam.__version__ == '0.23.3+bms1' and IDENTITY['binding_api'] == 1; "
+                        "limit=int(sys.argv[2]); "
+                        "resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit)) if limit else None; "
+                        "pysam.set_verbosity(0); "
+                        "pysam.index('-o', sys.argv[1]+'.bai', sys.stdin.read())"
+                    ),
+                    os.fspath(path),
+                    str(byte_limit or 0),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=remaining,
+                input=urls["data.bam"],
+                pass_fds=pass_fds,
+            )
     except subprocess.TimeoutExpired as exc:
         raise _AlignmentDerivativeTimeout(f"{label} time limit exceeded") from exc
     except OSError as exc:
@@ -3124,8 +2859,7 @@ def _index_bam_with_deadline(
     if result.returncode != 0:
         if byte_limited:
             raise AlignmentSessionError(f"{label} index byte ceiling exceeded")
-        detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
-        raise AlignmentSessionError(f"{label} indexing failed: {detail}")
+        raise AlignmentSessionError(f"{label} indexing failed")
     if byte_limit is not None and observed_size > byte_limit:
         raise AlignmentSessionError(f"{label} index byte ceiling exceeded")
 
@@ -3652,7 +3386,7 @@ def _load_derived_package(
             ):
                 return None
         preview_counts: dict[str, dict[str, int]] = {}
-        with pysam.AlignmentFile(paths["bam"], "rb", index_filename=str(paths["index"])) as preview:
+        with native.alignment_path(paths["bam"], index=paths["index"]) as preview:
             for record in preview.fetch(until_eof=True):
                 checkpoint()
                 if not record.query_name or record.is_secondary or record.is_unmapped:
@@ -3958,9 +3692,8 @@ def build_alignment_locus_slice(
         try:
             candidate_heap: list[tuple[int, str]] = []
             overlapping_ids: set[str] = set()
-            with pysam.AlignmentFile(
-                str(bam), "rb", index_filename=str(index),
-            ) as source:
+            with native.alignment_path(bam, sha256=bam_sha256, size=bam_size_bytes,
+                    index=index, index_sha256=index_sha256, index_size=index_size_bytes) as source:
                 header = source.header.to_dict()
                 for read in source.fetch(contig, start - 1, end):
                     if time.monotonic() > deadline:
@@ -3981,9 +3714,8 @@ def build_alignment_locus_slice(
             candidates: dict[str, list[Any]] = {}
             total_records = 0
             record_cap_applied = False
-            with pysam.AlignmentFile(
-                str(bam), "rb", index_filename=str(index),
-            ) as source:
+            with native.alignment_path(bam, sha256=bam_sha256, size=bam_size_bytes,
+                    index=index, index_sha256=index_sha256, index_size=index_size_bytes) as source:
                 for read in source.fetch(contig, start - 1, end):
                     if time.monotonic() > deadline:
                         raise AlignmentSessionError("locus slice time limit exceeded")
@@ -4183,77 +3915,22 @@ def _iter_sam_lines(
 ) -> Iterator[str]:
     if scan_limit < 1 or scan_limit > LOCUS_MAX_RECORDS:
         raise AlignmentSessionError("read scan limit is invalid")
-    samtools = _samtools_command()
-    samtools.verify_runtime()
-    snapshots: list[BinaryIO] = []
-    try:
-        if bam_sha256 is None or bam_size_bytes is None:
-            bam_sha256, bam_size_bytes = _sha256_file_and_size(bam)
-        bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size_bytes, expected_sha256=bam_sha256)
-        snapshots.append(bam_snapshot)
-        command = [*samtools, "view"]
-        if primary_only:
-            command.extend(["-F", "2308"])
-        if index is not None:
-            if index_sha256 is None or index_size_bytes is None:
-                index_sha256, index_size_bytes = _sha256_file_and_size(index)
-            index_snapshot = open_verified_artifact_snapshot(
-                index,
-                expected_size=index_size_bytes,
-                expected_sha256=index_sha256,
-            )
-            snapshots.append(index_snapshot)
-            command.extend(["-X", _descriptor_path(bam_snapshot.fileno()), _descriptor_path(index_snapshot.fileno())])
-        else:
-            command.append(_descriptor_path(bam_snapshot.fileno()))
-        if contig is not None:
-            if not SAFE_CONTIG_RE.fullmatch(contig):
-                raise AlignmentSessionError("unsafe contig")
-            if start is not None or end is not None:
-                if start is None or end is None or start < 1 or end < start:
-                    raise AlignmentSessionError("invalid read locus")
-                command.append(f"{contig}:{start}-{end}")
-            else:
-                command.append(contig)
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            pass_fds=(*samtools.pass_fds, *(snapshot.fileno() for snapshot in snapshots)),
-        )
-    except Exception:
-        for snapshot in reversed(snapshots):
-            snapshot.close()
-        raise
-    assert process.stdout is not None
-    lines: list[str] = []
-    bounded_stop = False
-    return_code: int | None = None
-    stderr = ""
-    try:
-        for line in process.stdout:
-            lines.append(line.rstrip("\n"))
+    if contig is not None and not SAFE_CONTIG_RE.fullmatch(contig):
+        raise AlignmentSessionError("unsafe contig")
+    if contig is not None and (start is not None or end is not None):
+        if start is None or end is None or start < 1 or end < start:
+            raise AlignmentSessionError("invalid read locus")
+    lines = []
+    with native.alignment_path(bam, sha256=bam_sha256, size=bam_size_bytes,
+            index=index, index_sha256=index_sha256, index_size=index_size_bytes) as source:
+        records = source.fetch(contig, start - 1 if start is not None else None, end) if contig is not None else source.fetch(until_eof=True)
+        for record in records:
+            if primary_only and record.flag & 2308:
+                continue
+            lines.append(record.to_string())
             if len(lines) > scan_limit:
-                bounded_stop = True
                 break
-    finally:
-        process.stdout.close()
-        if bounded_stop and process.poll() is None:
-            process.terminate()
-        try:
-            return_code = process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return_code = process.wait(timeout=5)
-        if process.stderr is not None:
-            stderr = process.stderr.read()
-            process.stderr.close()
-        samtools.verify_runtime()
-        for snapshot in reversed(snapshots):
-            snapshot.close()
-    if not bounded_stop and return_code != 0:
-        raise AlignmentSessionError(f"samtools read inspection failed: {stderr.strip() or 'unknown error'}")
+    # Publish only after native close and delivery failure/quiescence checks.
     yield from lines
 
 

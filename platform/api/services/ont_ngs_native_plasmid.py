@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 
 import pysam
+from services import verified_native_reads as native
 import rfc8785
 
 from services.ont_ngs_native_settings import seal_native_settings
@@ -51,7 +52,7 @@ def _fastq(path):
     with files._open_regular_file_no_symlinks(path) as handle:
         identity = (_digest(handle), os.fstat(handle.fileno()).st_size)
         records = Counter()
-        with pysam.FastxFile(f"/proc/self/fd/{handle.fileno()}", persist=False) as fastq:
+        with native.fastx(handle, persist=False) as fastq:
             for read in fastq:
                 _require(bool(read.name) and bool(read.sequence) and read.quality is not None
                          and len(read.sequence) == len(read.quality), "malformed native FASTQ record")
@@ -119,10 +120,10 @@ def validate_fastq_alignment(root, persisted, job):
                 _require(key not in receipt, "duplicate native FASTQ alignment receipt field")
                 receipt[key] = value
         _require(receipt == receipt_expected, "native FASTQ alignment source/settings receipt mismatch")
-        fd = lambda name: f"/proc/self/fd/{handles[name].fileno()}"
+        fd = lambda name: handles[name]
         primary, sequential, index_counts = Counter(), Counter(), Counter()
         count = mapped = no_coordinate = 0
-        with pysam.AlignmentFile(fd("align/aligned.bam"), "rb", index_filename=fd("align/aligned.bam.bai"), require_index=True) as bam:
+        with native.alignment(fd("align/aligned.bam"), fd("align/aligned.bam.bai")) as bam:
             sq = bam.header.to_dict().get("SQ", [])
             _require(bam.is_bam and bam.check_index() and len(sq) == len(contigs)
                      and {item["SN"] for item in sq} == set(contigs) and all(
@@ -207,7 +208,7 @@ def _indexed_fasta(root, fasta_relative, index_relative):
     with files._open_regular_file_no_symlinks(root / fasta_relative) as fasta_handle, files._open_regular_file_no_symlinks(root / index_relative) as index_handle:
         contigs, sequence = files._fasta_contigs_from_handle(fasta_handle)
         _require(len(contigs) == 1 and bool(sequence), "native indexed FASTA is not a single nonempty record")
-        with pysam.FastaFile(f"/proc/self/fd/{fasta_handle.fileno()}", filepath_index=f"/proc/self/fd/{index_handle.fileno()}") as fasta:
+        with native.fasta(fasta_handle, index_handle) as fasta:
             _require(tuple(fasta.references) == tuple(contigs) and all(
                 fasta.get_reference_length(name) == length and
                 hashlib.md5(fasta.fetch(name).upper().encode("ascii"), usedforsecurity=False).hexdigest() == md5
@@ -280,7 +281,7 @@ def validate_qc(root, persisted, job, alignment_result, *, verify=True):
         # samtools fastq excludes secondary/supplementary by default. The QC
         # producer itself requires one FASTQ occurrence per primary BAM record.
         with files._open_regular_file_no_symlinks(root / "align/aligned.bam") as handle:
-            with pysam.AlignmentFile(handle, "rb") as bam:
+            with native.alignment(handle) as bam:
                 primary = Counter((read.query_name, (read.get_forward_sequence() or "").upper())
                                   for read in bam.fetch(until_eof=True) if not read.is_secondary and not read.is_supplementary)
         _require(reads == primary, "BAM-to-QC FASTQ inventory differs from primary alignments")
@@ -412,7 +413,7 @@ def validate_verification(root, persisted, job, alignment_result, *, reads_ident
     _require(summary["verdict"] == verification["verdict"]
              and summary["variant_count"] == str(verification["summary"]["variant_count"]), "verification summary contradicts manifest")
     with files._open_regular_file_no_symlinks(root / "verification/variants.vcf") as handle:
-        with pysam.VariantFile(handle) as vcf:
+        with native.variant(handle) as vcf:
             variants = list(vcf)
             _require(all(record.contig == name and 0 <= record.start < record.stop <= length for record in variants)
                      and len(variants) == verification["summary"]["variant_count"], "verification VCF coordinate/count mismatch")

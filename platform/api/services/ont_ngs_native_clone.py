@@ -16,6 +16,7 @@ import runpy
 from types import SimpleNamespace
 
 import pysam
+from services import verified_native_reads as native
 from collections import Counter
 from contextlib import ExitStack
 
@@ -254,7 +255,7 @@ def validate_clone_supporting_formats(root, sample, params):
                     json.load(handle)
             elif name.endswith((".fasta", ".fa", ".fastq", ".fq")):
                 with files._open_regular_file_no_symlinks(path) as handle:
-                    with pysam.FastxFile("/proc/self/fd/" + str(handle.fileno())) as records:
+                    with native.fastx(handle) as records:
                         for record in records:
                             _require(bool(record.name) and bool(record.sequence), "empty clone sequence record")
                             if name.endswith((".fastq", ".fq")):
@@ -293,8 +294,7 @@ def validate_host_alignment(path, reference):
         contigs, _ = files._fasta_contigs_from_handle(ref)
         handle = stack.enter_context(files._open_regular_file_no_symlinks(path))
         index = stack.enter_context(files._open_regular_file_no_symlinks(Path(str(path) + ".bai")))
-        with pysam.AlignmentFile(f"/proc/self/fd/{handle.fileno()}", "rb",
-                                 index_filename=f"/proc/self/fd/{index.fileno()}", require_index=True) as bam:
+        with native.alignment(handle, index) as bam:
             _require(bam.is_bam and bam.check_index() and tuple(bam.references) == tuple(contigs)
                      and tuple(bam.lengths) == tuple(item[0] for item in contigs.values()),
                      "host BAM/reference dictionary mismatch")
@@ -360,7 +360,7 @@ def validate_variant_stats(path, reference):
     with ExitStack() as stack:
         handle = stack.enter_context(files._open_regular_file_no_symlinks(bcf_path))
         index = stack.enter_context(files._open_regular_file_no_symlinks(Path(str(bcf_path) + ".csi")))
-        with pysam.VariantFile(f"/proc/self/fd/{handle.fileno()}", index_filename=f"/proc/self/fd/{index.fileno()}") as bcf:
+        with native.variant(handle, index) as bcf:
             _require(bcf.is_bcf, "native statistics source is not BCF")
             ref = stack.enter_context(files._open_regular_file_no_symlinks(reference))
             contigs, sequence = files._fasta_contigs_from_handle(ref)
@@ -400,8 +400,8 @@ def validate_clone_products(root, sample):
              f"assembly/wf_clone_out/{sample}.full_construct.calls.bcf", f"assembly/wf_clone_out/{sample}.full_construct.calls.bcf.csi"]
     with ExitStack() as stack:
         handles = {name: stack.enter_context(files._open_regular_file_no_symlinks(root / name)) for name in names}
-        fd = lambda name: f"/proc/self/fd/{handles[name].fileno()}"
-        with pysam.AlignmentFile(fd(names[0]), "rb", index_filename=fd(names[1]), require_index=True) as bam:
+        fd = lambda name: handles[name]
+        with native.alignment(fd(names[0]), fd(names[1])) as bam:
             _require(bam.is_bam and bam.check_index() and tuple(bam.references) == tuple(reference_contigs)
                      and tuple(bam.lengths) == tuple(value[0] for value in reference_contigs.values()), "clone assembly BAM/reference dictionary mismatch")
             sequential, index_counts, primary_assembly = Counter(), Counter(), Counter()
@@ -425,7 +425,7 @@ def validate_clone_products(root, sample):
                 for item in bam.get_index_statistics()), "clone assembly BAM/index record mismatch")
         with files._open_regular_file_no_symlinks(root / "align/reference.fasta") as handle:
             reference_contigs, reference_sequence = files._fasta_contigs_from_handle(handle)
-        with pysam.VariantFile(fd(names[2]), index_filename=fd(names[3])) as bcf:
+        with native.variant(fd(names[2]), fd(names[3])) as bcf:
             _require(bcf.is_bcf, "clone full-reference calls are not BCF")
             records = Counter()
             for record in bcf:
@@ -482,7 +482,7 @@ def validate_clone_adapter(root, persisted, job, alignment_result):
     primary = Counter()
     counts = Counter()
     with files._open_regular_file_no_symlinks(root / "align/aligned.bam") as handle:
-        with pysam.AlignmentFile(handle, "rb") as bam:
+        with native.alignment(handle) as bam:
             for read in bam.fetch(until_eof=True):
                 if not read.is_secondary and not read.is_supplementary:
                     primary[(read.query_name, (read.get_forward_sequence() or "").upper())] += 1

@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 
 import pysam
+from services import verified_native_reads as native
 
 from services.ont_ngs_native_settings import seal_native_settings
 from services import ngs_alignment_sessions as files
@@ -29,7 +30,7 @@ def validate_realigned_external_bam(root, persisted, job):
     _require(path.is_absolute(), "external realignment source must be absolute")
     with files._open_regular_file_no_symlinks(path) as handle:
         source_id = (_digest(handle), os.fstat(handle.fileno()).st_size)
-        with pysam.AlignmentFile(handle, "rb", check_sq=False) as bam:
+        with native.alignment(handle, check_sq=False) as bam:
             _require(bam.is_bam, "external realignment requires BAM")
             count = sum(1 for _ in bam.fetch(until_eof=True))
         _require((_digest(handle), os.fstat(handle.fileno()).st_size) == source_id,
@@ -93,7 +94,7 @@ def validate_external_bam(root, persisted, job):
         _require(not declared or declared == source_id[0], 'external source SHA authority mismatch')
         expected = Counter()
         input_count = 0
-        with pysam.AlignmentFile(source, 'rb', check_sq=False) as bam:
+        with native.alignment(source, check_sq=False) as bam:
             source_sq = bam.header.to_dict().get('SQ', [])
             sort_order = bam.header.to_dict().get('HD', {}).get('SO', 'unknown')
             for read in bam.fetch(until_eof=True):
@@ -112,18 +113,16 @@ def validate_external_bam(root, persisted, job):
             _require(bool(contigs) and bool(sequence)
                      and hashlib.sha256(sequence).hexdigest() == params['reference_sequence_sha256'],
                      'external reference sequence authority mismatch')
-            with pysam.FastaFile(f'/proc/self/fd/{ref.fileno()}',
-                    filepath_index=f"/proc/self/fd/{handles['align/reference.fasta.fai'].fileno()}") as fasta:
+            with native.fasta(ref, handles['align/reference.fasta.fai']) as fasta:
                 _require(tuple(fasta.references) == tuple(contigs) and all(
                     fasta.get_reference_length(name) == length
                     and hashlib.md5(fasta.fetch(name).upper().encode('ascii'), usedforsecurity=False).hexdigest() == md5
                     for name, (length, md5) in contigs.items()), 'external reference index mismatch')
-        fdpath = lambda name: f'/proc/self/fd/{handles[name].fileno()}'
+        fdpath = lambda name: handles[name]
         observed, sequential, index_counts = Counter(), Counter(), Counter()
         mapped_contigs = set()
         no_coordinate = mapped = count = 0
-        with pysam.AlignmentFile(fdpath('align/aligned.bam'), 'rb',
-                index_filename=fdpath('align/aligned.bam.bai'), require_index=True) as bam:
+        with native.alignment(fdpath('align/aligned.bam'), fdpath('align/aligned.bam.bai')) as bam:
             _require(bam.is_bam and bam.check_index() and bam.header.to_dict().get('SQ', []) == source_sq,
                      'external prepared BAM dictionary differs from source')
             for read in bam.fetch(until_eof=True):

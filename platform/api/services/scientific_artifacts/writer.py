@@ -310,7 +310,7 @@ def verified_artifact_snapshot(
     artifact: InstalledArtifact | Mapping[str, Any],
     *,
     root: Path | str | None = None,
-    file_like: bool = False,
+    file_like: bool = True,
 ):
     """Yield a verified lease for callback readers, or the safe native fallback."""
     relative_path, expected_sha, expected_size = _artifact_receipt_identity(artifact)
@@ -354,7 +354,9 @@ def verified_artifact_snapshot(
             with storage.open_verified_artifact_snapshot(
                     base / relative, expected_size=expected_size,
                     expected_sha256=expected_sha) as snapshot:
-                yield snapshot if file_like else Path(storage._descriptor_path(snapshot.fileno()))
+                if not file_like:
+                    raise ScientificArtifactError("verified artifacts require the callback reader interface")
+                yield snapshot
         except storage.AlignmentSessionError as exc:
             raise ScientificArtifactError(str(exc)) from exc
     except OSError as exc:

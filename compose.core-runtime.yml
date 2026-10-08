@@ -47,6 +47,10 @@ services:
       # Optional profile exports; unresolved keys stay unset, not empty strings.
       BMS_LOCAL_CPU_THREADS:
       BMS_LOCAL_MEMORY_BYTES:
+      BMS_NATIVE_READ_ORIGIN: ${BMS_NATIVE_READ_ORIGIN:-}
+      BMS_NATIVE_READ_TRUST_LOOPBACK: ${BMS_NATIVE_READ_TRUST_LOOPBACK:-0}
+      BMS_NATIVE_READ_THREADS: ${BMS_NATIVE_READ_THREADS:-}
+      BMS_NATIVE_READ_DRAM_BYTES: ${BMS_NATIVE_READ_DRAM_BYTES:-}
       BMS_STATE_DIR: ${BMS_STATE_DIR:-/mnt/BioModStack}
       BMS_NVIDIA_SMI_PATH: ${BMS_NVIDIA_SMI_PATH:-/usr/bin/nvidia-smi}
       BMS_GPU_CONFIG_PATH: /app/platform/api/config/gpu_power_limits.json

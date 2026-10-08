@@ -1607,219 +1607,14 @@ def test_locus_slice_rejects_source_identity_mismatch(tmp_path: Path) -> None:
         )
 
 
-def test_samtools_command_uses_pinned_no_network_ont_runtime(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from services import ngs_alignment_sessions as service
-
-    container_dir = tmp_path / "apptainer"
-    container_dir.mkdir()
-    image = container_dir / "dorado-v1.3.1-samtools-v1.24.sif"
-    image.write_bytes(b"pinned-runtime")
-    monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(image))
-    monkeypatch.setattr(
-        service.shutil,
-        "which",
-        lambda command: "/usr/bin/apptainer" if command == "apptainer" else None,
-    )
-    monkeypatch.setattr(
-        service,
-        "_ngs_runtime_identity",
-        lambda: (hashlib.sha256(image.read_bytes()).hexdigest(), "1.24"),
-    )
-    observed = {}
-
-    def fake_run(command, **kwargs):
-        observed["command"] = command
-        observed["kwargs"] = kwargs
-        return SimpleNamespace(stdout="samtools 1.24\nUsing htslib 1.24\n")
-
-    monkeypatch.setattr(service.subprocess, "run", fake_run)
-    service._clear_samtools_runtime_cache()
-    try:
-        command = service._samtools_command()
-        assert tuple(command) == (
-            "/usr/bin/apptainer",
-            "exec",
-            "--no-home",
-            "--pid",
-            "--net",
-            "--network",
-            "none",
-            f"/proc/self/fd/{command.pass_fds[0]}",
-            "samtools",
-        )
-        assert command.runtime_path is not None
-        assert command.runtime_path.parent.parent == container_dir
-        assert os.stat(command.runtime_path, follow_symlinks=False).st_ino == os.fstat(command.pass_fds[0]).st_ino
-        assert os.fstat(command.pass_fds[0]).st_mode & 0o222 == 0
-        assert "--bind" not in command.argv
-        assert observed["command"] == [*command, "--version"]
-        assert observed["kwargs"]["pass_fds"] == command.pass_fds
-    finally:
-        service._clear_samtools_runtime_cache()
 
 
-@pytest.mark.parametrize("unsafe", ["digest", "version", "runtime_symlink", "parent_symlink"])
-def test_samtools_runtime_rejects_unpinned_or_unsafe_authority(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    unsafe: str,
-) -> None:
-    from services import ngs_alignment_sessions as service
-
-    real = tmp_path / "real"
-    real.mkdir()
-    image = real / "dorado.sif"
-    image.write_bytes(b"approved")
-    runtime_path = image
-    expected_digest = hashlib.sha256(image.read_bytes()).hexdigest()
-    expected_version = "1.24"
-    if unsafe == "digest":
-        expected_digest = "0" * 64
-    elif unsafe == "version":
-        expected_version = "1.23"
-    elif unsafe == "runtime_symlink":
-        runtime_path = tmp_path / "runtime-link.sif"
-        runtime_path.symlink_to(image)
-    elif unsafe == "parent_symlink":
-        linked_parent = tmp_path / "linked-parent"
-        linked_parent.symlink_to(real, target_is_directory=True)
-        runtime_path = linked_parent / image.name
-    monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(runtime_path))
-    monkeypatch.setattr(service.shutil, "which", lambda _command: "/usr/bin/apptainer")
-    monkeypatch.setattr(service, "_ngs_runtime_identity", lambda: (expected_digest, expected_version))
-    monkeypatch.setattr(
-        service.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="samtools 1.24\nUsing htslib 1.24\n"),
-    )
-    service._clear_samtools_runtime_cache()
-    try:
-        with pytest.raises(service.AlignmentSessionError):
-            service._samtools_command()
-    finally:
-        service._clear_samtools_runtime_cache()
 
 
-def test_samtools_read_inspection_uses_inherited_snapshot_descriptors_without_results_bind(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from services import ngs_alignment_sessions as service
-
-    image = tmp_path / "dorado.sif"
-    image.write_bytes(b"approved")
-    monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(image))
-    monkeypatch.setattr(service.shutil, "which", lambda _command: "/usr/bin/apptainer")
-    monkeypatch.setattr(
-        service,
-        "_ngs_runtime_identity",
-        lambda: (hashlib.sha256(image.read_bytes()).hexdigest(), "1.24"),
-    )
-    monkeypatch.setattr(
-        service.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="samtools 1.24\nUsing htslib 1.24\n"),
-    )
-    bam = tmp_path / "aligned.bam"
-    bai = tmp_path / "aligned.bam.bai"
-    bam.write_bytes(b"bam")
-    bai.write_bytes(b"bai")
-    observed = {}
-
-    class FakeProcess:
-        stdout = io.StringIO("")
-        stderr = io.StringIO("")
-        def wait(self, timeout=None):
-            return 0
-        def poll(self):
-            return 0
-
-    def fake_popen(command, **kwargs):
-        observed["command"] = command
-        observed["pass_fds"] = kwargs["pass_fds"]
-        return FakeProcess()
-
-    monkeypatch.setattr(service.subprocess, "Popen", fake_popen)
-    service._clear_samtools_runtime_cache()
-    try:
-        list(service._iter_sam_lines(bam, index=bai))
-        assert "--bind" not in observed["command"]
-        assert "-X" in observed["command"]
-        descriptor_inputs = [item for item in observed["command"] if item.startswith("/proc/self/fd/")]
-        assert len(descriptor_inputs) == 3
-        assert set(int(item.rsplit("/", 1)[1]) for item in descriptor_inputs).issubset(set(observed["pass_fds"]))
-    finally:
-        service._clear_samtools_runtime_cache()
 
 
-def test_samtools_runtime_private_snapshot_survives_source_mutation_after_cache(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from services import ngs_alignment_sessions as service
-
-    image = tmp_path / "dorado.sif"
-    image.write_bytes(b"approved")
-    monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(image))
-    monkeypatch.setattr(service.shutil, "which", lambda _command: "/usr/bin/apptainer")
-    monkeypatch.setattr(
-        service,
-        "_ngs_runtime_identity",
-        lambda: (hashlib.sha256(b"approved").hexdigest(), "1.24"),
-    )
-    monkeypatch.setattr(
-        service.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="samtools 1.24\nUsing htslib 1.24\n"),
-    )
-    service._clear_samtools_runtime_cache()
-    try:
-        command = service._samtools_command()
-        runtime_fd = command.pass_fds[0]
-        assert os.pread(runtime_fd, command.runtime_size or 0, 0) == b"approved"
-        assert os.fstat(runtime_fd).st_mode & 0o222 == 0
-        with image.open("r+b") as handle:
-            handle.seek(0)
-            handle.write(b"tampered")
-            handle.truncate()
-        command.verify_runtime()
-        assert os.pread(runtime_fd, command.runtime_size or 0, 0) == b"approved"
-    finally:
-        service._clear_samtools_runtime_cache()
 
 
-def test_samtools_runtime_rejects_wrong_observed_version(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from services import ngs_alignment_sessions as service
-
-    image = tmp_path / "dorado.sif"
-    image.write_bytes(b"approved")
-    results = tmp_path / "results"
-    results.mkdir()
-    monkeypatch.setenv("BMS_NGS_RUNTIME_SIF", str(image))
-    monkeypatch.setenv("BMS_RESULTS_DIR", str(results))
-    monkeypatch.setattr(service.shutil, "which", lambda _command: "/usr/bin/apptainer")
-    monkeypatch.setattr(
-        service,
-        "_ngs_runtime_identity",
-        lambda: (hashlib.sha256(image.read_bytes()).hexdigest(), "1.24"),
-    )
-    monkeypatch.setattr(
-        service.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="samtools 1.23.1\nUsing htslib 1.23.1\n"),
-    )
-    service._clear_samtools_runtime_cache()
-    try:
-        with pytest.raises(service.AlignmentSessionError, match="version mismatch"):
-            service._samtools_command()
-    finally:
-        service._clear_samtools_runtime_cache()
 
 
 @pytest.mark.parametrize("revoked", [False, True])
@@ -3950,7 +3745,7 @@ def test_verified_snapshot_is_stable_after_source_mutation(tmp_path: Path) -> No
         snapshot.close()
 
 
-def test_verified_snapshot_descriptor_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verified_snapshot_refuses_native_descriptor_bypass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from services import ngs_alignment_sessions as service
 
     payload = b"immutable"
@@ -3963,8 +3758,8 @@ def test_verified_snapshot_descriptor_is_read_only(tmp_path: Path, monkeypatch: 
         expected_sha256=hashlib.sha256(payload).hexdigest(),
     )
 
-    with pytest.raises(OSError):
-        os.write(snapshot.fileno(), b"X")
+    with pytest.raises(service.AlignmentSessionError, match="managed native delivery"):
+        snapshot.fileno()
     snapshot.seek(0)
     assert snapshot.read() == payload
     snapshot.close()
@@ -4430,16 +4225,10 @@ def test_equal_length_wrong_reference_fails_exact_identity_validation(
     reference.write_text(">ref\nCCCCCCCC\n", encoding="utf-8")
     bam_reference_md5 = hashlib.md5(b"AAAAAAAA", usedforsecurity=False).hexdigest()
 
-    def fake_run(command, **_kwargs):
-        stdout = f"@SQ\tSN:ref\tLN:8\tM5:{bam_reference_md5}\n" if "-H" in command else ""
-        return SimpleNamespace(stdout=stdout, stderr="", returncode=0)
-
-    monkeypatch.setattr(service.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        service,
-        "_samtools_command",
-        lambda: service._PinnedSamtoolsCommand(("samtools",), (), None, None),
-    )
+    from contextlib import nullcontext
+    monkeypatch.setattr(service.native, "alignment", lambda *args, **kwargs: nullcontext(
+        SimpleNamespace(is_bam=True, check_index=lambda: True, get_index_statistics=lambda: [],
+                        header=f"@SQ\tSN:ref\tLN:8\tM5:{bam_reference_md5}\n")))
     valid, reason = service._validate_alignment_bundle(bam, index, reference, None)
 
     assert valid is False
@@ -4459,16 +4248,10 @@ def test_missing_m5_accepts_only_matching_server_manifest_reference_binding(
     index.write_bytes(b"bai")
     reference.write_text(">nondefault_contig\nACGTACGT\n", encoding="utf-8")
 
-    def fake_run(command, **_kwargs):
-        stdout = "@SQ\tSN:nondefault_contig\tLN:8\n" if "-H" in command else ""
-        return SimpleNamespace(stdout=stdout, stderr="", returncode=0)
-
-    monkeypatch.setattr(service.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        service,
-        "_samtools_command",
-        lambda: service._PinnedSamtoolsCommand(("samtools",), (), None, None),
-    )
+    from contextlib import nullcontext
+    monkeypatch.setattr(service.native, "alignment", lambda *args, **kwargs: nullcontext(
+        SimpleNamespace(is_bam=True, check_index=lambda: True, get_index_statistics=lambda: [],
+                        header="@SQ\tSN:nondefault_contig\tLN:8\n")))
     expected = hashlib.sha256(b"ACGTACGT").hexdigest()
 
     assert service._validate_alignment_bundle(bam, index, reference, expected) == (True, None)

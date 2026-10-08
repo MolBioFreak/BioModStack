@@ -141,6 +141,8 @@ async def lifespan(app: FastAPI):
     await init_experiment_db()
     await init_molbio_db()
     await init_molbio_ngs_db()
+    from services.verified_native_reads import delivery
+    await delivery.start()
     _ngs_alignment_presentation_worker = NgsAlignmentPresentationWorker(async_session)
     await _ngs_alignment_presentation_worker.start()
     logger.info("[STARTUP] NGS alignment-presentation worker started")
@@ -290,6 +292,7 @@ async def lifespan(app: FastAPI):
     if _ngs_alignment_presentation_worker:
         await _ngs_alignment_presentation_worker.stop()
         logger.info("[SHUTDOWN] NGS alignment-presentation worker stopped")
+    await delivery.stop()
 
 
 app = FastAPI(
@@ -450,3 +453,7 @@ async def api_version():
 async def root():
     """Root redirect to API docs."""
     return {"message": "BioModStack API", "docs": "/docs"}
+
+# Intercept private capabilities before ordinary routing/logging middleware.
+from services.verified_native_reads import NativeReadMiddleware
+app.add_middleware(NativeReadMiddleware)

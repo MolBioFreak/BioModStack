@@ -1,0 +1,42 @@
+--- a/pysam/libcalignmentfile.pyx
++++ b/pysam/libcalignmentfile.pyx
+@@ -707,0 +708,6 @@
++    save_remote_index : bool
++        Save remote indices locally (default True, upstream compatibility).
++        False requires an explicit index for indexed reads and uses HTSlib
++        no-save loading, including multiple-iterator reopen. Without an
++        explicit index, no index discovery (including local lookup) occurs.
++
+@@ -809,1 +815,2 @@
+-              threads=1):
++              threads=1,
++              save_remote_index=True):
+@@ -853,0 +861,4 @@
++        self.save_remote_index = save_remote_index
++        self.index_load_flags = HTS_IDX_SILENT_FAIL
++        if save_remote_index:
++            self.index_load_flags |= HTS_IDX_SAVE_REMOTE
+@@ -1010,1 +1021,1 @@
+-                if cfilename or cindexname:
++                if (cfilename or cindexname) and (self.save_remote_index or cindexname):
+@@ -1013,1 +1024,1 @@
+-                                                     HTS_IDX_SAVE_REMOTE|HTS_IDX_SILENT_FAIL)
++                                                     self.index_load_flags)
+@@ -2017,1 +2028,2 @@
+-                    self.index = sam_index_load2(self.htsfile, cfilename, cindexname)
++                    self.index = sam_index_load3(self.htsfile, cfilename, cindexname,
++                                                 samfile.index_load_flags)
+--- a/pysam/libcalignmentfile.pxd
++++ b/pysam/libcalignmentfile.pxd
+@@ -45,0 +46,2 @@
++    cdef readonly bint save_remote_index
++    cdef int index_load_flags
+--- a/pysam/libcfaidx.pyx
++++ b/pysam/libcfaidx.pyx
+@@ -584,0 +585,3 @@
++        if self.fastqfile == NULL:
++            raise IOError("could not open FASTX transport")
++        with nogil:
+@@ -643,0 +647,2 @@
++        if self.fastqfile.errcode:
++            raise IOError("FASTX transport read failed")

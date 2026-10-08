@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 
 import pysam
+from services import verified_native_reads as native
 import rfc8785
 
 from services import ngs_alignment_sessions as storage
@@ -150,8 +151,7 @@ def sources(job, root):
             contig, (length, _md5) = next(iter(contigs.items()))
             if hashlib.sha256(sequence).hexdigest() != reference_sha:
                 raise storage.AlignmentSessionError("native reference digest mismatch")
-            with pysam.FastaFile(storage._descriptor_path(fasta_handle.fileno()),
-                    filepath_index=storage._descriptor_path(fai_handle.fileno())) as fasta:
+            with native.fasta(fasta_handle, fai_handle) as fasta:
                 if tuple(fasta.references) != (contig,) or fasta.get_reference_length(contig) != length:
                     raise storage.AlignmentSessionError("native reference index integrity mismatch")
             fasta_handle.remember_semantic_value(semantic_key, (contig, length), fai_handle)
@@ -175,7 +175,7 @@ def sources(job, root):
 
 
 async def prepare_intents(job, session):
-    from starlette.concurrency import run_in_threadpool
+    from services.verified_native_reads import run_in_threadpool
     def resolve():
         with result_root(job) as root:
             return [source for source, _inputs in sources(job, root)]

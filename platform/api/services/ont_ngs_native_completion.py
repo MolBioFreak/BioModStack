@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import pysam
+from services import verified_native_reads as guarded
 import rfc8785
 
 from services.ont_ngs_native_settings import seal_native_settings
@@ -38,11 +39,14 @@ def _require(condition: bool, message: str) -> None:
 
 
 def _digest(handle: BinaryIO) -> str:
+    before = ngs_alignment_sessions._snapshot_file_identity(handle)
     handle.seek(0)
     digest = hashlib.sha256()
     for chunk in iter(lambda: handle.read(1024 * 1024), b""):
         digest.update(chunk)
     handle.seek(0)
+    _require(ngs_alignment_sessions._snapshot_file_identity(handle) == before, "native file changed while hashing")
+    handle._bms_verified_identity = (digest.hexdigest(), before)
     return digest.hexdigest()
 
 
@@ -377,7 +381,7 @@ def _validate_basecall(root: Path, persisted: Path, job: Any) -> dict[str, Any]:
         tags = {"mv": 0, "ts": 0, "ns": 0}
         duplex_counts = {"simplex": 0, "duplex_parent": 0, "duplex": 0}
         modification_probabilities = 0
-        with pysam.AlignmentFile(handle, "rb", check_sq=False) as bam:
+        with guarded.alignment(handle, check_sq=False) as bam:
             _require(bam.is_bam, "native calls must be BAM, not SAM or CRAM")
             for read in bam.fetch(until_eof=True):
                 _require(bool(read.query_name) and bool(read.query_sequence) and read.is_unmapped,
@@ -463,7 +467,7 @@ def _validate_native_reference(handles: dict, params: dict, reference_identity: 
     selected = Path(params["reference_fasta"])
     _require(selected.is_absolute() and _identity(selected) == reference_identity,
              "native published reference differs from selected input")
-    with pysam.FastaFile(f"/proc/self/fd/{handles['align/reference.fasta'].fileno()}", filepath_index=f"/proc/self/fd/{handles['align/reference.fasta.fai'].fileno()}") as fasta:
+    with guarded.fasta(handles['align/reference.fasta'], handles['align/reference.fasta.fai']) as fasta:
         _require(tuple(fasta.references) == tuple(contigs)
                  and tuple(fasta.lengths) == tuple(length for length, _ in contigs.values())
                  and fasta.fetch(next(iter(contigs))).upper().encode("ascii") == sequence,
@@ -530,13 +534,13 @@ def _validate_reference_alignment(root: Path, persisted: Path, job: Any,
                  and receipt["bam_min_mapq"] == str(min_mapq)
                  and receipt["input_records"] == str(basecall["read_count"]),
                  "native alignment receipt disagrees with source/reference/settings")
-        fdpath = lambda relative: f"/proc/self/fd/{handles[relative].fileno()}"
+        fdpath = lambda relative: handles[relative]
         external = source_path is not None
         with ngs_alignment_sessions._open_regular_file_no_symlinks(source_path if external else root / "basecall/calls.bam") as source:
             _require(_digest(source) == basecall["calls_bam_sha256"], "basecall source changed before alignment validation")
             source_modifications: Counter = Counter()
             modification = params.get("modified_bases", "none")
-            with pysam.AlignmentFile(source, "rb", check_sq=False) as calls:
+            with guarded.alignment(source, check_sq=False) as calls:
                 source_reads: Counter = Counter()
                 source_identities: Counter = Counter()
                 source_records = 0
@@ -559,7 +563,7 @@ def _validate_reference_alignment(root: Path, persisted: Path, job: Any,
         sequential: Counter = Counter()
         index_counts: Counter = Counter()
         mapped = count = no_coordinate = 0
-        with pysam.AlignmentFile(fdpath("align/aligned.bam"), "rb", index_filename=fdpath("align/aligned.bam.bai"), require_index=True) as bam:
+        with guarded.alignment(fdpath("align/aligned.bam"), fdpath("align/aligned.bam.bai")) as bam:
             _require(bam.is_bam and bam.check_index(), "native aligned BAM/index is invalid")
             sq = bam.header.to_dict().get("SQ", [])
             _require(len(sq) == len(contigs) and all(
@@ -693,7 +697,7 @@ def _validate_demux(root: Path, persisted: Path, job: Any,
     aliases = {alias: barcode for barcode, alias in barcode_aliases.items()}
     with ngs_alignment_sessions._open_regular_file_no_symlinks(root / "basecall/calls.bam") as handle:
         _require(_digest(handle) == basecall["calls_bam_sha256"], "native demux source changed")
-        with pysam.AlignmentFile(handle, "rb", check_sq=False) as bam:
+        with guarded.alignment(handle, check_sq=False) as bam:
             expected = Counter((_demux_label(read, job.params["barcode_kit"], aliases), _demux_record(read))
                                for read in bam.fetch(until_eof=True))
         _require(_digest(handle) == basecall["calls_bam_sha256"], "native demux source changed")
@@ -723,7 +727,7 @@ def _validate_demux(root: Path, persisted: Path, job: Any,
         artifact("demux/" + bam_path, unit["bam_sha256"])
         with ngs_alignment_sessions._open_regular_file_no_symlinks(root / "demux" / bam_path) as handle:
             _require(_digest(handle) == unit["bam_sha256"], "native demux BAM changed")
-            with pysam.AlignmentFile(handle, "rb", check_sq=False) as bam:
+            with guarded.alignment(handle, check_sq=False) as bam:
                 _require(bam.is_bam, "native demux unit is not BAM")
                 records = Counter((label, _demux_record(read)) for read in bam.fetch(until_eof=True))
             _require(sum(records.values()) == unit["read_count"], "native demux unit read count mismatch")

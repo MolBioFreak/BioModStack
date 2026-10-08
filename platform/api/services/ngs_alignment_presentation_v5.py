@@ -16,6 +16,7 @@ from typing import Any, Callable
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pysam
+from services import verified_native_reads as native
 import rfc8785
 
 
@@ -452,7 +453,7 @@ def _verify_locators(
     abort_check: Callable[[], None] | None = None,
 ) -> None:
     checkpoint = abort_check or (lambda: None)
-    with pysam.AlignmentFile(source_path, "rb") as source:
+    with native.alignment_path(source_path) as source:
         for row in rows:
             checkpoint()
             source.seek(int(row["bgzf_virtual_offset"]))
@@ -531,10 +532,9 @@ def verify_package_against_source(
                 int(authority["source_alignment_size_bytes"]),
                 str(authority["source_alignment_sha256"]),
             )
-            canonical_path = Path(service._descriptor_path(handle.fileno()))
             expected_by_offset: dict[int, dict[str, Any]] = {}
             records_by_read: dict[str, list[tuple[dict[str, Any], pysam.AlignedSegment]]] = {}
-            with pysam.AlignmentFile(canonical_path, "rb") as source:
+            with native.alignment(handle) as source:
                 references = list(zip(source.references, source.lengths, strict=True))
                 bin_width = int(manifest["coverage_bin_width"])
                 coverage_boundary = {
@@ -695,7 +695,7 @@ def verify_package_against_source(
                     or entry["record_class"] == "supplementary" and not (entry["flags"] & 0x4)
                 )
             ]
-            with pysam.AlignmentFile(preview_path, "rb") as preview:
+            with native.alignment_path(preview_path) as preview:
                 observed_preview = [
                     alignment_record_fingerprint(record) for record in preview.fetch(until_eof=True)
                 ]
@@ -901,7 +901,7 @@ def build_alignment_presentation_v5(
             references: list[tuple[str, int]]
             coverage_boundary: dict[str, list[int]]
             coverage_difference: dict[str, list[int]]
-            with pysam.AlignmentFile(service._descriptor_path(source_handle.fileno()), "rb") as source:
+            with native.alignment(source_handle) as source:
                 header = source.header.to_dict()
                 references = list(zip(source.references, source.lengths, strict=True))
                 bin_width = max(
@@ -1096,7 +1096,7 @@ def build_alignment_presentation_v5(
                 try:
                     selected_record_count = service._write_bam_for_ids_bounded(
                         preview_path,
-                        Path(service._descriptor_path(source_handle.fileno())),
+                        source_handle,
                         retained_ids,
                         byte_limit=max_output_bytes,
                         deadline=deadline,
