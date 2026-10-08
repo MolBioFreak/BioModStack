@@ -103,7 +103,8 @@ class Utils {
             .collect()
             .map { files -> 
                 files.findAll { file -> 
-                    file.toString().endsWith('.pdb') 
+                    def name = file.toString()
+                    name.endsWith('.pdb') || name.endsWith('.cif.gz') || name.endsWith('.cif')
                 }.size() 
             }
             .ifEmpty(0)

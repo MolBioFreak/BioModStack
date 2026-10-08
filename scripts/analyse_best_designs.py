@@ -33,10 +33,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def derive_ids_from_filename(filename):
-    """Extract fold_id and seq_id from filename format: fold_X_seq_Y_*.pdb"""
+    """Extract fold_id and seq_id from filename.
+    
+    Supports formats:
+    - fold_X_seq_Y_*.pdb (legacy RFD)
+    - rfd3_*_model_X_sampleY.pdb (RFD3/RF3)
+    """
     basename = Path(filename).stem
+    
+    # Try legacy pattern first: fold_X, seq_Y
     fold_match = re.search(r'fold_(\d+)', basename)
     seq_match = re.search(r'seq_(\d+)', basename)
+    
+    # Try RFD3/RF3 pattern: model_X, sample_Y
+    if not fold_match:
+        fold_match = re.search(r'model_(\d+)', basename)
+    if not seq_match:
+        seq_match = re.search(r'sample_?(\d+)', basename)
     
     fold_id = int(fold_match.group(1)) if fold_match else None
     seq_id = int(seq_match.group(1)) if seq_match else None
