@@ -21,6 +21,7 @@ Usage:
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -126,6 +127,57 @@ def parse_thresholds(args, stage: str) -> Dict[str, tuple]:
     return thresholds
 
 
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def derive_ids(structure_path: Path, metadata: dict) -> Dict[str, Optional[Any]]:
+    """
+    Derive fold_id/seq_id/description from metadata or filename.
+    """
+    description = (
+        metadata.get('description')
+        or metadata.get('design')
+        or metadata.get('name')
+        or metadata.get('id')
+    )
+    if not description:
+        description = structure_path.stem
+        if description.endswith('.cif'):
+            description = description[:-4]
+
+    fold_id = _coerce_int(metadata.get('fold_id'))
+    seq_id = _coerce_int(metadata.get('seq_id'))
+
+    sources = [str(description), structure_path.name]
+    if fold_id is None:
+        for src in sources:
+            match = re.search(r'fold[_-]?(\d+)', src)
+            if not match:
+                match = re.search(r'model[_-]?(\d+)', src)
+            if match:
+                fold_id = int(match.group(1))
+                break
+
+    if seq_id is None:
+        for src in sources:
+            match = re.search(r'seq[_-]?(\d+)', src)
+            if not match:
+                match = re.search(r'sample[_-]?(\d+)', src)
+            if match:
+                seq_id = int(match.group(1))
+                break
+
+    return {
+        "description": description,
+        "fold_id": fold_id,
+        "seq_id": seq_id,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Unified structure filtering for BioModStack'
@@ -218,7 +270,46 @@ def main():
     jsonl_path = Path(args.output_jsonl)
     with open(jsonl_path, 'w') as f:
         for r in results:
-            f.write(json.dumps(r) + '\n')
+            structure_path = Path(r.get('file', ''))
+            metadata_path = filter_instance.find_metadata_file(structure_path) if structure_path else None
+            metadata = filter_instance.load_metadata(metadata_path) if metadata_path else {}
+            ids = derive_ids(structure_path, metadata)
+
+            if ids["fold_id"] is None:
+                logger.warning(f"Missing fold_id for {structure_path.name}")
+
+            record: Dict[str, Any] = {
+                "description": ids["description"],
+                "fold_id": ids["fold_id"],
+                "seq_id": ids["seq_id"],
+                "file": r.get("file"),
+                "passed": r.get("passed"),
+                "reason": r.get("reason"),
+            }
+
+            metrics = r.get("metrics") or {}
+            if args.stage == 'backbone':
+                record.update({
+                    "rfd_helices": metrics.get("helices"),
+                    "rfd_strands": metrics.get("strands"),
+                    "rfd_total_ss": metrics.get("total_ss"),
+                    "rfd_RoG": metrics.get("rog"),
+                })
+            elif args.stage == 'sequence':
+                record.update({
+                    "mpnn_score": metrics.get("score"),
+                    "fampnn_psce": metrics.get("psce"),
+                })
+            elif args.stage == 'prediction':
+                record.update({
+                    "plddt": metrics.get("plddt"),
+                    "ptm": metrics.get("ptm"),
+                    "pae": metrics.get("pae"),
+                    "rmsd": metrics.get("rmsd"),
+                    "rmsd_binder": metrics.get("rmsd_binder"),
+                })
+
+            f.write(json.dumps(record) + '\n')
     logger.info(f"Results written to {jsonl_path}")
     
     # Exit with error if nothing passed

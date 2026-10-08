@@ -104,10 +104,13 @@ class Design(Base):
     pdb_path = Column(String(500), nullable=False)
     json_path = Column(String(500), nullable=True)
     
-    # RFdiffusion metrics
+    # Structural metrics (predicted structures)
     num_helices = Column(Integer, nullable=True)
     num_strands = Column(Integer, nullable=True)
-    rog = Column(Float, nullable=True)  # Radius of gyration
+    rog = Column(Float, nullable=True)  # Radius of gyration (predicted)
+
+    # RFdiffusion backbone metrics
+    rfd_rog = Column(Float, nullable=True)  # Radius of gyration (backbone)
     
     # Sequence design metrics
     mpnn_score = Column(Float, nullable=True)

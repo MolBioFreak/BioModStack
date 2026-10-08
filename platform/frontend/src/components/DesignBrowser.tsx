@@ -1,27 +1,69 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchDesigns, toggleDesignFavorite, downloadDesignPdb, fetchJobs } from '../lib/api';
 import type { Design, DesignFilters, Job } from '../lib/api';
 
 export function DesignBrowser() {
+    const [searchParams, setSearchParams] = useSearchParams();
     const queryClient = useQueryClient();
 
     // Filters
-    const [filters, setFilters] = useState<DesignFilters>({
-        limit: 50,
-        offset: 0,
+    const [filters, setFilters] = useState<DesignFilters>(() => {
+        const limitParam = Number(searchParams.get('limit'));
+        const offsetParam = Number(searchParams.get('offset'));
+        return {
+            limit: Number.isFinite(limitParam) && limitParam > 0 ? limitParam : 50,
+            offset: Number.isFinite(offsetParam) && offsetParam >= 0 ? offsetParam : 0,
+        };
     });
-    const [selectedJobId, setSelectedJobId] = useState<string>('');
-    const [favoritesOnly, setFavoritesOnly] = useState(false);
+    const [rogMin, setRogMin] = useState<string>(searchParams.get('rogMin') ?? '');
+    const [rogMax, setRogMax] = useState<string>(searchParams.get('rogMax') ?? '');
+    const [rfdRogMin, setRfdRogMin] = useState<string>(searchParams.get('rfdRogMin') ?? '');
+    const [rfdRogMax, setRfdRogMax] = useState<string>(searchParams.get('rfdRogMax') ?? '');
+    const [selectedJobId, setSelectedJobId] = useState<string>(searchParams.get('job') ?? '');
+    const [favoritesOnly, setFavoritesOnly] = useState(searchParams.get('fav') === '1' || searchParams.get('fav') === 'true');
+
+    useEffect(() => {
+        setSelectedJobId(searchParams.get('job') ?? '');
+        setFavoritesOnly(searchParams.get('fav') === '1' || searchParams.get('fav') === 'true');
+        setRogMin(searchParams.get('rogMin') ?? '');
+        setRogMax(searchParams.get('rogMax') ?? '');
+        setRfdRogMin(searchParams.get('rfdRogMin') ?? '');
+        setRfdRogMax(searchParams.get('rfdRogMax') ?? '');
+        const limitParam = Number(searchParams.get('limit'));
+        const offsetParam = Number(searchParams.get('offset'));
+        setFilters(prev => ({
+            ...prev,
+            limit: Number.isFinite(limitParam) && limitParam > 0 ? limitParam : prev.limit || 50,
+            offset: Number.isFinite(offsetParam) && offsetParam >= 0 ? offsetParam : prev.offset || 0,
+        }));
+    }, [searchParams]);
+
+    useEffect(() => {
+        const params = new URLSearchParams();
+        if (selectedJobId) params.set('job', selectedJobId);
+        if (favoritesOnly) params.set('fav', '1');
+        if (rogMin.trim() !== '') params.set('rogMin', rogMin.trim());
+        if (rogMax.trim() !== '') params.set('rogMax', rogMax.trim());
+        if (rfdRogMin.trim() !== '') params.set('rfdRogMin', rfdRogMin.trim());
+        if (rfdRogMax.trim() !== '') params.set('rfdRogMax', rfdRogMax.trim());
+        if (filters.limit) params.set('limit', String(filters.limit));
+        if (filters.offset) params.set('offset', String(filters.offset));
+        setSearchParams(params, { replace: true });
+    }, [selectedJobId, favoritesOnly, rogMin, rogMax, rfdRogMin, rfdRogMax, filters.limit, filters.offset, setSearchParams]);
 
     // Fetch designs
     const { data: designsData, isLoading } = useQuery({
-        queryKey: ['designs', filters, selectedJobId, favoritesOnly],
+        queryKey: ['designs', filters, selectedJobId, favoritesOnly, rogMin, rogMax, rfdRogMin, rfdRogMax],
         queryFn: () => fetchDesigns({
             ...filters,
             job_id: selectedJobId || undefined,
             favorites_only: favoritesOnly || undefined,
+            rog_min: rogMin.trim() === '' ? undefined : Number(rogMin),
+            rog_max: rogMax.trim() === '' ? undefined : Number(rogMax),
+            rfd_rog_min: rfdRogMin.trim() === '' ? undefined : Number(rfdRogMin),
+            rfd_rog_max: rfdRogMax.trim() === '' ? undefined : Number(rfdRogMax),
         }),
         refetchInterval: 10000,
     });
@@ -102,6 +144,53 @@ export function DesignBrowser() {
                         />
                         <span className="text-sm text-slate-400">Favorites only</span>
                     </label>
+
+                    {/* RoG Filters */}
+                    <div className="flex items-center gap-2">
+                        <span className="text-sm text-slate-400">RoG:</span>
+                        <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={rogMin}
+                            onChange={(e) => setRogMin(e.target.value)}
+                            placeholder="min"
+                            className="bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm w-20 font-mono"
+                        />
+                        <span className="text-slate-500">–</span>
+                        <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={rogMax}
+                            onChange={(e) => setRogMax(e.target.value)}
+                            placeholder="max"
+                            className="bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm w-20 font-mono"
+                        />
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <span className="text-sm text-slate-400">RFD RoG:</span>
+                        <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={rfdRogMin}
+                            onChange={(e) => setRfdRogMin(e.target.value)}
+                            placeholder="min"
+                            className="bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm w-20 font-mono"
+                        />
+                        <span className="text-slate-500">–</span>
+                        <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={rfdRogMax}
+                            onChange={(e) => setRfdRogMax(e.target.value)}
+                            placeholder="max"
+                            className="bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm w-20 font-mono"
+                        />
+                    </div>
 
                     {/* Results count */}
                     <div className="ml-auto text-sm text-slate-400">

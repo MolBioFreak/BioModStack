@@ -45,6 +45,7 @@ class DesignResponse(BaseModel):
     num_helices: Optional[int]
     num_strands: Optional[int]
     rog: Optional[float]
+    rfd_rog: Optional[float]
     
     # Sequence metrics
     mpnn_score: Optional[float]
@@ -130,8 +131,12 @@ async def list_designs(
     plddt_min: Optional[float] = Query(None, description="Minimum pLDDT score"),
     pae_max: Optional[float] = Query(None, description="Maximum pAE score"),
     iptm_min: Optional[float] = Query(None, description="Minimum iPTM score"),
+    rog_min: Optional[float] = Query(None, description="Minimum radius of gyration"),
+    rog_max: Optional[float] = Query(None, description="Maximum radius of gyration"),
+    rfd_rog_min: Optional[float] = Query(None, description="Minimum RFdiffusion radius of gyration"),
+    rfd_rog_max: Optional[float] = Query(None, description="Maximum RFdiffusion radius of gyration"),
     favorites_only: bool = Query(False, description="Show only favorites"),
-    sort_by: Optional[str] = Query(None, description="Sort field: plddt, iptm, ptm, pae, backbone"),
+    sort_by: Optional[str] = Query(None, description="Sort field: plddt, iptm, ptm, pae, rog, rfd_rog, backbone"),
     sort_desc: bool = Query(True, description="Sort descending"),
     limit: int = Query(100, le=10000),
     offset: int = Query(0),
@@ -157,6 +162,8 @@ async def list_designs(
         'ptm': Design.ptm,
         'pae': Design.pae_overall,
         'backbone': Design.backbone_id,
+        'rog': Design.rog,
+        'rfd_rog': Design.rfd_rog,
     }
     
     order_col = sort_field_map.get(sort_by, Design.created_at)
@@ -187,6 +194,14 @@ async def list_designs(
         conditions.append(Design.pae_overall <= pae_max)
     if iptm_min is not None:
         conditions.append(Design.iptm >= iptm_min)
+    if rog_min is not None:
+        conditions.append(Design.rog >= rog_min)
+    if rog_max is not None:
+        conditions.append(Design.rog <= rog_max)
+    if rfd_rog_min is not None:
+        conditions.append(Design.rfd_rog >= rfd_rog_min)
+    if rfd_rog_max is not None:
+        conditions.append(Design.rfd_rog <= rfd_rog_max)
     if favorites_only:
         conditions.append(Design.is_favorite == True)
     
@@ -920,4 +935,3 @@ async def get_chain_pair_iptm(
         iptm_matrix=iptm_matrix,
         size=n
     )
-

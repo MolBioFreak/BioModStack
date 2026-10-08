@@ -51,7 +51,7 @@ async def ingest_job_results(
     
     Args:
         job_id: The job ID to associate designs with
-        output_dir: Path to the job's output directory (e.g., pdj_results/job_xxx)
+        output_dir: Path to the job's output directory (e.g., legacy pdj_results/job_xxx)
         session: Async database session
         epitope_residues: Optional list of epitope residues (e.g., ["A111", "A112"])
             for calculating contact metrics
@@ -108,10 +108,12 @@ async def ingest_job_results(
                         # Backbone grouping
                         backbone_id=parse_backbone_id(design_name),
                         
-                        # Structural metrics from RFdiffusion
+                        # Structural metrics (predicted structures)
                         num_helices=safe_int(row.get('pr_helices')),
                         num_strands=safe_int(row.get('pr_strands')),
                         rog=safe_float(row.get('pr_RoG')),
+                        # RFdiffusion backbone metrics
+                        rfd_rog=safe_float(row.get('rfd_RoG')),
                         
                         # Sequence design metrics
                         mpnn_score=safe_float(row.get('seq_mpnn_score')),

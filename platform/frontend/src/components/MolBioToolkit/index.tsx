@@ -255,7 +255,7 @@ export function MolBioToolkit() {
     const [gibsonName, setGibsonName] = useState('');
 
     const [goldenEnzymes, setGoldenEnzymes] = useState('BsaI:GGTCTC');
-    const [goldenName, setGoldenName] = useState('');
+    const [goldenName, _setGoldenName] = useState('');
 
     const [msaJobId, setMsaJobId] = useState<string | null>(null);
     const [msaStatus, setMsaStatus] = useState<string>('');

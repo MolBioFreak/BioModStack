@@ -30,7 +30,7 @@ First, clone the BioModStack repository:
 
 ```bash
 git clone https://github.com/MolBioFreak/Protein-De-Novo-Modification-and-Design-Platform
-cd proteindj
+cd Protein-De-Novo-Modification-and-Design-Platform
 ```
 
 ---
@@ -152,7 +152,7 @@ ls -la models/boltz/  # Should contain .ckpt files and mols directory
 
 ## Step 4: Build Containers
 
-BioModStack requires several containers for the different dependencies. By default, these will be fetched during execution of Nextflow and cached. You can also direct proteinDJ to container files located in `container_dir`. We have provide def files for containers in `proteindj/apptainer`. You may already have similar containers for some of these programs, but we have made changes to the source code and environment so we do not recommend using other containers with BioModStack. If the containers have already been built, you only need to update the `container_dir` variable in `nextflow.config` to the build directory.
+BioModStack requires several containers for the different dependencies. By default, these will be fetched during execution of Nextflow and cached. You can also direct BioModStack to container files located in `container_dir`. We have provided def files for containers in `apptainer/`. You may already have similar containers for some of these programs, but we have made changes to the source code and environment so we do not recommend using other containers with BioModStack. If the containers have already been built, you only need to update the `container_dir` variable in `nextflow.config` to the build directory.
 
 We have provided a script for building the containers in a series of sbatch jobs (`apptainer/build_containers.sh`). You may need to tweak the SLURM parameters and enviroment settings for your cluster.
 
@@ -246,7 +246,7 @@ Before running production workloads, verify your installation works correctly.
 ### Test 1: Monomer Design (5-10 minutes)
 
 ```bash
-# From the proteindj root directory
+# From the repository root directory
 nextflow run main.nf -profile test,monomer_denovo
 ```
 

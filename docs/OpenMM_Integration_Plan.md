@@ -52,7 +52,7 @@ uv pip install --system openmm openmm-ml mace-torch torchani pdbfixer mdtraj ana
 
 ---
 
-#### [NEW] [openmm.def](file:///home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/apptainer/openmm.def)
+#### [NEW] [openmm.def](../apptainer/openmm.def)
 
 Separate container with script binding support:
 
@@ -91,7 +91,7 @@ withLabel: 'OpenMM' {
 
 ---
 
-#### [NEW] [relax_openmm.py](file:///home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/scripts/relax_openmm.py)
+#### [NEW] [relax_openmm.py](../scripts/relax_openmm.py)
 
 **Core relaxation script with CDR-aware and mutagenesis support:**
 
@@ -144,7 +144,7 @@ withLabel: 'OpenMM' {
 
 ---
 
-#### [NEW] [score_mmgbsa.py](file:///home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/scripts/score_mmgbsa.py)
+#### [NEW] [score_mmgbsa.py](../scripts/score_mmgbsa.py)
 
 **MM-GBSA scoring with mode support:**
 
@@ -184,7 +184,7 @@ withLabel: 'OpenMM' {
 
 ---
 
-#### [NEW] [select_top_n.py](file:///home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/scripts/select_top_n.py)
+#### [NEW] [select_top_n.py](../scripts/select_top_n.py)
 
 Helper script to select top-N designs for MM-GBSA scoring based on upstream metrics (e.g., iPTM, confidence).
 
@@ -203,7 +203,7 @@ Helper script to select top-N designs for MM-GBSA scoring based on upstream metr
 
 ---
 
-#### [MODIFY] [database.py](file:///home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/database.py)
+#### [MODIFY] [database.py](../platform/api/database.py)
 
 Add columns to `Design` class (after line 193):
 
@@ -247,7 +247,7 @@ openmm_wt_reference = Column(String(500), nullable=True) # WT PDB path
 
 ---
 
-#### [NEW] [add_openmm_fields.py](file:///home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/platform/api/migrations/add_openmm_fields.py)
+#### [NEW] [add_openmm_fields.py](../platform/api/migrations/add_openmm_fields.py)
 
 ```python
 """Add OpenMM/MM-GBSA fields to designs table."""
@@ -312,7 +312,7 @@ if __name__ == "__main__":
 
 ---
 
-#### [NEW] [openmm.nf](file:///home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/modules/openmm.nf)
+#### [NEW] [openmm.nf](../modules/openmm.nf)
 
 ```nextflow
 /*
@@ -492,7 +492,7 @@ workflow OPENMM_REFINEMENT {
 
 ---
 
-#### [MODIFY] [nextflow.config](file:///home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/nextflow.config)
+#### [MODIFY] [nextflow.config](../nextflow.config)
 
 Add comprehensive OpenMM parameters:
 
@@ -545,7 +545,7 @@ openmm_resolve_clashes = true
 
 ---
 
-#### [MODIFY] [antibody_denovo.nf](file:///home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/workflows/antibody_denovo.nf)
+#### [MODIFY] [antibody_denovo.nf](../workflows/antibody_denovo.nf)
 
 Add OpenMM with **antibody-specific defaults**:
 
@@ -580,7 +580,7 @@ if (params.openmm_enabled) {
 
 ---
 
-#### [MODIFY] [mutagenesis.nf](file:///home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/modules/mutagenesis.nf) *(if exists)*
+#### [MODIFY] [mutagenesis.nf](../modules/mutagenesis.nf) *(if exists)*
 
 Add **ΔΔG calculation** for mutagenesis validation:
 
@@ -600,7 +600,7 @@ if (params.openmm_enabled && params.openmm_validation_mode in ['mutagenesis', 'b
 
 ---
 
-#### [MODIFY] [boltzgen.nf](file:///home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/modules/boltzgen.nf)
+#### [MODIFY] [boltzgen.nf](../modules/boltzgen.nf)
 
 Add OpenMM with **scaffold defaults**:
 
@@ -683,7 +683,7 @@ Add new columns and chart support:
 
 #### 1. Container Build
 ```bash
-cd /home/dalab/ProteinDJ_fork/Protein-De-Novo-Modification-and-Design-Platform/apptainer
+cd apptainer
 sudo apptainer build openmm.sif openmm.def
 
 # Verify imports

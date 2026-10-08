@@ -1,6 +1,6 @@
-# ProteinDJ Control Platform API
+# BioModStack Control Platform API
 
-FastAPI backend for the ProteinDJ web interface.
+FastAPI backend for the BioModStack web interface.
 
 ## Setup (using uv)
 

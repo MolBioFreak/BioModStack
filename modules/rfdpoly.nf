@@ -4,6 +4,9 @@
  * 
  * Based on: https://github.com/RosettaCommons/RFDpoly
  * Container paths: /RFDpoly (repo), /models (weights)
+ * 
+ * Phase 5 Enhancement: Full parameter support for target binding,
+ * noise schedule, custom sequences, and scaffold redesign
  */
 
 /*
@@ -22,6 +25,8 @@ process RFDPolyDesign {
     val polymer_chains    // e.g., "dna,rna,protein"
     val use_input_pdb     // Boolean: whether to use input_pdb
     path input_pdb        // Optional motif scaffold
+    val use_target_pdb    // Boolean: whether to use target_pdb
+    path target_pdb       // Optional target for binding design
     
     output:
     path "*.pdb", emit: pdbs
@@ -31,17 +36,37 @@ process RFDPolyDesign {
     // Format polymer chains as RFDpoly expects: ['dna','protein']
     def chains_formatted = polymer_chains.split(',').collect { chain -> "'${chain.trim()}'" }.join(',')
     
-    // Select checkpoint based on param (Critical fix #6: checkpoint selection)
+    // Select checkpoint based on param
     def ckpt_file = params.rfdpoly_checkpoint == 'rna_optimized' 
         ? 'train_session2024-06-27_1719522052_BFF_7.00.pt'
         : 'train_session2024-07-08_1720455712_BFF_3.00.pt'
     
-    // Handle optional input PDB (Critical fix #4)
+    // Handle optional input PDB (scaffold)
     def input_arg = use_input_pdb && input_pdb.name != 'NO_FILE'
         ? "inference.input_pdb=${input_pdb}"
-        : "inference.input_pdb=/RFDpoly/rf_diffusion/test_data/DBP035.pdb"
+        : ""
     
-    // Advanced params (High fix: temperature, seed)
+    // Handle target PDB for binding design
+    def target_arg = use_target_pdb && target_pdb.name != 'NO_FILE'
+        ? "ppi.target_pdb=${target_pdb}"
+        : ""
+    
+    // Hotspot residues for binding guidance
+    def hotspot_arg = params.hotspot_residues && use_target_pdb
+        ? "ppi.hotspot_residues=${params.hotspot_residues}"
+        : ""
+    
+    // Binding guidance (guided diffusion toward target)
+    def guidance_arg = params.binding_guidance && use_target_pdb
+        ? "diffuser.guidance_scale=2.0"
+        : ""
+    
+    // Noise schedule (linear or cosine)
+    def noise_arg = params.rfdpoly_noise_schedule
+        ? "diffuser.noise_schedule=${params.rfdpoly_noise_schedule}"
+        : ""
+    
+    // Advanced params: temperature, seed
     def temp_arg = params.rfdpoly_temperature ? "diffuser.partial_T=${params.rfdpoly_temperature}" : ""
     def seed_arg = params.rfdpoly_seed ? "inference.seed=${params.rfdpoly_seed}" : ""
     
@@ -55,6 +80,10 @@ process RFDPolyDesign {
         contigmap.contigs="['\${contigs}']" \\
         contigmap.polymer_chains="[${chains_formatted}]" \\
         ${input_arg} \\
+        ${target_arg} \\
+        ${hotspot_arg} \\
+        ${guidance_arg} \\
+        ${noise_arg} \\
         ${temp_arg} \\
         ${seed_arg} \\
         inference.output_prefix=./${design_id}
@@ -69,6 +98,9 @@ metrics = {
     'contigs': '${contigs}',
     'polymer_chains': '${polymer_chains}'.split(','),
     'checkpoint': '${ckpt_file}',
+    'noise_schedule': '${params.rfdpoly_noise_schedule ?: "linear"}',
+    'binding_guidance': ${params.binding_guidance ?: false},
+    'has_target': ${use_target_pdb},
     'pdbs': pdbs
 }
 json.dump(metrics, open('rfdpoly_metrics.json', 'w'), indent=2)
@@ -83,7 +115,7 @@ print(f'Generated {len(pdbs)} designs')
  * Detects polymer type per chain from residue names
  */
 process PrepBoltzOligo {
-    label 'pyrosetta_tools'  // Use existing python container
+    label 'pyrosetta_tools'
     
     publishDir "${params.out_dir}/run/rfdpoly/boltz_prep", mode: 'copy'
     
@@ -112,19 +144,27 @@ workflow OLIGO_DESIGN {
     design_id
     contigs
     polymer_chains
-    input_pdb
+    input_pdb      // Scaffold PDB (optional)
+    target_pdb     // Target protein PDB (optional, for protein-binding aptamer mode)
     
     main:
-    // Determine if input_pdb is provided (Critical fix #4)
-    def use_input = input_pdb != null && input_pdb.name != 'NO_FILE'
+    // Determine if scaffold input_pdb is provided
+    def use_scaffold = input_pdb != null && input_pdb.name != 'NO_FILE'
+    def scaffold_file = input_pdb ?: file("${projectDir}/NO_FILE")
+    
+    // Determine if target_pdb is provided (for binding design)
+    def use_target = target_pdb != null && target_pdb.name != 'NO_FILE'
+    def target_file = target_pdb ?: file("${projectDir}/NO_FILE")
     
     // Stage 1: RFDpoly Generation
     RFDPolyDesign(
         design_id,
         contigs,
         polymer_chains,
-        use_input,
-        input_pdb ?: file("${projectDir}/NO_FILE")
+        use_scaffold,
+        scaffold_file,
+        use_target,
+        target_file
     )
     
     // Stage 2: Prepare for Boltz-2 validation

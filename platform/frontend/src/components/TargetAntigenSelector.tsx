@@ -11,7 +11,7 @@ import { fetchInputPresets, fetchDesigns } from '../lib/api';
 import type { Job } from '../lib/api';
 import { JobBrowser } from './JobBrowser';
 
-interface SelectedTarget {
+export interface SelectedTarget {
     type: 'upload' | 'run' | 'preset' | 'rcsb';
     file?: File;
     url?: string;

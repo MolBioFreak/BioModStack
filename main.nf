@@ -159,18 +159,31 @@ workflow {
         println("* Polymer chains: ${params.rfdpoly_polymer_chains}")
         println("* Num designs: ${params.rfdpoly_num_designs}")
         println("* Checkpoint: ${params.rfdpoly_checkpoint}")
+        println("* Noise schedule: ${params.rfdpoly_noise_schedule ?: 'linear'}")
+        println("* Binding guidance: ${params.binding_guidance ?: false}")
         println("* Validate with Boltz: ${params.oligo_validate_boltz}")
+        if (params.target_pdb) {
+            println("* Target PDB: ${params.target_pdb}")
+        }
 
-        // Prepare input PDB channel (optional)
-        def input_pdb = params.rfdpoly_input_pdb 
-            ? channel.fromPath(params.rfdpoly_input_pdb)
+        // Prepare scaffold PDB channel (optional)
+        def input_pdb = params.scaffold_pdb 
+            ? channel.fromPath(params.scaffold_pdb)
+            : (params.rfdpoly_input_pdb
+                ? channel.fromPath(params.rfdpoly_input_pdb)
+                : channel.of(file("${projectDir}/NO_FILE")))
+
+        // Prepare target PDB channel (optional, for protein-binding aptamer mode)
+        def target_pdb = params.target_pdb 
+            ? channel.fromPath(params.target_pdb)
             : channel.of(file("${projectDir}/NO_FILE"))
 
         OLIGO_DESIGNER(
             channel.of(params.design_id ?: 'oligo_design'),
             channel.of(params.rfdpoly_contigs),
             channel.of(params.rfdpoly_polymer_chains),
-            input_pdb
+            input_pdb,
+            target_pdb
         )
 
         return null
