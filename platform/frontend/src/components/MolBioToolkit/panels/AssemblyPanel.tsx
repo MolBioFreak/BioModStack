@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+const GoldenGateWorkflowWorkspace = lazy(() => import('./golden-gate/GoldenGateWorkflowWorkspace'));
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useInputOwnership } from './useInputOwnership';
 import {
@@ -23,6 +24,7 @@ import type { SequenceData, SelectionInfo } from '../types';
 import { GibsonDesignWorkspace } from './GibsonDesignWorkspace';
 
 interface AssemblyPanelProps {
+    transferredFragments?: AssemblyFragmentInput[] | null;
     sequenceData: SequenceData;
     selection: SelectionInfo | null;
     selectedSequenceId: string | null;
@@ -342,6 +344,7 @@ function SavedGibsonWorkup({ operationParams }: { operationParams?: Record<strin
 }
 
 export function AssemblyPanel({
+    transferredFragments,
     sequenceData,
     selection,
     selectedSequenceId,
@@ -349,7 +352,11 @@ export function AssemblyPanel({
     onLoadSavedWorkup,
 }: AssemblyPanelProps) {
     const [mode, setMode] = useState<AssemblyMode>('ligation');
+    const [rawGoldenGate, setRawGoldenGate] = useState(false);
+    const goldenGateOperationId = sequenceData.operation === 'golden_gate_design' && typeof sequenceData.operationParams?.operation_id === 'string' ? sequenceData.operationParams.operation_id : undefined;
+    useEffect(() => { if (goldenGateOperationId) { setMode('golden_gate'); setRawGoldenGate(true); } }, [goldenGateOperationId]);
     const [fragments, setFragments] = useState<AssemblyFragmentInput[]>([]);
+    useEffect(() => { if (transferredFragments) { setFragments(structuredClone(transferredFragments)); setMode('ligation'); setRawGoldenGate(false); } }, [transferredFragments]);
     const [gibsonWorkflow, setGibsonWorkflow] = useState<'plan' | 'design' | 'validate'>('plan');
     const [gibsonPreparations, setGibsonPreparations] = useState<Record<string, 'pcr' | 'ready_linear'>>({});
     const [saveName, setSaveName] = useState('');
@@ -527,7 +534,7 @@ export function AssemblyPanel({
         setError(null);
         setFragments((current) => current.map((fragment) => ({
             ...fragment,
-            ...defaultEnds(nextMode),
+            ...(fragment.metadata?.digest_fragment ? {} : defaultEnds(nextMode)),
         })));
     };
 
@@ -701,8 +708,8 @@ export function AssemblyPanel({
             sequence: result.product.sequence,
             circular: result.product.circular,
             sequenceType: 'dna',
-            features: [],
-            primers: [],
+            features: (savedSequence?.features ?? []).map(f => ({ ...f, strand: f.strand === -1 ? -1 as const : 1 as const })),
+            primers: (savedSequence?.primers ?? []).map(p => ({ ...p, sites: p.sites?.map(s => ({ ...s, strand: s.strand === -1 ? -1 as const : 1 as const })), strand: p.strand === -1 ? -1 as const : 1 as const })),
             translations: [],
             analysisTracks: [],
             parentId: savedSequence?.parent_id ?? null,
@@ -742,6 +749,8 @@ export function AssemblyPanel({
                 ))}
             </div>
 
+            {mode === 'golden_gate' && <div><button onClick={() => setRawGoldenGate(false)}>Manual / prepared fragments</button><button onClick={() => setRawGoldenGate(true)}>Raw design / evaluate / optimize / split</button></div>}
+            {mode === 'golden_gate' && rawGoldenGate ? <Suspense fallback={<p>Loading Golden Gate workflow…</p>}><GoldenGateWorkflowWorkspace sequenceData={sequenceData} options={goldenGateOptions} onLoadProduct={onLoadProduct} operationId={goldenGateOperationId} /></Suspense> : <>
             {mode === 'gibson' && (
                 <>
                     <div className="grid grid-cols-1 gap-2 rounded-xl border border-slate-700 bg-slate-900/50 p-1.5 sm:grid-cols-3">
@@ -1117,6 +1126,7 @@ export function AssemblyPanel({
                     </div>
                 </div>
             )}
+            </>}
         </div>
     );
 }
