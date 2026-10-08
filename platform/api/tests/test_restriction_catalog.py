@@ -859,7 +859,7 @@ def test_phase1_loader_unavailable_state_is_sticky_and_never_partially_recovers(
         authority.require()
 
 
-def test_phase1_catalog_readiness_exposes_receipt_age_bounds_and_disabled_capabilities(tmp_path: Path) -> None:
+def test_phase2_catalog_readiness_exposes_receipt_age_bounds_and_analysis_capability(tmp_path: Path) -> None:
     authority, *_ = _phase1_authority(tmp_path)
     readiness = authority.readiness()
     assert readiness["required"] is True
@@ -870,5 +870,5 @@ def test_phase1_catalog_readiness_exposes_receipt_age_bounds_and_disabled_capabi
     assert readiness["counts"]["total"] == 1092
     assert readiness["bounds"]["maximum_limit"] == 250
     assert readiness["source_year"] == 2024
-    assert readiness["analysis_enabled"] is False
+    assert readiness["analysis_enabled"] is True
     assert readiness["digest_enabled"] is False
