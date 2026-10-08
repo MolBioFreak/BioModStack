@@ -36,6 +36,9 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     # Install dependencies using UV
     uv pip install -r requirements.txt || true  # Continue even if some fail
     
+    # Add biopython for PDB preprocessing in workflow
+    uv pip install biopython
+    
     # Specific adjustments for Blackwell/Ampere
     uv pip install "hydra-core>=1.3.2" "omegaconf>=2.3.0"
 
