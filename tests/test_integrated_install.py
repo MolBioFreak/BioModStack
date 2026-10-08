@@ -193,4 +193,3 @@ def test_later_failure_preserves_partial_model_outcomes(cli, monkeypatch, fault)
     if fault == 'receipt':
         journal = json.loads(Path(report['journal_path']).read_text())
         assert [r['status'] for r in journal['models']] == ['bytes-materialized', 'blocked']
-
