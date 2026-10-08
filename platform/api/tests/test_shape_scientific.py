@@ -109,7 +109,8 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert "seed=9" in args
     assert "inference_sampler.kind=shape" in args
     assert "inference_sampler.num_timesteps=200" in args
-    assert "+inference_sampler.shape_step_size=0.1" in args
+    assert "+inference_sampler.shape_step_size=0.2" in args
+    assert "+inference_sampler.shape_max_update=0.5" in args
     assert f"+inference_sampler.shape_manifest_path={manifest_path.resolve()}" in args
     assert f"+inference_sampler.shape_points_path={points_path.resolve()}" in args
     assert f"+inference_sampler.shape_sdf_path={sdf_path.resolve()}" in args
@@ -117,7 +118,9 @@ def test_shape_rfd3_wrapper_binds_request_and_guidance_paths(tmp_path: Path) -> 
     assert runtime["status"] == "completed"
     assert runtime["output_backbone_count"] == 2
     assert runtime["num_timesteps"] == 200
-    assert runtime["guidance_step_size"] == 0.1
+    assert runtime["guidance_step_size"] == 0.2
+    assert len(runtime["shape_guidance_sha256"]) == 64
+    assert len(runtime["shape_sampler_sha256"]) == 64
     assert runtime["checkpoint_sha256"] == hashlib.sha256(b"checkpoint").hexdigest()
     generated = json.loads((output.parent / "shape_rfd3_input.json").read_text())
     assert generated == {"shape_blueprint": {"dialect": 2, "length": "100-100"}}
