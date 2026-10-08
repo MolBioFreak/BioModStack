@@ -19,6 +19,9 @@ from migrations.add_sequence_provenance import migrate as migrate_sequence_prove
 from migrations.add_conformational_mapping import migrate as migrate_conformational_mapping
 from migrations.add_viewer_snapshots import migrate as migrate_viewer_snapshots
 from migrations.add_state_landscape_analysis_projection import migrate as migrate_state_landscape_analysis_projection
+from migrations.enforce_state_landscape_analysis_pair_row_integrity import (
+    migrate as migrate_state_landscape_analysis_pair_row_integrity,
+)
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -42,6 +45,11 @@ MIGRATIONS: List[Migration] = [
     Migration(10, "add_conformational_mapping", migrate_conformational_mapping),
     Migration(11, "add_viewer_snapshots", migrate_viewer_snapshots),
     Migration(12, "add_state_landscape_analysis_projection", migrate_state_landscape_analysis_projection),
+    Migration(
+        13,
+        "enforce_state_landscape_analysis_pair_row_integrity",
+        migrate_state_landscape_analysis_pair_row_integrity,
+    ),
 ]
 
 

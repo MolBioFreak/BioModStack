@@ -209,5 +209,76 @@ def test_state_analysis_projection_migration_is_ordered_and_idempotent(tmp_path:
 
     runner = importlib.import_module("migrations.runner")
     assert [(migration.version, migration.name) for migration in runner.MIGRATIONS][-1] == (
-        12, "add_state_landscape_analysis_projection",
+        13, "enforce_state_landscape_analysis_pair_row_integrity",
     )
+
+
+def test_state_analysis_projection_pair_row_migration_rejects_orphan_and_candidate_mismatch(
+    tmp_path: Path,
+) -> None:
+    import sqlite3
+
+    database = tmp_path / "projection-pair-row-integrity.db"
+    initial_migration = importlib.import_module("migrations.add_state_landscape_analysis_projection")
+    integrity_migration = importlib.import_module(
+        "migrations.enforce_state_landscape_analysis_pair_row_integrity"
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute(
+            "CREATE TABLE conformational_mapping_requests (request_id VARCHAR(36) PRIMARY KEY NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO conformational_mapping_requests(request_id) VALUES ('request-1')"
+        )
+    initial_migration.migrate(str(database))
+    integrity_migration.migrate(str(database))
+
+    header_values = (
+        "request-1", "analysis-1", "a" * 64, "b" * 64, "c" * 64, "d" * 64,
+        "e" * 64, "formula-v1", "f" * 64, "0" * 64, "all_pairs", "target-1",
+        "all", None, None, 1, 1, 0,
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute(
+            """
+            INSERT INTO conformational_mapping_state_landscape_analysis_headers (
+                request_id, analysis_id, content_sha256, source_ensemble_sha256,
+                source_landscape_sha256, source_structure_map_sha256, comparison_sha256,
+                formula_version, formula_sha256, policy_sha256, comparison_mode,
+                comparison_target_id, comparison_scope, reference_backend_coordinates_json,
+                reference_candidate_id, pair_count, row_count, exclusion_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            header_values,
+        )
+        connection.execute(
+            """
+            INSERT INTO conformational_mapping_state_landscape_analysis_pairs (
+                request_id, analysis_id, pair_id, candidate_a_id, candidate_b_id
+            ) VALUES ('request-1', 'analysis-1', 'pair-1', 'candidate-a', 'candidate-b')
+            """
+        )
+
+        def insert_row(row_id: str, pair_id: str, candidate_a_id: str, candidate_b_id: str) -> None:
+            connection.execute(
+                """
+                INSERT INTO conformational_mapping_state_landscape_analysis_rows (
+                    id, request_id, analysis_id, pair_id, candidate_a_id, candidate_b_id,
+                    target_id, entity_instance_id, auth_asym_id, auth_seq_id, insertion_code,
+                    sequence_index, validated_wt, metrics_json, availability_json
+                ) VALUES (?, 'request-1', 'analysis-1', ?, ?, ?, 'target-1', 'entity-1', 'A',
+                          1, '', 1, 'A', '{}', '{}')
+                """,
+                (row_id, pair_id, candidate_a_id, candidate_b_id),
+            )
+
+        insert_row("row-valid", "pair-1", "candidate-a", "candidate-b")
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_row("row-orphan", "pair-not-in-pairs", "candidate-a", "candidate-b")
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_row("row-mismatch", "pair-1", "candidate-a", "candidate-other")
+        assert connection.execute(
+            "SELECT id FROM conformational_mapping_state_landscape_analysis_rows"
+        ).fetchall() == [("row-valid",)]
