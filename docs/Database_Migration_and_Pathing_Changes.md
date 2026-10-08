@@ -61,6 +61,8 @@ Workflow and UI Changes (Consolidated)
   pre/post FrustraMPNN usage where applicable.
 - MSA generation: per-variant MSA refresh for mutagenesis batches and
   environment-driven ColabFold DB/cache paths in scripts and workflows.
+- Workflow API calls now use `params.api_url` instead of hardcoded
+  `http://localhost:8000` for portable deployments.
 - ANARCII: auto-annotation after antibody jobs and updated UI copy to
   reflect automatic post-run annotation behavior.
 - Re-ingestion: recursive output scanning, include-children support,

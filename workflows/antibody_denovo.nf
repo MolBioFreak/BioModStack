@@ -120,7 +120,7 @@ process SpawnRFantibodyJobs {
         --framework_type "${framework_type}" \\
         --batch_name "${batch_name}" \\
         --params_json '${params_json}' \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         --output spawn_rfa_result.json \\
         2>&1 | tee spawn_rfa.log
     """
@@ -157,7 +157,7 @@ process SpawnFAMPNNJobs {
         --seqs_per_design ${seqs_per_design} \\
         --batch_name "${batch_name}" \\
         --params_json '${params_json}' \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         --output spawn_fampnn_result.json \\
         2>&1 | tee spawn_fampnn.log
     """
@@ -182,7 +182,7 @@ process WaitForChildren {
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
         --batch_name "${batch_name}" \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         --output child_outputs.json
     """
 }
@@ -268,7 +268,7 @@ process WaitForFAMPNNChildren {
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
         --batch_name "${batch_name}" \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         --output child_outputs.json
     """
 }
@@ -418,7 +418,7 @@ process SpawnMaturationJobs {
         --designs_per_job ${designs_per_job} \\
         --batch_name "${batch_name}" \\
         --params_json '${params_json}' \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         --output spawn_maturation_result.json \\
         2>&1 | tee spawn_maturation.log
     """
@@ -443,7 +443,7 @@ process WaitForMaturationChildren {
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
         --batch_name "${batch_name}" \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         --output child_outputs.json
     """
 }
@@ -490,7 +490,7 @@ process TriggerANARCIIAnnotation {
     python3 ${projectDir}/scripts/trigger_anarcii_annotation.py \\
         --job_id "${job_id}" \\
         --include_children "${include_children}" \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         2>&1 | tee anarcii_trigger.log
     """
 }
@@ -561,7 +561,7 @@ process SpawnChildJobs {
         --msa_path "\$MSA_PERSIST_PATH" \\
         --params_json '${child_params_json}' \\
         --seqs_per_boltz_job ${params.seqs_per_boltz_job ?: 10} \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         2>&1 | tee -a spawn.log
     
     SPAWN_EXIT=\${PIPESTATUS[0]}
@@ -610,7 +610,7 @@ process WaitAndAggregateChildResults {
         --stage "boltz2" \\
         --batch_name "${batch_name}" \\
         --output wait_result.json \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         2>&1 | tee wait.log
     
     # Parse wait result
@@ -681,7 +681,7 @@ EOF
         python3 ${projectDir}/scripts/result_ingester.py \\
             --job_id "${parent_job_id}" \\
             --results_dir "${params.out_dir}" \\
-            --api_url "http://localhost:8000" \\
+            --api_url "${params.api_url}" \\
             2>&1 | tee ingest.log || echo "Warning: Ingestion had issues (non-fatal)"
     fi
     
