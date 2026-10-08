@@ -22,7 +22,13 @@ from experiment_models import (
     ExperimentWorkflowPreparation,
     ExperimentWorkflowRun,
 )
-from experiment_services import NotFound, ValidationFailure, canonical_json, sha256_text
+from experiment_services import (
+    NotFound,
+    ValidationFailure,
+    canonical_json,
+    public_workflow_payload,
+    sha256_text,
+)
 from services.global_experiments.result_surfaces import result_surface_for_receipt
 
 
@@ -1431,7 +1437,7 @@ async def build_project_manager_read_model(
     elif selected.get("node_type") == "domain_experiment" and selected_subject_id in domain_payloads:
         selected_payload = domain_payloads[str(selected_subject_id)]
     elif selected.get("node_type") == "workflow" and selected_subject_id in workflow_payloads:
-        selected_payload = _public_receipt(workflow_payloads[str(selected_subject_id)])
+        selected_payload = public_workflow_payload(workflow_payloads[str(selected_subject_id)])
     elif selected.get("node_type") == "workflow_run" and selected_run_item is not None:
         selected_payload = selected_run_item
 

@@ -15,8 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from model_registry import get_registry
 from scripts.rfd3_local_redesign.contract import ContractError
 from services.rfd3_local_redesign import (
+    canonical_local_redesign_data_alias,
     local_redesign_requests_semantically_equal,
     prepare_local_redesign_scheduler_params,
+    validate_local_redesign_workflow_params,
 )
 
 from experiment_models import (
@@ -106,6 +108,54 @@ def canonical_json(value: Any) -> str:
 
 def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def public_workflow_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Publish native workflow intent while hiding every private runtime path."""
+    scheduler = payload.get("scheduler")
+    if not isinstance(scheduler, dict) or scheduler.get("model_id") != "protein_local_redesign":
+        return copy.deepcopy(payload)
+
+    def redact(value: Any) -> Any:
+        if isinstance(value, dict):
+            result: dict[str, Any] = {}
+            for key, child in value.items():
+                normalized = str(key).lower()
+                if normalized == "input_structure":
+                    try:
+                        result[str(key)] = canonical_local_redesign_data_alias(child)
+                    except ContractError:
+                        pass
+                    continue
+                if normalized in {
+                    "input",
+                    "input_pdb",
+                    "input_cif",
+                    "plr_input_pdb",
+                    "rfd3_request",
+                }:
+                    continue
+                if any(
+                    token in normalized
+                    for token in ("path", "directory", "output_dir", "command", "executable")
+                ):
+                    continue
+                result[str(key)] = redact(child)
+            return result
+        if isinstance(value, list):
+            return [redact(child) for child in value]
+        return value
+
+    return redact(payload)
+
+
+def public_preparation_scheduler(payload: dict[str, Any]) -> dict[str, Any]:
+    """Publish a prepared scheduler without private runtime paths or native request bodies."""
+    if payload.get("model_id") != "protein_local_redesign":
+        return copy.deepcopy(payload)
+    public = public_workflow_payload({"scheduler": payload})
+    scheduler = public.get("scheduler")
+    return scheduler if isinstance(scheduler, dict) else {}
 
 
 def now() -> str:
@@ -265,6 +315,13 @@ def _validate_workflow_payload(payload: dict[str, Any]) -> None:
                 raise ValidationFailure(
                     "native RFD3 typed workflow requires scheduler.resources.pinned_gpu as a non-negative integer"
                 )
+            try:
+                validate_local_redesign_workflow_params(
+                    scheduler["params"],
+                    expected_adapter_id=adapter_id,
+                )
+            except ContractError as exc:
+                raise ValidationFailure(str(exc)) from exc
     if family == "conformational_mapping":
         stage = payload.get("stage")
         stage_by_adapter = {
@@ -696,6 +753,7 @@ async def save_workflow_draft(
         raise RevisionConflict(
             f"workflow draft generation conflict: expected {expected_generation}, current {draft.generation}"
         )
+    _validate_workflow_payload(payload)
     draft.canonical_payload = canonical_json(payload)
     draft.generation += 1
     draft.updated_at = now()

@@ -11,7 +11,9 @@ interface UseLiveGpuCatalogOptions {
 }
 
 export function useLiveGpuCatalog(options: UseLiveGpuCatalogOptions = {}) {
-    const requireFr...[truncated]        queryKey: ['system'],
+    const requireFresh = options.requireFresh === true;
+    const systemQuery = useQuery({
+        queryKey: ['system'],
         queryFn: fetchSystemStatus,
         refetchInterval: 5000,
         refetchIntervalInBackground: false,
