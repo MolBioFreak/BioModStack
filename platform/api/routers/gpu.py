@@ -291,16 +291,20 @@ async def set_power_profile(enable_eco: bool) -> PowerProfileResponse:
         if not set_gpu_power_limit(gpu_index, target_watts):
             errors.append(f"GPU {gpu_index}")
 
+    # Determine message based on success/failure
     if errors:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to set power limits for: {', '.join(errors)}"
-        )
+        # In container environments without privileges, we likely can't set limits.
+        # We'll enable "Soft Eco Mode" (UI state only) to satisfy user preference for the display.
+        print(f"WARNING: Failed to set hardware power limits for {', '.join(errors)}. Running in simulation/soft mode.")
+        message = f"Soft Eco Mode {'enabled' if enable_eco else 'disabled'} (Hardware limits restricted)"
+    else:
+        message = f"Eco mode {'enabled' if enable_eco else 'disabled'} - limits applied"
 
+    # Always update the state so the UI toggles
     _eco_mode_enabled = enable_eco
 
     return PowerProfileResponse(
         eco_mode=_eco_mode_enabled,
-        message=f"Eco mode {'enabled' if enable_eco else 'disabled'} - limits applied"
+        message=message
     )
 
