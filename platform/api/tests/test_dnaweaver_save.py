@@ -20,7 +20,12 @@ from molbio_database import (  # noqa: E402
     make_molbio_session_factory,
 )
 from routers import nucleotide_sequences  # noqa: E402
-from routers.molbio_ops import router as molbio_router  # noqa: E402
+from routers.molbio_ops import DnaWeaverPlanRequest, router as molbio_router  # noqa: E402
+
+
+def test_dnaweaver_request_default_price_matches_generic_profile() -> None:
+    request = DnaWeaverPlanRequest(target_sequence=_target())
+    assert request.price_per_bp == 0.08
 
 
 def _target(seed: int = 23, length: int = 900) -> str:
