@@ -300,3 +300,32 @@ async def test_partial_preparation_recovery(admission, monkeypatch, interruption
         child = await session.get(Job, child_id(owner))
         assert (child is not None) == (interruption == 'first_copy')
     assert retained.read_bytes() == before and retained.stat().st_ino == inode
+
+
+@pytest.mark.asyncio
+async def test_mid_copy_interruption_never_publishes_partial_seed(admission, monkeypatch):
+    _, factory = admission
+    owner, members, pdb = await admit_seed(admission, monkeypatch)
+    await complete(factory, members, pdb)
+    from paths import get_inputs_dir
+    selection = get_inputs_dir() / 'design_selections/antibody' / child_id(owner)
+
+    def interrupted_copy(source, destination, *args, **kwargs):
+        Path(destination).write_bytes(Path(source).read_bytes()[:17])
+        raise RuntimeError('controlled interruption during native seed copy')
+
+    with monkeypatch.context() as transient:
+        transient.setattr(jobs.shutil, 'copyfile', interrupted_copy)
+        await trigger(factory, members[0])
+    assert selection.is_dir() and not list(selection.iterdir())
+    async with factory() as session:
+        assert await session.get(Job, child_id(owner)) is None
+        assert not (await session.get(Job, owner)).params.get('_mutation_seed_refinement_triggered')
+    await trigger(factory, members[-1])
+    async with factory() as session:
+        child = await session.get(Job, child_id(owner))
+        assert child is not None
+        assert all(p.read_bytes() == pdb.read_bytes() for p in selection.glob('*.pdb'))
+    before = {p.name: p.read_bytes() for p in selection.iterdir()}
+    await trigger(factory, members[0])
+    assert {p.name: p.read_bytes() for p in selection.iterdir()} == before
