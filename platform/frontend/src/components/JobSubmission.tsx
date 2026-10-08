@@ -10,6 +10,7 @@ import { MutagenesisTemplate } from './MutagenesisTemplate';
 import { AntibodyDenovoTemplate } from './AntibodyDenovoTemplate';
 import { StructurePredictionTemplate } from './StructurePredictionTemplate';
 import { BoltzGenTemplate } from './BoltzGenTemplate';
+import { BindCraftTemplate } from './BindCraftTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
@@ -327,7 +328,7 @@ export function JobSubmission() {
     });
 
     // Hardcoded templates that use dedicated components instead of API-driven config
-    const hardcodedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design'];
+    const hardcodedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft'];
 
     const { data: selectedTemplateData } = useQuery({
         queryKey: ['template', selectedTemplateId],
@@ -655,6 +656,14 @@ export function JobSubmission() {
                                     }}
                                     initialValues={clonedValues}
                                 />
+                            ) : selectedTemplateId === 'bindcraft' ? (
+                                <BindCraftTemplate
+                                    onBack={() => {
+                                        setSelectedTemplateId(null);
+                                        setClonedValues(undefined);
+                                    }}
+                                    initialValues={clonedValues}
+                                />
                             ) : (
                                 <>
                                     <p className="text-slate-300 text-base font-medium mb-4">Choose a preset workflow for your experiment goal:</p>
@@ -704,6 +713,19 @@ export function JobSubmission() {
                                                     { tool: 'BoltzGen' },
                                                     { tool: 'Filtering' },
                                                     { tool: 'Docking' }
+                                                ]
+                                            },
+                                            // BindCraft (De Novo Minibinder Design)
+                                            {
+                                                id: 'bindcraft',
+                                                name: 'BindCraft',
+                                                description: 'Design minibinders and peptides using AF2 backpropagation, ProteinMPNN, and PyRosetta. ~50% experimental success rate.',
+                                                icon: 'target',
+                                                color: '#10B981', // Emerald
+                                                stages: [
+                                                    { tool: 'AF2 Backprop' },
+                                                    { tool: 'MPNN' },
+                                                    { tool: 'Filtering' }
                                                 ]
                                             }
                                         ].map((template: any) => {
