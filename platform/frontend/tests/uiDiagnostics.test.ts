@@ -55,15 +55,26 @@ test('layout exposes one far-left diagnostics top-bar entry with copy support', 
   assert.match(layoutSource, /\/api\/system\/runtime-ports/);
   assert.match(layoutSource, /\/api\/system\/runtime\/start-target/);
   assert.match(layoutSource, /\/api\/health/);
-  assert.match(layoutSource, /data-bms-topbar-left=\"true\"/);
-  assert.match(layoutSource, /data-bms-primary-nav-rail=\"true\"/);
-  assert.match(layoutSource, /data-bms-topbar-utilities=\"true\"/);
+  assert.match(layoutSource, /data-bms-topbar-left="true"/);
+  assert.match(layoutSource, /data-bms-primary-nav-rail="true"/);
+  assert.match(layoutSource, /data-bms-topbar-utilities="true"/);
   assert.match(layoutSource, /data-bms-primary-nav-active=\{isActive\('\/assay'\) \? 'true' : undefined\}/);
   assert.match(layoutSource, /overflow-x-auto overscroll-x-contain/);
-  assert.match(layoutSource, /xl:h-16 xl:flex-row/);
+  assert.match(layoutSource, /cursor-grab active:cursor-grabbing/);
+  assert.match(layoutSource, /touchAction: 'pan-x'/);
+  assert.match(layoutSource, /onPointerDown=\{handlePointerDown\}/);
+  assert.match(layoutSource, /onClickCapture=\{handleClickCapture\}/);
+  assert.match(layoutSource, /data-bms-drag-scroll-ignore="true"/);
   assert.match(layoutSource, /scrollIntoView\(\{ block: 'nearest', inline: 'center' \}\)/);
 
   const diagnosticsIndex = layoutSource.indexOf('<DiagnosticsMenu');
   const logoIndex = layoutSource.indexOf('{/* Logo / Brand */}');
   assert.ok(diagnosticsIndex > -1 && logoIndex > -1 && diagnosticsIndex < logoIndex);
+});
+
+test('theme selector marks floating surfaces so top-bar drag scrolling does not hijack dropdown interaction', () => {
+  const themeSelectorSource = fs.readFileSync(path.join(process.cwd(), 'src', 'components', 'ThemeSelector.tsx'), 'utf8');
+
+  assert.match(themeSelectorSource, /data-bms-drag-scroll-ignore="true"/);
+  assert.match(themeSelectorSource, /className="relative shrink-0"/);
 });
