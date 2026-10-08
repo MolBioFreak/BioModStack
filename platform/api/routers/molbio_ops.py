@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 import asyncio
 import hashlib
+import os
 import uuid
 from Bio.SeqUtils import MeltingTemp as mt
 
@@ -51,6 +52,16 @@ from services.molbio_ops import (
 )
 from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
+from services.annotation_sources import (
+    AnnotationSourceAmbiguityError,
+    AnnotationSourceAuthenticationError,
+    AnnotationSourceConfigurationError,
+    AnnotationSourceError,
+    AnnotationSourceResponseError,
+    AnnotationSourceValidationError,
+    fetch_addgene_genbank,
+    fetch_ncbi_genbank,
+)
 from services.sequence_alignment import (
     AlignmentSettings,
     SequenceAlignmentError,
@@ -59,6 +70,51 @@ from services.sequence_alignment import (
 
 
 router = APIRouter(prefix="/api/molbio", tags=["molbio"])
+
+
+def _annotation_source_http_error(error: Exception) -> HTTPException:
+    if isinstance(error, AnnotationSourceValidationError):
+        return HTTPException(status_code=400, detail=str(error))
+    if isinstance(error, AnnotationSourceAmbiguityError):
+        return HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, AnnotationSourceConfigurationError):
+        return HTTPException(status_code=503, detail=str(error))
+    if isinstance(error, (AnnotationSourceAuthenticationError, AnnotationSourceResponseError)):
+        return HTTPException(status_code=502, detail=str(error))
+    return HTTPException(status_code=502, detail="Annotation source retrieval failed")
+
+
+@router.get("/annotation-sources/status")
+async def annotation_source_status() -> dict[str, dict[str, bool]]:
+    return {
+        "ncbi": {"available": True},
+        "addgene": {"available": bool(os.environ.get("ADDGENE_API_TOKEN", "").strip())},
+    }
+
+
+@router.get("/annotation-sources/ncbi/{accession}")
+async def retrieve_ncbi_annotation_source(accession: str) -> dict[str, Any]:
+    try:
+        artifact = await fetch_ncbi_genbank(
+            accession,
+            api_key=os.environ.get("NCBI_API_KEY"),
+            email=os.environ.get("NCBI_EMAIL"),
+        )
+    except AnnotationSourceError as error:
+        raise _annotation_source_http_error(error) from error
+    return artifact.to_dict()
+
+
+@router.get("/annotation-sources/addgene/{plasmid_id}")
+async def retrieve_addgene_annotation_source(plasmid_id: int) -> dict[str, Any]:
+    try:
+        artifact = await fetch_addgene_genbank(
+            plasmid_id,
+            token=os.environ.get("ADDGENE_API_TOKEN", ""),
+        )
+    except AnnotationSourceError as error:
+        raise _annotation_source_http_error(error) from error
+    return artifact.to_dict()
 
 
 class SequenceInput(BaseModel):
