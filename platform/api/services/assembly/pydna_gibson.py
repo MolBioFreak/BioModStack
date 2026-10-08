@@ -29,7 +29,7 @@ ENGINE = "pydna"
 ENGINE_VERSION = version("pydna")
 MAX_CANDIDATES = 10
 MAX_TOTAL_NT = 2_000_000
-MAX_FRAGMENTS = 20
+MAX_FRAGMENTS = 50
 
 
 def _sha256(sequence: str) -> str:
