@@ -161,34 +161,6 @@ async def _stage_bundle(
     )
     for transfer in bundle.runtime_transfers:
         await _transfer_plan(connection, transfer)
-    api_runtime_transfers = [
-        transfer
-        for transfer in bundle.runtime_transfers
-        if "/data/runtime/cm-api-python/releases/" in transfer.remote_destination
-    ]
-    if len(api_runtime_transfers) != 1:
-        raise RemoteExecutionError("Remote package has no unique managed workflow Python runtime")
-    api_release_name = PurePosixPath(api_runtime_transfers[0].remote_destination).name
-    await run_remote(
-        connection,
-        ["rm", "-f", f"{api_runtime_transfers[0].remote_destination}/venv/.venv"],
-    )
-    api_runtime_root = f"{bundle.remote_runtime_dir}/data/runtime/cm-api-python"
-    await run_remote(
-        connection,
-        ["ln", "-sfn", f"releases/{api_release_name}", f"{api_runtime_root}/current"],
-    )
-    canonical_data_root = str(get_data_root())
-    await run_remote(connection, ["mkdir", "-p", canonical_data_root])
-    for target_path, canonical_name in (
-        (f"{bundle.remote_runtime_dir}/containers", "apptainer"),
-        (f"{bundle.remote_runtime_dir}/weights", "weights"),
-        (f"{bundle.remote_runtime_dir}/data/runtime", "runtime"),
-    ):
-        await run_remote(
-            connection,
-            ["ln", "-sfn", target_path, f"{canonical_data_root}/{canonical_name}"],
-        )
     await run_remote(
         connection,
         [
@@ -198,25 +170,8 @@ async def _stage_bundle(
             f"{bundle.remote_attempt_dir}/results",
             f"{bundle.remote_attempt_dir}/work",
             f"{bundle.remote_attempt_dir}/apptainer-cache",
-        ],
-    )
-    output_alias = PurePosixPath(bundle.remote_output_alias)
-    await run_remote(connection, ["mkdir", "-p", str(output_alias.parent)])
-    link_writer = (
-        "import os,sys; p,t=sys.argv[1:]; "
-        "exists=os.path.lexists(p); "
-        "(_ for _ in ()).throw(RuntimeError('remote output path is occupied')) "
-        "if exists and not os.path.islink(p) else None; "
-        "os.unlink(p) if exists else None; os.symlink(t,p)"
-    )
-    await run_remote(
-        connection,
-        [
-            "python3",
-            "-c",
-            link_writer,
-            bundle.remote_output_alias,
-            f"{bundle.remote_attempt_dir}/results",
+            f"{bundle.remote_attempt_dir}/msa-cache",
+            f"{bundle.remote_attempt_dir}/data",
         ],
     )
     await rsync_to_remote(
@@ -759,7 +714,11 @@ async def collect_remote_results(
     if target is None:
         raise RemoteCollectionPending("Remote execution target record is missing")
     connection, attempt_dir = _connection_for_attempt(target, job)
-    incoming = get_data_root() / "remote-execution" / "incoming" / str(job.remote_attempt_id)
+    local_output = Path(str(job.child_output_dir or job.output_dir)).expanduser()
+    if any(part.is_symlink() for part in (local_output, *local_output.parents)):
+        raise RemoteExecutionError("Remote result destination traverses a symlink")
+    local_output = local_output.resolve()
+    incoming = local_output.parent / f".{local_output.name}.remote-incoming" / str(job.remote_attempt_id)
     if incoming.exists():
         shutil.rmtree(incoming)
     incoming.parent.mkdir(parents=True, exist_ok=True)

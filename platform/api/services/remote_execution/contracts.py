@@ -100,6 +100,7 @@ class RemoteFileRecord(StrictModel):
     sha256: str = Field(pattern=SHA256_PATTERN)
     role: Literal["source", "input", "runtime", "result", "log", "receipt"]
     link_target: str | None = Field(default=None, max_length=2000)
+    mode: int = Field(default=0o644, ge=0, le=0o777, strict=True)
 
     @field_validator("relative_path")
     @classmethod

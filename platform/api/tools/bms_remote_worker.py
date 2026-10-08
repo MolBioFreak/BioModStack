@@ -122,6 +122,9 @@ def verify_bundle(attempt_dir: Path) -> dict[str, Any]:
             continue
         if path.is_symlink() or not path.is_file():
             raise RuntimeError(f"bundle file is missing: {relative}")
+        mode = record.get("mode", 0o644)
+        if type(mode) is not int or not 0 <= mode <= 0o777 or path.stat().st_mode & 0o7777 != mode:
+            raise RuntimeError(f"bundle file mode mismatch: {relative}")
         expected_size = record.get("size_bytes")
         expected_sha = str(record.get("sha256") or "")
         if path.stat().st_size != expected_size or sha256_file(path) != expected_sha:
