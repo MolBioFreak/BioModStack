@@ -59,11 +59,20 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     # Create symlinks for consistent paths
     ln -sf /root/.foundry /foundry
     
+    # Set up RF3 source layout for CLI compatibility
+    # RF3 expects PROJECT_ROOT/models/rf3/configs structure
+    # We create this in site-packages where RF3 is installed
+    SITE_PACKAGES="/usr/local/lib/python3.12/dist-packages"
+    mkdir -p "${SITE_PACKAGES}/models/rf3"
+    ln -sf "${SITE_PACKAGES}/rf3/configs" "${SITE_PACKAGES}/models/rf3/configs" || true
+    
 %environment
     export PATH=/usr/local/bin:$PATH
     export FOUNDRY_CHECKPOINT_DIRS=/foundry/checkpoints
     export CUDA_DEVICE_ORDER=PCI_BUS_ID
     export PYTHONUNBUFFERED=1
+    # Set PROJECT_ROOT for RF3 CLI compatibility
+    export PROJECT_ROOT=/usr/local/lib/python3.12/dist-packages
 
 %runscript
     exec python3.12 "$@"

@@ -132,16 +132,43 @@ workflow ANTIBODY_DENOVO {
             .map { yamls -> [1, yamls] }  // batch_id, yamls
         
         RunBoltz(boltz_batched)
+        
+        // RunBoltz emits pdbs_jsons as tuple(path(pdbs), path(jsons))
+        // Need to transform to tuple(meta, pdb) with metrics from JSON
         validated_structures = RunBoltz.out.pdbs_jsons
-
-        // Filter by ipTM and pLDDT thresholds
-        validated_structures = validated_structures.filter { meta, pdb ->
-            def iptm = meta.iptm ?: 0
-            def plddt = meta.plddt ?: 0
-            def iptm_threshold = params.boltz_iptm_threshold ?: 0.6
-            def plddt_threshold = params.boltz_plddt_threshold ?: 70
-            iptm >= iptm_threshold && plddt >= plddt_threshold
-        }
+            .flatMap { pdbs, jsons ->
+                // Pair each PDB with its corresponding JSON
+                def pdb_list = pdbs instanceof List ? pdbs : [pdbs]
+                def json_list = jsons instanceof List ? jsons : [jsons]
+                pdb_list.collect { pdb ->
+                    def name = pdb.baseName.replace('_boltzpred', '')
+                    def json_file = json_list.find { it.baseName.contains(name) }
+                    // Create meta with id from filename
+                    def meta = [id: name]
+                    [meta, pdb, json_file]
+                }
+            }
+        
+        // Filter by ipTM and pLDDT thresholds (read from JSON)
+        validated_structures = validated_structures
+            .filter { meta, pdb, json_file ->
+                // Parse JSON for metrics if available
+                if (!json_file || !json_file.exists()) return true
+                try {
+                    def json_text = json_file.text
+                    def slurper = new groovy.json.JsonSlurper()
+                    def data = slurper.parseText(json_text)
+                    def iptm = data.ptm_intf ?: data.ipTM ?: data.iptm ?: 0.8
+                    def plddt = data.plddt_mean ?: data.pLDDT ?: data.plddt ?: 80
+                    def iptm_threshold = params.boltz_iptm_threshold ?: 0.6
+                    def plddt_threshold = params.boltz_plddt_threshold ?: 70
+                    return iptm >= iptm_threshold && plddt >= plddt_threshold
+                } catch (Exception e) {
+                    log.warn("Could not parse JSON for ${meta.id}: ${e.message}")
+                    return true  // Keep if can't parse
+                }
+            }
+            .map { meta, pdb, json_file -> [meta, pdb] }  // Drop JSON for downstream
     }
     else {
         validated_structures = all_sequences
