@@ -213,6 +213,7 @@ process WaitForBoltzGenChildren {
     input:
     val parent_job_id
     path spawn_result
+    val batch_name
 
     output:
     path "boltzgen_child_outputs.json", emit: result
@@ -224,6 +225,7 @@ process WaitForBoltzGenChildren {
         --parent_job_id "${parent_job_id}" \\
         --stage "boltzgen" \\
         --poll_interval 30 \\
+        --batch_name "${batch_name}" \\
         --api_url "${params.api_url}" \\
         --output boltzgen_child_outputs.json \\
         2>&1 | tee wait_boltzgen.log

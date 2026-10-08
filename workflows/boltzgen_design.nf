@@ -61,6 +61,7 @@ workflow BOLTZGEN_DESIGN {
         if (use_orchestrator) {
             // SWA Pattern: Spawn child jobs for large campaigns
             println("BoltzGen PARALLEL MODE: Spawning ${Math.ceil(params.boltzgen_num_designs / params.boltzgen_designs_per_job)} child jobs")
+            def batch_name = params.batch_name ?: params.name ?: 'boltzgen_campaign'
             
             def target_pdb = params.boltzgen_target_pdb_path 
                 ? file(params.boltzgen_target_pdb_path) 
@@ -73,12 +74,13 @@ workflow BOLTZGEN_DESIGN {
                 PrepBoltzGenInput.out.yaml,
                 target_pdb,
                 params.boltzgen_mode ?: 'nanobody_binder',
-                params.name ?: 'boltzgen_campaign',
+                batch_name,
             )
             
             WaitForBoltzGenChildren(
                 params.job_id ?: 'unknown',
                 SpawnBoltzGenJobs.out.result,
+                batch_name,
             )
             
             CollectBoltzGenOutputs(WaitForBoltzGenChildren.out.result)

@@ -21,7 +21,10 @@ from database import Job, get_session
 from services.gpu_metadata import HARDWARE_LIMITS
 from services.gpu_config import read_scheduler_config
 from services.gpu_orchestrator import collect_live_vram_by_job, build_queue_scheduler_diagnostics
-from services.job_control import force_launch_job as force_launch_job_service
+from services.job_control import (
+    cancel_job_lineage,
+    force_launch_job as force_launch_job_service,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -473,40 +476,14 @@ async def resume_job(job_id: str, session: AsyncSession = Depends(get_session)):
 
 @router.delete("/{job_id}")
 async def cancel_job(job_id: str, session: AsyncSession = Depends(get_session)):
-    """Cancel a queued/paused/running job."""
-    from services.nextflow import cancel_nextflow_job
-    
-    result = await session.execute(select(Job).where(Job.id == job_id))
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.queue_status == 'running':
-        # Actually kill the Nextflow process
-        if job.nextflow_run_id:
-            try:
-                killed = await cancel_nextflow_job(job.nextflow_run_id)
-                if killed:
-                    logger.info(f"[CANCEL] Killed Nextflow process for job {job.name}")
-            except Exception as e:
-                logger.warning(f"[CANCEL] Failed to kill process for {job.name}: {e}")
-        
-        job.queue_status = 'failed'
-        job.paused = False
-        job.status = 'cancelled'
-        job.error_message = 'Cancelled by user'
-    elif job.queue_status in ['queued', 'paused']:
-        job.queue_status = 'failed'
-        job.paused = False
-        job.status = 'cancelled'
-        job.error_message = 'Cancelled by user'
-    else:
-        raise HTTPException(status_code=400, detail=f"Cannot cancel job with status: {job.queue_status}")
-    
-    await session.commit()
-    
-    return {"success": True, "message": f"Job {job.name} cancelled", "job_id": job_id}
+    """Cancel a queued/paused/running job and any active descendant jobs it spawned."""
+    job, lineage = await cancel_job_lineage(job_id, session)
+    return {
+        "success": True,
+        "message": f"Job {job.name} cancelled",
+        "job_id": job_id,
+        "jobs_cancelled": len(lineage),
+    }
 
 
 @router.post("/{job_id}/pin")

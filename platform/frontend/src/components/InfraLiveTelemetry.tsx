@@ -252,6 +252,56 @@ const UI_SUCCESS = 'var(--success)';
 const UI_WARNING = 'var(--warning)';
 const UI_LINK = 'var(--link)';
 
+function TotalPowerBar({
+    payload,
+    currentLimits,
+    compact = false,
+}: {
+    payload: SystemStatus;
+    currentLimits: Record<number, number>;
+    compact?: boolean;
+}) {
+    const gpuDraw = payload.gpus.reduce((sum, gpu) => sum + gpu.power_draw_w, 0);
+    const cpuDraw = payload.cpu.power_watts ?? 0;
+    const totalDraw = gpuDraw + cpuDraw;
+    const cpuCap = getCpuPowerScale(payload.cpu) ?? Math.max(200, Math.ceil(Math.max(cpuDraw, 150) / 25) * 25);
+    const totalCap = payload.gpus.reduce(
+        (sum, gpu) => sum + (currentLimits[gpu.index] ?? gpu.power_limit_w),
+        cpuCap,
+    );
+    const fillPercent = Math.max(0, Math.min(100, toPercent(totalDraw, totalCap)));
+
+    return (
+        <section className={`rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/88 shadow-2xl shadow-black/10 ${compact ? 'p-3' : 'p-4'}`}>
+            <div className="mb-2 flex items-center justify-between gap-3">
+                <div>
+                    <h2 className={`font-semibold text-[var(--text-primary)] ${compact ? 'text-sm' : 'text-base'}`}>Total Power Draw</h2>
+                    <p className={`text-[var(--text-muted)] ${compact ? 'text-[11px]' : 'text-sm'}`}>
+                        GPU {gpuDraw.toFixed(0)}W{payload.cpu.power_watts != null ? ` + CPU ${cpuDraw.toFixed(0)}W` : ''} of {totalCap.toFixed(0)}W cap
+                    </p>
+                </div>
+                <div className="text-right">
+                    <div className={`font-semibold text-[var(--text-primary)] ${compact ? 'text-base' : 'text-lg'}`}>
+                        {totalDraw.toFixed(0)}W
+                    </div>
+                    <div className={`text-[var(--text-muted)] ${compact ? 'text-[11px]' : 'text-xs'}`}>
+                        {fillPercent.toFixed(0)}%
+                    </div>
+                </div>
+            </div>
+            <div className={`overflow-hidden rounded-full border border-[var(--border-primary)] bg-[var(--bg-primary)] ${compact ? 'h-2.5' : 'h-3'}`}>
+                <div
+                    className="h-full rounded-full transition-all duration-300"
+                    style={{
+                        width: `${fillPercent}%`,
+                        background: `linear-gradient(90deg, ${UI_SUCCESS} 0%, ${UI_WARNING} 72%, #ef4444 100%)`,
+                    }}
+                />
+            </div>
+        </section>
+    );
+}
+
 function SegmentedControl<T extends string | number>({
     label,
     value,
@@ -1578,6 +1628,13 @@ export function InfraLiveTelemetry({
 
             {payload && (
                 <div className={compact ? 'space-y-2' : 'space-y-6'}>
+                    {compact && (
+                        <TotalPowerBar
+                            payload={payload}
+                            currentLimits={currentLimits}
+                            compact={compact}
+                        />
+                    )}
                     <div className={`grid xl:grid-cols-2 ${compact ? 'gap-2' : 'gap-6'}`}>
                         <CpuPanel
                             current={payload.cpu}

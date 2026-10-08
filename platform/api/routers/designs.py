@@ -6,6 +6,7 @@ stored in the SQLite database after pipeline ingestion.
 """
 
 import asyncio
+import contextlib
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +20,7 @@ import math
 
 from database import get_session, Design, Job
 from paths import to_allowed_relative
-from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows
+from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows, load_review_gate_snapshot
 
 
 router = APIRouter()
@@ -33,10 +34,17 @@ _TWO_LETTER_ELEMENTS = {
 
 
 def _guess_pdb_element(atom_name: str) -> str:
-    letters = "".join(char for char in atom_name if char.isalpha()).upper()
+    raw_name = (atom_name or "")[:4].ljust(4)
+    letters = "".join(char for char in raw_name if char.isalpha()).upper()
     if not letters:
         return ""
-    if len(letters) >= 2 and letters[:2] in _TWO_LETTER_ELEMENTS:
+
+    # PDB atom names are alignment-sensitive. When the first column is blank,
+    # names like " CA " are alpha carbons, not the element calcium.
+    if raw_name[0].isspace() or raw_name[0].isdigit():
+        return letters[0]
+
+    if len(letters) >= 2 and raw_name[0].isalpha() and raw_name[1].isalpha() and letters[:2] in _TWO_LETTER_ELEMENTS:
         return letters[:2].title()
     return letters[0]
 
@@ -63,6 +71,35 @@ def _normalize_pdb_for_viewer(pdb_text: str) -> str:
         normalized_lines.append("END")
 
     return "\n".join(normalized_lines) + "\n"
+
+
+async def _hydrate_review_job(session: AsyncSession, job: Optional[Job]) -> Optional[str]:
+    if job is None:
+        return None
+
+    gate_stage, gate_payload = load_review_gate_snapshot(job.output_dir, job.awaiting_stage)
+    review_stage = str(job.awaiting_stage or gate_stage or "").strip().lower()
+    changed = False
+
+    if gate_stage and job.awaiting_stage != gate_stage:
+        job.awaiting_stage = gate_stage
+        review_stage = gate_stage
+        changed = True
+    if gate_payload and gate_payload != (job.awaiting_payload or {}):
+        job.awaiting_payload = gate_payload
+        changed = True
+    if review_stage in REVIEWABLE_STAGES and not bool(job.awaiting_input):
+        job.awaiting_input = True
+        changed = True
+
+    if review_stage in REVIEWABLE_STAGES and bool(job.awaiting_input):
+        await ensure_stage_review_rows(session, job)
+        changed = True
+
+    if changed:
+        await session.commit()
+
+    return review_stage if review_stage in REVIEWABLE_STAGES else None
 
 
 # --- Pydantic Schemas ---
@@ -531,8 +568,11 @@ async def _collect_plotly_metrics(
     session: AsyncSession,
 ) -> PlotlyMetricsResponse:
     job_result = await session.execute(select(Job).where(Job.id == job_id))
-    if not job_result.scalar_one_or_none():
+    job = job_result.scalar_one_or_none()
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if not include_children:
+        await _hydrate_review_job(session, job)
 
     job_ids = [job_id]
     if include_children:
@@ -634,14 +674,8 @@ async def list_designs(
     if job_id:
         job_result = await session.execute(select(Job).where(Job.id == job_id))
         selected_job = job_result.scalar_one_or_none()
-        if (
-            selected_job
-            and not include_children
-            and bool(selected_job.awaiting_input)
-            and str(selected_job.awaiting_stage or "").strip().lower() in REVIEWABLE_STAGES
-        ):
-            review_stage = str(selected_job.awaiting_stage or "").strip().lower()
-            await ensure_stage_review_rows(session, selected_job)
+        if selected_job and not include_children:
+            review_stage = await _hydrate_review_job(session, selected_job)
 
     # Build base query with optional sorting
     sort_field_map = {
@@ -805,14 +839,7 @@ async def get_backbone_summary(
     """
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     job = job_result.scalar_one_or_none()
-    review_stage: Optional[str] = None
-    if (
-        job
-        and bool(job.awaiting_input)
-        and str(job.awaiting_stage or "").strip().lower() in REVIEWABLE_STAGES
-    ):
-        review_stage = str(job.awaiting_stage or "").strip().lower()
-        await ensure_stage_review_rows(session, job)
+    review_stage = await _hydrate_review_job(session, job)
 
     summary_conditions = [Design.job_id == job_id]
     if review_stage:
@@ -1111,8 +1138,11 @@ async def get_designs_for_job(
     """
     # Verify job exists
     job_result = await session.execute(select(Job).where(Job.id == job_id))
-    if not job_result.scalar_one_or_none():
+    job = job_result.scalar_one_or_none()
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if not include_children:
+        await _hydrate_review_job(session, job)
     
     # Build job_id filter - include children if requested
     if include_children:
@@ -1449,13 +1479,72 @@ class AntibodyData(BaseModel):
     humanness_score: Optional[float]
     stability_data: Optional[Dict[str, Any]]
     imgt_pdb_url: Optional[str]
-    
+    detected_antibody_chains: Optional[str] = None
+    overlay_selections: List[Dict[str, Union[str, int]]] = []
+
+
+def _build_antibody_overlay_selections(
+    design: Design,
+    *,
+    imgt_url: Optional[str],
+    annotation,
+    binder_chains: Dict[str, str],
+) -> List[Dict[str, Union[str, int]]]:
+    if not annotation:
+        return []
+
+    chain_metrics = design.chain_metrics if isinstance(design.chain_metrics, dict) else {}
+    selections: List[Dict[str, Union[str, int]]] = []
+    region_specs = [
+        ("H1", "H", getattr(annotation, "cdr_h1_range", None), getattr(annotation, "cdr_h1_seq_range", None)),
+        ("H2", "H", getattr(annotation, "cdr_h2_range", None), getattr(annotation, "cdr_h2_seq_range", None)),
+        ("H3", "H", getattr(annotation, "cdr_h3_range", None), getattr(annotation, "cdr_h3_seq_range", None)),
+        ("L1", "L", getattr(annotation, "cdr_l1_range", None), getattr(annotation, "cdr_l1_seq_range", None)),
+        ("L2", "L", getattr(annotation, "cdr_l2_range", None), getattr(annotation, "cdr_l2_seq_range", None)),
+        ("L3", "L", getattr(annotation, "cdr_l3_range", None), getattr(annotation, "cdr_l3_seq_range", None)),
+    ]
+
+    for region, chain_type, imgt_range, seq_range in region_specs:
+        if imgt_url and imgt_range:
+            selections.append(
+                {
+                    "region": region,
+                    "chain_id": chain_type,
+                    "start_residue_number": int(imgt_range[0]),
+                    "end_residue_number": int(imgt_range[1]),
+                }
+            )
+            continue
+
+        chain_id = binder_chains.get(chain_type)
+        chain_info = chain_metrics.get(chain_id or "", {}) if chain_id else {}
+        residue_numbers = chain_info.get("residue_numbers") if isinstance(chain_info, dict) else None
+        if not chain_id or not seq_range or not isinstance(residue_numbers, list):
+            continue
+
+        start_idx, end_idx = int(seq_range[0]), int(seq_range[1])
+        if start_idx < 0 or end_idx < start_idx or end_idx >= len(residue_numbers):
+            continue
+
+        selections.append(
+            {
+                "region": region,
+                "chain_id": str(chain_id),
+                "start_residue_number": int(residue_numbers[start_idx]),
+                "end_residue_number": int(residue_numbers[end_idx]),
+            }
+        )
+
+    return selections
+
 @router.get("/{design_id}/antibody", response_model=AntibodyData)
 async def get_antibody_data(
     design_id: str,
     session: AsyncSession = Depends(get_session)
 ):
     """Get antibody-specific data (CDRs, humanness, stability)."""
+    from services.cdr_annotator import annotate_pdb, extract_sequence_from_pdb, identify_binder_chains
+
     result = await session.execute(select(Design).where(Design.id == design_id))
     design = result.scalar_one_or_none()
     
@@ -1466,10 +1555,9 @@ async def get_antibody_data(
         getattr(design, field)
         for field in ("cdr_h1", "cdr_h2", "cdr_h3", "cdr_l1", "cdr_l2", "cdr_l3")
     )
+    annotation = None
     if not has_annotation and design.pdb_path:
         try:
-            from services.cdr_annotator import annotate_pdb
-
             annotation = await asyncio.to_thread(annotate_pdb, design.pdb_path)
             if annotation:
                 design.antibody_type = annotation.antibody_type
@@ -1507,6 +1595,36 @@ async def get_antibody_data(
              if imgt_chk.exists():
                  imgt_url = f"/api/designs/{design.id}/pdb-imgt"
 
+    binder_chains: Dict[str, str] = {}
+    overlay_selections: List[Dict[str, Union[str, int]]] = []
+    detected_antibody_chains = design.detected_antibody_chains
+    if design.pdb_path:
+        try:
+            sequences = await asyncio.to_thread(extract_sequence_from_pdb, design.pdb_path)
+            binder_chains = await asyncio.to_thread(identify_binder_chains, sequences, design.pdb_path)
+        except Exception:
+            binder_chains = {}
+
+        if binder_chains:
+            detected_chain_value = ",".join(binder_chains[chain_type] for chain_type in ("H", "L") if binder_chains.get(chain_type))
+            if detected_chain_value:
+                detected_antibody_chains = detected_chain_value
+                if design.detected_antibody_chains != detected_chain_value:
+                    design.detected_antibody_chains = detected_chain_value
+                    with contextlib.suppress(Exception):
+                        await session.commit()
+
+        if annotation is None and (imgt_url or binder_chains):
+            with contextlib.suppress(Exception):
+                annotation = await asyncio.to_thread(annotate_pdb, design.pdb_path, binder_chains or None)
+
+        overlay_selections = _build_antibody_overlay_selections(
+            design,
+            imgt_url=imgt_url,
+            annotation=annotation,
+            binder_chains=binder_chains,
+        )
+
     return AntibodyData(
         design_id=design.id,
         cdrs={
@@ -1515,7 +1633,9 @@ async def get_antibody_data(
         },
         humanness_score=design.humanness_score,
         stability_data=design.stability_data,
-        imgt_pdb_url=imgt_url
+        imgt_pdb_url=imgt_url,
+        detected_antibody_chains=detected_antibody_chains,
+        overlay_selections=overlay_selections,
     )
 
 @router.get("/{design_id}/pdb-imgt")

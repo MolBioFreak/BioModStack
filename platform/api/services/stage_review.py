@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import csv
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from services.rfantibody_metadata import load_rfantibody_trb_summary
 REVIEWABLE_STAGES = {"post_rfantibody", "post_fampnn"}
 STRUCTURE_PATTERNS = ("*.pdb", "*.cif")
 METRIC_PATTERNS = ("*.json", "*.csv", "*.tsv")
+NEXTFLOW_JOB_ID_RE = re.compile(r"--job_id\s+([0-9a-fA-F-]{36})")
 
 
 def resolve_output_dir(output_dir: str | None) -> Optional[Path]:
@@ -105,6 +107,51 @@ def resolve_nextflow_run_dir(output_dir: Path | str | None) -> Optional[Path]:
     return nested_candidates[0][1]
 
 
+def _history_status_from_lines(lines: list[str], job_id: str | None = None) -> str:
+    normalized_job_id = str(job_id or "").strip()
+    saw_job_id_line = False
+
+    if normalized_job_id:
+        for line in reversed(lines):
+            if "--job_id" not in line:
+                continue
+            saw_job_id_line = True
+            match = NEXTFLOW_JOB_ID_RE.search(line)
+            if not match or match.group(1) != normalized_job_id:
+                continue
+            parts = line.split("\t")
+            if len(parts) <= 3:
+                return ""
+            return parts[3].strip().upper()
+
+        if saw_job_id_line:
+            return ""
+
+    if not lines:
+        return ""
+    parts = lines[-1].split("\t")
+    if len(parts) <= 3:
+        return ""
+    return parts[3].strip().upper()
+
+
+def nextflow_history_status_for_run_dir(
+    output_dir: Path | str | None,
+    job_id: str | None = None,
+) -> str:
+    output_path = resolve_nextflow_run_dir(output_dir)
+    if output_path is None:
+        return ""
+    history_path = output_path / ".nextflow" / "history"
+    if not history_path.exists():
+        return ""
+    try:
+        lines = history_path.read_text(errors="ignore").splitlines()
+    except Exception:
+        return ""
+    return _history_status_from_lines(lines, job_id=job_id)
+
+
 def _iter_matching_files(directory: Path, patterns: Iterable[str]) -> list[Path]:
     files: set[Path] = set()
     if not directory.exists():
@@ -112,6 +159,11 @@ def _iter_matching_files(directory: Path, patterns: Iterable[str]) -> list[Path]
     for pattern in patterns:
         files.update(path.resolve() for path in directory.glob(pattern))
     return sorted(files)
+
+
+def _review_design_id(job_id: str, stage: str, artifact_group: str, design_name: str) -> str:
+    seed = f"{job_id}:{stage}:{artifact_group}:{design_name}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
 
 
 def list_preview_files(directory: Path | None, patterns: Iterable[str], limit: int = 25) -> list[str]:
@@ -344,23 +396,62 @@ def gate_file_for_stage(job: Job) -> Optional[Path]:
     return output_path / "gates" / f"gate_{job.awaiting_stage}.json"
 
 
-def nextflow_history_status(job: Job) -> str:
-    output_path = resolve_nextflow_run_dir(job.output_dir)
+def load_review_gate_snapshot(
+    output_dir: str | None,
+    stage: str | None = None,
+) -> tuple[Optional[str], dict]:
+    output_path = resolve_output_dir(output_dir)
     if output_path is None:
-        return ""
-    history_path = output_path / ".nextflow" / "history"
-    if not history_path.exists():
-        return ""
-    try:
-        lines = history_path.read_text(errors="ignore").splitlines()
-    except Exception:
-        return ""
-    if not lines:
-        return ""
-    parts = lines[-1].split("\t")
-    if len(parts) <= 3:
-        return ""
-    return parts[3].strip().upper()
+        return None, {}
+
+    gate_dir = output_path / "gates"
+    if not gate_dir.exists():
+        return None, {}
+
+    candidate_paths: list[Path] = []
+    normalized_stage = str(stage or "").strip().lower()
+    if normalized_stage:
+        candidate_paths.append(gate_dir / f"gate_{normalized_stage}.json")
+    candidate_paths.extend(sorted(gate_dir.glob("gate_*.json")))
+
+    seen: set[Path] = set()
+    for candidate in candidate_paths:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            resolved = candidate
+        if resolved in seen or not candidate.exists():
+            continue
+        seen.add(resolved)
+
+        gate_data = _read_json(candidate)
+        if not gate_data:
+            continue
+
+        payload = gate_data.get("awaiting_payload")
+        if not isinstance(payload, dict):
+            payload = gate_data if isinstance(gate_data, dict) else {}
+        payload = dict(payload or {})
+
+        gate_stage = str(
+            gate_data.get("awaiting_stage")
+            or payload.get("stage")
+            or stage
+            or candidate.stem.replace("gate_", "", 1)
+        ).strip().lower()
+        if not gate_stage:
+            continue
+        if gate_stage not in REVIEWABLE_STAGES:
+            continue
+
+        payload["stage"] = gate_stage
+        return gate_stage, refresh_gate_payload(payload, output_dir)
+
+    return None, {}
+
+
+def nextflow_history_status(job: Job) -> str:
+    return nextflow_history_status_for_run_dir(job.output_dir, str(job.id))
 
 
 def has_stage_gate(job: Job) -> bool:
@@ -593,7 +684,7 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
 
         rows.append(
             Design(
-                id=str(uuid.uuid4()),
+                id=_review_design_id(job.id, stage, artifact_group, design_name),
                 job_id=job.id,
                 name=design_name,
                 pdb_path=str(structure_path),
@@ -667,4 +758,5 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
 
     session.add_all(rows)
     await session.flush()
+    await session.commit()
     return len(rows)
