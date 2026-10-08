@@ -104,6 +104,8 @@ function manualChunks(id: string): string | undefined {
   return undefined
 }
 
+const devApiTarget = process.env.BMS_DEV_API_PROXY_TARGET || 'http://127.0.0.1:8002'
+
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   // Use /bms/ for production (Tailscale Serve proxy), but / for dev mode
@@ -184,7 +186,7 @@ export default defineConfig(({ mode }) => ({
       // MJPEG stream: dedicated entry to prevent http-proxy from buffering
       // the multipart/x-mixed-replace response (must precede generic /api)
       '/api/bioxp/camera/mjpeg': {
-        target: 'http://localhost:8000',
+        target: devApiTarget,
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on('proxyRes', (proxyRes: IncomingMessage) => {
@@ -195,7 +197,7 @@ export default defineConfig(({ mode }) => ({
       },
       // Proxy /api requests to backend server
       '/api': {
-        target: 'http://localhost:8000',
+        target: devApiTarget,
         changeOrigin: true,
       }
     }

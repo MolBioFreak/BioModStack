@@ -64,7 +64,8 @@ if [ -e "$RAPL_ENERGY_PATH" ] && [ ! -r "$RAPL_ENERGY_PATH" ] && cpu_power_stric
 fi
 
 cd "$PROJECT_DIR/platform/api"
-cmd=(uv run uvicorn main:app --port 8000 --host 127.0.0.1 --no-access-log)
+bms_api_port="${BMS_API_BIND_PORT:-${BMS_DEV_API_HOST_PORT:-8002}}"
+cmd=(uv run uvicorn main:app --port "$bms_api_port" --host 127.0.0.1 --no-access-log)
 case "$(api_mode)" in
     dev)
         if api_reload_enabled; then
