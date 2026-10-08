@@ -230,6 +230,33 @@ async def test_reconciliation_self_heals_active_md_parent_scheduler_projection(t
 
 
 @pytest.mark.asyncio
+async def test_reconciliation_does_not_claim_validating_coordinator_before_scheduler(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'md-validating.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with maker() as session:
+        parent = Job(
+            id="md-validating-coordinator", name="MD", status="queued", queue_status="queued",
+            model_id="md", mode="molecular_dynamics", params={},
+        )
+        session.add(parent); await session.flush()
+        run = await create_md_run(session, job=parent, normalized_request=_request())
+        assert run.phase == "validating"
+        await session.commit()
+
+    async with maker() as session:
+        await reconcile_md_state(session, owner_id="validating-owner", apply=True)
+        await session.commit()
+        parent = await session.get(Job, "md-validating-coordinator")
+        assert parent is not None
+        assert (parent.status, parent.queue_status) == ("queued", "queued")
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_terminalizes_failed_coordinator_without_replicas(tmp_path) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'md-coordinator.db'}")
     async with engine.begin() as conn:

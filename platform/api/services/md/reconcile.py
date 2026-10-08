@@ -111,7 +111,7 @@ def _phase(run: MdRun, states: list[str]) -> str:
 
 
 _ACTIVE_PARENT_PHASES = frozenset({
-    "validating", "preparing", "replicas_queued", "replicas_running",
+    "replicas_queued", "replicas_running",
     "reconciling", "finalizing",
 })
 
