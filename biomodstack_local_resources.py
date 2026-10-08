@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from dataclasses import dataclass
 from functools import lru_cache
 from collections.abc import Mapping
+from typing import cast
 
 GIB = 1024**3
 
@@ -124,7 +125,37 @@ def detect_local_capacity() -> LocalCapacity:
     return LocalCapacity(threads, total)
 
 
+def validate_local_budget(profile: Mapping[str, object]) -> None:
+    """Validate stored values without consulting the reader's cgroup.
+
+    Missing fields are allowed for legacy profiles, not committed generations.
+    Capacity admission belongs to configured_local_policy, not integrity reads.
+    """
+    if "local_cpu_threads" in profile:
+        threads = profile["local_cpu_threads"]
+        if type(threads) is not int or threads < 1:
+            raise ValueError("Local CPU budget must be a positive integer")
+    if "local_memory_gib" in profile:
+        gib = profile["local_memory_gib"]
+        try:
+            valid = (not isinstance(gib, bool) and isinstance(gib, (int, float))
+                     and math.isfinite(gib) and gib > 0 and math.isfinite(gib * GIB)
+                     and int(gib * GIB) >= 1)
+        except OverflowError:
+            valid = False
+        if not valid:
+            raise ValueError("Local RAM budget must be finite, positive and at least one byte")
+
+
+def committed_local_policy(profile: Mapping[str, object]) -> LocalCapacity:
+    """Reproduce a frozen generation for integrity/export checks, not admission."""
+    validate_local_budget(profile)
+    return LocalCapacity(cast(int, profile["local_cpu_threads"]),
+                         int(cast(float, profile["local_memory_gib"]) * GIB))
+
+
 def configured_local_policy(profile: Mapping[str, object] | None = None) -> LocalCapacity:
+    """Resolve defaults and admit a new configuration against live capacity."""
     if profile is None:
         from biomodstack_runtime_profile import load_install_profile
         profile = load_install_profile()
@@ -146,9 +177,22 @@ def applied_local_policy() -> LocalCapacity:
     """Process snapshot: call at runtime startup, not after each profile save."""
     from biomodstack_runtime_profile import load_install_profile
     profile = load_install_profile()
+    validate_local_budget(profile)
+    committed = dict(profile)
     if os.getenv("BMS_LOCAL_CPU_THREADS") is not None:
         profile["local_cpu_threads"] = int(os.environ["BMS_LOCAL_CPU_THREADS"])
     if os.getenv("BMS_LOCAL_MEMORY_BYTES") is not None:
         memory = int(os.environ["BMS_LOCAL_MEMORY_BYTES"])
         profile["local_memory_gib"] = memory / GIB
-    return configured_local_policy(profile)
+    validate_local_budget(profile)
+    capacity = detect_local_capacity()
+    # Environment exports can narrow a saved budget, never enlarge it. When no
+    # profile is mounted (Compose), exports supply the configured budget.
+    defaults = LocalCapacity(math.ceil(capacity.cpu_threads * 0.8), int(capacity.memory_bytes * 0.75))
+    threads = min(capacity.cpu_threads,
+                  cast(int, committed.get("local_cpu_threads", capacity.cpu_threads)),
+                  cast(int, profile.get("local_cpu_threads", defaults.cpu_threads)))
+    memory = min(capacity.memory_bytes,
+                 int(cast(float, committed.get("local_memory_gib", capacity.memory_bytes / GIB)) * GIB),
+                 int(cast(float, profile.get("local_memory_gib", defaults.memory_bytes / GIB)) * GIB))
+    return LocalCapacity(threads, memory)

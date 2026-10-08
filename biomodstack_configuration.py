@@ -157,12 +157,12 @@ def _verify(journal: dict, *, activated: bool) -> None:
     if set(journal["files"]) != set(_destinations()):
         raise ConfigurationBlocked("journal_invalid: incomplete generation")
     profile = json.loads(journal["files"]["profile"])
-    profiles.validate_install_profile_raw(profile)
+    profiles.validate_install_profile_raw(profile, admit_local_capacity=False)
     resolved = profiles.resolve_runtime_paths(Path(journal["context"]["source"]), profile=profile, environ={})
     profiles.validate_runtime_port_contract(resolved)
-    from biomodstack_local_resources import configured_local_policy
+    from biomodstack_local_resources import committed_local_policy
     from biomodstack_install_document import _path, MUTABLE_PATH_FIELDS
-    policy = configured_local_policy(profile)
+    policy = committed_local_policy(profile)
     resolved.update(local_cpu_threads=policy.cpu_threads, local_memory_bytes=policy.memory_bytes)
     for key, renderer in (("core_runtime_env", profiles._core_runtime_env_lines),
                           ("compat_env", profiles._compat_env_lines)):

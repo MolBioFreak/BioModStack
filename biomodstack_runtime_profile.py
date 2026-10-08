@@ -302,12 +302,15 @@ def _sqlite_path_from_url(db_url: str) -> Path | None:
     return None
 
 
-def validate_install_profile_raw(raw: object) -> None:
+def validate_install_profile_raw(raw: object, *, admit_local_capacity: bool = True) -> None:
     """Opt-in strict diagnostic boundary; legacy normalization stays permissive.
 
     Reuse this module's field/feature authority before any coercion or path
     resolution. Legacy string booleans and decimal string ports are supported;
     lossy numeric coercion, unknown nested features and empty fields are not.
+    Integrity readers use admit_local_capacity=False: a committed installation
+    budget is not a request to allocate that budget in the reader's leaf cgroup.
+    New configuration retains live admission by default.
     """
     if not isinstance(raw, Mapping):
         raise ValueError("Install profile must be an object")
@@ -345,8 +348,10 @@ def validate_install_profile_raw(raw: object) -> None:
                 raise ValueError("cors_origins must be a nonempty string or list of nonempty strings")
     # Includes finite/range checks; OverflowError from enormous integers is a
     # configuration error at this opt-in boundary, not a change to legacy APIs.
-    from biomodstack_local_resources import configured_local_policy
-    configured_local_policy(raw)
+    from biomodstack_local_resources import configured_local_policy, validate_local_budget
+    validate_local_budget(raw)
+    if admit_local_capacity:
+        configured_local_policy(raw)
 
 
 def _validate_raw_bool(value: object, field: str) -> None:
