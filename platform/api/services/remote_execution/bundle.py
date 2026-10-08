@@ -179,6 +179,11 @@ def current_source_identity(source_root: Path | None = None) -> tuple[str, str]:
 
 def resolve_job_result_contract(job: Any) -> dict[str, Any]:
     """Resolve the exact local ingestion contract bound into a remote attempt."""
+    if (job.model_id in {'antibody_denovo', 'template_antibody_denovo'}
+            and job.mode in {'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}):
+        # These fields describe the selected INPUT stage, not the root result.
+        # Bind the aggregate job contract; Design rows keep their own profiles.
+        return resolve_result_contract(model_type=job.model_id, stage_mode=job.mode).model_dump(mode='json')
     return resolve_result_contract(
         model_type=job.model_id,
         stage_family=job.stage_family,

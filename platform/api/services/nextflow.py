@@ -4098,10 +4098,17 @@ def compile_workflow_provision_request(request):
     original = deepcopy(typed.params)
     registry = get_registry()
     model = registry.get_model(typed.model_id)
+    native_entrypoint = None
+    if (typed.model_id == 'template_antibody_denovo'
+            and typed.mode in {ANTIBODY_DENOVO_PIPELINE, ANTIBODY_REFINEMENT_PIPELINE}):
+        native_entrypoint = MODEL_MODE_WORKFLOW_ENTRYPOINTS.get((typed.model_id, typed.mode))
+        if native_entrypoint != MODEL_MODE_WORKFLOW_ENTRYPOINTS.get(('antibody_denovo', typed.mode)):
+            raise ValueError('Native model/mode does not match canonical compiler routing')
+        model = registry.get_model('antibody_denovo')
     if model is None or typed.mode not in {mode.id for mode in model.modes}:
         raise ValueError('Workflow provision requires a supported typed model and mode')
     typed.params = apply_msa_policy(typed.model_id, typed.params)
-    typed = normalize_job_request(typed, registry=registry)
+    typed = normalize_job_request(typed, registry=registry, native_entrypoint=native_entrypoint)
     revision = scientific_contract.admission_revision(typed.model_id, typed.mode)
     if revision is None and typed.fampnn_analysis_overrides is not None:
         raise ValueError('FA-MPNN analysis overrides require a supported core-protein caller')

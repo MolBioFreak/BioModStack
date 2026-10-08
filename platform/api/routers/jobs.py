@@ -4123,7 +4123,13 @@ def _materialize_antibody_selection(
             )
 
         dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
-        link_mode = _link_selection_input(source_path, dest_path)
+        if root_job.execution_target_id:
+            # Remote preview binds one retained snapshot. Reference-only local
+            # links are not immutable portable inputs and cannot be approved.
+            shutil.copyfile(source_path, dest_path)
+            link_mode = "copy"
+        else:
+            link_mode = _link_selection_input(source_path, dest_path)
 
         manifest_items.append(_build_selection_manifest_item(
             design,

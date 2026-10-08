@@ -83,6 +83,9 @@ def _integrity_provenance(job: Job, payload: dict[str, Any]) -> dict[str, Any]:
 def job_expects_design_results(job: Job) -> bool:
     """Return whether a successful workflow is expected to publish Design rows."""
     params = job.params if isinstance(job.params, dict) else {}
+    if (job.model_id in {'antibody_denovo', 'template_antibody_denovo'}
+            and job.mode in {'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}):
+        return True
     explicit = params.get("result_integrity_requires_designs")
     if isinstance(explicit, bool):
         return explicit
@@ -474,6 +477,14 @@ async def finalize_successful_job(
     strict_revision = None
     try:
         strict_revision = revision_for_job(job)
+        # Interactive gates returned above. A terminal full antibody root must
+        # carry its own native aggregate, never merely an arbitrary child PDB.
+        from services.result_contracts import antibody_pipeline_closeout
+        from paths import resolve_runtime_data_path, get_data_root
+        native_root = Path(output_dir)
+        native_root = (resolve_runtime_data_path(native_root) if native_root.is_absolute()
+                       else get_data_root() / output_dir)
+        antibody_closeout = antibody_pipeline_closeout(job, native_root, required=True)
         if (not job.execution_target_id
                 and job_id not in session.info.get('component_projection_verified', {})):
             # Shared local execution publishes the same child envelope as remote
@@ -491,6 +502,12 @@ async def finalize_successful_job(
         )
         from services.core_protein_execution_settings import persist_openmm_receipts
         await persist_openmm_receipts(job, output_dir, session)
+        if antibody_closeout is not None:
+            expected_count = antibody_closeout['candidate_count']
+            direct_count = int(await session.scalar(select(func.count(Design.id)).where(
+                Design.job_id == job_id, Design.source_stage.is_(None))) or 0)
+            if expected_count <= 0 or direct_count < expected_count:
+                raise RuntimeError('Antibody root native closeout lacks its declared parent candidate rows')
         count = await _authoritative_result_count(session, job)
         idempotent_prior_results = False
         result_kind = "design"

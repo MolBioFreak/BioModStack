@@ -134,7 +134,7 @@ async def admission(tmp_path, monkeypatch):
     # Frozen source identity is infrastructure, never a replacement compiler.
     identity = SourceIdentity('a' * 40, 'b' * 40)
     monkeypatch.setattr(SourceIdentity, 'from_checkout', lambda *_: identity)
-    monkeypatch.setattr(bundle, 'current_source_identity', lambda: (identity.revision, identity.tree))
+    monkeypatch.setattr(bundle, 'current_source_identity', lambda *_: (identity.revision, identity.tree))
     engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "admission.sqlite"}')
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -177,6 +177,7 @@ async def test_custom_actions_prepare_once_before_review(admission, tmp_path, mo
     pdb = inputs / 'source.pdb'
     pdb.write_bytes((Path(__file__).parent / 'fixtures/md/1AKI.pdb').read_bytes())
     monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: inputs)
+    monkeypatch.setattr('paths.get_inputs_dir', lambda: inputs)
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda value: Path(value))
     async with factory() as session:
         session.add(Job(id='source', name='antibody source', model_id='boltzgen', mode='antibody',
@@ -204,27 +205,116 @@ async def test_custom_actions_prepare_once_before_review(admission, tmp_path, mo
     assert prepared['execution_plan_approval'] is None
     before = {str(p): p.read_bytes() for p in inputs.rglob('*') if p.is_file()}
     preview = await client.post('/jobs/execution-plan/preview', json=prepared)
-    if action == 'manual':
-        assert preview.status_code == 200, preview.text
-        assert preview.json()['admissible'], preview.text
-    else:
-        # Existing builder selects a template root absent from the shared typed
-        # provision catalog. Do not manufacture compiler/approval authority.
-        assert preview.status_code == 422, preview.text
-        assert preview.json()['detail'] == 'Workflow provision requires a supported typed model and mode'
+    assert preview.status_code == 200, preview.text
+    assert preview.json()['admissible'], preview.text
     assert {str(p): p.read_bytes() for p in inputs.rglob('*') if p.is_file()} == before
     async with factory() as session:
         assert [j.id for j in (await session.scalars(select(Job))).all()] == ['source']
         assert not (await session.get(Job, 'source')).decision_history
-    if action == 'manual':
-        submitted = await client.post('/jobs', json={**prepared,
+    if action != 'manual':
+        no_approval = await client.post('/jobs', json=prepared)
+        assert no_approval.status_code == 409, no_approval.text
+        stale = await client.post('/jobs', json={**prepared,
+            'execution_target_id': 'vast:two',
             'execution_plan_approval': preview.json()['approval_digest']})
-        assert submitted.status_code == 201, submitted.text
+        assert stale.status_code == 409, stale.text
+        # The selected native directory is approval-bound by actual bytes.
+        selected = Path(prepared['params']['selected_input_dir'])
+        candidate = next(selected.rglob('*.pdb'))
+        saved = candidate.read_bytes()
+        candidate.write_bytes(saved + b'REMARK approval counterfactual\n')
+        stale = await client.post('/jobs', json={**prepared,
+            'execution_plan_approval': preview.json()['approval_digest']})
+        assert stale.status_code == 409, stale.text
+        candidate.write_bytes(saved)
+        candidate.unlink()
+        candidate.symlink_to(pdb)
+        unsafe = await client.post('/jobs/execution-plan/preview', json=prepared)
+        assert unsafe.status_code == 422 and 'symlink' in unsafe.text, unsafe.text
+        candidate.unlink()
+        candidate.write_bytes(saved)
         async with factory() as session:
-            child = await session.get(Job, submitted.json()['id'])
-            assert child.execution_target_id == 'vast:one'
-            assert child.provenance['execution_plan_approval']['approval_digest'] == preview.json()['approval_digest']
-        assert {str(p): p.read_bytes() for p in inputs.rglob('*') if p.is_file()} == before
+            assert [j.id for j in (await session.scalars(select(Job))).all()] == ['source']
+    submitted = await client.post('/jobs', json={**prepared,
+        'execution_plan_approval': preview.json()['approval_digest']})
+    assert submitted.status_code == 201, submitted.text
+    async with factory() as session:
+        child = await session.get(Job, submitted.json()['id'])
+        assert child.execution_target_id == 'vast:one'
+        assert child.provenance['execution_plan_approval']['approval_digest'] == preview.json()['approval_digest']
+        if action != 'manual':
+            qualify_root_bundle(child, tmp_path, monkeypatch)
+    assert {str(p): p.read_bytes() for p in inputs.rglob('*') if p.is_file()} == before
+
+
+def qualify_root_bundle(job, tmp_path, monkeypatch):
+    """Actual approved root -> launch compiler -> package -> relocated inputs.
+
+    Runtime installation/source checkout identity are infrastructure doubles;
+    native compiler, result contract, input inventory and worker verifier are real.
+    """
+    import shutil
+    import subprocess
+    from pathlib import Path
+    from types import SimpleNamespace
+    from services import nextflow
+    from services.remote_execution import bundle
+    from tools import bms_remote_worker as worker
+    import paths
+    root = Path(__file__).resolve().parents[3]
+    for name in ('get_data_root', 'get_inputs_dir', 'get_results_dir', 'get_weights_root', 'get_container_dir'):
+        monkeypatch.setattr(bundle, name, getattr(paths, name))
+    monkeypatch.setattr(bundle, 'get_code_root', lambda: root)
+    monkeypatch.setattr(bundle, '_git', lambda *_: 'b' * 40)
+    for directory in (paths.get_weights_root(), paths.get_container_dir()):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / 'infrastructure-fixture.txt').write_text('Runtime inventory double; never executed.\n')
+    monkeypatch.setattr(bundle, '_runtime_assets', lambda *_, **__: [
+        (paths.get_weights_root(), 'weights'), (paths.get_container_dir(), 'containers')])
+    actual_run = subprocess.run
+    # The fixture freezes source authority to a/b above. Archive actual source
+    # bytes from HEAD rather than requesting that synthetic infrastructure SHA.
+    def archive(command, **kwargs):
+        if command[:2] == ['git', 'archive']:
+            command = [*command[:-1], 'HEAD']
+        return actual_run(command, **kwargs)
+    monkeypatch.setattr(bundle.subprocess, 'run', archive)
+    job.assigned_gpu = 0
+    job.provenance = {**job.provenance, 'remote_execution_assignment':
+                      {'lease_id': 'fixture-lease', 'gpu_indices': [0]}}
+    invocation = nextflow.compile_job_nextflow_invocation(job, job.params, job.output_dir)
+    invocation.materialize_inputs(Path(job.output_dir))
+    prepared = bundle.prepare_remote_bundle(job=job,
+        target=SimpleNamespace(id=job.execution_target_id, remote_root=str(tmp_path / 'remote')),
+        command=list(invocation.command), native_invocation=invocation)
+    assert prepared.envelope.expected_result_contract['analysis_contract_id'] == 'antibody_pipeline_v1'
+    for transfer in (*prepared.input_transfers, *prepared.runtime_transfers, prepared.source_transfer):
+        destination = Path(transfer.remote_destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if transfer.source.is_dir():
+            shutil.copytree(transfer.source, destination)
+        else:
+            shutil.copyfile(transfer.source, destination)
+    attempt = Path(prepared.remote_attempt_dir)
+    shutil.copytree(prepared.local_attempt_dir, attempt, dirs_exist_ok=True)
+    (attempt / 'bundle/source').symlink_to(prepared.remote_source_dir, target_is_directory=True)
+    (attempt / 'bundle/runtime').symlink_to(prepared.remote_runtime_dir, target_is_directory=True)
+    worker.verify_bundle(attempt)
+    command = prepared.envelope.command
+    if 'BMS_COMPONENT_CONTEXT' in prepared.envelope.environment:
+        import json
+        context = json.loads(Path(prepared.envelope.environment['BMS_COMPONENT_CONTEXT']).read_bytes())
+        command = context['root_command']
+    remote_selection = Path(command[command.index('--selected_input_dir') + 1])
+    original = Path(job.params['selected_input_dir'])
+    assert remote_selection != original
+    assert {p.name: p.read_bytes() for p in remote_selection.glob('*.pdb')} == {
+        p.name: p.read_bytes() for p in original.glob('*.pdb')}
+    assert all(not p.is_symlink() and p.stat().st_nlink == 1 for p in remote_selection.glob('*.pdb'))
+    # Tampering with received native biological input fails actual worker custody.
+    next(remote_selection.glob('*.pdb')).write_bytes(b'changed')
+    with pytest.raises(Exception):
+        worker.verify_bundle(attempt)
 
 
 async def empty(factory):
