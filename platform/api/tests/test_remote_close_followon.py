@@ -108,6 +108,18 @@ async def test_reviewed_parent_to_automatic_child_and_recovery(admission, monkey
         assert child.params['manual_mutation_mode'] == 'seeded_refinement'
         selection = Path(child.params['iteration_selection_dir'])
         before = {p.name: p.read_bytes() for p in selection.iterdir()}
+        assert all(not p.is_symlink() for p in selection.iterdir())
+        # Exercise the actual bundle input-closure/sealing consumer, not just
+        # preview hashes. No runtime image, provider, worker or inference call.
+        from services.remote_execution.bundle import _input_assets, _input_records
+        invocation = nextflow.compile_job_nextflow_invocation(child, child.params, child.output_dir)
+        invocation.materialize_inputs(Path(child.output_dir))
+        assets = _input_assets(dict(invocation.native_parameters), native_invocation=invocation,
+            repo_root=Path(__file__).resolve().parents[3], runtime_paths=set(), output_dir=Path(child.output_dir))
+        assert selection in {path for path, _ in assets}
+        records = _input_records(selection, 'inputs/seeds', native_invocation=invocation, output_dir=Path(child.output_dir))
+        assert len(records) == len(before)
+        assert all(row.link_target is None for row in records)
     await trigger(factory, members[0])  # fresh session/recovery, not a second child
     async with factory() as session:
         assert len(list((await session.scalars(select(Job))).all())) == len(members) + 2
@@ -260,3 +272,29 @@ async def test_static_input_same_path_mutation_invalidates_followon(admission, m
         assert await session.get(Job, child_id(owner)) is None
         assert not (await session.get(Job, owner)).params.get('_mutation_seed_refinement_triggered')
     assert not (get_inputs_dir() / 'design_selections/antibody' / child_id(owner)).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('interruption', ['first_copy', 'foreign_file', 'changed_copy'])
+async def test_partial_preparation_recovery(admission, monkeypatch, interruption):
+    _, factory = admission
+    owner, members, pdb = await admit_seed(admission, monkeypatch)
+    await complete(factory, members, pdb)
+    from paths import get_inputs_dir
+    selection = get_inputs_dir() / 'design_selections/antibody' / child_id(owner)
+    selection.mkdir(parents=True)
+    async with factory() as session:
+        coordinator = await session.get(Job, owner)
+        first_member = coordinator.provenance[KEY]['members'][0]['id']
+        design = (await session.scalars(select(Design).where(Design.job_id == first_member))).one()
+        retained = selection / f'001_{design.id}.pdb'
+    retained.write_bytes(pdb.read_bytes() if interruption != 'changed_copy' else b'corrupt')
+    before = retained.read_bytes()
+    inode = retained.stat().st_ino
+    if interruption == 'foreign_file':
+        (selection / 'foreign.pdb').write_bytes(pdb.read_bytes())
+    await trigger(factory, members[-1])
+    async with factory() as session:
+        child = await session.get(Job, child_id(owner))
+        assert (child is not None) == (interruption == 'first_copy')
+    assert retained.read_bytes() == before and retained.stat().st_ino == inode

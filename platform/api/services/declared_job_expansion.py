@@ -11,6 +11,9 @@ from database import Job
 
 AUTHORITY = 'services/nextflow.py:maybe_trigger_mutation_seed_refinement'
 KEY = 'mutation_seed_expansion'
+DERIVED_INPUT_FIELDS = frozenset({'rfantibody_input_pdbs', 'fampnn_collected_pdbs',
+    'selected_input_dir', 'iteration_selection_dir', 'source_selection_manifest_path',
+    'selected_input_manifest', 'manual_mutation_fixed_positions_json'})
 
 
 def job_binding(job):
@@ -47,6 +50,11 @@ async def declarations(request, session, *, lock=False):
                'manual_mutation_mode', 'manual_mutation_method'}
     if set(trigger) - allowed or trigger.get('manual_mutation_mode') != 'seeded_refinement':
         raise ValueError('Invalid mutation seed expansion declaration')
+    overrides = trigger.get('param_overrides') or {}
+    if not isinstance(overrides, dict) or DERIVED_INPUT_FIELDS.intersection(overrides):
+        raise ValueError('Mutation seed expansion inputs are derived, not overrideable paths')
+    if overrides.get('num_parallel_jobs', 1) != 1 or 'mutagenesis_variants' in overrides:
+        raise ValueError('Mutation seed expansion declares exactly one refinement root')
     source, root = await _resolve_antibody_root_job(session, str(trigger.get('source_job_id') or ''))
     if lock:
         from sqlalchemy import select
