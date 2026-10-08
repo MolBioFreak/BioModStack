@@ -707,6 +707,7 @@ export function MolBioToolkitV2() {
                                     <GCContentTrack
                                         sequence={sequenceData.sequence}
                                         selection={selection}
+                                        onSelectionChange={handleSelection}
                                         windowSize={Math.max(20, Math.min(100, Math.floor(sequenceData.sequence.length / 50)))}
                                         height={120}
                                     />
