@@ -12,6 +12,9 @@
   },
   "include": [
     "src/components/designOutputSource.ts",
+    "src/components/MolBioToolkit/utils/alignmentLabels.ts",
+    "src/components/MolBioToolkit/utils/seqVizTouch.ts",
+    "src/components/MolBioToolkit/utils/viewerLayout.ts",
     "src/runtime/navigation.ts",
     "tests/**/*.ts"
   ]

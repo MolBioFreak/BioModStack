@@ -21,6 +21,10 @@ export type BiomodstackDesktopApi = {
   restartAll: (runtimeMode?: ShellRuntimeMode) => Promise<void>;
   restartApi: (runtimeMode?: ShellRuntimeMode) => Promise<void>;
   openInBrowser: () => Promise<void>;
+  getZoomFactor: () => Promise<number>;
+  setZoomFactor: (zoomFactor: number) => Promise<number>;
+  adjustZoom: (deltaSteps: number) => Promise<number>;
+  resetZoom: () => Promise<number>;
 };
 
 export const GET_SHELL_CONTEXT_CHANNEL = 'biomodstack:get-shell-context';
@@ -30,6 +34,10 @@ export const STOP_ALL_CHANNEL = 'biomodstack:stop-all';
 export const RESTART_ALL_CHANNEL = 'biomodstack:restart-all';
 export const RESTART_API_CHANNEL = 'biomodstack:restart-api';
 export const OPEN_IN_BROWSER_CHANNEL = 'biomodstack:open-in-browser';
+export const GET_ZOOM_FACTOR_CHANNEL = 'biomodstack:get-zoom-factor';
+export const SET_ZOOM_FACTOR_CHANNEL = 'biomodstack:set-zoom-factor';
+export const ADJUST_ZOOM_CHANNEL = 'biomodstack:adjust-zoom';
+export const RESET_ZOOM_CHANNEL = 'biomodstack:reset-zoom';
 
 export const EXPOSED_BIOMODSTACK_API_KEYS = [
   'getShellContext',
@@ -39,6 +47,10 @@ export const EXPOSED_BIOMODSTACK_API_KEYS = [
   'restartAll',
   'restartApi',
   'openInBrowser',
+  'getZoomFactor',
+  'setZoomFactor',
+  'adjustZoom',
+  'resetZoom',
 ] as const;
 
 function normalizeOrigin(origin: string): string {

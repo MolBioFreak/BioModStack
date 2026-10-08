@@ -52,6 +52,24 @@ def test_runtime_start_endpoint_invokes_service_layer(monkeypatch) -> None:
     assert response.json()["runtime_active"] is True
 
 
+def test_runtime_state_endpoint_defaults_to_container_when_runtime_omitted(monkeypatch) -> None:
+    seen: list[str] = []
+
+    def fake_runtime_descriptor(project_root=None, runtime_mode=None):
+        seen.append(runtime_mode or "missing")
+        return {"runtime_mode": runtime_mode, "runtime_active": False}
+
+    monkeypatch.delenv("BMS_RUNTIME_MODE", raising=False)
+    monkeypatch.setattr(system, "runtime_descriptor", fake_runtime_descriptor, raising=False)
+
+    with build_client() as client:
+        response = client.get("/api/system/runtime-state")
+
+    assert response.status_code == 200
+    assert seen == ["container"]
+    assert response.json()["runtime_mode"] == "container"
+
+
 def test_install_profile_put_persists_and_returns_snapshot(monkeypatch) -> None:
     saved_payloads: list[dict[str, object]] = []
 

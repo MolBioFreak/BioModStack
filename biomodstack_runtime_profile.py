@@ -13,7 +13,16 @@ COMPAT_ENV_FILENAME = "env.sh"
 DEFAULT_CONTAINER_STATE_PATH = "/var/lib/biomodstack"
 DEFAULT_API_HOST_PORT = 8000
 DEFAULT_WEB_HOST_PORT = 5173
-DEFAULT_CORS_ORIGINS = ["http://127.0.0.1:5173", "http://localhost:5173"]
+DEFAULT_CORS_ORIGINS = [
+    "http://127.0.0.1",
+    "http://127.0.0.1:5173",
+    "http://localhost",
+    "https://localhost",
+    "http://localhost:5173",
+    "https://localhost:5173",
+    "https://127.0.0.1",
+    "https://compute-node.taileb3a90.ts.net",
+]
 DEFAULT_WORKFLOW_ADAPTER_URL = "http://127.0.0.1:8001"
 DEFAULT_COMPOSE_PROJECT_NAME = "biomodstack-core-runtime"
 

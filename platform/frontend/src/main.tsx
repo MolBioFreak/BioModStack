@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider } from './components/ThemeProvider'
 import './index.css'
 import App from './App.tsx'
+import { signalCordovaAppReady } from './runtime/cordovaShell'
 import { getRouterBasename, isAppPath } from './runtime/navigation'
 
 const queryClient = new QueryClient({
@@ -36,3 +37,9 @@ createRoot(document.getElementById('root')!).render(
     </ThemeProvider>
   </QueryClientProvider>,
 )
+
+if (typeof window !== 'undefined') {
+  window.requestAnimationFrame(() => {
+    signalCordovaAppReady(window)
+  })
+}

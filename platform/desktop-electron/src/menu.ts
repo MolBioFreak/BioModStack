@@ -2,6 +2,7 @@ import { Menu, type MenuItemConstructorOptions } from 'electron';
 
 import type { ServiceControl } from './serviceControl.js';
 import type { ShellContext } from './windowState.js';
+import { DEFAULT_ZOOM_FACTOR, ZOOM_PRESETS, formatZoomPercentage } from './zoom.js';
 
 type MenuDeps = {
   showWindow?: () => void;
@@ -16,6 +17,12 @@ type MenuDeps = {
   hideShell?: () => void;
   quitShell?: () => void;
   showAbout?: () => void;
+  getZoomFactor?: () => number;
+  adjustZoom?: (deltaSteps: number) => void;
+  setZoomFactor?: (zoomFactor: number) => void;
+  resetZoom?: () => void;
+  isAlwaysOnTop?: () => boolean;
+  toggleAlwaysOnTop?: () => void;
 };
 
 function fireAndForget(action: () => Promise<void> | void): () => void {
@@ -53,6 +60,7 @@ function buildLogsSubmenu(deps: MenuDeps): MenuItemConstructorOptions[] {
 function buildServicesSubmenu(
   context: ShellContext,
   serviceControl: ServiceControl,
+  deps: MenuDeps,
 ): MenuItemConstructorOptions[] {
   return [
     {
@@ -71,7 +79,23 @@ function buildServicesSubmenu(
       label: 'Restart API',
       click: fireAndForget(() => serviceControl.restartApi(context.runtimeMode)),
     },
+    { type: 'separator' },
+    {
+      label: 'Logs',
+      submenu: buildLogsSubmenu(deps),
+    },
   ];
+}
+
+function buildZoomPresetsSubmenu(deps: MenuDeps): MenuItemConstructorOptions[] {
+  const currentZoomFactor = deps.getZoomFactor?.() ?? DEFAULT_ZOOM_FACTOR;
+
+  return ZOOM_PRESETS.map((zoomPreset) => ({
+    label: formatZoomPercentage(zoomPreset),
+    type: 'radio',
+    checked: Math.abs(currentZoomFactor - zoomPreset) < 0.001,
+    click: () => deps.setZoomFactor?.(zoomPreset),
+  }));
 }
 
 export function buildApplicationMenuTemplate(
@@ -79,6 +103,8 @@ export function buildApplicationMenuTemplate(
   serviceControl: ServiceControl,
   deps: MenuDeps = {},
 ): MenuItemConstructorOptions[] {
+  const currentZoomLabel = formatZoomPercentage(deps.getZoomFactor?.() ?? DEFAULT_ZOOM_FACTOR);
+
   return [
     {
       label: 'BioModStack',
@@ -95,6 +121,7 @@ export function buildApplicationMenuTemplate(
           label: 'Copy Local URL',
           click: () => deps.copyLocalUrl?.(context.browserUrl),
         },
+        { type: 'separator' },
         {
           label: 'Open Results Folder',
           click: fireAndForget(() => deps.openResultsFolder?.()),
@@ -103,14 +130,7 @@ export function buildApplicationMenuTemplate(
           label: 'Open Shell Data Folder',
           click: fireAndForget(() => deps.openShellDataFolder?.()),
         },
-        {
-          label: 'Logs',
-          submenu: buildLogsSubmenu(deps),
-        },
-        {
-          label: 'Services',
-          submenu: buildServicesSubmenu(context, serviceControl),
-        },
+        { type: 'separator' },
         {
           label: 'Hide to Tray',
           click: () => deps.hideShell?.(),
@@ -122,16 +142,16 @@ export function buildApplicationMenuTemplate(
       ],
     },
     {
+      label: 'Services',
+      submenu: buildServicesSubmenu(context, serviceControl, deps),
+    },
+    {
       label: 'View',
       submenu: [
         {
           label: 'Reload Shell',
-          role: 'reload',
+          accelerator: 'CommandOrControl+R',
           click: () => deps.reloadShell?.(),
-        },
-        {
-          label: 'Force Reload',
-          role: 'forceReload',
         },
         {
           label: 'Toggle Developer Tools',
@@ -139,16 +159,27 @@ export function buildApplicationMenuTemplate(
         },
         { type: 'separator' },
         {
-          label: 'Reset Zoom',
-          role: 'resetZoom',
-        },
-        {
-          label: 'Zoom In',
-          role: 'zoomIn',
+          label: `Current Zoom: ${currentZoomLabel}`,
+          enabled: false,
         },
         {
           label: 'Zoom Out',
-          role: 'zoomOut',
+          accelerator: 'CommandOrControl+-',
+          click: () => deps.adjustZoom?.(-1),
+        },
+        {
+          label: 'Reset Zoom',
+          accelerator: 'CommandOrControl+0',
+          click: () => deps.resetZoom?.(),
+        },
+        {
+          label: 'Zoom In',
+          accelerator: 'CommandOrControl+=',
+          click: () => deps.adjustZoom?.(1),
+        },
+        {
+          label: 'Zoom Presets',
+          submenu: buildZoomPresetsSubmenu(deps),
         },
         { type: 'separator' },
         {
@@ -168,6 +199,12 @@ export function buildApplicationMenuTemplate(
         {
           label: 'Close Window',
           role: 'close',
+        },
+        {
+          label: 'Always on Top',
+          type: 'checkbox',
+          checked: deps.isAlwaysOnTop?.() ?? false,
+          click: () => deps.toggleAlwaysOnTop?.(),
         },
       ],
     },

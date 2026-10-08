@@ -49,7 +49,7 @@ def main() -> int:
     parser.add_argument(
         "--runtime",
         choices=["dev", "container"],
-        help="runtime mode to manage (defaults to BMS_RUNTIME_MODE or dev)",
+        help="runtime mode to manage (defaults to BMS_RUNTIME_MODE or container)",
     )
     parser.add_argument("--notify", action="store_true", help="send desktop notifications")
     parser.add_argument("--json", action="store_true", dest="json_output", help="emit structured JSON for supported actions")

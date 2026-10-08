@@ -120,6 +120,17 @@ def _build_aligner(settings: AlignmentSettings) -> Align.PairwiseAligner:
     return aligner
 
 
+def _take_first_alignment(alignments: object) -> Align.Alignment | None:
+    try:
+        return next(iter(alignments))  # type: ignore[arg-type]
+    except StopIteration:
+        return None
+    except OverflowError as exc:
+        raise SequenceAlignmentError(
+            "Alignment produced too many equally optimal solutions; try local mode or trim repetitive sequence content"
+        ) from exc
+
+
 def _alignment_columns(
     alignment: Align.Alignment,
     reference: str,
@@ -379,10 +390,10 @@ def _select_candidate(
 
     for candidate_strand, oriented_query in query_variants:
         alignments = aligner.align(reference_search, oriented_query)
-        if len(alignments) == 0:
+        alignment = _take_first_alignment(alignments)
+        if alignment is None:
             continue
 
-        alignment = alignments[0]
         columns = _alignment_columns(alignment, reference_search, oriented_query)
         if mode == "placement":
             columns, _ = _trim_terminal_gap_columns(columns)

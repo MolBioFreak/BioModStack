@@ -41,11 +41,53 @@ def _normalize_url(url: Optional[str]) -> Optional[str]:
     return normalized.rstrip("/")
 
 
-def _recommended_linkage_url() -> str:
-    host = _preferred_runtime_host()
+def _format_linkage_host(host: str) -> str:
     if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-    return f"http://{host}:{ROBOT_DAEMON_PORT}"
+        return f"[{host}]"
+    return host
+
+
+def _build_linkage_url(
+    host: str,
+    *,
+    scheme: str = "http",
+    port: Optional[int] = None,
+    path: str = "",
+    query: str = "",
+    fragment: str = "",
+) -> str:
+    netloc_host = _format_linkage_host(host)
+    effective_port = ROBOT_DAEMON_PORT if port is None else port
+    netloc = netloc_host if effective_port is None else f"{netloc_host}:{effective_port}"
+    return urlunsplit((scheme or "http", netloc, path, query, fragment)).rstrip("/")
+
+
+def _configured_default_linkage_url() -> Optional[str]:
+    configured = _normalize_url(os.getenv("BIOXP_SERVER_URL"))
+    if not configured:
+        return None
+    parsed = urlsplit(configured)
+    host = parsed.hostname
+    if not host:
+        return configured
+    if host == ROBOT_SSH_HOST:
+        host = _resolve_host_for_linkage(host)
+    return _build_linkage_url(
+        host,
+        scheme=parsed.scheme,
+        port=parsed.port,
+        path=parsed.path,
+        query=parsed.query,
+        fragment=parsed.fragment,
+    )
+
+
+def _recommended_linkage_url() -> str:
+    configured = _configured_default_linkage_url()
+    if configured:
+        return configured
+    host = _preferred_runtime_host()
+    return _build_linkage_url(host)
 
 
 def _preferred_runtime_host() -> str:
@@ -78,19 +120,40 @@ def _canonicalize_linkage_url(url: Optional[str]) -> Optional[str]:
     parsed = urlsplit(normalized)
     if parsed.hostname != ROBOT_SSH_HOST:
         return normalized
+    configured_default = _configured_default_linkage_url()
+    if configured_default:
+        configured = urlsplit(configured_default)
+        host = configured.hostname or _preferred_runtime_host()
+        return _build_linkage_url(
+            host,
+            scheme=parsed.scheme,
+            port=parsed.port if parsed.port is not None else configured.port,
+            path=parsed.path,
+            query=parsed.query,
+            fragment=parsed.fragment,
+        )
     preferred_host = _preferred_runtime_host()
-    netloc_host = preferred_host
-    if ":" in netloc_host and not netloc_host.startswith("["):
-        netloc_host = f"[{netloc_host}]"
-    netloc = netloc_host if parsed.port is None else f"{netloc_host}:{parsed.port}"
-    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)).rstrip("/")
+    return _build_linkage_url(
+        preferred_host,
+        scheme=parsed.scheme,
+        port=parsed.port,
+        path=parsed.path,
+        query=parsed.query,
+        fragment=parsed.fragment,
+    )
 
 
 def _read_persisted_linkage() -> Optional[str]:
     try:
         if LINKAGE_STATE_PATH.exists():
-            value = LINKAGE_STATE_PATH.read_text(encoding="utf-8").strip()
-            return _normalize_url(value)
+            raw_value = LINKAGE_STATE_PATH.read_text(encoding="utf-8").strip()
+            canonical = _canonicalize_linkage_url(raw_value)
+            if canonical and canonical != _normalize_url(raw_value):
+                try:
+                    LINKAGE_STATE_PATH.write_text(canonical, encoding="utf-8")
+                except Exception:
+                    pass
+            return canonical
     except Exception:
         return None
     return None
@@ -107,7 +170,7 @@ def _persist_linkage(url: Optional[str]) -> None:
 # In-memory Linkage State. Falls back to persisted file, then env var, otherwise remains unset.
 _GLOBAL_LINKAGE_URL: Optional[str] = (
     _read_persisted_linkage()
-    or _normalize_url(os.getenv("BIOXP_SERVER_URL"))
+    or _configured_default_linkage_url()
 )
 
 

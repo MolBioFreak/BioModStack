@@ -51,6 +51,7 @@ async def test_set_linkage_normalizes_and_persists_url(monkeypatch: pytest.Monke
 def test_recommended_linkage_url_prefers_resolved_robot_ip(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bioxp, 'ROBOT_SSH_HOST', 'robot')
     monkeypatch.setattr(bioxp, 'ROBOT_DAEMON_PORT', 8123)
+    monkeypatch.delenv('BIOXP_SERVER_URL', raising=False)
 
     def fake_getaddrinfo(host: str, port: int | None, *args: object, **kwargs: object):
         assert host == 'robot'
@@ -59,6 +60,37 @@ def test_recommended_linkage_url_prefers_resolved_robot_ip(monkeypatch: pytest.M
     monkeypatch.setattr(socket, 'getaddrinfo', fake_getaddrinfo)
 
     assert bioxp._recommended_linkage_url() == 'http://100.124.140.56:8123'
+
+
+def test_recommended_linkage_url_prefers_explicit_bioxp_server_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('BIOXP_SERVER_URL', 'http://100.124.140.56:8123/')
+    monkeypatch.setattr(bioxp, 'ROBOT_SSH_HOST', 'robot')
+    monkeypatch.setattr(bioxp, 'ROBOT_DAEMON_PORT', 8123)
+
+    def failing_getaddrinfo(*args: object, **kwargs: object):
+        raise AssertionError('robot hostname should not be resolved when BIOXP_SERVER_URL is set')
+
+    monkeypatch.setattr(socket, 'getaddrinfo', failing_getaddrinfo)
+
+    assert bioxp._recommended_linkage_url() == 'http://100.124.140.56:8123'
+
+
+def test_read_persisted_linkage_canonicalizes_robot_alias_and_rewrites_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / 'bioxp_linkage_url'
+    state_path.write_text('http://robot:8123/\n', encoding='utf-8')
+    monkeypatch.setattr(bioxp, 'LINKAGE_STATE_PATH', state_path)
+
+    def fake_getaddrinfo(host: str, port: int | None, *args: object, **kwargs: object):
+        assert host == 'robot'
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('100.124.140.56', port or 0))]
+
+    monkeypatch.setattr(socket, 'getaddrinfo', fake_getaddrinfo)
+
+    assert bioxp._read_persisted_linkage() == 'http://100.124.140.56:8123'
+    assert state_path.read_text(encoding='utf-8') == 'http://100.124.140.56:8123'
 
 
 @pytest.mark.asyncio

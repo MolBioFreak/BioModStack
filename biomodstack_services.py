@@ -26,6 +26,7 @@ TARGET_UNIT = "biomodstack.target"
 
 DEV_RUNTIME_MODE = "dev"
 CONTAINER_RUNTIME_MODE = "container"
+DEFAULT_RUNTIME_MODE = CONTAINER_RUNTIME_MODE
 VALID_RUNTIME_MODES = {DEV_RUNTIME_MODE, CONTAINER_RUNTIME_MODE}
 
 API_PORT = 8000
@@ -148,7 +149,7 @@ def get_user_systemd_dir(home: Path | None = None) -> Path:
 
 
 def resolve_runtime_mode(runtime_mode: str | None = None) -> str:
-    mode = (runtime_mode or os.getenv("BMS_RUNTIME_MODE") or DEV_RUNTIME_MODE).strip().lower()
+    mode = (runtime_mode or os.getenv("BMS_RUNTIME_MODE") or DEFAULT_RUNTIME_MODE).strip().lower()
     if mode not in VALID_RUNTIME_MODES:
         raise ServiceManagerError(
             f"Unknown BioModStack runtime mode '{mode}'. Expected one of: {', '.join(sorted(VALID_RUNTIME_MODES))}"
@@ -536,6 +537,18 @@ def _parse_pid_tokens(text: str) -> list[int]:
 def listener_pids(port: int) -> list[int]:
     try:
         result = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode in (0, 1):
+            return _parse_pid_tokens(result.stdout)
+    except FileNotFoundError:
+        pass
+
+    try:
+        result = subprocess.run(
             ["fuser", "-n", "tcp", str(port)],
             check=False,
             capture_output=True,
@@ -548,13 +561,7 @@ def listener_pids(port: int) -> list[int]:
     except FileNotFoundError:
         pass
 
-    result = subprocess.run(
-        ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return _parse_pid_tokens(result.stdout)
+    return []
 
 
 def read_pid_ppid(pid: int) -> int | None:

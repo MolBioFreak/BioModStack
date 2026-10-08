@@ -25,6 +25,12 @@ interface SequenceHeaderProps {
     showGCTrack?: boolean;
     onGCTrackToggle?: () => void;
     onOpenLibrary?: () => void;
+    isViewerFullscreen?: boolean;
+    onToggleFullscreen?: () => void;
+    isLibraryPanelCollapsed?: boolean;
+    isToolPanelCollapsed?: boolean;
+    onToggleLibraryPanel?: () => void;
+    onToggleToolPanel?: () => void;
     historyJournal?: HistoryEntry[];
 }
 
@@ -50,6 +56,12 @@ export function SequenceHeader({
     showGCTrack = true,
     onGCTrackToggle,
     onOpenLibrary,
+    isViewerFullscreen = false,
+    onToggleFullscreen,
+    isLibraryPanelCollapsed = false,
+    isToolPanelCollapsed = false,
+    onToggleLibraryPanel,
+    onToggleToolPanel,
     historyJournal = [],
 }: SequenceHeaderProps) {
     const gcContent = calculateGC(sequenceData.sequence);
@@ -176,6 +188,60 @@ export function SequenceHeader({
                             </button>
                         </div>
                     </div>
+                )}
+
+                {(onToggleLibraryPanel || onToggleToolPanel) && (
+                    <div className="flex items-center border-r border-slate-600 pr-2 mr-2 gap-2">
+                        {onToggleLibraryPanel && (
+                            <button
+                                type="button"
+                                onClick={onToggleLibraryPanel}
+                                className={`flex items-center gap-1 rounded px-2 py-1.5 text-sm transition-colors ${isLibraryPanelCollapsed
+                                        ? 'text-blue-300 hover:bg-slate-700'
+                                        : 'text-slate-300 hover:bg-slate-700'
+                                    }`}
+                                title={isLibraryPanelCollapsed ? 'Show construct shelf' : 'Hide construct shelf'}
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isLibraryPanelCollapsed ? 'M9 5l7 7-7 7' : 'M15 19l-7-7 7-7'} />
+                                </svg>
+                                {isLibraryPanelCollapsed ? 'Show Shelf' : 'Hide Shelf'}
+                            </button>
+                        )}
+                        {onToggleToolPanel && (
+                            <button
+                                type="button"
+                                onClick={onToggleToolPanel}
+                                className={`flex items-center gap-1 rounded px-2 py-1.5 text-sm transition-colors ${isToolPanelCollapsed
+                                        ? 'text-blue-300 hover:bg-slate-700'
+                                        : 'text-slate-300 hover:bg-slate-700'
+                                    }`}
+                                title={isToolPanelCollapsed ? 'Show toolkit tools' : 'Hide toolkit tools'}
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isToolPanelCollapsed ? 'M15 5l-7 7 7 7' : 'M9 19l7-7-7-7'} />
+                                </svg>
+                                {isToolPanelCollapsed ? 'Show Tools' : 'Hide Tools'}
+                            </button>
+                        )}
+                    </div>
+                )}
+
+                {sequenceData.circular && onToggleFullscreen && (
+                    <button
+                        type="button"
+                        onClick={onToggleFullscreen}
+                        className={`flex items-center gap-1 rounded px-2 py-1.5 text-sm transition-colors border-r border-slate-600 mr-2 pr-3 ${isViewerFullscreen
+                                ? 'text-blue-300 hover:bg-slate-700'
+                                : 'text-slate-300 hover:bg-slate-700'
+                            }`}
+                        title={isViewerFullscreen ? 'Exit focused plasmid view' : 'Focus Viewer'}
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isViewerFullscreen ? 'M9 9H5v4m10-4h4v4M9 15H5v-4m10 4h4v-4' : 'M8 3H5a2 2 0 00-2 2v3m14-5h2a2 2 0 012 2v3M8 21H5a2 2 0 01-2-2v-3m14 5h2a2 2 0 002-2v-3'} />
+                        </svg>
+                        {isViewerFullscreen ? 'Exit Focus' : 'Focus Viewer'}
+                    </button>
                 )}
 
                 {/* Analytics Track Toggle */}
