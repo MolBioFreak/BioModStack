@@ -228,6 +228,42 @@ export interface MotionInterlockOverridePayload {
     operator?: string;
 }
 
+export interface GripperStatusResponse {
+    ok?: boolean;
+    axis?: 'g' | string;
+    board?: number;
+    motor?: number;
+    position?: Record<string, UntypedApiValue> | null;
+    speed?: Record<string, UntypedApiValue> | null;
+    switches?: {
+        left_active?: boolean | null;
+        right_active?: boolean | null;
+        both_effective_limits_active?: boolean;
+        left_state?: number | null;
+        right_state?: number | null;
+        left_disabled?: boolean;
+        right_disabled?: boolean;
+    } | null;
+    current?: {
+        run_current_param6?: number | null;
+        standby_current_param7?: number | null;
+        idle_safe?: boolean;
+        safe_idle_max?: number;
+    } | null;
+    oem_home_predicate?: Record<string, UntypedApiValue> | null;
+    profile?: Record<string, UntypedApiValue> | null;
+    blockers?: string[];
+    motion_commanded?: boolean;
+    physical_motion?: boolean;
+}
+
+export interface GripperActionPayload {
+    operator_ack: 'GRIPPER_CLEAR' | 'GRIPPER_HOME';
+    reason: string;
+    timeout_s?: number;
+    operator?: string;
+}
+
 export type UsbSniffProfile = 'passive' | 'manual_observe' | 'debug';
 
 export interface UsbSniffRunSummary {
@@ -1349,6 +1385,58 @@ export const useClearLock = () => {
             return res.data;
         },
         onSuccess: () => invalidateBioXp(queryClient)
+    });
+};
+
+export const useGripperStatus = (enabled = true, refetchInterval: number | false = 5000) =>
+    useQuery<GripperStatusResponse, Error>({
+        queryKey: ['bioxp', 'gripper', 'status'],
+        queryFn: async () => {
+            const res = await api.get('/api/bioxp/motion/gripper/status', { timeout: 8000 });
+            return res.data;
+        },
+        enabled,
+        refetchInterval: enabled ? refetchInterval : false,
+        retry: false,
+    });
+
+export const useGripperRestoreIdleCurrent = () => {
+    const queryClient = useQueryClient();
+    return useMutation<BioXpPayload, Error, { reason?: string }>({
+        mutationKey: bioxpHardwareMutationKey('motion', 'gripper', 'restore-idle-current'),
+        mutationFn: async ({ reason = 'bms-cockpit restore gripper idle current' } = {}) => {
+            const res = await api.post('/api/bioxp/motion/gripper/restore_idle_current', { reason, operator: 'bms-cockpit' });
+            return res.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['bioxp', 'gripper', 'status'] });
+            queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis', 'g'] });
+            queryClient.invalidateQueries({ queryKey: ['bioxp', 'axis-batch'] });
+        },
+    });
+};
+
+export const useGripperClear = () => {
+    const queryClient = useQueryClient();
+    return useMutation<BioXpPayload, Error, Omit<GripperActionPayload, 'operator_ack'>>({
+        mutationKey: bioxpHardwareMutationKey('motion', 'gripper', 'clear'),
+        mutationFn: async ({ reason, timeout_s = 15.0, operator = 'bms-cockpit' }) => {
+            const res = await api.post('/api/bioxp/motion/gripper/clear', { operator_ack: 'GRIPPER_CLEAR', reason, timeout_s, operator });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
+    });
+};
+
+export const useGripperHome = () => {
+    const queryClient = useQueryClient();
+    return useMutation<BioXpPayload, Error, Omit<GripperActionPayload, 'operator_ack'>>({
+        mutationKey: bioxpHardwareMutationKey('motion', 'gripper', 'home'),
+        mutationFn: async ({ reason, timeout_s = 30.0, operator = 'bms-cockpit' }) => {
+            const res = await api.post('/api/bioxp/motion/gripper/home', { operator_ack: 'GRIPPER_HOME', reason, timeout_s, operator });
+            return res.data;
+        },
+        onSuccess: () => invalidateBioXp(queryClient),
     });
 };
 

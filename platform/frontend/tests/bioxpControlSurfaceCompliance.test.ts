@@ -34,7 +34,8 @@ test('default Handler Controls tab contains readback and live motion/grabber sur
     const axisControls = sourceBetween(cockpitSource, 'const AxisControls = ({', 'const CameraAxisQuickControls = ({');
 
     assert.match(controlsTab, /\{liveXyzMotionPanel\}/);
-    assert.match(liveMotionPanel, /Live X\/Y\/Z \+ Grabber Motion/);
+    assert.match(liveMotionPanel, /Live X\/Y\/Z Motion/);
+    assert.match(liveMotionPanel, /Gripper uses the OEM Gripper Contract below/);
     assert.match(cockpitSource, /Supervised OEM homing modes/);
     assert.match(cockpitSource, /OEM HomeXY/);
     assert.match(cockpitSource, />\s*Rehome Diagnostic \/ No Homing\s*</);
@@ -45,7 +46,8 @@ test('default Handler Controls tab contains readback and live motion/grabber sur
     assert.equal(cockpitSource.match(/OEM HomeXY/g)?.length ?? 0, 1);
     assert.equal(cockpitSource.match(/OEM Rehome ACK/g)?.length ?? 0, 1);
     assert.equal(cockpitSource.match(/InitializeMotion ACK/g)?.length ?? 0, 1);
-    assert.match(liveMotionPanel, /<AxisControls axis="g" label="Grabber \/ Gripper"/);
+    assert.doesNotMatch(liveMotionPanel, /<AxisControls axis="g" label="Grabber \/ Gripper"/);
+    assert.match(controlsTab, /\{gripperPanel\}/);
     assert.match(axisControls, /Speed/);
     assert.match(axisControls, /Acc/);
     assert.match(axisControls, /SliderNumberControl/);
