@@ -26,9 +26,15 @@ import {
 } from '../lib/api';
 import { inferDesignAnalysisLens, inferDesignOutputSource, getValidationOutputLabel } from './designOutputSource';
 import {
+    buildConforNetsConformerNavigation,
+    buildConforNetsConformerSet,
+    buildPlddtResidueColorMap,
     buildStructureViewerQuickViews,
     buildStructureViewerSections,
     buildStructureViewerSummaryCards,
+    getConforNetsDefaultChainId,
+    getConforNetsScalarPlddt,
+    resolveConforNetsOverlayIds,
     resolveStructureViewerConfidenceSemantics,
     type StructureViewerColorMode,
     type StructureViewerOverlayView,
@@ -305,6 +311,7 @@ export default function StructureViewerPane({
     ));
     const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(true);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
+    const [conforNetsOverlayIds, setConforNetsOverlayIds] = useState<string[]>([]);
     const [focusedMetricSection, setFocusedMetricSection] = useState<StructureViewerSectionId>('summary');
     const [showReferenceDock, setShowReferenceDock] = useState(false);
     const [selectedReference, setSelectedReference] = useState<ReferenceStructure | null>(null);
@@ -317,6 +324,7 @@ export default function StructureViewerPane({
     });
 
     const [plddtProfile, setPlddtProfile] = useState<number[]>([]);
+    const [residueMetricNumbers, setResidueMetricNumbers] = useState<number[]>([]);
     const [selectedChain, setSelectedChain] = useState<string | null>(null);  // null = all chains
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerAreaRef = useRef<HTMLDivElement>(null);
@@ -373,6 +381,59 @@ export default function StructureViewerPane({
             name: `Source Backbone • ${sourceName}`,
         };
     }, [designLens, selectedDesign?.id, selectedDesignPpiflowRecord]);
+    const conforNetsConformerSet = useMemo(
+        () => buildConforNetsConformerSet(designs, selectedDesignId),
+        [designs, selectedDesignId],
+    );
+    const conforNetsNavigation = useMemo(
+        () => buildConforNetsConformerNavigation(conforNetsConformerSet),
+        [conforNetsConformerSet],
+    );
+    const resolvedConforNetsOverlayIds = useMemo(
+        () => resolveConforNetsOverlayIds(conforNetsConformerSet, conforNetsOverlayIds),
+        [conforNetsConformerSet, conforNetsOverlayIds],
+    );
+    const conforNetsOverlaySignature = resolvedConforNetsOverlayIds.join('|');
+    const conforNetsDefaultChainId = useMemo(
+        () => getConforNetsDefaultChainId(selectedDesign ?? null) ?? (conforNetsConformerSet ? 'A' : null),
+        [conforNetsConformerSet, selectedDesign],
+    );
+    const conforNetsScalarPlddt = getConforNetsScalarPlddt(selectedDesign ?? null);
+    const conforNetsArtifactManifest = asRecord(asRecord(selectedDesign?.confidence_metrics)?.confornets_artifact_manifest);
+    const conforNetsTensorCountRaw = conforNetsArtifactManifest?.full_confidence_tensor_count;
+    const conforNetsFullConfidenceTensorCount = typeof conforNetsTensorCountRaw === 'number' && Number.isFinite(conforNetsTensorCountRaw)
+        ? conforNetsTensorCountRaw
+        : typeof conforNetsTensorCountRaw === 'string' && conforNetsTensorCountRaw.trim() && Number.isFinite(Number(conforNetsTensorCountRaw))
+            ? Number(conforNetsTensorCountRaw)
+            : null;
+    const conforNetsUsesScalarPlddtFallback = Boolean(
+        conforNetsConformerSet
+        && conforNetsScalarPlddt !== null
+        && conforNetsFullConfidenceTensorCount === 0,
+    );
+    useEffect(() => {
+        const isAlreadyResolved = conforNetsOverlayIds.length === resolvedConforNetsOverlayIds.length
+            && conforNetsOverlayIds.every((id, index) => id === resolvedConforNetsOverlayIds[index]);
+        if (!isAlreadyResolved) {
+            setConforNetsOverlayIds(resolvedConforNetsOverlayIds);
+        }
+    }, [conforNetsOverlayIds, resolvedConforNetsOverlayIds]);
+    const selectConforNetsConformerByIndex = useCallback((nextIndex: number) => {
+        if (!conforNetsConformerSet) return;
+        const lastIndex = conforNetsConformerSet.conformers.length - 1;
+        const clampedIndex = Math.min(Math.max(nextIndex, 0), lastIndex);
+        const nextConformer = conforNetsConformerSet.conformers[clampedIndex];
+        if (nextConformer && nextConformer.id !== selectedDesignId) {
+            setSelectedDesignId(nextConformer.id);
+        }
+    }, [conforNetsConformerSet, selectedDesignId, setSelectedDesignId]);
+    const toggleConforNetsOverlay = useCallback((conformerId: string) => {
+        setConforNetsOverlayIds((currentIds) => (
+            currentIds.includes(conformerId)
+                ? currentIds.filter((id) => id !== conformerId)
+                : [...currentIds, conformerId]
+        ));
+    }, []);
     const preferredRfMetricScope = normalizeRfScreeningScope(activeJob?.params?.rfantibody_screen_reference_scope) ?? 'cdr_loops';
     const effectiveRfMetricScope = rfMetricScope ?? preferredRfMetricScope;
     const rfMetricLabels = RF_SCOPE_LABELS[effectiveRfMetricScope];
@@ -475,12 +536,15 @@ export default function StructureViewerPane({
 
                 if (residueRes?.ok) {
                     const data = await residueRes.json();
-                    setPlddtProfile(data.plddt || []);
+                    setPlddtProfile(Array.isArray(data.plddt) ? data.plddt : []);
+                    setResidueMetricNumbers(Array.isArray(data.residue_numbers) ? data.residue_numbers : []);
                 } else {
                     setPlddtProfile([]);
+                    setResidueMetricNumbers([]);
                 }
-            } catch (err) {
-                console.error('Failed to fetch structure metrics:', err);
+            } catch {
+                setPlddtProfile([]);
+                setResidueMetricNumbers([]);
             }
         };
 
@@ -679,6 +743,21 @@ export default function StructureViewerPane({
         ? antibodyStructureUrl
         : (selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined);
     const viewerStructureFormat = effectiveColorMode === 'cdr' && antibodyStructureUrl ? 'pdb' : structureFormat;
+    const conforNetsOverlayStructures = useMemo(() => {
+        if (!conforNetsConformerSet || effectiveColorMode === 'cdr') return [];
+        const conformerById = new Map(conforNetsConformerSet.conformers.map((conformer) => [conformer.id, conformer]));
+        return resolvedConforNetsOverlayIds.map((id) => {
+            const conformer = conformerById.get(id);
+            return {
+                id,
+                structureUrl: `/api/designs/${id}/pdb`,
+                format: viewerStructureFormat,
+                label: conformer?.frameIndex == null
+                    ? (conformer?.name ?? id)
+                    : `Frame ${conformer.frameIndex} • ${conformer.name}`,
+            };
+        });
+    }, [conforNetsConformerSet, effectiveColorMode, resolvedConforNetsOverlayIds, viewerStructureFormat]);
 
     useEffect(() => {
         if (colorMode === 'plddt' && !hasResidueConfidence) {
@@ -881,6 +960,9 @@ export default function StructureViewerPane({
     const confidenceResidueCount = plddtProfile.length > 0
         ? plddtProfile.length
         : Object.values(chainMetrics).reduce((sum, metric) => sum + (metric?.length || 0), 0);
+    const confidenceOverlayReadyCopy = conforNetsUsesScalarPlddtFallback
+        ? `ConforNets scalar pLDDT fallback is active: Mol* residue coloring uses the displayed scalar pLDDT (${formatMetricValue(conforNetsScalarPlddt, 1)}) uniformly because no per-residue confidence tensor is present.`
+        : `${headlineConfidenceLabel} overlays are ready. Mol* residue coloring uses the same ${bfactorLabel} residue/chain map shown in this panel.`;
     const interfacePairScoreCount = ipsaeInterface?.pair_scores?.length ?? 0;
     const chainPairIptmChainCount = chainPairIptm?.chain_ids?.length ?? 0;
 
@@ -891,20 +973,18 @@ export default function StructureViewerPane({
         ...(hasPae ? [{ id: 'pae', label: 'PAE' }] : []),
     ] as Array<{ id: OverlayView; label: string }>;
 
-    const plddtResidueColors = (() => {
+    const plddtResidueColors = useMemo(() => {
         if (effectiveColorMode !== 'plddt') return undefined;
-        const colorMap = new Map<string, { r: number; g: number; b: number }>();
-        for (const [chainId, metric] of Object.entries(chainMetrics)) {
-            const plddt = metric?.plddt || [];
-            const residueNumbers = metric?.residue_numbers || plddt.map((_, idx) => idx + 1);
-            for (let idx = 0; idx < plddt.length; idx++) {
-                const residueNumber = residueNumbers[idx];
-                if (residueNumber == null) continue;
-                colorMap.set(residueColorKey(chainId, residueNumber), plddtColor(plddt[idx]));
-            }
-        }
-        return colorMap.size > 0 ? colorMap : undefined;
-    })();
+        return buildPlddtResidueColorMap({
+            chainMetrics,
+            plddtProfile,
+            residueNumbers: residueMetricNumbers,
+            fallbackChainId: conforNetsDefaultChainId,
+            scalarPlddtFallback: conforNetsScalarPlddt,
+            preferScalarFallback: conforNetsUsesScalarPlddtFallback,
+            colorForValue: plddtColor,
+        });
+    }, [chainMetrics, conforNetsDefaultChainId, conforNetsScalarPlddt, conforNetsUsesScalarPlddtFallback, effectiveColorMode, plddtProfile, residueMetricNumbers]);
 
     const frustrationResidueColors = (() => {
         if (effectiveColorMode !== 'frustration' || !selectedDesign?.frustration_residues?.length) return undefined;
@@ -1968,7 +2048,7 @@ export default function StructureViewerPane({
                         )}
                         {hasResidueConfidence ? (
                             <div className="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
-                                {headlineConfidenceLabel} overlays are ready. Use the quick-view buttons above to jump straight into residue coloring.
+                                {confidenceOverlayReadyCopy}
                             </div>
                         ) : (
                             <div className="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
@@ -2371,6 +2451,68 @@ export default function StructureViewerPane({
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▾</div>
             </div>
 
+            {conforNetsNavigation && conforNetsConformerSet && conforNetsNavigation.totalCount > 1 && (
+                <div
+                    data-confornets-conformer-controls
+                    className={`flex items-center gap-2 rounded-lg border border-violet-500/30 px-2 py-1.5 text-xs ${isCompact ? 'bg-slate-900/85 backdrop-blur-sm' : 'bg-violet-500/10'}`}
+                >
+                    <button
+                        type="button"
+                        onClick={() => conforNetsNavigation.previousId && setSelectedDesignId(conforNetsNavigation.previousId)}
+                        disabled={!conforNetsNavigation.previousId}
+                        className="rounded border border-violet-500/30 px-2 py-1 text-violet-100 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500 hover:bg-violet-500/20"
+                        title="Previous conformation"
+                    >
+                        ‹
+                    </button>
+                    <label className="flex min-w-[220px] items-center gap-2 text-violet-100">
+                        <span className="whitespace-nowrap">Conformation {conforNetsNavigation.selectedNumber}/{conforNetsNavigation.totalCount}</span>
+                        <input
+                            type="range"
+                            min={conforNetsNavigation.sliderMin}
+                            max={conforNetsNavigation.sliderMax}
+                            value={conforNetsNavigation.sliderValue}
+                            onChange={(event) => selectConforNetsConformerByIndex(Number(event.target.value))}
+                            className="w-28 accent-violet-400"
+                            aria-label="ConforNets conformation slider"
+                        />
+                    </label>
+                    <button
+                        type="button"
+                        onClick={() => conforNetsNavigation.nextId && setSelectedDesignId(conforNetsNavigation.nextId)}
+                        disabled={!conforNetsNavigation.nextId}
+                        className="rounded border border-violet-500/30 px-2 py-1 text-violet-100 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500 hover:bg-violet-500/20"
+                        title="Next conformation"
+                    >
+                        ›
+                    </button>
+                    <details className="relative">
+                        <summary className="cursor-pointer select-none rounded border border-violet-500/30 px-2 py-1 text-violet-100 hover:bg-violet-500/20">
+                            Overlay conformers ({resolvedConforNetsOverlayIds.length})
+                        </summary>
+                        <div className="absolute left-0 top-full z-50 mt-2 max-h-64 w-72 overflow-y-auto rounded-lg border border-violet-500/30 bg-slate-950/95 p-2 shadow-xl backdrop-blur-sm">
+                            <div className="mb-2 text-[11px] text-slate-400">Overlay extra ConforNets frames on the active conformation.</div>
+                            {conforNetsConformerSet.conformers.map((conformer, index) => {
+                                const isActive = conformer.id === conforNetsNavigation.selectedId;
+                                return (
+                                    <label key={conformer.id} className={`flex items-center gap-2 rounded px-2 py-1 ${isActive ? 'text-slate-500' : 'text-slate-200 hover:bg-slate-800'}`}>
+                                        <input
+                                            type="checkbox"
+                                            checked={resolvedConforNetsOverlayIds.includes(conformer.id)}
+                                            disabled={isActive}
+                                            onChange={() => toggleConforNetsOverlay(conformer.id)}
+                                            className="accent-violet-400"
+                                        />
+                                        <span className="truncate">{conformer.frameIndex == null ? `Frame ${index}` : `Frame ${conformer.frameIndex}`} • {conformer.name}</span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    </details>
+                    <span className="max-w-[240px] truncate text-[11px] text-violet-200" title={conforNetsNavigation.selectedLabel}>{conforNetsNavigation.selectedLabel}</span>
+                </div>
+            )}
+
             {/* Color Mode */}
             <select
                 value={effectiveColorMode}
@@ -2510,11 +2652,12 @@ export default function StructureViewerPane({
                         style={isFullscreen ? undefined : { height: viewerLayout.viewerHeight }}
                     >
                         <MolstarViewer
-                            key={selectedDesignId + '_' + effectiveColorMode}
+                            key={`${selectedDesignId}_${effectiveColorMode}_${conforNetsOverlaySignature}`}
                             structureUrl={viewerStructureUrl}
                             format={viewerStructureFormat}
                             alphafoldView={effectiveColorMode === 'plddt' && !plddtResidueColors}
                             selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
+                            overlayStructures={conforNetsOverlayStructures}
                             residueColors={
                                 effectiveColorMode === 'plddt'
                                     ? plddtResidueColors
