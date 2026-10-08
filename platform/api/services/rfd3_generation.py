@@ -134,9 +134,10 @@ def normalize_generation_params(
     return normalized, request, digest
 
 
-def materialize_generation_request(
+def bind_generation_request(
     params: Mapping[str, Any], *, output_dir: str | Path, job_id: str
 ) -> tuple[dict[str, Any], Path]:
+    """Pure native request binding shared by preview and local materialization."""
     request_template = params.get("rfd3_generation_request")
     if not isinstance(request_template, dict) or request_template.get("schema") != REQUEST_SCHEMA:
         raise GenerationContractError("normalized RFD3 generation request is missing")
@@ -151,7 +152,34 @@ def materialize_generation_request(
         "job_id": str(job_id),
     }
     digest = request_sha256(request)
-    root = Path(output_dir).expanduser().resolve()
+    destination = Path(output_dir).expanduser().resolve() / "requests" / "rfd3_generation_request.json"
+    normalized = dict(params)
+    normalized["rfd3_generation_request"] = request
+    normalized["rfd3_generation_request_path"] = str(destination)
+    normalized["rfd3_generation_request_id"] = request_id
+    normalized["rfd3_generation_request_sha256"] = digest
+    normalized["rfd3_generation_result_contract_id"] = "rfd3_generation_v1"
+    return normalized, destination
+
+
+def generation_result_contract(params: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Bind the native manifest/import owner, not a generic Design review profile."""
+    request = params.get("rfd3_generation_request")
+    if (not isinstance(request, dict) or request.get("schema") != REQUEST_SCHEMA
+            or params.get("rfd3_generation_result_contract_id") != "rfd3_generation_v1"
+            or not params.get("rfd3_generation_request_path")):
+        return None
+    return {"contract_id": "rfd3_generation_v1", "aggregate_schema": RESULT_SCHEMA,
+        "native_contract_authority": "platform/api/services/result_ingester.py:_ingest_rfd3_generation_manifest",
+        "completion_authority": "platform/api/services/rfd3_generation.py:validate_result_manifest"}
+
+
+def materialize_generation_request(
+    params: Mapping[str, Any], *, output_dir: str | Path, job_id: str
+) -> tuple[dict[str, Any], Path]:
+    normalized, destination = bind_generation_request(params, output_dir=output_dir, job_id=job_id)
+    request = normalized["rfd3_generation_request"]
+    root = destination.parent.parent
     if not root.is_dir() or root.is_symlink():
         raise GenerationContractError("RFD3 generation output root is missing or unsafe")
     request_dir = root / "requests"
@@ -172,12 +200,6 @@ def materialize_generation_request(
     except OSError as exc:
         temporary.unlink(missing_ok=True)
         raise GenerationContractError(f"failed to materialize RFD3 generation request: {exc}") from exc
-    normalized = dict(params)
-    normalized["rfd3_generation_request"] = request
-    normalized["rfd3_generation_request_path"] = str(destination)
-    normalized["rfd3_generation_request_id"] = request_id
-    normalized["rfd3_generation_request_sha256"] = digest
-    normalized["rfd3_generation_result_contract_id"] = "rfd3_generation_v1"
     return normalized, destination
 
 
