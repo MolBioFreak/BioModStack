@@ -11,7 +11,7 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from database import Design
-from routers.designs import _design_to_response
+from routers.designs import _design_to_response, _enrich_design_responses_from_sources
 
 
 def test_design_response_surfaces_generic_import_metadata_for_esmfold_rows() -> None:
@@ -167,3 +167,44 @@ def test_design_response_fails_closed_for_unknown_model_contract() -> None:
     assert response.result_set_label is None
     assert response.analysis_contract_id is None
     assert response.supported_analyzers == []
+
+
+def test_ppiflow_children_inherit_source_binder_length_from_embedded_source_uuid() -> None:
+    source = Design(
+        id="39c69ef1-3e4f-465f-870a-bbf79f5363cf",
+        job_id="source-job",
+        name="job0_001_f731565d-9c96-4721-8953-0f7af8a2084a_seq_0",
+        binder_length=111,
+        cdr_h1_length=8,
+        cdr_h2_length=7,
+        cdr_h3_length=13,
+        artifact_class="sequence_designed_complex",
+        stage_family="fampnn",
+        stage_mode="post_fampnn",
+        is_favorite=False,
+        created_at=datetime(2026, 4, 14, 18, 0, 0),
+    )
+    child = Design(
+        id="49e43d95-e26a-44ac-a6d0-e5f9076c5fcf",
+        job_id="child-job",
+        name="job0_001_f731565d-9c96-4721-8953-0f7af8a2084a_seq_0_ppiflow_seq_3_sample0",
+        binder_length=None,
+        cdr_h1_length=None,
+        cdr_h2_length=None,
+        cdr_h3_length=None,
+        artifact_class="sequence_designed_complex",
+        stage_family="ppiflow",
+        stage_mode="maturation",
+        ppiflow_filter_passed=False,
+        provenance={"maturation_filter_passed": False},
+        is_favorite=False,
+        created_at=datetime(2026, 4, 14, 18, 0, 0),
+    )
+
+    responses = [_design_to_response(source), _design_to_response(child)]
+    _enrich_design_responses_from_sources(responses)
+
+    assert responses[1].binder_length == 111
+    assert responses[1].cdr_h1_length == 8
+    assert responses[1].cdr_h2_length == 7
+    assert responses[1].cdr_h3_length == 13
