@@ -39,7 +39,10 @@ export default defineConfig(({ mode }) => ({
     }
   },
   server: {
-    host: '0.0.0.0',
+    // Tailscale Serve proxies https://compute-node.taileb3a90.ts.net → 127.0.0.1:5173
+    // HMR disabled: WebSocket can't negotiate wss↔ws through the TLS proxy,
+    // causing remote clients to hang.  Local edits still trigger a full reload.
+    hmr: false,
     allowedHosts: ['compute-node.taileb3a90.ts.net'],
     // Prevent watching pipeline directories that can have millions of files
     watch: {
@@ -52,6 +55,18 @@ export default defineConfig(({ mode }) => ({
       ]
     },
     proxy: {
+      // MJPEG stream: dedicated entry to prevent http-proxy from buffering
+      // the multipart/x-mixed-replace response (must precede generic /api)
+      '/api/bioxp/camera/mjpeg': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes: any) => {
+            proxyRes.headers['x-accel-buffering'] = 'no';
+            proxyRes.headers['cache-control'] = 'no-cache, no-store, no-transform';
+          });
+        },
+      },
       // Proxy /api requests to backend server
       '/api': {
         target: 'http://localhost:8000',

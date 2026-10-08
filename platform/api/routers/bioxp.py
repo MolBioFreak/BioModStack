@@ -70,6 +70,26 @@ def get_current_url() -> str:
     return _GLOBAL_LINKAGE_URL
 
 
+async def _daemon_probe() -> dict:
+    probe_cmd = (
+        f"if curl -fsS --max-time 3 http://127.0.0.1:{ROBOT_DAEMON_PORT}/status >/dev/null; then "
+        f"echo '__HEALTHY__'; else echo '__UNHEALTHY__'; fi; "
+        f"pgrep -af '[u]vicorn.*bioxp.api' || echo '__NO_PIDS__'"
+    )
+    result = await _ssh_exec(probe_cmd, timeout_s=8.0)
+    healthy = "__HEALTHY__" in result["stdout"]
+    lines = []
+    for line in result["stdout"].splitlines():
+        stripped = line.strip()
+        if not stripped or stripped in {"__HEALTHY__", "__UNHEALTHY__", "__NO_PIDS__"}:
+            continue
+        lines.append(stripped)
+    return {
+        "healthy": healthy,
+        "detail": "\n".join(lines) if lines else None,
+    }
+
+
 async def _ssh_exec(cmd: str, timeout_s: float = 10.0) -> dict:
     """Run a command on the robot via SSH. Returns stdout, stderr, and return code."""
     ssh_cmd = [
@@ -135,23 +155,27 @@ async def disconnect_linkage():
 
 @router.get("/daemon/status")
 async def daemon_status():
-    """Check if the uvicorn process is running on the remote host."""
-    result = await _ssh_exec("pgrep -af '[u]vicorn.*bioxp.api' || echo '__NOT_RUNNING__'")
-    is_running = "__NOT_RUNNING__" not in result["stdout"]
+    """Check if the uvicorn process is actually healthy on the remote host."""
+    probe = await _daemon_probe()
     return {
-        "running": is_running,
+        "running": probe["healthy"],
+        "healthy": probe["healthy"],
+        "stale_process": bool(probe["detail"]) and not probe["healthy"],
         "host": ROBOT_SSH_HOST,
         "port": ROBOT_DAEMON_PORT,
-        "detail": result["stdout"] if is_running else None,
+        "detail": probe["detail"],
     }
 
 @router.post("/daemon/start")
 async def daemon_start():
     """Start the BioXP API daemon on the remote host via SSH."""
-    # First check if already running
-    check = await _ssh_exec("pgrep -af '[u]vicorn.*bioxp.api' || echo '__NOT_RUNNING__'")
-    if "__NOT_RUNNING__" not in check["stdout"]:
-        return {"status": "already_running", "detail": check["stdout"]}
+    probe = await _daemon_probe()
+    if probe["healthy"]:
+        return {"status": "already_running", "detail": probe["detail"]}
+
+    if probe["detail"]:
+        await _ssh_exec("pkill -f '[u]vicorn.*bioxp.api' || true", timeout_s=10.0)
+        await asyncio.sleep(1.0)
 
     # Start daemon in a detached screen/nohup so it survives SSH disconnect
     start_cmd = (
@@ -165,14 +189,13 @@ async def daemon_start():
     pid = result["stdout"].strip().split("\n")[-1]
 
     # Brief wait then verify
-    await asyncio.sleep(1.5)
-    verify = await _ssh_exec("pgrep -af '[u]vicorn.*bioxp.api' || echo '__NOT_RUNNING__'")
-    is_running = "__NOT_RUNNING__" not in verify["stdout"]
+    await asyncio.sleep(2.0)
+    verify = await _daemon_probe()
 
     return {
-        "status": "started" if is_running else "failed",
+        "status": "started" if verify["healthy"] else "failed",
         "pid": pid,
-        "detail": verify["stdout"],
+        "detail": verify["detail"],
     }
 
 @router.post("/daemon/stop")
@@ -272,8 +295,11 @@ async def proxy_stream(path: str, request: Request, params: Optional[Dict[str, A
 
     content_type = upstream.headers.get("content-type", "application/octet-stream")
     headers = {
-        "Cache-Control": upstream.headers.get("cache-control", "no-store"),
-        "Pragma": upstream.headers.get("pragma", "no-cache"),
+        "Cache-Control": "no-cache, no-store, no-transform",
+        "Pragma": "no-cache",
+        # Prevent reverse-proxy buffering (Tailscale Serve, nginx, etc.)
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
     }
     if upstream.headers.get("x-bioxp-camera-device"):
         headers["X-BioXp-Camera-Device"] = upstream.headers["x-bioxp-camera-device"]
@@ -335,6 +361,22 @@ async def get_axis_status(axis: str):
 @router.post("/motion/interlock/prepare")
 async def prepare_interlock():
     return await proxy_request("POST", "/motion/interlock/prepare")
+
+@router.get("/motion/power/status")
+async def motion_power_status():
+    return await proxy_request("GET", "/motion/power/status", timeout=30.0)
+
+@router.post("/motion/power/enable")
+async def motion_power_enable():
+    return await proxy_request("POST", "/motion/power/enable", timeout=40.0)
+
+@router.post("/motion/power/diag")
+async def motion_power_diag():
+    return await proxy_request("POST", "/motion/power/diag", timeout=55.0)
+
+@router.post("/motion/hard_reset")
+async def motion_hard_reset(request: Request):
+    return await proxy_request("POST", "/motion/hard_reset", await request.json(), timeout=90.0)
 
 @router.post("/motion/clear_lock")
 async def clear_lock():
@@ -448,6 +490,10 @@ async def camera_devices():
 async def camera_controls(device: str = "/dev/video0"):
     return await proxy_request("GET", "/camera/controls", params={"device": device})
 
+@router.post("/camera/control")
+async def camera_control(request: Request):
+    return await proxy_request("POST", "/camera/control", await request.json(), timeout=20.0)
+
 @router.post("/camera/snapshot")
 async def camera_snapshot(request: Request):
     return await proxy_request("POST", "/camera/snapshot", await request.json())
@@ -459,6 +505,14 @@ async def camera_stream_health(request: Request):
 @router.post("/camera/auto_recover")
 async def camera_auto_recover(request: Request):
     return await proxy_request("POST", "/camera/auto_recover", await request.json(), timeout=90.0)
+
+@router.post("/camera/reset")
+async def camera_reset(request: Request):
+    return await proxy_request("POST", "/camera/reset", await request.json(), timeout=20.0)
+
+@router.post("/camera/stop")
+async def camera_stop(request: Request):
+    return await proxy_request("POST", "/camera/stop", await request.json(), timeout=20.0)
 
 @router.get("/camera/mjpeg")
 async def camera_mjpeg(

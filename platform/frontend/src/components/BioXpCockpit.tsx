@@ -1,12 +1,16 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useIsMutating } from '@tanstack/react-query';
 import {
     getCameraStreamUrl,
+    useSetCameraControl,
     useAxisStatus,
     useBioXpStatus,
     useCameraAutoRecover,
     useCameraControls,
     useCameraDevices,
+    useCameraReset,
     useCameraSnapshot,
+    useCameraStop,
     useCameraStreamHealth,
     useChillerBaseline,
     useChillerHardReset,
@@ -36,7 +40,7 @@ import {
     useThermalHardReset,
     useThermalSnapshot
 } from '../lib/bioxpClient';
-import type { AxisName, ChillerBankName, ThermalBankName } from '../lib/bioxpClient';
+import type { AxisName, CameraControlRow, ChillerBankName, ThermalBankName } from '../lib/bioxpClient';
 
 const getErrorMessage = (error: unknown) => {
     if (error instanceof Error) {
@@ -71,14 +75,142 @@ const JsonBlock = ({ title, data, fallback = 'No data yet.' }: { title: string; 
 );
 
 const CONNECTION_STICKY_WINDOW_MS = 15000;
+const CAMERA_STREAM_MODES = [
+    { key: '640x480', label: '640x480 / 30 FPS', width: 640, height: 480, maxFps: 30 },
+    { key: '1280x720', label: '1280x720 / 30 FPS', width: 1280, height: 720, maxFps: 30 },
+    { key: '1920x1080', label: '1920x1080 / 15 FPS', width: 1920, height: 1080, maxFps: 15 },
+] as const;
+const V4L2_CTRL_TYPE_INTEGER = 1;
+const V4L2_CTRL_TYPE_BOOLEAN = 2;
+const V4L2_CTRL_TYPE_MENU = 3;
+const V4L2_CTRL_FLAG_DISABLED = 0x00000002;
+const V4L2_CTRL_FLAG_READ_ONLY = 0x00000004;
+const CAMERA_CONTROL_PRIORITY = [
+    'zoom_absolute',
+    'auto_exposure',
+    'exposure_time_absolute',
+    'white_balance_automatic',
+    'white_balance_temperature',
+    'focus_auto',
+    'focus_absolute',
+    'gain',
+    'brightness',
+    'contrast',
+    'saturation',
+    'sharpness',
+    'backlight_compensation',
+    'power_line_frequency',
+    'gamma',
+    'hue',
+    'pan_absolute',
+    'tilt_absolute',
+] as const;
+const CAMERA_CONTROL_LABELS: Record<string, string> = {
+    zoom_absolute: 'Zoom',
+    focus_auto: 'Autofocus',
+    focus_absolute: 'Focus',
+    auto_exposure: 'Exposure Mode',
+    exposure_time_absolute: 'Exposure Time',
+    exposure_auto: 'Exposure Mode',
+    exposure_absolute: 'Exposure',
+    gain: 'Gain',
+    brightness: 'Brightness',
+    contrast: 'Contrast',
+    saturation: 'Saturation',
+    sharpness: 'Sharpness',
+    white_balance_automatic: 'Auto White Balance',
+    white_balance_temperature_auto: 'Auto White Balance',
+    white_balance_temperature: 'White Balance',
+    backlight_compensation: 'Backlight',
+    power_line_frequency: 'Power Line',
+    gamma: 'Gamma',
+    hue: 'Hue',
+    pan_absolute: 'Pan',
+    tilt_absolute: 'Tilt',
+};
+const CAMERA_CONTROL_OPTIONS: Record<string, Array<{ value: number; label: string }>> = {
+    focus_auto: [
+        { value: 0, label: 'Off' },
+        { value: 1, label: 'On' },
+    ],
+    white_balance_temperature_auto: [
+        { value: 0, label: 'Manual' },
+        { value: 1, label: 'Auto' },
+    ],
+    white_balance_automatic: [
+        { value: 0, label: 'Manual' },
+        { value: 1, label: 'Auto' },
+    ],
+    auto_exposure: [
+        { value: 0, label: 'Auto' },
+        { value: 1, label: 'Manual' },
+        { value: 2, label: 'Shutter' },
+        { value: 3, label: 'Aperture' },
+    ],
+    exposure_auto: [
+        { value: 0, label: 'Auto' },
+        { value: 1, label: 'Manual' },
+        { value: 2, label: 'Shutter' },
+        { value: 3, label: 'Aperture' },
+    ],
+    power_line_frequency: [
+        { value: 0, label: 'Disabled' },
+        { value: 1, label: '50 Hz' },
+        { value: 2, label: '60 Hz' },
+    ],
+};
 
-const AxisControls = ({ axis, label, enabled }: { axis: AxisName; label: string; enabled: boolean }) => {
-    const { data, isLoading, isError, error } = useAxisStatus(axis, enabled);
+const normalizeCameraControlName = (name: string) =>
+    name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+const clampCameraControlValue = (control: CameraControlRow, value: number) => {
+    const step = Math.max(1, Number(control.step) || 1);
+    const minimum = Number(control.minimum) || 0;
+    const maximum = Number(control.maximum) || minimum;
+    const clamped = Math.min(maximum, Math.max(minimum, value));
+    const snapped = minimum + Math.round((clamped - minimum) / step) * step;
+    return Math.min(maximum, Math.max(minimum, snapped));
+};
+
+const isWritableCameraControl = (control: CameraControlRow) => {
+    const flags = Number(control.flags) || 0;
+    if ((flags & V4L2_CTRL_FLAG_DISABLED) !== 0 || (flags & V4L2_CTRL_FLAG_READ_ONLY) !== 0) {
+        return false;
+    }
+    return [V4L2_CTRL_TYPE_INTEGER, V4L2_CTRL_TYPE_BOOLEAN, V4L2_CTRL_TYPE_MENU].includes(Number(control.type));
+};
+
+const cameraControlSortWeight = (control: CameraControlRow) => {
+    const normalizedName = normalizeCameraControlName(control.name);
+    const idx = CAMERA_CONTROL_PRIORITY.indexOf(normalizedName as (typeof CAMERA_CONTROL_PRIORITY)[number]);
+    return idx === -1 ? CAMERA_CONTROL_PRIORITY.length + 100 : idx;
+};
+
+const AxisControls = ({
+    axis,
+    label,
+    enabled,
+    pollIntervalMs = 8000,
+}: {
+    axis: AxisName;
+    label: string;
+    enabled: boolean;
+    pollIntervalMs?: number | false;
+}) => {
     const moveRelative = useMoveRelative();
     const moveAbsolute = useMoveAbsolute();
     const homeAxis = useHomeAxis();
-    const [steps, setSteps] = useState(1000);
+    const [steps, setSteps] = useState(100);
     const [absolutePosition, setAbsolutePosition] = useState(0);
+    const [lastMotionResult, setLastMotionResult] = useState<any>(null);
+    const [commandStartPosition, setCommandStartPosition] = useState<number | null>(null);
+    const [commandLabel, setCommandLabel] = useState<string | null>(null);
+    const localMotionBusy = moveRelative.isPending || moveAbsolute.isPending || homeAxis.isPending;
+    const { data, isLoading, isError, error, refetch } = useAxisStatus(
+        axis,
+        enabled,
+        localMotionBusy ? 1000 : pollIntervalMs,
+    );
 
     const reportedPosition = data?.status?.position?.position;
     const reportedSpeed = data?.status?.speed?.speed;
@@ -92,6 +224,35 @@ const AxisControls = ({ axis, label, enabled }: { axis: AxisName; label: string;
     const moving = typeof reportedSpeed === 'number' ? reportedSpeed !== 0 : false;
     const leftActive = data?.switch_activity?.left_active;
     const rightActive = data?.switch_activity?.right_active;
+    const leftMasked = data?.preset?.disable_left === true;
+    const rightMasked = data?.preset?.disable_right === true;
+    const conflictingSwitches = leftActive === true && rightActive === true;
+    const negativeMoveBlocked = leftActive === true && !leftMasked && !conflictingSwitches;
+    const positiveMoveBlocked = rightActive === true && !rightMasked && !conflictingSwitches;
+    const motionProfile = lastMotionResult?.motion_profile ?? {
+        speed: data?.preset?.speed ?? 100,
+        acc: data?.preset?.acc ?? 50,
+        no_delta_timeout_s: 2,
+    };
+    const liveDelta =
+        commandStartPosition != null && typeof reportedPosition === 'number'
+            ? reportedPosition - commandStartPosition
+            : null;
+
+    const startCommand = (labelText: string) => {
+        setCommandLabel(labelText);
+        setCommandStartPosition(typeof reportedPosition === 'number' ? reportedPosition : null);
+    };
+
+    const finishCommand = (payload: any) => {
+        setLastMotionResult(payload);
+        setCommandLabel(null);
+        if (typeof payload?.position_after?.position === 'number') {
+            setAbsolutePosition(payload.position_after.position);
+        } else if (typeof payload?.home?.position_after?.position === 'number') {
+            setAbsolutePosition(payload.home.position_after.position);
+        }
+    };
 
     return (
         <div className="p-3 bg-surface-tertiary rounded-lg border border-accent/20 space-y-3">
@@ -100,9 +261,17 @@ const AxisControls = ({ axis, label, enabled }: { axis: AxisName; label: string;
                     <span className="text-xs text-accent font-semibold">{label}</span>
                     {isLoading && <span className="text-xs text-content-muted animate-pulse">Polling...</span>}
                 </div>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full border ${moving ? 'bg-warning/20 text-warning border-warning/30' : 'bg-success/20 text-success border-success/30'}`}>
-                    {moving ? 'MOVING' : 'IDLE'}
-                </span>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => refetch()}
+                        className="px-2 py-0.5 text-[10px] rounded border border-border-primary text-content-muted hover:text-content transition-colors"
+                    >
+                        Refresh
+                    </button>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full border ${moving || localMotionBusy ? 'bg-warning/20 text-warning border-warning/30' : 'bg-success/20 text-success border-success/30'}`}>
+                        {moving || localMotionBusy ? 'MOVING' : 'IDLE'}
+                    </span>
+                </div>
             </div>
 
             {isError && <div className="text-xs text-error">{getErrorMessage(error) ?? 'Unable to read axis status.'}</div>}
@@ -110,8 +279,12 @@ const AxisControls = ({ axis, label, enabled }: { axis: AxisName; label: string;
             <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-content-muted">
                 <div>Pos: {reportedPosition ?? 'n/a'}</div>
                 <div>Speed: {reportedSpeed ?? 'n/a'}</div>
-                <div>L switch: {leftActive == null ? 'n/a' : leftActive ? '1' : '0'}</div>
-                <div>R switch: {rightActive == null ? 'n/a' : rightActive ? '1' : '0'}</div>
+                <div>L sw: {leftActive == null ? 'n/a' : leftActive ? '1' : '0'}{leftMasked ? ' (masked)' : ''}</div>
+                <div>R sw: {rightActive == null ? 'n/a' : rightActive ? '1' : '0'}{rightMasked ? ' (masked)' : ''}</div>
+                <div>Cmd speed: {motionProfile.speed}</div>
+                <div>Cmd acc: {motionProfile.acc}</div>
+                <div>Stall abort: {motionProfile.no_delta_timeout_s}s</div>
+                <div>Live Δ: {liveDelta ?? 'n/a'}</div>
             </div>
 
             <div className="flex gap-2 items-center">
@@ -123,21 +296,48 @@ const AxisControls = ({ axis, label, enabled }: { axis: AxisName; label: string;
                     className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
                 />
                 <button
-                    onClick={() => moveRelative.mutate({ axis, steps: -Math.abs(steps) })}
-                    disabled={!enabled || moveRelative.isPending}
+                    onClick={() => {
+                        startCommand(`REL ${-Math.abs(steps)}`);
+                        moveRelative.mutate(
+                            { axis, steps: -Math.abs(steps) },
+                            {
+                                onSuccess: (payload) => finishCommand(payload),
+                                onError: () => setCommandLabel(null),
+                            },
+                        );
+                    }}
+                    disabled={!enabled || moveRelative.isPending || negativeMoveBlocked}
                     className="px-3 py-1.5 bg-surface-secondary hover:bg-surface border border-accent/20 text-content text-xs rounded-lg transition-colors"
                 >
                     ◄
                 </button>
                 <button
-                    onClick={() => moveRelative.mutate({ axis, steps: Math.abs(steps) })}
-                    disabled={!enabled || moveRelative.isPending}
+                    onClick={() => {
+                        startCommand(`REL ${Math.abs(steps)}`);
+                        moveRelative.mutate(
+                            { axis, steps: Math.abs(steps) },
+                            {
+                                onSuccess: (payload) => finishCommand(payload),
+                                onError: () => setCommandLabel(null),
+                            },
+                        );
+                    }}
+                    disabled={!enabled || moveRelative.isPending || positiveMoveBlocked}
                     className="px-3 py-1.5 bg-surface-secondary hover:bg-surface border border-accent/20 text-content text-xs rounded-lg transition-colors"
                 >
                     ►
                 </button>
                 <button
-                    onClick={() => homeAxis.mutate({ axis })}
+                    onClick={() => {
+                        startCommand('HOME');
+                        homeAxis.mutate(
+                            { axis },
+                            {
+                                onSuccess: (payload) => finishCommand(payload),
+                                onError: () => setCommandLabel(null),
+                            },
+                        );
+                    }}
                     disabled={!enabled || homeAxis.isPending}
                     className="ml-auto px-3 py-1.5 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
                 >
@@ -154,7 +354,16 @@ const AxisControls = ({ axis, label, enabled }: { axis: AxisName; label: string;
                     className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
                 />
                 <button
-                    onClick={() => moveAbsolute.mutate({ axis, position_steps: absolutePosition })}
+                    onClick={() => {
+                        startCommand(`ABS ${absolutePosition}`);
+                        moveAbsolute.mutate(
+                            { axis, position_steps: absolutePosition },
+                            {
+                                onSuccess: (payload) => finishCommand(payload),
+                                onError: () => setCommandLabel(null),
+                            },
+                        );
+                    }}
                     disabled={!enabled || moveAbsolute.isPending}
                     className="px-4 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
                 >
@@ -162,11 +371,257 @@ const AxisControls = ({ axis, label, enabled }: { axis: AxisName; label: string;
                 </button>
             </div>
 
+            {(commandLabel || lastMotionResult) && (
+                <div className="text-[10px] text-content-muted font-mono">
+                    {commandLabel ? `Command: ${commandLabel}` : null}
+                    {commandLabel && liveDelta != null ? ` | live delta ${liveDelta}` : null}
+                    {!commandLabel && lastMotionResult?.position_delta != null ? `Last move delta: ${lastMotionResult.position_delta}` : null}
+                    {!commandLabel && lastMotionResult?.wait?.elapsed_ms != null ? ` | settle ${lastMotionResult.wait.elapsed_ms} ms` : null}
+                    {!commandLabel && lastMotionResult?.home?.position_delta != null ? `Last home delta: ${lastMotionResult.home.position_delta}` : null}
+                    {!commandLabel && lastMotionResult?.home?.elapsed_ms != null ? ` | home ${lastMotionResult.home.elapsed_ms} ms` : null}
+                </div>
+            )}
+
             {(moveRelative.isError || moveAbsolute.isError || homeAxis.isError) && (
                 <div className="text-[10px] text-error">
                     {getErrorMessage(moveRelative.error) || getErrorMessage(moveAbsolute.error) || getErrorMessage(homeAxis.error)}
                 </div>
             )}
+
+            {(negativeMoveBlocked || positiveMoveBlocked) && (
+                <div className="text-[10px] text-warning">
+                    {negativeMoveBlocked ? 'Negative travel blocked by active left limit.' : null}
+                    {negativeMoveBlocked && positiveMoveBlocked ? ' ' : null}
+                    {positiveMoveBlocked ? 'Positive travel blocked by active right limit.' : null}
+                </div>
+            )}
+
+            {((leftActive === true && leftMasked) || (rightActive === true && rightMasked)) && (
+                <div className="text-[10px] text-content-muted">
+                    Raw switch active but OEM preset masks that direction on this axis.
+                </div>
+            )}
+
+            {conflictingSwitches && (
+                <div className="text-[10px] text-content-muted">
+                    Raw switch conflict: both switch lines are active, so this read is not treated as a real endstop.
+                </div>
+            )}
+        </div>
+    );
+};
+
+const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; label: string; enabled: boolean }) => {
+    const moveRelative = useMoveRelative();
+    const homeAxis = useHomeAxis();
+    const [steps, setSteps] = useState(axis === 'z' ? 50 : 100);
+    const [commandStartPosition, setCommandStartPosition] = useState<number | null>(null);
+    const [commandLabel, setCommandLabel] = useState<string | null>(null);
+    const localMotionBusy = moveRelative.isPending || homeAxis.isPending;
+    const { data, isError, error } = useAxisStatus(axis, enabled, localMotionBusy ? 750 : 2500);
+
+    const position = data?.status?.position?.position;
+    const speed = data?.status?.speed?.speed;
+    const moving = typeof speed === 'number' ? speed !== 0 : false;
+    const leftActive = data?.switch_activity?.left_active;
+    const rightActive = data?.switch_activity?.right_active;
+    const leftMasked = data?.preset?.disable_left === true;
+    const rightMasked = data?.preset?.disable_right === true;
+    const conflictingSwitches = leftActive === true && rightActive === true;
+    const liveDelta =
+        commandStartPosition != null && typeof position === 'number'
+            ? position - commandStartPosition
+            : null;
+
+    const beginCommand = (labelText: string) => {
+        setCommandLabel(labelText);
+        setCommandStartPosition(typeof position === 'number' ? position : null);
+    };
+
+    return (
+        <div className="rounded-lg border border-white/10 bg-[rgba(8,16,29,0.35)] backdrop-blur-sm p-2 space-y-2 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
+            <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold text-content">{label}</span>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full border ${moving || moveRelative.isPending || homeAxis.isPending ? 'bg-white/10 text-content border-white/15' : 'bg-white/5 text-content-muted border-white/10'}`}>
+                    {moving || moveRelative.isPending || homeAxis.isPending ? 'MOVE' : 'IDLE'}
+                </span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] font-mono text-content-muted">
+                <span>P {position ?? 'n/a'}</span>
+                <span>Δ {liveDelta ?? '--'}</span>
+            </div>
+            <div className="flex items-center gap-1">
+                <input
+                    type="number"
+                    value={steps}
+                    onChange={(e) => setSteps(Number(e.target.value))}
+                    className="w-14 bg-surface border border-white/10 rounded px-2 py-1 text-[11px] text-content font-mono"
+                />
+                <button
+                    onClick={() => {
+                        beginCommand(`REL ${-Math.abs(steps)}`);
+                        moveRelative.mutate(
+                            { axis, steps: -Math.abs(steps) },
+                            { onSettled: () => setCommandLabel(null) },
+                        );
+                    }}
+                    disabled={!enabled || moveRelative.isPending || (leftActive === true && !leftMasked && !conflictingSwitches)}
+                    className="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
+                >
+                    ◄
+                </button>
+                <button
+                    onClick={() => {
+                        beginCommand(`REL ${Math.abs(steps)}`);
+                        moveRelative.mutate(
+                            { axis, steps: Math.abs(steps) },
+                            { onSettled: () => setCommandLabel(null) },
+                        );
+                    }}
+                    disabled={!enabled || moveRelative.isPending || (rightActive === true && !rightMasked && !conflictingSwitches)}
+                    className="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
+                >
+                    ►
+                </button>
+                <button
+                    onClick={() => {
+                        beginCommand('HOME');
+                        homeAxis.mutate(
+                            { axis },
+                            { onSettled: () => setCommandLabel(null) },
+                        );
+                    }}
+                    disabled={!enabled || homeAxis.isPending}
+                    className="ml-auto px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
+                >
+                    Home
+                </button>
+            </div>
+            {(leftActive === true || rightActive === true) && (
+                <div className="text-[10px] text-content-muted font-mono">
+                    {conflictingSwitches
+                        ? 'L/R switch conflict'
+                        : `${leftActive === true ? (leftMasked ? 'L sw(masked) ' : 'L sw ') : ''}${rightActive === true ? (rightMasked ? 'R sw(masked)' : 'R sw') : ''}`.trim()}
+                </div>
+            )}
+            {commandLabel && (
+                <div className="text-[10px] text-content-muted font-mono">
+                    {commandLabel}
+                </div>
+            )}
+            {(moveRelative.isError || homeAxis.isError || isError) && (
+                <div className="text-[10px] text-error">
+                    {getErrorMessage(moveRelative.error) || getErrorMessage(homeAxis.error) || getErrorMessage(error)}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const CameraSettingControl = ({
+    control,
+    disabled,
+    pending,
+    onApply,
+}: {
+    control: CameraControlRow;
+    disabled: boolean;
+    pending: boolean;
+    onApply: (control: CameraControlRow, value: number) => void;
+}) => {
+    const normalizedName = normalizeCameraControlName(control.name);
+    const currentValue =
+        typeof control.get?.value === 'number'
+            ? control.get.value
+            : typeof control.default === 'number'
+                ? control.default
+                : control.minimum;
+    const [draftValue, setDraftValue] = useState(currentValue ?? 0);
+
+    useEffect(() => {
+        setDraftValue(currentValue ?? 0);
+    }, [control.cid, currentValue]);
+
+    const controlOptions = CAMERA_CONTROL_OPTIONS[normalizedName];
+    const controlLabel = CAMERA_CONTROL_LABELS[normalizedName] ?? control.name;
+    const currentLabel = controlOptions?.find((option) => option.value === currentValue)?.label ?? currentValue;
+
+    return (
+        <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                    <div className="text-[10px] font-semibold text-content truncate">{controlLabel}</div>
+                    <div className="text-[9px] font-mono text-content-muted truncate">{control.name}</div>
+                </div>
+                <div className="text-[10px] font-mono text-content-muted text-right">
+                    {currentLabel ?? 'n/a'}
+                </div>
+            </div>
+
+            {controlOptions ? (
+                <select
+                    value={String(draftValue)}
+                    onChange={(e) => setDraftValue(Number(e.target.value))}
+                    disabled={disabled || pending}
+                    className="w-full bg-white/10 border border-white/10 rounded px-2 py-1.5 text-[11px] text-content font-mono disabled:opacity-40"
+                >
+                    {controlOptions
+                        .filter((option) => option.value >= control.minimum && option.value <= control.maximum)
+                        .map((option) => (
+                            <option key={option.value} value={option.value}>
+                                {option.label}
+                            </option>
+                        ))}
+                </select>
+            ) : (
+                <div className="space-y-2">
+                    <input
+                        type="range"
+                        min={control.minimum}
+                        max={control.maximum}
+                        step={Math.max(1, control.step || 1)}
+                        value={draftValue}
+                        onChange={(e) => setDraftValue(Number(e.target.value))}
+                        disabled={disabled || pending}
+                        className="w-full accent-white disabled:opacity-40"
+                    />
+                    <input
+                        type="number"
+                        min={control.minimum}
+                        max={control.maximum}
+                        step={Math.max(1, control.step || 1)}
+                        value={draftValue}
+                        onChange={(e) => setDraftValue(Number(e.target.value))}
+                        disabled={disabled || pending}
+                        className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-[11px] text-content font-mono disabled:opacity-40"
+                    />
+                </div>
+            )}
+
+            <div className="flex items-center gap-2">
+                <button
+                    onClick={() => onApply(control, clampCameraControlValue(control, draftValue))}
+                    disabled={disabled || pending}
+                    className="flex-1 px-2 py-1.5 rounded bg-white/10 hover:bg-white/15 text-content text-[10px] border border-white/10 disabled:opacity-30 transition-colors"
+                >
+                    {pending ? 'Applying' : 'Set'}
+                </button>
+                <button
+                    onClick={() => {
+                        const defaultValue = clampCameraControlValue(control, Number(control.default) || 0);
+                        setDraftValue(defaultValue);
+                        onApply(control, defaultValue);
+                    }}
+                    disabled={disabled || pending}
+                    className="px-2 py-1.5 rounded bg-white/10 hover:bg-white/15 text-content text-[10px] border border-white/10 disabled:opacity-30 transition-colors"
+                >
+                    Default
+                </button>
+            </div>
+
+            <div className="text-[9px] font-mono text-content-muted">
+                {control.minimum}..{control.maximum} step {Math.max(1, control.step || 1)}
+            </div>
         </div>
     );
 };
@@ -233,15 +688,23 @@ export const BioXpCockpit = () => {
     const [cameraDevice, setCameraDevice] = useState('/dev/video0');
     const [snapshot, setSnapshot] = useState<string | null>(null);
     const [pollCamera, setPollCamera] = useState(false);
-    const [streamFps, setStreamFps] = useState(8);
+    const [streamMode, setStreamMode] = useState<(typeof CAMERA_STREAM_MODES)[number]['key']>('1280x720');
+    const [streamFps, setStreamFps] = useState(30);
     const [streamNonce, setStreamNonce] = useState(0);
+    const [streamReady, setStreamReady] = useState(false);
     const [streamError, setStreamError] = useState<string | null>(null);
+    const [latestCameraAction, setLatestCameraAction] = useState<{ action: string; data: any } | null>(null);
     const [ledRgbState, setLedRgbState] = useState({ r: 32, g: 128, b: 255 });
     const [ledPctState, setLedPctState] = useState(35);
     const [lastHealthyAt, setLastHealthyAt] = useState<number | null>(null);
+    const [viewerFullscreen, setViewerFullscreen] = useState(false);
+    const [pendingCameraControlCid, setPendingCameraControlCid] = useState<number | null>(null);
+    const cameraViewerRef = useRef<HTMLDivElement | null>(null);
 
+    const motionMutationCount = useIsMutating({ mutationKey: ['bioxp', 'motion'] });
+    const motionBusy = motionMutationCount > 0;
     const { data: linkage, isLoading: linkageLoading } = useGetLinkage();
-    const { data: status, isLoading: statusLoading, isError: statusIsError, error: statusError } = useBioXpStatus();
+    const { data: status, isLoading: statusLoading, isError: statusIsError, error: statusError } = useBioXpStatus(true, motionBusy ? false : 5000);
     const setLinkage = useSetLinkage();
     const disconnectLinkage = useDisconnectLinkage();
 
@@ -257,8 +720,8 @@ export const BioXpCockpit = () => {
         lastHealthyAt != null &&
         (Date.now() - lastHealthyAt) < CONNECTION_STICKY_WINDOW_MS;
     const connectionPollingEnabled = hardwareReachable && activeTab === 'connection';
-    const controlsPollingEnabled = hardwareReachable && activeTab === 'controls';
-    const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera;
+    const controlsPollingEnabled = hardwareReachable && activeTab === 'controls' && !motionBusy;
+    const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera && !motionBusy;
 
     const latchStatus = useLatchStatus(connectionPollingEnabled);
     const latchLock = useLatchLock();
@@ -278,9 +741,14 @@ export const BioXpCockpit = () => {
 
     const cameraDevices = useCameraDevices(cameraDiscoveryEnabled);
     const cameraControls = useCameraControls(cameraDevice, cameraDiscoveryEnabled && activeTab === 'camera');
+    const cameraSetControl = useSetCameraControl();
+    const cameraReset = useCameraReset();
     const cameraSnapshot = useCameraSnapshot();
+    const cameraStop = useCameraStop();
     const cameraStreamHealth = useCameraStreamHealth();
     const cameraAutoRecover = useCameraAutoRecover();
+    const selectedStreamMode =
+        CAMERA_STREAM_MODES.find((mode) => mode.key === streamMode) ?? CAMERA_STREAM_MODES[1];
 
     useEffect(() => {
         if (linkage?.url && !linkageInput) {
@@ -306,6 +774,20 @@ export const BioXpCockpit = () => {
         }
     }, [cameraDevice, cameraDevices.data]);
 
+    useEffect(() => {
+        if (streamFps > selectedStreamMode.maxFps) {
+            setStreamFps(selectedStreamMode.maxFps);
+        }
+    }, [selectedStreamMode, streamFps]);
+
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            setViewerFullscreen(document.fullscreenElement === cameraViewerRef.current);
+        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    }, []);
+
     const isConnected = hardwareReachable || (!!status?.linkage_configured && hasRecentHardwareContact);
     const isRecovering = !hardwareReachable && !!status?.linkage_configured && hasRecentHardwareContact;
     const isDegraded = !!status && !statusIsError && (status.status === 'degraded' || isRecovering);
@@ -315,8 +797,89 @@ export const BioXpCockpit = () => {
             : status?.proxy_error?.detail
                 ? getErrorMessage(status.proxy_error.detail)
                 : null;
-    const latestCameraResult = cameraAutoRecover.data ?? cameraStreamHealth.data ?? cameraSnapshot.data ?? null;
+    const latestCameraResult = latestCameraAction?.data ?? null;
     const latestHardwareAction = reconnectRuntime.data ?? prepareInterlock.data ?? clearLock.data ?? null;
+    const recordCameraAction = (action: string, data: any) => {
+        setLatestCameraAction({ action, data });
+    };
+    const recordCameraError = (action: string, error: unknown) => {
+        setLatestCameraAction({
+            action,
+            data: {
+                ok: false,
+                error: getErrorMessage(error) ?? `${action} failed`,
+            },
+        });
+    };
+    const latestCameraSummary = (() => {
+        if (!latestCameraAction?.data) {
+            return null;
+        }
+        const action = latestCameraAction.action.toUpperCase();
+        const data = latestCameraAction.data;
+        const parts = [action];
+        if (typeof data.ok === 'boolean') {
+            parts.push(data.ok ? 'OK' : 'FAIL');
+        }
+        if (data.busy === true) {
+            parts.push('BUSY');
+        }
+        if (typeof data.frames === 'number') {
+            parts.push(`frames ${data.frames}`);
+        }
+        if (typeof data.fps_last === 'number') {
+            parts.push(`fps ${data.fps_last.toFixed(1)}`);
+        }
+        if (typeof data.rc === 'number') {
+            parts.push(`rc ${data.rc}`);
+        }
+        if (typeof data.name === 'string' && data.name) {
+            parts.push(data.name);
+        }
+        if (typeof data.set_value === 'number') {
+            parts.push(`set ${data.set_value}`);
+        }
+        if (typeof data.readback === 'number') {
+            parts.push(`read ${data.readback}`);
+        }
+        if (typeof data.device === 'string' && data.device) {
+            parts.push(data.device);
+        }
+        if (typeof data.error === 'string' && data.error) {
+            parts.push(data.error);
+        }
+        return parts.join(' | ');
+    })();
+
+    const cameraControlRows = Array.isArray(cameraControls.data?.rows)
+        ? [...cameraControls.data.rows]
+        : [];
+    const cameraVisibleControls = cameraControlRows
+        .filter((control) => isWritableCameraControl(control))
+        .sort((left, right) => {
+            const weightDelta = cameraControlSortWeight(left) - cameraControlSortWeight(right);
+            if (weightDelta !== 0) {
+                return weightDelta;
+            }
+            return normalizeCameraControlName(left.name).localeCompare(normalizeCameraControlName(right.name));
+        })
+        .slice(0, 10);
+    const hasZoomControl = cameraControlRows.some((control) => normalizeCameraControlName(control.name).includes('zoom'));
+
+    const toggleViewerFullscreen = async () => {
+        if (!cameraViewerRef.current) {
+            return;
+        }
+        try {
+            if (document.fullscreenElement === cameraViewerRef.current) {
+                await document.exitFullscreen();
+            } else {
+                await cameraViewerRef.current.requestFullscreen();
+            }
+        } catch (error) {
+            recordCameraError('fullscreen', error);
+        }
+    };
 
     const captureFrame = () => {
         setStreamError(null);
@@ -324,43 +887,268 @@ export const BioXpCockpit = () => {
             { device: cameraDevice },
             {
                 onSuccess: (data) => {
+                    recordCameraAction('capture', data);
                     if (data.image_b64) {
                         setSnapshot(data.image_b64);
                     }
-                }
+                },
+                onError: (error) => recordCameraError('capture', error),
             }
         );
     };
 
     useEffect(() => {
         if (activeTab !== 'camera' && pollCamera) {
+            cameraStop.mutate({ device: cameraDevice });
             setPollCamera(false);
         }
-    }, [activeTab, pollCamera]);
+    }, [activeTab, pollCamera, cameraDevice]);
 
     useEffect(() => {
         if (!isConnected && pollCamera) {
+            cameraStop.mutate({ device: cameraDevice });
             setPollCamera(false);
         }
-    }, [isConnected, pollCamera]);
+    }, [isConnected, pollCamera, cameraDevice]);
 
     useEffect(() => {
         if (pollCamera) {
             setStreamNonce((prev) => prev + 1);
             setStreamError(null);
+            setStreamReady(false);
         }
     }, [pollCamera, cameraDevice, streamFps]);
+
+    useEffect(() => {
+        if (!pollCamera || streamReady) {
+            return;
+        }
+        const timer = window.setTimeout(() => {
+            const message = 'Live stream opened but no frame arrived. Stop the stream and retry or run Reset/Auto Recover.';
+            setStreamError(message);
+            recordCameraAction('stream', { ok: false, error: message, device: cameraDevice });
+            setSnapshot(null);
+            cameraStop.mutate({ device: cameraDevice });
+            setPollCamera(false);
+        }, 4000);
+        return () => window.clearTimeout(timer);
+    }, [pollCamera, streamReady, streamNonce, cameraDevice]);
 
     const streamUrl = pollCamera
         ? getCameraStreamUrl({
             device: cameraDevice,
             fps: streamFps,
             quality: 7,
-            width: 640,
-            height: 480,
+            width: selectedStreamMode.width,
+            height: selectedStreamMode.height,
             nonce: streamNonce,
         })
         : null;
+    const cameraActionError =
+        getErrorMessage(cameraSnapshot.error) ||
+        getErrorMessage(cameraSetControl.error) ||
+        getErrorMessage(cameraStop.error) ||
+        getErrorMessage(cameraStreamHealth.error) ||
+        getErrorMessage(cameraAutoRecover.error) ||
+        getErrorMessage(cameraReset.error) ||
+        streamError;
+    const applyCameraControl = (control: CameraControlRow, value: number) => {
+        const nextValue = clampCameraControlValue(control, value);
+        setPendingCameraControlCid(control.cid);
+        cameraSetControl.mutate(
+            { device: cameraDevice, cid: control.cid, value: nextValue },
+            {
+                onSuccess: (data) => {
+                    recordCameraAction('control', { ...data, name: control.name });
+                    setPendingCameraControlCid(null);
+                },
+                onError: (error) => {
+                    recordCameraError('control', error);
+                    setPendingCameraControlCid(null);
+                },
+            },
+        );
+    };
+    const cameraTransportPanel = (
+        <div className="space-y-3">
+            <div className="space-y-1">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-content">Camera Control</div>
+                <div className="text-[10px] text-content-muted">On-demand live view with recovery and fullscreen calibration controls.</div>
+            </div>
+            <div className="space-y-2">
+                <label className="block text-[10px] font-mono text-content-muted">DEVICE</label>
+                <input
+                    type="text"
+                    value={cameraDevice}
+                    onChange={(e) => setCameraDevice(e.target.value)}
+                    className="w-full bg-surface/90 border border-white/10 rounded px-2 py-1.5 text-content text-[11px] font-mono"
+                />
+            </div>
+            <div className="space-y-2">
+                <label className="block text-[10px] font-mono text-content-muted">MODE</label>
+                <select
+                    value={streamMode}
+                    onChange={(e) => setStreamMode(e.target.value as (typeof CAMERA_STREAM_MODES)[number]['key'])}
+                    className="w-full bg-surface/90 border border-white/10 rounded px-2 py-1.5 text-content text-[11px] font-mono"
+                >
+                    {CAMERA_STREAM_MODES.map((mode) => (
+                        <option key={mode.key} value={mode.key}>
+                            {mode.label}
+                        </option>
+                    ))}
+                </select>
+            </div>
+            <div className="space-y-2">
+                <label className="block text-[10px] font-mono text-content-muted">FPS</label>
+                <input
+                    type="number"
+                    min={1}
+                    max={selectedStreamMode.maxFps}
+                    value={streamFps}
+                    onChange={(e) => setStreamFps(Number(e.target.value))}
+                    className="w-20 bg-surface/90 border border-white/10 rounded px-2 py-1.5 text-content text-[11px] font-mono"
+                />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+                <button
+                    onClick={() => {
+                        setStreamError(null);
+                        if (pollCamera) {
+                            cameraStop.mutate(
+                                { device: cameraDevice },
+                                {
+                                    onSuccess: (data) => recordCameraAction('stop', data),
+                                    onError: (error) => recordCameraError('stop', error),
+                                },
+                            );
+                        } else {
+                            setSnapshot(null);
+                            setLatestCameraAction(null);
+                        }
+                        setPollCamera((prev) => !prev);
+                    }}
+                    className="px-2 py-2 text-[11px] rounded transition-colors bg-white/10 hover:bg-white/15 text-content border border-white/10"
+                >
+                    {pollCamera ? (cameraStop.isPending ? 'Stopping' : 'Stop Stream') : 'Start Stream'}
+                </button>
+                <button
+                    onClick={captureFrame}
+                    disabled={cameraSnapshot.isPending || pollCamera}
+                    className="px-2 py-2 bg-white/10 hover:bg-white/15 text-content text-[11px] rounded transition-colors border border-white/10 disabled:opacity-40"
+                >
+                    {cameraSnapshot.isPending ? 'Capturing' : 'Capture'}
+                </button>
+                <button
+                    onClick={() => {
+                        setPollCamera(false);
+                        setStreamError(null);
+                        cameraReset.mutate(
+                            { device: cameraDevice },
+                            {
+                                onSuccess: (data) => recordCameraAction('reset', data),
+                                onError: (error) => recordCameraError('reset', error),
+                            },
+                        );
+                    }}
+                    disabled={cameraReset.isPending}
+                    className="px-2 py-2 bg-white/10 hover:bg-white/15 text-content text-[11px] rounded transition-colors border border-white/10 disabled:opacity-40"
+                >
+                    {cameraReset.isPending ? 'Resetting' : 'Reset'}
+                </button>
+                <button
+                    onClick={() =>
+                        cameraStreamHealth.mutate(
+                            { device: cameraDevice, seconds: 5 },
+                            {
+                                onSuccess: (data) => recordCameraAction('health', data),
+                                onError: (error) => recordCameraError('health', error),
+                            },
+                        )
+                    }
+                    disabled={cameraStreamHealth.isPending || pollCamera}
+                    className="px-2 py-2 bg-white/10 hover:bg-white/15 text-content text-[11px] rounded transition-colors border border-white/10 disabled:opacity-40"
+                >
+                    {cameraStreamHealth.isPending ? 'Checking' : 'Health'}
+                </button>
+            </div>
+            <button
+                onClick={() =>
+                    cameraAutoRecover.mutate(
+                        { device: cameraDevice, max_resets: 2 },
+                        {
+                            onSuccess: (data) => recordCameraAction('recover', data),
+                            onError: (error) => recordCameraError('recover', error),
+                        },
+                    )
+                }
+                disabled={cameraAutoRecover.isPending || pollCamera}
+                className="w-full px-2 py-2 bg-white/10 hover:bg-white/15 text-content text-[11px] rounded transition-colors border border-white/10 disabled:opacity-40"
+            >
+                {cameraAutoRecover.isPending ? 'Recovering' : 'Auto Recover'}
+            </button>
+            <button
+                onClick={() => void toggleViewerFullscreen()}
+                className="w-full px-2 py-2 bg-white/10 hover:bg-white/15 text-content text-[11px] rounded transition-colors border border-white/10"
+            >
+                {viewerFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+            </button>
+            <div className="space-y-1 text-[10px] font-mono text-content-muted">
+                <div>STATE: {pollCamera ? (streamReady ? `LIVE ${streamFps} FPS` : 'CONNECTING') : 'IDLE'}</div>
+                <div>NODE: {cameraDevice}</div>
+                <div>MODE: {selectedStreamMode.width}x{selectedStreamMode.height}</div>
+                {cameraSnapshot.data?.path && <div>LAST: {cameraSnapshot.data.path}</div>}
+            </div>
+            {latestCameraSummary && (
+                <div className="rounded border border-white/10 bg-white/5 px-2 py-2 text-[10px] font-mono text-content-muted break-words">
+                    {latestCameraSummary}
+                </div>
+            )}
+            {cameraActionError && (
+                <div className="text-[10px] text-error font-mono">{cameraActionError}</div>
+            )}
+        </div>
+    );
+    const cameraSettingsPanel = (
+        <div className="space-y-3">
+            <div className="space-y-1 pt-1 border-t border-white/10">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-content">Lens & Image</div>
+                <div className="text-[10px] text-content-muted">
+                    {hasZoomControl
+                        ? 'Live V4L2 tuning is available while you are in the viewer.'
+                        : 'No hardware zoom control is reported here, but the available image controls are exposed below.'}
+                </div>
+            </div>
+            {cameraVisibleControls.length > 0 ? (
+                <div className="space-y-2">
+                    {cameraVisibleControls.map((control) => (
+                        <CameraSettingControl
+                            key={control.cid}
+                            control={control}
+                            disabled={!isConnected}
+                            pending={pendingCameraControlCid === control.cid}
+                            onApply={applyCameraControl}
+                        />
+                    ))}
+                </div>
+            ) : (
+                <div className="rounded border border-white/10 bg-white/5 px-2 py-2 text-[10px] font-mono text-content-muted">
+                    No writable camera controls have been reported for {cameraDevice} yet.
+                </div>
+            )}
+        </div>
+    );
+    const cameraMotionPanel = (
+        <div className="space-y-2">
+            <div className="space-y-1 pb-1">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-content">Quick Motion</div>
+                <div className="text-[10px] text-content-muted">Guarded jog and home controls for live calibration.</div>
+            </div>
+            <CameraAxisQuickControls axis="x" label="X Axis" enabled={isConnected} />
+            <CameraAxisQuickControls axis="y" label="Y Axis" enabled={isConnected} />
+            <CameraAxisQuickControls axis="z" label="Z Axis" enabled={isConnected} />
+            <CameraAxisQuickControls axis="g" label="Gripper" enabled={isConnected} />
+        </div>
+    );
 
     return (
         <div className="flex flex-col h-full overflow-y-auto p-8 space-y-6 bg-surface">
@@ -618,6 +1406,10 @@ export const BioXpCockpit = () => {
                             title="Motion Control System"
                             subtitle="All five documented BioXP axes are now surfaced, including the gripper and thermal door."
                         >
+                            <div className="text-[11px] font-mono text-content-muted">
+                                Safety profile: speed 100, acc 50, abort if speed is nonzero with no position delta for 2s.
+                                {motionBusy ? ' Background polling is paused while a motion command is in flight.' : null}
+                            </div>
                             <div className="flex flex-wrap gap-2">
                                 <button
                                     onClick={() => prepareInterlock.mutate()}
@@ -635,11 +1427,11 @@ export const BioXpCockpit = () => {
                                 </button>
                             </div>
                             <div className="space-y-4">
-                                <AxisControls axis="x" label="Gantry X" enabled={isConnected} />
-                                <AxisControls axis="y" label="Gantry Y" enabled={isConnected} />
-                                <AxisControls axis="z" label="Pipette Z" enabled={isConnected} />
-                                <AxisControls axis="g" label="Gripper" enabled={isConnected} />
-                                <AxisControls axis="door" label="Thermal Door" enabled={isConnected} />
+                                <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                <AxisControls axis="y" label="Gantry Y" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                <AxisControls axis="z" label="Pipette Z" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                <AxisControls axis="g" label="Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                                <AxisControls axis="door" label="Thermal Door" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                             </div>
                         </SectionCard>
 
@@ -728,91 +1520,80 @@ export const BioXpCockpit = () => {
                     </div>
                 ) : (
                     <div className="space-y-6">
-                        <SectionCard
-                            title="Camera Transport"
-                            subtitle="BMS now uses an on-demand MJPEG stream for live view. Device discovery and control probes pause while the stream is active to avoid camera bus contention."
-                        >
-                            <div className="flex flex-wrap gap-2 items-center">
-                                <input
-                                    type="text"
-                                    value={cameraDevice}
-                                    onChange={(e) => setCameraDevice(e.target.value)}
-                                    className="bg-surface border border-accent/20 rounded-lg px-3 py-2 text-content text-sm font-mono min-w-[14rem]"
-                                />
-                                <input
-                                    type="number"
-                                    min={1}
-                                    max={15}
-                                    value={streamFps}
-                                    onChange={(e) => setStreamFps(Number(e.target.value))}
-                                    className="bg-surface border border-accent/20 rounded-lg px-3 py-2 text-content text-sm font-mono w-24"
-                                />
-                                <button
-                                    onClick={captureFrame}
-                                    disabled={cameraSnapshot.isPending || pollCamera}
-                                    className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
-                                >
-                                    {cameraSnapshot.isPending ? 'CAPTURING...' : 'Capture Frame'}
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        setStreamError(null);
-                                        setPollCamera((prev) => !prev);
-                                    }}
-                                    className={`px-4 py-2 text-xs rounded-lg transition-colors ${pollCamera ? 'bg-error/20 text-error hover:bg-error/30' : 'bg-success/20 text-success hover:bg-success/30'}`}
-                                >
-                                    {pollCamera ? 'Stop Stream' : 'Start Stream'}
-                                </button>
-                                <button
-                                    onClick={() => cameraStreamHealth.mutate({ device: cameraDevice, seconds: 5 })}
-                                    disabled={cameraStreamHealth.isPending || pollCamera}
-                                    className="px-4 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors"
-                                >
-                                    Stream Health
-                                </button>
-                                <button
-                                    onClick={() => cameraAutoRecover.mutate({ device: cameraDevice, max_resets: 2 })}
-                                    disabled={cameraAutoRecover.isPending || pollCamera}
-                                    className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
-                                >
-                                    Auto Recover
-                                </button>
+                        <div className="space-y-3">
+                            <div className="text-xs text-content-muted max-w-3xl">
+                                The live viewer is now the primary calibration surface. Camera transport stays on the left rail and guarded X/Y/Z motion stays on the right rail.
                             </div>
-                            <div className="text-[11px] text-content-muted font-mono">
-                                Live stream: MJPEG on demand at {streamFps} FPS
-                            </div>
-                            {(cameraSnapshot.isError || cameraStreamHealth.isError || cameraAutoRecover.isError || streamError) && (
-                                <div className="text-xs text-error">
-                                    {getErrorMessage(cameraSnapshot.error) || getErrorMessage(cameraStreamHealth.error) || getErrorMessage(cameraAutoRecover.error) || streamError}
-                                </div>
-                            )}
-                        </SectionCard>
 
-                        <div className="w-full aspect-video bg-[#000000] rounded-lg border border-border-primary flex items-center justify-center overflow-hidden relative">
-                            {pollCamera && streamUrl ? (
-                                <img
-                                    src={streamUrl}
-                                    alt="BioXP Deck Live"
-                                    className="w-full h-full object-contain"
-                                    onLoad={() => setStreamError(null)}
-                                    onError={() => {
-                                        setStreamError('Live stream failed. Stop the stream and run Auto Recover if the camera stays busy.');
-                                        setPollCamera(false);
-                                    }}
-                                />
-                            ) : snapshot ? (
-                                <img src={`data:image/jpeg;base64,${snapshot}`} alt="BioXP Deck" className="w-full h-full object-contain" />
-                            ) : (
-                                <div className="text-content-muted text-sm font-mono flex flex-col items-center gap-2">
-                                    <span className="text-2xl">CAM</span>
-                                    <span>{cameraSnapshot.isPending ? 'CAPTURING FRAME...' : pollCamera ? 'OPENING STREAM...' : 'STREAM INACTIVE'}</span>
+                            <div className="flex justify-center">
+                                <div
+                                    ref={cameraViewerRef}
+                                    className={viewerFullscreen ? 'w-screen h-screen bg-[#000000]' : 'w-full md:w-[96%] xl:w-[60%] max-w-[1180px]'}
+                                >
+                                    <div className={`relative bg-[#000000] flex items-center justify-center overflow-hidden ${viewerFullscreen ? 'w-full h-full rounded-none border-0' : 'aspect-video rounded-lg border border-border-primary'}`}>
+                                        {pollCamera && streamUrl ? (
+                                            <img
+                                                key={streamUrl}
+                                                src={streamUrl}
+                                                alt="BioXP Deck Live"
+                                                className={`w-full h-full object-contain transition-opacity duration-200 ${streamReady ? 'opacity-100' : 'opacity-0'}`}
+                                                onLoad={() => {
+                                                    setStreamError(null);
+                                                    setStreamReady(true);
+                                                }}
+                                                onError={() => {
+                                                    const message = 'Live stream failed. Stop the stream and run Auto Recover if the camera stays busy.';
+                                                    setStreamError(message);
+                                                    recordCameraAction('stream', { ok: false, error: message, device: cameraDevice });
+                                                    setStreamReady(false);
+                                                    setSnapshot(null);
+                                                    cameraStop.mutate({ device: cameraDevice });
+                                                    setPollCamera(false);
+                                                }}
+                                            />
+                                        ) : null}
+
+                                        {!pollCamera && snapshot ? (
+                                            <img src={`data:image/jpeg;base64,${snapshot}`} alt="BioXP Deck" className="w-full h-full object-contain" />
+                                        ) : (
+                                            <div className={`text-content-muted text-sm font-mono flex flex-col items-center gap-2 ${pollCamera && streamReady ? 'hidden' : ''}`}>
+                                                <span className="text-2xl">CAM</span>
+                                                <span>{cameraSnapshot.isPending ? 'CAPTURING FRAME...' : pollCamera ? 'OPENING STREAM...' : 'STREAM INACTIVE'}</span>
+                                            </div>
+                                        )}
+
+                                        <div className="absolute top-4 left-4 flex flex-col gap-1 text-[10px] font-mono text-[#00ff00] bg-black/50 p-2 rounded">
+                                            <div>CAM: {cameraDevice}</div>
+                                            <div>STATUS: {pollCamera ? (streamReady ? `LIVE (${streamFps} FPS target)` : 'CONNECTING') : 'IDLE'}</div>
+                                            {cameraSnapshot.data?.path && <div>PATH: {cameraSnapshot.data.path}</div>}
+                                        </div>
+
+                                        <div className={`absolute inset-y-4 left-4 rounded-xl border border-white/10 bg-[rgba(8,16,29,0.35)] backdrop-blur-sm p-3 overflow-y-auto ${viewerFullscreen ? 'flex w-72' : 'hidden md:flex w-64'}`}>
+                                            <div className="w-full space-y-3">
+                                                {cameraTransportPanel}
+                                                {cameraSettingsPanel}
+                                            </div>
+                                        </div>
+                                        <div className={`absolute inset-y-4 right-4 rounded-xl border border-white/10 bg-[rgba(8,16,29,0.35)] backdrop-blur-sm p-3 overflow-y-auto ${viewerFullscreen ? 'flex w-64' : 'hidden md:flex w-56'}`}>
+                                            {cameraMotionPanel}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {!viewerFullscreen && (
+                                <div className="grid grid-cols-1 gap-4 md:hidden">
+                                    <div className="rounded-xl border border-white/10 bg-[rgba(8,16,29,0.35)] backdrop-blur-sm p-3">
+                                        {cameraTransportPanel}
+                                    </div>
+                                    <div className="rounded-xl border border-white/10 bg-[rgba(8,16,29,0.35)] backdrop-blur-sm p-3">
+                                        {cameraSettingsPanel}
+                                    </div>
+                                    <div className="rounded-xl border border-white/10 bg-[rgba(8,16,29,0.35)] backdrop-blur-sm p-3">
+                                        {cameraMotionPanel}
+                                    </div>
                                 </div>
                             )}
-                            <div className="absolute top-4 left-4 flex flex-col gap-1 text-[10px] font-mono text-[#00ff00] bg-black/50 p-2 rounded">
-                                <div>CAM: {cameraDevice}</div>
-                                <div>STATUS: {pollCamera ? `LIVE (${streamFps} FPS target)` : 'IDLE'}</div>
-                                {cameraSnapshot.data?.path && <div>PATH: {cameraSnapshot.data.path}</div>}
-                            </div>
                         </div>
 
                         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
