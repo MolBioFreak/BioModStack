@@ -14,6 +14,8 @@ import { Provider } from 'react-redux';
 import { store } from './store';
 // Import styles directly
 import '@biomodstack/ove/style.css';
+// Desert tan theme for OVE
+import './ove-theme.css';
 // Note: OVE CSS is loaded via link tag in index.html from /ove/ove.css
 
 // Types for sequence data
@@ -77,10 +79,40 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
         }))
     }), [sequenceData]);
 
-    // Use updateEditor to push sequence data into Redux store
+    // Use updateEditor to push sequence data and panel configuration into Redux store
     useEffect(() => {
         updateEditor(store, EDITOR_NAME, {
-            sequenceData: oveSequenceData
+            sequenceData: oveSequenceData,
+            // Panel layout configuration
+            panelsShown: [
+                [
+                    { active: true, id: "circular", name: "Circular Map" }
+                ],
+                [
+                    { id: "sequence", name: "Sequence Map", active: true },
+                    { id: "rail", name: "Linear Map" },
+                    { id: "properties", name: "Properties" }
+                ]
+            ],
+            // Enable all annotation types
+            annotationsToSupport: {
+                features: true,
+                translations: true,
+                parts: true,
+                orfs: true,
+                cutsites: true,
+                primers: true
+            },
+            // Initial visibility settings
+            annotationVisibility: {
+                features: true,
+                parts: true,
+                primers: true,
+                cutsites: true,
+                orfs: false,
+                orfTranslations: false,
+                translations: true
+            }
         });
     }, [oveSequenceData]);
 
@@ -91,21 +123,34 @@ function OVEWrapper({ sequenceData, onSave }: OVEWrapperProps) {
                     editorName={EDITOR_NAME}
                     showMenuBar={true}
                     onSave={onSave}
+                    PropertiesProps={{
+                        propertiesList: [
+                            "general",
+                            "features",
+                            "parts",
+                            "primers",
+                            "translations",
+                            "cutsites",
+                            "orfs",
+                            "genbank"
+                        ]
+                    }}
                     ToolBarProps={{
                         toolList: [
-                            'saveTool',
-                            'downloadTool',
-                            'importTool',
-                            'undoTool',
-                            'redoTool',
-                            'cutsiteTool',
-                            'featureTool',
-                            'oligoTool',
-                            'orfTool',
-                            'editTool',
-                            'findTool',
-                            'alignmentTool',
-                            'visibilityTool'
+                            "saveTool",
+                            "downloadTool",
+                            "importTool",
+                            "undoTool",
+                            "redoTool",
+                            "cutsiteTool",
+                            "featureTool",
+                            "oligoTool",
+                            "orfTool",
+                            "editTool",
+                            "findTool",
+                            "alignmentTool",
+                            "versionHistoryTool",
+                            "visibilityTool"
                         ]
                     }}
                 />
