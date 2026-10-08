@@ -18,6 +18,7 @@ from services.viewer_resources import (
     create_snapshot_record, delete_snapshot_record, get_snapshot_record,
     list_snapshot_records, load_volume_inventory, resolve_viewer_artifact,
 )
+from services.viewer_volume_fixture import materialize_1ubq_registered_volume_fixture
 
 HASH_A = "a" * 64
 DOC_ID = "11111111-1111-4111-8111-111111111111"
@@ -159,6 +160,147 @@ def test_volume_registration_requires_exact_canonical_identity_and_matching_volu
     (output / "viewer" / "volumes.json").write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ViewerResourceError, match="does not match"):
         load_volume_inventory(SimpleNamespace(id="job-1", output_dir=str(output)))
+
+
+def test_volume_registration_accepts_the_direct_viewer_primary_document_identity(tmp_path: Path):
+    output = tmp_path / "job-output"
+    manifest, _, digest = _volume_manifest(output)
+    registration = {
+        "schema": "bms.viewer.volume-registration.v1", "registrationId": REGISTRATION_ID,
+        "structureDocumentId": "primary", "structureSha256": HASH_A, "volumeId": VOLUME_ID,
+        "volumeSha256": digest, "transformRowMajor4x4": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+        "method": "supplied_transform_v1", "provenanceRef": "fixture:1ubq-derived-map-registration",
+    }
+    registration["artifactSha256"] = hashlib.sha256(canonical_json_bytes(registration)).hexdigest()
+    manifest["volumes"][0]["registrationRef"] = REGISTRATION_ID
+    manifest["registrations"] = [registration]
+    (output / "viewer" / "volumes.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    inventory = load_volume_inventory(SimpleNamespace(id="job-1", output_dir=str(output)))
+
+    assert inventory["registrations"] == [registration]
+
+
+def test_1ubq_fixture_publishes_hash_bound_registered_scalar_and_label_maps(tmp_path: Path):
+    fixture = Path(__file__).parent / "fixtures" / "conformational_mapping" / "real_1ubq" / "1UBQ.protein-only-authoritative.cif"
+    output = tmp_path / "completed-job"
+
+    published = materialize_1ubq_registered_volume_fixture(
+        job_id="job-1",
+        output_dir=output,
+        structure_path=fixture,
+        structure_document_id="primary",
+    )
+
+    inventory = load_volume_inventory(SimpleNamespace(id="job-1", output_dir=str(output)))
+    assert {entry["semanticKind"] for entry in inventory["volumes"]} == {"density", "segmentation"}
+    assert inventory["segmentations"][0]["labels"] == [
+        {"segmentId": 1, "parentSegmentId": None, "label": "Residues 1–25", "recommendedColor": 0x2563EB},
+        {"segmentId": 2, "parentSegmentId": None, "label": "Residues 26–50", "recommendedColor": 0x16A34A},
+        {"segmentId": 3, "parentSegmentId": None, "label": "Residues 51–76", "recommendedColor": 0xEA580C},
+    ]
+    assert {entry["structureDocumentId"] for entry in inventory["registrations"]} == {"primary"}
+    assert all(entry["structureSha256"] == published.structure_sha256 for entry in inventory["registrations"])
+    assert all(resolve_viewer_artifact(SimpleNamespace(id="job-1", output_dir=str(output)), entry["artifactId"], verify=True).size_bytes > 1024 for entry in inventory["volumes"])
+    assert (output / "viewer" / "fixture-provenance.json").is_file()
+
+
+def test_1ubq_fixture_preserves_existing_job_owned_volume_inventory(tmp_path: Path):
+    fixture = Path(__file__).parent / "fixtures" / "conformational_mapping" / "real_1ubq" / "1UBQ.protein-only-authoritative.cif"
+    output = tmp_path / "completed-job"
+    existing, _, _ = _volume_manifest(output)
+
+    materialize_1ubq_registered_volume_fixture(
+        job_id="job-1", output_dir=output, structure_path=fixture, structure_document_id="primary",
+    )
+
+    published = json.loads((output / "viewer" / "volumes.json").read_text(encoding="utf-8"))
+    assert any(entry["volumeId"] == existing["volumes"][0]["volumeId"] for entry in published["volumes"])
+
+
+def test_1ubq_fixture_rejects_invalid_document_identity_before_publishing(tmp_path: Path):
+    fixture = Path(__file__).parent / "fixtures" / "conformational_mapping" / "real_1ubq" / "1UBQ.protein-only-authoritative.cif"
+    output = tmp_path / "completed-job"
+
+    with pytest.raises(ValueError, match="direct-viewer document ID"):
+        materialize_1ubq_registered_volume_fixture(
+            job_id="job-1", output_dir=output, structure_path=fixture, structure_document_id="../not-a-document",
+        )
+
+    assert not (output / "viewer").exists()
+
+
+def test_1ubq_fixture_rejects_retained_artifact_path_collision_before_writing(tmp_path: Path):
+    fixture = Path(__file__).parent / "fixtures" / "conformational_mapping" / "real_1ubq" / "1UBQ.protein-only-authoritative.cif"
+    output = tmp_path / "completed-job"
+    manifest, _, _ = _volume_manifest(output)
+    collision = output / "viewer" / "artifacts" / "1ubq-fixture-density.ccp4"
+    original = b"unrelated-owned-artifact"
+    collision.write_bytes(original)
+    manifest["volumes"][0].update({
+        "relativePath": "viewer/artifacts/1ubq-fixture-density.ccp4",
+        "artifactSha256": hashlib.sha256(original).hexdigest(),
+        "byteLength": len(original),
+    })
+    manifest_path = output / "viewer" / "volumes.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="collides"):
+        materialize_1ubq_registered_volume_fixture(
+            job_id="job-1", output_dir=output, structure_path=fixture, structure_document_id="primary",
+        )
+
+    assert collision.read_bytes() == original
+    assert json.loads(manifest_path.read_text(encoding="utf-8")) == manifest
+
+
+def test_1ubq_fixture_rejects_retained_segmentation_artifact_collision_before_writing(tmp_path: Path):
+    fixture = Path(__file__).parent / "fixtures" / "conformational_mapping" / "real_1ubq" / "1UBQ.protein-only-authoritative.cif"
+    output = tmp_path / "completed-job"
+    manifest, _, _ = _volume_manifest(output)
+    collision = output / "viewer" / "artifacts" / "1ubq-fixture-density.ccp4"
+    original = b"unrelated-segmentation-artifact"
+    collision.write_bytes(original)
+    manifest["volumes"][0].update({"semanticKind": "segmentation", "valueUnits": None})
+    manifest["segmentations"] = [{
+        "schema": "bms.viewer.volume-segmentation.v1",
+        "segmentationId": "11111111-1111-4111-8111-111111111111",
+        "volumeId": VOLUME_ID,
+        "artifactId": "22222222-2222-4222-8222-222222222222",
+        "artifactSha256": hashlib.sha256(original).hexdigest(),
+        "relativePath": "viewer/artifacts/1ubq-fixture-density.ccp4",
+        "labels": [],
+        "provenanceRef": "analysis:existing-segmentation",
+    }]
+    manifest_path = output / "viewer" / "volumes.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="collides"):
+        materialize_1ubq_registered_volume_fixture(
+            job_id="job-1", output_dir=output, structure_path=fixture, structure_document_id="primary",
+        )
+
+    assert collision.read_bytes() == original
+    assert json.loads(manifest_path.read_text(encoding="utf-8")) == manifest
+
+
+def test_1ubq_fixture_rejects_malformed_retained_inventory_before_writing(tmp_path: Path):
+    fixture = Path(__file__).parent / "fixtures" / "conformational_mapping" / "real_1ubq" / "1UBQ.protein-only-authoritative.cif"
+    output = tmp_path / "completed-job"
+    viewer = output / "viewer"
+    viewer.mkdir(parents=True)
+    manifest = {"schema": "bms.viewer.volume-list.v1", "jobId": "job-1", "volumes": [{}], "segmentations": [], "registrations": []}
+    manifest_path = viewer / "volumes.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid"):
+        materialize_1ubq_registered_volume_fixture(
+            job_id="job-1", output_dir=output, structure_path=fixture, structure_document_id="primary",
+        )
+
+    assert not (viewer / "artifacts" / "1ubq-fixture-density.ccp4").exists()
+    assert not (viewer / "fixture-provenance.json").exists()
+    assert json.loads(manifest_path.read_text(encoding="utf-8")) == manifest
 
 
 @pytest.mark.asyncio
