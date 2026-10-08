@@ -136,11 +136,17 @@ const AXES: readonly AxisControls[] = [
 
 
 const actionClass = 'rounded bg-cyan-700 px-3 py-2 text-sm font-semibold hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-35';
-let fallbackIdempotencySequence = 0;
-const nextIdempotencyKey = (prefix: string): string => {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-    fallbackIdempotencySequence += 1;
-    return `${prefix}-${fallbackIdempotencySequence}`;
+const nextIdempotencyKey = (prefix: string): string | null => {
+    try {
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+        // Durable request identities must not repeat when a document reloads.
+        // getRandomValues is also available where randomUUID is not exposed.
+        if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+            const bytes = crypto.getRandomValues(new Uint8Array(16));
+            return `${prefix}-${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`;
+        }
+    } catch { /* No request may be sent with an invented or weak identity. */ }
+    return null;
 };
 
 const CANONICAL_DECK_ACTION_IDS = new Set([
@@ -281,6 +287,12 @@ export function BioXpCockpit() {
     useEffect(() => {
         currentGenerationRef.current = generation;
     }, [generation]);
+    const [requestKeyUnavailable, setRequestKeyUnavailable] = useState(false);
+    const createRequestKey = (prefix: string) => {
+        const key = nextIdempotencyKey(prefix);
+        setRequestKeyUnavailable(key === null);
+        return key;
+    };
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(8);
     const [reportsOpen, setReportsOpen] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -854,7 +866,8 @@ export function BioXpCockpit() {
     ) => {
         if (!linkConnected || generation <= 0 || interruptPending(actionId)) return;
         if (actionId === 'oem.abort_all' && v2InterruptActionById(actionId)?.enabled !== true) return;
-        const idempotencyKey = nextIdempotencyKey('bioxp-stop');
+        const idempotencyKey = createRequestKey('bioxp-stop');
+        if (idempotencyKey === null) return;
         interruptMutation(actionId).mutate({
             actionId,
             request: {
@@ -930,7 +943,8 @@ export function BioXpCockpit() {
         const authority = actionId === 'oem.deck.collect_authority' && active
             ? catalogV2Query.data?.dashboard : currentDashboardV2;
         if (authority == null || (actionId == null && !v2AuthorityCoherent)) return null;
-        const idempotencyKey = nextIdempotencyKey('bioxp-oem');
+        const idempotencyKey = createRequestKey('bioxp-oem');
+        if (idempotencyKey === null) return null;
         return {
             expected_connection_generation: generation,
             schema_version: 'bioxp.operator_action_request.v2' as const,
@@ -1718,6 +1732,7 @@ export function BioXpCockpit() {
                 {historyQuery.isError && <p role="alert" className="mt-2 text-sm text-red-300">Robot action history unavailable: {bioXpErrorText(historyQuery.error)}</p>}
             </details>
 
+            {requestKeyUnavailable && <p role="alert" className="rounded border border-red-800 p-3 text-sm text-red-300">Request not sent: this browser could not generate a secure request identity. Existing requests are unchanged.</p>}
             {error && <p role="alert" className="rounded border border-red-800 p-3 text-sm text-red-300">{bioXpErrorText(error)}</p>}
             {statusQuery.isError && <p role="alert" className="text-sm text-red-300">BioXP status unavailable.</p>}
         </div>
