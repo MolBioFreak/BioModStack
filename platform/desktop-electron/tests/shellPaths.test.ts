@@ -96,6 +96,52 @@ test('desktop consumes real configured generation and fails closed on interrupte
 });
 
 
+
+
+for (const interleave of [false, true]) {
+  test(`desktop verifies immutable release generation (interleave=${interleave})`, () => {
+    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'bms-desktop-release-'));
+    try {
+      const home = path.join(fixture, 'home');
+      fs.mkdirSync(home);
+      const env = { HOME: home, XDG_CONFIG_HOME: path.join(fixture, 'config'),
+        XDG_STATE_HOME: path.join(fixture, 'state'), PATH: process.env.PATH };
+      const project = path.resolve(process.cwd(), '../..');
+      const document = path.join(fixture, 'document.json');
+      fs.writeFileSync(document, JSON.stringify({schema_version: 'bms.install.v1', profile: {}, ingress: {mode: 'local-only'}}));
+      execFileSync('bash', [path.join(project, 'start_ui.sh'), 'configure', '--document', document, '--json'], {env});
+      const commit = () => execFileSync('python3', ['-B', '-c', `
+import sys
+from pathlib import Path
+sys.path.insert(0, ${JSON.stringify(project)})
+from scripts.biomodstack_release import ProductionReleaseBackend, BuildIdentity, BUILD_SERVICES
+b=ProductionReleaseBackend(repo_root=Path(${JSON.stringify(project)}), allow_first_install=True)
+b._candidate_running_image_ids=lambda: {k:'sha256:'+'b'*64 for k in BUILD_SERVICES}
+b.commit_known_good({}, BuildIdentity('a'*40,'desktop-release','2026-09-07T00:00:00Z'))
+`], {env});
+      let switched = false;
+      const options = {homeDir: home, env, projectRoot: project};
+      if (interleave) {
+        assert.throws(() => resolveShellPaths({...options, readText: target => {
+          const text = fs.readFileSync(target, 'utf8');
+          if (target.endsWith('/install_profile.json') && !switched) { switched = true; commit(); }
+          return text;
+        }}), /Configuration changed/);
+      } else commit();
+      assert.equal(resolveShellPaths(options).dataRoot, path.join(fixture, 'state', 'biomodstack'));
+      const root = path.join(env.XDG_CONFIG_HOME, 'biomodstack', 'configuration-v1');
+      const generation = fs.readlinkSync(path.join(root, 'active'));
+      const good = JSON.parse(fs.readFileSync(path.join(env.XDG_STATE_HOME, 'biomodstack', 'releases', 'known-good.json'), 'utf8'));
+      assert.equal(good.configuration_generation_id, generation);
+      const manifest = path.join(root, generation, 'manifest.json');
+      const parsed = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+      parsed.receipt.BMS_DATA = '/foreign';
+      fs.writeFileSync(manifest, JSON.stringify(parsed));
+      assert.throws(() => resolveShellPaths(options), /Invalid release manifest/);
+    } finally { fs.rmSync(fixture, {recursive: true, force: true}); }
+  });
+}
+
 for (const alias of ['config', 'home', 'state', 'default-config', 'config-relative-link']) {
   test(`canonical Python/desktop identity through ${alias} alias`, () => {
     const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'bms-alias-'));

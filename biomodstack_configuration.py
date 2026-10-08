@@ -66,7 +66,7 @@ def _mkdir(path: Path) -> None:
         raise ConfigurationBlocked(f"unsafe_directory: {path}")
 
 
-def _write(path: Path, data: str, *, replace: bool = False) -> None:
+def _write(path: Path, data: str, *, replace: bool = False, release: bool = False) -> None:
     _mkdir(path.parent)
     # mkstemp uses random names, O_CREAT|O_EXCL, and mode 0600. O_EXCL
     # refuses existing symlinks (including dangling ones) without following.
@@ -82,6 +82,18 @@ def _write(path: Path, data: str, *, replace: bool = False) -> None:
             if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
                 raise ConfigurationBlocked(f"unsafe_file: {path}")
             os.replace(temporary, path)
+        elif release:
+            # Linux RENAME_NOREPLACE has no link/unlink crash window: a killed
+            # writer cannot leave the committed file with an extra temporary
+            # hardlink that readers correctly reject. Unsupported FS fail closed.
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+            rename = libc.renameat2
+            rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+            rename.restype = ctypes.c_int
+            if rename(-100, os.fsencode(temporary), -100, os.fsencode(path), 1) != 0:
+                error = ctypes.get_errno()
+                raise OSError(error, os.strerror(error), str(path))
         else:
             os.link(temporary, path)  # exclusive publication; preserve existing entries
             temporary.unlink()
@@ -91,10 +103,12 @@ def _write(path: Path, data: str, *, replace: bool = False) -> None:
 
 
 @contextmanager
-def configuration_lock():
+def configuration_lock(*, name: str = "configuration.lock"):
     root = profiles.get_biomodstack_config_dir()
     _mkdir(root)
-    fd = os.open(root / "configuration.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    if name not in {"configuration.lock", "managed-release.lock"}:
+        raise ValueError("unsupported lock")
+    fd = os.open(root / name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     with os.fdopen(fd, "r+") as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
@@ -127,6 +141,9 @@ def _load() -> dict:
 
 def _verify(journal: dict, *, activated: bool) -> None:
     root = transaction_dir()
+    for directory in (root, root / "generation"):
+        if directory.is_symlink() or not directory.is_dir():
+            raise ConfigurationBlocked("configuration_invalid_generation")
     if journal["schema_version"] != "bms.configuration-journal.v1":
         raise ConfigurationBlocked("journal_invalid: unsupported schema")
     if journal["context"]["destinations"] != _destinations():
@@ -163,8 +180,11 @@ def _verify(journal: dict, *, activated: bool) -> None:
             if a.is_relative_to(b) or b.is_relative_to(a):
                 raise ConfigurationBlocked("stale_storage: cross-lane mutable overlap")
     if activated:
-        if not (root / "active").is_symlink() or os.readlink(root / "active") != "generation":
-            raise ConfigurationBlocked("configuration_incomplete: run recover")
+        identity = configuration_identity()
+        if identity != "generation":
+            _verify_release_generation(journal, identity)
+        if identity != configuration_identity():
+            raise ConfigurationBlocked("configuration_changed: retry")
         for key, target in _destinations().items():
             path = Path(target)
             if not path.is_symlink() or os.readlink(path) != str(root / "active" / key):
@@ -261,6 +281,221 @@ def _finish(journal: dict) -> None:
     journal["state"] = "committed"
     _write(root / "journal.json", _json(journal), replace=True)
     _checkpoint("committed")
+
+
+RECEIPT_KEYS = {"BMS_BUILD_SHA", "BMS_BUILD_ID", "BMS_BUILD_TIME",
+                "BMS_MANAGED_API_IMAGE_ID", "BMS_MANAGED_WEB_IMAGE_ID"}
+
+
+class ManagedReleaseRecoveryRequired(ConfigurationBlocked):
+    """Candidate must not be rolled back after durable acceptance intent."""
+
+
+def configuration_identity() -> str | None:
+    root = transaction_dir()
+    if not root.exists():
+        return None
+    active = root / "active"
+    if not active.is_symlink():
+        raise ConfigurationBlocked("configuration_incomplete: run recover")
+    target = os.readlink(active)
+    if target != "generation" and not re.fullmatch(r"release-[0-9a-f]{64}", target):
+        raise ConfigurationBlocked("configuration_invalid_target")
+    if (root / target).is_symlink() or not (root / target).is_dir():
+        raise ConfigurationBlocked("configuration_invalid_generation")
+    return target
+
+
+def _receipt(receipt: dict) -> dict:
+    from scripts.biomodstack_release import BuildIdentity
+    if not isinstance(receipt, dict) or set(receipt) != RECEIPT_KEYS:
+        raise ConfigurationBlocked("release_receipt_invalid: closed five-key receipt required")
+    if not all(isinstance(v, str) for v in receipt.values()):
+        raise ConfigurationBlocked("release_receipt_invalid: strings required")
+    BuildIdentity(receipt["BMS_BUILD_SHA"], receipt["BMS_BUILD_ID"], receipt["BMS_BUILD_TIME"])
+    for key in RECEIPT_KEYS:
+        if not re.fullmatch(r"[A-Za-z0-9_.:+/@-]+", receipt[key]):
+            raise ConfigurationBlocked("release_receipt_invalid: unsafe export")
+    for key in ("BMS_MANAGED_API_IMAGE_ID", "BMS_MANAGED_WEB_IMAGE_ID"):
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", receipt[key]):
+            raise ConfigurationBlocked("release_receipt_invalid: immutable image required")
+    return dict(receipt)
+
+
+def _release_files(journal, receipt):
+    files = dict(journal["files"])
+    files["core_runtime_env"] = files["core_runtime_env"].rstrip("\n") + "\n" + "".join(
+        f"{k}={receipt[k]}\n" for k in sorted(receipt))
+    return files
+
+
+def _regular_text(path):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
+        raise ConfigurationBlocked(f"unsafe_file: {path}")
+    return path.read_text()
+
+
+def _verify_release_generation(journal, generation):
+    root = transaction_dir() / generation
+    manifest = json.loads(_regular_text(root / "manifest.json"))
+    receipt = _receipt(manifest["receipt"])
+    if (manifest["schema_version"] != "bms.configuration-release.v1"
+            or manifest["operation_id"] != journal["operation_id"]
+            or manifest["base_hashes"] != journal["hashes"]
+            or manifest["generation_id"] != generation
+            or generation != "release-" + _digest(manifest["release_id"].encode())):
+        raise ConfigurationBlocked("release_manifest_invalid")
+    files = _release_files(journal, receipt)
+    if manifest["hashes"] != {k: _digest(v.encode()) for k, v in files.items()}:
+        raise ConfigurationBlocked("release_manifest_hashes_invalid")
+    for key, content in files.items():
+        if _regular_text(root / key) != content:
+            raise ConfigurationBlocked("release_generation_corrupt: " + key)
+    return manifest
+
+
+def managed_release_base(project_root: Path) -> dict:
+    journal = _load()
+    if journal["state"] != "committed" or journal["context"] != _context(project_root):
+        raise ConfigurationBlocked("managed_release_context_invalid")
+    before = configuration_identity()
+    _verify(journal, activated=True)
+    hashes = journal["hashes"] if before == "generation" else _verify_release_generation(journal, before)["hashes"]
+    if before != configuration_identity():
+        raise ConfigurationBlocked("configuration_changed: retry")
+    return {"operation_id": journal["operation_id"], "generation_id": before, "hashes": hashes}
+
+
+def _finish_managed_release(project_root, record):
+    journal = _load()
+    current = managed_release_base(project_root)
+    manifest = record["manifest"]
+    receipt = _receipt(manifest["receipt"])
+    if (record["base"] != {"operation_id": journal["operation_id"], "generation_id": "generation", "hashes": journal["hashes"]}
+            or manifest["operation_id"] != journal["operation_id"]
+            or manifest["schema_version"] != "bms.configuration-release.v1"
+            or manifest["base_hashes"] != journal["hashes"]
+            or manifest["hashes"] != {k: _digest(v.encode()) for k, v in _release_files(journal, receipt).items()}):
+        raise ConfigurationBlocked("release_record_invalid")
+    _validate_known_good(record["known_good"], receipt)
+    generation = record["manifest"]["generation_id"]
+    if current != record["base"] and current["generation_id"] != generation:
+        raise ConfigurationBlocked("managed_release_stale_base")
+    root = transaction_dir()
+    if generation != "release-" + _digest(record["manifest"]["release_id"].encode()):
+        raise ConfigurationBlocked("release_manifest_invalid")
+    if record["known_good"].get("configuration_generation_id") != generation or record["known_good"].get("release_id") != record["manifest"]["release_id"]:
+        raise ConfigurationBlocked("release_binding_invalid")
+    directory = root / generation
+    _mkdir(directory)
+    for key, content in {**_release_files(journal, _receipt(record["manifest"]["receipt"])),
+                         "manifest.json": _json(record["manifest"])}.items():
+        if not os.path.lexists(directory / key):
+            _write(directory / key, content, release=True)
+        elif _regular_text(directory / key) != content:
+            raise ConfigurationBlocked("release_staging_conflict: " + key)
+        _checkpoint("release_stage:" + key)
+    _sync(directory)
+    _checkpoint("release_directory")
+    _verify_release_generation(journal, generation)
+    _checkpoint("release_before_activation")
+    if current["generation_id"] != generation:
+        temporary = root / ("activate-" + str(uuid.uuid4()))
+        os.symlink(generation, temporary)
+        try:
+            os.replace(temporary, root / "active")
+        finally:
+            temporary.unlink(missing_ok=True)
+    _checkpoint("release_activation_rename")
+    _sync(root)
+    _checkpoint("release_activation_sync")
+    _verify(journal, activated=True)
+    destination = Path(record["known_good_path"])
+    _checkpoint("release_before_known_good")
+    if os.path.lexists(destination):
+        if json.loads(_regular_text(destination)) != record["known_good"]:
+            raise ConfigurationBlocked("known_good_conflict")
+        _sync(destination.parent)
+    else:
+        _write(destination, _json(record["known_good"]), release=True)
+    _checkpoint("release_known_good")
+    if json.loads(_regular_text(destination)) != record["known_good"]:
+        raise ConfigurationBlocked("known_good_verification_failed")
+    _checkpoint("release_before_ack")
+    if record["state"] != "committed":
+        record["state"] = "committed"
+        _write(root / "release.json", _json(record), replace=True)
+    _sync(root)
+    _checkpoint("release_ack")
+    return record["known_good"]
+
+
+def _validate_known_good(payload, receipt):
+    if (payload.get("build") != {k: receipt[k] for k in ("BMS_BUILD_SHA", "BMS_BUILD_ID", "BMS_BUILD_TIME")}
+            or payload.get("images", {}).get("bms-api") != receipt["BMS_MANAGED_API_IMAGE_ID"]
+            or payload.get("images", {}).get("bms-web") != receipt["BMS_MANAGED_WEB_IMAGE_ID"]):
+        raise ConfigurationBlocked("release_known_good_binding_invalid")
+
+
+def commit_managed_release(project_root: Path, expected_base: dict, release_id: str,
+                           receipt: dict, *, known_good_path: Path, known_good: dict) -> dict:
+    receipt = _receipt(receipt)
+    _validate_known_good(known_good, receipt)
+    if not isinstance(release_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:+@-]+", release_id):
+        raise ConfigurationBlocked("release_id_invalid")
+    canonical = Path(_context(project_root)["state_home"]) / "biomodstack/releases/known-good.json"
+    if known_good_path != canonical:
+        raise ConfigurationBlocked("managed_release_state_override_unsupported")
+    with configuration_lock():
+        root = transaction_dir()
+        path = root / "release.json"
+        if os.path.lexists(path):
+            record = json.loads(_regular_text(path))
+            if record["manifest"]["release_id"] != release_id or record["manifest"]["receipt"] != receipt:
+                raise ConfigurationBlocked("managed_release_migration_unsupported")
+            if record["base"] != expected_base:
+                raise ConfigurationBlocked("managed_release_stale_base")
+        else:
+            if managed_release_base(project_root) != expected_base or expected_base["generation_id"] != "generation":
+                raise ConfigurationBlocked("managed_release_stale_base")
+            if os.path.lexists(canonical):
+                raise ConfigurationBlocked("managed_release_existing_known_good")
+            journal = _load()
+            generation = "release-" + _digest(release_id.encode())
+            if os.path.lexists(root / generation):
+                raise ConfigurationBlocked("release_staging_conflict")
+            manifest = {"schema_version": "bms.configuration-release.v1", "release_id": release_id,
+                        "operation_id": journal["operation_id"], "generation_id": generation,
+                        "base_hashes": journal["hashes"], "receipt": receipt,
+                        "hashes": {k: _digest(v.encode()) for k, v in _release_files(journal, receipt).items()}}
+            record = {"state": "prepared", "base": expected_base, "manifest": manifest,
+                      "known_good_path": str(canonical), "known_good": {**known_good,
+                      "release_id": release_id, "configuration_generation_id": generation}}
+            _checkpoint("release_before_intent")
+            try:
+                _write(path, _json(record), release=True)
+            except BaseException as exc:
+                if os.path.lexists(path):
+                    raise ManagedReleaseRecoveryRequired(f"managed_release_recovery_required: {release_id}") from exc
+                raise
+        try:
+            _sync(root)
+            _checkpoint("release_intent")
+            return _finish_managed_release(project_root, record)
+        except BaseException as exc:
+            raise ManagedReleaseRecoveryRequired(f"managed_release_recovery_required: {release_id}: {exc}") from exc
+
+
+def recover_managed_release(project_root: Path, release_id: str) -> dict:
+    with configuration_lock():
+        record = json.loads(_regular_text(transaction_dir() / "release.json"))
+        if record["manifest"]["release_id"] != release_id:
+            raise ConfigurationBlocked("release_id_mismatch")
+        canonical = Path(_context(project_root)["state_home"]) / "biomodstack/releases/known-good.json"
+        if record["known_good_path"] != str(canonical):
+            raise ConfigurationBlocked("managed_release_context_invalid")
+        return _finish_managed_release(project_root, record)
 
 
 def configuration_report(action: str, *, project_root: Path, document: Path | None = None,

@@ -96,38 +96,76 @@ function loadInstallProfile(options: ShellPathOptions = {}): InstallProfile {
   const readText = options.readText ?? ((target: string) => fs.readFileSync(target, 'utf8'));
   const transaction = path.join(resolveConfigDir(options), 'configuration-v1');
   const managed = pathExists(transaction);
-  if (managed) {
-    const journal = JSON.parse(readText(path.join(transaction, 'journal.json')));
-    if (journal.schema_version !== 'bms.configuration-journal.v1' ||
-        !pathExists(path.join(transaction, 'active'))) throw new Error('Configuration incomplete; run recover');
-    const destinations = {
-      profile: path.join(resolveConfigDir(options), 'install_profile.json'),
-      core_runtime_env: path.join(resolveConfigDir(options), 'core-runtime.env'),
-      compat_env: path.join(homePath(options), '.biomodstack', 'env.sh'),
-    };
-    for (const [key, destination] of Object.entries(destinations)) {
-      if (journal.context.destinations[key] !== destination) throw new Error('Configuration context changed');
-      const content = readText(destination as string);
-      if (createHash('sha256').update(content).digest('hex') !== journal.hashes[key]) {
-        throw new Error('Configuration generation mismatch; run recover');
+  if (managed && !pathExists(path.join(transaction, 'active'))) throw new Error('Configuration incomplete; run recover');
+  const activeIdentity = managed ? fs.readlinkSync(path.join(transaction, 'active')) : null;
+  try {
+    if (managed) {
+      const journal = JSON.parse(readText(path.join(transaction, 'journal.json')));
+      if (journal.schema_version !== 'bms.configuration-journal.v1' ||
+          !pathExists(path.join(transaction, 'active'))) throw new Error('Configuration incomplete; run recover');
+      const destinations = {
+        profile: path.join(resolveConfigDir(options), 'install_profile.json'),
+        core_runtime_env: path.join(resolveConfigDir(options), 'core-runtime.env'),
+        compat_env: path.join(homePath(options), '.biomodstack', 'env.sh'),
+      };
+      if (fs.lstatSync(path.join(transaction, 'generation')).isSymbolicLink()) throw new Error('Invalid original generation');
+      let hashes = journal.hashes;
+      if (activeIdentity !== 'generation') {
+        if (!/^release-[0-9a-f]{64}$/.test(activeIdentity ?? '')) throw new Error('Invalid configuration target');
+        const directory = path.join(transaction, activeIdentity!);
+        if (fs.lstatSync(directory).isSymbolicLink()) throw new Error('Invalid generation link');
+        const manifestPath = path.join(directory, 'manifest.json');
+        if (!fs.lstatSync(manifestPath).isFile() || fs.lstatSync(manifestPath).isSymbolicLink()) throw new Error('Invalid manifest');
+        const manifest = JSON.parse(readText(manifestPath));
+        const receipt = manifest.receipt;
+        const keys = ['BMS_BUILD_ID', 'BMS_BUILD_SHA', 'BMS_BUILD_TIME', 'BMS_MANAGED_API_IMAGE_ID', 'BMS_MANAGED_WEB_IMAGE_ID'];
+        if (manifest.schema_version !== 'bms.configuration-release.v1' ||
+            manifest.operation_id !== journal.operation_id || manifest.generation_id !== activeIdentity ||
+            'release-' + createHash('sha256').update(manifest.release_id).digest('hex') !== activeIdentity ||
+            JSON.stringify(Object.keys(receipt).sort()) !== JSON.stringify(keys) ||
+            !keys.every(k => typeof receipt[k] === 'string' && /^[A-Za-z0-9_.:+/@-]+$/.test(receipt[k])) ||
+            !/^[0-9a-f]{40}$/.test(receipt.BMS_BUILD_SHA) ||
+            !['BMS_MANAGED_API_IMAGE_ID', 'BMS_MANAGED_WEB_IMAGE_ID'].every(k => /^sha256:[0-9a-f]{64}$/.test(receipt[k]))) {
+          throw new Error('Invalid release manifest');
+        }
+        for (const key of Object.keys(destinations)) {
+          if (manifest.base_hashes[key] !== journal.hashes[key]) throw new Error('Invalid release base');
+          const expected = key === 'core_runtime_env'
+            ? journal.files[key].replace(/\n+$/, '') + '\n' + keys.map(k => `${k}=${receipt[k]}\n`).join('')
+            : journal.files[key];
+          if (createHash('sha256').update(expected).digest('hex') !== manifest.hashes[key]) throw new Error('Invalid release export');
+        }
+        hashes = manifest.hashes;
+      }
+      for (const [key, destination] of Object.entries(destinations)) {
+        if (fs.readlinkSync(destination) !== path.join(transaction, 'active', key)) throw new Error('Invalid publication link');
+        const staged = path.join(transaction, activeIdentity!, key);
+        if (!fs.lstatSync(staged).isFile() || fs.lstatSync(staged).isSymbolicLink()) throw new Error('Invalid generation file');
+        if (journal.context.destinations[key] !== destination) throw new Error('Configuration context changed');
+        const content = readText(destination as string);
+        if (createHash('sha256').update(content).digest('hex') !== hashes[key]) {
+          throw new Error('Configuration generation mismatch; run recover');
+        }
       }
     }
-  }
-  const installProfilePath = path.join(resolveConfigDir(options), 'install_profile.json');
-  let profile: InstallProfile = {};
-  try {
-    if (pathExists(installProfilePath)) {
-      const parsed = JSON.parse(readText(installProfilePath));
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) profile = parsed as InstallProfile;
+    const installProfilePath = path.join(resolveConfigDir(options), 'install_profile.json');
+    let profile: InstallProfile = {};
+    try {
+      if (pathExists(installProfilePath)) {
+        const parsed = JSON.parse(readText(installProfilePath));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) profile = parsed as InstallProfile;
+      }
+    } catch (error) {
+      if (managed) throw error;
+    } finally {
+      // Every exit, including missing/invalid JSON and shape errors, must reject
+      // a writer that became visible during this read. Never select legacy state.
+      if (managed !== pathExists(transaction)) throw new Error('Configuration changed; retry');
     }
-  } catch (error) {
-    if (managed) throw error;
+    return profile;
   } finally {
-    // Every exit, including missing/invalid JSON and shape errors, must reject
-    // a writer that became visible during this read. Never select legacy state.
-    if (managed !== pathExists(transaction)) throw new Error('Configuration changed; retry');
+    if (managed !== pathExists(transaction) || (managed && fs.readlinkSync(path.join(transaction, 'active')) !== activeIdentity)) throw new Error('Configuration changed; retry');
   }
-  return profile;
 }
 
 export function resolveProjectRoot(options: ShellPathOptions = {}): string {

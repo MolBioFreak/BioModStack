@@ -322,12 +322,14 @@ def test_state_rechecked_immediately_before_activation(fixture, monkeypatch):
     assert not apply(fixture)["configuration_active"]
 
 
-def test_first_install_release_remains_explicitly_blocked(fixture):
+def test_first_install_release_uses_managed_base(fixture):
     assert cli("configure", "--document", str(fixture))[0] == 0
-    sys.path.insert(0, str(ROOT / "scripts"))
-    ProductionReleaseBackend = __import__("biomodstack_release").ProductionReleaseBackend
+    from scripts.biomodstack_release import ProductionReleaseBackend
+    backend = ProductionReleaseBackend(repo_root=ROOT, allow_first_install=True)
+    assert backend.managed_base == tx.managed_release_base(ROOT)
+    assert backend.runtime_env_file.is_symlink()
     with pytest.raises(tx.ConfigurationBlocked, match="managed_configuration_read_only"):
-        ProductionReleaseBackend(repo_root=ROOT, allow_first_install=True)
+        ProductionReleaseBackend(repo_root=ROOT)
 
 
 @pytest.mark.parametrize("kind", ["symlink", "hardlink", "fifo"])

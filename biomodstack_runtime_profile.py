@@ -433,14 +433,15 @@ def _consistent_configuration_read(function):
 
     @wraps(function)
     def wrapped(*args, **kwargs):
-        from biomodstack_configuration import transaction_dir, assert_configuration_readable
-        before = transaction_dir().exists()
+        from biomodstack_configuration import configuration_identity, assert_configuration_readable
+        before = configuration_identity()
         assert_configuration_readable()
-        result = function(*args, **kwargs)
-        assert_configuration_readable()
-        if before != transaction_dir().exists():
-            raise RuntimeError("Configuration changed during read; retry after recover")
-        return result
+        try:
+            return function(*args, **kwargs)
+        finally:
+            assert_configuration_readable()
+            if before != configuration_identity():
+                raise RuntimeError("Configuration changed during read; retry after recover")
     return wrapped
 
 
