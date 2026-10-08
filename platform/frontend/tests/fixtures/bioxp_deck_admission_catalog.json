@@ -1,0 +1,416 @@
+{
+  "source_sha256": "2ba4ab886d049dd291285161a98b121d2ce6180d771b11aa5809a076e7c0eab2",
+  "source": "26-LOC_PARK-before-catalog.json",
+  "deck": {
+    "current_location": "WASTE_BIN",
+    "current_well": 0,
+    "semantic_state_revision": 183,
+    "position_table_revision": "cee27c5e30de6be84a689f1167165fd1bc915eb351c41487c5eb12227a5d3278",
+    "destination_catalog_revision": "f7f4e88a9e5f358c01887dc5017a1b792cc85b7446643d4c7f11f77651ab5d39",
+    "ambiguity_state": "none"
+  },
+  "action": {
+    "action_id": "oem.deck.move_to_location",
+    "request_schema_version": "bioxp.operator_action_request.v2",
+    "response_schema_version": "bioxp.operator_action_receipt.v2",
+    "interrupt": false,
+    "enabled": true,
+    "disabled_reason": null,
+    "required_boards": [
+      4,
+      5
+    ],
+    "expected_board_epoch_by_board": {
+      "4": 64,
+      "5": 1
+    },
+    "required_references": [
+      "x",
+      "y",
+      "z",
+      "g"
+    ],
+    "position_table_revision": "cee27c5e30de6be84a689f1167165fd1bc915eb351c41487c5eb12227a5d3278",
+    "destination_catalog_revision": "f7f4e88a9e5f358c01887dc5017a1b792cc85b7446643d4c7f11f77651ab5d39",
+    "destination_options": [
+      {
+        "target": "LOC_MS",
+        "label": "LOC_MS",
+        "aliases": [
+          "Magnetic Station"
+        ],
+        "location_id": 0,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_OC",
+        "label": "LOC_OC",
+        "aliases": [
+          "OC chiller",
+          "Output Chiller",
+          "Output Tray"
+        ],
+        "location_id": 1,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "TECANRACK2",
+        "label": "TIP TRAY 2",
+        "aliases": [],
+        "location_id": 8,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "TECANRACK4",
+        "label": "TIP TRAY_4",
+        "aliases": [],
+        "location_id": 10,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_P_MS",
+        "label": "LOC_MS_PLATE",
+        "aliases": [],
+        "location_id": 25,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_P_OC",
+        "label": "LOC_OC_PLATE",
+        "aliases": [],
+        "location_id": 21,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_OC_COVER",
+        "label": "LOC_OC_COVER",
+        "aliases": [],
+        "location_id": 17,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_TC",
+        "label": "LOC_TC",
+        "aliases": [
+          "Thermal Cycler"
+        ],
+        "location_id": 2,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_TC_BARCODE",
+        "label": "LOC_TC_BARCODE",
+        "aliases": [],
+        "location_id": 2,
+        "branch_kind": "barcode",
+        "camera_offset_option": false,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "CAMERA_OFFSET"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_RC",
+        "label": "LOC_RC",
+        "aliases": [
+          "Reagent Chiller"
+        ],
+        "location_id": 3,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_RC_BARCODE",
+        "label": "LOC_RC_BARCODE",
+        "aliases": [],
+        "location_id": 3,
+        "branch_kind": "barcode",
+        "camera_offset_option": false,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "CAMERA_OFFSET"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "TECANRACK1",
+        "label": "TIP TRAY 1",
+        "aliases": [],
+        "location_id": 7,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "TECANRACK3",
+        "label": "TIP TRAY_3",
+        "aliases": [],
+        "location_id": 9,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_P_TC",
+        "label": "LOC_TC_PLATE",
+        "aliases": [],
+        "location_id": 23,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_BSC",
+        "label": "LOC_TC_COVER",
+        "aliases": [],
+        "location_id": 5,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_RC_COVER",
+        "label": "LOC_RC_COVER",
+        "aliases": [],
+        "location_id": 19,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_STRIP1",
+        "label": "STRIP 1",
+        "aliases": [],
+        "location_id": 11,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_STRIP2",
+        "label": "STRIP 2",
+        "aliases": [],
+        "location_id": 12,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_STRIP3",
+        "label": "STRIP 3",
+        "aliases": [],
+        "location_id": 13,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_STRIP4",
+        "label": "STRIP 4",
+        "aliases": [],
+        "location_id": 14,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_OC_COVER_STORAGE",
+        "label": "LOC_OC_COVER_S",
+        "aliases": [],
+        "location_id": 18,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_RC_COVER_STORAGE",
+        "label": "LOC_RC_COVER_S",
+        "aliases": [],
+        "location_id": 20,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_TROUGH",
+        "label": "LOC_TROUGH1",
+        "aliases": [],
+        "location_id": 16,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_BSCS",
+        "label": "LOC_BSCS",
+        "aliases": [],
+        "location_id": 4,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "WASTE_BIN",
+        "label": "Waste Bin",
+        "aliases": [
+          "Waste Bin"
+        ],
+        "location_id": 6,
+        "branch_kind": "ordinary",
+        "camera_offset_option": true,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ClassControlInterface.moveTo:3691-3716"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      },
+      {
+        "target": "LOC_PARK",
+        "label": "Park",
+        "aliases": [
+          "Park"
+        ],
+        "location_id": 28,
+        "branch_kind": "park",
+        "camera_offset_option": false,
+        "source_anchors": [
+          "ClassControlInterface.btnLOC1_Click:1932-1959",
+          "ControlLib.parkGantry:7071-7122"
+        ],
+        "enabled": true,
+        "disabled_reason": null
+      }
+    ]
+  }
+}

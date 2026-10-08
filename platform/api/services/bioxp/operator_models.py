@@ -5668,7 +5668,7 @@ class OperatorDashboardV2(BaseModel):
     board4: OperatorBoard4AuthorityV2
     y_axis: OperatorYAxisAuthorityV2
     active_commands: list[OperatorActionReceiptV2]
-    command_queue: OperatorQueueV1
+    command_queue: OperatorQueueV1 | None = None
     latest_receipts: list[OperatorActionReceiptV2]
     telemetry: OperatorDashboard | None = None
     deck: OperatorDeckDashboardV1 | None = None

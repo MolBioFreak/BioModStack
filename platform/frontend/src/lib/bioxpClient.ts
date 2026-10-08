@@ -511,7 +511,7 @@ export interface BioXpOperatorDashboardV2 {
     board4: BioXpBoard4AuthorityV2;
     y_axis: BioXpYAxisV2;
     active_commands: BioXpOperatorReceiptV2[];
-    command_queue: BioXpOperatorCommandQueueV2;
+    command_queue?: BioXpOperatorCommandQueueV2 | null;
     latest_receipts: BioXpOperatorReceiptV2[];
     telemetry: BioXpOperatorDashboard | null;
     deck?: {
@@ -1643,17 +1643,16 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
     const queryClient = useQueryClient();
     return useMutation({
         // Physical submissions must never inherit a retry/offline replay policy.
+        gcTime: 0,
         retry: false,
         networkMode: 'always',
         mutationFn: async ({ request }: { request: BioXpOperatorActionV2Request }) => {
             assertBioXpOperatorActionV2Request(request);
             const { action_id: actionId, ...body } = request;
-            return (
-                await api.post<BioXpOperatorReceiptV2>(
-                    `/api/bioxp/operator-controls/v2/actions/${encodeURIComponent(actionId)}`,
-                    body,
-                )
-            ).data;
+            const path = `/api/bioxp/operator-controls/v2/actions/${encodeURIComponent(actionId)}`;
+            return (await (actionId === 'oem.deck.move_to_location'
+                ? api.post<BioXpOperatorReceiptV2>(path, body, { timeout: 12000 })
+                : api.post<BioXpOperatorReceiptV2>(path, body))).data;
         },
         onSettled: (_receipt, _error, variables) => {
             void queryClient.invalidateQueries({ queryKey: [...operatorHistoryKey, variables.request.expected_connection_generation] });
@@ -1665,8 +1664,104 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
 
 export const useInvokeBioXpOperatorActionV2 = () => useInvokeBioXpOperatorActionV2Mutation();
 
-// Deck and generic axis actions intentionally own separate mutation state.
-export const useInvokeBioXpDeckActionV2 = () => useInvokeBioXpOperatorActionV2Mutation();
+export interface BioXpDeckSubmission {
+    request: Extract<BioXpOperatorActionV2Request, { action_id: 'oem.deck.move_to_location' }>;
+    state: 'submitting' | 'accepted' | 'uncertain' | 'rejected' | 'not_sent';
+    commandId?: string;
+    receipt?: BioXpOperatorReceiptV2;
+    error?: unknown;
+}
+
+// Short HTTP admission custody only. Nothing waits for physical completion,
+// persists across reload, retries a POST, or claims unsent work is robot queued.
+export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
+    const mutation = useInvokeBioXpOperatorActionV2Mutation();
+    const [submissions, setSubmissions] = useState<BioXpDeckSubmission[]>([]);
+    const scope = useRef({ generation, active });
+    scope.current = { generation, active };
+    const sending = useRef<string | null>(null);
+    const pending = submissions.find(item => item.request.expected_connection_generation === generation
+        && (item.state === 'submitting' || item.state === 'uncertain'));
+    const lookup = useQuery({
+        queryKey: ['bioxp', 'operator-controls', 'v2', 'request', generation, pending?.request.idempotency_key],
+        enabled: active && pending?.state === 'uncertain',
+        retry: false,
+        queryFn: async ({ signal }) => {
+            const receipt = (await api.get<BioXpOperatorReceiptV2>(
+                `/api/bioxp/operator-controls/v2/requests/${encodeURIComponent(pending!.request.idempotency_key)}`,
+                { signal, timeout: 12000, params: { expected_connection_generation: generation } },
+            )).data;
+            if (receipt.action_id !== pending!.request.action_id || !receipt.command_id)
+                throw new Error('Command request identity mismatch; admission remains uncertain');
+            return receipt;
+        },
+        // Including 404: the original admission may still be in flight.
+        refetchInterval: 2000,
+        gcTime: 0,
+    });
+    const update = (key: string, changes: Partial<BioXpDeckSubmission>) =>
+        setSubmissions(items => items.map(item => item.request.idempotency_key === key ? { ...item, ...changes } : item));
+    useEffect(() => {
+        if (!active) return;
+        if (pending?.state === 'uncertain' && lookup.data) {
+            update(pending.request.idempotency_key, { state: 'accepted', receipt: lookup.data, error: undefined });
+        }
+    }, [active, pending, lookup.data]);
+    useEffect(() => {
+        // Never resume unsent requests after connection replacement/disconnect.
+        setSubmissions(items => items.map(item => item.state === 'submitting'
+            && (!active || item.request.expected_connection_generation !== generation)
+            ? { ...item, state: sending.current === item.request.idempotency_key ? 'uncertain' : 'not_sent' } : item));
+    }, [active, generation]);
+    useEffect(() => {
+        if (!active || pending?.state !== 'submitting' || sending.current !== null) return;
+        const request = pending.request;
+        const key = request.idempotency_key;
+        sending.current = key;
+        void mutation.mutateAsync({ request }).then(receipt => {
+            sending.current = null;
+            if (scope.current.generation !== generation || !scope.current.active) {
+                update(key, { state: 'uncertain', commandId: receipt?.command_id });
+                return;
+            }
+            if (receipt == null || receipt.action_id !== request.action_id || !receipt.command_id) {
+                update(key, { state: 'uncertain', error: new Error('Invalid admission receipt') });
+            } else update(key, { state: 'accepted', receipt });
+        }, error => {
+            sending.current = null;
+            if (scope.current.generation !== generation || !scope.current.active) {
+                update(key, { state: 'uncertain', error, commandId: bioXpPostDispatchCommandIdentity(error)?.commandId });
+                return;
+            }
+            const status = (error as { response?: { status?: number } })?.response?.status;
+            // Only explicit client/validation refusals settle non-admission.
+            const rejected = status != null && status >= 400 && status < 500 && status !== 408;
+            update(key, { state: rejected ? 'rejected' : 'uncertain', error,
+                commandId: bioXpPostDispatchCommandIdentity(error)?.commandId });
+        });
+    }, [active, generation, pending, mutation.mutateAsync]);
+    return {
+        ...mutation,
+        submissions,
+        retire: (key: string, receipt: BioXpOperatorReceiptV2) => {
+            if (!receipt.terminal || receipt.status === 'ambiguous' || receipt.completion_class === 'recovery_required') return;
+            setSubmissions(items => {
+                const settled = items.find(item => item.request.idempotency_key === key
+                    && item.state === 'accepted' && item.receipt?.command_id === receipt.command_id);
+                // Exact terminal GET transfers presentation custody to canonical history.
+                return settled ? items.filter(item => item !== settled) : items;
+            });
+        },
+        submit: (request: BioXpOperatorActionV2Request) => {
+            if (!active || request.expected_connection_generation !== generation || request.action_id !== 'oem.deck.move_to_location') return;
+            assertBioXpOperatorActionV2Request(request);
+            // Capture values, not the mutable picker; no admission batch gate.
+            const captured = { ...request, inputs: { ...request.inputs },
+                expected_board_epoch_by_board: { ...request.expected_board_epoch_by_board } };
+            setSubmissions(items => [...items, { request: captured, state: 'submitting' }]);
+        },
+    };
+};
 
 export interface BioXpPostDispatchCommandIdentity {
     commandId: string;
@@ -1750,10 +1845,10 @@ export const useBioXpOperatorReceiptV2 = (
     enabled = true,
 ) => useQuery({
     queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
-    queryFn: async () => decodeBioXpReceiptDetailV2((
+    queryFn: async ({ signal }) => decodeBioXpReceiptDetailV2((
         await api.get<BioXpOperatorReceiptDetailV2>(
             `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
-            { params: { detail: true } },
+            { signal, timeout: 12000, params: { detail: true } },
         )
     ).data, commandId ?? ''),
     enabled: enabled && Boolean(commandId) && connectionGeneration > 0,

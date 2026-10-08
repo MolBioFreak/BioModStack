@@ -566,22 +566,29 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
                 reset: state.stableReset,
             };
     },
-    useInvokeBioXpDeckActionV2: () => ({
-        data: undefined,
-        error: state.deckInvokeError,
-        isPending: state.deckInvokePending,
-        mutate: (
-            payload: Record<string, unknown>,
-            callbacks?: { onSuccess?: (receipt: Record<string, unknown>) => void; onError?: (error: unknown) => void },
-        ) => {
-            state.deckInvokeCalls.push(payload);
-            state.deckCallbacks = callbacks ?? {};
-            if (!state.deckDeferred) {
-                callbacks?.onSuccess?.({ command_id: 'deck-command-mounted-1', status: 'queued', terminal: false });
-            }
-        },
-        reset: state.stableReset,
-    }),
+    useInvokeBioXpDeckActionV2: () => {
+        const [submissions, setSubmissions] = React.useState<any[]>([]);
+        return {
+            data: undefined, error: state.deckInvokeError, isPending: state.deckInvokePending,
+            submissions, retire: () => {},
+            submit: (request: Record<string, unknown>) => {
+                state.deckInvokeCalls.push({ request });
+                const item = { request, state: 'submitting' };
+                setSubmissions(items => [...items, item]);
+                state.deckCallbacks = {
+                    onSuccess: receipt => setSubmissions(items => items.map(row => row.request === request
+                        ? { ...row, state: 'accepted', receipt } : row)),
+                    onError: error => setSubmissions(items => items.map(row => row.request === request
+                        ? { ...row, state: 'uncertain', error, commandId: (error as any)?.response?.data?.detail?.command_id } : row)),
+                };
+                if (state.deckInvokeError) state.deckCallbacks.onError?.(state.deckInvokeError);
+                else if (!state.deckDeferred) state.deckCallbacks.onSuccess?.({
+                    command_id: 'deck-command-mounted-1', action_id: 'oem.deck.move_to_location', status: 'queued', terminal: false,
+                });
+            },
+            reset: state.stableReset,
+        };
+    },
     bioXpPostDispatchCommandIdentity: (error: unknown) => {
         const detail = (error as { response?: { data?: { detail?: Record<string, unknown> } } })?.response?.data?.detail;
         return typeof detail?.command_id === 'string'
@@ -2091,7 +2098,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             expect(state.deckInvokeCalls).toHaveLength(1); expect(api.post).not.toHaveBeenCalled();
             state.connected = false; await render(); const prior = calls; await advance(); expect(calls).toBe(prior);
             state.connectionGeneration = 2; state.connected = true; await render(); await advance();
-            expect(calls).toBe(prior); expect(panel.textContent).not.toContain('deck-command-mounted-1');
+            expect(calls).toBe(prior); expect(panel.textContent).toContain('earlier connection');
         } finally {
             await act(async () => root.render(null)); client.clear(); nativeMetadataMode.receipts = false; vi.useRealTimers();
         }
@@ -2149,7 +2156,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
             const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
             expect(move.disabled).toBe(true);
-            expect(move.title).toBe('Deck command is in progress; wait for its terminal receipt. Do not resubmit.');
+            expect(move.title).toContain('Source-owned deck readiness is unavailable');
             expect(panel.textContent).not.toContain('Existing deck command requires reconciliation');
             expect(panel.textContent).toContain(actualParkReceipt.command_id);
             await act(async () => { finish({ data: structuredClone(actualParkReceipt) }); await new Promise(resolve => setTimeout(resolve, 20)); });
@@ -2344,7 +2351,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(state.receiptHookCalls.some((call) => call.commandId === 'deck-command-mounted-1' && call.generation === 1)).toBe(true);
     });
 
-    it('prefers a newer authoritative dashboard deck command over terminal local ownership', async () => {
+    it('retains selected local receipt while showing newer canonical queue work', async () => {
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
         const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
@@ -2360,16 +2367,16 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         }];
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
 
-        expect(panel.textContent).toContain('deck-command-dashboard-2');
-        expect(panel.textContent).toContain('Lifecycledispatched');
-        expect(move.disabled).toBe(true);
-        expect(state.receiptHookCalls).toContainEqual({ commandId: 'deck-command-dashboard-2', generation: 1, enabled: true });
+        expect(panel.textContent).toContain('deck-command-mounted-1');
+        expect(panel.textContent).toContain('Lifecyclecompleted');
+        expect(move.disabled).toBe(false);
+        expect(state.receiptHookCalls).toContainEqual({ commandId: 'deck-command-mounted-1', generation: 1, enabled: true });
     });
 
     it.each([
         ['oem.deck._mov_execution', 'dispatched', false, null],
         ['oem.deck._finite_operation', 'ambiguous', true, 'recovery_required'],
-    ])('blocks and polls canonical internal deck work, then releases settled work: %s', async (actionId, status, terminal, completionClass) => {
+    ])('polls canonical internal deck work and blocks only recovery faults: %s', async (actionId, status, terminal, completionClass) => {
         const internalReceipt = {
             command_id: 'canonical-internal-deck-command', action_id: actionId,
             status, terminal, sequence: 73, completion_class: completionClass, error: null,
@@ -2380,10 +2387,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
         const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
-        expect(move.disabled).toBe(true);
-        expect(panel.textContent).toContain(terminal
-            ? 'Existing deck command requires reconciliation; do not resubmit.'
-            : 'Deck command is in progress; wait for its terminal receipt. Do not resubmit.');
+        expect(move.disabled).toBe(terminal);
+        if (terminal) expect(panel.textContent).toContain('Existing deck command requires reconciliation; do not resubmit.');
         expect(panel.textContent).not.toContain(actionId);
         expect(state.receiptHookCalls).toContainEqual({ commandId: 'canonical-internal-deck-command', generation: 1, enabled: true });
 
@@ -2396,8 +2401,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         expect(move.disabled).toBe(false);
         expect(panel.textContent).not.toContain(actionId);
-        expect(state.receiptHookCalls[3]).toEqual({ commandId: null, generation: 1, enabled: true });
-        expect(state.receiptHookCalls.some(call => call.commandId === 'canonical-internal-deck-command')).toBe(false);
+        expect(state.receiptHookCalls.some(call => call.commandId === 'canonical-internal-deck-command')).toBe(true); // selected terminal detail remains observable; real hook stops its polling
     });
 
     it.each(process.env.BMS_RECOVERY_DETAIL_EXPORT ? ['contract', 'native'] : ['contract'])('warm recovery polls the actual decoder without replay: %s', async (source) => {
@@ -2510,9 +2514,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(move.disabled).toBe(false);
         await act(async () => move.click());
         expect(state.deckInvokeCalls).toHaveLength(1); // explicit new user command only
-        expect(move.disabled).toBe(true); // new addressed receipt, not the old recovered one, must reconcile
+        expect(move.disabled).toBe(false); // another deliberate intent need not wait for physical completion
         await act(async () => move.click());
-        expect(state.deckInvokeCalls).toHaveLength(1);
+        expect(state.deckInvokeCalls).toHaveLength(2);
     });
 
     it.each(['stopped', 'aborted', 'cancelled'])('renders truthful terminal deck lifecycle %s', async (status) => {
@@ -2658,7 +2662,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.connectionGeneration = 2;
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
         await act(async () => oldCallbacks?.onSuccess?.({ command_id: 'deck-old-generation', status: 'queued', terminal: false }));
-        expect(container.textContent).not.toContain('deck-old-generation');
+        expect(container.textContent).toContain('deck-old-generation');
+        expect(container.textContent).toContain('earlier connection');
     });
 
     it('keeps Y and deck errors on their independent control surfaces', async () => {
@@ -2989,9 +2994,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(home.title).not.toContain('acknowledged');
 
         const queueStrip = article.querySelector('[data-testid="successive-move-queue"]') as HTMLElement;
-        expect(queueStrip).not.toBeNull();
-        expect(queueStrip.textContent).toContain('X:');
-        expect(queueStrip.textContent).toContain('oem.x.move_steps');
+        expect(queueStrip).toBeNull(); // legacy telemetry queue is not canonical command custody
+        expect(container.querySelector('[data-testid="canonical-command-queue"]')).not.toBeNull();
         expect(state.admissionCalls).toBe(0);
     });
 
