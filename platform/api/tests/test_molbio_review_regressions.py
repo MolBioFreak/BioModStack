@@ -65,6 +65,7 @@ from routers.nucleotide_sequences import (  # noqa: E402
     AnalysisTrackSchema,
     NucleotideSequenceUpdate,
     delete_sequence,
+    normalize_feature_payloads,
     update_sequence,
 )
 from services.assembly.golden_gate import simulate_golden_gate  # noqa: E402
@@ -132,6 +133,28 @@ async def _seed_template(session, template_id: str = "template-1") -> Nucleotide
     await record_sequence_revision(session, template, change_kind="create", provenance={"source": "test"})
     await session.commit()
     return template
+
+
+def test_feature_normalization_preserves_compound_traversal_segment_order() -> None:
+    segments = [
+        {"start": 12, "end": 16},
+        {"start": 0, "end": 4},
+    ]
+
+    normalized = normalize_feature_payloads(
+        [
+            {
+                "name": "origin-spanning feature",
+                "type": "misc_feature",
+                "segments": segments,
+            }
+        ],
+        sequence_length=16,
+    )
+
+    assert normalized[0]["segments"] == segments
+    assert normalized[0]["start"] == 0
+    assert normalized[0]["end"] == 16
 
 
 @pytest.mark.asyncio
