@@ -629,10 +629,35 @@ def _source_helpers(envelope: dict) -> None:
     sys.path.insert(0, str(source / "platform" / "api"))
 
 
+def _publish_diagnostic_bytes(attempt_dir: Path, destination: Path, payload: bytes) -> None:
+    """Publish a complete inode without replacing sealed bytes; retry-safe."""
+    fd, name = tempfile.mkstemp(prefix="diagnostic-", suffix=".tmp", dir=attempt_dir)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            if destination.is_symlink() or destination.read_bytes() != payload:
+                raise RuntimeError("Previously published diagnostic conflicts")
+        directory_fd = os.open(destination.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _publish_root_diagnostics(attempt_dir: Path, envelope: dict, environment: dict,
-                              offsets: dict[str, int]) -> None:
+                              offsets: dict[str, int], *, recovery: bool = False) -> None:
     from scripts.lib.native_diagnostics import redact_text
     destination = Path(envelope["output_directory"]) / "_remote"
+    if recovery:
+        destination /= "recovery"
     destination.mkdir(parents=True, exist_ok=True)
     if any(path.is_symlink() for path in (destination, *destination.parents)):
         raise RuntimeError("Diagnostic destination is a symlink")
@@ -640,6 +665,8 @@ def _publish_root_diagnostics(attempt_dir: Path, envelope: dict, environment: di
                          (attempt_dir / "supervisor.log", "supervisor.log"),
                          (Path(envelope["working_directory"]) / ".nextflow.log", "nextflow-internal.log"),
                          (Path(envelope["working_directory"]) / "component-root.log", "component-root.log")):
+        if recovery and name not in {"nextflow.log", "supervisor.log"}:
+            continue
         if source.is_symlink():
             raise RuntimeError("Named diagnostic source is a symlink")
         if not source.is_file():
@@ -649,11 +676,15 @@ def _publish_root_diagnostics(attempt_dir: Path, envelope: dict, environment: di
         with source.open("rb") as raw:
             raw.seek(offsets.get(name, 0))
             text = redact_text(raw.read().decode("utf-8", errors="replace"), environment=environment)
-        # Exclusive copies: no previously sealed diagnostic/scientific bytes change.
-        with (destination / name).open("x", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        # Recovery must survive interruption without retaining a partial final
+        # file. Existing normal-supervisor exclusive publication is unchanged.
+        if recovery:
+            _publish_diagnostic_bytes(attempt_dir, destination / name, text.encode("utf-8"))
+        else:
+            with (destination / name).open("x", encoding="utf-8") as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
 
 
 def _supervise_owned(attempt_dir: Path) -> int:
@@ -1003,6 +1034,73 @@ def workflow_activity(attempt_dir: Path, identity: dict[str, Any], *,
     return latest[1] if latest else None
 
 
+def _recover_terminal_manifest(attempt_dir: Path, envelope: dict, value: dict) -> None:
+    """Status-lock owner only: seal/adopt diagnostics, never restart science.
+
+    A caller must retain positive durable quiescence, not infer it from PID
+    absence. The supervisor lock also excludes a publisher finishing its exit.
+    Failures propagate so controllers cannot consume a premature unsealed terminal.
+    """
+    with (attempt_dir / "supervisor.lock").open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if envelope.get("schema") != "bms.remote-execution.v1":
+            raise RuntimeError("Diagnostic recovery requires a valid execution envelope")
+        for key in ("job_id", "attempt_id", "source_revision", "source_tree"):
+            if not isinstance(envelope.get(key), str) or not envelope[key]:
+                raise RuntimeError("Diagnostic recovery identity is incomplete")
+        generation = value.get("generation", 0)
+        if type(generation) is not int or generation < 0:
+            raise RuntimeError("Invalid shared root generation")
+        output = Path(envelope["output_directory"])
+        native = Path(value.get("native_output_directory") or output)
+        if (not output.is_absolute() or not native.is_absolute()
+                or not native.resolve().is_relative_to(output.resolve())
+                or any(p.is_symlink() for p in (native, *native.parents))):
+            raise RuntimeError("Diagnostic recovery output escapes artifact custody")
+        exit_code = value.get("exit_code")
+        if exit_code is None:
+            exit_code = -15 if value["state"] == "cancelled" else 1
+        if type(exit_code) is not int:
+            raise RuntimeError("Invalid terminal exit code")
+        expected = {key: envelope[key] for key in ("job_id", "attempt_id", "source_revision", "source_tree")}
+        expected.update(execution_envelope_sha256=sha256_file(envelope_path(attempt_dir)))
+        manifest_path = output / RESULT_MANIFEST_FILE
+        if manifest_path.is_symlink():
+            raise RuntimeError("Current result manifest is a symlink")
+        manifest = load_json(manifest_path) if manifest_path.exists() else None
+        if manifest is not None:
+            if any(manifest.get(k) != v for k, v in expected.items()):
+                raise RuntimeError("Diagnostic manifest identity mismatch")
+            if manifest.get("generation") == generation:
+                if manifest.get("exit_code") != exit_code:
+                    raise RuntimeError("Diagnostic manifest terminal identity mismatch")
+                # Publication can outlive its status write. Verify before adopting;
+                # never rebuild or silently bless changed sealed artifact bytes.
+                actual = build_result_manifest(attempt_dir, envelope, exit_code, generation=generation)
+                if (set(manifest) != set(actual) or manifest.get("schema") != actual["schema"]
+                        or manifest.get("artifacts") != actual["artifacts"]):
+                    raise RuntimeError("Recovered diagnostic artifact integrity mismatch")
+                value.update(exit_code=exit_code, result_manifest_sha256=sha256_file(manifest_path))
+                return
+            if (type(manifest.get("generation")) is not int
+                    or manifest["generation"] >= generation or native == output):
+                raise RuntimeError("Refuse to replace a sealed native generation")
+            archive = output / "_remote" / "result-manifests"
+            if any(p.is_symlink() for p in (archive, *archive.parents)):
+                raise RuntimeError("Previous manifest archive contains a symlink")
+            archive.mkdir(parents=True, exist_ok=True)
+            _publish_diagnostic_bytes(attempt_dir, archive / (sha256_file(manifest_path) + ".json"),
+                                      manifest_path.read_bytes())
+        _source_helpers(envelope)
+        # Only attempt-owned named logs: shared working-directory logs have no
+        # surviving generation offset after owner loss and must not be swept.
+        _publish_root_diagnostics(attempt_dir, {**envelope, "output_directory": str(native)},
+                                  {**os.environ, **dict(envelope.get("environment") or {})}, {}, recovery=True)
+        manifest = build_result_manifest(attempt_dir, envelope, exit_code, generation=generation)
+        atomic_json(manifest_path, manifest)
+        value.update(exit_code=exit_code, result_manifest_sha256=sha256_file(manifest_path))
+
+
 def status(attempt_dir: Path) -> dict[str, Any]:
     with status_path(attempt_dir).with_suffix(".json.lock").open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -1011,6 +1109,8 @@ def status(attempt_dir: Path) -> dict[str, Any]:
         envelope = load_json(envelope_path(attempt_dir))
         if any(value.get(key) != envelope.get(key) for key in ("job_id", "attempt_id")):
             raise RuntimeError("Attempt status identity mismatch")
+        if value.get("boot_id") is not None and (not isinstance(value["boot_id"], str) or not value["boot_id"]):
+            raise RuntimeError("Attempt boot identity is invalid")
         rebooted = bool(value.get("boot_id") and value["boot_id"] != boot_id())
         cancellation_requested = (attempt_dir / CANCEL_REQUEST_FILE).exists()
         supervisor_alive = (not rebooted and process_matches(
@@ -1055,6 +1155,11 @@ def status(attempt_dir: Path) -> dict[str, Any]:
         elif rebooted and not value.get("quiescent"):
             value["quiescent"] = True
         if value != previous:
+            _write_atomic_json(status_path(attempt_dir), value)
+        if (value.get("state") in {"failed", "lost", "cancelled"}
+                and value.get("quiescent") is True and not supervisor_alive
+                and not value.get("result_manifest_sha256")):
+            _recover_terminal_manifest(attempt_dir, envelope, value)
             _write_atomic_json(status_path(attempt_dir), value)
         # Even terminal publication is not permission to race the publisher.
         if supervisor_alive:
