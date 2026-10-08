@@ -123,6 +123,7 @@ process FilterRFD3 {
         --input-dir . \\
         --output-dir "filtered_output" \\
         --convert-to-pdb \\
+        --output-jsonl "rfd3_data_${task.index}.jsonl" \\
         ${paramString} \\
         2>&1 | tee filter_rfd3_${task.index}.log
     """

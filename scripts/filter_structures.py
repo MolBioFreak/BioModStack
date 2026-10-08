@@ -138,6 +138,8 @@ def main():
     common.add_argument('--output-dir', required=True, help='Output directory')
     common.add_argument('--convert-to-pdb', action='store_true',
                         help='Convert CIF outputs to PDB')
+    common.add_argument('--output-jsonl', type=str, default='filtered.jsonl',
+                        help='Output JSONL filename (default: filtered.jsonl)')
     common.add_argument('--ncpus', type=int, default=1,
                         help='Number of CPUs (for compatibility, not used)')
     
@@ -211,7 +213,13 @@ def main():
     )
     
     results = filter_instance.run()
-    filter_instance.write_results(results)
+    
+    # Write results JSONL to working directory (not output_dir) for Nextflow
+    jsonl_path = Path(args.output_jsonl)
+    with open(jsonl_path, 'w') as f:
+        for r in results:
+            f.write(json.dumps(r) + '\n')
+    logger.info(f"Results written to {jsonl_path}")
     
     # Exit with error if nothing passed
     passed = sum(1 for r in results if r['passed'])
