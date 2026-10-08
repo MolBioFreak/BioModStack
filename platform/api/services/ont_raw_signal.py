@@ -6,13 +6,17 @@ Conversion stays fail-closed until the exact local fidelity profile is qualified
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
 import os
+import platform
 import secrets
 import shutil
 import stat
+import subprocess
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -53,6 +57,52 @@ LIVE_CONVERSION_ENABLED_ENV = "BMS_ONT_LIVE_CONVERSION_ENABLED"
 RAW_SIGNAL_RETENTION_POLICY_ENV = "BMS_ONT_RAW_SIGNAL_RETENTION_POLICY"
 BLOW5_DEFAULT_STAGING_ROOT = "/mnt/BioModStack/ont-raw-signal-staging"
 BLOW5_DEFAULT_MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
+RAW_SIGNAL_RUNTIME_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/ont_signal_workbench/raw_signal_runtime_policy_v1.json"
+RAW_SIGNAL_RUNTIME_POLICY_SHA256 = "6257135ec3f0669f7579e3c1d4d44742fa78c7913d32108b158da08e01ccdc05"
+
+
+class SourceLeaseUnavailable(RuntimeError):
+    """A transient source read lease conflict requires a later retry."""
+
+
+_RENAME_NOREPLACE = 1
+_RENAMEAT2_SYSCALLS = {"x86_64": 316, "amd64": 316, "aarch64": 276, "arm64": 276}
+
+
+def _rename_directory_noreplace(
+    source_dir_fd: int, source_name: str, destination_dir_fd: int, destination_name: str
+) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    source = os.fsencode(source_name)
+    destination = os.fsencode(destination_name)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is not None:
+        renameat2.restype = ctypes.c_int
+        result = renameat2(
+            ctypes.c_int(source_dir_fd),
+            ctypes.c_char_p(source),
+            ctypes.c_int(destination_dir_fd),
+            ctypes.c_char_p(destination),
+            ctypes.c_uint(_RENAME_NOREPLACE),
+        )
+    else:
+        syscall_number = _RENAMEAT2_SYSCALLS.get(platform.machine())
+        if syscall_number is None:
+            raise OSError(errno.ENOSYS, "renameat2 is unavailable on this architecture")
+        libc.syscall.restype = ctypes.c_long
+        result = libc.syscall(
+            ctypes.c_long(syscall_number),
+            ctypes.c_int(source_dir_fd),
+            ctypes.c_char_p(source),
+            ctypes.c_int(destination_dir_fd),
+            ctypes.c_char_p(destination),
+            ctypes.c_uint(_RENAME_NOREPLACE),
+        )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        if error_number == errno.EEXIST:
+            raise FileExistsError(error_number, os.strerror(error_number), destination_name)
+        raise OSError(error_number, os.strerror(error_number), destination_name)
 
 _SOURCE_LEASE_BREAK = threading.Event()
 
@@ -67,6 +117,83 @@ if threading.current_thread() is threading.main_thread():
 
 def source_lease_break_requested() -> bool:
     return _SOURCE_LEASE_BREAK.is_set()
+
+
+def raw_signal_runtime_identity() -> dict[str, Any]:
+    """Resolve raw-signal runtime identity from checked-in authority, not env input."""
+    descriptor = os.open(
+        RAW_SIGNAL_RUNTIME_POLICY_PATH,
+        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
+    try:
+        raw = os.read(descriptor, 8193)
+        if len(raw) > 8192 or os.read(descriptor, 1):
+            raise RuntimeError("raw-signal runtime policy exceeds its bound")
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise RuntimeError("raw-signal runtime policy is not a regular file")
+    finally:
+        os.close(descriptor)
+    policy_sha256 = hashlib.sha256(raw).hexdigest()
+    if policy_sha256 != RAW_SIGNAL_RUNTIME_POLICY_SHA256:
+        raise RuntimeError("raw-signal runtime policy manifest identity diverged")
+    try:
+        policy = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("raw-signal runtime policy is invalid") from exc
+    runtime_id = policy.get("runtime_id") if isinstance(policy, dict) else None
+    oci_digest = policy.get("oci_digest") if isinstance(policy, dict) else None
+    tools = policy.get("tools") if isinstance(policy, dict) else None
+    if (
+        policy != {
+            "schema": "bms.ont-raw-signal-runtime-policy.v1",
+            "runtime_id": runtime_id,
+            "oci_digest": oci_digest,
+            "tools": tools,
+            "network": "none",
+        }
+        or not isinstance(runtime_id, str)
+        or not isinstance(oci_digest, str)
+        or not _is_sha256(runtime_id.removeprefix("sha256:"))
+        or runtime_id != oci_digest
+        or not isinstance(tools, dict)
+        or tools != {"blue_crab": "0.5.0", "slow5tools": "1.4.0", "pyslow5": "1.4.0"}
+    ):
+        raise RuntimeError("raw-signal runtime policy manifest is invalid")
+    image = os.getenv(BLOW5_CONTAINER_ENV, "").strip()
+    digest = os.getenv(BLOW5_CONTAINER_DIGEST_ENV, "").strip().lower()
+    if image != runtime_id or digest != oci_digest.removeprefix("sha256:"):
+        raise RuntimeError("raw-signal runtime policy does not match configured image identity")
+    return {
+        "image": runtime_id,
+        "digest": digest,
+        "tools": dict(tools),
+        "network": "none",
+        "policy_sha256": policy_sha256,
+    }
+
+
+def assert_local_raw_runtime_image(runtime: str, image: str) -> None:
+    """Admit only the exact policy image already present in the local runtime."""
+    if runtime not in {"docker", "podman"} or shutil.which(runtime) is None:
+        raise RuntimeError("raw-signal container runtime is unavailable")
+    if not image.startswith("sha256:") or not _is_sha256(image.removeprefix("sha256:")):
+        raise RuntimeError("raw-signal runtime image ID is not immutable")
+    try:
+        result = subprocess.run(
+            [runtime, "image", "inspect", "--format", "{{.Id}}", image],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=30,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("local raw-signal runtime image inspection failed") from exc
+    if result.returncode != 0 or result.stdout.strip() != image:
+        raise RuntimeError("local raw-signal runtime image is absent or diverged")
 
 _RAW_FORMATS = frozenset({"pod5", "slow5", "blow5"})
 _TERMINAL_STATES = frozenset({"stopped", "completed", "failed"})
@@ -155,6 +282,53 @@ def _open_absolute_directory_nofollow(path: Path) -> int:
     except BaseException:
         os.close(current_fd)
         raise
+
+
+def _prepare_confined_directory(root: Path, components: tuple[str, ...]) -> int:
+    """Create and open a new leaf below an existing absolute directory without following symlinks."""
+    if not root.is_absolute() or not components:
+        raise ValueError("confined directory root and components are invalid")
+    if any(not component or component in {".", ".."} or os.sep in component for component in components):
+        raise ValueError("confined directory component is invalid")
+    current_fd = _open_absolute_directory_nofollow(root)
+    try:
+        for component in components[:-1]:
+            try:
+                os.mkdir(component, 0o700, dir_fd=current_fd)
+            except FileExistsError:
+                pass
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = next_fd
+        leaf = components[-1]
+        os.mkdir(leaf, 0o700, dir_fd=current_fd)
+        leaf_fd = os.open(
+            leaf,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=current_fd,
+        )
+        return leaf_fd
+    finally:
+        os.close(current_fd)
+
+
+def _assert_semantic_output_identity(
+    output_identities: Mapping[str, Any],
+    fingerprint: str,
+    kind: str,
+    artifact: Mapping[str, Any],
+) -> None:
+    expected_group = output_identities.get(fingerprint)
+    expected = expected_group.get(kind) if isinstance(expected_group, Mapping) else None
+    required = ("sha256", "bytes", "device", "inode", "mtime_ns", "ctime_ns")
+    if not isinstance(expected, Mapping) or any(key not in expected for key in required):
+        raise ValueError("semantic output identity receipt is incomplete")
+    if any(artifact.get(key) != expected.get(key) for key in required):
+        raise ValueError(f"semantic output identity diverged for {fingerprint} {kind}")
 
 
 def _open_live_pod5_candidate(
@@ -845,6 +1019,7 @@ async def register_external_source(
 async def create_external_run_registration(
     session: AsyncSession,
     *,
+    domain_session: AsyncSession,
     format: str,
     input_file_id: str,
     index_input_file_id: str | None,
@@ -858,6 +1033,13 @@ async def create_external_run_registration(
     source_artifact_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one sealed external generation without MinKNOW or POD5 ancestry."""
+    if not experiment_group:
+        raise ValueError("exact active Domain Experiment is required")
+    domain_context = await _validate_external_registration_context(
+        domain_session,
+        experiment_group=experiment_group,
+        sample_id=sample_id,
+    )
     now = _now()
     run_id = (
         f"ont-external-run-{external_registration_key[:32]}"
@@ -872,6 +1054,7 @@ async def create_external_run_registration(
         "candidate_id": candidate_id,
         "source_sha256": source_sha256,
         "sample_id": sample_id,
+        "domain_context": domain_context,
     }
     input_record = await session.get(InputFile, input_file_id)
     if input_record is None:
@@ -889,6 +1072,7 @@ async def create_external_run_registration(
         "minknow_run_id_sha256": hashlib.sha256(b"").hexdigest(),
         "terminal_state": "completed",
         "observed_generation": 1,
+        "domain_context": domain_context,
         "artifacts": [{
             "kind": format,
             "path": str(source_path),
@@ -954,12 +1138,19 @@ async def _validate_external_registration_context(
     *,
     experiment_group: str,
     sample_id: str | None,
-) -> None:
+) -> dict[str, Any]:
     domain = await domain_session.get(MolBioNGSDomainState, experiment_group)
     if domain is None or domain.current_state_revision_id is None:
         raise ValueError("exact active Domain Experiment is required")
+    context: dict[str, Any] = {
+        "experiment_group": experiment_group,
+        "state_revision_id": domain.current_state_revision_id,
+        "binding_revision_id": domain.current_binding_revision_id,
+        "head_generation": domain.head_generation,
+        "sample_revision_id": None,
+    }
     if sample_id is None:
-        return
+        return context
     sample = await domain_session.get(MolBioNGSSample, sample_id)
     if (
         sample is None
@@ -967,6 +1158,8 @@ async def _validate_external_registration_context(
         or sample.archived_at is not None
     ):
         raise ValueError("sample is not an active member of the exact Domain Experiment")
+    context["sample_revision_id"] = sample.current_revision_id
+    return context
 
 
 async def _external_registration_replay(
@@ -1078,6 +1271,13 @@ async def _adopt_legacy_external_registration(
             and item.get("path") == str(source_path)
             and item.get("bytes") == source_artifact["bytes"]
             and item.get("sha256") == source_artifact["sha256"]
+            and all(
+                item.get(key) == source_artifact[key]
+                for key in (
+                    "device", "inode", "mtime_ns", "ctime_ns",
+                    "governed_root_device", "governed_root_inode", "governed_relative_path",
+                )
+            )
         ]
         if len(exact) != 1:
             continue
@@ -1167,6 +1367,13 @@ async def _backfill_keyed_external_source_identity(
         and item.get("path") == str(source_path)
         and item.get("bytes") == source_artifact["bytes"]
         and item.get("sha256") == source_artifact["sha256"]
+        and all(
+            item.get(key) == source_artifact[key]
+            for key in (
+                "device", "inode", "mtime_ns", "ctime_ns",
+                "governed_root_device", "governed_root_inode", "governed_relative_path",
+            )
+        )
     ]
     if len(exact) != 1:
         raise ValueError("legacy external POD5 authority does not match the selected source")
@@ -1627,7 +1834,7 @@ def _conversion_commands(
         ))
     validator_input_args.extend(("--fd-socket", "/stage/source-fd.sock"))
     base = [
-        snapshot["container_runtime"], "run", "--rm", "--network=none", "--read-only",
+        snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=4", "--memory=16g", "--pids-limit=256", "--ulimit", "nofile=512:512",
         "--mount", f"type=bind,src={stage},dst=/stage",
@@ -1712,6 +1919,10 @@ def pin_conversion_source_descriptors(commands: dict[str, Any]) -> list[int]:
             try:
                 fcntl.fcntl(file_fd, fcntl.F_SETLEASE, fcntl.F_RDLCK)
             except OSError as exc:
+                if exc.errno in {errno.EAGAIN, errno.EWOULDBLOCK}:
+                    raise SourceLeaseUnavailable(
+                        "raw-signal source read lease is temporarily unavailable"
+                    ) from exc
                 raise RuntimeError("raw-signal source read lease is unavailable") from exc
         return pinned
     except BaseException:
@@ -1771,37 +1982,190 @@ def conversion_semantic_command(commands: dict[str, Any], groups: list[str]) -> 
     ]
 
 
+def _external_blow5_artifact_records(source: OntRawSignalRepresentation) -> tuple[dict[str, Any], dict[str, Any]]:
+    manifest = source.artifact_manifest if isinstance(source.artifact_manifest, dict) else {}
+    artifacts = manifest.get("artifacts")
+    records = [item for item in artifacts if isinstance(item, dict)] if isinstance(artifacts, list) else []
+    blow5_records = [item for item in records if item.get("kind") == "blow5" and item.get("path")]
+    index_records = [item for item in records if item.get("kind") == "blow5_index" and item.get("path")]
+    if len(blow5_records) != 1 or len(index_records) != 1:
+        raise ValueError("external BLOW5 validation requires one registered BLOW5 and one index artifact")
+    blow5, index = blow5_records[0], index_records[0]
+    if index.get("path") != f"{blow5.get('path')}.idx":
+        raise ValueError("external BLOW5 index must remain adjacent to the registered artifact")
+    return blow5, index
+
+
+def _assert_external_blow5_artifact_identity(artifact: Mapping[str, Any], *, authority: str) -> dict[str, Any]:
+    path, descriptor = _open_descriptor_confined_artifact(artifact, authority=authority)
+    try:
+        info = os.fstat(descriptor)
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        if digest.hexdigest() != artifact.get("sha256") or info.st_size != artifact.get("bytes"):
+            raise ValueError(f"{authority} bytes diverged from registration manifest")
+        return {
+            "device": info.st_dev,
+            "inode": info.st_ino,
+            "bytes": info.st_size,
+            "mtime_ns": info.st_mtime_ns,
+            "ctime_ns": info.st_ctime_ns,
+            "root_device": artifact.get("governed_root_device"),
+            "root_inode": artifact.get("governed_root_inode"),
+            "sha256": digest.hexdigest(),
+        }
+    finally:
+        os.close(descriptor)
+
+
+def _verified_external_descriptor_identity(
+    file_descriptor: int,
+    root_descriptor: int,
+    *,
+    expected: Mapping[str, Any],
+    authority: str,
+) -> dict[str, Any]:
+    root_info = os.fstat(root_descriptor)
+    before = os.fstat(file_descriptor)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or (root_info.st_dev, root_info.st_ino)
+        != (expected["root_device"], expected["root_inode"])
+        or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+        != (
+            expected["device"],
+            expected["inode"],
+            expected["bytes"],
+            expected["mtime_ns"],
+            expected["ctime_ns"],
+        )
+    ):
+        raise ValueError(f"{authority} descriptor identity diverged")
+    os.lseek(file_descriptor, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    while chunk := os.read(file_descriptor, 1024 * 1024):
+        digest.update(chunk)
+    after = os.fstat(file_descriptor)
+    identity = {
+        "sha256": digest.hexdigest(),
+        "bytes": after.st_size,
+        "device": after.st_dev,
+        "inode": after.st_ino,
+        "mtime_ns": after.st_mtime_ns,
+        "ctime_ns": after.st_ctime_ns,
+        "root_device": root_info.st_dev,
+        "root_inode": root_info.st_ino,
+    }
+    if identity != dict(expected) or (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ):
+        raise ValueError(f"{authority} bytes diverged from registration manifest")
+    return identity
+
+
+def pin_external_blow5_descriptors(commands: Mapping[str, Any]) -> list[int]:
+    """Hold descriptor authority for external BLOW5/index container consumption."""
+    authorities = commands.get("source_authorities")
+    if not isinstance(authorities, list) or len(authorities) != 2 or commands.get("source_fd_count") != 4:
+        raise ValueError("external BLOW5 descriptor authority is incomplete")
+    pinned: list[int] = []
+    try:
+        for authority in authorities:
+            if not isinstance(authority, dict):
+                raise ValueError("external BLOW5 descriptor authority is malformed")
+            artifact = authority.get("artifact")
+            expected = authority.get("identity")
+            if not isinstance(artifact, dict) or not isinstance(expected, dict):
+                raise ValueError("external BLOW5 descriptor authority is incomplete")
+            _path, root_fd, file_fd = _open_descriptor_confined_artifact_fds(
+                artifact, authority=f"external {authority.get('kind', 'source')}"
+            )
+            try:
+                _verified_external_descriptor_identity(
+                    file_fd, root_fd, expected=expected,
+                    authority=f"external {authority.get('kind', 'source')}",
+                )
+            except BaseException:
+                os.close(file_fd)
+                os.close(root_fd)
+                raise
+            pinned.extend((root_fd, file_fd))
+        return pinned
+    except BaseException:
+        for descriptor in pinned:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
+
+
 def _external_blow5_validation_commands(job: OntRawSignalDerivationJob, source: OntRawSignalRepresentation, snapshot: dict[str, Any]) -> dict[str, Any]:
-    blow5, index = _external_blow5_paths(source)
+    blow5_artifact, index_artifact = _external_blow5_artifact_records(source)
+    blow5 = Path(str(blow5_artifact["path"]))
+    index = Path(str(index_artifact["path"]))
+    blow5_identity = _assert_external_blow5_artifact_identity(blow5_artifact, authority="registered external BLOW5 artifact")
+    index_identity = _assert_external_blow5_artifact_identity(index_artifact, authority="registered external BLOW5 index")
     stage = Path(snapshot["staging_root"]) / job.id / f"attempt-{job.attempt + 1}"
     image_ref = _container_image_ref(snapshot)
     common = [
-        snapshot["container_runtime"], "run", "--rm", "--network=none", "--read-only",
+        snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=1", "--memory=2g", "--pids-limit=64", "--ulimit", "nofile=128:128",
-        "--mount", f"type=bind,src={blow5.parent},dst=/input,readonly",
         "--mount", f"type=bind,src={stage},dst=/stage",
         image_ref,
     ]
+    expected_args = [
+        "--expected-blow5-sha256", str(blow5_identity["sha256"]),
+        "--expected-blow5-size", str(blow5_identity["bytes"]),
+        "--expected-blow5-device", str(blow5_identity["device"]),
+        "--expected-blow5-inode", str(blow5_identity["inode"]),
+        "--expected-blow5-mtime-ns", str(blow5_identity["mtime_ns"]),
+        "--expected-blow5-ctime-ns", str(blow5_identity["ctime_ns"]),
+        "--expected-blow5-root-device", str(blow5_identity["root_device"]),
+        "--expected-blow5-root-inode", str(blow5_identity["root_inode"]),
+        "--expected-index-sha256", str(index_identity["sha256"]),
+        "--expected-index-size", str(index_identity["bytes"]),
+        "--expected-index-device", str(index_identity["device"]),
+        "--expected-index-inode", str(index_identity["inode"]),
+        "--expected-index-mtime-ns", str(index_identity["mtime_ns"]),
+        "--expected-index-ctime-ns", str(index_identity["ctime_ns"]),
+        "--expected-index-root-device", str(index_identity["root_device"]),
+        "--expected-index-root-inode", str(index_identity["root_inode"]),
+    ]
+    validator_args = [
+        "python3", "/opt/bms/ont_raw_signal_validate.py", "external-blow5",
+        "--blow5", "/proc/self/fd/unbound-external-blow5",
+        "--index", "/proc/self/fd/unbound-external-index",
+        *expected_args,
+        "--fd-socket", "/stage/source-fd.sock",
+    ]
     return {
         "stage": str(stage), "output": str(blow5), "index": str(index),
-        "quickcheck": common + ["slow5tools", "quickcheck", f"/input/{blow5.name}"],
-        "semantic_validate": common + [
-            "python3", "/opt/bms/ont_raw_signal_validate.py", "external-blow5", "--blow5", f"/input/{blow5.name}",
-            "--index", f"/input/{index.name}", "--receipt", "/stage/semantic-receipt.json",
+        "fd_socket": str(stage / "source-fd.sock"), "source_fd_count": 4,
+        "source_authorities": [
+            {"kind": "blow5", "artifact": dict(blow5_artifact), "identity": blow5_identity},
+            {"kind": "index", "artifact": dict(index_artifact), "identity": index_identity},
         ],
+        "quickcheck": common + validator_args + ["--receipt", "/stage/quickcheck-receipt.json"],
+        "semantic_validate": common + validator_args + ["--receipt", "/stage/semantic-receipt.json"],
     }
 
 
 def _external_blow5_paths(source: OntRawSignalRepresentation) -> tuple[Path, Path]:
-    manifest = source.artifact_manifest if isinstance(source.artifact_manifest, dict) else {}
-    raw_artifacts = manifest.get("artifacts")
-    artifacts: list[Any] = raw_artifacts if isinstance(raw_artifacts, list) else []
-    paths = {str(item.get("kind")): Path(str(item.get("path"))).expanduser().resolve() for item in artifacts if isinstance(item, dict) and item.get("path")}
-    blow5, index = paths.get("blow5"), paths.get("blow5_index")
-    if blow5 is None or index is None or index != Path(f"{blow5}.idx"):
-        raise ValueError("external BLOW5 validation requires an adjacent tracked index")
-    return blow5, index
+    blow5, index = _external_blow5_artifact_records(source)
+    return Path(str(blow5["path"])).expanduser().resolve(), Path(str(index["path"])).expanduser().resolve()
 
 
 async def complete_external_blow5_validation(
@@ -1814,6 +2178,12 @@ async def complete_external_blow5_validation(
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     if receipt.get("status") != "passed" or receipt.get("duplicate_read_ids") not in (0, False):
         raise ValueError("external BLOW5 validation receipt did not pass")
+    blow5_artifact, index_artifact = _external_blow5_artifact_records(source)
+    current_blow5 = _assert_external_blow5_artifact_identity(blow5_artifact, authority="registered external BLOW5 artifact")
+    current_index = _assert_external_blow5_artifact_identity(index_artifact, authority="registered external BLOW5 index")
+    if receipt.get("blow5_identity") != current_blow5 or receipt.get("blow5_index_identity") != current_index:
+        raise ValueError("external BLOW5 validation receipt identity diverged from registration")
+    job = await _fence_active_derivation_claim(session, job.id, str(job.claim_token or ""))
     receipts = dict(source.validation_receipts or {})
     receipts.update({"adjacent_index": True, "semantic": receipt})
     source.validation_receipts = receipts
@@ -1822,7 +2192,7 @@ async def complete_external_blow5_validation(
     source.profile_id = EXTERNAL_BLOW5_VALIDATION_PROFILE_ID
     source.published_at = _now()
     job.output_representation_id = source.id
-    await session.commit()
+    await session.flush()
     return source
 
 
@@ -1916,25 +2286,71 @@ async def cancel_derivation(session: AsyncSession, job_id: str) -> dict[str, Any
         raise KeyError(job_id)
     if job.state in {"ready", "failed", "cancelled"}:
         return {"job_id": job.id, "state": job.state, "reason_code": job.reason_code}
-    job.cancel_requested_at = _now()
-    job.updated_at = _now()
-    if job.state in {"requested", "deferred"}:
+    now = _now()
+    prior_state = job.state
+    prior_claim_token = job.claim_token
+    prior_lease_expires_at = job.lease_expires_at
+    claim_predicate = (
+        OntRawSignalDerivationJob.claim_token.is_(None)
+        if prior_claim_token is None
+        else OntRawSignalDerivationJob.claim_token == prior_claim_token
+    )
+    predicates = [
+        OntRawSignalDerivationJob.id == job.id,
+        OntRawSignalDerivationJob.state == prior_state,
+        claim_predicate,
+        OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+    ]
+    values: dict[str, Any] = {"cancel_requested_at": now, "updated_at": now}
+    if prior_state in {"requested", "deferred"}:
+        predicates.append(OntRawSignalDerivationJob.lease_expires_at.is_(None))
+        values.update(
+            state="cancelled",
+            reason_code="cancelled_before_execution",
+            completed_at=now,
+            claim_token=None,
+            lease_expires_at=None,
+        )
+    else:
+        predicates.extend(
+            [
+                OntRawSignalDerivationJob.lease_expires_at == prior_lease_expires_at,
+                OntRawSignalDerivationJob.lease_expires_at > now,
+            ]
+        )
+    result = await session.execute(
+        update(OntRawSignalDerivationJob).where(*predicates).values(**values)
+    )
+    if result.rowcount != 1:
+        await session.rollback()
+        live = await session.get(OntRawSignalDerivationJob, job_id)
+        if live is None:
+            raise KeyError(job_id)
+        return {"job_id": live.id, "state": live.state, "reason_code": live.reason_code}
+    job.cancel_requested_at = now
+    job.updated_at = now
+    if prior_state in {"requested", "deferred"}:
         job.state = "cancelled"
         job.reason_code = "cancelled_before_execution"
-        job.completed_at = _now()
+        job.completed_at = now
         job.claim_token = None
         job.lease_expires_at = None
         session.add(OntRawSignalDerivationEvent(
             id=_id("ont-raw-event"), job_id=job.id, state="cancelled",
-            reason_code=job.reason_code, receipt={"child_started": False}, created_at=_now(),
+            reason_code="cancelled_before_execution", receipt={"child_started": False}, created_at=now,
         ))
     await session.commit()
-    return {"job_id": job.id, "state": job.state, "reason_code": job.reason_code, "cancel_requested": True}
+    return {
+        "job_id": job.id,
+        "state": job.state,
+        "reason_code": job.reason_code,
+        "cancel_requested": True,
+    }
 
 
-def _open_descriptor_confined_artifact(
+def _open_descriptor_confined_artifact_fds(
     artifact: Mapping[str, Any], *, authority: str
-) -> tuple[Path, int]:
+) -> tuple[Path, int, int]:
     root_raw = artifact.get("governed_root_path")
     relative_raw = artifact.get("governed_relative_path")
     if not isinstance(root_raw, str) or not os.path.isabs(root_raw):
@@ -1982,9 +2398,9 @@ def _open_descriptor_confined_artifact(
         expected_path = root.joinpath(*relative.parts)
         if artifact.get("path") != str(expected_path):
             raise ValueError(f"{authority} path diverged from governed descriptor")
-        result_fd = file_fd
-        file_fd = -1
-        return expected_path, result_fd
+        result_root_fd, result_file_fd = root_fd, file_fd
+        root_fd = file_fd = -1
+        return expected_path, result_root_fd, result_file_fd
     except OSError as exc:
         raise ValueError(
             f"{authority} left governed descriptor boundary or used symbolic links"
@@ -1993,6 +2409,30 @@ def _open_descriptor_confined_artifact(
         for descriptor in (file_fd, current_fd, root_fd):
             if descriptor >= 0:
                 os.close(descriptor)
+
+
+def _open_descriptor_confined_artifact(
+    artifact: Mapping[str, Any], *, authority: str
+) -> tuple[Path, int]:
+    path, root_fd, file_fd = _open_descriptor_confined_artifact_fds(artifact, authority=authority)
+    try:
+        return path, file_fd
+    finally:
+        os.close(root_fd)
+
+
+def _revalidate_descriptor_artifact(artifact: Mapping[str, Any], *, authority: str) -> Path:
+    path, descriptor = _open_descriptor_confined_artifact(artifact, authority=authority)
+    try:
+        digest = hashlib.sha256()
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        if digest.hexdigest() != artifact.get("sha256"):
+            raise ValueError(f"{authority} digest diverged")
+        return path
+    finally:
+        os.close(descriptor)
 
 
 def _validated_blow5_paths(
@@ -2005,13 +2445,19 @@ def _validated_blow5_paths(
     if not receipts.get("adjacent_index"):
         raise ValueError("raw waveform requires a validated adjacent BLOW5 index")
     manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
+    if not _is_sha256(representation.manifest_sha256) or _digest(manifest) != representation.manifest_sha256:
+        raise ValueError("raw waveform representation manifest authority is invalid")
     raw_artifacts = manifest.get("artifacts")
     artifacts: list[Any] = raw_artifacts if isinstance(raw_artifacts, list) else []
     blow5_artifacts = [item for item in artifacts if isinstance(item, dict) and item.get("kind") == "blow5" and item.get("path")]
     index_artifacts = [item for item in artifacts if isinstance(item, dict) and item.get("kind") == "blow5_index" and item.get("path")]
     if len(blow5_artifacts) == 1 and len(index_artifacts) == 1:
-        blow5 = Path(str(blow5_artifacts[0]["path"])).expanduser().resolve()
-        index = Path(str(index_artifacts[0]["path"])).expanduser().resolve()
+        blow5 = _revalidate_descriptor_artifact(
+            blow5_artifacts[0], authority="single-file BLOW5 artifact"
+        )
+        index = _revalidate_descriptor_artifact(
+            index_artifacts[0], authority="single-file BLOW5 index artifact"
+        )
     else:
         if read_id is None:
             raise ValueError("partitioned BLOW5 lookup requires a read ID")
@@ -2062,19 +2508,43 @@ def _validated_blow5_paths(
         )
         if blow5_artifact is None or index_artifact is None:
             raise ValueError("routing selection is not confined to published partition descriptors")
-        blow5, blow5_fd = _open_descriptor_confined_artifact(
+        blow5 = _revalidate_descriptor_artifact(
             blow5_artifact, authority="partition BLOW5 artifact"
         )
-        index, index_fd = _open_descriptor_confined_artifact(
+        index = _revalidate_descriptor_artifact(
             index_artifact, authority="partition index artifact"
         )
-        os.close(blow5_fd)
-        os.close(index_fd)
     if blow5 is None or index is None or index != Path(f"{blow5}.idx"):
         raise ValueError("raw waveform representation lacks an adjacent index")
     if not blow5.is_file() or not index.is_file():
         raise ValueError("raw waveform representation artifacts are unavailable")
     return blow5, index
+
+
+def _artifact_for_resolved_path(
+    representation: OntRawSignalRepresentation, path: Path, kind: str
+) -> dict[str, Any]:
+    manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
+    artifacts = manifest.get("artifacts")
+    candidates = artifacts if isinstance(artifacts, list) else []
+    for artifact in candidates:
+        if not isinstance(artifact, dict) or artifact.get("kind") != kind:
+            continue
+        raw_path = artifact.get("path")
+        if isinstance(raw_path, str) and Path(raw_path).expanduser().resolve() == path:
+            return artifact
+    raise ValueError(f"raw waveform {kind} descriptor authority is unavailable")
+
+
+def _waveform_identity_args(artifact: Mapping[str, Any], prefix: str) -> list[str]:
+    return [
+        f"--expected-{prefix}-sha256", str(artifact["sha256"]),
+        f"--expected-{prefix}-size", str(artifact["bytes"]),
+        f"--expected-{prefix}-device", str(artifact["device"]),
+        f"--expected-{prefix}-inode", str(artifact["inode"]),
+        f"--expected-{prefix}-mtime-ns", str(artifact["mtime_ns"]),
+        f"--expected-{prefix}-ctime-ns", str(artifact["ctime_ns"]),
+    ]
 
 
 async def request_waveform_lookup(
@@ -2124,8 +2594,192 @@ async def get_waveform_lookup(session: AsyncSession, lookup_id: str) -> dict[str
     return _public_lookup(lookup)
 
 
-async def claim_next_waveform_lookup(session: AsyncSession, *, lease_seconds: int = 120) -> tuple[OntRawSignalLookup, list[str], Path] | None:
-    active = (await session.execute(select(OntRawSignalLookup).where(OntRawSignalLookup.state == "running"))).scalars().first()
+def _create_waveform_output_placeholder(
+    output: Path, *, directory_fd: int | None = None
+) -> dict[str, int | str]:
+    authority_path = output.with_name(f"{output.name}.authority")
+    if directory_fd is None:
+        descriptor = os.open(
+            output,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+        )
+    else:
+        descriptor = os.open(
+            output.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=directory_fd,
+        )
+    try:
+        info = os.fstat(descriptor)
+        if directory_fd is None:
+            os.link(output, authority_path, follow_symlinks=False)
+            parent_descriptor = _open_absolute_directory_nofollow(output.parent)
+            try:
+                parent_info = os.fstat(parent_descriptor)
+            finally:
+                os.close(parent_descriptor)
+        else:
+            os.link(
+                output.name,
+                authority_path.name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            parent_info = os.fstat(directory_fd)
+    except BaseException:
+        try:
+            if directory_fd is None:
+                output.unlink()
+            else:
+                os.unlink(output.name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+        raise
+    finally:
+        os.close(descriptor)
+    return {
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "uid": info.st_uid,
+        "gid": info.st_gid,
+        "mtime_ns": info.st_mtime_ns,
+        "ctime_ns": info.st_ctime_ns,
+        "root_device": parent_info.st_dev,
+        "root_inode": parent_info.st_ino,
+        "authority_path": str(authority_path),
+    }
+
+
+def _validate_waveform_payload(payload: Mapping[str, Any], expected_read_id: str) -> None:
+    if payload.get("schema") != "bms.ont.raw-waveform.v1":
+        raise ValueError("waveform receipt schema is invalid")
+    if payload.get("read_id") != expected_read_id:
+        raise ValueError("waveform receipt read ID is not authoritative")
+    sample_count = payload.get("sample_count")
+    returned_sample_count = payload.get("returned_sample_count")
+    stride = payload.get("stride")
+    samples = payload.get("samples")
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 1
+        for value in (sample_count, returned_sample_count, stride)
+    ):
+        raise ValueError("waveform receipt counts are invalid")
+    assert isinstance(sample_count, int) and not isinstance(sample_count, bool)
+    assert isinstance(returned_sample_count, int) and not isinstance(returned_sample_count, bool)
+    assert isinstance(stride, int) and not isinstance(stride, bool)
+    sample_count_value = int(sample_count)
+    returned_sample_count_value = int(returned_sample_count)
+    stride_value = int(stride)
+    if not isinstance(samples, list) or returned_sample_count_value != len(samples):
+        raise ValueError("waveform receipt sample count is inconsistent")
+    if returned_sample_count_value > sample_count_value or returned_sample_count_value > RAW_SIGNAL_MAX_WAVEFORM_SAMPLES:
+        raise ValueError("waveform receipt sample count is inconsistent")
+    expected_returned = min(
+        RAW_SIGNAL_MAX_WAVEFORM_SAMPLES,
+        (sample_count_value + stride_value - 1) // stride_value,
+    )
+    if returned_sample_count_value != expected_returned:
+        raise ValueError("waveform receipt sample count is inconsistent")
+    source_identity = payload.get("source_identity")
+    if not isinstance(source_identity, dict) or not all(
+        isinstance(source_identity.get(key), dict) for key in ("blow5", "index")
+    ):
+        raise ValueError("waveform receipt source identity is invalid")
+
+
+def _deterministic_publication_artifact_id(
+    run_id: str, observed_generation: int, relative_path: str, sha256: str
+) -> str:
+    return "ont-artifact-" + hashlib.sha256(
+        f"{run_id}\0{observed_generation}\0{relative_path}\0{sha256}".encode("utf-8")
+    ).hexdigest()
+
+
+def _read_waveform_output_descriptor(
+    output: Path, expected: Mapping[str, Any]
+) -> tuple[bytes, dict[str, int | str]]:
+    authority_value = expected.get("authority_path")
+    authority_path = Path(authority_value) if isinstance(authority_value, str) else None
+    if (
+        authority_path is None
+        or authority_path.parent != output.parent
+        or authority_path.name != f"{output.name}.authority"
+    ):
+        raise ValueError("waveform output descriptor authority is invalid")
+    parent_descriptor = _open_absolute_directory_nofollow(output.parent)
+    descriptor = authority_descriptor = -1
+    try:
+        parent_info = os.fstat(parent_descriptor)
+        if (
+            parent_info.st_dev != expected.get("root_device")
+            or parent_info.st_ino != expected.get("root_inode")
+        ):
+            raise ValueError("waveform output parent directory identity diverged")
+        descriptor = os.open(
+            output.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_descriptor
+        )
+        authority_descriptor = os.open(
+            authority_path.name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_descriptor,
+        )
+        before = os.fstat(descriptor)
+        authority_info = os.fstat(authority_descriptor)
+        if (before.st_dev, before.st_ino) != (authority_info.st_dev, authority_info.st_ino):
+            raise ValueError("waveform output descriptor identity diverged")
+        if any(
+            before_value != before_expected
+            for before_value, before_expected in (
+                (before.st_dev, expected.get("device")),
+                (before.st_ino, expected.get("inode")),
+                (before.st_uid, expected.get("uid")),
+                (before.st_gid, expected.get("gid")),
+            )
+        ):
+            raise ValueError("waveform output descriptor identity diverged")
+        digest = hashlib.sha256()
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if (
+            (before.st_dev, before.st_ino, before.st_uid, before.st_gid)
+            != (after.st_dev, after.st_ino, after.st_uid, after.st_gid)
+            or before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_ctime_ns != after.st_ctime_ns
+        ):
+            raise ValueError("waveform output changed while reading")
+        return b"".join(chunks), {
+            "sha256": digest.hexdigest(),
+            "bytes": after.st_size,
+            "device": after.st_dev,
+            "inode": after.st_ino,
+            "uid": after.st_uid,
+            "gid": after.st_gid,
+            "mtime_ns": after.st_mtime_ns,
+            "ctime_ns": after.st_ctime_ns,
+            "root_device": parent_info.st_dev,
+            "root_inode": parent_info.st_ino,
+        }
+    finally:
+        for descriptor_value in (descriptor, authority_descriptor, parent_descriptor):
+            if descriptor_value >= 0:
+                os.close(descriptor_value)
+
+
+async def claim_next_waveform_lookup(
+    session: AsyncSession, *, lease_seconds: int = 120
+) -> tuple[OntRawSignalLookup, list[str], Path, dict[str, Any]] | None:
+    now = _now()
+    active = (await session.execute(select(OntRawSignalLookup).where(
+        OntRawSignalLookup.state == "running",
+        OntRawSignalLookup.lease_expires_at > now,
+    ))).scalars().first()
     if active is not None:
         return None
     lookup = (await session.execute(select(OntRawSignalLookup).where(OntRawSignalLookup.state == "requested").order_by(OntRawSignalLookup.created_at.asc()).limit(1))).scalar_one_or_none()
@@ -2139,8 +2793,34 @@ async def claim_next_waveform_lookup(session: AsyncSession, *, lease_seconds: in
         await session.commit()
         return None
     blow5, index = _validated_blow5_paths(representation, lookup.read_id)
-    del index
+    blow5_artifact = _artifact_for_resolved_path(representation, blow5, "blow5")
+    index_artifact = _artifact_for_resolved_path(representation, index, "blow5_index")
+    blow5_identity = _assert_external_blow5_artifact_identity(
+        blow5_artifact, authority="waveform BLOW5 artifact"
+    )
+    index_identity = _assert_external_blow5_artifact_identity(
+        index_artifact, authority="waveform BLOW5 index"
+    )
     snapshot = _resource_snapshot(0)
+    try:
+        runtime_identity = raw_signal_runtime_identity()
+        assert_local_raw_runtime_image(
+            str(snapshot["container_runtime"]), runtime_identity["image"]
+        )
+    except RuntimeError as exc:
+        lookup.state = "failed"
+        lookup.reason_code = f"raw_signal_runtime_not_admitted:{type(exc).__name__}"
+        lookup.completed_at = _now()
+        lookup.updated_at = _now()
+        await session.commit()
+        return None
+    snapshot.update(
+        {
+            "container_image": runtime_identity["image"],
+            "container_digest": runtime_identity["digest"],
+            "runtime_policy_sha256": runtime_identity["policy_sha256"],
+        }
+    )
     gate = _runtime_gate(snapshot)
     if gate:
         lookup.state = "failed"
@@ -2150,74 +2830,230 @@ async def claim_next_waveform_lookup(session: AsyncSession, *, lease_seconds: in
         return None
     claim_token = secrets.token_hex(24)
     output_root = Path(snapshot["staging_root"]) / "waveforms" / lookup.id
-    output_root.mkdir(parents=True, exist_ok=True)
-    output = output_root / "waveform.json"
+    output_root_fd = _prepare_confined_directory(
+        Path(snapshot["staging_root"]), ("waveforms", lookup.id)
+    )
+    try:
+        output_name = f"waveform-{claim_token}.json"
+        output = output_root / output_name
+        output_identity = _create_waveform_output_placeholder(
+            output, directory_fd=output_root_fd
+        )
+    finally:
+        os.close(output_root_fd)
     image_ref = _container_image_ref(snapshot)
+    fd_socket = output_root / "source-fd.sock"
+    source_authority = {
+        "source_fd_count": 4,
+        "source_authorities": [
+            {"kind": "blow5", "artifact": dict(blow5_artifact), "identity": blow5_identity},
+            {"kind": "index", "artifact": dict(index_artifact), "identity": index_identity},
+        ],
+    }
     command = [
-        snapshot["container_runtime"], "run", "--rm", "--network=none", "--read-only",
+        snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=1", "--memory=1g", "--pids-limit=64", "--ulimit", "nofile=128:128",
-        "--mount", f"type=bind,src={blow5.parent},dst=/input,readonly",
         "--mount", f"type=bind,src={output_root},dst=/output",
         image_ref, "python", "/opt/bms/ont_raw_signal_lookup.py",
-        "--blow5", f"/input/{blow5.name}", "--read-id", lookup.read_id,
-        "--max-samples", str(RAW_SIGNAL_MAX_WAVEFORM_SAMPLES), "--output", "/output/waveform.json",
+        "--blow5", "/proc/self/fd/unbound-waveform-blow5",
+        "--index", "/proc/self/fd/unbound-waveform-index",
+        "--fd-socket", "/output/source-fd.sock",
+        "--read-id", lookup.read_id,
+        "--max-samples", str(RAW_SIGNAL_MAX_WAVEFORM_SAMPLES), "--output", f"/output/{output_name}",
+        *_waveform_identity_args(blow5_identity, "blow5"),
+        "--expected-blow5-root-device", str(blow5_identity["root_device"]),
+        "--expected-blow5-root-inode", str(blow5_identity["root_inode"]),
+        *_waveform_identity_args(index_identity, "index"),
+        "--expected-index-root-device", str(index_identity["root_device"]),
+        "--expected-index-root-inode", str(index_identity["root_inode"]),
     ]
+    source_fds = pin_external_blow5_descriptors(source_authority)
+    lease_expires_at = now + timedelta(seconds=lease_seconds)
+    try:
+        result = await session.execute(
+            update(OntRawSignalLookup)
+            .where(
+                OntRawSignalLookup.id == lookup.id,
+                OntRawSignalLookup.state == "requested",
+                OntRawSignalLookup.claim_token.is_(None),
+                OntRawSignalLookup.lease_expires_at.is_(None),
+            )
+            .values(
+                state="running",
+                reason_code="leased",
+                claim_token=claim_token,
+                lease_expires_at=lease_expires_at,
+                receipt={
+                    "schema": "bms.ont.waveform-output-authority.v1",
+                    "output_identity": output_identity,
+                },
+                updated_at=now,
+            )
+        )
+    except BaseException:
+        for descriptor in source_fds:
+            os.close(descriptor)
+        output.unlink(missing_ok=True)
+        output.with_name(f"{output.name}.authority").unlink(missing_ok=True)
+        raise
+    if result.rowcount != 1:
+        await session.rollback()
+        for descriptor in source_fds:
+            os.close(descriptor)
+        output.unlink(missing_ok=True)
+        authority_path = output.with_name(f"{output.name}.authority")
+        authority_path.unlink(missing_ok=True)
+        return None
     lookup.state = "running"
     lookup.reason_code = "leased"
     lookup.claim_token = claim_token
-    lookup.lease_expires_at = _now() + timedelta(seconds=lease_seconds)
-    lookup.updated_at = _now()
-    await session.commit()
-    return lookup, command, output
+    lookup.lease_expires_at = lease_expires_at
+    lookup.receipt = {
+        "schema": "bms.ont.waveform-output-authority.v1",
+        "output_identity": output_identity,
+    }
+    lookup.updated_at = now
+    try:
+        await session.commit()
+    except BaseException:
+        for descriptor in source_fds:
+            os.close(descriptor)
+        raise
+    return lookup, command, output, {
+        "fd_socket": str(fd_socket),
+        "source_fds": source_fds,
+    }
 
 
 async def finish_waveform_lookup(session: AsyncSession, lookup_id: str, claim_token: str, output: Path, receipt: dict[str, Any]) -> None:
     lookup = await session.get(OntRawSignalLookup, lookup_id)
-    if lookup is None or lookup.claim_token != claim_token:
-        raise ValueError("waveform lookup lease ownership lost")
-    payload = json.loads(output.read_text(encoding="utf-8"))
-    samples = payload.get("samples")
-    if not isinstance(samples, list) or len(samples) > RAW_SIGNAL_MAX_WAVEFORM_SAMPLES:
-        raise ValueError("waveform output violates sample bound")
-    lookup.state = "ready"
-    lookup.reason_code = "indexed_blow5_lookup_ready"
-    lookup.sample_count = int(payload.get("sample_count") or len(samples))
-    lookup.samples = samples
-    lookup.receipt = receipt
-    lookup.claim_token = None
-    lookup.lease_expires_at = None
-    lookup.completed_at = _now()
-    lookup.updated_at = _now()
+    now = _now()
+    if (
+        lookup is None
+        or lookup.claim_token != claim_token
+        or lookup.state != "running"
+        or lookup.lease_expires_at is None
+        or lookup.lease_expires_at <= now
+    ):
+        raise ValueError("waveform lookup lease ownership lost or expired")
+    output_authority = lookup.receipt if isinstance(lookup.receipt, dict) else {}
+    expected_output_identity = output_authority.get("output_identity")
+    if not isinstance(expected_output_identity, dict):
+        raise ValueError("waveform output authority receipt is missing")
+    output_bytes, output_identity = _read_waveform_output_descriptor(
+        output, expected_output_identity
+    )
+    payload = json.loads(output_bytes.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("waveform receipt is invalid")
+    _validate_waveform_payload(payload, lookup.read_id)
+    samples = payload["samples"]
+    source_identity = payload.get("source_identity")
+    if not isinstance(source_identity, dict):
+        raise ValueError("waveform output lacks source identity receipt")
+    representation = await session.get(OntRawSignalRepresentation, lookup.representation_id)
+    if representation is None:
+        raise ValueError("waveform representation authority disappeared")
+    blow5, index = _validated_blow5_paths(representation, lookup.read_id)
+    expected_source_identity = {
+        "blow5": {
+            key: _artifact_for_resolved_path(representation, blow5, "blow5")[key]
+            for key in ("sha256", "bytes", "device", "inode", "mtime_ns", "ctime_ns")
+        },
+        "index": {
+            key: _artifact_for_resolved_path(representation, index, "blow5_index")[key]
+            for key in ("sha256", "bytes", "device", "inode", "mtime_ns", "ctime_ns")
+        },
+    }
+    if source_identity != expected_source_identity:
+        raise ValueError("waveform source identity receipt diverged")
+    completed_at = _now()
+    result = await session.execute(
+        update(OntRawSignalLookup)
+        .where(
+            OntRawSignalLookup.id == lookup_id,
+            OntRawSignalLookup.claim_token == claim_token,
+            OntRawSignalLookup.state == "running",
+            OntRawSignalLookup.lease_expires_at > completed_at,
+        )
+        .values(
+            state="ready",
+            reason_code="indexed_blow5_lookup_ready",
+            sample_count=payload["sample_count"],
+            samples=samples,
+            receipt={
+                **receipt,
+                "waveform_schema": payload["schema"],
+                "read_id": payload["read_id"],
+                "sample_count": payload["sample_count"],
+                "returned_sample_count": payload["returned_sample_count"],
+                "stride": payload["stride"],
+                "source_identity": source_identity,
+                "output_identity": output_identity,
+            },
+            claim_token=None,
+            lease_expires_at=None,
+            completed_at=completed_at,
+            updated_at=completed_at,
+        )
+    )
+    if result.rowcount != 1:
+        await session.rollback()
+        raise ValueError("waveform lookup lease ownership lost or expired")
     await session.commit()
 
 
 async def fail_waveform_lookup(session: AsyncSession, lookup_id: str, claim_token: str, reason_code: str) -> None:
-    lookup = await session.get(OntRawSignalLookup, lookup_id)
-    if lookup is None or lookup.claim_token != claim_token:
+    now = _now()
+    result = await session.execute(
+        update(OntRawSignalLookup)
+        .where(
+            OntRawSignalLookup.id == lookup_id,
+            OntRawSignalLookup.claim_token == claim_token,
+            OntRawSignalLookup.state == "running",
+            OntRawSignalLookup.lease_expires_at > now,
+        )
+        .values(
+            state="failed",
+            reason_code=reason_code,
+            claim_token=None,
+            lease_expires_at=None,
+            completed_at=now,
+            updated_at=now,
+        )
+    )
+    if result.rowcount != 1:
+        await session.rollback()
         return
-    lookup.state = "failed"
-    lookup.reason_code = reason_code
-    lookup.claim_token = None
-    lookup.lease_expires_at = None
-    lookup.completed_at = _now()
-    lookup.updated_at = _now()
     await session.commit()
 
 
 async def renew_waveform_lookup_lease(session: AsyncSession, lookup_id: str, claim_token: str, *, lease_seconds: int = 120) -> None:
-    lookup = await session.get(OntRawSignalLookup, lookup_id)
-    if lookup is None or lookup.claim_token != claim_token or lookup.state != "running":
-        raise ValueError("waveform lookup lease ownership lost")
-    lookup.lease_expires_at = _now() + timedelta(seconds=lease_seconds)
-    lookup.updated_at = _now()
+    now = _now()
+    renewed_until = now + timedelta(seconds=lease_seconds)
+    result = await session.execute(
+        update(OntRawSignalLookup)
+        .where(
+            OntRawSignalLookup.id == lookup_id,
+            OntRawSignalLookup.claim_token == claim_token,
+            OntRawSignalLookup.state == "running",
+            OntRawSignalLookup.lease_expires_at > now,
+        )
+        .values(lease_expires_at=renewed_until, updated_at=now)
+    )
+    if result.rowcount != 1:
+        await session.rollback()
+        raise ValueError("waveform lookup lease ownership lost or expired")
     await session.commit()
 
 
 async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 300) -> tuple[OntRawSignalDerivationJob, OntRawSignalRepresentation, dict[str, Any]] | None:
     """Claim one request. SQLite write serialization keeps the one-job policy."""
+    now = _now()
     active = (await session.execute(select(OntRawSignalDerivationJob).where(
-        OntRawSignalDerivationJob.state.in_(("admitted", "partitioning", "converting", "structural_check", "indexing", "index_validation", "semantic_validation", "publishing"))
+        OntRawSignalDerivationJob.state.in_(("admitted", "partitioning", "converting", "structural_check", "indexing", "index_validation", "semantic_validation", "publishing")),
+        OntRawSignalDerivationJob.lease_expires_at > now,
     ))).scalars().first()
     if active is not None:
         return None
@@ -2227,36 +3063,125 @@ async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 3
     if job is None:
         job = (await session.execute(select(OntRawSignalDerivationJob).where(
             OntRawSignalDerivationJob.state == "deferred",
-            OntRawSignalDerivationJob.updated_at < _now() - timedelta(seconds=60),
+            OntRawSignalDerivationJob.updated_at < now - timedelta(seconds=60),
         ).order_by(OntRawSignalDerivationJob.updated_at, OntRawSignalDerivationJob.id).limit(1))).scalar_one_or_none()
     if job is None:
         return None
     source = await session.get(OntRawSignalRepresentation, job.source_representation_id)
     run = await session.get(OntInstrumentRun, job.run_id)
     if source is None or run is None:
-        job.state = "failed"
-        job.reason_code = "source_representation_missing" if source is None else "source_run_missing"
-        job.completed_at = _now()
+        reason_code = "source_representation_missing" if source is None else "source_run_missing"
+        result = await session.execute(
+            update(OntRawSignalDerivationJob)
+            .where(
+                OntRawSignalDerivationJob.id == job.id,
+                OntRawSignalDerivationJob.state == job.state,
+                OntRawSignalDerivationJob.claim_token.is_(None),
+                OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+            )
+            .values(
+                state="failed",
+                reason_code=reason_code,
+                completed_at=now,
+                updated_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            await session.rollback()
+            return None
         await session.commit()
         return None
     snapshot = _derivation_resource_snapshot(run, source)
+    try:
+        runtime_identity = raw_signal_runtime_identity()
+        assert_local_raw_runtime_image(
+            str(snapshot["container_runtime"]), runtime_identity["image"]
+        )
+    except RuntimeError as exc:
+        result = await session.execute(
+            update(OntRawSignalDerivationJob)
+            .where(
+                OntRawSignalDerivationJob.id == job.id,
+                OntRawSignalDerivationJob.state == job.state,
+                OntRawSignalDerivationJob.claim_token.is_(None),
+                OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+            )
+            .values(
+                state="deferred",
+                reason_code=f"raw_signal_runtime_not_admitted:{type(exc).__name__}",
+                resource_snapshot=snapshot,
+                completed_at=now,
+                updated_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            await session.rollback()
+            return None
+        await session.commit()
+        return None
+    snapshot.update(
+        {
+            "container_image": runtime_identity["image"],
+            "container_digest": runtime_identity["digest"],
+            "runtime_policy_sha256": runtime_identity["policy_sha256"],
+        }
+    )
     gate = _runtime_gate(snapshot) if job.profile_id == EXTERNAL_BLOW5_VALIDATION_PROFILE_ID else _qualification_gate(snapshot)
     if gate:
-        job.state = "deferred"
-        job.reason_code = gate
-        job.resource_snapshot = snapshot
-        job.completed_at = _now()
-        job.updated_at = _now()
+        result = await session.execute(
+            update(OntRawSignalDerivationJob)
+            .where(
+                OntRawSignalDerivationJob.id == job.id,
+                OntRawSignalDerivationJob.state == job.state,
+                OntRawSignalDerivationJob.claim_token.is_(None),
+                OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+            )
+            .values(
+                state="deferred",
+                reason_code=gate,
+                resource_snapshot=snapshot,
+                completed_at=now,
+                updated_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            await session.rollback()
+            return None
         await session.commit()
+        return None
+    claim_token = _id("ont-raw-claim")
+    lease_expires_at = now + timedelta(seconds=lease_seconds)
+    result = await session.execute(
+        update(OntRawSignalDerivationJob)
+        .where(
+            OntRawSignalDerivationJob.id == job.id,
+            OntRawSignalDerivationJob.state == job.state,
+            OntRawSignalDerivationJob.claim_token.is_(None),
+            OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+            OntRawSignalDerivationJob.lease_expires_at.is_(None),
+        )
+        .values(
+            state="admitted",
+            reason_code="qualified_conversion_admitted",
+            claim_token=claim_token,
+            lease_expires_at=lease_expires_at,
+            resource_snapshot=snapshot,
+            attempt=OntRawSignalDerivationJob.attempt + 1,
+            completed_at=None,
+            updated_at=now,
+        )
+    )
+    if result.rowcount != 1:
+        await session.rollback()
         return None
     job.state = "admitted"
     job.reason_code = "qualified_conversion_admitted"
-    job.claim_token = _id("ont-raw-claim")
-    job.lease_expires_at = _now() + timedelta(seconds=lease_seconds)
+    job.claim_token = claim_token
+    job.lease_expires_at = lease_expires_at
     job.resource_snapshot = snapshot
     job.attempt += 1
     job.completed_at = None
-    job.updated_at = _now()
+    job.updated_at = now
     session.add(OntRawSignalDerivationEvent(
         id=_id("ont-raw-event"), job_id=job.id, state=job.state,
         reason_code=job.reason_code, receipt={"claim_token": job.claim_token, "resource_snapshot": snapshot}, created_at=_now(),
@@ -2270,30 +3195,118 @@ async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 3
     return job, source, commands
 
 
+async def defer_derivation(
+    session: AsyncSession,
+    job_id: str,
+    claim_token: str,
+    reason_code: str,
+    receipt: dict[str, Any],
+) -> OntRawSignalDerivationJob:
+    """Release a live claim for a bounded retry without creating a terminal failure."""
+    job = await session.get(OntRawSignalDerivationJob, job_id)
+    now = _now()
+    if (
+        job is None
+        or job.claim_token != claim_token
+        or job.cancel_requested_at is not None
+        or job.lease_expires_at is None
+        or job.lease_expires_at <= now
+    ):
+        raise ValueError("raw-signal derivation retry lease ownership is unavailable")
+    stage_receipts = {**dict(job.stage_receipts or {}), "deferred": receipt}
+    result = await session.execute(
+        update(OntRawSignalDerivationJob)
+        .where(
+            OntRawSignalDerivationJob.id == job_id,
+            OntRawSignalDerivationJob.claim_token == claim_token,
+            OntRawSignalDerivationJob.state.notin_(("ready", "failed", "cancelled")),
+            OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+            OntRawSignalDerivationJob.lease_expires_at > now,
+        )
+        .values(
+            state="deferred",
+            reason_code=reason_code,
+            stage_receipts=stage_receipts,
+            claim_token=None,
+            lease_expires_at=None,
+            completed_at=None,
+            updated_at=now,
+        )
+    )
+    if result.rowcount != 1:
+        await session.rollback()
+        raise ValueError("raw-signal derivation retry ownership was lost")
+    job.state = "deferred"
+    job.reason_code = reason_code
+    job.stage_receipts = stage_receipts
+    job.claim_token = None
+    job.lease_expires_at = None
+    job.completed_at = None
+    job.updated_at = now
+    session.add(OntRawSignalDerivationEvent(
+        id=_id("ont-raw-event"), job_id=job.id, state="deferred",
+        reason_code=reason_code, receipt=receipt, created_at=now,
+    ))
+    await session.commit()
+    return job
+
+
 async def transition_derivation(session: AsyncSession, job_id: str, claim_token: str, state: str, reason_code: str, receipt: dict[str, Any]) -> OntRawSignalDerivationJob:
     allowed = {"partitioning", "converting", "structural_check", "indexing", "index_validation", "semantic_validation", "publishing", "ready", "failed", "cancelled"}
     if state not in allowed:
         raise ValueError("invalid raw-signal derivation state")
     job = await session.get(OntRawSignalDerivationJob, job_id)
+    now = _now()
     if job is None or job.claim_token != claim_token:
         raise ValueError("raw-signal derivation lease ownership lost")
+    prior_state = job.state
     if job.cancel_requested_at is not None and state != "cancelled":
         raise ValueError("raw-signal derivation cancellation requested")
-    if job.lease_expires_at is None or job.lease_expires_at <= _now():
+    if job.lease_expires_at is None or job.lease_expires_at <= now:
         raise ValueError("raw-signal derivation lease expired")
+    stage_receipts = {**dict(job.stage_receipts or {}), state: receipt}
+    terminal = state in {"ready", "failed", "cancelled"}
+    values: dict[str, Any] = {
+        "state": state,
+        "reason_code": reason_code,
+        "updated_at": now,
+        "stage_receipts": stage_receipts,
+    }
+    if terminal:
+        values.update(
+            completed_at=now,
+            lease_expires_at=None,
+            claim_token=None,
+        )
+    else:
+        values["lease_expires_at"] = now + timedelta(seconds=300)
+    predicates = [
+        OntRawSignalDerivationJob.id == job_id,
+        OntRawSignalDerivationJob.claim_token == claim_token,
+        OntRawSignalDerivationJob.state == prior_state,
+        OntRawSignalDerivationJob.lease_expires_at > now,
+    ]
+    if state != "cancelled":
+        predicates.append(OntRawSignalDerivationJob.cancel_requested_at.is_(None))
+    result = await session.execute(
+        update(OntRawSignalDerivationJob).where(*predicates).values(**values)
+    )
+    if result.rowcount != 1:
+        await session.rollback()
+        raise ValueError("raw-signal derivation lease ownership lost or expired")
     job.state = state
     job.reason_code = reason_code
-    job.updated_at = _now()
-    job.stage_receipts = {**dict(job.stage_receipts or {}), state: receipt}
-    if state in {"ready", "failed", "cancelled"}:
-        job.completed_at = _now()
+    job.updated_at = now
+    job.stage_receipts = stage_receipts
+    if terminal:
+        job.completed_at = now
         job.lease_expires_at = None
         job.claim_token = None
     else:
-        job.lease_expires_at = _now() + timedelta(seconds=300)
+        job.lease_expires_at = values["lease_expires_at"]
     session.add(OntRawSignalDerivationEvent(
         id=_id("ont-raw-event"), job_id=job.id, state=state,
-        reason_code=reason_code, receipt=receipt, created_at=_now(),
+        reason_code=reason_code, receipt=receipt, created_at=now,
     ))
     await session.commit()
     return job
@@ -2308,6 +3321,33 @@ async def derivation_cancellation_requested(
     return bool(job is not None and job.claim_token == claim_token and job.cancel_requested_at is not None)
 
 
+async def derivation_spawn_admission_lost(
+    session: AsyncSession, job_id: str, claim_token: str
+) -> bool:
+    job = await session.get(OntRawSignalDerivationJob, job_id)
+    return bool(
+        job is None
+        or job.claim_token != claim_token
+        or job.cancel_requested_at is not None
+        or job.state in {"ready", "failed", "cancelled"}
+        or job.lease_expires_at is None
+        or job.lease_expires_at <= _now()
+    )
+
+
+async def waveform_spawn_admission_lost(
+    session: AsyncSession, lookup_id: str, claim_token: str
+) -> bool:
+    lookup = await session.get(OntRawSignalLookup, lookup_id)
+    return bool(
+        lookup is None
+        or lookup.claim_token != claim_token
+        or lookup.state != "running"
+        or lookup.lease_expires_at is None
+        or lookup.lease_expires_at <= _now()
+    )
+
+
 async def renew_derivation_lease(
     session: AsyncSession,
     job_id: str,
@@ -2315,13 +3355,22 @@ async def renew_derivation_lease(
     *,
     lease_seconds: int = 300,
 ) -> None:
-    job = await session.get(OntRawSignalDerivationJob, job_id)
-    if job is None or job.claim_token != claim_token or job.state in {"ready", "failed", "cancelled"}:
-        raise ValueError("raw-signal derivation lease ownership lost")
-    if job.cancel_requested_at is not None:
-        raise ValueError("raw-signal derivation cancellation requested")
-    job.lease_expires_at = _now() + timedelta(seconds=lease_seconds)
-    job.updated_at = _now()
+    now = _now()
+    renewed_until = now + timedelta(seconds=lease_seconds)
+    result = await session.execute(
+        update(OntRawSignalDerivationJob)
+        .where(
+            OntRawSignalDerivationJob.id == job_id,
+            OntRawSignalDerivationJob.claim_token == claim_token,
+            OntRawSignalDerivationJob.state.notin_(("ready", "failed", "cancelled")),
+            OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+            OntRawSignalDerivationJob.lease_expires_at > now,
+        )
+        .values(lease_expires_at=renewed_until, updated_at=now)
+    )
+    if result.rowcount != 1:
+        await session.rollback()
+        raise ValueError("raw-signal derivation lease ownership lost or expired")
     await session.commit()
 
 
@@ -2353,6 +3402,45 @@ def _publication_component(value: str, *, authority: str) -> str:
     if not value or value in {".", ".."} or "/" in value or "\x00" in value:
         raise ValueError(f"raw-signal publication {authority} is invalid")
     return value
+
+
+async def _fence_active_derivation_claim(
+    session: AsyncSession,
+    job_id: str,
+    claim_token: str,
+) -> OntRawSignalDerivationJob:
+    """Acquire the final conditional write fence before any ready publication."""
+    live_job = await session.get(OntRawSignalDerivationJob, job_id)
+    if live_job is not None and hasattr(session, "refresh"):
+        await session.refresh(live_job)
+    now = _now()
+    if (
+        live_job is None
+        or not claim_token
+        or live_job.claim_token != claim_token
+        or live_job.cancel_requested_at is not None
+        or live_job.lease_expires_at is None
+        or live_job.lease_expires_at <= now
+        or live_job.state in {"ready", "failed", "cancelled"}
+    ):
+        reason = "cancellation requested" if live_job is not None and live_job.cancel_requested_at is not None else "lease expired or ownership lost"
+        raise ValueError(f"raw-signal publication {reason}")
+    if hasattr(session, "execute"):
+        result = await session.execute(
+            update(OntRawSignalDerivationJob)
+            .where(
+                OntRawSignalDerivationJob.id == job_id,
+                OntRawSignalDerivationJob.claim_token == claim_token,
+                OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+                OntRawSignalDerivationJob.lease_expires_at > now,
+                OntRawSignalDerivationJob.state.not_in(("ready", "failed", "cancelled")),
+            )
+            .values(updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise ValueError("raw-signal publication lease fence was lost")
+    return live_job
 
 
 def _open_relative_directory(
@@ -2438,6 +3526,7 @@ def _assert_publication_directory_identity(
 
 
 async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJob, source: OntRawSignalRepresentation, commands: dict[str, Any]) -> OntRawSignalRepresentation:
+    job = await _fence_active_derivation_claim(session, job.id, str(job.claim_token or ""))
     configured_value = os.getenv(
         BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT
     )
@@ -2529,11 +3618,13 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
                     os.close(descriptor)
 
         partition_counts = semantic.get("partition_counts")
+        output_identities = semantic.get("output_identities")
         if (
             semantic.get("status") != "passed"
             or semantic.get("duplicate_read_ids") not in (0, False)
             or not isinstance(partition_counts, dict)
             or not partition_counts
+            or not isinstance(output_identities, dict)
             or semantic.get("routing_sha256")
             != hashlib.sha256(routing_bytes).hexdigest()
         ):
@@ -2587,13 +3678,14 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
                 publish_root, publish_root_fd, authority="publication generation"
             )
             try:
-                os.rename(
+                _rename_directory_noreplace(
+                    stage_parent_fd,
                     f"attempt-{int(job.attempt)}",
+                    publish_root_fd,
                     str(job.id),
-                    src_dir_fd=stage_parent_fd,
-                    dst_dir_fd=publish_root_fd,
                 )
                 renamed = True
+                os.fsync(stage_parent_fd)
                 os.fsync(publish_root_fd)
                 _assert_publication_directory_identity(
                     configured_parent, parent_fd, authority="configured parent"
@@ -2653,6 +3745,9 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
                 )
             finally:
                 os.close(blow5_fd)
+            _assert_semantic_output_identity(
+                output_identities, fingerprint, "blow5", blow5_artifact
+            )
             index_fd = _open_publication_regular(outputs_fd, index_name)
             try:
                 index_artifact = _file_artifact(
@@ -2666,22 +3761,42 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
                 )
             finally:
                 os.close(index_fd)
+            _assert_semantic_output_identity(
+                output_identities, fingerprint, "index", index_artifact
+            )
             blow5_artifact.update({"partition_fingerprint": fingerprint, "read_count": int(read_count)})
+            blow5_artifact["id"] = _deterministic_publication_artifact_id(
+                job.run_id,
+                int(job.observed_generation),
+                str(blow5_artifact["governed_relative_path"]),
+                str(blow5_artifact["sha256"]),
+            )
             index_artifact.update({"partition_fingerprint": fingerprint})
+            index_artifact["id"] = _deterministic_publication_artifact_id(
+                job.run_id,
+                int(job.observed_generation),
+                str(index_artifact["governed_relative_path"]),
+                str(index_artifact["sha256"]),
+            )
             artifacts.extend((blow5_artifact, index_artifact))
         routing_fd = _open_publication_regular(governed_fd, "routing.json")
         try:
-            artifacts.append(
-                _file_artifact(
-                    final_directory / "routing.json",
-                    _id("ont-artifact"),
-                    kind="read_routing",
-                    opened_fd=routing_fd,
-                    governed_root_path=final_directory,
-                    governed_root_fd=governed_fd,
-                    governed_relative_path="routing.json",
-                )
+            routing_artifact = _file_artifact(
+                final_directory / "routing.json",
+                _id("ont-artifact"),
+                kind="read_routing",
+                opened_fd=routing_fd,
+                governed_root_path=final_directory,
+                governed_root_fd=governed_fd,
+                governed_relative_path="routing.json",
             )
+            routing_artifact["id"] = _deterministic_publication_artifact_id(
+                job.run_id,
+                int(job.observed_generation),
+                str(routing_artifact["governed_relative_path"]),
+                str(routing_artifact["sha256"]),
+            )
+            artifacts.append(routing_artifact)
         finally:
             os.close(routing_fd)
     except OSError as exc:
@@ -2703,11 +3818,25 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
                 os.close(descriptor)
 
     manifest = {"schema": "bms.ont.raw-signal-artifacts.v1", "run_id": job.run_id, "observed_generation": job.observed_generation, "format": "blow5", "artifacts": artifacts}
+    manifest_sha256 = _digest(manifest)
+    existing = (
+        await session.execute(
+            select(OntRawSignalRepresentation).where(
+                OntRawSignalRepresentation.run_id == job.run_id,
+                OntRawSignalRepresentation.observed_generation == job.observed_generation,
+                OntRawSignalRepresentation.manifest_sha256 == manifest_sha256,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.artifact_manifest != manifest or existing.state != "ready":
+            raise ValueError("raw-signal publication representation authority diverged")
+        return existing
     representation = OntRawSignalRepresentation(
         id=_id("ont-raw-rep"), run_id=job.run_id, observed_generation=job.observed_generation,
         role="derived", source_kind="pod5_to_blow5", format="blow5",
         source_fidelity="verified_signal_and_full_common_field_contract_exact", state="ready", reason_code="partitioned_indexed_blow5_ready_native_pod5_retained",
-        artifact_manifest=manifest, manifest_sha256=_digest(manifest),
+        artifact_manifest=manifest, manifest_sha256=manifest_sha256,
         parent_representation_ids=[source.id], parent_manifest_sha256s=[source.manifest_sha256],
         compression={"record": "zstd", "signal": "svb-zd"},
         runtime_identity={"profile_id": BLOW5_PROFILE_ID, "container_digest": job.resource_snapshot.get("container_digest")},
@@ -2718,79 +3847,248 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
     session.add(representation)
     await session.flush()
     job.output_representation_id = representation.id
-    await session.commit()
+    await session.flush()
+    await _fence_active_derivation_claim(session, job.id, str(job.claim_token or ""))
     return representation
 
 
 async def recover_expired_derivations(session: AsyncSession) -> int:
     """Fail closed on expired work. Partial output is never resumed or published."""
     now = _now()
+    recovered_count = 0
     expired_lookups = list((await session.execute(select(OntRawSignalLookup).where(
         OntRawSignalLookup.state == "running",
-        OntRawSignalLookup.lease_expires_at < now,
+        OntRawSignalLookup.lease_expires_at <= now,
     ))).scalars())
     for lookup in expired_lookups:
-        lookup.state = "failed"
-        lookup.reason_code = "lease_expired"
-        lookup.claim_token = None
-        lookup.lease_expires_at = None
-        lookup.completed_at = now
-        lookup.updated_at = now
+        result = await session.execute(
+            update(OntRawSignalLookup)
+            .where(
+                OntRawSignalLookup.id == lookup.id,
+                OntRawSignalLookup.state == "running",
+                OntRawSignalLookup.claim_token == lookup.claim_token,
+                OntRawSignalLookup.lease_expires_at == lookup.lease_expires_at,
+                OntRawSignalLookup.lease_expires_at <= now,
+            )
+            .values(
+                state="failed",
+                reason_code="lease_expired",
+                claim_token=None,
+                lease_expires_at=None,
+                completed_at=now,
+                updated_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            await session.rollback()
+            continue
+        recovered_count += 1
     rows = list((await session.execute(select(OntRawSignalDerivationJob).where(
         OntRawSignalDerivationJob.state.in_(("admitted", "partitioning", "converting", "structural_check", "indexing", "index_validation", "semantic_validation", "publishing")),
-        OntRawSignalDerivationJob.lease_expires_at < now,
+        OntRawSignalDerivationJob.lease_expires_at <= now,
     ))).scalars())
     for row in rows:
+        prior_state = row.state
+        prior_claim_token = row.claim_token
+        prior_lease_expires_at = row.lease_expires_at
+        if row.cancel_requested_at is not None:
+            cancel_result = await session.execute(
+                update(OntRawSignalDerivationJob)
+                .where(
+                    OntRawSignalDerivationJob.id == row.id,
+                    OntRawSignalDerivationJob.state == prior_state,
+                    OntRawSignalDerivationJob.claim_token == prior_claim_token,
+                    OntRawSignalDerivationJob.lease_expires_at == prior_lease_expires_at,
+                    OntRawSignalDerivationJob.lease_expires_at <= now,
+                    OntRawSignalDerivationJob.cancel_requested_at.is_not(None),
+                )
+                .values(
+                    state="cancelled",
+                    reason_code="cancelled_after_lease_expiry",
+                    claim_token=None,
+                    lease_expires_at=None,
+                    completed_at=now,
+                    updated_at=now,
+                )
+            )
+            if cancel_result.rowcount != 1:
+                await session.rollback()
+                continue
+            recovered_count += 1
+            session.add(OntRawSignalDerivationEvent(
+                id=_id("ont-raw-event"), job_id=row.id, state="cancelled",
+                reason_code="cancelled_after_lease_expiry",
+                receipt={"cancel_requested": True}, created_at=now,
+            ))
+            continue
+        recovery_token = _id("ont-recovery")
+        recovery_lease_expires_at = now + timedelta(seconds=300)
+        claim_result = await session.execute(
+            update(OntRawSignalDerivationJob)
+            .where(
+                OntRawSignalDerivationJob.id == row.id,
+                OntRawSignalDerivationJob.state == prior_state,
+                OntRawSignalDerivationJob.claim_token == prior_claim_token,
+                OntRawSignalDerivationJob.lease_expires_at == prior_lease_expires_at,
+                OntRawSignalDerivationJob.lease_expires_at <= now,
+                OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+            )
+            .values(
+                claim_token=recovery_token,
+                lease_expires_at=recovery_lease_expires_at,
+                reason_code="lease_recovery_claimed",
+                updated_at=now,
+            )
+        )
+        if claim_result.rowcount != 1:
+            await session.rollback()
+            continue
+        row.claim_token = recovery_token
+        row.lease_expires_at = recovery_lease_expires_at
+        row.reason_code = "lease_recovery_claimed"
+        recovered_count += 1
         source = await session.get(OntRawSignalRepresentation, row.source_representation_id)
+        live_row = await session.get(OntRawSignalDerivationJob, row.id)
+        if live_row is None or live_row.claim_token != recovery_token:
+            await session.rollback()
+            continue
+        row = live_row
         if row.state == "publishing" and source is not None:
             representation = await session.get(OntRawSignalRepresentation, row.output_representation_id) if row.output_representation_id else None
+            if row.cancel_requested_at is not None:
+                cancel_result = await session.execute(
+                    update(OntRawSignalDerivationJob)
+                    .where(
+                        OntRawSignalDerivationJob.id == row.id,
+                        OntRawSignalDerivationJob.state == "publishing",
+                        OntRawSignalDerivationJob.claim_token == recovery_token,
+                        OntRawSignalDerivationJob.lease_expires_at > now,
+                        OntRawSignalDerivationJob.cancel_requested_at.is_not(None),
+                    )
+                    .values(
+                        state="cancelled",
+                        reason_code="cancelled_after_publication_before_recovery",
+                        claim_token=None,
+                        lease_expires_at=None,
+                        completed_at=now,
+                        updated_at=now,
+                    )
+                )
+                if cancel_result.rowcount != 1:
+                    await session.rollback()
+                    continue
+                session.add(OntRawSignalDerivationEvent(
+                    id=_id("ont-raw-event"), job_id=row.id, state="cancelled",
+                    reason_code="cancelled_after_publication_before_recovery",
+                    receipt={
+                        "representation_id": getattr(representation, "id", None),
+                        "recovered_after_db_commit": representation is not None,
+                        "cancel_requested": True,
+                    },
+                    created_at=now,
+                ))
+                continue
             if representation is not None and representation.state == "ready":
-                row.state = "ready"
-                row.reason_code = "publication_commit_recovered"
-                row.claim_token = None
-                row.lease_expires_at = None
-                row.completed_at = now
-                row.updated_at = now
+                ready_result = await session.execute(
+                    update(OntRawSignalDerivationJob)
+                    .where(
+                        OntRawSignalDerivationJob.id == row.id,
+                        OntRawSignalDerivationJob.state == "publishing",
+                        OntRawSignalDerivationJob.claim_token == recovery_token,
+                        OntRawSignalDerivationJob.lease_expires_at > now,
+                        OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+                    )
+                    .values(
+                        state="ready",
+                        reason_code="publication_commit_recovered",
+                        claim_token=None,
+                        lease_expires_at=None,
+                        completed_at=now,
+                        updated_at=now,
+                    )
+                )
+                if ready_result.rowcount != 1:
+                    await session.rollback()
+                    continue
                 session.add(OntRawSignalDerivationEvent(
                     id=_id("ont-raw-event"), job_id=row.id, state="ready",
-                    reason_code=row.reason_code, receipt={"representation_id": representation.id, "recovered_after_db_commit": True}, created_at=now,
+                    reason_code="publication_commit_recovered",
+                    receipt={"representation_id": representation.id, "recovered_after_db_commit": True},
+                    created_at=now,
                 ))
                 continue
             run = await session.get(OntInstrumentRun, row.run_id)
-            commands = _conversion_commands(
-                row,
-                source,
-                dict(row.resource_snapshot or {}),
-                run,
+            commands = (
+                _external_blow5_validation_commands(row, source, dict(row.resource_snapshot or {}))
+                if row.profile_id == EXTERNAL_BLOW5_VALIDATION_PROFILE_ID
+                else _conversion_commands(
+                    row,
+                    source,
+                    dict(row.resource_snapshot or {}),
+                    run,
+                )
             )
             final_directory = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).parent / "ont-raw-signal" / row.run_id / str(row.observed_generation) / row.id
             if final_directory.is_dir():
                 try:
                     representation = await publish_derivation(session, row, source, commands)
-                    row.state = "ready"
-                    row.reason_code = "atomic_publication_recovered"
-                    row.claim_token = None
-                    row.lease_expires_at = None
-                    row.completed_at = now
-                    row.updated_at = now
+                    ready_result = await session.execute(
+                        update(OntRawSignalDerivationJob)
+                        .where(
+                            OntRawSignalDerivationJob.id == row.id,
+                            OntRawSignalDerivationJob.state == "publishing",
+                            OntRawSignalDerivationJob.claim_token == recovery_token,
+                            OntRawSignalDerivationJob.lease_expires_at > now,
+                            OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+                        )
+                        .values(
+                            state="ready",
+                            reason_code="atomic_publication_recovered",
+                            claim_token=None,
+                            lease_expires_at=None,
+                            completed_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    if ready_result.rowcount != 1:
+                        await session.rollback()
+                        continue
                     session.add(OntRawSignalDerivationEvent(
                         id=_id("ont-raw-event"), job_id=row.id, state="ready",
-                        reason_code=row.reason_code, receipt={"representation_id": representation.id, "recovered_after_rename": True}, created_at=now,
+                        reason_code="atomic_publication_recovered",
+                        receipt={"representation_id": representation.id, "recovered_after_rename": True},
+                        created_at=now,
                     ))
                     continue
                 except Exception:
                     pass
-        row.state = "failed"
-        row.reason_code = "lease_expired_partial_attempt_discarded"
-        row.failure_code = row.reason_code
-        row.claim_token = None
-        row.lease_expires_at = None
-        row.completed_at = now
-        row.updated_at = now
+        failed_result = await session.execute(
+            update(OntRawSignalDerivationJob)
+            .where(
+                OntRawSignalDerivationJob.id == row.id,
+                OntRawSignalDerivationJob.state == row.state,
+                OntRawSignalDerivationJob.claim_token == recovery_token,
+                OntRawSignalDerivationJob.lease_expires_at > now,
+                OntRawSignalDerivationJob.cancel_requested_at.is_(None),
+            )
+            .values(
+                state="failed",
+                reason_code="lease_expired_partial_attempt_discarded",
+                failure_code="lease_expired_partial_attempt_discarded",
+                claim_token=None,
+                lease_expires_at=None,
+                completed_at=now,
+                updated_at=now,
+            )
+        )
+        if failed_result.rowcount != 1:
+            await session.rollback()
+            continue
         session.add(OntRawSignalDerivationEvent(
-            id=_id("ont-raw-event"), job_id=row.id, state=row.state,
-            reason_code=row.reason_code, receipt={"attempt": row.attempt}, created_at=now,
+            id=_id("ont-raw-event"), job_id=row.id, state="failed",
+            reason_code="lease_expired_partial_attempt_discarded",
+            receipt={"attempt": row.attempt}, created_at=now,
         ))
-    if rows or expired_lookups:
+    if recovered_count:
         await session.commit()
-    return len(rows) + len(expired_lookups)
+    return recovered_count

@@ -351,6 +351,7 @@ class MappingJobResponse(ClosedModel):
     alignment_job_id: str | None
     alignment_session_id: str | None
     parent_mapping_job_id: str | None
+    domain_revision: dict[str, Any] | None
     request_fingerprint: str
     state: str
     reason_code: str
