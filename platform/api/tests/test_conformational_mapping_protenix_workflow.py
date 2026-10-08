@@ -6,7 +6,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MODULE_PATH = REPO_ROOT / "modules" / "conformational_mapping_protenix.nf"
 CONFIG_PATH = REPO_ROOT / "nextflow.config"
+RUNTIME_SCRIPT_PATH = REPO_ROOT / "scripts" / "run_protenix_inference.py"
 ADAPTER_LAUNCHER_PATH = REPO_ROOT / "scripts" / "run_biomodstack_workflow_adapter.sh"
+
+
+def test_protenix_coordinate_ledger_is_appendable_until_inference_completes() -> None:
+    source = RUNTIME_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "0o640," in source
+    assert "os.chmod(ledger_path, 0o440)" in source
 
 
 def test_protenix_binds_a_self_contained_declared_canonical_runtime() -> None:
