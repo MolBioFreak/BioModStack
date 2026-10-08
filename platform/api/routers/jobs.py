@@ -1590,13 +1590,22 @@ def _normalize_structure_prediction_pred_method(
 
 def _job_has_retired_structure_predictor(job: Any) -> bool:
     params = job.params if isinstance(getattr(job, "params", None), dict) else {}
+    model_id = str(getattr(job, "model_id", "") or "").strip().lower()
+    mode = str(getattr(job, "mode", "") or "").strip().lower()
+    structure_context = (
+        mode in {"predict", "complex", "structure_prediction", "structure_validation"}
+        or model_id in {"template_structure_prediction", "template_structure_validation"}
+        or (
+            mode == "validate"
+            and model_id in {"boltz2", "protenix", "rf3"}
+        )
+    )
+    if not structure_context:
+        return False
     requested = str(params.get("pred_method") or "").strip().lower()
     if requested in RETIRED_STRUCTURE_PRED_METHODS:
         return True
-    return (
-        str(getattr(job, "model_id", "") or "").strip().lower() == "rf3"
-        and str(getattr(job, "mode", "") or "").strip().lower() in {"predict", "complex", "structure_prediction"}
-    )
+    return model_id == "rf3"
 
 
 def _frustrampnn_param_error(

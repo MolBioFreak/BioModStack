@@ -172,6 +172,19 @@ const isBoltzCpLaunch = (job: StructureRetryJob): boolean => {
     return modelId === 'boltz_cp_experimental' || launchVariant === 'boltz_cp_experimental';
 };
 
+const isStructurePredictionContext = (job: StructureRetryJob): boolean => {
+    const modelId = String(job.model_id || '').trim().toLowerCase();
+    const mode = String(job.mode || '').trim().toLowerCase();
+    return isBoltzCpLaunch(job)
+        || mode === 'predict'
+        || mode === 'complex'
+        || mode === 'structure_prediction'
+        || mode === 'structure_validation'
+        || modelId === 'template_structure_prediction'
+        || modelId === 'template_structure_validation'
+        || (mode === 'validate' && ['boltz2', 'protenix', 'rf3'].includes(modelId));
+};
+
 const resolveBoltzCpAutoFallbackGpuIds = (job: StructureRetryJob): string | null => {
     const params = job.params || {};
     const explicitPinned = parseBoltzCpGpuIds(params.pinned_gpus);
@@ -190,6 +203,7 @@ const sameValue = (left: unknown, right: unknown): boolean => {
 };
 
 const resolvePredictors = (job: StructureRetryJob): StructurePredictor[] => {
+    if (!isStructurePredictionContext(job)) return [];
     const params = job.params || {};
     const explicit = String(params.pred_method || '').trim().toLowerCase();
     const predictionMode: StructurePredictionMode = String(job.mode || '').trim().toLowerCase() === 'complex' ? 'complex' : 'predict';
@@ -220,12 +234,14 @@ const resolvePredictors = (job: StructureRetryJob): StructurePredictor[] => {
 };
 
 const resolveRetiredPredictors = (job: StructureRetryJob): Array<'rf3'> => {
+    if (!isStructurePredictionContext(job)) return [];
     const explicit = String((job.params || {}).pred_method || '').trim().toLowerCase();
     return explicit === 'rf3' || explicit === 'both' || explicit === 'all' ? ['rf3'] : [];
 };
 
 export const isStructureReorchestrateJob = (job: StructureRetryJob): boolean => (
-    resolvePredictors(job).length > 0 || resolveRetiredPredictors(job).length > 0
+    isStructurePredictionContext(job)
+    && (resolvePredictors(job).length > 0 || resolveRetiredPredictors(job).length > 0)
 );
 
 export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): StructureReorchestrateSettings => {

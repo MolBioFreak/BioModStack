@@ -165,6 +165,20 @@ test('keeps a historical RF3-only job readable without a relaunch path', () => {
     );
 });
 
+test('keeps internal RF3 use in Protein Design outside Structure retirement', () => {
+    const job = {
+        model_id: 'protein_design',
+        mode: 'design',
+        params: {
+            pred_method: 'rf3',
+        },
+    };
+
+    const settings = deriveStructureReorchestrateSettings(job);
+    assert.equal(isStructureReorchestrateJob(job), false);
+    assert.deepEqual(settings.retiredPredictors, []);
+});
+
 test('the Structure retry panel has no editable RF3 controls', () => {
     const source = readFileSync(
         new URL('../src/components/dashboard/StructureReorchestratePanel.tsx', import.meta.url),

@@ -121,6 +121,9 @@ def test_historical_rf3_structure_jobs_are_non_resumable_without_retiring_other_
     assert not _job_has_retired_structure_predictor(
         SimpleNamespace(model_id="rf3", mode="design", params={})
     )
+    assert not _job_has_retired_structure_predictor(
+        SimpleNamespace(model_id="protein_design", mode="design", params={"pred_method": "rf3"})
+    )
 
 
 def test_build_nextflow_command_routes_boltz_protenix_template_runs_through_boltz_profile(tmp_path: Path) -> None:
