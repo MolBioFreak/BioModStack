@@ -397,9 +397,33 @@ class DesignResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DesignAggregateSummary(BaseModel):
+    total: int
+    favorites: int
+    avg_plddt: Optional[float] = None
+    avg_pae: Optional[float] = None
+    avg_ptm: Optional[float] = None
+    avg_iptm: Optional[float] = None
+    avg_ipsae: Optional[float] = None
+    avg_affinity: Optional[float] = None
+    avg_binder_probability: Optional[float] = None
+    avg_epitope_contacts: Optional[float] = None
+    avg_target_contacts: Optional[float] = None
+    avg_epitope_distance: Optional[float] = None
+    avg_target_distance: Optional[float] = None
+    avg_hotspot_coverage: Optional[float] = None
+    avg_psce: Optional[float] = None
+    high_confidence: int
+    low_error: int
+    high_contacts: int
+    screen_passed: int
+    screen_failed: int
+
+
 class DesignList(BaseModel):
     designs: List[DesignResponse]
     total: int
+    summary: Optional[DesignAggregateSummary] = None
 
 
 class DesignQueryRequest(BaseModel):
@@ -437,6 +461,7 @@ class DesignQueryRequest(BaseModel):
     sort_desc: Optional[bool] = True
     limit: Optional[int] = 100
     offset: Optional[int] = 0
+    include_summary: Optional[bool] = False
 
 
 class FavoriteUpdate(BaseModel):
@@ -2340,6 +2365,7 @@ async def list_designs(
     sort_desc: bool = Query(True, description="Sort descending"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    include_summary: bool = Query(False, description="Include exact aggregates for the complete filtered result set"),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -2531,6 +2557,55 @@ async def list_designs(
     if conditions:
         count_query = count_query.where(and_(*conditions))
     total = (await session.execute(count_query)).scalar()
+
+    summary: Optional[DesignAggregateSummary] = None
+    if include_summary:
+        aggregate_query = select(
+            func.count(case((Design.is_favorite.is_(True), 1))).label("favorites"),
+            func.avg(Design.plddt_overall).label("avg_plddt"),
+            func.avg(Design.pae_overall).label("avg_pae"),
+            func.avg(Design.ptm).label("avg_ptm"),
+            func.avg(Design.iptm).label("avg_iptm"),
+            func.avg(Design.ipsae).label("avg_ipsae"),
+            func.avg(Design.affinity_score).label("avg_affinity"),
+            func.avg(Design.binder_probability).label("avg_binder_probability"),
+            func.avg(Design.epitope_contact_count).label("avg_epitope_contacts"),
+            func.avg(Design.target_contact_count).label("avg_target_contacts"),
+            func.avg(Design.epitope_min_distance).label("avg_epitope_distance"),
+            func.avg(Design.target_min_distance).label("avg_target_distance"),
+            func.avg(Design.rfa_hotspot_covered_count).label("avg_hotspot_coverage"),
+            func.avg(Design.fampnn_psce).label("avg_psce"),
+            func.count(case((Design.plddt_overall >= 80, 1))).label("high_confidence"),
+            func.count(case((Design.pae_overall <= 5, 1))).label("low_error"),
+            func.count(case((Design.epitope_contact_count >= 5, 1))).label("high_contacts"),
+            func.count(case((Design.passed_screen.is_(True), 1))).label("screen_passed"),
+            func.count(case((Design.passed_screen.is_(False), 1))).label("screen_failed"),
+        )
+        if conditions:
+            aggregate_query = aggregate_query.where(and_(*conditions))
+        aggregate = (await session.execute(aggregate_query)).one()
+        summary = DesignAggregateSummary(
+            total=int(total or 0),
+            favorites=int(aggregate.favorites or 0),
+            avg_plddt=aggregate.avg_plddt,
+            avg_pae=aggregate.avg_pae,
+            avg_ptm=aggregate.avg_ptm,
+            avg_iptm=aggregate.avg_iptm,
+            avg_ipsae=aggregate.avg_ipsae,
+            avg_affinity=aggregate.avg_affinity,
+            avg_binder_probability=aggregate.avg_binder_probability,
+            avg_epitope_contacts=aggregate.avg_epitope_contacts,
+            avg_target_contacts=aggregate.avg_target_contacts,
+            avg_epitope_distance=aggregate.avg_epitope_distance,
+            avg_target_distance=aggregate.avg_target_distance,
+            avg_hotspot_coverage=aggregate.avg_hotspot_coverage,
+            avg_psce=aggregate.avg_psce,
+            high_confidence=int(aggregate.high_confidence or 0),
+            low_error=int(aggregate.low_error or 0),
+            high_contacts=int(aggregate.high_contacts or 0),
+            screen_passed=int(aggregate.screen_passed or 0),
+            screen_failed=int(aggregate.screen_failed or 0),
+        )
     
     # Apply pagination
     query = query.limit(limit).offset(offset)
@@ -2541,7 +2616,8 @@ async def list_designs(
     
     return DesignList(
         designs=responses,
-        total=total
+        total=total,
+        summary=summary,
     )
 
 
@@ -2586,6 +2662,7 @@ async def query_designs(
         sort_desc=True if request.sort_desc is None else request.sort_desc,
         limit=100 if request.limit is None else request.limit,
         offset=0 if request.offset is None else request.offset,
+        include_summary=bool(request.include_summary),
         session=session,
     )
 

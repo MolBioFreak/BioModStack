@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import sys
 from datetime import datetime
@@ -19,6 +20,7 @@ if str(API_ROOT) not in sys.path:
 from database import Base, Design, Job
 from routers.designs import _build_plotly_metrics, _collect_plotly_metrics, _design_to_response
 from routers.jobs import ProteinBaseBundleImportRequest, import_proteinbase_bundle_job
+from services import proteinbase_importer
 from services.proteinbase_importer import import_proteinbase_bundle, normalize_proteinbase_record
 
 
@@ -114,6 +116,164 @@ def test_normalize_proteinbase_record_promotes_boltz_metrics_and_preserves_raw_p
     assert normalized["confidence_metrics"]["pae_json_url"] == "s3://proteinbase-pub/sample-pae.json"
     assert normalized["confidence_metrics"]["structure_prediction_url"] == "https://proteinbase-pub.t3.storage.dev/boltz-entry.cif"
     assert normalized["confidence_metrics"]["proteinbase"]["id"] == "boltz-entry"
+
+
+def test_proteinbase_downloader_rejects_non_https_before_network(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    network_called = False
+
+    def _forbidden_build_opener(*_args, **_kwargs):
+        nonlocal network_called
+        network_called = True
+        raise AssertionError("network must not be reached")
+
+    monkeypatch.setattr(proteinbase_importer, "build_opener", _forbidden_build_opener)
+
+    with pytest.raises(ValueError, match="HTTPS"):
+        proteinbase_importer._default_downloader("http://127.0.0.1/private.cif", tmp_path / "private.cif")
+
+    assert network_called is False
+
+
+def test_proteinbase_downloader_rejects_untrusted_https_host_before_network(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    network_called = False
+
+    def _forbidden_build_opener(*_args, **_kwargs):
+        nonlocal network_called
+        network_called = True
+        raise AssertionError("network must not be reached")
+
+    monkeypatch.setattr(proteinbase_importer, "build_opener", _forbidden_build_opener)
+
+    with pytest.raises(ValueError, match="host"):
+        proteinbase_importer._default_downloader("https://example.invalid/private.cif", tmp_path / "private.cif")
+
+    assert network_called is False
+
+
+def test_proteinbase_downloader_enforces_streamed_byte_limit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    content = b"123456789"
+
+    class _Response:
+        headers = {"Content-Length": str(len(content))}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size: int = -1) -> bytes:
+            return content
+
+        def geturl(self) -> str:
+            return "https://proteinbase-pub.t3.storage.dev/result.cif"
+
+    class _Opener:
+        def open(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setattr(proteinbase_importer, "MAX_PROTEINBASE_ARTIFACT_BYTES", 8, raising=False)
+    monkeypatch.setattr(proteinbase_importer, "_validate_public_resolution", lambda _host: None, raising=False)
+    monkeypatch.setattr(proteinbase_importer, "build_opener", lambda *_handlers: _Opener(), raising=False)
+
+    with pytest.raises(ValueError, match="exceeds"):
+        proteinbase_importer._default_downloader(
+            "https://proteinbase-pub.t3.storage.dev/result.cif",
+            tmp_path / "result.cif",
+        )
+
+    assert not (tmp_path / "result.cif").exists()
+
+
+def test_proteinbase_downloader_installs_no_redirect_handler(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handlers: list[object] = []
+
+    class _Response:
+        headers = {"Content-Length": "4"}
+        consumed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size: int = -1) -> bytes:
+            if self.consumed:
+                return b""
+            self.consumed = True
+            return b"data"
+
+        def geturl(self) -> str:
+            return "https://proteinbase-pub.t3.storage.dev/result.cif"
+
+    class _Opener:
+        def open(self, *_args, **_kwargs):
+            return _Response()
+
+    def _build_opener(*received_handlers):
+        handlers.extend(received_handlers)
+        return _Opener()
+
+    monkeypatch.setattr(proteinbase_importer, "_validate_public_resolution", lambda _host: None, raising=False)
+    monkeypatch.setattr(proteinbase_importer, "build_opener", _build_opener, raising=False)
+
+    destination = tmp_path / "result.cif"
+    proteinbase_importer._default_downloader(
+        "https://proteinbase-pub.t3.storage.dev/result.cif",
+        destination,
+    )
+
+    assert destination.read_bytes() == b"data"
+    assert len(handlers) == 1
+    redirect_request = getattr(handlers[0], "redirect_request")
+    assert redirect_request(None, None, 302, "", {}, "https://example.invalid") is None
+
+
+def test_proteinbase_downloader_does_not_replace_existing_destination(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class _Response:
+        headers = {"Content-Length": "3"}
+        consumed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size: int = -1) -> bytes:
+            if self.consumed:
+                return b""
+            self.consumed = True
+            return b"new"
+
+        def geturl(self) -> str:
+            return "https://proteinbase-pub.t3.storage.dev/result.cif"
+
+    class _Opener:
+        def open(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setattr(proteinbase_importer, "_validate_public_resolution", lambda _host: None)
+    monkeypatch.setattr(proteinbase_importer, "build_opener", lambda *_handlers: _Opener())
+
+    destination = tmp_path / "result.cif"
+    destination.write_bytes(b"existing")
+
+    with pytest.raises(FileExistsError):
+        proteinbase_importer._default_downloader(
+            "https://proteinbase-pub.t3.storage.dev/result.cif",
+            destination,
+        )
+
+    assert destination.read_bytes() == b"existing"
+    assert not list(tmp_path.glob("*.part"))
 
 
 @pytest.mark.asyncio
@@ -212,6 +372,68 @@ async def test_import_proteinbase_bundle_creates_completed_job_and_design_rows(t
     assert esmfold_design.iptm is None
     assert esmfold_design.pdb_path.endswith("LGDL_RBX1_002.cif")
     assert esmfold_design.confidence_metrics["structure_prediction_url"] == "https://proteinbase-pub.t3.storage.dev/esmfold-default.cif"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_import_proteinbase_bundle_accepts_current_official_csv_shape(tmp_path: Path) -> None:
+    session_factory, engine = await _build_session_factory(tmp_path)
+    bundle_path = tmp_path / "proteinbase_all_data.csv"
+    record = _make_record(
+        protein_id="azure-wolf-maple",
+        name="azure wolf maple",
+        structure_url="https://proteinbase-pub.t3.storage.dev/unused.cif",
+        plddt_value=0.8123,
+        include_boltz_metrics=False,
+    )
+    current_structure_url = "https://proteinbase-pub.t3.storage.dev/01KFJ2D1XA8TNNNAMEN3J97XP1.cif"
+    next(
+        evaluation
+        for evaluation in record["evaluations"]
+        if evaluation["metric"] == "esmfold_structure_prediction"
+    )["value"]["url"] = current_structure_url
+    with bundle_path.open("w", newline="", encoding="utf-8-sig") as bundle:
+        writer = csv.DictWriter(
+            bundle,
+            fieldnames=["id", "name", "sequence", "author", "designMethod", "evaluations"],
+            quoting=csv.QUOTE_ALL,
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "id": record["id"],
+                "name": record["name"],
+                "sequence": record["sequence"],
+                "author": record["author"],
+                "designMethod": record["designMethod"],
+                "evaluations": json.dumps(record["evaluations"]),
+            }
+        )
+
+    downloaded_urls: list[str] = []
+
+    def _fake_downloader(url: str, destination: Path) -> None:
+        downloaded_urls.append(url)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("data_ESMFold\n#\nloop_\n_atom_site.group_PDB\n", encoding="utf-8")
+
+    async with session_factory() as session:
+        job = await import_proteinbase_bundle(
+            session=session,
+            bundle_path=bundle_path,
+            dataset_name="Current ProteinBase Download",
+            downloader=_fake_downloader,
+            imported_at=datetime(2026, 8, 30, 12, 0, 0),
+        )
+        designs = (
+            await session.execute(select(Design).where(Design.job_id == job.id))
+        ).scalars().all()
+
+    assert job.params["record_count"] == 1
+    assert len(designs) == 1
+    assert designs[0].name == "azure wolf maple"
+    assert downloaded_urls == [current_structure_url]
 
     await engine.dispose()
 

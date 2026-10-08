@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import csv
 import json
+import ipaddress
+import os
 import re
 import shutil
+import socket
 import uuid
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +23,55 @@ from schemas import JobStatus
 
 
 Downloader = Callable[[str, Path], None]
+DEFAULT_PROTEINBASE_ARTIFACT_HOSTS = frozenset({"proteinbase-pub.t3.storage.dev"})
+MAX_PROTEINBASE_ARTIFACT_BYTES = 64 * 1024 * 1024
+PROTEINBASE_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+PROTEINBASE_DOWNLOAD_TIMEOUT_SECONDS = 20.0
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _allowed_proteinbase_artifact_hosts() -> frozenset[str]:
+    configured = os.getenv("BMS_PROTEINBASE_ARTIFACT_HOSTS", "")
+    if not configured.strip():
+        return DEFAULT_PROTEINBASE_ARTIFACT_HOSTS
+    return frozenset(host.strip().lower().rstrip(".") for host in configured.split(",") if host.strip())
+
+
+def _validate_proteinbase_artifact_url(url: str) -> tuple[str, str]:
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != "https":
+        raise ValueError("ProteinBase artifact URLs must use HTTPS")
+    if parsed.username or parsed.password:
+        raise ValueError("ProteinBase artifact URLs cannot contain credentials")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("ProteinBase artifact URL has an invalid port") from exc
+    if port not in {None, 443}:
+        raise ValueError("ProteinBase artifact URLs must use HTTPS port 443")
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host not in _allowed_proteinbase_artifact_hosts():
+        raise ValueError("ProteinBase artifact URL host is not allowed")
+    if parsed.fragment:
+        raise ValueError("ProteinBase artifact URLs cannot contain fragments")
+    return parsed.geturl(), host
+
+
+def _validate_public_resolution(host: str) -> None:
+    try:
+        addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError("ProteinBase artifact host could not be resolved") from exc
+    if not addresses:
+        raise ValueError("ProteinBase artifact host did not resolve")
+    for _family, _socktype, _proto, _canonname, sockaddr in addresses:
+        address = ipaddress.ip_address(sockaddr[0])
+        if not address.is_global:
+            raise ValueError("ProteinBase artifact host resolved to a non-public address")
 
 
 def _safe_float(value: Any) -> float | None:
@@ -106,9 +159,46 @@ def _flatten_metric_values(metrics: dict[str, list[Any]]) -> dict[str, Any]:
 
 
 def _default_downloader(url: str, destination: Path) -> None:
+    validated_url, host = _validate_proteinbase_artifact_url(url)
+    _validate_public_resolution(host)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with urlopen(url) as response:
-        destination.write_bytes(response.read())
+    temporary_path = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.part")
+    request = Request(
+        validated_url,
+        headers={
+            "Accept": "application/octet-stream,chemical/x-pdb,chemical/x-mmcif,text/plain",
+            "User-Agent": "BioModStack-ProteinBase-Import/1",
+        },
+        method="GET",
+    )
+    opener = build_opener(_NoRedirectHandler())
+    try:
+        with opener.open(request, timeout=PROTEINBASE_DOWNLOAD_TIMEOUT_SECONDS) as response:
+            final_url = str(response.geturl())
+            if final_url != validated_url:
+                raise ValueError("ProteinBase artifact redirects are not allowed")
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    declared_bytes = int(content_length)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("ProteinBase artifact has an invalid Content-Length") from exc
+                if declared_bytes < 0 or declared_bytes > MAX_PROTEINBASE_ARTIFACT_BYTES:
+                    raise ValueError("ProteinBase artifact exceeds the download byte limit")
+
+            total_bytes = 0
+            with temporary_path.open("xb") as output:
+                while True:
+                    chunk = response.read(PROTEINBASE_DOWNLOAD_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_PROTEINBASE_ARTIFACT_BYTES:
+                        raise ValueError("ProteinBase artifact exceeds the download byte limit")
+                    output.write(chunk)
+            os.link(temporary_path, destination)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _url_suffix(url: str) -> str:
@@ -117,6 +207,40 @@ def _url_suffix(url: str) -> str:
     if suffix in {".cif", ".mmcif", ".pdb"}:
         return suffix
     return ".cif"
+
+
+def _load_proteinbase_rows(bundle_path: Path) -> tuple[list[dict[str, Any]], str]:
+    if bundle_path.suffix.lower() == ".csv":
+        rows: list[dict[str, Any]] = []
+        with bundle_path.open("r", encoding="utf-8-sig", newline="") as bundle:
+            reader = csv.DictReader(bundle)
+            columns = set(reader.fieldnames or [])
+            required_columns = {"id", "name", "sequence", "author", "designMethod", "evaluations"}
+            if not required_columns.issubset(columns):
+                raise ValueError("ProteinBase CSV is missing required columns")
+            for row_number, row in enumerate(reader, start=2):
+                try:
+                    evaluations = json.loads(row.get("evaluations") or "[]")
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"ProteinBase CSV evaluations are invalid on row {row_number}"
+                    ) from exc
+                if not isinstance(evaluations, list):
+                    raise ValueError(
+                        f"ProteinBase CSV evaluations must be an array on row {row_number}"
+                    )
+                row["evaluations"] = evaluations
+                rows.append(row)
+        return rows, "csv"
+
+    rows = [
+        json.loads(line)
+        for line in bundle_path.read_text(encoding="utf-8-sig").splitlines()
+        if line.strip()
+    ]
+    if not all(isinstance(row, dict) for row in rows):
+        raise ValueError("ProteinBase JSONL rows must be objects")
+    return rows, "jsonl"
 
 
 def normalize_proteinbase_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -201,11 +325,7 @@ async def import_proteinbase_bundle(
     imported_at = imported_at or datetime.utcnow()
     bundle_path = Path(bundle_path).expanduser().resolve()
 
-    rows = [
-        json.loads(line)
-        for line in bundle_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    rows, bundle_format = _load_proteinbase_rows(bundle_path)
     normalized_rows = [normalize_proteinbase_record(row) for row in rows]
 
     job_id = str(uuid.uuid4())
@@ -225,6 +345,7 @@ async def import_proteinbase_bundle(
         mode="external_import",
         params={
             "import_type": "proteinbase_bundle",
+            "bundle_format": bundle_format,
             "bundle_path": str(bundle_path),
             "dataset_name": dataset_name,
             "record_count": len(normalized_rows),

@@ -12,8 +12,8 @@ import {
 import type { ExternalImportPreview, Job } from '../lib/api';
 import FrustraMpnnUploadAnalysisPanel from './FrustraMpnnUploadAnalysisPanel';
 
-type RequestedFormat = 'auto' | 'proteinbase_jsonl' | 'tabular_csv' | 'jsonl_records' | 'boltz_api_run';
-type ResolvedFormat = 'proteinbase_jsonl' | 'tabular_csv' | 'jsonl_records' | 'unknown';
+type RequestedFormat = 'auto' | 'proteinbase_bundle' | 'tabular_csv' | 'jsonl_records' | 'boltz_api_run';
+type ResolvedFormat = 'proteinbase_csv' | 'proteinbase_jsonl' | 'tabular_csv' | 'jsonl_records' | 'unknown';
 
 type PreviewFieldMap = {
     sequence: string | null;
@@ -315,6 +315,33 @@ function detectTabularPreview(text: string): ImportPreview {
     const columns = splitDelimitedLine(lines[0], delimiter)
         .map((column) => column.replace(/^"|"$/g, '').trim())
         .filter(Boolean);
+    const looksProteinBaseCsv = columns.includes('id')
+        && columns.includes('name')
+        && columns.includes('sequence')
+        && columns.includes('author')
+        && columns.includes('designMethod')
+        && columns.includes('evaluations');
+
+    if (looksProteinBaseCsv) {
+        return {
+            resolvedFormat: 'proteinbase_csv',
+            label: 'ProteinBase CSV bundle',
+            importable: true,
+            recordCount: Math.max(lines.length - 1, 0),
+            columns,
+            detectedFields: {
+                sequence: 'sequence',
+                plddt: 'evaluations[*].metric',
+                structure: 'evaluations[*].value.url',
+            },
+            notes: [
+                'Current ProteinBase CSV export detected. Import will create a completed job in the Results Viewer.',
+                'Structure and confidence metrics are read from the evaluations column.',
+            ],
+            warnings: [],
+            sampleNames: [],
+        };
+    }
 
     return {
         resolvedFormat: 'tabular_csv',
@@ -331,21 +358,22 @@ function detectTabularPreview(text: string): ImportPreview {
             'Columns auto-detected; sequence / pLDDT / structure hints are shown when present.',
         ],
         warnings: [
-            'Generic CSV / TSV import preview is wired, but only ProteinBase JSONL currently creates a synthetic completed job from the UI.',
+            'Generic CSV / TSV import preview is available, but this table is not a ProteinBase export.',
         ],
         sampleNames: [],
     };
 }
 
 function detectImportPreview(file: File, text: string, requestedFormat: RequestedFormat): ImportPreview {
-    if (requestedFormat === 'proteinbase_jsonl') {
-        const preview = detectProteinBasePreview(text);
-        return preview.resolvedFormat === 'proteinbase_jsonl'
+    if (requestedFormat === 'proteinbase_bundle') {
+        const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+        const preview = extension === 'csv' ? detectTabularPreview(text) : detectProteinBasePreview(text);
+        return preview.resolvedFormat === 'proteinbase_jsonl' || preview.resolvedFormat === 'proteinbase_csv'
             ? preview
             : {
                 ...preview,
                 warnings: [
-                    'ProteinBase JSONL was selected manually, but the sampled records did not match the expected ProteinBase shape.',
+                    'ProteinBase was selected manually, but the file did not match the current CSV or legacy JSONL shape.',
                     ...preview.warnings,
                 ],
             };
@@ -557,7 +585,7 @@ export function DataViewerLanding({
                 throw new Error('Choose a dataset file first.');
             }
             if (!preview?.importable) {
-                throw new Error('Only ProteinBase JSONL and validated Boltz API runs import today.');
+                throw new Error('Only ProteinBase CSV/JSONL and validated Boltz API runs import today.');
             }
 
             const uploadTarget = `inputs/data_imports/${Date.now()}_${slugify(selectedFile.name)}`;
@@ -642,7 +670,7 @@ export function DataViewerLanding({
                                 >
                                     <option value="auto">Auto-detect</option>
                                     <option value="boltz_api_run">Boltz API downloaded run</option>
-                                    <option value="proteinbase_jsonl">ProteinBase JSONL bundle</option>
+                                    <option value="proteinbase_bundle">ProteinBase CSV / JSONL bundle</option>
                                     <option value="tabular_csv">Generic CSV / TSV table</option>
                                     <option value="jsonl_records">Generic JSONL records</option>
                                 </select>

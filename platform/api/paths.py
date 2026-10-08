@@ -243,9 +243,6 @@ def get_allowed_roots() -> dict[str, Path]:
     downloads = home / "Downloads"
     if downloads.exists():
         roots["downloads"] = downloads
-    data_root = get_data_root()
-    if data_root.exists() and data_root != code_root:
-        roots["data"] = data_root
     return roots
 
 

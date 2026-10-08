@@ -1748,9 +1748,33 @@ export interface Design {
     created_at: string;
 }
 
+export interface DesignAggregateSummary {
+    total: number;
+    favorites: number;
+    avg_plddt: number | null;
+    avg_pae: number | null;
+    avg_ptm: number | null;
+    avg_iptm: number | null;
+    avg_ipsae: number | null;
+    avg_affinity: number | null;
+    avg_binder_probability: number | null;
+    avg_epitope_contacts: number | null;
+    avg_target_contacts: number | null;
+    avg_epitope_distance: number | null;
+    avg_target_distance: number | null;
+    avg_hotspot_coverage: number | null;
+    avg_psce: number | null;
+    high_confidence: number;
+    low_error: number;
+    high_contacts: number;
+    screen_passed: number;
+    screen_failed: number;
+}
+
 export interface DesignListResponse {
     designs: Design[];
     total: number;
+    summary?: DesignAggregateSummary | null;
 }
 
 export interface DesignFilters {
@@ -1788,6 +1812,7 @@ export interface DesignFilters {
     sort_desc?: boolean;
     limit?: number;
     offset?: number;
+    include_summary?: boolean;
 }
 
 export type DesignSortField =
