@@ -759,7 +759,11 @@ workflow {
         // =========================================================================
         // PARALLEL MODE: Use SWA pattern for large campaigns
         // =========================================================================
-        if (params.boltzgen_parallel_mode) {
+        def parallel_mode_set = params.containsKey('parallel_mode')
+        def use_orchestrator = parallel_mode_set
+            ? (params.parallel_mode == 'full_orchestrator')
+            : (params.boltzgen_parallel_mode == true)
+        if (use_orchestrator) {
             println("BoltzGen PARALLEL MODE: Spawning ${Math.ceil(params.boltzgen_num_designs / params.boltzgen_designs_per_job)} child jobs")
 
             def target_pdb = params.boltzgen_target_pdb_path ? file(params.boltzgen_target_pdb_path) : file("${projectDir}/lib/NO_TARGET_PDB")

@@ -21,6 +21,9 @@ def paramOrDefault(val, deflt) {
     val != null ? val : deflt
 }
 
+// Parallelism mode (shared across workflows)
+if (!params.containsKey('parallel_mode')) params.parallel_mode = 'standard'
+
 // =============================================================================
 // SWA ORCHESTRATOR PROCESSES
 // =============================================================================
@@ -82,7 +85,7 @@ process SpawnBindCraftJobs {
         --target_pdb "${target_pdb}" \\
         --batch_name "${batch_name}" \\
         --params_json '${params_json}' \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         --output spawn_bindcraft_result.json \\
         2>&1 | tee spawn_bindcraft.log
     """
@@ -107,7 +110,7 @@ process WaitForBindCraftChildren {
         --stage "${stage_name}" \\
         --poll_interval ${poll_interval_seconds} \\
         --batch_name "${batch_name}" \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         --output child_outputs.json
     """
 }
@@ -200,12 +203,19 @@ workflow BINDCRAFT_DESIGN {
     job_id = params.job_id ?: UUID.randomUUID().toString().take(8)
     batch_name = params.batch_name ?: "bindcraft_${job_id}"
 
-    // Check if running in SWA mode (multiple GPUs / high trajectory count)
+    // Determine orchestration mode (prefer explicit parallel_mode, fallback to legacy SWA)
     total_trajectories = params.bindcraft_total_trajectories ?: 100
     trajectories_per_job = params.bindcraft_trajectories_per_job ?: 25
-    use_swa = params.bindcraft_use_swa != null ? params.bindcraft_use_swa : (total_trajectories > trajectories_per_job)
+    def use_orchestrator
+    if (params.containsKey('parallel_mode')) {
+        use_orchestrator = params.parallel_mode == 'full_orchestrator'
+    } else {
+        use_orchestrator = params.bindcraft_use_swa != null
+            ? params.bindcraft_use_swa
+            : (total_trajectories > trajectories_per_job)
+    }
 
-    if (use_swa) {
+    if (use_orchestrator) {
         // =====================================================================
         // SWA Mode: Spawn multiple child jobs for parallel trajectory generation
         // =====================================================================

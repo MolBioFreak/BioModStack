@@ -198,7 +198,7 @@ process SpawnBoltzGenJobs {
         --mode "${mode}" \\
         --batch_name "${batch_name}" \\
         --params_json ${paramsJson} \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         --output spawn_boltzgen_result.json \\
         2>&1 | tee spawn_boltzgen.log
     """
@@ -224,7 +224,7 @@ process WaitForBoltzGenChildren {
         --parent_job_id "${parent_job_id}" \\
         --stage "boltzgen" \\
         --poll_interval 30 \\
-        --api_url "http://localhost:8000" \\
+        --api_url "${params.api_url}" \\
         --output boltzgen_child_outputs.json \\
         2>&1 | tee wait_boltzgen.log
     """
@@ -337,7 +337,7 @@ process AggregateBoltzGenResults {
         python3 ${projectDir}/scripts/result_ingester.py \\
             --job_id "${parent_job_id}" \\
             --results_dir "${params.out_dir}" \\
-            --api_url "http://localhost:8000" \\
+            --api_url "${params.api_url}" \\
             2>&1 | tee ingest.log || echo "Warning: Ingestion had issues (non-fatal)"
     fi
     
