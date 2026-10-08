@@ -78,6 +78,48 @@ def test_ont_ngs_submit_route_normalizes_alias_and_delegates_to_jobs(monkeypatch
     assert job_data.params["fastq_minimap2_preset"] == "map-ont"
 
 
+@pytest.mark.parametrize(
+    ("workflow_id", "params", "mode"),
+    [
+        ("ont_basecall_dna", {"pod5_dir": "/data/run/pod5"}, "basecall_dna"),
+        ("ont_basecall_rna", {"pod5_dir": "/data/run/pod5"}, "basecall_rna"),
+        ("ont_plasmid_qc", {"bam_path": "/data/run/reads.bam", "reference_fasta": "/data/refs/ref.fa"}, "plasmid_qc"),
+        ("ont_construct_screening", {"fastq_path": "/data/run/reads.fastq.gz", "reference_fasta": "/data/refs/ref.fa"}, "construct_screening"),
+        ("ont_methylation_analysis", {"bam_path": "/data/run/mmml.bam", "reference_fasta": "/data/refs/ref.fa"}, "methylation_analysis"),
+        ("ont_fastq_qc", {"fastq_path": "/data/run/reads.fastq.gz", "reference_fasta": "/data/refs/ref.fa"}, "fastq_qc"),
+        ("wf_clone_validation", {"pod5_dir": "/data/run/pod5", "reference_fasta": "/data/refs/ref.fa"}, "clone_validation"),
+    ],
+)
+def test_each_canonical_ont_workflow_has_a_typed_prelaunch_route(monkeypatch, workflow_id, params, mode) -> None:
+    captured: dict[str, Any] = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+
+    response = client.post(f"/api/ont/ngs/{workflow_id}/submit", json={"name": workflow_id, "params": params})
+
+    assert response.status_code == 201, response.text
+    job_data = captured["job_data"]
+    assert job_data.mode == mode
+    assert job_data.params["ont_workflow_id"] == workflow_id
+    assert job_data.params["ont_input_mode"] in {"pod5", "bam", "fastq"}
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"pod5_dir": "/data/run/pod5", "dorado_basecall_mode": "duplex", "duplex_pairs": "/data/run/pairs.tsv"},
+        {"pod5_dir": "/data/run/pod5", "barcode_kit": "SQK-RBK114-96", "sample_sheet": "/data/run/samples.csv"},
+    ],
+)
+def test_dna_duplex_and_rbk114_demux_remain_typed_basecall_modes(monkeypatch, params) -> None:
+    captured: dict[str, Any] = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+
+    response = client.post("/api/ont/ngs/ont_basecall_dna/submit", json={"name": "dna mode", "params": params})
+
+    assert response.status_code == 201, response.text
+    assert captured["job_data"].params["ont_workflow_id"] == "ont_basecall_dna"
+
+
 def test_ont_run_plasmid_handoff_submit_builds_and_submits_job(monkeypatch) -> None:
     captured: dict[str, Any] = {}
     client = _client_with_fake_create(monkeypatch, captured)

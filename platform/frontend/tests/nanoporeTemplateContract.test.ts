@@ -23,9 +23,9 @@ test('Nanopore FASTQ launch is gated on reference input, finite numeric bounds, 
     const template = readSource('src/components/NanoporeTemplate.tsx');
 
     assert.match(template, /const hasFastqReferenceInput = useMemo/u);
-    assert.match(template, /&& \(runFastqQc \|\| runAssembly\)\s+&& hasFastqReferenceInput\s+&& hasValidFastqNumericControls/u);
+    assert.match(template, /selectedWorkflow === 'clone' \|\| selectedWorkflow === 'plasmidQc' \|\| selectedWorkflow === 'constructScreening' \|\| selectedWorkflow === 'fastqQc'/u);
+    assert.match(template, /&& hasFastqReferenceInput\s+&& hasValidFastqNumericControls/u);
     assert.match(template, /This workflow requires a reference FASTA path or a pasted\/created FASTA sequence/u);
-    assert.match(template, /Choose either FASTQ plasmid QC or vendor clone validation before submitting a FASTQ analysis/u);
     assert.match(template, /function coerceIntegerInput/u);
     assert.match(template, /FASTQ_MAX_IGV_REPORT_MAX_SITES/u);
     assert.match(template, /max=\{FASTQ_MAX_IGV_REPORT_MAX_SITES\}/u);
@@ -35,8 +35,10 @@ test('NGS exposes named workflow choices with input and output expectations befo
     const template = readSource('src/components/NanoporeTemplate.tsx');
 
     assert.match(template, /Choose what you want to do/u);
-    assert.match(template, /Validate a known plasmid \/ clone from FASTQ/u);
+    assert.match(template, /Validate a known plasmid \/ clone/u);
     assert.match(template, /QC plasmid reads/u);
+    assert.match(template, /Screen a construct/u);
+    assert.match(template, /ONT FASTQ QC/u);
     assert.match(template, /Basecall DNA simplex/u);
     assert.match(template, /Basecall RNA/u);
     assert.match(template, /Basecall DNA duplex/u);
@@ -106,6 +108,8 @@ test('Nanopore workflow state routes clone and BAM QC to their supported workflo
 
     assert.match(template, /selectedWorkflow === 'clone'\s*\? 'wf_clone_validation'/u);
     assert.match(template, /selectedWorkflow === 'plasmidQc' \|\| selectedWorkflow === 'bamQc'/u);
+    assert.match(template, /selectedWorkflow === 'constructScreening'\s*\? 'ont_construct_screening'/u);
+    assert.match(template, /selectedWorkflow === 'fastqQc'\s*\? 'ont_fastq_qc'/u);
     assert.match(template, /setBarcodeKit\(''\)/u);
     assert.match(template, /run_assembly: selectedWorkflow === 'clone'/u);
     assert.match(template, /if \(value\) \{ setModifiedBases\('none'\); setRunModkit\(false\); setRunAssembly\(false\); \}/u);
@@ -118,6 +122,9 @@ test('Nanopore selected workflows keep source controls contextual and require re
     assert.match(template, /selectedWorkflow === 'clone' \|\| selectedWorkflow === 'plasmidQc'/u);
     assert.match(template, /selectedWorkflow === 'bamQc'/u);
     assert.match(template, /selectedWorkflow === 'modified'/u);
+    assert.match(template, /Existing BAM with MM\/ML tags/u);
+    assert.match(template, /selectedWorkflow === 'constructScreening'/u);
+    assert.match(template, /selectedWorkflow === 'fastqQc'/u);
     assert.match(template, /const requiresReference = selectedWorkflow === 'clone'/u);
 });
 
@@ -129,6 +136,9 @@ test('NGS runs polling is scoped to Nanopore jobs instead of pulling the whole j
     assert.match(ngsToolkit, /fetchJobs\(\{ include_children: true, model_id: 'nanopore', limit: 100, summary: true \}\)/u);
     assert.doesNotMatch(ngsToolkit, /fetchJobs\(\{ include_children: true \}\)/u);
     assert.doesNotMatch(ngsToolkit, /refetchInterval: 5000/u);
+    assert.match(ngsToolkit, /function ontWorkflowDisplayName/u);
+    assert.match(ngsToolkit, /ONT Construct Screening/u);
+    assert.match(ngsToolkit, /job\.params\?\.ont_workflow_id/u);
 });
 
 test('NGS modkit summary label matches the rendered preview limit', () => {

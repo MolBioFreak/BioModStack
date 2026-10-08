@@ -172,7 +172,7 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
     "ont_plasmid_qc": OntWorkflowSpec(
         workflow_id="ont_plasmid_qc",
         display_name="ONT Plasmid QC",
-        description="Reference-optional plasmid QC supporting POD5/BAM/FASTQ input modes with per-base support, consensus, and evidence artifacts.",
+        description="Reference-required plasmid QC supporting POD5/BAM/FASTQ input modes with per-base support, consensus, and evidence artifacts.",
         input_modes=("pod5", "bam", "fastq"),
         artifact_kinds=(
             "basecall_reads",

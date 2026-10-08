@@ -24,7 +24,7 @@ type AssemblyTool = 'flye' | 'canu';
 type FlyeReadQuality = 'nano-hq' | 'nano-corr' | 'nano-raw';
 type MinimapPreset = 'map-ont' | 'map-hifi' | 'map-pb' | 'sr';
 type InputSource = 'pod5' | 'bam' | 'fastq';
-type WorkflowKey = 'clone' | 'plasmidQc' | 'bamQc' | 'dna' | 'rna' | 'duplex' | 'modified' | 'barcode';
+type WorkflowKey = 'clone' | 'plasmidQc' | 'constructScreening' | 'fastqQc' | 'bamQc' | 'dna' | 'rna' | 'duplex' | 'modified' | 'barcode';
 type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath' | 'referencePath';
 type PathPickerMode = 'file' | 'directory';
 type ReferenceTab = 'browse' | 'paste' | 'create';
@@ -420,7 +420,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [inputSource, setInputSource] = useState<InputSource>(initialValues?.inputSource as InputSource || 'pod5');
     const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowKey>(() => {
         if (typeof initialValues?.selectedWorkflow === 'string') return initialValues.selectedWorkflow as WorkflowKey;
-        if (initialValues?.runAssembly === true) return 'clone';
+        if (initialValues?.selectedWorkflow === 'constructScreening' || initialValues?.ontWorkflowId === 'ont_construct_screening') return 'constructScreening';
+        if (initialValues?.selectedWorkflow === 'fastqQc' || initialValues?.ontWorkflowId === 'ont_fastq_qc') return 'fastqQc';
+        if (initialValues?.runAssembly === true || initialValues?.ontWorkflowId === 'wf_clone_validation') return 'clone';
         if (initialValues?.inputSource === 'bam') return 'bamQc';
         if (initialValues?.inputSource === 'fastq') return 'plasmidQc';
         if (initialValues?.doradoMolecule === 'rna') return 'rna';
@@ -614,14 +616,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
     const canSubmit = useMemo(() => {
         if (!jobName.trim()) return false;
-        const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
+        const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
         if (requiresReference && !hasFastqReferenceInput) return false;
         if (inputSource === 'pod5') return pod5Dir.trim() !== '';
         if (inputSource === 'bam') return bamPath.trim() !== '';
         // FASTQ can run either BMS plasmid QC or the vendor clone-validation
         // workflow. They are deliberately mutually exclusive, not sequential.
         return fastqPath.trim() !== ''
-            && (runFastqQc || runAssembly)
+            && (selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc')
             && hasFastqReferenceInput
             && hasValidFastqNumericControls;
     }, [jobName, inputSource, pod5Dir, bamPath, fastqPath, runAssembly, runFastqQc, hasFastqReferenceInput, hasValidFastqNumericControls, selectedWorkflow]);
@@ -827,14 +829,18 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 effectiveReferencePath = uploadedPath;
             }
 
-            const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
+            const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
             if (requiresReference && !effectiveReferencePath) {
                 throw new Error('This workflow requires a reference FASTA (path or pasted sequence).');
             }
 
             const workflowId = selectedWorkflow === 'clone'
                 ? 'wf_clone_validation'
-                : selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc'
+                : selectedWorkflow === 'constructScreening'
+                    ? 'ont_construct_screening'
+                    : selectedWorkflow === 'fastqQc'
+                        ? 'ont_fastq_qc'
+                        : selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc'
                     ? 'ont_plasmid_qc'
                     : selectedWorkflow === 'rna'
                         ? 'ont_basecall_rna'
@@ -847,8 +853,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     reference_fasta: effectiveReferencePath || undefined,
                     min_qscore: inputSource === 'pod5' ? minQscore : undefined,
                     run_modkit: runModkit && canRunModkit,
-                    run_fastq_qc: inputSource === 'fastq' && !runAssembly ? runFastqQc : false,
-                    run_multimer_qc: inputSource === 'fastq' && !runAssembly ? runFastqQc : false,
+                    run_fastq_qc: inputSource === 'fastq' && selectedWorkflow !== 'clone',
+                    run_multimer_qc: inputSource === 'fastq' && selectedWorkflow !== 'clone',
                     run_assembly: selectedWorkflow === 'clone',
                     ...(inputSource === 'pod5' && {
                         pod5_dir: pod5Dir,
@@ -894,7 +900,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         wf_clone_expected_identity: wfCloneExpectedIdentity,
                         ...(wfCloneSample.trim() && { wf_clone_sample: wfCloneSample.trim() }),
                     }),
-                    ...((selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc') && {
+                    ...((selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc') && {
                         enable_rotating_reference_frames: enableRotatingReferenceFrames,
                         rotation_scan_step_bp: rotationScanStepBp,
                         single_ref_split_min_mapq: singleRefSplitMinMapq,
@@ -954,11 +960,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             setError('Please specify a FASTQ file path');
             return;
         }
-        if (inputSource === 'fastq' && !runFastqQc && !runAssembly) {
-            setError('Choose either FASTQ plasmid QC or vendor clone validation before submitting a FASTQ analysis.');
-            return;
-        }
-        const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
+        const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
         if (requiresReference && !hasFastqReferenceInput) {
             setError('This workflow requires a reference FASTA path or a pasted/created FASTA sequence.');
             return;
@@ -1023,6 +1025,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         setSelectedWorkflow(workflow);
         if (workflow === 'clone') {
             setInputSource('fastq');
+            setDoradoMolecule('dna');
+            setDoradoMode('simplex');
             setRunAssembly(true);
             setRunFastqQc(false);
             setRunModkit(false);
@@ -1032,6 +1036,26 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             return;
         }
         if (workflow === 'plasmidQc') {
+            setInputSource('fastq');
+            setDoradoMolecule('dna');
+            setDoradoMode('simplex');
+            setRunAssembly(false);
+            setRunFastqQc(true);
+            setRunModkit(false);
+            setBarcodeKit('');
+            return;
+        }
+        if (workflow === 'constructScreening') {
+            setInputSource('fastq');
+            setDoradoMolecule('dna');
+            setDoradoMode('simplex');
+            setRunAssembly(false);
+            setRunFastqQc(true);
+            setRunModkit(false);
+            setBarcodeKit('');
+            return;
+        }
+        if (workflow === 'fastqQc') {
             setInputSource('fastq');
             setRunAssembly(false);
             setRunFastqQc(true);
@@ -1118,8 +1142,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                     {[
-                        { key: 'clone' as const, title: 'Validate a known plasmid / clone from FASTQ', input: 'FASTQ + expected construct FASTA', result: 'Vendor wf-clone-validation HTML report, assembly, construct evidence', tone: 'border-[var(--accent-secondary)]' },
-                        { key: 'plasmidQc' as const, title: 'QC plasmid reads', input: 'FASTQ + reference FASTA', result: 'BMS plasmid QC, alignment and generic multimer evidence', tone: 'border-[var(--border-primary)]' },
+                        { key: 'clone' as const, title: 'Validate a known plasmid / clone', input: 'POD5, BAM, or FASTQ + expected construct FASTA', result: 'Vendor wf-clone-validation HTML report, assembly, construct evidence', tone: 'border-[var(--accent-secondary)]' },
+                        { key: 'plasmidQc' as const, title: 'QC plasmid reads', input: 'POD5, BAM, or FASTQ + reference FASTA', result: 'BMS plasmid QC, alignment and generic multimer evidence', tone: 'border-[var(--border-primary)]' },
+                        { key: 'constructScreening' as const, title: 'Screen a construct', input: 'POD5, BAM, or FASTQ + construct FASTA', result: 'BMS construct-screening evidence; not a competing clone report', tone: 'border-[var(--border-primary)]' },
+                        { key: 'fastqQc' as const, title: 'ONT FASTQ QC', input: 'FASTQ + reference FASTA', result: 'Read and alignment QC only; no clone report', tone: 'border-[var(--border-primary)]' },
                         { key: 'bamQc' as const, title: 'Analyze aligned plasmid BAM', input: 'BAM + reference FASTA', result: 'BMS plasmid QC and alignment evidence', tone: 'border-[var(--border-primary)]' },
                         { key: 'dna' as const, title: 'Basecall DNA simplex', input: 'DNA POD5', result: 'Dorado calls BAM, summary and runtime provenance', tone: 'border-[var(--border-primary)]' },
                         { key: 'rna' as const, title: 'Basecall RNA', input: 'RNA POD5', result: 'RNA004 simplex calls BAM, trimming and provenance', tone: 'border-[var(--border-primary)]' },
@@ -1221,12 +1247,20 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
                 <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Primary Input *</label>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
-                    {[selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc'
-                        ? { key: 'fastq' as const, label: 'FASTQ Analysis' }
-                        : selectedWorkflow === 'bamQc'
-                            ? { key: 'bam' as const, label: 'Existing BAM' }
-                            : { key: 'pod5' as const, label: 'POD5 Raw Reads' }
-                    ].map((source) => (
+                    {(selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening'
+                        ? [
+                            { key: 'pod5' as const, label: 'POD5 Raw Reads' },
+                            { key: 'bam' as const, label: 'Existing BAM' },
+                            { key: 'fastq' as const, label: 'FASTQ Analysis' },
+                        ]
+                        : selectedWorkflow === 'modified'
+                            ? [{ key: 'pod5' as const, label: 'POD5 Raw Reads' }, { key: 'bam' as const, label: 'Existing BAM with MM/ML tags' }]
+                            : selectedWorkflow === 'fastqQc'
+                                ? [{ key: 'fastq' as const, label: 'FASTQ Analysis' }]
+                                : selectedWorkflow === 'bamQc'
+                                    ? [{ key: 'bam' as const, label: 'Existing BAM' }]
+                                    : [{ key: 'pod5' as const, label: 'POD5 Raw Reads' }]
+                    ).map((source) => (
                         <button
                             key={source.key}
                             onClick={() => setInputSource(source.key)}
