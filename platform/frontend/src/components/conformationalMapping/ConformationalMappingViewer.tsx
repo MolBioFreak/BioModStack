@@ -44,6 +44,7 @@ import {
     resolveStateLandscapeResidueRef,
     selectStateLandscapeWorkspacePair,
     stateLandscapeSummaryEnabled,
+    stateLandscapeWorkspaceEnabled,
     stateLandscapeRowKey,
     stateLandscapeWorkspaceTabs,
     validateStateLandscapeWorkspaceRowsPage,
@@ -167,7 +168,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
     const stateAnalysisPage = useQuery({
         queryKey: ['cm-state-landscape-analysis-rows', requestId, stateAnalysisSummaryParsed.data?.analysis_id, selectedPairId, stateAnalysisOffset],
         queryFn: () => getCmStateLandscapeAnalysisRows(requestId, stateAnalysisSummaryParsed.data!.analysis_id, selectedPairId, stateAnalysisOffset, 50),
-        enabled: Boolean(stateAnalysisSummaryParsed.data && selectedPairId),
+        enabled: stateLandscapeWorkspaceEnabled(stateAnalysisSummaryParsed.data) && Boolean(selectedPairId),
         retry: false,
     });
     const stateAnalysisPageParsed = useMemo(() => {
@@ -407,7 +408,7 @@ export function ConformationalMappingViewer({ requestId, title = 'Conformational
                         </div>
                     </section>
 
-                    <nav className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Conformational mapping result lenses">{stateLandscapeWorkspaceTabs(Boolean(stateAnalysisSummaryParsed.data)).map((tab) => <button type="button" key={tab} onClick={() => setDetailTab(tab)} className={tabClass(detailTab === tab)}>{tab === 'mapping' ? 'Residue mapping' : tab === 'landscape' ? 'Exact-20 landscape' : tab === 'state-analysis' ? 'State analysis' : tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
+                    <nav className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Conformational mapping result lenses">{stateLandscapeWorkspaceTabs(stateLandscapeWorkspaceEnabled(stateAnalysisSummaryParsed.data)).map((tab) => <button type="button" key={tab} onClick={() => setDetailTab(tab)} className={tabClass(detailTab === tab)}>{tab === 'mapping' ? 'Residue mapping' : tab === 'landscape' ? 'Exact-20 landscape' : tab === 'state-analysis' ? 'State analysis' : tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
 
                     {detailTab === 'ensemble' && <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Canonical ensemble and provenance</h2><div className="mt-4 grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4"><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Backend</span><div className="mt-1 font-mono text-white">{parsed.data.ensemble.backend}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Runtime identity</span><div className="mt-1 break-words text-white">{parsed.data.ensemble.runtime_identity}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Expected candidates</span><div className="mt-1 text-white">{parsed.data.ensemble.expected_cardinality}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Terminal contract state</span><div className="mt-1 text-white">{parsed.data.ensemble.terminal_status}</div></div>{[['Request SHA-256', parsed.data.ensemble.request_sha256], ['Snapshot SHA-256', parsed.data.ensemble.source_snapshot_sha256], ['Feature policy SHA-256', parsed.data.ensemble.feature_policy_sha256], ['Native manifest SHA-256', parsed.data.ensemble.native_manifest_sha256], ['Container digest', parsed.data.ensemble.container_digest], ['Checkpoint SHA-256', parsed.data.ensemble.checkpoint_sha256]].map(([label, value]) => <div key={label} className="rounded-lg border border-slate-800 p-3" title={value}><span className="text-slate-500">{label}</span><div className="mt-1 font-mono text-white">{shortHash(value)}</div></div>)}</div><div className="mt-4 grid gap-3 lg:grid-cols-2"><div className="rounded-xl border border-amber-500/20 p-3"><h3 className="text-sm font-medium text-amber-100">Producer warnings</h3>{parsed.data.ensemble.warnings.length ? <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-200">{parsed.data.ensemble.warnings.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No producer warning recorded.</p>}</div><div className="rounded-xl border border-slate-800 p-3"><h3 className="text-sm font-medium text-white">Explicit omissions</h3>{parsed.data.ensemble.omissions.length ? <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-400">{parsed.data.ensemble.omissions.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No omission recorded.</p>}</div></div></section>}
 

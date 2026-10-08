@@ -20,6 +20,16 @@ const summary = () => ({
     artifact: { artifact_id: 'artifact-a', content_sha256: sha('a'), size_bytes: 123, media_type: 'application/json', download_url: '/api/conformational-mapping/requests/request-a/artifacts/artifact-a' },
 });
 
+const canonicalAuthority = () => ({
+    analysis_id: summary().analysis_id,
+    content_sha256: sha('a'),
+    source_ensemble_sha256: sha('b'), source_landscape_sha256: sha('c'), source_structure_map_sha256: sha('d'),
+    comparison_sha256: sha('e'), formula_version: 'cm_state_landscape_analysis_v1', formula_sha256: sha('f'), policy_sha256: sha('1'),
+    comparison_mode: 'pairwise', comparison_target_id: 'target-a', comparison_scope: 'all_within_target',
+    reference_backend_coordinates: null, reference_candidate_id: null,
+    resolved_pairs: summary().pairs, rows: [row(), row('candidate-a__candidate-c')], exclusion_ledger: [],
+});
+
 const numeric = () => ({ a: 1, b: 2, delta_b_minus_a: 1, status: 'ok', reason: null });
 const unavailable = () => ({ a: null, b: null, delta_b_minus_a: null, status: 'unavailable', reason: 'missing_slot' });
 const row = (pairId = 'candidate-a__candidate-b') => ({
@@ -92,6 +102,22 @@ test('workspace hides its lens and does not fetch a B2 projection without a cano
     assert.deepEqual(tabs!(true), ['ensemble', 'mapping', 'landscape', 'state-analysis', 'analysis', 'evidence', 'downloads']);
 });
 
+test('workspace fails closed on an otherwise-valid B2 content hash mismatch before exposing its lens or rows', async () => {
+    const module = await workspaceModule();
+    assert.ok(module, 'C2 workspace module must exist');
+    const validateSummary = module!.validateStateLandscapeWorkspaceSummary as ((value: unknown, authority: unknown) => unknown);
+    const workspaceEnabled = module!.stateLandscapeWorkspaceEnabled as ((summaryValue: unknown) => boolean) | undefined;
+    const tabs = module!.stateLandscapeWorkspaceTabs as ((available: boolean) => string[]);
+    assert.equal(typeof workspaceEnabled, 'function');
+
+    const altered = summary();
+    altered.authority.content_sha256 = sha('9');
+    altered.artifact.content_sha256 = sha('9');
+    assert.throws(() => validateSummary(altered, canonicalAuthority()), /content hash|canonical authority/i);
+    assert.equal(workspaceEnabled!(null), false);
+    assert.deepEqual(tabs!(workspaceEnabled!(null)), ['ensemble', 'mapping', 'landscape', 'analysis', 'evidence', 'downloads']);
+});
+
 test('workspace rejects a malformed summary and a row page whose next offset skips persisted rows', async () => {
     const module = await workspaceModule();
     assert.ok(module, 'C2 workspace module must exist');
@@ -115,7 +141,7 @@ test('workspace selects a 3D residue only from one exact persisted identity mapp
     const mapRow = {
         status: 'mapped', entity_instance_id: identity.entity_instance_id, source_entity_id: 'source-entity', label_asym_id: 'L',
         auth_asym_id: identity.auth_asym_id, label_seq_id: 12, auth_seq_id: identity.auth_seq_id,
-        insertion_code: identity.insertion_code, sequence_index: identity.sequence_index,
+        insertion_code: identity.insertion_code, sequence_index: identity.sequence_index, residue_name: 'GLY',
     };
     const structureMap = { target_id: identity.target_id, rows: [mapRow] };
     assert.deepEqual(resolveResidue!(identity, structureMap), {
@@ -124,6 +150,12 @@ test('workspace selects a 3D residue only from one exact persisted identity mapp
     });
     assert.equal(resolveResidue!(identity, { ...structureMap, rows: [mapRow, { ...mapRow }] }), null);
     assert.equal(resolveResidue!(identity, { ...structureMap, target_id: 'other-target' }), null);
+    assert.equal(resolveResidue!({ ...identity, validated_wt: 'G' }, { ...structureMap, rows: [{ ...mapRow, residue_name: 'ALA' }] }), null);
+    assert.equal(resolveResidue!(identity, { ...structureMap, rows: [{ ...mapRow, residue_name: 'MSE' }] }), null);
+    assert.deepEqual(resolveResidue!({ ...identity, validated_wt: 'A' }, { ...structureMap, rows: [{ ...mapRow, residue_name: 'ALA' }] }), {
+        documentId: 'primary', entityId: 'source-entity', sourceEntityId: 'source-entity', sourceInstanceId: 'entity-1',
+        labelAsymId: 'L', authAsymId: 'A', labelSeqId: 12, authSeqId: 42, insertionCode: 'B',
+    });
 });
 
 test('workspace rejects malformed B2 rows and renders unavailable metrics with their reason instead of a fabricated zero', async () => {

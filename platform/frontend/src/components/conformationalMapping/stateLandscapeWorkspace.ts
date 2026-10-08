@@ -1,7 +1,7 @@
 import type { ResidueRef } from '../../structureViewer/contracts/structureIdentity.js';
 import type { CmStructureMap } from './conformationalMappingSemantics.js';
+import type { CanonicalStateLandscapeAnalysis } from './stateLandscapeSemantics.js';
 import type {
-    CmStateLandscapeAnalysis,
     CmStateLandscapeAnalysisRowsPage,
     CmStateLandscapeAnalysisSummary,
     CmStateLandscapeClassMetric,
@@ -14,8 +14,10 @@ import type {
 export type StateLandscapeWorkspaceTab = 'ensemble' | 'mapping' | 'landscape' | 'state-analysis' | 'analysis' | 'evidence' | 'downloads';
 
 const WORKSPACE_TABS: StateLandscapeWorkspaceTab[] = ['ensemble', 'mapping', 'landscape', 'analysis', 'evidence', 'downloads'];
-export const stateLandscapeSummaryEnabled = (authority: CmStateLandscapeAnalysis | null): boolean => authority !== null;
-/** C1 fail-closed gate: absent or malformed authority never exposes a state-analysis lens. */
+/** C1 only enables the compact B2 header request; it never exposes the workspace itself. */
+export const stateLandscapeSummaryEnabled = (authority: CanonicalStateLandscapeAnalysis | null): boolean => authority !== null;
+/** C2 enables the lens and bounded row requests only after B2 binds the C1 record hash. */
+export const stateLandscapeWorkspaceEnabled = (summary: CmStateLandscapeAnalysisSummary | null): boolean => summary !== null;
 export const stateLandscapeWorkspaceTabs = (available: boolean): StateLandscapeWorkspaceTab[] => available
     ? [...WORKSPACE_TABS.slice(0, 3), 'state-analysis', ...WORKSPACE_TABS.slice(3)]
     : WORKSPACE_TABS;
@@ -154,7 +156,7 @@ const validateRow = (value: unknown, pair: CmStateLandscapeResolvedPair, targetI
 /** Validates a compact B2 header without calculating scientific values or reordering its persisted pair ledger. */
 export const validateStateLandscapeWorkspaceSummary = (
     value: unknown,
-    canonicalAuthority: CmStateLandscapeAnalysis | null,
+    canonicalAuthority: CanonicalStateLandscapeAnalysis | null,
 ): CmStateLandscapeAnalysisSummary => {
     const summary = object(value, 'State-analysis summary is malformed');
     exact(summary, ['request_id', 'analysis_id', 'authority', 'comparison', 'counts', 'pairs', 'artifact'], 'State-analysis summary is malformed');
@@ -203,6 +205,7 @@ export const validateStateLandscapeWorkspaceSummary = (
     })();
     if (canonicalAuthority) {
         if (canonicalAuthority.analysis_id !== analysisId
+            || canonicalAuthority.content_sha256 !== parsedAuthority.content_sha256
             || canonicalAuthority.source_ensemble_sha256 !== parsedAuthority.source_ensemble_sha256
             || canonicalAuthority.source_landscape_sha256 !== parsedAuthority.source_landscape_sha256
             || canonicalAuthority.source_structure_map_sha256 !== parsedAuthority.source_structure_map_sha256
@@ -260,6 +263,11 @@ export const stateLandscapeRowKey = (row: Pick<CmStateLandscapeRow, 'pair_id' | 
 export const stateLandscapeMetricText = (metric: CmStateLandscapeNumericMetric | CmStateLandscapeClassMetric): string => metric.status === 'unavailable' ? `Unavailable: ${metric.reason}` : `${metric.a} → ${metric.b}${'delta_b_minus_a' in metric ? ` (Δ ${metric.delta_b_minus_a})` : ` (${metric.transition})`}`;
 
 /** Maps only an exact persisted identity to the selected candidate's structure map; ambiguous/missing mappings return null. */
+const STANDARD_RESIDUE_TO_ONE_LETTER: Readonly<Record<string, string>> = {
+    ALA: 'A', ARG: 'R', ASN: 'N', ASP: 'D', CYS: 'C', GLN: 'Q', GLU: 'E', GLY: 'G', HIS: 'H',
+    ILE: 'I', LEU: 'L', LYS: 'K', MET: 'M', PHE: 'F', PRO: 'P', SER: 'S', THR: 'T', TRP: 'W',
+    TYR: 'Y', VAL: 'V',
+};
 export const resolveStateLandscapeResidueRef = (identity: CmStateLandscapeIdentity, structureMap: CmStructureMap | null): ResidueRef | null => {
     if (!structureMap || structureMap.target_id !== identity.target_id) return null;
     const matches = structureMap.rows.filter((row) => row.status === 'mapped'
@@ -270,5 +278,6 @@ export const resolveStateLandscapeResidueRef = (identity: CmStateLandscapeIdenti
         && row.sequence_index === identity.sequence_index);
     if (matches.length !== 1) return null;
     const row = matches[0];
+    if (STANDARD_RESIDUE_TO_ONE_LETTER[row.residue_name] !== identity.validated_wt) return null;
     return { documentId: 'primary', entityId: row.source_entity_id, sourceEntityId: row.source_entity_id, sourceInstanceId: row.entity_instance_id, labelAsymId: row.label_asym_id, authAsymId: row.auth_asym_id, labelSeqId: row.label_seq_id, authSeqId: row.auth_seq_id, insertionCode: row.insertion_code };
 };
