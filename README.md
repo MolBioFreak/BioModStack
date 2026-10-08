@@ -1,23 +1,26 @@
 # BioModStack (BMS)
 
-**A high-performance computational platform for protein design, structural bioinformatics, and laboratory data analysis.**
+**A high-performance computational platform for protein design and structural bioinformatics.**
 
 [![Ampere+ GPUs](https://img.shields.io/badge/GPU-Ampere%2B-76B900?logo=nvidia)](https://nvidia.com)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react)](https://react.dev)
 [![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?logo=python)](https://python.org)
 [![Nextflow DSL2](https://img.shields.io/badge/Nextflow-DSL2-1DB954)](https://nextflow.io)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
 ## Overview
 
-BioModStack evolved from a ProteinDJ fork into a unified workstation for:
+BioModStack is a unified workstation for:
 
 - **De Novo Protein Design** – RFantibody+, BindCraft, BoltzGen
 - **Structural Validation** – Boltz-2, RoseTTAFold3, OpenMM physics refinement
 - **Results Analysis** – Plotly-powered analytics dashboard with publication-quality charts
 
-## Workflows
+## Workflow Catalog
+
+Access all workflows through the **Workflow Catalog** in the web UI:
 
 | Workflow | Description | Key Features |
 |----------|-------------|--------------|
@@ -30,33 +33,34 @@ BioModStack evolved from a ProteinDJ fork into a unified workstation for:
 ## Quick Start
 
 ```bash
-# 1. Clone and setup
-git clone https://github.com/MolBioFreak/Protein-De-Novo-Modification-and-Design-Platform.git
-cd Protein-De-Novo-Modification-and-Design-Platform
-
-# 2. Start services
+# Start all services (API + Frontend)
 ./start_ui.sh
 
-# 3. Open browser
-# http://localhost:5173 (Frontend)
-# http://localhost:8100 (API)
+# Or use the GUI launcher
+./start_ui_gui.sh
+
+# Stop all services
+./stop_services.sh
+
+# Restart just the API
+./restart_api.sh
 ```
+
+**URLs:**
+- Frontend: http://localhost:5173
+- API: http://localhost:8100
 
 ## Architecture
 
 ```
 ├── main.nf                 # Nextflow entry point
 ├── modules/                # Nextflow process definitions
-│   ├── rfantibody.nf       # RFantibody backbone generation
-│   ├── boltz.nf            # Boltz-2 structure prediction
-│   ├── openmm.nf           # Physics refinement
-│   └── ...
 ├── workflows/              # Workflow compositions
 ├── platform/
 │   ├── api/                # FastAPI backend
 │   └── frontend/           # React 19 UI
 ├── scripts/                # Python utilities
-└── apptainer/              # Container definitions
+└── apptainer/              # Container definitions (.def → .sif)
 ```
 
 ## GPU Requirements
@@ -98,6 +102,12 @@ cd Protein-De-Novo-Modification-and-Design-Platform
 - **LigandMPNN** – Ligand/metal/DNA-aware design
 - **AntiFold** – Antibody-specific inverse folding
 
+### MSA Generation (MMseqs2)
+- GPU-accelerated local MSA search (~5-10 seconds)
+- Automatic fallback to CPU when GPU is busy
+- Batch MSA generation for mutagenesis libraries
+- UniRef30 + ColabFold database support
+
 ### GPU Orchestration
 - VRAM-aware bin-packing across heterogeneous GPUs
 - Dynamic job scheduling with priority queues
@@ -122,8 +132,4 @@ apptainer build openmm.sif openmm.def
 
 ## License
 
-Academic use. See LICENSE for details.
-
----
-
-*Originally forked from [PapenfussLab/ProteinDJ](https://github.com/PapenfussLab/proteindj). Extensively modified and rebranded as BioModStack (January 2026).*
+MIT License - see [LICENSE](LICENSE) for details.
