@@ -939,6 +939,23 @@ async def launch_nextflow_job(
                 # Reduces allocator fragmentation spikes on large pair/MSA tensors.
                 env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
             
+            # ═══════════════════════════════════════════════════════════════
+            # PER-JOB SESSION ISOLATION (NXF_CACHE_DIR)
+            # ═══════════════════════════════════════════════════════════════
+            # Each job gets its own .nextflow cache directory so concurrent
+            # runs and resumes never collide on LevelDB locks.
+            # Ref: https://www.nextflow.io/docs/latest/reference/env-vars.html
+            resume_source_dir = launch_params.get("resume_source_dir")
+            if resume_source_dir:
+                # Resume: use the ORIGINAL job's cache to find its session
+                job_cache_dir = str(Path(resume_source_dir) / ".nextflow")
+                logger.info(f"[JOB {job_id}] NXF_CACHE_DIR → original job cache: {job_cache_dir}")
+            else:
+                # Fresh run: create cache in this job's output dir
+                job_cache_dir = str(Path(output_dir) / ".nextflow")
+                logger.info(f"[JOB {job_id}] NXF_CACHE_DIR → {job_cache_dir}")
+            env["NXF_CACHE_DIR"] = job_cache_dir
+            
             # ═══════════════════════════════════════════════════════════════════
             # RUN NEXTFLOW + STREAM OUTPUT (with resume-lock retry hardening)
             # ═══════════════════════════════════════════════════════════════════
@@ -1450,6 +1467,9 @@ def build_nextflow_command(
             "-resume",
             "--out_dir", output_dir,
         ]
+        # Log the resume_source_dir if set (for NXF_CACHE_DIR tracing)
+        if params.get('resume_source_dir'):
+            logger.info(f"Resume cache source: {params['resume_source_dir']}")
     else:
         cmd = [
             "nextflow", "run", "main.nf",
