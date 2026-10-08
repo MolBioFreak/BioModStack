@@ -767,3 +767,42 @@ def test_fake_gromacs_full_run_verifies_outputs_and_resumes_safely(
     assert "production/production.cpt" in retry_calls[2]
     assert "-cpi" in retry_calls[2]
     assert "-append" in retry_calls[2]
+
+
+def test_resume_accepts_only_hash_named_immutable_checkpoint_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "replica_0"
+    snapshot_bytes = b"immutable-checkpoint"
+    digest = hashlib.sha256(snapshot_bytes).hexdigest()
+    snapshot = output / ".bms-checkpoints" / "segment-1" / f"{digest}.cpt"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_bytes(snapshot_bytes)
+
+    def accepted(*_args: Any, **_kwargs: Any) -> str:
+        raise RuntimeError("resume checkpoint accepted")
+
+    monkeypatch.setattr("scripts.bms_md.gromacs_pipeline._run_command", accepted)
+    prepared = {
+        "schema": "bms.md.job.v2",
+        "engine": "gromacs",
+        "replicas": 1,
+        "execution": {"gpu_offload": "none"},
+    }
+    with pytest.raises(RuntimeError, match="resume checkpoint accepted"):
+        run_gromacs_job(
+            tmp_path / "unused.json",
+            output,
+            _prepared_config=prepared,
+            resume_checkpoint=snapshot,
+        )
+
+    arbitrary = output / "arbitrary.cpt"
+    arbitrary.write_bytes(snapshot_bytes)
+    with pytest.raises(ValueError, match="canonical stage checkpoint or immutable snapshot"):
+        run_gromacs_job(
+            tmp_path / "unused.json",
+            output,
+            _prepared_config=prepared,
+            resume_checkpoint=arbitrary,
+        )

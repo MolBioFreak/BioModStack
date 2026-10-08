@@ -432,12 +432,22 @@ def run_gromacs_job(
         except ValueError as exc:
             raise ValueError("resume checkpoint must belong to the resumed replica output") from exc
         allowed_stages = {"minimization", "nvt", "npt", "production"}
-        if (
-            len(resume_relative.parts) != 2
-            or resume_relative.parts[0] not in allowed_stages
-            or resume_relative.name != f"{resume_relative.parts[0]}.cpt"
-        ):
-            raise ValueError("resume checkpoint path does not match a canonical stage checkpoint")
+        canonical_stage_checkpoint = (
+            len(resume_relative.parts) == 2
+            and resume_relative.parts[0] in allowed_stages
+            and resume_relative.name == f"{resume_relative.parts[0]}.cpt"
+        )
+        immutable_snapshot = (
+            len(resume_relative.parts) == 3
+            and resume_relative.parts[0] == ".bms-checkpoints"
+            and re.fullmatch(r"[0-9a-f]{64}\.cpt", resume_relative.name) is not None
+            and hashlib.sha256(resume_checkpoint.read_bytes()).hexdigest()
+            == resume_checkpoint.stem
+        )
+        if not canonical_stage_checkpoint and not immutable_snapshot:
+            raise ValueError(
+                "resume checkpoint path does not match a canonical stage checkpoint or immutable snapshot"
+            )
     config = dict(_prepared_config) if _prepared_config is not None else prepare_verified_worker_inputs(
         config_path,
         output_dir / ".worker_inputs",
