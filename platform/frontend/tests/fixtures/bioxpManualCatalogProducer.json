@@ -1,0 +1,1076 @@
+{
+  "unarmed": [
+    {
+      "action_id": "route.motion_gripper_close_motion_gripper_close_post.0ec914f9",
+      "label": "Motion Gripper Close",
+      "subsystem": "motion.gripper",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/gripper/close",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/gripper/close",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": true,
+      "unavailable_reason": null,
+      "enabled": false,
+      "disabled_reason": "Motion arm is not confirmed.",
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": false,
+          "reason": "Motion arm is not confirmed."
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    },
+    {
+      "action_id": "route.motion_gripper_open_motion_gripper_open_post.3c25c6a5",
+      "label": "Motion Gripper Open",
+      "subsystem": "motion.gripper",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/gripper/open",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/gripper/open",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": true,
+      "unavailable_reason": null,
+      "enabled": false,
+      "disabled_reason": "Motion arm is not confirmed.",
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": false,
+          "reason": "Motion arm is not confirmed."
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    },
+    {
+      "action_id": "route.motion_thermal_door_close_motion_thermal_door_close_post.4c75ea47",
+      "label": "Motion Thermal Door Close",
+      "subsystem": "motion.thermal_door",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/thermal_door/close",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/thermal_door/close",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": false,
+      "unavailable_reason": "DOOR axis is not homed.",
+      "enabled": false,
+      "disabled_reason": "Motion arm is not confirmed.",
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": false,
+          "reason": "Motion arm is not confirmed."
+        },
+        {
+          "key": "axis_door_referenced",
+          "label": "DOOR axis homed",
+          "met": false,
+          "reason": "DOOR axis is not homed."
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    },
+    {
+      "action_id": "route.motion_thermal_door_open_motion_thermal_door_open_post.5d250091",
+      "label": "Motion Thermal Door Open",
+      "subsystem": "motion.thermal_door",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/thermal_door/open",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/thermal_door/open",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": false,
+      "unavailable_reason": "DOOR axis is not homed.",
+      "enabled": false,
+      "disabled_reason": "Motion arm is not confirmed.",
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": false,
+          "reason": "Motion arm is not confirmed."
+        },
+        {
+          "key": "axis_door_referenced",
+          "label": "DOOR axis homed",
+          "met": false,
+          "reason": "DOOR axis is not homed."
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    }
+  ],
+  "armed": [
+    {
+      "action_id": "route.motion_gripper_close_motion_gripper_close_post.0ec914f9",
+      "label": "Motion Gripper Close",
+      "subsystem": "motion.gripper",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/gripper/close",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/gripper/close",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": true,
+      "unavailable_reason": null,
+      "enabled": true,
+      "disabled_reason": null,
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    },
+    {
+      "action_id": "route.motion_gripper_open_motion_gripper_open_post.3c25c6a5",
+      "label": "Motion Gripper Open",
+      "subsystem": "motion.gripper",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/gripper/open",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/gripper/open",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": true,
+      "unavailable_reason": null,
+      "enabled": true,
+      "disabled_reason": null,
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    },
+    {
+      "action_id": "route.motion_thermal_door_close_motion_thermal_door_close_post.4c75ea47",
+      "label": "Motion Thermal Door Close",
+      "subsystem": "motion.thermal_door",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/thermal_door/close",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/thermal_door/close",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": false,
+      "unavailable_reason": "DOOR axis is not homed.",
+      "enabled": false,
+      "disabled_reason": "DOOR axis is not homed.",
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "axis_door_referenced",
+          "label": "DOOR axis homed",
+          "met": false,
+          "reason": "DOOR axis is not homed."
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    },
+    {
+      "action_id": "route.motion_thermal_door_open_motion_thermal_door_open_post.5d250091",
+      "label": "Motion Thermal Door Open",
+      "subsystem": "motion.thermal_door",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/thermal_door/open",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/thermal_door/open",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": false,
+      "unavailable_reason": "DOOR axis is not homed.",
+      "enabled": false,
+      "disabled_reason": "DOOR axis is not homed.",
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "axis_door_referenced",
+          "label": "DOOR axis homed",
+          "met": false,
+          "reason": "DOOR axis is not homed."
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    }
+  ],
+  "referenced": [
+    {
+      "action_id": "route.motion_gripper_close_motion_gripper_close_post.0ec914f9",
+      "label": "Motion Gripper Close",
+      "subsystem": "motion.gripper",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/gripper/close",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/gripper/close",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": true,
+      "unavailable_reason": null,
+      "enabled": true,
+      "disabled_reason": null,
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    },
+    {
+      "action_id": "route.motion_gripper_open_motion_gripper_open_post.3c25c6a5",
+      "label": "Motion Gripper Open",
+      "subsystem": "motion.gripper",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/gripper/open",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/gripper/open",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": true,
+      "unavailable_reason": null,
+      "enabled": true,
+      "disabled_reason": null,
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    },
+    {
+      "action_id": "route.motion_thermal_door_close_motion_thermal_door_close_post.4c75ea47",
+      "label": "Motion Thermal Door Close",
+      "subsystem": "motion.thermal_door",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/thermal_door/close",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/thermal_door/close",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": false,
+      "unavailable_reason": "DOOR axis is not homed.",
+      "enabled": true,
+      "disabled_reason": null,
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "axis_door_referenced",
+          "label": "DOOR axis homed",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    },
+    {
+      "action_id": "route.motion_thermal_door_open_motion_thermal_door_open_post.5d250091",
+      "label": "Motion Thermal Door Open",
+      "subsystem": "motion.thermal_door",
+      "category": "route",
+      "kind": "primitive",
+      "safety_class": "motion",
+      "description": "Exact existing robot route: POST /motion/thermal_door/open",
+      "source_anchor": null,
+      "informational_method": "POST",
+      "informational_path": "/motion/thermal_door/open",
+      "required_provider_capability": null,
+      "provider_available": true,
+      "provider_unavailable_reason": null,
+      "available": false,
+      "unavailable_reason": "DOOR axis is not homed.",
+      "enabled": true,
+      "disabled_reason": null,
+      "dependencies": [
+        {
+          "key": "provider_available",
+          "label": "Provider available",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "transport_live",
+          "label": "Robot transport live",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "operation_allows_motion",
+          "label": "Operation state allows motion",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "can_ready",
+          "label": "Same-epoch CAN ready",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "canonical_snapshot",
+          "label": "Canonical hardware snapshot",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "snapshot_fresh",
+          "label": "Motion observations fresh",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_enabled",
+          "label": "Motion enabled",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "power_ready",
+          "label": "24 V rail sensor valid",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "enclosure_ready",
+          "label": "Door closed and latched",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "motion_arm",
+          "label": "Motion arm confirmed",
+          "met": true,
+          "reason": null
+        },
+        {
+          "key": "axis_door_referenced",
+          "label": "DOOR axis homed",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "requires_confirmation": true,
+      "timeout_seconds": 120.0,
+      "inputs": [],
+      "stages": [],
+      "ownership_generation": 7
+    }
+  ]
+}
