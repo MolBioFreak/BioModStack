@@ -86,6 +86,10 @@
         "chain_ids": {
           "type": "array", "maxItems": 128, "uniqueItems": true,
           "items": {"type": "string", "minLength": 1, "maxLength": 32}
+        },
+        "entity_ids": {
+          "type": "array", "maxItems": 128, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
         }
       }
     },

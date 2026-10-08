@@ -49,7 +49,7 @@ params:
   - {name: analysis_policy, type: object, description: Versioned support and ranking policy., required: true, hidden: true}
   - {name: confornets, type: object, description: Strict single-chain ConforNets coordinate-plan controls., hidden: true}
   - {name: registered_snapshot_id, type: string, description: Principal-owned complete-complex snapshot registry ID.}
-  - {name: registered_artifact_ids, type: object, description: Ordered principal-owned import structure registry IDs.}
+  - {name: registered_artifact_ids, type: object, description: Exactly one principal-owned import structure registry ID for external import.}
   - {name: registered_sequence_id, type: string, description: Principal-owned ConforNets protein-sequence registry ID.}
   - {name: registered_reference_ids, type: object, description: Ordered zero-to-two ConforNets reference registry IDs.}
   - {name: registered_checkpoint_id, type: string, description: Principal-owned ConforNets checkpoint registry ID.}
