@@ -1,0 +1,107 @@
+id: boltz_cp_experimental
+name: Boltz-CP Experimental
+version: "0.1.0"
+category: structure_prediction
+description: >
+  Experimental single-example Boltz-2 inference using DTensor context
+  parallelism (CP) across multiple GPUs. Accepts either a prepared Boltz YAML
+  / FASTA input or a preprocessed Boltz directory, then launches the checked-out
+  Boltz-CP fork through torch.distributed.
+container: boltz2.sif
+
+ui_icon: sparkles
+ui_color: "#F97316"
+experimental: true
+
+inputs:
+  - yaml
+  - fasta
+outputs:
+  - cif
+  - pdb
+  - json
+  - npz
+
+modes:
+  - id: design
+    name: Distributed Prediction
+    description: Run Boltz-CP multi-GPU structure prediction from a prepared Boltz input path
+    params:
+      - input_path
+      - gpu_ids
+      - size_cp
+      - input_format
+      - output_format
+      - write_full_pae
+      - recycling_steps
+      - sampling_steps
+      - diffusion_samples
+      - seed
+
+params:
+  - name: input_path
+    type: file
+    description: Path to a Boltz YAML / FASTA input file, directory of configs, or preprocessed Boltz directory
+    required: true
+
+  - name: gpu_ids
+    type: string
+    description: Comma-separated host GPU IDs to expose to the CP run
+    required: true
+    default: "0,1,2,3"
+
+  - name: size_cp
+    type: integer
+    description: Total number of context-parallel ranks; must be a perfect square and divide the selected GPU count
+    required: true
+    default: 4
+    minimum: 1
+    maximum: 16
+
+  - name: input_format
+    type: string
+    description: Input layout for the Boltz-CP CLI (config_files or preprocessed)
+    required: false
+    default: config_files
+
+  - name: output_format
+    type: string
+    description: Output structure format written by Boltz-CP (mmcif or pdb)
+    required: false
+    default: mmcif
+
+  - name: write_full_pae
+    type: boolean
+    description: Write full PAE matrices in the confidence outputs
+    required: false
+    default: false
+
+  - name: recycling_steps
+    type: integer
+    description: Number of Boltz trunk recycling iterations
+    required: false
+    default: 3
+    minimum: 1
+    maximum: 16
+
+  - name: sampling_steps
+    type: integer
+    description: Number of diffusion denoising steps
+    required: false
+    default: 200
+    minimum: 1
+    maximum: 500
+
+  - name: diffusion_samples
+    type: integer
+    description: Number of independent diffusion samples to draw
+    required: false
+    default: 1
+    minimum: 1
+    maximum: 32
+
+  - name: seed
+    type: integer
+    description: Optional random seed for deterministic comparisons
+    required: false
+    minimum: 0
