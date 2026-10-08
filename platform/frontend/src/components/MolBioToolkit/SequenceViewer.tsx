@@ -19,6 +19,7 @@ export interface Feature {
     end: number;
     strand: 1 | -1;
     color?: string;
+    description?: string;
     notes?: Record<string, string>;
 }
 

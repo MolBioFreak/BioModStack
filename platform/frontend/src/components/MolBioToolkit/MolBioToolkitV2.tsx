@@ -516,6 +516,17 @@ export function MolBioToolkitV2() {
         });
     }, [sequenceData, setSequenceData]);
 
+    // Update feature handler (for inline edit)
+    const handleUpdateFeature = useCallback((updatedFeature: Feature) => {
+        setSequenceData({
+            ...sequenceData,
+            features: sequenceData.features.map(f =>
+                f.id === updatedFeature.id ? updatedFeature : f
+            )
+        });
+        setIsDirty(true);
+    }, [sequenceData, setSequenceData]);
+
     // Add primer handler
     const handleAddPrimer = useCallback((primer: Primer) => {
         setSequenceData({
@@ -794,6 +805,7 @@ export function MolBioToolkitV2() {
                                 onHighlight={setHighlightedRegions}
                                 onAddFeature={handleAddFeature}
                                 onRemoveFeature={handleRemoveFeature}
+                                onUpdateFeature={handleUpdateFeature}
                             />
                         )}
                     </div>
