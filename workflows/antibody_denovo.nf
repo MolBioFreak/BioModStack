@@ -1048,7 +1048,7 @@ EOF
     copy_if_present() {
         local src="\$1"
         [ -f "\$src" ] || return 0
-        cp "\$src" "validation_artifacts/\$(basename "\$src")"
+        cp -f "\$src" "validation_artifacts/\$(basename "\$src")" 2>/dev/null || true
     }
 
     while IFS= read -r pdb; do
@@ -1057,7 +1057,7 @@ EOF
         base="\$(basename "\$pdb")"
         stem="\${base%.*}"
         src_dir="\$(dirname "\$pdb")"
-        cp "\$pdb" "validation_artifacts/\$base"
+        cp -f "\$pdb" "validation_artifacts/\$base"
 
         copy_if_present "\${pdb%.*}.json"
         copy_if_present "\${pdb%.*}.cif"
@@ -1073,6 +1073,10 @@ EOF
             copy_if_present "\$src_dir/\${prefix}_full_data_sample_\${sample_rank}.json"
         fi
     done < pdbs.list
+
+    # Keep this gate-artifact staging step best-effort; the canonical outputs
+    # already live under ${params.out_dir}/pdb_files/validated_designs.
+    true
     """
 }
 
@@ -1272,6 +1276,7 @@ process SpawnChildJobs {
     val parent_job_id
     val batch_name
     val child_params_json
+    val seqs_per_validation_job
     
     output:
     path "spawn_result.json", emit: result
@@ -1321,7 +1326,7 @@ process SpawnChildJobs {
         --display_prefix "${params.job_name ?: 'Antibody'}" \\
         --msa_path "\$MSA_PERSIST_PATH" \\
         --params_json '${child_params_json}' \\
-        --seqs_per_validation_job ${params.seqs_per_validation_job ?: params.seqs_per_boltz_job ?: 10} \\
+        --seqs_per_validation_job ${seqs_per_validation_job} \\
         --api_url "${params.api_url}" \\
         2>&1 | tee -a spawn.log
     
@@ -1411,21 +1416,23 @@ process WaitAndAggregateChildResults {
         --api_url "${params.api_url}" \\
         2>&1 | tee wait.log
     
-    # Parse wait result
-    CHILD_DIRS=\$(python3 -c "
+    # Parse wait result into a file so paths with spaces survive shell handling
+    python3 -c "
 import json
 with open('wait_result.json') as f:
     data = json.load(f)
     for d in data.get('child_output_dirs', []):
         print(d)
-")
+" > child_dirs.txt
+
+    mapfile -t CHILD_DIRS < child_dirs.txt
     
     echo "Collecting validated designs from child jobs..."
     
     TOTAL_PDBS=0
     TOTAL_CHILDREN=0
     
-    for child_dir in \$CHILD_DIRS; do
+    for child_dir in "\${CHILD_DIRS[@]}"; do
         if [ -d "\$child_dir" ]; then
             TOTAL_CHILDREN=\$((TOTAL_CHILDREN + 1))
             child_idx="\$TOTAL_CHILDREN"
@@ -1434,51 +1441,20 @@ with open('wait_result.json') as f:
             for subdir in "pdb_files/predictions" "pdb_files" "run/boltz/predictions" "run/boltz" "run/protenix/predictions" "run/protenix" ""; do
                 search_path="\$child_dir/\$subdir"
                 if [ -d "\$search_path" ]; then
-                    for pdb in \$search_path/*.pdb; do
-                        if [ -f "\$pdb" ]; then
-                            basename=\$(basename "\$pdb")
-                            if [ -n "\${COPIED_BASENAMES[\$basename]:-}" ]; then
-                                continue
-                            fi
-                            dest_path=\$(choose_dest_name "\$child_idx" "\$basename")
-                            cp "\$pdb" "\$dest_path"
-                            COPIED_BASENAMES[\$basename]=1
-                            TOTAL_PDBS=\$((TOTAL_PDBS + 1))
+                    while IFS= read -r -d '' artifact_path; do
+                        basename=\$(basename "\$artifact_path")
+                        if [ -n "\${COPIED_BASENAMES[\$basename]:-}" ]; then
+                            continue
                         fi
-                    done
-                    for cif in \$search_path/*.cif; do
-                        if [ -f "\$cif" ]; then
-                            basename=\$(basename "\$cif")
-                            if [ -n "\${COPIED_BASENAMES[\$basename]:-}" ]; then
-                                continue
-                            fi
-                            dest_path=\$(choose_dest_name "\$child_idx" "\$basename")
-                            cp "\$cif" "\$dest_path" 2>/dev/null || true
-                            COPIED_BASENAMES[\$basename]=1
-                        fi
-                    done
-                    for json_path in \$search_path/*.json; do
-                        if [ -f "\$json_path" ]; then
-                            basename=\$(basename "\$json_path")
-                            if [ -n "\${COPIED_BASENAMES[\$basename]:-}" ]; then
-                                continue
-                            fi
-                            dest_path=\$(choose_dest_name "\$child_idx" "\$basename")
-                            cp "\$json_path" "\$dest_path" 2>/dev/null || true
-                            COPIED_BASENAMES[\$basename]=1
-                        fi
-                    done
-                    for npz_path in \$search_path/*.npz; do
-                        if [ -f "\$npz_path" ]; then
-                            basename=\$(basename "\$npz_path")
-                            if [ -n "\${COPIED_BASENAMES[\$basename]:-}" ]; then
-                                continue
-                            fi
-                            dest_path=\$(choose_dest_name "\$child_idx" "\$basename")
-                            cp "\$npz_path" "\$dest_path" 2>/dev/null || true
-                            COPIED_BASENAMES[\$basename]=1
-                        fi
-                    done
+                        dest_path=\$(choose_dest_name "\$child_idx" "\$basename")
+                        cp "\$artifact_path" "\$dest_path" 2>/dev/null || true
+                        COPIED_BASENAMES[\$basename]=1
+                        case "\$artifact_path" in
+                            *.pdb)
+                                TOTAL_PDBS=\$((TOTAL_PDBS + 1))
+                                ;;
+                        esac
+                    done < <(find "\$search_path" -maxdepth 1 -type f \\( -name '*.pdb' -o -name '*.cif' -o -name '*.json' -o -name '*.npz' \\) -print0)
                 fi
             done
         fi
@@ -1504,6 +1480,11 @@ EOF
 
     # Trigger result ingestion for parent job (updates database)
     if [ \$TOTAL_PDBS -gt 0 ]; then
+        mkdir -p "${params.out_dir}/pdb_files/validated_designs"
+        while IFS= read -r -d '' staged_artifact; do
+            cp -f "\$staged_artifact" "${params.out_dir}/pdb_files/validated_designs/"
+        done < <(find validated_designs -maxdepth 1 -type f -print0)
+        cp -f aggregation_report.json "${params.out_dir}/aggregation_report.json"
         echo "Triggering result ingestion for parent job..."
         python3 ${params.code_root}/scripts/result_ingester.py \\
             --job_id "${parent_job_id}" \\
@@ -1513,6 +1494,102 @@ EOF
     fi
     
     echo "Aggregation complete: \$TOTAL_PDBS designs ready for analytics"
+    """
+}
+
+process FinalizeSequentialValidationOutputs {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.pdb"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.json"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.cif"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.npz"
+    publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
+
+    input:
+    val pdbs
+
+    output:
+    path "validated_designs/*.pdb", emit: pdbs, optional: true
+    path "validated_designs/*.json", emit: scores, optional: true
+    path "validated_designs/*.npz", emit: aligned_error, optional: true
+    path "aggregation_report.json", emit: report
+
+    script:
+    def pdbList = (pdbs instanceof Collection ? pdbs : [pdbs]).collect { it.toString() }.join('\n')
+    """
+    #!/bin/bash
+    set -euo pipefail
+
+    mkdir -p validated_designs
+
+    cat > sequential_pdbs.list <<'EOF'
+${pdbList}
+EOF
+
+    SOURCE_DIR="${params.out_dir}/pdb_files/predictions"
+    if [ ! -d "\$SOURCE_DIR" ]; then
+        SOURCE_DIR="${params.out_dir}/pdb_files"
+    fi
+
+    if [ ! -d "\$SOURCE_DIR" ]; then
+        echo "ERROR: no published validation output directory found under ${params.out_dir}/pdb_files" >&2
+        exit 1
+    fi
+
+    TOTAL_PDBS=0
+    while IFS= read -r -d '' artifact_path; do
+        cp -f "\$artifact_path" "validated_designs/"
+        case "\$artifact_path" in
+            *.pdb)
+                TOTAL_PDBS=\$((TOTAL_PDBS + 1))
+                ;;
+        esac
+    done < <(find "\$SOURCE_DIR" -maxdepth 1 -type f \\( -name '*.pdb' -o -name '*.cif' -o -name '*.json' -o -name '*.npz' \\) -print0)
+
+    cat > aggregation_report.json << EOF
+{
+    "parent_job_id": "${params.job_id ?: 'unknown'}",
+    "batch_name": "${params.batch_name ?: params.job_name ?: 'sequential_validation'}",
+    "children_processed": 1,
+    "total_validated_designs": \$TOTAL_PDBS,
+    "output_path": "${params.out_dir}/pdb_files",
+    "status": "complete"
+}
+EOF
+
+    if [ \$TOTAL_PDBS -gt 0 ]; then
+        mkdir -p "${params.out_dir}/pdb_files/validated_designs"
+        while IFS= read -r -d '' staged_artifact; do
+            cp -f "\$staged_artifact" "${params.out_dir}/pdb_files/validated_designs/"
+        done < <(find validated_designs -maxdepth 1 -type f -print0)
+        cp -f aggregation_report.json "${params.out_dir}/aggregation_report.json"
+        echo "Triggering result ingestion for parent job..."
+        python3 ${params.code_root}/scripts/result_ingester.py \\
+            --job_id "${params.job_id ?: 'unknown'}" \\
+            --results_dir "${params.out_dir}" \\
+            --api_url "${params.api_url}" \\
+            2>&1 | tee ingest.log || echo "Warning: Ingestion had issues (non-fatal)"
+
+        report_files=()
+        while IFS= read -r -d '' staged_pdb; do
+            report_files+=("\$staged_pdb")
+            if [ "\${#report_files[@]}" -ge 50 ]; then
+                break
+            fi
+        done < <(find validated_designs -maxdepth 1 -type f -name '*.pdb' -print0 | sort -z)
+
+        if [ "\${#report_files[@]}" -gt 0 ]; then
+            python3 ${params.code_root}/scripts/stage_reporter.py \\
+                "${params.job_id ?: 'unknown'}" \\
+                "structure_validation" \\
+                "complete" \\
+                "\${report_files[@]}" \\
+                || echo "Warning: Failed to report sequential structure_validation completion"
+        fi
+    fi
+
+    echo "Sequential validation closeout complete: \$TOTAL_PDBS designs ready for analytics"
     """
 }
 
@@ -1551,7 +1628,17 @@ if (!params.containsKey('interactive_swa')) params.interactive_swa = false
 if (!params.containsKey('interactive_gate_stage') || !params.interactive_gate_stage) params.interactive_gate_stage = 'post_fampnn'
 if (!params.containsKey('interactive_gate_continue')) params.interactive_gate_continue = false
 if (!params.containsKey('protenix_allow_cpu_msa_fallback')) params.protenix_allow_cpu_msa_fallback = false
+if (!params.containsKey('protenix_msa_max_seqs_per_validation_job')) params.protenix_msa_max_seqs_per_validation_job = 1
+if (!params.containsKey('protenix_local_msa_max_seqs_per_validation_job')) params.protenix_local_msa_max_seqs_per_validation_job = 1
+if (!params.containsKey('protenix_local_msa_timeout_seconds')) params.protenix_local_msa_timeout_seconds = 900
 if (!params.containsKey('target_model_number')) params.target_model_number = null
+if (!params.containsKey('maturation_selected_loops')) params.maturation_selected_loops = null
+if (!params.containsKey('selected_cdr_loops')) params.selected_cdr_loops = null
+if (!params.containsKey('ppiflow_cdr_loops')) params.ppiflow_cdr_loops = null
+if (!params.containsKey('ppiflow_stage')) params.ppiflow_stage = null
+if (!params.containsKey('msa_sensitivity')) params.msa_sensitivity = null
+if (!params.containsKey('msa_min_depth_warning')) params.msa_min_depth_warning = null
+if (!params.containsKey('msa_min_depth_fail')) params.msa_min_depth_fail = null
 def normalizeLoopSelection = { raw ->
     if (raw == null) return null
     def values = raw instanceof Collection ? raw : raw.toString().replace('[', '').replace(']', '').split(',')
@@ -1564,6 +1651,46 @@ def normalizePpiFlowRegionMode = { raw ->
     if (value in ['framework', 'framework_only']) return 'framework_only'
     if (value in ['all_antibody', 'whole_antibody', 'full_antibody']) return 'all_antibody'
     return 'selected_cdrs'
+}
+def normalizeProtenixMsaBackend = { raw ->
+    def value = (raw ?: 'auto').toString().trim().toLowerCase()
+    if (value in ['local', 'colabfold_api']) return value
+    return 'auto'
+}
+def resolveValidationBatchPlan = { validatorRaw, useMsaRaw ->
+    def requested = params.seqs_per_validation_job ?: params.seqs_per_boltz_job ?: 10
+    int requestedSize
+    try {
+        requestedSize = requested.toString().toInteger()
+    } catch (Exception ignored) {
+        requestedSize = 10
+    }
+    requestedSize = Math.max(1, requestedSize)
+
+    def validator = (validatorRaw ?: 'boltz2').toString().trim().toLowerCase()
+    def useMsa = (useMsaRaw == true || useMsaRaw == 'true')
+    def effectiveSize = requestedSize
+    def reason = null
+
+    if (validator == 'protenix' && useMsa) {
+        def backend = normalizeProtenixMsaBackend(params.protenix_msa_backend)
+        def rawCap = backend == 'local'
+            ? (params.protenix_local_msa_max_seqs_per_validation_job ?: 1)
+            : (params.protenix_msa_max_seqs_per_validation_job ?: 1)
+        int cap
+        try {
+            cap = rawCap.toString().toInteger()
+        } catch (Exception ignored) {
+            cap = 1
+        }
+        cap = Math.max(1, cap)
+        effectiveSize = Math.min(requestedSize, cap)
+        if (effectiveSize < requestedSize) {
+            reason = "Protenix MSA batching override: ${requestedSize} -> ${effectiveSize} seqs/job (${backend} backend)"
+        }
+    }
+
+    [requestedSize, effectiveSize, reason]
 }
 if (!params.containsKey('ppiflow_selected_loops')) {
     params.ppiflow_selected_loops = normalizeLoopSelection(
@@ -2416,6 +2543,11 @@ workflow ANTIBODY_DENOVO {
             }
 
             def protenix_use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
+            def validationBatchPlan = resolveValidationBatchPlan(structure_validator, protenix_use_msa)
+            def effectiveValidationBatchSize = validationBatchPlan[1] as int
+            if (validationBatchPlan[2]) {
+                log.info("  ${validationBatchPlan[2]}")
+            }
             def shouldPreflightProtenixMsa = structure_validator == 'protenix' &&
                 protenix_use_msa &&
                 !(params.protenix_allow_cpu_msa_fallback == true || params.protenix_allow_cpu_msa_fallback == 'true')
@@ -2425,6 +2557,7 @@ workflow ANTIBODY_DENOVO {
                 protenix_msa_preflight_inputs = pdb_design_sequences
                     .map { sequence, name, pdb -> pdb }
                     .collect()
+                    .map { pdbs -> pdbs.take(effectiveValidationBatchSize) }
 
                 CheckProtenixMsaPreflight(protenix_msa_preflight_inputs)
 
@@ -2459,9 +2592,9 @@ workflow ANTIBODY_DENOVO {
                 msa_for_spawn = msa_file_ch
                 spawn_validation_inputs = collected_pdbs
                     .combine(msa_for_spawn)
-                    .map { pdbs, msa_file -> tuple(pdbs, msa_file) }
+                    .map { payload -> tuple(payload[0..-2], payload[-1]) }
                     .combine(protenixMsaReadySignal)
-                    .map { validation_input, _gate_ok -> validation_input }
+                    .map { payload -> tuple(payload[0], payload[1]) }
 
                 def parent_id = params.job_id ?: "unknown_${System.currentTimeMillis()}"
                 def batch = orchestrator_batch_name
@@ -2484,6 +2617,9 @@ workflow ANTIBODY_DENOVO {
                     protenix_use_template: params.protenix_use_template,
                     protenix_enable_cache: params.protenix_enable_cache,
                     protenix_enable_fusion: params.protenix_enable_fusion,
+                    target_pdb: params.target_pdb,
+                    target_model_number: params.target_model_number,
+                    antigen_chains: params.antigen_chains,
                     protenix_auto_oom_retry: params.protenix_auto_oom_retry,
                     protenix_oom_retry_attempts: params.protenix_oom_retry_attempts,
                     msa_preset: params.msa_preset,
@@ -2501,6 +2637,9 @@ workflow ANTIBODY_DENOVO {
                     msa_gpu_server_db_load_mode: params.msa_gpu_server_db_load_mode,
                     msa_gpu_server_startup_wait: params.msa_gpu_server_startup_wait,
                     protenix_allow_cpu_msa_fallback: params.protenix_allow_cpu_msa_fallback,
+                    protenix_local_msa_timeout_seconds: params.protenix_local_msa_timeout_seconds,
+                    protenix_msa_max_seqs_per_validation_job: params.protenix_msa_max_seqs_per_validation_job,
+                    protenix_local_msa_max_seqs_per_validation_job: params.protenix_local_msa_max_seqs_per_validation_job,
                     run_thermompnn: params.run_thermompnn ?: false,
                     thermompnn_max_ddg: params.thermompnn_max_ddg,
                     run_immunogenicity_scoring: params.run_immunogenicity_scoring ?: false,
@@ -2514,7 +2653,8 @@ workflow ANTIBODY_DENOVO {
                     spawn_validation_inputs.map { pdbs, msa_file -> msa_file },
                     parent_id,
                     batch,
-                    child_params
+                    child_params,
+                    effectiveValidationBatchSize
                 )
 
                 spawn_child_count = SpawnChildJobs.out.result
@@ -2555,41 +2695,35 @@ workflow ANTIBODY_DENOVO {
             } else {
                 log.info("Refinement Mode: Running ${validation_label} validation sequentially...")
 
-                if (structure_validator == 'protenix') {
-                    collected_validation_pdbs = pdb_design_sequences
-                        .map { sequence, name, pdb -> pdb }
-                        .collect()
+	                if (structure_validator == 'protenix') {
+	                    collected_validation_pdbs = pdb_design_sequences
+	                        .map { sequence, name, pdb -> pdb }
+	                        .buffer(size: effectiveValidationBatchSize, remainder: true)
 
                     msa_for_validation = msa_file_ch
                     ready_validation_inputs = collected_validation_pdbs
                         .combine(msa_for_validation)
-                        .map { pdbs, msa_file -> tuple(pdbs, msa_file) }
+                        .map { payload -> tuple(payload[0..-2], payload[-1]) }
                         .combine(protenixMsaReadySignal)
-                        .map { validation_input, _gate_ok -> validation_input }
+                        .map { payload -> tuple(payload[0], payload[1]) }
 
-                    BatchProtenixValidation(
-                        ready_validation_inputs.map { pdbs, msa_file -> pdbs },
-                        ready_validation_inputs.map { pdbs, msa_file -> msa_file }
-                    )
+	                    BatchProtenixValidation(
+	                        ready_validation_inputs.map { pdbs, msa_file -> pdbs },
+	                        ready_validation_inputs.map { pdbs, msa_file -> msa_file }
+	                    )
 
-                    BatchProtenixValidation.out.pdbs.subscribe { pdbs ->
-                        try {
-                            def file_list = pdbs instanceof List ? pdbs : [pdbs]
-                            def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
-                            def args = [params.job_id, validation_stage_name, "complete"] + report_files.collect { it.toString() }
-                            def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
-                            proc.waitFor()
-                        } catch (Exception e) {
-                            println "Warning: Failed to report stage ${validation_stage_name}: ${e.message}"
-                        }
-                    }
+	                    sequential_validation_outputs = BatchProtenixValidation.out.pdbs
+	                        .collect()
+	                        .filter { pdbs -> pdbs && pdbs.size() > 0 }
 
-                    validated_structures = BatchProtenixValidation.out.pdbs
-                        .flatten()
-                        .map { pdb ->
-                            def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
-                            def meta = [id: name]
-                            [meta, pdb]
+	                    FinalizeSequentialValidationOutputs(sequential_validation_outputs)
+
+	                    validated_structures = FinalizeSequentialValidationOutputs.out.pdbs
+	                        .flatten()
+	                        .map { pdb ->
+	                            def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
+	                            def meta = [id: name]
+	                            [meta, pdb]
                         }
                 } else {
                     boltz_inputs = design_sequences
@@ -2598,26 +2732,20 @@ workflow ANTIBODY_DENOVO {
                             tuple(sequence, name, msa_file)
                         }
 
-                    BoltzFromSequenceWithMSA(boltz_inputs)
+	                    BoltzFromSequenceWithMSA(boltz_inputs)
 
-                    BoltzFromSequenceWithMSA.out.pdbs.subscribe { pdbs ->
-                        try {
-                            def file_list = pdbs instanceof List ? pdbs : [pdbs]
-                            def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
-                            def args = [params.job_id, validation_stage_name, "complete"] + report_files.collect { it.toString() }
-                            def proc = ["python3", "${params.code_root}/scripts/stage_reporter.py", *args].execute()
-                            proc.waitFor()
-                        } catch (Exception e) {
-                            println "Warning: Failed to report stage ${validation_stage_name}: ${e.message}"
-                        }
-                    }
+	                    sequential_validation_outputs = BoltzFromSequenceWithMSA.out.pdbs
+	                        .collect()
+	                        .filter { pdbs -> pdbs && pdbs.size() > 0 }
 
-                    validated_structures = BoltzFromSequenceWithMSA.out.pdbs
-                        .flatten()
-                        .map { pdb ->
-                            def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
-                            def meta = [id: name]
-                            [meta, pdb]
+	                    FinalizeSequentialValidationOutputs(sequential_validation_outputs)
+
+	                    validated_structures = FinalizeSequentialValidationOutputs.out.pdbs
+	                        .flatten()
+	                        .map { pdb ->
+	                            def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
+	                            def meta = [id: name]
+	                            [meta, pdb]
                         }
                 }
             }
@@ -2633,7 +2761,7 @@ workflow ANTIBODY_DENOVO {
             params.interactive_gate_continue != true &&
             params.run_structure_validation != false
 
-        if (params.run_structure_validation != false) {
+        if (shouldPauseAfterStructureValidation) {
             staged_validation_pdbs = validated_structures
                 .map { meta, pdb -> pdb }
                 .collect()

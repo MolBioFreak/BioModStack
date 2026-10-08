@@ -140,6 +140,7 @@ tools/RFDpoly/
 
 # Protenix model cache (large, local only)
 .protenix_cache/
+.protenix_anchor_root/
 *.pdf
 img/
 backups/

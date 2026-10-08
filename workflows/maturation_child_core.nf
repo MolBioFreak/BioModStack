@@ -75,6 +75,59 @@ workflow MATURATION_CHILD_CORE {
             return 0
         }
     }
+    def normalizeScoredSamples = { raw ->
+        if (raw == null) {
+            return []
+        }
+        def items
+        if (raw instanceof Collection) {
+            items = raw.toList()
+        }
+        else if (raw instanceof Iterable) {
+            items = raw.collect { it }
+        }
+        else {
+            items = [raw]
+        }
+        if (items instanceof List && items.size() >= 4 && items[0] instanceof Map && !((items[0] as Map).containsKey('meta'))) {
+            def grouped = []
+            for (int idx = 0; idx + 3 < items.size(); idx += 4) {
+                def meta = items[idx]
+                def backbonePdb = items[idx + 1]
+                def scoreJson = items[idx + 2]
+                def scoreValue = items[idx + 3]
+                if (!(meta instanceof Map)) {
+                    continue
+                }
+                grouped << [
+                    meta: meta,
+                    backbone_pdb: backbonePdb,
+                    score_json: scoreJson,
+                    score: scoreValue instanceof Number ? scoreValue.doubleValue() : (scoreValue as Double),
+                ]
+            }
+            return grouped
+        }
+        items.collect { item ->
+            if (item instanceof List && item.size() >= 4 && item[0] instanceof Map) {
+                return [
+                    meta: item[0],
+                    backbone_pdb: item[1],
+                    score_json: item[2],
+                    score: item[3] instanceof Number ? item[3].doubleValue() : (item[3] as Double)
+                ]
+            }
+            if (item instanceof Map && item.meta instanceof Map && item.backbone_pdb && item.score_json) {
+                return [
+                    meta: item.meta,
+                    backbone_pdb: item.backbone_pdb,
+                    score_json: item.score_json,
+                    score: item.score instanceof Number ? item.score.doubleValue() : (item.score as Double)
+                ]
+            }
+            return null
+        }.findAll { it != null }
+    }
     def selectedLoopsSpec = normalizeLoopSpec(params.ppiflow_selected_loops ?: params.maturation_selected_loops ?: params.selected_cdr_loops)
     def ppiflowRegionMode = normalizeRegionMode(params.ppiflow_region_mode ?: params.ppiflow_maturation_region_mode ?: params.ppiflow_backbone_region_mode)
     params.ppiflow_region_mode = ppiflowRegionMode
@@ -187,19 +240,29 @@ workflow MATURATION_CHILD_CORE {
     if (redesign_enabled && runRedesign && redesign_top_n > 0) {
         partial_selected = partial_scored
             .collect()
-            .flatMap { items ->
-                def normalizedItems
-                if (items instanceof List && items && items[0] instanceof List) {
-                    normalizedItems = items
-                } else if (items instanceof List && items.size() >= 4 && items[0] instanceof Map) {
-                    normalizedItems = [items]
-                } else if (items instanceof Collection) {
-                    normalizedItems = items.toList()
-                } else {
-                    normalizedItems = [items]
-                }
-                def sorted = normalizedItems.sort { a, b -> a[3] <=> b[3] }
-                sorted.take(redesign_top_n)
+            .map { items ->
+                def normalizedItems = normalizeScoredSamples(items)
+                normalizedItems
+                    .sort { a, b -> a.score <=> b.score }
+                    .take(redesign_top_n)
+                    .collect { item ->
+                        groovy.json.JsonOutput.toJson([
+                            meta: item.meta,
+                            backbone_pdb: item.backbone_pdb.toString(),
+                            score_json: item.score_json.toString(),
+                            score: item.score,
+                        ])
+                    }
+            }
+            .flatMap { items -> items ?: [] }
+            .map { itemJson ->
+                def item = new groovy.json.JsonSlurper().parseText(itemJson.toString())
+                tuple(
+                    item.meta as Map,
+                    file(item.backbone_pdb.toString()),
+                    file(item.score_json.toString()),
+                    item.score instanceof Number ? item.score.doubleValue() : (item.score as Double)
+                )
             }
     }
 

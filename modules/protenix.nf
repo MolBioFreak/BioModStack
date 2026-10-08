@@ -61,6 +61,7 @@ process ProtenixPredict {
     def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
     def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
     def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
+    def msa_cache_only_flag = (params.msa_cache_only == true || params.msa_cache_only == 'true') ? '--cache-only' : ''
     def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
 
     // Auto-switch to ESM model if MSA is disabled
@@ -160,6 +161,29 @@ PY
 ENDJSON
 
     PROTENIX_INPUT_JSON="input.json"
+    if [ "${use_template}" = "true" ]; then
+        python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+input_path = Path("input.json")
+output_path = Path("protenix_input_with_templates.json")
+template_dir = str((Path(os.environ["PROTENIX_ROOT_DIR"]) / "mmcif").resolve())
+
+payload = json.loads(input_path.read_text(encoding="utf-8"))
+if not isinstance(payload, list):
+    raise SystemExit("Expected top-level list in Protenix input JSON")
+
+for entry in payload:
+    if isinstance(entry, dict):
+        entry["templatesPath"] = template_dir
+
+output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
+        PROTENIX_INPUT_JSON="protenix_input_with_templates.json"
+        echo "[PROTENIX] Injected templatesPath=${params.code_root}/.protenix_cache/mmcif into \$PROTENIX_INPUT_JSON"
+    fi
     if [ "${use_msa}" = "true" ]; then
         PROTENIX_MSA_CACHE_DIR="${params.msa_cache_dir}"
         if [ -z "\$PROTENIX_MSA_CACHE_DIR" ] || ! mkdir -p "\$PROTENIX_MSA_CACHE_DIR/.locks" 2>/dev/null; then
@@ -170,7 +194,7 @@ ENDJSON
             echo "[PROTENIX] Using shared MSA cache at \$PROTENIX_MSA_CACHE_DIR"
         fi
         python3 ${params.code_root}/scripts/prepare_protenix_msa.py \\
-            --input_json input.json \\
+            --input_json "\$PROTENIX_INPUT_JSON" \\
             --output_json prepared_input.json \\
             --out_dir msa_prepared \\
             --report_json msa_prepared/msa_report.json \\
@@ -189,6 +213,7 @@ ENDJSON
             --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
             --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 0} \\
             --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 1.0} \\
+            ${msa_cache_only_flag} \\
             ${msa_allow_cpu_fallback_flag} \\
             2>&1 | tee protenix_msa_prep.log
         PROTENIX_INPUT_JSON="prepared_input.json"
@@ -234,7 +259,7 @@ ENDJSON
     fi
 
     echo "[PROTENIX] Prediction complete. Listing outputs:"
-    find predictions/ -type f \\( -name "*.cif" -o -name "*confidence*.json" \\) | head -20
+    find predictions/ -type f \\( -name "*.cif" -o -name "*confidence*.json" \\) | head -20 || true
     """
 }
 
@@ -259,9 +284,9 @@ process PrepProtenixComplex {
     """
     #!/usr/bin/env python3
     import json, sys
+    from pathlib import Path
 
-    with open("${complex_json}") as f:
-        bms = json.load(f)
+    input_path = Path("${complex_json}")
 
     type_map = {
         'protein': 'proteinChain',
@@ -270,50 +295,75 @@ process PrepProtenixComplex {
         'rna': 'rnaSequence',
     }
 
-    sequences = []
-    for comp in bms.get('components', []):
-        t = comp.get('type', 'protein').lower()
-        seq = comp.get('sequence', '')
-        count_raw = comp.get('count', 1)
-        try:
-            count = max(1, int(count_raw))
-        except Exception:
-            count = 1
+    def convert_entry(bms, default_name):
+        sequences = []
+        for comp in bms.get('components', []):
+            t = comp.get('type', 'protein').lower()
+            seq = comp.get('sequence', '')
+            comp_id = str(comp.get('id') or '').strip()
+            count_raw = comp.get('count', 1)
+            try:
+                count = max(1, int(count_raw))
+            except Exception:
+                count = 1
 
-        if t in type_map:
-            if seq:
-                sequences.append({type_map[t]: {"sequence": seq, "count": count}})
-        elif t == 'ligand':
-            ccd = comp.get('ccd', '')
-            smiles = comp.get('smiles', '')
-            entry = {}
-            if ccd:
-                ligand_id = str(ccd)
-                if not ligand_id.startswith("CCD_"):
-                    ligand_id = f"CCD_{ligand_id}"
-                entry = {"ligand": {"ligand": ligand_id, "count": count}}
-            elif smiles:
-                entry = {"ligand": {"ligand": str(smiles), "count": count}}
-            if entry:
-                sequences.append(entry)
-        elif t == 'ion':
-            entry = {}
-            ion = comp.get('ion') or comp.get('element') or comp.get('ccd')
-            if ion:
-                entry = {"ion": {"ion": str(ion).upper(), "count": count}}
-            if entry:
-                sequences.append(entry)
+            if t in type_map:
+                if seq:
+                    chain_entry = {"sequence": seq, "count": count}
+                    if comp_id:
+                        chain_entry["id"] = [comp_id]
+                    sequences.append({type_map[t]: chain_entry})
+            elif t == 'ligand':
+                ccd = comp.get('ccd', '')
+                smiles = comp.get('smiles', '')
+                entry = {}
+                if ccd:
+                    ligand_id = str(ccd)
+                    if not ligand_id.startswith("CCD_"):
+                        ligand_id = f"CCD_{ligand_id}"
+                    ligand_entry = {"ligand": ligand_id, "count": count}
+                    if comp_id:
+                        ligand_entry["id"] = [comp_id]
+                    entry = {"ligand": ligand_entry}
+                elif smiles:
+                    ligand_entry = {"ligand": str(smiles), "count": count}
+                    if comp_id:
+                        ligand_entry["id"] = [comp_id]
+                    entry = {"ligand": ligand_entry}
+                if entry:
+                    sequences.append(entry)
+            elif t == 'ion':
+                entry = {}
+                ion = comp.get('ion') or comp.get('element') or comp.get('ccd')
+                if ion:
+                    ion_entry = {"ion": str(ion).upper(), "count": count}
+                    if comp_id:
+                        ion_entry["id"] = [comp_id]
+                    entry = {"ion": ion_entry}
+                if entry:
+                    sequences.append(entry)
 
-    protenix_input = [{
-        "name": "${name}",
-        "modelSeeds": [${seeds}],
-        "sequences": sequences,
-    }]
+        protenix_entry = {
+            "name": str(bms.get("name") or default_name),
+            "modelSeeds": [${seeds}],
+            "sequences": sequences,
+        }
+        return protenix_entry
+
+    protenix_input = []
+    input_files = [input_path]
+    if input_path.is_dir():
+        input_files = sorted(path for path in input_path.glob("*.json") if path.is_file())
+
+    for path in input_files:
+        with open(path) as f:
+            bms = json.load(f)
+        protenix_input.append(convert_entry(bms, path.stem))
 
     with open("protenix_input.json", "w") as f:
         json.dump(protenix_input, f, indent=2)
 
-    print(f"[PrepProtenixComplex] Converted {len(bms.get('components', []))} components to Protenix format")
+    print(f"[PrepProtenixComplex] Prepared {len(protenix_input)} Protenix tasks from {input_path}")
     """
 }
 
@@ -351,6 +401,7 @@ process ProtenixFromComplex {
     def n_cycle = params.protenix_n_cycle ?: 10
     def requested_template = (params.protenix_use_template == true || params.protenix_use_template == 'true')
     def anchor_target = (params.protenix_anchor_target == true || params.protenix_anchor_target == 'true')
+    def geometryMode = params.protenix_target_geometry_mode ?: (anchor_target ? 'conditioned' : 'flexible')
     def use_template = requested_template || anchor_target
     def enable_cache = (params.protenix_enable_cache == true || params.protenix_enable_cache == 'true' || params.protenix_enable_cache == null)
     def enable_fusion = (params.protenix_enable_fusion == true || params.protenix_enable_fusion == 'true' || params.protenix_enable_fusion == null)
@@ -370,13 +421,21 @@ process ProtenixFromComplex {
     def msa_preferred_gpu_csv = normalizeGpuCsv(params.msa_preferred_gpus)
     def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
     def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
+    def msa_cache_only_flag = (params.msa_cache_only == true || params.msa_cache_only == 'true') ? '--cache-only' : ''
     def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
+    def binderChainCsv = params.binder_chains ?: ''
+    def epitopeResiduesCsv = params.epitope_residues ?: params.hotspot_residues ?: ''
 
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
     def model_aliases = [
         'protenix_esm_20241211_v0.2.1': 'protenix_mini_esm_v0.5.0',
         'protenix_base_20241211_v0.2.1': 'protenix_base_default_v1.0.0'
     ]
+    def fixedTargetSourcePath = params.fixed_target_source_path ?: ''
+    def resolvedFixedTargetSourcePath = fixedTargetSourcePath
+    if (fixedTargetSourcePath && !fixedTargetSourcePath.startsWith('/')) {
+        resolvedFixedTargetSourcePath = "${params.code_root}/${fixedTargetSourcePath}".replaceAll('/+', '/')
+    }
     def effective_model = model_aliases.get(model_name, model_name)
     if (!use_msa && !(effective_model.contains('esm') || effective_model.contains('ism'))) {
         effective_model = 'protenix_mini_esm_v0.5.0'
@@ -392,10 +451,16 @@ process ProtenixFromComplex {
             echo "[PROTENIX-COMPLEX] ERROR: protenix_anchor_target requires fixed_target_source_path and fixed_target_source_chains" | tee -a protenix_complex.log
             exit 84
         fi
-        export PROTENIX_ROOT_DIR="$PWD/.protenix_anchor_root"
+        export PROTENIX_ROOT_DIR="\$PWD/.protenix_anchor_root"
         mkdir -p "\$PROTENIX_ROOT_DIR"
         if [ -d "\$SHARED_PROTENIX_ROOT/checkpoint" ] && [ ! -e "\$PROTENIX_ROOT_DIR/checkpoint" ]; then
             ln -s "\$SHARED_PROTENIX_ROOT/checkpoint" "\$PROTENIX_ROOT_DIR/checkpoint"
+        fi
+        if [ -d "\$SHARED_PROTENIX_ROOT/common" ] && [ ! -e "\$PROTENIX_ROOT_DIR/common" ]; then
+            ln -s "\$SHARED_PROTENIX_ROOT/common" "\$PROTENIX_ROOT_DIR/common"
+        fi
+        if [ -d "\$SHARED_PROTENIX_ROOT/search_database" ] && [ ! -e "\$PROTENIX_ROOT_DIR/search_database" ]; then
+            ln -s "\$SHARED_PROTENIX_ROOT/search_database" "\$PROTENIX_ROOT_DIR/search_database"
         fi
     else
         export PROTENIX_ROOT_DIR="\$SHARED_PROTENIX_ROOT"
@@ -407,6 +472,7 @@ process ProtenixFromComplex {
     export PIP_NO_USER=1
     export PATH="/root/miniconda3/bin:\$PATH"
     mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
+    RESOLVED_FIXED_TARGET_SOURCE_PATH="${resolvedFixedTargetSourcePath}"
 
     # Validate container runtime is self-contained (no runtime installs or patching).
     if ! command -v python3 &> /dev/null; then
@@ -415,13 +481,17 @@ process ProtenixFromComplex {
     fi
 
     if [ "${anchor_target}" = "true" ]; then
+        if [ -z "\$RESOLVED_FIXED_TARGET_SOURCE_PATH" ] || [ ! -f "\$RESOLVED_FIXED_TARGET_SOURCE_PATH" ]; then
+            echo "[PROTENIX-COMPLEX] ERROR: Fixed-target source PDB not found: \$RESOLVED_FIXED_TARGET_SOURCE_PATH" | tee -a protenix_complex.log
+            exit 84
+        fi
         python3 ${params.code_root}/scripts/extract_target_templates.py \\
-            --pdb_files "${params.fixed_target_source_path}" \\
+            --pdb_files "\$RESOLVED_FIXED_TARGET_SOURCE_PATH" \\
             --target_chains "${params.fixed_target_source_chains}" \\
             --out_dir "\$PROTENIX_ROOT_DIR/mmcif" \\
             --manifest target_template_manifest.json \\
             ${params.fixed_target_model_number ? '--model_number ' + params.fixed_target_model_number : ''}
-        echo "[PROTENIX-COMPLEX] Fixed-target mode enabled: staged target templates from ${params.fixed_target_source_path}" | tee -a protenix_complex.log
+        echo "[PROTENIX-COMPLEX] Fixed-target mode enabled: staged target templates from \$RESOLVED_FIXED_TARGET_SOURCE_PATH" | tee -a protenix_complex.log
     fi
 
     if [ "${use_template}" = "true" ]; then
@@ -478,6 +548,43 @@ PY
     cat ${complex_json}
 
     PROTENIX_INPUT_JSON="${complex_json}"
+    if [ "${use_template}" = "true" ]; then
+        python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+input_path = Path("${complex_json}")
+output_path = Path("protenix_input_with_templates.json")
+template_dir = str((Path(os.environ["PROTENIX_ROOT_DIR"]) / "mmcif").resolve())
+
+payload = json.loads(input_path.read_text(encoding="utf-8"))
+if not isinstance(payload, list):
+    raise SystemExit("Expected top-level list in Protenix complex input JSON")
+
+for entry in payload:
+    if isinstance(entry, dict):
+        entry["templatesPath"] = template_dir
+
+output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
+        PROTENIX_INPUT_JSON="protenix_input_with_templates.json"
+        echo "[PROTENIX-COMPLEX] Injected templatesPath=\$PROTENIX_ROOT_DIR/mmcif into \$PROTENIX_INPUT_JSON"
+    fi
+    python3 ${params.code_root}/scripts/prepare_protenix_constraints.py \\
+        --input_json "\$PROTENIX_INPUT_JSON" \\
+        --output_json protenix_input_conditioned.json \\
+        --binder_chains "${binderChainCsv}" \\
+        --predicted_target_chains "${params.target_chains ?: ''}" \\
+        --epitope_residues "${epitopeResiduesCsv}" \\
+        --target_pdb "\$RESOLVED_FIXED_TARGET_SOURCE_PATH" \\
+        --source_target_chains "${params.fixed_target_source_chains ?: ''}" \\
+        --auto-pocket-if-missing \\
+        --auto-pocket-max-residues ${params.protenix_auto_pocket_residue_count ?: 24} \\
+        --pocket-max-distance ${params.protenix_pocket_max_distance ?: 8.0} \\
+        ${params.fixed_target_model_number ? '--target_model_number ' + params.fixed_target_model_number : ''} \\
+        2>&1 | tee -a protenix_msa_prep.log
+    PROTENIX_INPUT_JSON="protenix_input_conditioned.json"
     if [ "${use_msa}" = "true" ]; then
         PROTENIX_MSA_CACHE_DIR="${params.msa_cache_dir}"
         if [ -z "\$PROTENIX_MSA_CACHE_DIR" ] || ! mkdir -p "\$PROTENIX_MSA_CACHE_DIR/.locks" 2>/dev/null; then
@@ -488,11 +595,14 @@ PY
             echo "[PROTENIX-COMPLEX] Using shared MSA cache at \$PROTENIX_MSA_CACHE_DIR"
         fi
         python3 ${params.code_root}/scripts/prepare_protenix_msa.py \\
-            --input_json ${complex_json} \\
+            --input_json "\$PROTENIX_INPUT_JSON" \\
             --output_json prepared_input.json \\
             --out_dir msa_prepared \\
             --report_json msa_prepared/msa_report.json \\
             --backend "${msa_backend}" \\
+            --binder-chain-ids "${binderChainCsv}" \\
+            --binder-max-unpaired-msa-rows ${params.protenix_binder_max_unpaired_msa_rows ?: 256} \\
+            --binder-min-residue-coverage ${params.protenix_binder_min_residue_coverage ?: 0.5} \\
             --colabfold-api-host "${params.colabfold_api_host ?: 'https://api.colabfold.com'}" \\
             --db-path "${params.msa_local_db}" \\
             --cache-dir "\$PROTENIX_MSA_CACHE_DIR" \\
@@ -507,9 +617,27 @@ PY
             --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
             --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 0} \\
             --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 1.0} \\
+            ${msa_cache_only_flag} \\
             ${msa_allow_cpu_fallback_flag} \\
             2>&1 | tee protenix_msa_prep.log
         PROTENIX_INPUT_JSON="prepared_input.json"
+    fi
+    if [ "${anchor_target}" = "true" ] && [ -n "${params.fixed_target_source_sequence ?: ''}" ]; then
+        TARGET_TEMPLATE_PDB_ID="\$(basename "\$RESOLVED_FIXED_TARGET_SOURCE_PATH" .pdb | tr '[:upper:]' '[:lower:]')"
+        python3 ${params.code_root}/scripts/prepare_protenix_exact_templates.py \\
+            --input_json "\$PROTENIX_INPUT_JSON" \\
+            --output_json prepared_input_exact_templates.json \\
+            --target_sequence "${params.fixed_target_source_sequence}" \\
+            --template_pdb_id "\$TARGET_TEMPLATE_PDB_ID" \\
+            --template_chains "${params.fixed_target_source_chains}" \\
+            --out_dir exact_target_templates \\
+            2>&1 | tee -a protenix_msa_prep.log
+        PROTENIX_INPUT_JSON="prepared_input_exact_templates.json"
+    fi
+
+    ALLOW_EXACT_DUPLICATE_TEMPLATE_PDB_IDS=""
+    if [ "${anchor_target}" = "true" ] && [ -n "${params.fixed_target_source_sequence ?: ''}" ]; then
+        ALLOW_EXACT_DUPLICATE_TEMPLATE_PDB_IDS="\$TARGET_TEMPLATE_PDB_ID"
     fi
 
     # Run structure prediction
@@ -526,6 +654,7 @@ PY
         --use_template ${use_template} \\
         --enable_cache ${enable_cache} \\
         --enable_fusion ${enable_fusion} \\
+        ${anchor_target ? '--allow_exact_duplicate_template_pdb_ids "$ALLOW_EXACT_DUPLICATE_TEMPLATE_PDB_IDS"' : ''} \\
         2>&1 | tee protenix_complex.log
 
     first_cif="\$(find predictions/ -type f -name '*.cif' | head -n 1 || true)"
@@ -549,7 +678,19 @@ PY
         exit 85
     fi
 
+    if [ "${geometryMode}" != "flexible" ] && [ -n "${params.fixed_target_source_path ?: ''}" ] && [ -n "${params.fixed_target_source_chains ?: ''}" ] && [ -n "${params.target_chains ?: ''}" ]; then
+        python3 ${params.code_root}/scripts/finalize_target_geometry.py \\
+            --prediction_dir predictions \\
+            --backend protenix \\
+            --geometry_mode "${geometryMode}" \\
+            --target_pdb "${params.fixed_target_source_path}" \\
+            --reference_target_chains "${params.fixed_target_source_chains}" \\
+            --predicted_target_chains "${params.target_chains}" \\
+            ${params.fixed_target_model_number ? '--target_model_number ' + params.fixed_target_model_number : ''} \\
+            2>&1 | tee -a protenix_complex.log
+    fi
+
     echo "[PROTENIX-COMPLEX] Prediction complete. Listing outputs:"
-    find predictions/ -type f \\( -name "*.cif" -o -name "*confidence*.json" \\) | head -20
+    find predictions/ -type f \\( -name "*.cif" -o -name "*confidence*.json" \\) | head -20 || true
     """
 }

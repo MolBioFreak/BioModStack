@@ -8,9 +8,11 @@ import asyncio
 import subprocess
 import os
 import signal
+import json
+import csv
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Set
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,6 +22,7 @@ MIN_DYNAMIC_GPU_CPUS = 2
 
 # Track running processes
 _running_processes: Dict[str, asyncio.subprocess.Process] = {}
+_launching_jobs: Set[str] = set()
 
 from paths import (
     get_code_root,
@@ -216,6 +219,203 @@ def sanitize_filename(name: str) -> str:
     return sanitized if sanitized else "unnamed"
 
 
+def _normalize_sequence_batch_entries(raw: object, *, prefix: str = "variant") -> List[Dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+
+    safe_prefix = sanitize_filename(prefix) or "variant"
+    entries: List[Dict[str, str]] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        sequence = str(item.get("sequence") or "").strip().upper()
+        sequence = "".join(char for char in sequence if char.isalpha())
+        if not sequence:
+            continue
+        raw_name = str(item.get("name") or "").strip()
+        safe_name = sanitize_filename(raw_name) if raw_name else ""
+        safe_suffix = safe_name[:48] if safe_name else "seq"
+        runtime_name = f"{safe_prefix}_{index:03d}"
+        if safe_suffix:
+            runtime_name = f"{runtime_name}_{safe_suffix}"
+        entries.append(
+            {
+                "name": runtime_name,
+                "sequence": sequence,
+                "label": raw_name or runtime_name,
+                "original_name": raw_name or "",
+                "batch_index": str(index),
+            }
+        )
+    return entries
+
+
+def _write_sequence_batch_name_map(
+    *,
+    output_dir: Path,
+    entries: List[Dict[str, Any]],
+) -> None:
+    if not entries:
+        return
+
+    csv_path = output_dir / "sequence_batch_manifest.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "batch_index",
+                "runtime_name",
+                "label",
+                "original_name",
+                "sequence_length",
+                "sequence",
+                "complex_json",
+            ],
+        )
+        writer.writeheader()
+        for entry in entries:
+            writer.writerow(
+                {
+                    "batch_index": entry.get("batch_index", ""),
+                    "runtime_name": entry.get("name", ""),
+                    "label": entry.get("label", ""),
+                    "original_name": entry.get("original_name", ""),
+                    "sequence_length": len(str(entry.get("sequence") or "")),
+                    "sequence": entry.get("sequence", ""),
+                    "complex_json": entry.get("complex_json", ""),
+                }
+            )
+
+
+def _write_sequence_batch_payloads(
+    *,
+    output_dir: str,
+    params: Dict[str, Any],
+    complex_components: Optional[List[Dict[str, Any]]],
+) -> Tuple[Optional[Path], Optional[Path], Optional[List[Dict[str, Any]]]]:
+    batch_prefix = (
+        str(
+            params.get("sequence_batch_prefix")
+            or params.get("sequence_name")
+            or params.get("job_name")
+            or params.get("name")
+            or "variant"
+        ).strip()
+    )
+    batch_entries = _normalize_sequence_batch_entries(
+        params.pop("sequence_batch_entries", None),
+        prefix=batch_prefix,
+    )
+    if not batch_entries:
+        return None, None, complex_components
+
+    out_root = Path(output_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    sequence_batch_json_path: Optional[Path] = None
+    complex_batch_dir: Optional[Path] = None
+
+    if complex_components:
+        normalized_components: List[Dict[str, Any]] = [dict(component) for component in complex_components]
+        protein_components = [
+            component
+            for component in normalized_components
+            if str(component.get("type") or "").strip().lower() in {"protein", "peptide"}
+        ]
+
+        if len(protein_components) == 1:
+            used_ids = {
+                str(component.get("id") or "").strip()
+                for component in normalized_components
+                if str(component.get("id") or "").strip()
+            }
+            implicit_component_id = ""
+            for candidate_ord in range(ord("A"), ord("Z") + 1):
+                candidate = chr(candidate_ord)
+                if candidate not in used_ids:
+                    implicit_component_id = candidate
+                    break
+            if not implicit_component_id:
+                implicit_component_id = f"P{len(used_ids) + 1}"
+
+            batch_binder_name = (
+                str(params.get("sequence_batch_component_name") or "").strip()
+                or f"{batch_prefix} binder"
+            )
+            normalized_components.append(
+                {
+                    "type": "protein",
+                    "id": implicit_component_id,
+                    "sequence": batch_entries[0]["sequence"],
+                    "name": batch_binder_name,
+                }
+            )
+            params["sequence_batch_component_id"] = implicit_component_id
+
+        replace_component_id = str(
+            params.get("sequence_batch_component_id")
+            or params.get("binder_chains")
+            or params.get("primary_chain_id")
+            or ""
+        ).split(",")[0].strip()
+        if not replace_component_id:
+            protein_ids = [
+                str(component.get("id") or "").strip()
+                for component in normalized_components
+                if str(component.get("type") or "").strip().lower() in {"protein", "peptide"}
+            ]
+            replace_component_id = protein_ids[-1] if protein_ids else ""
+        if not replace_component_id:
+            raise ValueError("Could not determine which complex protein component should be replaced by sequence_batch_entries")
+
+        complex_batch_dir = out_root / "complex_batch_inputs"
+        complex_batch_dir.mkdir(parents=True, exist_ok=True)
+        batch_manifest: List[Dict[str, Any]] = []
+        for index, entry in enumerate(batch_entries, start=1):
+            variant_name = sanitize_filename(f"{entry['name']}")
+            variant_components: List[Dict[str, Any]] = []
+            replaced = False
+            for component in normalized_components:
+                copied = dict(component)
+                component_id = str(copied.get("id") or "").strip()
+                component_type = str(copied.get("type") or "").strip().lower()
+                if component_id == replace_component_id and component_type in {"protein", "peptide"}:
+                    copied["sequence"] = entry["sequence"]
+                    replaced = True
+                variant_components.append(copied)
+            if not replaced:
+                raise ValueError(
+                    f"sequence_batch_component_id={replace_component_id!r} did not match a protein/peptide component in complex_components"
+                )
+            variant_payload = {
+                "name": variant_name,
+                "components": variant_components,
+            }
+            variant_path = complex_batch_dir / f"{index:03d}_{variant_name}.json"
+            with variant_path.open("w", encoding="utf-8") as handle:
+                json.dump(variant_payload, handle, indent=2)
+            batch_manifest.append(
+                {
+                    "name": variant_name,
+                    "label": entry["label"],
+                    "sequence": entry["sequence"],
+                    "complex_json": str(variant_path),
+                }
+            )
+        sequence_batch_json_path = out_root / "sequence_batch_manifest.json"
+        with sequence_batch_json_path.open("w", encoding="utf-8") as handle:
+            json.dump(batch_manifest, handle, indent=2)
+        _write_sequence_batch_name_map(output_dir=out_root, entries=batch_manifest)
+        complex_components = normalized_components
+    else:
+        sequence_batch_json_path = Path(output_dir) / "sequence_batch_manifest.json"
+        with sequence_batch_json_path.open("w", encoding="utf-8") as handle:
+            json.dump(batch_entries, handle, indent=2)
+        _write_sequence_batch_name_map(output_dir=out_root, entries=batch_entries)
+
+    return sequence_batch_json_path, complex_batch_dir, complex_components
+
+
 def _coerce_bool(value: object, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -405,6 +605,21 @@ def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], L
         if n_cycle > 4:
             tuned["protenix_n_cycle"] = 4
             notes.append(f"protenix_n_cycle: {n_cycle} -> 4")
+
+    if use_msa:
+        backend = _normalize_protenix_msa_backend(tuned.get("protenix_msa_backend")) or "auto"
+        msa_cache_only = _coerce_bool(tuned.get("msa_cache_only", False), default=False)
+        requested_validation_batch = max(1, _coerce_int(tuned.get("seqs_per_validation_job", tuned.get("seqs_per_boltz_job", 10)), 10))
+        batch_cap_key = "protenix_local_msa_max_seqs_per_validation_job" if backend == "local" else "protenix_msa_max_seqs_per_validation_job"
+        batch_cap_default = 1
+        batch_cap = max(1, _coerce_int(tuned.get(batch_cap_key, batch_cap_default), batch_cap_default))
+        if backend == "local" and msa_cache_only:
+            batch_cap = requested_validation_batch
+        if requested_validation_batch > batch_cap:
+            tuned["seqs_per_validation_job"] = batch_cap
+            notes.append(f"seqs_per_validation_job: {requested_validation_batch} -> {batch_cap}")
+        if "protenix_local_msa_timeout_seconds" not in tuned:
+            tuned["protenix_local_msa_timeout_seconds"] = 900
 
     # Allow override; keep the retry ladder configured but disabled by default.
     if "protenix_oom_retry_attempts" not in tuned:
@@ -1661,8 +1876,13 @@ async def launch_nextflow_job(
                         logger.info(f"Job {job_id} exit code {exit_code} interpreted as CANCELLED")
                         
                     else:
-                        job.status = JobStatus.FAILED.value
-                        job.queue_status = 'failed'
+                        if job.status == JobStatus.COMPLETED.value or (job.current_stage or "").lower() == "complete":
+                            logger.warning(
+                                f"Nextflow process for job {job_id} exited with code {exit_code} after job was already finalized; preserving completed status"
+                            )
+                        else:
+                            job.status = JobStatus.FAILED.value
+                            job.queue_status = 'failed'
                         resume_lock_line = next(
                             (ln.strip() for ln in full_log if "Unable to acquire lock on session with ID" in ln),
                             None,
@@ -1700,10 +1920,17 @@ async def launch_nextflow_job(
                             )
                         else:
                             job.error_message = f"Nextflow exited with code {exit_code}"
-                        logger.error(f"Nextflow failed for job {job_id} with code {exit_code}")
+                        if job.status == JobStatus.FAILED.value:
+                            logger.error(f"Nextflow failed for job {job_id} with code {exit_code}")
+                        else:
+                            job.error_message = None
+                            logger.warning(
+                                f"Nextflow exited with code {exit_code} for already-completed job {job_id}; status preserved"
+                            )
                         
                         # Log last few lines
-                        logger.error(f"Tail of log:\n{''.join(full_log[-20:])}")
+                        if job.status == JobStatus.FAILED.value:
+                            logger.error(f"Tail of log:\n{''.join(full_log[-20:])}")
                 
                 job.completed_at = datetime.utcnow()
                 await session.commit()
@@ -1718,12 +1945,48 @@ async def launch_nextflow_job(
             if job:
                 # Don't overwrite if already cancelled
                 await session.refresh(job)
-                if job.status != JobStatus.CANCELLED.value:
+                if job.status == JobStatus.COMPLETED.value or (job.current_stage or "").lower() == "complete":
+                    logger.warning(
+                        f"Detached runner caught exception for already-completed job {job_id}; preserving completed status"
+                    )
+                elif job.status != JobStatus.CANCELLED.value:
                     job.status = JobStatus.FAILED.value
                     job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
                     job.error_message = str(e)
                     job.completed_at = datetime.utcnow()
                     await session.commit()
+
+
+def launch_nextflow_job_detached(
+    *,
+    job_id: str,
+    model_id: str,
+    mode: str,
+    params: Dict[str, Any],
+    output_dir: str,
+) -> asyncio.Task:
+    """
+    Schedule a Nextflow launch in the background while marking the job as
+    actively launching immediately.
+
+    This closes the race where the orchestrator marks a job running before the
+    launcher has created the subprocess or registered it in _running_processes.
+    """
+    _launching_jobs.add(job_id)
+
+    async def _runner() -> None:
+        try:
+            await launch_nextflow_job(
+                job_id=job_id,
+                model_id=model_id,
+                mode=mode,
+                params=params,
+                output_dir=output_dir,
+            )
+        finally:
+            _launching_jobs.discard(job_id)
+
+    return asyncio.create_task(_runner())
 
 
 def build_nextflow_command(
@@ -1929,11 +2192,15 @@ def build_nextflow_command(
         global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
         overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
         msa_server_settings = read_server_settings() or {}
+        skip_persisted_msa_pin = (
+            str(params.get("structure_validator", "")).strip().lower() == "protenix"
+            and str(params.get("protenix_msa_backend", "auto")).strip().lower() == "local"
+        )
 
         if params.get("msa_preferred_gpus") in (None, ""):
             preferred_ids = []
             preferred_source = None
-            raw_pinned_gpu = msa_server_settings.get("pinned_gpu_id")
+            raw_pinned_gpu = None if skip_persisted_msa_pin else msa_server_settings.get("pinned_gpu_id")
             if raw_pinned_gpu not in (None, ""):
                 try:
                     preferred_ids = [int(raw_pinned_gpu)]
@@ -1941,6 +2208,8 @@ def build_nextflow_command(
                     preferred_ids = []
                 if preferred_ids:
                     preferred_source = "persisted MSA server settings"
+            elif skip_persisted_msa_pin:
+                logger.info("[MSA] Skipping persisted MSA GPU pin for Protenix local MSA; allowing normal GPU selection")
             if not preferred_ids:
                 raw_preferred = global_cfg.get("msa_preferred_gpu_ids")
                 seen_preferred = set()
@@ -2070,6 +2339,7 @@ def build_nextflow_command(
         'boltz_step_scale': 'boltz_step_scale',
         'boltz_anchor_target': 'boltz_anchor_target',
         'boltz_anchor_strict': 'boltz_anchor_strict',
+        'boltz_target_geometry_mode': 'boltz_target_geometry_mode',
         # Boltz-2 affinity prediction (quality feature)
         'boltz_predict_affinity': 'boltz_predict_affinity',
         'boltz_sampling_steps_affinity': 'boltz_sampling_steps_affinity',
@@ -2090,6 +2360,7 @@ def build_nextflow_command(
         'protenix_use_template': 'protenix_use_template',
         'protenix_anchor_target': 'protenix_anchor_target',
         'protenix_anchor_strict': 'protenix_anchor_strict',
+        'protenix_target_geometry_mode': 'protenix_target_geometry_mode',
         'protenix_enable_cache': 'protenix_enable_cache',
         'protenix_enable_fusion': 'protenix_enable_fusion',
         'protenix_auto_oom_retry': 'protenix_auto_oom_retry',
@@ -2131,6 +2402,9 @@ def build_nextflow_command(
         'msa_gpu_server_startup_wait': 'msa_gpu_server_startup_wait',
         'lock_target_chains': 'lock_target_chains',
         'lock_antibody_framework': 'lock_antibody_framework',
+        'target_geometry_mode': 'target_geometry_mode',
+        'target_template_threshold_angstrom': 'target_template_threshold_angstrom',
+        'strict_target_rmsd': 'strict_target_rmsd',
         # NA-MPNN sequence design params (Oligo Designer)
         'nampnn_temperature': 'nampnn_temperature',
         'nampnn_num_seqs': 'nampnn_num_seqs',
@@ -2142,6 +2416,11 @@ def build_nextflow_command(
     
     # Handle complex_components specially - write JSON file for BoltzFromComplex process
     complex_components = params.pop('complex_components', None)
+    sequence_batch_json_path, complex_batch_dir, complex_components = _write_sequence_batch_payloads(
+        output_dir=output_dir,
+        params=params,
+        complex_components=complex_components,
+    )
     
     # Model-specific param preprocessing: Route ntp_type and ligand_smiles to correct targets
     if model_id == 'unidock':
@@ -2280,7 +2559,6 @@ def build_nextflow_command(
             params['rfd_mode'] = 'bindcraft'
     
     if complex_components:
-        import json
         complex_json_path = Path(output_dir) / "complex_definition.json"
         # Ensure output directory exists
         complex_json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2288,6 +2566,11 @@ def build_nextflow_command(
             json.dump({"components": complex_components}, f, indent=2)
         logger.info(f"Wrote complex definition to {complex_json_path}")
         cmd.extend(["--complex_json_path", str(complex_json_path)])
+
+    if sequence_batch_json_path:
+        cmd.extend(["--sequence_batch_json_path", str(sequence_batch_json_path)])
+    if complex_batch_dir:
+        cmd.extend(["--complex_batch_dir", str(complex_batch_dir)])
     
     # Dynamic parameter passing
     for key, value in params.items():
@@ -2396,8 +2679,11 @@ async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: fl
 
 def get_running_jobs() -> Dict[str, int]:
     """Get currently running job IDs and their PIDs."""
-    return {
+    running = {
         job_id: proc.pid 
         for job_id, proc in _running_processes.items() 
         if proc.returncode is None
     }
+    for job_id in _launching_jobs:
+        running.setdefault(job_id, 0)
+    return running

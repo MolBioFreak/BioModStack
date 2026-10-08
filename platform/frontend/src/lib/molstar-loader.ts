@@ -38,7 +38,6 @@ export function ensureMolstarLoaded(): Promise<void> {
             if (!isMolstarRegistered()) {
                 throw new Error('PDBe Molstar custom element was not registered');
             }
-            console.log('[molstar-loader] PDBe Molstar loaded from installed dependency');
             loaded = true;
         })
         .catch((error) => {

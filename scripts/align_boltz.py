@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import sys
-import os
 import re
 import json
 import logging
 import math
 import shutil
+import copy
 from pathlib import Path
 import argparse
 from multiprocessing import Pool
@@ -96,6 +96,19 @@ def rmsd_without_refit(ref_atoms, mobile_atoms):
         squared += float(diff[0] ** 2 + diff[1] ** 2 + diff[2] ** 2)
     return math.sqrt(squared / len(ref_atoms))
 
+
+def replace_target_chains(mobile_structure, ref_structure, target_chains):
+    ref_model = next(ref_structure.get_models())
+    mobile_model = next(mobile_structure.get_models())
+    for chain_id in target_chains:
+        if chain_id in mobile_model:
+            mobile_model.detach_child(chain_id)
+    for chain_id in target_chains:
+        if chain_id in ref_model:
+            cloned_chain = copy.deepcopy(ref_model[chain_id])
+            cloned_chain.id = chain_id
+            mobile_model.add(cloned_chain)
+
 def align_structures(args):
     """Align Boltz structure to Design template with chain-specific handling"""
     (design_path, boltz_path, out_pdb, src_json, dst_json, src_pae, dst_pae,
@@ -146,10 +159,17 @@ def align_structures(args):
             ref_binder, boltz_binder = get_matched_ca_atoms(ref_structure, boltz_structure, binder_chains)
             rmsd_binder = rmsd_without_refit(ref_binder, boltz_binder)
 
+            final_target_rmsd = round(rmsd_target, 2)
+            if geometry_mode == "frozen":
+                replace_target_chains(boltz_structure, ref_structure, target_chains)
+                final_target_rmsd = 0.0
+
             rmsd_data = {
                 "boltz_overall_rmsd": round(rmsd_overall, 2),
                 "boltz_target_rmsd": round(rmsd_target, 2),
-                "boltz_binder_rmsd": round(rmsd_binder, 2)
+                "boltz_binder_rmsd": round(rmsd_binder, 2),
+                "raw_target_rmsd": round(rmsd_target, 2),
+                "final_target_rmsd": final_target_rmsd,
             }
             if strict_target_rmsd is not None and rmsd_target > strict_target_rmsd:
                 raise ValueError(
@@ -189,11 +209,14 @@ def align_structures(args):
                 "seq_id": seq_id,
                 "description": boltz_path.name,
                 "validation_geometry_mode": geometry_mode,
-                "target_anchor_enabled": geometry_mode == "anchored",
+                "target_anchor_enabled": geometry_mode in {"conditioned", "frozen"},
                 "target_anchor_strict": strict_target_rmsd is not None,
+                "target_replaced_from_reference": geometry_mode == "frozen",
                 "boltz_overall_rmsd": round(rmsd_data.get("boltz_overall_rmsd", 0), 2),
                 "boltz_target_rmsd": round(rmsd_data.get("boltz_target_rmsd", 0), 2),
                 "boltz_binder_rmsd": round(rmsd_data.get("boltz_binder_rmsd", 0), 2),
+                "raw_target_rmsd": round(rmsd_data.get("raw_target_rmsd", 0), 2),
+                "final_target_rmsd": round(rmsd_data.get("final_target_rmsd", 0), 2),
                 "boltz_conf_score": round(data.get("confidence_score", 0), 3),
                 "boltz_ptm": round(data.get("ptm", 0), 3),
                 "boltz_ptm_interface": round(data.get("iptm", 0), 3),
@@ -208,7 +231,7 @@ def align_structures(args):
                 "seq_id": seq_id,
                 "description": boltz_path.name,
                 "validation_geometry_mode": geometry_mode,
-                "target_anchor_enabled": geometry_mode == "anchored",
+                "target_anchor_enabled": geometry_mode in {"conditioned", "frozen"},
                 "target_anchor_strict": strict_target_rmsd is not None,
                 "boltz_overall_rmsd": round(rmsd_data.get("boltz_overall_rmsd", 0), 2),
                 "boltz_conf_score": round(data.get("confidence_score", 0), 3),
@@ -248,8 +271,8 @@ def main():
                       help="Comma separated list of binder chains (e.g. H,L or A)")
     parser.add_argument("--target_chains", type=str, default="",
                       help="Comma separated list of target chains (e.g. T or B)")
-    parser.add_argument("--geometry_mode", choices=['flexible', 'anchored'], default='flexible',
-                      help="Whether validation was run in flexible or anchored target mode")
+    parser.add_argument("--geometry_mode", choices=['flexible', 'conditioned', 'frozen'], default='flexible',
+                      help="Whether validation was run in flexible, conditioned, or frozen target mode")
     parser.add_argument("--strict_target_rmsd", type=float, default=None,
                       help="Fail anchored outputs whose target RMSD exceeds this threshold")
     parser.add_argument("--ncpus", type=int, default=1,

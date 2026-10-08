@@ -300,6 +300,7 @@ def run_batch_msa(
     gpu_id: Optional[int] = None,
     reference_sequence: Optional[str] = None,
     force_refresh: bool = False,
+    cache_only: bool = False,
     cpu_only: bool = False,
     max_seqs: Optional[int] = None,
     preset: str = "fast",
@@ -360,6 +361,7 @@ def run_batch_msa(
     print(f"Output: {output_dir}")
     print(f"GPU: {effective_gpu_id}")
     print(f"CPU only: {cpu_only}")
+    print(f"Cache only: {cache_only}")
     print(f"Preset: {preset}")
     print(f"Max seqs: {max_seqs if max_seqs is not None else 'preset default'}")
     print(f"Mode: {'colabfold-compatible' if use_colabfold_mode else 'true-batch-fast'}")
@@ -395,6 +397,18 @@ def run_batch_msa(
                 })
                 continue
         
+        if cache_only:
+            print(f"  CACHE MISS (cache-only): {name}")
+            results.append({
+                "name": name,
+                "sequence_hash": seq_hash,
+                "msa_path": None,
+                "cache_hit": False,
+                "success": False,
+                "error": "MSA cache miss in cache-only mode",
+            })
+            continue
+
         # Need to generate
         sequences_to_process.append(seq_info)
         print(f"  CACHE MISS: {name}")
@@ -410,6 +424,20 @@ def run_batch_msa(
         manifest_path = output_dir / "msa_manifest.json"
         with open(manifest_path, 'w') as f:
             json.dump(manifest, f, indent=2)
+        return manifest
+
+    if cache_only:
+        manifest = {
+            "total_sequences": len(sequences),
+            "successful": sum(1 for r in results if r["success"]),
+            "cache_hits": sum(1 for r in results if r.get("cache_hit", False)),
+            "sequences": results,
+        }
+        manifest_path = output_dir / "msa_manifest.json"
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=2)
+        print("\nCache-only mode: failing on cache misses.")
+        print(f"Manifest: {manifest_path}")
         return manifest
 
     if use_colabfold_mode:
@@ -695,6 +723,8 @@ if __name__ == "__main__":
                        help="Path to MSA cache directory")
     parser.add_argument("--force_refresh", action="store_true",
                        help="Bypass cache and regenerate MSAs")
+    parser.add_argument("--cache-only", action="store_true",
+                       help="Use only cached MSAs; fail any uncached sequences")
     parser.add_argument("--gpu_id", type=int, default=None,
                        help="GPU ID to use for search")
     parser.add_argument("--cpu-only", action="store_true",
@@ -761,6 +791,7 @@ if __name__ == "__main__":
         gpu_id=args.gpu_id,
         reference_sequence=args.reference_sequence,
         force_refresh=args.force_refresh,
+        cache_only=args.cache_only,
         cpu_only=args.cpu_only,
         max_seqs=args.max_seqs,
         preset=args.preset,

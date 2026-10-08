@@ -1,6 +1,16 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
+import groovy.json.JsonSlurper
+
+params.sequence_batch_json_path = params.sequence_batch_json_path ?: null
+params.complex_batch_dir = params.complex_batch_dir ?: null
+params.target_geometry_mode = params.target_geometry_mode ?: null
+params.boltz_target_geometry_mode = params.boltz_target_geometry_mode ?: null
+params.protenix_target_geometry_mode = params.protenix_target_geometry_mode ?: null
+params.target_template_threshold_angstrom = params.target_template_threshold_angstrom ?: 2.0
+params.strict_target_rmsd = params.strict_target_rmsd ?: null
+
 include { RFDiffusionWorkflow } from './workflows/rfdiffusion.nf'
 include { FilterRFD ; RunRFDiffusion } from './modules/rfdiffusion.nf'
 include { PrepRFD3Input ; RunRFD3 ; FilterRFD3 } from './modules/rfd3.nf'
@@ -529,19 +539,14 @@ workflow {
         // Build input by joining PrepFAMPNN outputs with gpu_id
         def gpu_id_val = params.gpu_id ?: 0
 
-        // Collect PDFs as-is (they're already in a collection from the glob)
-        // PrepFAMPNN.out.pdbs emits path objects matching the glob
-        // Use collect to group them, then merge with CSV
+        // `collect()` emits a List<Path>. Nextflow's `combine()` then flattens
+        // that list into a LinkedList payload alongside the csv. Rebuild the
+        // original [pdbs, csv] shape explicitly before passing it downstream.
         fampnn_run_input = PrepFAMPNN.out.pdbs
             .collect()
-            .merge(PrepFAMPNN.out.csv)
-            .map { collected_items ->
-                // collected_items is [List<Path>, Path] from merge
-                def pdbs = collected_items[0]
-                // First is the collected PDBs list
-                def csv = collected_items[1]
-                // Second is the CSV
-                tuple(0, pdbs, csv, gpu_id_val)
+            .combine(PrepFAMPNN.out.csv)
+            .map { payload ->
+                tuple(0, payload[0..-2], payload[-1], gpu_id_val)
             }
 
         RunFAMPNN(fampnn_run_input, params.analysis_chain_id ?: 'all_chains')
@@ -554,7 +559,7 @@ workflow {
             FilterFAMPNN(RunFAMPNN.out.pdbs_jsons)
         }
 
-        println("FAMPNN child job complete")
+        println("FAMPNN child workflow configured")
         return null
     }
 
@@ -673,14 +678,41 @@ workflow {
         println("* Number of simulations: ${numParallelJobs}")
 
         def complex_name = params.sequence_name ?: 'complex_pred'
-        def complex_json = file(params.complex_json_path)
-
-        // Create parallel job channels
-        def job_indices = Channel.from(0..<numParallelJobs)
         def msa_file = params.msa_path ? file(params.msa_path) : file("${params.code_root}/NO_MSA")
-        def complex_ch = job_indices.map { idx ->
-            def jobName = numParallelJobs > 1 ? "${complex_name}_job${idx}" : complex_name
-            tuple(jobName, complex_json, msa_file)
+        def complex_ch
+
+        if (params.sequence_batch_json_path && params.complex_batch_dir) {
+            def batchEntries = new JsonSlurper().parse(file(params.sequence_batch_json_path)) as List
+            println("* Batch variants: ${batchEntries.size()}")
+            if ((params.pred_method ?: 'boltz') == 'protenix') {
+                println("* Protenix complex batch mode: one model bootstrap for ${batchEntries.size()} variants")
+                complex_ch = Channel.of(
+                    tuple(
+                        "${complex_name}_batch",
+                        file(params.complex_batch_dir),
+                        msa_file,
+                    )
+                )
+            } else {
+                complex_ch = Channel
+                    .from(batchEntries)
+                    .map { entry ->
+                        tuple(
+                            "${entry.name}",
+                            file("${entry.complex_json}"),
+                            msa_file,
+                        )
+                    }
+            }
+        } else {
+            def complex_json = file(params.complex_json_path)
+
+            // Create parallel job channels
+            def job_indices = Channel.from(0..<numParallelJobs)
+            complex_ch = job_indices.map { idx ->
+                def jobName = numParallelJobs > 1 ? "${complex_name}_job${idx}" : complex_name
+                tuple(jobName, complex_json, msa_file)
+            }
         }
 
         // Centralized routing — dispatches based on params.pred_method
@@ -768,23 +800,38 @@ workflow {
     ///////////////////////////////////
 
     // If sequence_input is provided, run sequence-based prediction only
-    if (params.sequence_input) {
+    if (params.sequence_input || params.sequence_batch_json_path) {
         def numParallelJobs = params.num_parallel_jobs ?: 1
         println("Running sequence-based structure prediction")
-        println("* Sequence: ${params.sequence_input.take(50)}...")
+        if (params.sequence_batch_json_path) {
+            println("* Batch manifest: ${params.sequence_batch_json_path}")
+        } else {
+            println("* Sequence: ${params.sequence_input.take(50)}...")
+        }
         println("* Predictor: ${params.pred_method ?: 'boltz'}")
         println("* Parallel jobs: ${numParallelJobs}")
 
         def seq_name = params.sequence_name ?: 'predicted'
+        def parallel_jobs_ch
 
-        // Create a channel with job indices for parallel execution
-        // Each job gets a unique name suffix (job_0, job_1, etc.)
-        def job_indices = Channel.from(0..<numParallelJobs)
+        if (params.sequence_batch_json_path) {
+            def batchEntries = new JsonSlurper().parse(file(params.sequence_batch_json_path)) as List
+            println("* Batch sequences: ${batchEntries.size()}")
+            parallel_jobs_ch = Channel
+                .from(batchEntries)
+                .map { entry ->
+                    tuple("${entry.sequence}", "${entry.name}")
+                }
+        } else {
+            // Create a channel with job indices for parallel execution
+            // Each job gets a unique name suffix (job_0, job_1, etc.)
+            def job_indices = Channel.from(0..<numParallelJobs)
 
-        // Create sequence channel that pairs with each job index
-        def parallel_jobs_ch = job_indices.map { idx ->
-            def jobName = numParallelJobs > 1 ? "${seq_name}_job${idx}" : seq_name
-            tuple(params.sequence_input, jobName)
+            // Create sequence channel that pairs with each job index
+            parallel_jobs_ch = job_indices.map { idx ->
+                def jobName = numParallelJobs > 1 ? "${seq_name}_job${idx}" : seq_name
+                tuple(params.sequence_input, jobName)
+            }
         }
 
         if (params.pred_method in ['boltz', 'rf3', 'both', 'protenix', 'all']) {

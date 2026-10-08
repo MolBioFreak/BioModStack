@@ -111,11 +111,21 @@ def check_frontend_status() -> bool:
     except Exception:
         return False
 
+STATUS_DB_TIMEOUT_SECONDS = 0.25
+
+def _connect_status_db() -> sqlite3.Connection:
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=STATUS_DB_TIMEOUT_SECONDS)
+    except Exception:
+        conn = sqlite3.connect(str(DB_PATH), timeout=STATUS_DB_TIMEOUT_SECONDS)
+    conn.execute("PRAGMA busy_timeout = 250")
+    return conn
+
 def get_job_counts() -> tuple:
     try:
         if not DB_PATH.exists():
             return (0, 0, 0)
-        conn = sqlite3.connect(str(DB_PATH), timeout=30)
+        conn = _connect_status_db()
         cur = conn.cursor()
         cur.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status")
         counts = dict(cur.fetchall())
@@ -129,7 +139,7 @@ def get_db_info() -> dict:
         if not DB_PATH.exists():
             return {"error": "Not found"}
         size_mb = DB_PATH.stat().st_size / (1024 * 1024)
-        conn = sqlite3.connect(str(DB_PATH), timeout=30)
+        conn = _connect_status_db()
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM jobs")
         jobs = cur.fetchone()[0]
@@ -185,6 +195,7 @@ class BioModStackPanel(Adw.Application):
         self.window = None
         self.config = load_config()
         self.current_log = "api"
+        self.cached_sudo_password = ""
         
     def do_activate(self):
         if self.window:
@@ -230,6 +241,7 @@ class BioModStackPanel(Adw.Application):
         
         # Build UI sections
         content.append(self._build_status_section())
+        content.append(self._build_privilege_section())
         content.append(self._build_actions_section())
         content.append(self._build_logs_section())
         content.append(self._build_database_section())
@@ -328,21 +340,56 @@ class BioModStackPanel(Adw.Application):
         group.add(row)
         
         return group
+
+    def _build_privilege_section(self) -> Gtk.Widget:
+        """Privileged-action credentials."""
+        group = Adw.PreferencesGroup()
+        group.set_title("Privileges")
+
+        password_row = Adw.ActionRow()
+        password_row.set_title("Admin Password")
+        password_row.set_subtitle("Used for privileged API restart/port-clear actions. Cached in memory only.")
+
+        password_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.password_entry = Gtk.PasswordEntry()
+        self.password_entry.set_show_peek_icon(True)
+        self.password_entry.set_width_chars(20)
+        self.password_entry.set_hexpand(True)
+        self.password_entry.connect("changed", self._on_password_changed)
+        password_box.append(self.password_entry)
+
+        btn_clear_password = Gtk.Button(label="Clear")
+        btn_clear_password.connect("clicked", self._on_clear_password)
+        password_box.append(btn_clear_password)
+
+        password_row.add_suffix(password_box)
+        password_row.set_activatable_widget(self.password_entry)
+        group.add(password_row)
+
+        return group
     
     def _on_start_all(self, button):
         show_notification("Starting", "Starting all services...")
-        subprocess.Popen(["bash", str(START_SCRIPT)])
+        subprocess.Popen(["bash", str(START_SCRIPT)], env=self._script_env())
         GLib.timeout_add_seconds(5, self._refresh_status)
     
     def _on_restart_all(self, button):
         show_notification("Restarting", "Restarting all services...")
-        subprocess.Popen(["bash", str(START_SCRIPT), "restart"])
+        subprocess.Popen(["bash", str(START_SCRIPT), "restart"], env=self._script_env())
         GLib.timeout_add_seconds(3, self._refresh_status)
     
     def _on_stop_all(self, button):
         show_notification("Stopping", "Stopping all services...")
-        subprocess.Popen(["bash", str(STOP_SCRIPT)])
+        subprocess.Popen(["bash", str(STOP_SCRIPT)], env=self._script_env())
         GLib.timeout_add_seconds(2, self._refresh_status)
+
+    def _script_env(self) -> dict:
+        env = os.environ.copy()
+        if self.cached_sudo_password:
+            env["BMS_SUDO_PASSWORD"] = self.cached_sudo_password
+        else:
+            env.pop("BMS_SUDO_PASSWORD", None)
+        return env
     
     def _build_logs_section(self) -> Gtk.Widget:
         """Log viewer section."""
@@ -535,6 +582,13 @@ X-GNOME-Autostart-enabled=true
     def _on_notifications_toggle(self, row, param):
         self.config["notifications"] = row.get_active()
         save_config(self.config)
+
+    def _on_password_changed(self, entry):
+        self.cached_sudo_password = entry.get_text()
+
+    def _on_clear_password(self, button):
+        self.cached_sudo_password = ""
+        self.password_entry.set_text("")
     
     def _refresh_status(self):
         """Refresh all status displays."""

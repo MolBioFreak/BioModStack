@@ -7,7 +7,6 @@ and a SHARED MSA file, then generates individual YAML config files for Boltz to 
 """
 
 import os
-import sys
 import argparse
 import json
 import yaml
@@ -65,7 +64,12 @@ def main():
     parser.add_argument('--out_dir', required=True, help='Output directory for YAMLs')
     parser.add_argument('--anchor_target', action='store_true', help='Attach structural templates to target chains')
     parser.add_argument('--target_chains', default='', help='Comma-separated target chain IDs to anchor')
+    parser.add_argument('--binder_chains', default='', help='Comma-separated binder chain IDs that should receive the shared MSA')
     parser.add_argument('--template_manifest', default='', help='JSON manifest produced by extract_target_templates.py')
+    parser.add_argument('--template_threshold', type=float, default=2.0, help='Template threshold in angstrom for force=true templates')
+    parser.add_argument('--epitope_residues', default='', help='Comma-separated epitope residues like B:12,B:15')
+    parser.add_argument('--pocket_max_distance', type=float, default=8.0, help='Pocket/contact guidance cutoff in angstrom')
+    parser.add_argument('--pocket_force', action='store_true', help='Set force=true on emitted pocket constraints')
     
     args = parser.parse_args()
     
@@ -81,6 +85,17 @@ def main():
         pdb_files = raw_input
     msa_abs_path = os.path.abspath(args.msa_path)
     target_chains = {token.strip() for token in (args.target_chains or '').split(',') if token.strip()}
+    binder_chains = [token.strip() for token in (args.binder_chains or '').split(',') if token.strip()]
+    epitope_contacts = []
+    for token in (args.epitope_residues or '').split(','):
+        value = token.strip()
+        if not value or ':' not in value:
+            continue
+        chain_id, residue_id = value.split(':', 1)
+        chain_id = chain_id.strip()
+        residue_id = residue_id.strip()
+        if chain_id and residue_id:
+            epitope_contacts.append([chain_id, residue_id])
     template_manifest = {}
     if args.anchor_target:
         if not target_chains:
@@ -120,6 +135,8 @@ def main():
         if args.anchor_target and not isinstance(template_info, dict):
             raise ValueError(f"Missing target template manifest entry for {name}")
         
+        shared_msa_bound = False
+        shared_msa_chain_ids = set(binder_chains or ([next(iter(chains.keys()))] if chains else []))
         for chain_id, sequence in chains.items():
             entry = {
                 "protein": {
@@ -127,11 +144,11 @@ def main():
                     "sequence": sequence
                 }
             }
-            # Attach the shared MSA to every chain
-            # Note: Ideally we attach it only to the heavy/light chains derived from the antigen
-            # But for batch backbones sharing an antigen, the MSA usually covers the complex.
-            if "NO_MSA" not in msa_abs_path:
+            if "NO_MSA" not in msa_abs_path and chain_id in shared_msa_chain_ids:
                 entry["protein"]["msa"] = msa_abs_path
+                shared_msa_bound = True
+            elif chain_id in target_chains:
+                entry["protein"]["msa"] = "empty"
 
             if args.anchor_target and chain_id in target_chains:
                 template_path = os.path.abspath(str(template_info.get("cif", "")))
@@ -142,9 +159,24 @@ def main():
                     "chain_id": chain_id,
                     "template_id": chain_id,
                     "force": True,
+                    "threshold": args.template_threshold,
                 }]
             
             yaml_data["sequences"].append(entry)
+
+        if not shared_msa_bound and "NO_MSA" not in msa_abs_path and yaml_data["sequences"]:
+            yaml_data["sequences"][0]["protein"]["msa"] = msa_abs_path
+
+        if epitope_contacts and shared_msa_chain_ids:
+            binder_chain = sorted(shared_msa_chain_ids)[0]
+            yaml_data["constraints"] = [{
+                "pocket": {
+                    "binder": binder_chain,
+                    "contacts": epitope_contacts,
+                    "max_distance": args.pocket_max_distance,
+                    "force": bool(args.pocket_force),
+                }
+            }]
             
         # Write YAML
         out_yaml = Path(args.out_dir) / f"{name}.yaml"

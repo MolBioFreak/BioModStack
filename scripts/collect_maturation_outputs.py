@@ -28,7 +28,12 @@ def resolve_dest_name(path: Path, job_idx: int) -> Path:
         counter += 1
 
 
-def collect_files(output_dirs, patterns, subdirs):
+def is_final_ppiflow_pdb(path: Path) -> bool:
+    name = path.name.lower()
+    return name.endswith(".pdb") and "ppiflow" in name and not name.endswith("_enriched_complex.pdb")
+
+
+def collect_files(output_dirs, patterns, subdirs, predicate=None):
     collected = []
     seen_names = set()
     for job_idx, output_dir in enumerate(output_dirs):
@@ -43,6 +48,8 @@ def collect_files(output_dirs, patterns, subdirs):
                 continue
             for pattern in patterns:
                 for path in search_path.glob(pattern):
+                    if predicate is not None and not predicate(path):
+                        continue
                     if path.name in seen_names:
                         continue
                     dest = resolve_dest_name(path, job_idx)
@@ -75,8 +82,9 @@ def main():
 
     pdbs = collect_files(
         output_dirs,
-        patterns=["*_ppiflow_sample*.pdb"],
+        patterns=["*ppiflow*.pdb"],
         subdirs=search_subdirs,
+        predicate=is_final_ppiflow_pdb,
     )
 
     jsons = collect_files(

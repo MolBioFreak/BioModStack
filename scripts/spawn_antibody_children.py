@@ -43,6 +43,48 @@ def _child_display_name(display_prefix: str, stage_label: str, index: int, total
     return f"{prefix} · {stage_label}"
 
 
+def _coerce_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _coerce_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_protenix_msa_backend(value):
+    backend = str(value).strip().lower() if value is not None else ""
+    if backend in {"auto", "local", "colabfold_api"}:
+        return backend
+    return "auto"
+
+
+def _effective_validation_batch_size(requested_size: int, extra_params: dict, validator: str) -> tuple[int, str | None]:
+    size = max(1, _coerce_int(requested_size, 10))
+    if validator != "protenix" or not _coerce_bool(extra_params.get("protenix_use_msa", True), default=True):
+        return size, None
+
+    backend = _normalize_protenix_msa_backend(extra_params.get("protenix_msa_backend"))
+    cap_key = "protenix_local_msa_max_seqs_per_validation_job" if backend == "local" else "protenix_msa_max_seqs_per_validation_job"
+    cap = max(1, _coerce_int(extra_params.get(cap_key, 1), 1))
+    effective = min(size, cap)
+    if effective < size:
+        return effective, f"[SPAWN] Protenix MSA batching override: {size} -> {effective} seqs/job ({backend} backend)"
+    return effective, None
+
+
 def _normalize_pinned_gpus(raw_value):
     if raw_value in (None, "", []):
         return None
@@ -168,11 +210,18 @@ def spawn_children(
     
     # Calculate number of jobs based on ratio
     total_seqs = len(pdbs)
-    num_jobs = max(1, ceil(total_seqs / seqs_per_validation_job))
-    chunk_size = ceil(total_seqs / num_jobs)
     structure_validator = str(extra_params.get("structure_validator", "boltz2")).strip().lower()
     if structure_validator not in {"boltz2", "protenix"}:
         structure_validator = "boltz2"
+    effective_batch_size, batch_override_message = _effective_validation_batch_size(
+        seqs_per_validation_job,
+        extra_params,
+        structure_validator,
+    )
+    if batch_override_message:
+        print(batch_override_message)
+    num_jobs = max(1, ceil(total_seqs / effective_batch_size))
+    chunk_size = ceil(total_seqs / num_jobs)
     child_stage = "structure_validation"
     validator_label = "Protenix" if structure_validator == "protenix" else "Boltz"
     
@@ -199,7 +248,7 @@ def spawn_children(
     # =========================================================================
     # No existing children or all failed - proceed with fresh spawn
     # =========================================================================
-    print(f"[SPAWN] {total_seqs} sequences → {num_jobs} {validator_label} validation jobs ({seqs_per_validation_job} seqs/job ratio)")
+    print(f"[SPAWN] {total_seqs} sequences → {num_jobs} {validator_label} validation jobs ({effective_batch_size} seqs/job ratio)")
     
     created = 0
     failed = 0

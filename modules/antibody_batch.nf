@@ -23,6 +23,7 @@ process BatchBoltzValidation {
 
     script:
     def anchor_target = (params.boltz_anchor_target == true || params.boltz_anchor_target == 'true')
+    def geometryMode = params.boltz_target_geometry_mode ?: (anchor_target ? 'conditioned' : 'flexible')
     def anchor_strict = (params.boltz_anchor_strict == true || params.boltz_anchor_strict == 'true')
     def anchor_target_rmsd = params.boltz_anchor_target_max_rmsd ?: 1.5
     def boltzAnchorArgs = anchor_target ? "--anchor_target --target_chains \"${params.antigen_chains ?: 'T'}\" --template_manifest target_templates/manifest.json" : ""
@@ -45,7 +46,11 @@ process BatchBoltzValidation {
     python3 ${params.code_root}/scripts/prep_boltz_batch.py \\
         --pdb_files ${pdbs} \\
         --msa_path ${msa} \\
-        --out_dir yamls ${boltzAnchorArgs}
+        --out_dir yamls \\
+        --binder_chains "${params.antibody_chains ?: 'H,L'}" \\
+        --template_threshold ${params.target_template_threshold_angstrom ?: 2.0} \\
+        ${params.epitope_residues ? '--epitope_residues "' + params.epitope_residues + '"' : ''} \\
+        ${boltzAnchorArgs}
         
     # Run Boltz on the directory of YAMLs (Batch Mode)
     # This loads the model ONCE and processes all sequences
@@ -136,7 +141,7 @@ process BatchBoltzValidation {
         --design_type binder \\
         --binder_chains "${params.antibody_chains ?: 'H,L'}" \\
         --target_chains "${params.antigen_chains ?: 'T'}" \\
-        --geometry_mode "${anchor_target ? 'anchored' : 'flexible'}" ${boltzStrictArgs} \\
+        --geometry_mode "${geometryMode}" ${boltzStrictArgs} \\
         --ncpus ${task.cpus} \\
         2>&1 | tee alignment_batch.log
 
@@ -178,6 +183,7 @@ process BatchProtenixValidation {
     def n_cycle = params.protenix_n_cycle ?: 10
     def requested_template = (params.protenix_use_template == true || params.protenix_use_template == 'true')
     def anchor_target = (params.protenix_anchor_target == true || params.protenix_anchor_target == 'true')
+    def geometryMode = params.protenix_target_geometry_mode ?: (anchor_target ? 'conditioned' : 'flexible')
     def anchor_strict = (params.protenix_anchor_strict == true || params.protenix_anchor_strict == 'true')
     def anchor_target_rmsd = params.protenix_anchor_target_max_rmsd ?: 1.5
     def protenixStrictArgs = (anchor_target && anchor_strict) ? "--strict_target_rmsd ${anchor_target_rmsd}" : ""
@@ -187,6 +193,15 @@ process BatchProtenixValidation {
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
     def msa_backend = params.protenix_msa_backend ?: 'auto'
     def msa_allow_cpu_fallback = (params.protenix_allow_cpu_msa_fallback == true || params.protenix_allow_cpu_msa_fallback == 'true')
+    def local_msa_timeout_seconds = params.protenix_local_msa_timeout_seconds ?: 900
+    def externalTargetAsTarget = (
+        params.protenix_external_target_as_target == true ||
+        params.protenix_external_target_as_target == 'true' ||
+        (params.protenix_external_target_as_target == null && params.target_pdb)
+    )
+    def binderSourceChains = params.protenix_binder_source_chains ?: ''
+    def alignmentBinderChains = externalTargetAsTarget ? (binderSourceChains ?: 'A') : (params.antibody_chains ?: 'H,L')
+    def alignmentTargetChains = externalTargetAsTarget ? 'B' : (params.antigen_chains ?: 'T')
     def normalizeGpuCsv = { raw ->
         if (raw == null) return ''
         if (raw instanceof Collection) {
@@ -202,6 +217,7 @@ process BatchProtenixValidation {
     def msa_excluded_gpu_csv = normalizeGpuCsv(params.msa_excluded_gpus)
     def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
     def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
+    def msa_cache_only_flag = (params.msa_cache_only == true || params.msa_cache_only == 'true') ? '--cache-only' : ''
     def model_aliases = [
         'protenix_esm_20241211_v0.2.1': 'protenix_mini_esm_v0.5.0',
         'protenix_base_20241211_v0.2.1': 'protenix_base_default_v1.0.0'
@@ -216,8 +232,7 @@ process BatchProtenixValidation {
     set -euo pipefail
     shopt -s nullglob
 
-    mkdir -p original_designs raw_predictions predictions
-    cp ${pdbs} original_designs/
+    mkdir -p validation_designs raw_predictions predictions
 
     SHARED_PROTENIX_ROOT="${params.code_root}/.protenix_cache"
     if [ "${anchor_target}" = "true" ]; then
@@ -244,17 +259,31 @@ process BatchProtenixValidation {
     python3 ${params.code_root}/scripts/prep_protenix_batch.py \\
         --pdb_files ${pdbs} \\
         --out_json input.json \\
-        --seeds "${seeds}"
+        --out_pdb_dir validation_designs \\
+        --seeds "${seeds}" \\
+        --target_pdb "${params.target_pdb}" \\
+        --target_chains "${params.antigen_chains ?: ''}" \\
+        ${params.epitope_residues ? '--epitope_residues "' + params.epitope_residues + '"' : ''} \\
+        --auto_pocket_if_missing \\
+        --auto_pocket_max_residues ${params.protenix_auto_pocket_residue_count ?: 24} \\
+        --pocket_max_distance ${params.protenix_pocket_max_distance ?: 8.0} \\
+        ${externalTargetAsTarget ? '--external-target-as-target' : ''} \\
+        ${binderSourceChains ? '--binder_source_chains "' + binderSourceChains + '"' : ''} \\
+        ${params.target_model_number ? '--target_model_number ' + params.target_model_number : ''}
 
     if [ "${anchor_target}" = "true" ]; then
         python3 ${params.code_root}/scripts/extract_target_templates.py \\
-            --pdb_files ${pdbs} \\
-            --target_chains "${params.antigen_chains ?: 'T'}" \\
+            --pdb_files validation_designs/*.pdb \\
+            --target_chains "${externalTargetAsTarget ? 'B' : (params.antigen_chains ?: 'T')}" \\
             --out_dir "\$PROTENIX_ROOT_DIR/mmcif" \\
             --manifest target_template_manifest.json
         echo "[BatchProtenixValidation] Antibody validator mode: target-anchored co-fold. A task-local Protenix template DB was staged from the experimental target chains." | tee -a protenix_batch.log
     else
-        echo "[BatchProtenixValidation] Antibody validator mode: sequence-only complex co-fold with original chain IDs preserved in input.json." | tee -a protenix_batch.log
+        if [ "${externalTargetAsTarget}" = "true" ]; then
+            echo "[BatchProtenixValidation] Antibody validator mode: flexible co-fold using binder chains from source PDBs plus experimental target chains from ${params.target_pdb}." | tee -a protenix_batch.log
+        else
+            echo "[BatchProtenixValidation] Antibody validator mode: sequence-only complex co-fold with original chain IDs preserved in input.json." | tee -a protenix_batch.log
+        fi
     fi
     if [ "${requested_template}" = "true" ] && [ "${anchor_target}" != "true" ]; then
         echo "[BatchProtenixValidation] Generic template DB conditioning enabled for this run; no explicit target anchoring is applied." | tee -a protenix_batch.log
@@ -275,6 +304,9 @@ process BatchProtenixValidation {
             --output_json prepared_input.json \\
             --out_dir msa_prepared \\
             --backend "${msa_backend}" \\
+            --binder-chain-ids "${alignmentBinderChains}" \\
+            --binder-max-unpaired-msa-rows ${params.protenix_binder_max_unpaired_msa_rows ?: 256} \\
+            --binder-min-residue-coverage ${params.protenix_binder_min_residue_coverage ?: 0.5} \\
             --colabfold-api-host "${params.colabfold_api_host ?: 'https://api.colabfold.com'}" \\
             --db-path "${params.msa_local_db}" \\
             --cache-dir "\$PROTENIX_MSA_CACHE_DIR" \\
@@ -289,6 +321,8 @@ process BatchProtenixValidation {
             --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
             --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 0} \\
             --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 1.0} \\
+            --local-msa-timeout-seconds ${local_msa_timeout_seconds} \\
+            ${msa_cache_only_flag} \\
             ${msa_allow_cpu_fallback_flag} \\
             2>&1 | tee protenix_msa_prep.log
         PROTENIX_INPUT_JSON="prepared_input.json"
@@ -316,13 +350,13 @@ process BatchProtenixValidation {
         exit 1
     fi
     python3 ${params.code_root}/scripts/align_protenix.py \\
-        --design_dir ./original_designs \\
+        --design_dir ./validation_designs \\
         --protenix_dir ./raw_predictions \\
         --output_dir predictions \\
         --design_type binder \\
-        --binder_chains "${params.antibody_chains ?: 'H,L'}" \\
-        --target_chains "${params.antigen_chains ?: 'T'}" \\
-        --geometry_mode "${anchor_target ? 'anchored' : 'flexible'}" ${protenixStrictArgs} \\
+        --binder_chains "${alignmentBinderChains}" \\
+        --target_chains "${alignmentTargetChains}" \\
+        --geometry_mode "${geometryMode}" ${protenixStrictArgs} \\
         --ncpus ${task.cpus} \\
         2>&1 | tee alignment_protenix.log
 

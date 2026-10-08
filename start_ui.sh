@@ -9,6 +9,8 @@ FRONTEND_LOG="/tmp/biomodstack_frontend.log"
 API_RELOAD_RAW="${BMS_API_RELOAD:-1}"
 CPU_POWER_STRICT_RAW="${BMS_CPU_POWER_STRICT:-1}"
 RAPL_ENERGY_PATH="${BMS_CPU_POWER_RAPL_PATH:-/sys/class/powercap/intel-rapl:0/energy_uj}"
+SUDO_PASSWORD="${BMS_SUDO_PASSWORD:-}"
+SUDO_SESSION_PRIMED=0
 
 # Load NVM if available to ensure correct Node version
 export NVM_DIR="$HOME/.nvm"
@@ -41,6 +43,43 @@ cpu_power_strict_enabled() {
         0|false|no|off) return 1 ;;
         *) return 0 ;;
     esac
+}
+
+run_privileged_shell() {
+    local cmd=$1
+    if command -v sudo >/dev/null 2>&1 && ensure_sudo_session; then
+        sudo -n /bin/bash -lc "$cmd"
+    else
+        pkexec /bin/bash -lc "$cmd"
+    fi
+}
+
+ensure_sudo_session() {
+    if [ "$SUDO_SESSION_PRIMED" -eq 1 ]; then
+        return 0
+    fi
+    if ! command -v sudo >/dev/null 2>&1; then
+        return 1
+    fi
+    if sudo -n true >/dev/null 2>&1; then
+        SUDO_SESSION_PRIMED=1
+        return 0
+    fi
+    if [ -z "$SUDO_PASSWORD" ]; then
+        return 1
+    fi
+    printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' -v >/dev/null 2>&1 || return 1
+    SUDO_SESSION_PRIMED=1
+    return 0
+}
+
+ensure_api_log_writable() {
+    if [ -e "$API_LOG" ] && [ ! -w "$API_LOG" ] && { [ -n "$SUDO_PASSWORD" ] || command -v pkexec >/dev/null 2>&1; }; then
+        echo "   🔐 Reclaiming API log ownership..."
+        run_privileged_shell "rm -f '$API_LOG'"
+    fi
+    touch "$API_LOG" 2>/dev/null || true
+    chmod 0644 "$API_LOG" 2>/dev/null || true
 }
 
 rapl_requires_privileged_api_launch() {
@@ -84,26 +123,41 @@ launch_api_with_rapl_caps() {
         echo "❌ Missing RAPL capability launcher: $helper"
         return 1
     fi
-    if ! command -v pkexec >/dev/null 2>&1; then
+    if ! command -v sudo >/dev/null 2>&1 && ! command -v pkexec >/dev/null 2>&1; then
         echo "❌ pkexec is required for accurate CPU power telemetry"
         return 1
     fi
 
     echo "   Authenticating API launch for accurate CPU RAPL telemetry..."
-    DISPLAY="${DISPLAY:-:0}" \
-    XAUTHORITY="${XAUTHORITY:-/run/user/$(id -u)/gdm/Xauthority}" \
-        pkexec env \
-        TARGET_USER="$(id -un)" \
-        TARGET_UID="$(id -u)" \
-        TARGET_GID="$(id -g)" \
-        TARGET_HOME="$HOME" \
-        TARGET_PATH="$PATH" \
-        PROJECT_DIR="$PROJECT_DIR" \
-        API_LOG="$API_LOG" \
-        API_CMD="$api_cmd" \
-        BMS_INPUTS="${BMS_INPUTS:-}" \
-        BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-}" \
-        "$helper"
+    if command -v sudo >/dev/null 2>&1 && ensure_sudo_session; then
+        sudo -n env \
+            TARGET_USER="$(id -un)" \
+            TARGET_UID="$(id -u)" \
+            TARGET_GID="$(id -g)" \
+            TARGET_HOME="$HOME" \
+            TARGET_PATH="$PATH" \
+            PROJECT_DIR="$PROJECT_DIR" \
+            API_LOG="$API_LOG" \
+            API_CMD="$api_cmd" \
+            BMS_INPUTS="${BMS_INPUTS:-}" \
+            BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-}" \
+            "$helper"
+    else
+        DISPLAY="${DISPLAY:-:0}" \
+        XAUTHORITY="${XAUTHORITY:-/run/user/$(id -u)/gdm/Xauthority}" \
+            pkexec env \
+            TARGET_USER="$(id -un)" \
+            TARGET_UID="$(id -u)" \
+            TARGET_GID="$(id -g)" \
+            TARGET_HOME="$HOME" \
+            TARGET_PATH="$PATH" \
+            PROJECT_DIR="$PROJECT_DIR" \
+            API_LOG="$API_LOG" \
+            API_CMD="$api_cmd" \
+            BMS_INPUTS="${BMS_INPUTS:-}" \
+            BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-}" \
+            "$helper"
+    fi
 }
 
 check_port() {
@@ -111,6 +165,10 @@ check_port() {
     if lsof -i :$port > /dev/null; then
         echo "   ⚠️  Port $port is still in use. Killing process..."
         fuser -k -n tcp $port > /dev/null 2>&1
+        if lsof -i :$port > /dev/null 2>&1 && { [ -n "$SUDO_PASSWORD" ] || command -v pkexec >/dev/null 2>&1; }; then
+            echo "   🔐 Escalating to clear privileged listener on port $port..."
+            run_privileged_shell "fuser -k -n tcp $port > /dev/null 2>&1 || true"
+        fi
     fi
 }
 
@@ -125,6 +183,7 @@ start_services() {
 
     # Start API
     cd "$PROJECT_DIR/platform/api"
+    ensure_api_log_writable
     # Check/Kill port 8000
     check_port 8000
     

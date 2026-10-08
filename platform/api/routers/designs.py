@@ -112,8 +112,12 @@ async def _hydrate_review_job(session: AsyncSession, job: Optional[Job]) -> Opti
         changed = True
 
     if review_stage in REVIEWABLE_STAGES and bool(job.awaiting_input):
-        await ensure_stage_review_rows(session, job)
-        changed = True
+        existing_design_count = await session.scalar(
+            select(func.count()).select_from(Design).where(Design.job_id == job.id)
+        )
+        if not existing_design_count:
+            await ensure_stage_review_rows(session, job)
+            changed = True
 
     if changed:
         await session.commit()
@@ -1213,10 +1217,12 @@ async def _collect_plotly_metrics(
     if not include_children:
         await _hydrate_review_job(session, job)
 
-    job_ids = [job_id]
-    if include_children:
-        child_result = await session.execute(select(Job.id).where(Job.parent_job_id == job_id))
-        job_ids.extend([row[0] for row in child_result.all()])
+    job_ids = await _resolve_design_query_job_ids(
+        session,
+        job_id,
+        include_children=include_children,
+        job=job,
+    )
 
     clean_design_ids = [design_id.strip() for design_id in (requested_design_ids or []) if design_id and design_id.strip()]
 
@@ -1256,6 +1262,34 @@ async def _collect_plotly_metrics(
         points=points,
         total=int(total),
     )
+
+
+async def _resolve_design_query_job_ids(
+    session: AsyncSession,
+    job_id: str,
+    include_children: bool,
+    job: Optional[Job] = None,
+) -> list[str]:
+    if not include_children:
+        return [job_id]
+
+    resolved_job = job
+    if resolved_job is None:
+        job_result = await session.execute(select(Job).where(Job.id == job_id))
+        resolved_job = job_result.scalar_one_or_none()
+
+    parent_design_count = await session.scalar(
+        select(func.count(Design.id)).where(
+            Design.job_id == job_id,
+            Design.source_stage.is_(None),
+        )
+    )
+    if parent_design_count and not bool(getattr(resolved_job, "awaiting_input", False)):
+        return [job_id]
+
+    child_result = await session.execute(select(Job.id).where(Job.parent_job_id == job_id))
+    child_job_ids = [row[0] for row in child_result.all()]
+    return [job_id] + child_job_ids
 
 
 # --- Endpoints ---
@@ -1398,13 +1432,12 @@ async def list_designs(
     conditions = []
     if job_id:
         if include_children:
-            # Get all child job IDs for this parent
-            child_query = select(Job.id).where(Job.parent_job_id == job_id)
-            child_result = await session.execute(child_query)
-            child_job_ids = [row[0] for row in child_result.all()]
-            
-            # Include both parent and children
-            all_job_ids = [job_id] + child_job_ids
+            all_job_ids = await _resolve_design_query_job_ids(
+                session,
+                job_id,
+                include_children=True,
+                job=selected_job,
+            )
             conditions.append(Design.job_id.in_(all_job_ids))
         else:
             conditions.append(Design.job_id == job_id)
@@ -1860,13 +1893,12 @@ async def get_designs_for_job(
     
     # Build job_id filter - include children if requested
     if include_children:
-        # Get all child job IDs for this parent
-        child_query = select(Job.id).where(Job.parent_job_id == job_id)
-        child_result = await session.execute(child_query)
-        child_job_ids = [row[0] for row in child_result.all()]
-        
-        # Include both parent and children
-        all_job_ids = [job_id] + child_job_ids
+        all_job_ids = await _resolve_design_query_job_ids(
+            session,
+            job_id,
+            include_children=True,
+            job=job,
+        )
         query = select(Design).where(Design.job_id.in_(all_job_ids)).order_by(Design.name)
         count_query = select(func.count(Design.id)).where(Design.job_id.in_(all_job_ids))
     else:
@@ -2339,4 +2371,110 @@ async def get_chain_pair_iptm(
         chain_ids=chain_labels,
         iptm_matrix=iptm_matrix,
         size=n
+    )
+
+
+@router.get("/export/fasta")
+async def export_fasta(
+    job_id: str = Query(...),
+    mode: str = Query("binder", description="binder or cdr"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Export binder or CDR sequences as FASTA for all designs in a job."""
+    from fastapi.responses import PlainTextResponse
+
+    result = await session.execute(
+        select(Design).where(Design.job_id == job_id)
+    )
+    designs = result.scalars().all()
+    if not designs:
+        raise HTTPException(status_code=404, detail="No designs found for this job")
+
+    job_result = await session.execute(select(Job).where(Job.id == job_id))
+    job_obj = job_result.scalar_one_or_none()
+    target_chains: set[str] = set()
+    if job_obj:
+        job_params = job_obj.params if isinstance(job_obj.params, dict) else {}
+        raw_antigen = job_params.get("antigen_chains") or ""
+        if isinstance(raw_antigen, str):
+            target_chains = {c.strip() for c in raw_antigen.split(",") if c.strip()}
+
+    lines: list[str] = []
+    for d in designs:
+        name_lower = (d.name or "").lower()
+        if "normalized_target" in name_lower or "target" == name_lower:
+            continue
+
+        if mode == "cdr":
+            cdr_parts: list[tuple[str, str]] = []
+            for label, attr in [("CDR-H1", "cdr_h1"), ("CDR-H2", "cdr_h2"), ("CDR-H3", "cdr_h3"),
+                                ("CDR-L1", "cdr_l1"), ("CDR-L2", "cdr_l2"), ("CDR-L3", "cdr_l3")]:
+                val = getattr(d, attr, None)
+                if isinstance(val, str) and val.strip():
+                    cdr_parts.append((label, val.strip()))
+            if cdr_parts:
+                header_annot = " ".join(f"{lbl}={seq}" for lbl, seq in cdr_parts)
+                lines.append(f">{d.name} {header_annot}")
+                lines.append("".join(seq for _, seq in cdr_parts))
+                continue
+
+        seq = _compute_binder_sequence_response_value(d, include_structure_fallback=True)
+        if d.pdb_path:
+            try:
+                structure_path = Path(d.pdb_path)
+                if structure_path.exists():
+                    sequences = extract_sequence_from_pdb(str(structure_path))
+                    detected_binder_chains = {
+                        chain_id.strip()
+                        for chain_id in str(getattr(d, "detected_antibody_chains", "") or "").split(",")
+                        if chain_id.strip()
+                    }
+                    detected_target_chains = {
+                        chain_id.strip()
+                        for chain_id in str(getattr(d, "detected_target_chain", "") or "").split(",")
+                        if chain_id.strip()
+                    }
+
+                    if detected_binder_chains:
+                        binder_seqs = [
+                            sequences[cid].strip()
+                            for cid in detected_binder_chains
+                            if isinstance(sequences.get(cid), str) and sequences[cid].strip()
+                        ]
+                        if binder_seqs:
+                            seq = "|".join(binder_seqs)
+                    elif not seq:
+                        excluded_chains = detected_target_chains or target_chains
+                        binder_seqs = [
+                            sequences[cid].strip()
+                            for cid in sequences
+                            if cid not in excluded_chains
+                            and isinstance(sequences.get(cid), str)
+                            and sequences[cid].strip()
+                        ]
+                        if binder_seqs:
+                            seq = "|".join(binder_seqs)
+            except Exception:
+                pass
+        if seq:
+            chains = seq.split("|")
+            if len(chains) > 1:
+                for idx, chain in enumerate(chains):
+                    if chain.strip():
+                        lines.append(f">{d.name}_chain{idx + 1}")
+                        lines.append(chain.strip())
+            else:
+                lines.append(f">{d.name}")
+                lines.append(seq.strip())
+
+    if not lines:
+        raise HTTPException(status_code=404, detail="No sequences could be extracted")
+
+    job_name = ((job_obj.name if job_obj else None) or "designs").replace(" ", "_")
+    filename = f"{job_name}_{mode}_sequences.fasta"
+
+    return PlainTextResponse(
+        "\n".join(lines) + "\n",
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
