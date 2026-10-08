@@ -100,7 +100,7 @@ def test_fastq_qc_has_one_authoritative_fail_closed_method() -> None:
     config = (ROOT / "nextflow.config").read_text(encoding="utf-8")
 
     assert "withLabel: fastq_qc_cpu" in config
-    assert 'container = "${params.container_dir}/dorado.sif"' in config
+    assert "container = params.dorado_runtime_sif" in config
     assert "apptainer" not in module
     assert "mpileup" not in module
     assert "fallback" not in module.lower()
@@ -128,7 +128,7 @@ def test_fastq_qc_has_one_authoritative_fail_closed_method() -> None:
     assert "igv_standalone_track_config.json" in module
     assert "validate_standalone_igv_report.py" in module
     assert "IGV_REPORT_ARTIFACT_OVERSIZED" in module
-    assert "67108864" in module
+    assert "100663296" in module
     assert '"url": "\\${bam_local}"' not in module
     assert "/api/files/" not in module
     assert "<!doctype html>" not in module

@@ -1477,6 +1477,22 @@ async def test_external_alignment_resolver_discards_reference_if_bam_publication
             state="ready", manifest_sha256="e" * 64,
         ),
     })
+    domain = _LookupSession({
+        ("MolBioNGSReferenceRevision", "reference-revision-1"): SimpleNamespace(
+            id="reference-revision-1",
+            artifact_id="reference-artifact-1",
+            reference_id="reference-aggregate-1",
+            canonical_fasta_sha256=reference_sha,
+            canonical_fasta_size_bytes=len(reference_bytes),
+            topology="circular",
+        ),
+        ("MolBioNGSReferenceArtifact", "reference-artifact-1"): SimpleNamespace(
+            id="reference-artifact-1",
+            reference_id="reference-aggregate-1",
+            sha256=reference_sha,
+            size_bytes=len(reference_bytes),
+        ),
+    })
 
     async def resolve_reference(*_args, **_kwargs):
         return SimpleNamespace(
@@ -1516,7 +1532,7 @@ async def test_external_alignment_resolver_discards_reference_if_bam_publication
     ) as caught:
         await service.resolve_external_alignment_launch_authority(
             core,
-            _LookupSession({}),
+            domain,
             move_source_id="moves-1",
             reference_revision_id="reference-revision-1",
             global_domain_experiment_id="domain-1",
