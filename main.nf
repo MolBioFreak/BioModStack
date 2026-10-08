@@ -29,7 +29,7 @@ include { structure_prediction_wf } from './modules/structure_prediction.nf'
 // Antibody Design Subworkflow
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
-// De Novo Antibody Pipeline (RFantibody → FAMPNN/AntiFold → Boltz2 → AntiBERTy → ThermoMPNN → IgGM)
+// De Novo Antibody Pipeline (RFantibody -> FAMPNN/AntiFold -> Boltz2 -> AntiBERTy -> ThermoMPNN -> IgGM)
 include { ANTIBODY_DENOVO } from './workflows/antibody_denovo.nf'
 
 workflow {
@@ -37,7 +37,7 @@ workflow {
     try {
         nextflow.preview.topic = true
     }
-    catch (_e: Exception) {
+    catch (Exception e) {
     }
 
     def outputDirectory = params.out_dir
