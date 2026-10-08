@@ -66,10 +66,8 @@ process RFDPolyDesign {
         ? "diffuser.guidance_scale=2.0"
         : ""
 
-    // Noise schedule (linear or cosine)
-    def noise_arg = params.rfdpoly_noise_schedule
-        ? "diffuser.noise_schedule=${params.rfdpoly_noise_schedule}"
-        : ""
+    // Note: noise_schedule is not a valid RFDpoly config key (causes Hydra error)
+    // Linear is the default behavior in RFDpoly
 
     // Advanced params: temperature, seed
     def temp_arg = params.rfdpoly_temperature ? "diffuser.partial_T=${params.rfdpoly_temperature}" : ""
@@ -90,7 +88,6 @@ process RFDPolyDesign {
         ${target_arg} \\
         ${hotspot_arg} \\
         ${guidance_arg} \\
-        ${noise_arg} \\
         ${temp_arg} \\
         ${seed_arg} \\
         inference.output_prefix=./${design_id}

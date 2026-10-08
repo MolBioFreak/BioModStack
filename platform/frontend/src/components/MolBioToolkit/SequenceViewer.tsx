@@ -74,6 +74,7 @@ interface SequenceViewerProps {
     onSearch?: (results: { start: number; end: number }[]) => void;
     highlightedRegions?: { start: number; end: number; color: string }[];
     className?: string;
+    viewMode?: 'linear' | 'circular' | 'both' | 'both_flip';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -103,7 +104,8 @@ export function SequenceViewer({
     onSelection,
     onSearch,
     highlightedRegions,
-    className
+    className,
+    viewMode
 }: SequenceViewerProps) {
 
     // Build annotations array based on visibility toggles
@@ -174,9 +176,18 @@ export function SequenceViewer({
                 annotations={annotations}
                 translations={translations}
                 enzymes={visibility.cutsites ? selectedEnzymes : []}
-                viewer={sequenceData.circular ? "both" : "linear"}
+                viewer={viewMode || (sequenceData.circular ? "both" : "linear")}
                 showComplement={visibility.reverseComplement}
                 rotateOnScroll
+
+                // Base pair colors for dark mode visibility
+                bpColors={{
+                    A: "#22c55e",  // Green for Adenine
+                    T: "#ef4444",  // Red for Thymine  
+                    G: "#f59e0b",  // Amber for Guanine
+                    C: "#3b82f6",  // Blue for Cytosine
+                    U: "#ec4899",  // Pink for Uracil (RNA)
+                }}
 
                 // Selection handling with type info
                 onSelection={(sel) => {

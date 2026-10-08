@@ -5,6 +5,8 @@
 import { ExportDropdown } from './ExportDropdown';
 import type { SequenceData } from './types';
 
+type ViewMode = 'linear' | 'circular' | 'both';
+
 interface SequenceHeaderProps {
     sequenceData: SequenceData;
     onSave?: () => void;
@@ -16,6 +18,10 @@ interface SequenceHeaderProps {
     isDirty?: boolean;
     loading?: boolean;
     isAnnotating?: boolean;
+    viewMode?: ViewMode;
+    onViewModeChange?: (mode: ViewMode) => void;
+    showGCTrack?: boolean;
+    onGCTrackToggle?: () => void;
 }
 
 function calculateGC(sequence: string): number {
@@ -34,7 +40,11 @@ export function SequenceHeader({
     canRedo = false,
     isDirty = false,
     loading = false,
-    isAnnotating = false
+    isAnnotating = false,
+    viewMode = 'both',
+    onViewModeChange,
+    showGCTrack = true,
+    onGCTrackToggle
 }: SequenceHeaderProps) {
     const gcContent = calculateGC(sequenceData.sequence);
 
@@ -97,6 +107,61 @@ export function SequenceHeader({
                         </svg>
                     </button>
                 </div>
+
+                {/* View Mode Toggle (only show for circular sequences) */}
+                {sequenceData.circular && onViewModeChange && (
+                    <div className="flex items-center border-r border-slate-600 pr-2 mr-2">
+                        <div className="flex rounded overflow-hidden border border-slate-600">
+                            <button
+                                onClick={() => onViewModeChange('linear')}
+                                className={`px-2 py-1 text-xs transition-colors ${viewMode === 'linear'
+                                    ? 'bg-purple-600 text-white'
+                                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                    }`}
+                                title="Linear view only"
+                            >
+                                Linear
+                            </button>
+                            <button
+                                onClick={() => onViewModeChange('both')}
+                                className={`px-2 py-1 text-xs border-x border-slate-600 transition-colors ${viewMode === 'both'
+                                    ? 'bg-purple-600 text-white'
+                                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                    }`}
+                                title="Both views split"
+                            >
+                                Both
+                            </button>
+                            <button
+                                onClick={() => onViewModeChange('circular')}
+                                className={`px-2 py-1 text-xs transition-colors ${viewMode === 'circular'
+                                    ? 'bg-purple-600 text-white'
+                                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                    }`}
+                                title="Circular view only"
+                            >
+                                Circular
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* GC Track Toggle */}
+                {onGCTrackToggle && (
+                    <button
+                        onClick={onGCTrackToggle}
+                        className={`flex items-center gap-1 px-2 py-1.5 rounded text-sm transition-colors border-r border-slate-600 mr-2 pr-3 ${showGCTrack
+                                ? 'text-emerald-400 hover:bg-slate-700'
+                                : 'text-slate-500 hover:bg-slate-700'
+                            }`}
+                        title={showGCTrack ? 'Hide GC content track' : 'Show GC content track'}
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                        </svg>
+                        GC%
+                    </button>
+                )}
 
                 {/* Auto-Annotate */}
                 {onAutoAnnotate && (

@@ -12,6 +12,8 @@ import { VisibilityPanel } from './VisibilityPanel';
 import { useSequenceHistory } from './hooks/useSequenceHistory';
 import { useSequenceOperations } from './hooks/useSequenceOperations';
 import { DigestPanel, PCRPanel, PrimerPanel, FeaturePanel } from './panels';
+import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePanel';
+import { GCContentTrack } from './GCContentTrack';
 import type {
     SequenceData,
     VisibilityState,
@@ -267,6 +269,12 @@ export function MolBioToolkitV2() {
     const [highlightedRegions, setHighlightedRegions] = useState<HighlightedRegion[]>([]);
     const [isDirty, setIsDirty] = useState(false);
 
+    // Common restriction enzymes for SeqViz
+    const [selectedEnzymes] = useState<string[]>([
+        'EcoRI', 'BamHI', 'HindIII', 'XbaI', 'SalI', 'PstI', 'SmaI', 'KpnI', 'SacI', 'XhoI',
+        'NotI', 'NdeI', 'NcoI', 'BglII', 'SpeI', 'MluI', 'ApaI', 'ClaI', 'EcoRV', 'NheI'
+    ]);
+
     // History hook for undo/redo
     const {
         sequenceData,
@@ -438,19 +446,27 @@ export function MolBioToolkitV2() {
 
     // Auto-annotation state
     const [isAnnotating, setIsAnnotating] = useState(false);
+    const [showAnnotatePanel, setShowAnnotatePanel] = useState(false);
 
-    // Auto-annotate handler - calls pLannotate API to detect features
-    const handleAutoAnnotate = useCallback(async () => {
+    // View mode state (for circular view toggle)
+    type ViewMode = 'linear' | 'circular' | 'both';
+    const [viewMode, setViewMode] = useState<ViewMode>('both');
+
+    // GC track visibility state
+    const [showGCTrack, setShowGCTrack] = useState(true);
+
+    // Open auto-annotate settings panel
+    const handleAutoAnnotate = useCallback(() => {
+        setShowAnnotatePanel(true);
+    }, []);
+
+    // Run auto-annotation with user settings
+    const runAutoAnnotate = useCallback(async (settings: AutoAnnotateSettings) => {
         if (!sequenceData.sequence) return;
 
-        // Warn if already has features
-        if (sequenceData.features.length > 0) {
-            if (!confirm('Sequence already has features. Add detected features?')) {
-                return;
-            }
-        }
-
+        setShowAnnotatePanel(false);
         setIsAnnotating(true);
+
         try {
             const response = await fetch('/api/molbio/auto-annotate', {
                 method: 'POST',
@@ -458,8 +474,8 @@ export function MolBioToolkitV2() {
                 body: JSON.stringify({
                     sequence: sequenceData.sequence,
                     is_linear: !sequenceData.circular,
-                    detailed: false,
-                    min_identity: 50.0
+                    detailed: settings.detailed,
+                    min_identity: settings.minIdentity
                 })
             });
 
@@ -468,10 +484,16 @@ export function MolBioToolkitV2() {
                 throw new Error(error.detail || `HTTP ${response.status}`);
             }
 
-            const { features, message } = await response.json();
+            const { features: detectedFeatures, message } = await response.json();
 
-            if (features.length === 0) {
-                alert('No common features detected.');
+            // Apply fragment filter if enabled
+            let filteredFeatures = detectedFeatures;
+            if (settings.filterFragments) {
+                filteredFeatures = detectedFeatures.filter((f: any) => !f.is_fragment);
+            }
+
+            if (filteredFeatures.length === 0) {
+                alert('No features detected matching your criteria.');
                 return;
             }
 
@@ -487,7 +509,7 @@ export function MolBioToolkitV2() {
             };
 
             // Convert detected features to our Feature format
-            const newFeatures: Feature[] = features.map((f: any, i: number) => ({
+            const newFeatures: Feature[] = filteredFeatures.map((f: any, i: number) => ({
                 id: `auto_${Date.now()}_${i}`,
                 name: f.name,
                 type: f.type,
@@ -504,7 +526,7 @@ export function MolBioToolkitV2() {
                 features: [...sequenceData.features, ...newFeatures]
             });
 
-            alert(`Detected ${features.length} features! ${message}`);
+            alert(`Detected ${filteredFeatures.length} features! ${message}`);
         } catch (error) {
             console.error('Auto-annotation failed:', error);
             alert(`Auto-annotation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -540,113 +562,150 @@ export function MolBioToolkitV2() {
     }, [undo, redo, saveSequence]);
 
     return (
-        <div className="molbio-toolkit h-full w-full flex bg-slate-900 text-slate-100 overflow-hidden">
-            {/* Left: Sequence Library */}
-            <SequenceLibrary
-                sequences={sequences}
-                selectedId={selectedSequenceId}
-                onSelect={loadSequence}
-                onRefresh={loadLibrary}
-                onImport={handleImport}
-                onLoadDemo={loadDemo}
-                loading={loading}
-            />
-
-            {/* Center: Viewer */}
-            <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-                <SequenceHeader
-                    sequenceData={sequenceData}
-                    onSave={selectedSequenceId ? saveSequence : undefined}
-                    onUndo={undo}
-                    onRedo={redo}
-                    canUndo={canUndo}
-                    canRedo={canRedo}
-                    isDirty={isDirty}
+        <>
+            <div className="molbio-toolkit h-full w-full flex bg-slate-900 text-slate-100 overflow-hidden">
+                {/* Left: Sequence Library */}
+                <SequenceLibrary
+                    sequences={sequences}
+                    selectedId={selectedSequenceId}
+                    onSelect={loadSequence}
+                    onRefresh={loadLibrary}
+                    onImport={handleImport}
+                    onLoadDemo={loadDemo}
                     loading={loading}
                 />
 
-                <div className="flex-1 overflow-hidden">
-                    {sequenceData.sequence ? (
-                        <SequenceViewer
-                            sequenceData={sequenceData}
-                            visibility={visibility}
-                            onSelection={handleSelection}
-                            highlightedRegions={highlightedRegions}
-                        />
-                    ) : (
-                        <div className="flex items-center justify-center h-full text-slate-500">
-                            <div className="text-center">
-                                <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                </svg>
-                                <p className="text-lg">Select a sequence from the library</p>
-                                <p className="text-sm mt-1">or expand "Demo Plasmids" to try one</p>
+                {/* Center: Viewer */}
+                <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+                    <SequenceHeader
+                        sequenceData={sequenceData}
+                        onSave={selectedSequenceId ? saveSequence : undefined}
+                        onUndo={undo}
+                        onRedo={redo}
+                        onAutoAnnotate={handleAutoAnnotate}
+                        canUndo={canUndo}
+                        canRedo={canRedo}
+                        isDirty={isDirty}
+                        loading={loading}
+                        isAnnotating={isAnnotating}
+                        viewMode={viewMode}
+                        onViewModeChange={setViewMode}
+                        showGCTrack={showGCTrack}
+                        onGCTrackToggle={() => setShowGCTrack(prev => !prev)}
+                    />
+
+
+                    <div className="flex-1 overflow-hidden flex flex-col">
+                        {sequenceData.sequence ? (
+                            <>
+                                {/* GC Content Track */}
+                                {showGCTrack && (
+                                    <GCContentTrack
+                                        sequence={sequenceData.sequence}
+                                        selection={selection}
+                                        windowSize={Math.max(20, Math.min(100, Math.floor(sequenceData.sequence.length / 50)))}
+                                        height={120}
+                                    />
+                                )}
+
+                                {/* Sequence Viewer */}
+                                <div className="flex-1 overflow-hidden">
+                                    <SequenceViewer
+                                        sequenceData={sequenceData}
+                                        visibility={visibility}
+                                        selectedEnzymes={selectedEnzymes}
+                                        onSelection={handleSelection}
+                                        highlightedRegions={highlightedRegions}
+                                        viewMode={viewMode}
+                                    />
+                                </div>
+                            </>
+                        ) : (
+                            <div className="flex items-center justify-center h-full text-slate-500">
+                                <div className="text-center">
+                                    <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                    </svg>
+                                    <p className="text-lg">Select a sequence from the library</p>
+                                    <p className="text-sm mt-1">or expand "Demo Plasmids" to try one</p>
+                                </div>
                             </div>
+                        )}
+                    </div>
+
+                    {/* Selection info bar */}
+                    {selection && (
+                        <div className="px-4 py-1 bg-slate-800 border-t border-slate-700 text-sm text-slate-400 flex-shrink-0">
+                            Selected: {selection.start + 1} - {selection.end + 1} ({selection.end - selection.start + 1} bp)
                         </div>
                     )}
                 </div>
 
-                {/* Selection info bar */}
-                {selection && (
-                    <div className="px-4 py-1 bg-slate-800 border-t border-slate-700 text-sm text-slate-400 flex-shrink-0">
-                        Selected: {selection.start + 1} - {selection.end + 1} ({selection.end - selection.start + 1} bp)
+                {/* Right: Tool Panels */}
+                <div className="w-72 flex-shrink-0 border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden">
+                    <PanelTabs active={activePanel} onChange={setActivePanel} />
+
+                    <div className="flex-1 overflow-y-auto">
+                        {activePanel === null && (
+                            <VisibilityPanel
+                                visibility={visibility}
+                                onChange={handleVisibilityChange}
+                            />
+                        )}
+                        {activePanel === 'digest' && (
+                            <DigestPanel
+                                sequenceData={sequenceData}
+                                sequenceId={selectedSequenceId}
+                                onHighlight={setHighlightedRegions}
+                            />
+                        )}
+                        {activePanel === 'pcr' && (
+                            <PCRPanel
+                                sequenceData={sequenceData}
+                                sequenceId={selectedSequenceId}
+                                onHighlight={setHighlightedRegions}
+                            />
+                        )}
+                        {activePanel === 'primers' && (
+                            <PrimerPanel
+                                sequenceData={sequenceData}
+                                selection={selection}
+                                onHighlight={setHighlightedRegions}
+                                onAddPrimer={handleAddPrimer}
+                                onRemovePrimer={handleRemovePrimer}
+                            />
+                        )}
+                        {activePanel === 'features' && (
+                            <FeaturePanel
+                                sequenceData={sequenceData}
+                                selection={selection}
+                                onHighlight={setHighlightedRegions}
+                                onAddFeature={handleAddFeature}
+                                onRemoveFeature={handleRemoveFeature}
+                            />
+                        )}
                     </div>
-                )}
-            </div>
 
-            {/* Right: Tool Panels */}
-            <div className="w-72 flex-shrink-0 border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden">
-                <PanelTabs active={activePanel} onChange={setActivePanel} />
-
-                <div className="flex-1 overflow-y-auto">
-                    {activePanel === null && (
-                        <VisibilityPanel
-                            visibility={visibility}
-                            onChange={handleVisibilityChange}
-                        />
-                    )}
-                    {activePanel === 'digest' && (
-                        <DigestPanel
-                            sequenceData={sequenceData}
-                            sequenceId={selectedSequenceId}
-                            onHighlight={setHighlightedRegions}
-                        />
-                    )}
-                    {activePanel === 'pcr' && (
-                        <PCRPanel
-                            sequenceData={sequenceData}
-                            sequenceId={selectedSequenceId}
-                            onHighlight={setHighlightedRegions}
-                        />
-                    )}
-                    {activePanel === 'primers' && (
-                        <PrimerPanel
-                            sequenceData={sequenceData}
-                            selection={selection}
-                            onHighlight={setHighlightedRegions}
-                            onAddPrimer={handleAddPrimer}
-                            onRemovePrimer={handleRemovePrimer}
-                        />
-                    )}
-                    {activePanel === 'features' && (
-                        <FeaturePanel
-                            sequenceData={sequenceData}
-                            selection={selection}
-                            onHighlight={setHighlightedRegions}
-                            onAddFeature={handleAddFeature}
-                            onRemoveFeature={handleRemoveFeature}
-                        />
+                    {/* Error display */}
+                    {error && (
+                        <div className="p-3 bg-red-900/50 border-t border-red-800 text-red-300 text-sm flex-shrink-0">
+                            Error: {error}
+                        </div>
                     )}
                 </div>
-
-                {/* Error display */}
-                {error && (
-                    <div className="p-3 bg-red-900/50 border-t border-red-800 text-red-300 text-sm flex-shrink-0">
-                        Error: {error}
-                    </div>
-                )}
             </div>
-        </div>
+
+            {/* Auto-Annotate Settings Panel */}
+            <AutoAnnotatePanel
+                isOpen={showAnnotatePanel}
+                onClose={() => setShowAnnotatePanel(false)}
+                onAnnotate={runAutoAnnotate}
+                isAnnotating={isAnnotating}
+                hasSequence={!!sequenceData.sequence}
+                sequenceLength={sequenceData.sequence.length}
+                isCircular={sequenceData.circular}
+            />
+        </>
     );
 }
 
