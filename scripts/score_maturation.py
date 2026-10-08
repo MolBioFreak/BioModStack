@@ -44,7 +44,8 @@ def detect_interface_residues(pose, ab_chains, ag_chains, distance_cutoff):
         elif chain in ag_chains:
             ag_residues.append(i)
 
-    interface_residues = []
+    interface_ab = set()
+    interface_ag = set()
     for i in ab_residues:
         res_i = pose.residue(i)
         xyz_i = res_i.nbr_atom_xyz()
@@ -52,9 +53,10 @@ def detect_interface_residues(pose, ab_chains, ag_chains, distance_cutoff):
             res_j = pose.residue(j)
             xyz_j = res_j.nbr_atom_xyz()
             if xyz_i.distance(xyz_j) <= distance_cutoff:
-                interface_residues.append(i)
-                break
-    return interface_residues
+                interface_ab.add(i)
+                interface_ag.add(j)
+    
+    return sorted(list(interface_ab | interface_ag))
 
 
 def interface_score(pose, interface_residues):
@@ -131,7 +133,7 @@ def main():
     antibody_chains = parse_chain_list(args.antibody_chains)
     antigen_chains = parse_chain_list(args.antigen_chains)
 
-    pyrosetta.init("-out:levels all:error")
+    pyrosetta.init("-out:levels all:error -ignore_unrecognized_res 1")
     pose_original = pyrosetta.pose_from_pdb(args.original_pdb)
     pose_matured = pyrosetta.pose_from_pdb(args.matured_pdb)
     scorefxn = pyrosetta.get_fa_scorefxn()

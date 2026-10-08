@@ -34,7 +34,7 @@ process RunPartialFlow {
     tuple val(meta), path(complex_pdb), path(anchors_json), path(cdr_positions)
 
     output:
-    tuple val(meta), path("${meta.id}_ppiflow_backbone.pdb"), emit: backbones
+    tuple val(meta), path("ppiflow_backbones/*.pdb"), emit: backbones
 
     script:
     def antibodyChains = params.antibody_chains ?: 'H,L'
@@ -106,14 +106,16 @@ PY
         ${hotspotArg} \\
         --name "${meta.id}"
 
-    python - <<'PY'
+python - <<'PY'
 from pathlib import Path
 import shutil
 
 pdbs = sorted(Path("ppiflow_out").rglob("*.pdb"))
 if not pdbs:
     raise SystemExit("No PPIFlow PDB outputs found")
-shutil.copy2(pdbs[0], "${meta.id}_ppiflow_backbone.pdb")
+Path("ppiflow_backbones").mkdir(exist_ok=True)
+for i, pdb in enumerate(pdbs):
+    shutil.copy2(pdb, f"ppiflow_backbones/${meta.id}_ppiflow_sample{i}.pdb")
 PY
     """
 }
@@ -122,7 +124,7 @@ process PrepMaturationRedesign {
     label 'pyrosetta_tools'
 
     input:
-    tuple val(meta), path(backbone_pdb), path(anchors_json), path(cdr_positions), path(cdr_positions_by_loop)
+    tuple val(meta), path(backbone_pdbs), path(anchors_json), path(cdr_positions), path(cdr_positions_by_loop)
 
     output:
     tuple val(meta), path("fampnn_input/*.pdb"), path("fampnn.csv"), emit: prep
@@ -133,7 +135,8 @@ process PrepMaturationRedesign {
     def designMode = designModeRaw == 'inherit' ? (params.antibody_design_mode ?: 'cdr_only') : designModeRaw
     def protectTetrad = params.protect_vhh_tetrad != null ? params.protect_vhh_tetrad : true
     """
-    cp "${backbone_pdb}" ./input.pdb
+    mkdir -p input_pdbs
+    cp ${backbone_pdbs} ./input_pdbs/
 
     python /scripts/anchors_to_ppiflow_positions.py \\
         --anchors_json "${anchors_json}" \\
@@ -142,7 +145,7 @@ process PrepMaturationRedesign {
     anchors_spec=\$(cat fixed_positions.txt | tr -d '\\n')
 
     python /scripts/prep_fampnn_designs.py \\
-        --input_dir "./" \\
+        --input_dir "./input_pdbs" \\
         --out_dir "fampnn_input"
 
     cdr_positions=\$(cat "${cdr_positions}" | tr -d '\\n')
@@ -171,7 +174,7 @@ process RunMaturationFAMPNN {
     tuple val(meta), path(pdbs), path(csv)
 
     output:
-    tuple val(meta), path("${meta.id}_matured.pdb"), path("${meta.id}_matured.json"), emit: redesigned
+    tuple val(meta), path("matured_pdbs/*.pdb"), path("matured_jsons/*.json"), emit: redesigned
 
     script:
     def analysisChain = params.analysis_chain_id ?: 'all_chains'
@@ -200,7 +203,6 @@ process RunMaturationFAMPNN {
         base_name=\$(basename "\$file")
         new_name=\$(echo "\$base_name" | sed 's/sample/seq_/')
         cp "\$file" "results/\$new_name"
-        break
     done
 
     python /scripts/analyse_fampnn.py \\
@@ -209,10 +211,9 @@ process RunMaturationFAMPNN {
         --ignore_cbeta \\
         --out_dir results
 
-    mature_pdb=\$(ls results/*.pdb | head -n 1)
-    mature_json=\$(ls results/*.json | head -n 1)
-    cp "\${mature_pdb}" "${meta.id}_matured.pdb"
-    cp "\${mature_json}" "${meta.id}_matured.json"
+    mkdir -p matured_pdbs matured_jsons
+    cp results/*.pdb matured_pdbs/
+    cp results/*.json matured_jsons/
 
     if [ -n "${params.out_dir}" ]; then
         mkdir -p "${params.out_dir}/run/ppiflow/results" 2>/dev/null || true
@@ -227,23 +228,27 @@ process ScoreMaturationImprovement {
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*maturation_score.json"
 
     input:
-    tuple val(meta), path(original_pdb), path(matured_pdb)
+    tuple val(meta), path(original_pdb), path(matured_pdbs)
 
     output:
-    tuple val(meta), path("${meta.id}_maturation_score.json"), emit: scores
+    tuple val(meta), path("scores/*_maturation_score.json"), emit: scores
 
     script:
     def antibodyChains = params.antibody_chains ?: 'H,L'
     def antigenChains = params.antigen_chains ?: ''
     def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 8.0
     """
-    python /scripts/score_maturation.py \\
-        --original_pdb "${original_pdb}" \\
-        --matured_pdb "${matured_pdb}" \\
-        --antibody_chains "${antibodyChains}" \\
-        --antigen_chains "${antigenChains}" \\
-        --distance_cutoff ${distanceCutoff} \\
-        --output "${meta.id}_maturation_score.json"
+    mkdir -p scores
+    for matured_pdb in ${matured_pdbs}; do
+        base_name=\$(basename "\$matured_pdb" .pdb)
+        python /scripts/score_maturation.py \\
+            --original_pdb "${original_pdb}" \\
+            --matured_pdb "\$matured_pdb" \\
+            --antibody_chains "${antibodyChains}" \\
+            --antigen_chains "${antigenChains}" \\
+            --distance_cutoff ${distanceCutoff} \\
+            --output "scores/\${base_name}_maturation_score.json"
+    done
     """
 }
 
@@ -252,23 +257,27 @@ process ScorePartialFlowImprovement {
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*partial_flow_score.json"
 
     input:
-    tuple val(meta), path(original_pdb), path(matured_pdb)
+    tuple val(meta), path(original_pdb), path(matured_pdbs)
 
     output:
-    tuple val(meta), path("${meta.id}_partial_flow_score.json"), emit: scores
+    tuple val(meta), path("scores/*_partial_flow_score.json"), emit: scores
 
     script:
     def antibodyChains = params.antibody_chains ?: 'H,L'
     def antigenChains = params.antigen_chains ?: ''
     def distanceCutoff = params.maturation_anchor_distance_cutoff ?: 8.0
     """
-    python /scripts/score_maturation.py \\
-        --original_pdb "${original_pdb}" \\
-        --matured_pdb "${matured_pdb}" \\
-        --antibody_chains "${antibodyChains}" \\
-        --antigen_chains "${antigenChains}" \\
-        --distance_cutoff ${distanceCutoff} \\
-        --output "${meta.id}_partial_flow_score.json"
+    mkdir -p scores
+    for matured_pdb in ${matured_pdbs}; do
+        base_name=\$(basename "\$matured_pdb" .pdb)
+        python /scripts/score_maturation.py \\
+            --original_pdb "${original_pdb}" \\
+            --matured_pdb "\$matured_pdb" \\
+            --antibody_chains "${antibodyChains}" \\
+            --antigen_chains "${antigenChains}" \\
+            --distance_cutoff ${distanceCutoff} \\
+            --output "scores/\${base_name}_partial_flow_score.json"
+    done
     """
 }
 
@@ -278,23 +287,46 @@ process FilterByMaturation {
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*maturation_filter.json"
 
     input:
-    tuple val(meta), path(matured_pdb), path(score_json)
+    tuple val(meta), path(matured_pdbs), path(score_jsons)
 
     output:
     tuple val(meta), path("filtered_output/*.pdb"), emit: pdbs, optional: true
-    path ("${meta.id}_maturation_filter.json"), emit: filter_reports
+    path ("filter_reports/*_maturation_filter.json"), emit: filter_reports
 
     script:
     def minImprovement = params.maturation_min_improvement ?: -1.0
     def percentile = params.maturation_filter_percentile
     def percentileArg = percentile != null && percentile > 0 ? "--percentile ${percentile}" : ""
     """
-    python /scripts/filter_maturation.py \\
-        --score_json "${score_json}" \\
-        --pdb_path "${matured_pdb}" \\
-        --output_dir "filtered_output" \\
-        --min_improvement ${minImprovement} \\
-        ${percentileArg} \\
-        --report_json "${meta.id}_maturation_filter.json"
+    mkdir -p filtered_output filter_reports
+
+    python -c '
+import json
+from pathlib import Path
+scores = []
+for p in Path(".").glob("*.json"):
+    if "score.json" in p.name:
+        with open(p) as f:
+            data = json.load(f)
+            scores.append(data)
+with open("scores_manifest.json", "w") as f:
+    json.dump(scores, f)
+'
+
+    for matured_pdb in ${matured_pdbs}; do
+        base_name=\$(basename "\$matured_pdb" .pdb)
+        
+        # Determine the correct score JSON mapping
+        score_json="\${base_name}_maturation_score.json"
+        
+        python /scripts/filter_maturation.py \\
+            --score_json "\${score_json}" \\
+            --pdb_path "\$matured_pdb" \\
+            --output_dir "filtered_output" \\
+            --min_improvement ${minImprovement} \\
+            ${percentileArg} \\
+            --scores_manifest "scores_manifest.json" \\
+            --report_json "filter_reports/\${base_name}_maturation_filter.json"
+    done
     """
 }
