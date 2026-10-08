@@ -28,6 +28,7 @@ SAFE_FAILURE_REASONS = frozenset({
     "Saved recipe changed during preload",
     "Source identity changed during preload",
     "Cache source verification failed",
+    "Cache native invocation verification failed",
     "Remote transport timed out",
     "Remote SSH host key changed",
     "Prewarm source identity does not match current committed source",
@@ -179,6 +180,7 @@ class PreloadController:
             operation_id = str(uuid.uuid4())
             now = datetime.utcnow()
             progress = PreloadProgress(operation_id=operation_id, job_id=None if independent else request.job_id, selection=selection,
+                native_invocation_sha256=native_invocations[0].invocation_sha256 if native_invocations else None,
                 source_revision=revision, source_tree=tree, request_sha256=digest,
                 phase="checking", message="Checking source and runtime cache", started_at=now, updated_at=now)
             admitted = await session.execute(update(ExecutionTarget).where(admission_clause(target)).values(
@@ -302,6 +304,9 @@ class PreloadController:
             await check_fence()
             if (receipt.get("source_revision"), receipt.get("source_tree")) != (progress.source_revision, progress.source_tree):
                 raise ExecutionTargetError("Cache source verification failed")
+            if (progress.native_invocation_sha256 is not None
+                    and receipt.get('native_invocation_sha256') != progress.native_invocation_sha256):
+                raise ExecutionTargetError('Cache native invocation verification failed')
             progress.artifacts = [CachedArtifactReceipt.model_validate(row) for row in receipt.get("artifacts", [])]
             progress.phase = "source_download_ready"
             progress.artifact = None

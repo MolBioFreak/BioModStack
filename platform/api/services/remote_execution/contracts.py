@@ -103,6 +103,7 @@ class ProvisionPreview(StrictModel):
 class PreloadProgress(StrictModel):
     operation_id: str
     job_id: str | None = None
+    native_invocation_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
     selection: ProvisionSelection | None = None
     artifacts: list[CachedArtifactReceipt] = Field(default_factory=list)
     source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")

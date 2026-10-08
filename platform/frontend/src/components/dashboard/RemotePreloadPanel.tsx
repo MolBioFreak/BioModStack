@@ -52,6 +52,7 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
       <p>{preload.message}</p>
       {preload.artifact && <p className="break-all font-mono">{preload.artifact}</p>}
       <p className="text-xs text-[var(--text-muted)]">{preload.selection ? `${preload.selection.kind} ${preload.selection.model_id}` : `Recipe ${preload.job_id}`} · Source {preload.source_revision.slice(0, 12)} · Updated {preload.updated_at}</p>
+      {preload.native_invocation_sha256 && <p className="break-all text-xs text-[var(--text-muted)]">Native compilation: <code>{preload.native_invocation_sha256}</code></p>}
     </div>}
     {progress && <div role="status" aria-label="Worker activity" className="text-sm">
       <p>{progress.message}</p>

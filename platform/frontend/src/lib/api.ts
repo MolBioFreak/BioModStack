@@ -457,6 +457,7 @@ export interface ObservedArtifactInventory {
 export interface RemotePreloadProgress {
     operation_id: string;
     job_id?: string | null;
+    native_invocation_sha256?: string | null;
     selection?: ProvisionSelection | null;
     artifacts?: CachedArtifactReceipt[];
     source_revision: string;

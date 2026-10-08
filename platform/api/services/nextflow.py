@@ -3399,6 +3399,23 @@ def compile_job_nextflow_invocation(job, params, output_dir):
     from services.core_protein_scientific_contract import workflow_params
     from schemas import ExecutionPolicy
     source = SourceIdentity.from_checkout(get_code_root())
+    from services.resource_usage_evidence import (
+        GLOBAL_RESOURCE_ADMISSION_PARAM, GLOBAL_DISPATCH_AUTHORITY_PARAM,
+        validate_resource_admission_handoff, validate_dispatch_materialization_authority,
+    )
+    persisted_params = dict(job.params or {})
+    dispatch_context = {}
+    if (GLOBAL_RESOURCE_ADMISSION_PARAM in persisted_params
+            or GLOBAL_DISPATCH_AUTHORITY_PARAM in persisted_params):
+        handoff = validate_resource_admission_handoff(persisted_params.get(GLOBAL_RESOURCE_ADMISSION_PARAM))
+        if handoff is None:
+            raise ValueError('Plan dispatch is missing its resource admission authority')
+        dispatch = validate_dispatch_materialization_authority(
+            persisted_params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM), expected_handoff=handoff)
+        if (dispatch['canonical_job_id'] != str(job.id)
+                or (handoff['source_revision'], handoff['source_tree']) != (source.revision, source.tree)):
+            raise ValueError('Native compilation differs from its sealed Plan dispatch authority')
+        dispatch_context = {'dispatch': dispatch, 'resource_admission': handoff}
     pinned_revision = getattr(job, 'execution_source_revision', None)
     pinned_tree = getattr(job, 'execution_source_tree', None)
     if pinned_revision is not None or pinned_tree is not None:
@@ -3437,7 +3454,8 @@ def compile_job_nextflow_invocation(job, params, output_dir):
     return replace(invocation, command=tuple(command), source_identity=source,
                    native_parameters_json=canonical_bytes(native_parameters),
                    model_contracts=tuple(model_contracts),
-                   execution_policy_json=canonical_bytes(ExecutionPolicy.from_params(job.params).model_dump(mode='json')))
+                   execution_policy_json=canonical_bytes(ExecutionPolicy.from_params(job.params).model_dump(mode='json')),
+                   dispatch_context_json=canonical_bytes(dispatch_context))
 
 
 def build_nextflow_command(

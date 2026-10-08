@@ -283,6 +283,7 @@ class NativeInvocation:
     entrypoint: str | None = None
     model_contracts: tuple[ModelContractReference, ...] = ()
     execution_policy_json: bytes = b'{}'
+    dispatch_context_json: bytes = b'{}'
 
     def __post_init__(self) -> None:
         if (type(self.model_id) is not str or not self.model_id
@@ -316,7 +317,7 @@ class NativeInvocation:
                for parent in PurePosixPath(path).parents if parent.as_posix() != '.'):
             raise ValueError('generated input files cannot also be parent directories')
         for payload in (self.requested_json, self.effective_json, self.native_parameters_json,
-                        self.execution_policy_json):
+                        self.execution_policy_json, self.dispatch_context_json):
             if type(payload) is not bytes:
                 raise ValueError('native invocation snapshots must be immutable bytes')
             value = json.loads(payload)
@@ -349,6 +350,8 @@ class NativeInvocation:
             'model_contracts': [asdict(item) for item in self.model_contracts],
             'execution_policy': json.loads(self.execution_policy_json),
             'execution_policy_sha256': hashlib.sha256(self.execution_policy_json).hexdigest(),
+            'dispatch_context': json.loads(self.dispatch_context_json),
+            'dispatch_context_sha256': hashlib.sha256(self.dispatch_context_json).hexdigest(),
             'command': list(self.command),
             'requested': json.loads(self.requested_json),
             'requested_sha256': hashlib.sha256(self.requested_json).hexdigest(),

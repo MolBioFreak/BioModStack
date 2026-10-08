@@ -271,6 +271,9 @@ async def provision_cache(*, connection, entries, operation_id, progress, check_
 async def prewarm_cache(*, connection, job, command, source_revision, source_tree,
                         operation_id, progress, check_fence, compiled_parameters, native_invocation=None):
     """Only source/runtime: no input admission, envelope creation or scientific run."""
+    from component_runtime import NativeInvocation
+    if not isinstance(native_invocation, NativeInvocation):
+        raise ValueError('Saved recipe is missing shared native compilation')
     await check_fence()
     with tempfile.TemporaryDirectory(prefix='bms-prewarm-') as temporary:
         entries = await asyncio.to_thread(_prewarm_plan, job, command, source_revision,
@@ -279,4 +282,5 @@ async def prewarm_cache(*, connection, job, command, source_revision, source_tre
                                           operation_id=operation_id, progress=progress,
                                           check_fence=check_fence)
     return {'source_revision': source_revision, 'source_tree': source_tree, 'artifacts': receipts,
+            'native_invocation_sha256': native_invocation.invocation_sha256,
             'excluded': [{'name': 'runtime/support-python', 'reason': 'destination-dependent relocation at launch'}]}
