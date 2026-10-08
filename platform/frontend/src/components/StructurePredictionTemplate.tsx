@@ -983,7 +983,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
         const targetConditioningRequested = (usesBoltz && boltzTargetGeometryMode !== 'flexible') || (usesProtenix && protenixTargetGeometryMode !== 'flexible');
         if (targetConditioningRequested && !complexMode) {
-            alert('Target conditioning currently applies to complex predictions. Add a shared target source or additional complex component before launching.');
+            alert('Target conditioning needs a shared target or complex component.');
             return;
         }
         if (targetConditioningRequested && !fixedTargetAvailable) {
@@ -2139,7 +2139,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                             />
                                         </div>
                                         <p className="md:col-span-3 text-xs text-emerald-200/80">
-                                            Keeps the total MSA CPU budget fixed while splitting EnvDB target search for high-quality balanced/maximum runs. Fast remains a screening preset; use Off for rollback/debug.
+                                            Shards EnvDB for balanced/maximum runs. Fast screens quickly; Off is rollback/debug.
                                         </p>
                                     </div>
                                 )}
