@@ -18,6 +18,7 @@ from services.ont_run_control import (  # noqa: E402
     start_instrument_run,
     stop_instrument_run,
     refresh_instrument_run_status,
+    build_plasmid_qc_handoff,
 )
 
 
@@ -210,3 +211,39 @@ def test_refresh_instrument_run_status_does_not_mark_missing_outputs_ready(monke
     assert refreshed["status"] == "completed"
     assert refreshed["handoff_ready"] is False
     assert refreshed["output_files"]["fastq"] == []
+
+
+def test_build_plasmid_qc_handoff_requires_ready_outputs_and_reference(monkeypatch, tmp_path: Path) -> None:
+    reset_ont_run_store()
+    fastq = tmp_path / "reads.fastq.gz"
+    ref = tmp_path / "reference.fasta"
+    fastq.write_text("@r1\nACGT\n+\n!!!!\n")
+    ref.write_text(">plasmid\nACGT\n")
+
+    def fake_request(method, path, payload=None, *, query=None):
+        if path.endswith("/start"):
+            return {"minknow_run_id": "MNK-RUN-005", "status": "running", "position": "X1"}
+        return {"status": "completed", "output_files": {"fastq": [str(fastq)], "pod5": [], "bam": []}}
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", fake_request)
+    run = start_instrument_run("X1", {"kit": "SQK-LSK114", "confirm_start": True})
+    refresh_instrument_run_status(run["id"])
+
+    handoff = build_plasmid_qc_handoff(run["id"], {"reference_fasta": str(ref)})
+
+    assert handoff["model_id"] == "nanopore"
+    assert handoff["mode"] == "plasmid_qc"
+    assert handoff["params"]["ont_workflow_id"] == "ont_plasmid_qc"
+    assert handoff["params"]["fastq_path"] == str(fastq)
+    assert handoff["params"]["reference_fasta"] == str(ref)
+    assert handoff["params"]["source_instrument_run_id"] == run["id"]
+
+
+def test_build_plasmid_qc_handoff_blocks_missing_reference() -> None:
+    reset_ont_run_store()
+    try:
+        build_plasmid_qc_handoff("missing", {"reference_fasta": "/missing/reference.fasta"})
+    except KeyError as exc:
+        assert "missing" in str(exc)
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("unknown run should not hand off")
