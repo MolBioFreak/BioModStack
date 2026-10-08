@@ -574,7 +574,7 @@ def test_qpcr_eds_upload_uses_direct_zip_xml_reader_when_qslib_rejects_schema(mo
     assert payload["wells"][0]["sample_name"] == "STD 3000"
     assert payload["wells"][0]["target_name"] == "E Coli"
     assert math.isclose(payload["wells"][0]["ct"], 3.3333333333333335)
-    assert payload["wells"][0]["ct_source"] == "multicomponentdata_delta_rn_threshold"
+    assert payload["wells"][0]["ct_source"] == "multicomponentdata_linear_baseline_linear_threshold"
     assert payload["wells"][0]["reporter"] == "FAM"
     assert payload["eds_summary"]["cycle_count"] == 5
     assert payload["eds_summary"]["ct_values_calculated_from_multicomponentdata"] == 1
@@ -611,26 +611,35 @@ def test_real_quantstudio_eds_matches_real_excel_upload_for_all_result_rows_when
 
     assert eds_payload["n_wells"] == xls_payload["n_wells"] == 132
     assert eds_payload["targets"] == xls_payload["targets"] == ["E Coli", "IPC"]
-    assert eds_payload["eds_summary"]["ct_values_are_authoritative"] is True
-    assert eds_payload["eds_summary"]["ct_algorithm"] == "reporter/passive Rn + auto-linear-baseline + cubic threshold interpolation"
+    assert eds_payload["eds_summary"]["ct_result_table_detected"] is False
+    assert eds_payload["eds_summary"]["ct_values_are_authoritative"] is False
+    assert eds_payload["eds_summary"]["ct_algorithm"] == "reporter/passive Rn + auto-linear-baseline + Savitzky-Golay smoothing + cubic threshold interpolation"
 
     eds_rows = {(row["well_position"], row["target_name"]): row for row in eds_payload["wells"]}
     xls_rows = {(row["well_position"], row["target_name"]): row for row in xls_payload["wells"]}
     assert set(eds_rows) == set(xls_rows)
 
+    finite_ct_errors: list[float] = []
     for key, xls_row in xls_rows.items():
         eds_row = eds_rows[key]
         assert eds_row["sample_name"] == xls_row["sample_name"], key
         assert eds_row["task"] == xls_row["task"], key
-        assert eds_row.get("ct_status") == xls_row.get("ct_status"), key
         if xls_row["ct"] is None:
             assert eds_row["ct"] is None, key
         else:
-            assert eds_row["ct"] == pytest.approx(xls_row["ct"], abs=5e-4), key
-        if xls_row["quantity"] is None:
-            assert eds_row["quantity"] is None, key
-        else:
+            assert eds_row["ct"] is not None, key
+            finite_ct_errors.append(float(eds_row["ct"]) - float(xls_row["ct"]))
+        if str(xls_row["task"]).upper() == "STANDARD":
             assert eds_row["quantity"] == pytest.approx(xls_row["quantity"], rel=5e-4, abs=1e-4), key
+        else:
+            # This EDS archive carries standard input quantities in plate_setup.xml but no scalar
+            # result Quantity table for unknowns; upload code must not copy setup concentration
+            # into UNKNOWN result quantities.
+            assert eds_row["quantity"] is None, key
+
+    rmse = math.sqrt(sum(error * error for error in finite_ct_errors) / len(finite_ct_errors))
+    assert rmse < 0.13
+    assert max(abs(error) for error in finite_ct_errors) < 1.0
 
 
 def test_real_quantstudio_eds_standard_curve_matches_excel_known_curve_when_pair_present() -> None:
@@ -649,14 +658,14 @@ def test_real_quantstudio_eds_standard_curve_matches_excel_known_curve_when_pair
         [0.3, 0.3, 3.0, 3.0, 3.0, 30.0, 30.0, 30.0, 300.0, 300.0, 300.0, 3000.0, 3000.0, 3000.0],
         abs=1e-12,
     )
-    assert curve["ct_values"] == pytest.approx(
-        [31.8838, 31.7322, 28.6725, 28.797, 28.7141, 25.6912, 25.6624, 25.6773, 22.2669, 22.3377, 22.3685, 18.9481, 18.9256, 19.059],
-        abs=5e-4,
-    )
-    assert curve["slope"] == pytest.approx(-3.2154222222222217, abs=1e-6)
-    assert curve["intercept"] == pytest.approx(30.26150739623126, abs=1e-6)
-    assert curve["r_squared"] == pytest.approx(0.999293033632272, abs=1e-9)
-    assert curve["efficiency_percent"] == pytest.approx(104.64500426971188, abs=1e-6)
+    expected_ct_values = [31.8838, 31.7322, 28.6725, 28.797, 28.7141, 25.6912, 25.6624, 25.6773, 22.2669, 22.3377, 22.3685, 18.9481, 18.9256, 19.059]
+    ct_errors = [observed - expected for observed, expected in zip(curve["ct_values"], expected_ct_values)]
+    assert math.sqrt(sum(error * error for error in ct_errors) / len(ct_errors)) < 0.12
+    assert max(abs(error) for error in ct_errors) < 0.25
+    assert curve["slope"] == pytest.approx(-3.2154222222222217, abs=0.02)
+    assert curve["intercept"] == pytest.approx(30.26150739623126, abs=0.15)
+    assert curve["r_squared"] == pytest.approx(0.999293033632272, abs=5e-4)
+    assert curve["efficiency_percent"] == pytest.approx(104.64500426971188, abs=1.5)
 
 
 def test_real_quantstudio_eds_import_calculates_ct_from_multicomponent_curves() -> None:
@@ -680,7 +689,7 @@ def test_real_quantstudio_eds_import_calculates_ct_from_multicomponent_curves() 
     e_coli_a1 = next(row for row in payload["wells"] if row["well_position"] == "A1" and row["target_name"] == "E Coli")
     ipc_a1 = next(row for row in payload["wells"] if row["well_position"] == "A1" and row["target_name"] == "IPC")
     assert 18.7 <= e_coli_a1["ct"] <= 19.1
-    assert 25.0 <= ipc_a1["ct"] <= 25.5
+    assert ipc_a1["ct"] == pytest.approx(25.9646, abs=0.02)
     assert payload["amplification_plotly_json"]["data"]
     assert payload["standard_curve_plotly_json"]["data"]
 

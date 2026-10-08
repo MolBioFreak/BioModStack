@@ -15,7 +15,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from scipy import stats
-from scipy.signal import find_peaks, peak_widths
+from scipy.signal import find_peaks, peak_widths, savgol_filter
 
 from services.assay_tool_integrations import assay_tool_registry, tools_by_category
 
@@ -1000,6 +1000,19 @@ def _safe_int(value: Optional[str], default: int) -> int:
         return default
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y", "on"}:
+        return True
+    if text in {"false", "0", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _eds_well_position(index: int, columns: int) -> str:
     columns = max(1, columns)
     row_idx = index // columns
@@ -1042,7 +1055,15 @@ def _eds_ct_settings_from_generic(generic: Dict[str, Any]) -> Tuple[Dict[str, Di
     default_threshold = _finite_float(generic.get("threshold"), 0.2) or 0.2
     default_start = _safe_int(generic.get("defaultBaseLineStart") or generic.get("defaultBaselineStart"), 3)
     default_end = _safe_int(generic.get("defaultBaseLineEnd") or generic.get("defaultBaselineEnd"), 15)
-    default = {"threshold": default_threshold, "baseline_start": default_start, "baseline_end": default_end}
+    default_auto_baseline = _coerce_bool(generic.get("autoBaseLine") if generic.get("autoBaseLine") is not None else generic.get("autoBaseline"), False)
+    default_auto_threshold = _coerce_bool(generic.get("autoThreshold"), False)
+    default = {
+        "threshold": default_threshold,
+        "baseline_start": default_start,
+        "baseline_end": default_end,
+        "auto_baseline": default_auto_baseline,
+        "auto_threshold": default_auto_threshold,
+    }
     by_target: Dict[str, Dict[str, Any]] = {}
     settings = generic.get("ctSettingsDetailsDTOS") or generic.get("ctSettingsDetailsDTOs") or generic.get("ctSettingsDetailsDtos") or []
     if isinstance(settings, list):
@@ -1053,18 +1074,43 @@ def _eds_ct_settings_from_generic(generic: Dict[str, Any]) -> Tuple[Dict[str, Di
             if not target:
                 continue
             threshold = _finite_float(item.get("threshold"), default_threshold) or default_threshold
-            baseline_start = _safe_int(item.get("baselineStart") or item.get("defaultBaselineStart"), default_start)
-            baseline_end = _safe_int(item.get("baselineEnd") or item.get("defaultBaselineEnd"), default_end)
-            by_target[target] = {"threshold": threshold, "baseline_start": baseline_start, "baseline_end": baseline_end}
+            baseline_start = _safe_int(item.get("baselineStart") if item.get("baselineStart") is not None else item.get("defaultBaselineStart"), default_start)
+            baseline_end = _safe_int(item.get("baselineEnd") if item.get("baselineEnd") is not None else item.get("defaultBaselineEnd"), default_end)
+            by_target[target] = {
+                "threshold": threshold,
+                "baseline_start": baseline_start,
+                "baseline_end": baseline_end,
+                "auto_baseline": _coerce_bool(item.get("autoBaseline"), default_auto_baseline),
+                "auto_threshold": _coerce_bool(item.get("autoThreshold"), default_auto_threshold),
+            }
     return by_target, default
 
 
-def _eds_ct_settings_from_analysis_protocol(xml_bytes: bytes) -> Dict[str, Dict[str, Any]]:
+def _eds_jaxb_value(value_item: ET.Element) -> Any:
+    for child in list(value_item):
+        child_name = child.tag.rsplit("}", 1)[-1]
+        text = (child.text or "").strip()
+        if not text:
+            continue
+        if child_name == "StringValue":
+            return text
+        if child_name == "DoubleValue":
+            return _finite_float(text)
+        if child_name == "BooleanValue":
+            return _coerce_bool(text)
+        if child_name in {"IntegerValue", "IntValue", "LongValue"}:
+            return _safe_int(text, 0)
+        return text
+    return None
+
+
+def _eds_analysis_settings_from_analysis_protocol(xml_bytes: bytes) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError:
-        return {}
+        return {}, {}
     out: Dict[str, Dict[str, Any]] = {}
+    global_settings: Dict[str, Any] = {}
     for settings in root.iter():
         if settings.tag.rsplit("}", 1)[-1] != "JaxbAnalysisSettings":
             continue
@@ -1074,20 +1120,165 @@ def _eds_ct_settings_from_analysis_protocol(xml_bytes: bytes) -> Dict[str, Dict[
             value_item = _xml_first(setting_value, "JaxbValueItem")
             if not name or value_item is None:
                 continue
-            for child in list(value_item):
-                child_name = child.tag.rsplit("}", 1)[-1]
-                text = (child.text or "").strip()
-                if text:
-                    values[name] = text if child_name == "StringValue" else (_finite_float(text) if child_name == "DoubleValue" else _safe_int(text, 0))
-                    break
-        target = str(values.get("ObjectName") or "").strip()
-        if not target:
+            value = _eds_jaxb_value(value_item)
+            if value is not None:
+                values[name] = value
+        object_name = str(values.get("ObjectName") or "").strip()
+        target = "" if object_name == "AnalysisProtocol.DEFAULT_SETTINGS" else object_name
+        if target:
+            threshold = _finite_float(values.get("Threshold"), 0.2) or 0.2
+            baseline_start = _safe_int(values.get("BaselineStart"), 3)
+            baseline_end = _safe_int(values.get("BaselineStop") if values.get("BaselineStop") is not None else values.get("BaselineEnd"), 15)
+            out[target] = {
+                "threshold": threshold,
+                "baseline_start": baseline_start,
+                "baseline_end": baseline_end,
+                "auto_baseline": _coerce_bool(values.get("AutoBaseline"), False),
+                "auto_threshold": _coerce_bool(values.get("AutoThreshold"), False),
+            }
             continue
-        threshold = _finite_float(values.get("Threshold"), 0.2) or 0.2
-        baseline_start = _safe_int(values.get("BaselineStart"), 3)
-        baseline_end = _safe_int(values.get("BaselineStop"), 15)
-        out[target] = {"threshold": threshold, "baseline_start": baseline_start, "baseline_end": baseline_end}
-    return out
+        if "Threshold" in values:
+            global_settings["threshold"] = _finite_float(values.get("Threshold"), 0.2) or 0.2
+        if "BaselineStart" in values:
+            global_settings["baseline_start"] = _safe_int(values.get("BaselineStart"), 3)
+        if "BaselineStop" in values or "BaselineEnd" in values:
+            global_settings["baseline_end"] = _safe_int(values.get("BaselineStop") if values.get("BaselineStop") is not None else values.get("BaselineEnd"), 15)
+        if "AutoBaseline" in values:
+            global_settings["auto_baseline"] = _coerce_bool(values.get("AutoBaseline"), False)
+        if "AutoThreshold" in values:
+            global_settings["auto_threshold"] = _coerce_bool(values.get("AutoThreshold"), False)
+        if "SignalSmoothing" in values:
+            global_settings["signal_smoothing"] = _coerce_bool(values.get("SignalSmoothing"), False)
+        if "AlgorithmName" in values:
+            global_settings["algorithm_name"] = str(values.get("AlgorithmName"))
+        if "AutoAnalysis" in values:
+            global_settings["auto_analysis"] = _coerce_bool(values.get("AutoAnalysis"), False)
+    return out, global_settings
+
+
+def _eds_ct_settings_from_analysis_protocol(xml_bytes: bytes) -> Dict[str, Dict[str, Any]]:
+    return _eds_analysis_settings_from_analysis_protocol(xml_bytes)[0]
+
+
+def _eds_linear_baseline(normalized: List[float], baseline_start: int, baseline_end: int) -> Optional[Dict[str, Any]]:
+    n = len(normalized)
+    if n == 0:
+        return None
+    start_cycle = max(1, min(n, int(baseline_start)))
+    end_cycle = max(start_cycle, min(n, int(baseline_end)))
+    x = np.arange(start_cycle, end_cycle + 1, dtype=float)
+    y = np.asarray(normalized[start_cycle - 1 : end_cycle], dtype=float)
+    finite_mask = np.isfinite(y)
+    if int(np.count_nonzero(finite_mask)) == 0:
+        return None
+    x = x[finite_mask]
+    y = y[finite_mask]
+    if len(x) >= 2:
+        slope, intercept = np.polyfit(x, y, 1)
+    else:
+        slope = 0.0
+        intercept = float(y[0])
+    cycles = np.arange(1, n + 1, dtype=float)
+    baseline = slope * cycles + intercept
+    residuals = y - (slope * x + intercept)
+    return {
+        "baseline": baseline.astype(float).tolist(),
+        "baseline_start": start_cycle,
+        "baseline_end": end_cycle,
+        "baseline_slope": float(slope),
+        "baseline_intercept": float(intercept),
+        "baseline_residual_sd": _std(residuals.tolist()) if len(residuals) > 1 else 0.0,
+    }
+
+
+def _eds_smooth_delta_rn(delta_rn: List[float], signal_smoothing: bool) -> List[float]:
+    if not signal_smoothing:
+        return [float(value) for value in delta_rn]
+    n = len(delta_rn)
+    if n < 5:
+        return [float(value) for value in delta_rn]
+    window = 5 if n >= 5 else n
+    if window % 2 == 0:
+        window -= 1
+    if window < 5:
+        return [float(value) for value in delta_rn]
+    try:
+        return [float(value) for value in savgol_filter(np.asarray(delta_rn, dtype=float), window, 2, mode="interp")]
+    except Exception:
+        return [float(value) for value in delta_rn]
+
+
+def _eds_threshold_crossing(delta_rn: List[float], threshold: float, scan_after_cycle: int, interpolation: str = "linear") -> Optional[float]:
+    if not delta_rn:
+        return None
+    y = np.asarray(delta_rn, dtype=float)
+    cycles = np.arange(1, len(y) + 1, dtype=float)
+    scan_start = min(len(y) - 1, max(1, int(scan_after_cycle)))
+    for idx in range(scan_start, len(y)):
+        prev = y[idx - 1]
+        cur = y[idx]
+        if not (math.isfinite(float(prev)) and math.isfinite(float(cur))):
+            continue
+        if prev < threshold <= cur and cur != prev:
+            linear_estimate = float(cycles[idx - 1] + (threshold - prev) / (cur - prev))
+            if interpolation != "cubic":
+                return linear_estimate
+            local_start = max(0, idx - 2)
+            local_end = min(len(y), idx + 3)
+            local_x = cycles[local_start:local_end]
+            local_y = y[local_start:local_end] - threshold
+            degree = min(3, len(local_x) - 1)
+            if degree >= 1:
+                try:
+                    coeff = np.polyfit(local_x, local_y, degree)
+                    roots = np.roots(coeff)
+                    candidates = [float(root.real) for root in roots if abs(float(root.imag)) < 1e-6 and cycles[idx - 1] - 1e-9 <= float(root.real) <= cycles[idx] + 1e-9]
+                    if candidates:
+                        return min(candidates, key=lambda candidate: abs(candidate - linear_estimate))
+                except Exception:
+                    pass
+            return linear_estimate
+        if idx == scan_start and cur >= threshold:
+            return float(cycles[idx])
+    return None
+
+
+def _eds_ct_for_baseline(
+    normalized: List[float],
+    threshold: float,
+    baseline_start: int,
+    baseline_end: int,
+    signal_smoothing: bool,
+) -> Dict[str, Any]:
+    baseline_result = _eds_linear_baseline(normalized, baseline_start, baseline_end)
+    if baseline_result is None:
+        return {"ct": None, "ct_status": "invalid_baseline_window"}
+    baseline = baseline_result["baseline"]
+    delta_rn = [float(value) - float(base_value) for value, base_value in zip(normalized, baseline)]
+    smoothed_delta_rn = _eds_smooth_delta_rn(delta_rn, signal_smoothing)
+    interpolation = "cubic" if signal_smoothing else "linear"
+    ct_value = _eds_threshold_crossing(smoothed_delta_rn, threshold, int(baseline_result["baseline_end"]), interpolation=interpolation)
+    payload: Dict[str, Any] = {
+        **{key: value for key, value in baseline_result.items() if key != "baseline"},
+        "baseline_rn": _mean(baseline[baseline_result["baseline_start"] - 1 : baseline_result["baseline_end"]]),
+        "baseline_method": "linear_regression",
+        "threshold_interpolation": interpolation,
+        "threshold": threshold,
+        "signal_smoothing": signal_smoothing,
+        "amplification_curve": {
+            "cycle": list(range(1, len(normalized) + 1)),
+            "delta_rn": delta_rn,
+            "delta_rn_smoothed": smoothed_delta_rn if signal_smoothing else None,
+            "rn": normalized,
+            "linear_baseline_rn": baseline,
+        },
+    }
+    if ct_value is None:
+        payload.update({"ct": None, "ct_status": "no_threshold_crossing"})
+    else:
+        source_suffix = "cubic_threshold" if interpolation == "cubic" else "linear_threshold"
+        payload.update({"ct": ct_value, "ct_source": f"multicomponentdata_linear_baseline_{source_suffix}"})
+    return payload
 
 
 def _calculate_ct_from_eds_curves(
@@ -1096,6 +1287,8 @@ def _calculate_ct_from_eds_curves(
     threshold: float,
     baseline_start: int,
     baseline_end: int,
+    auto_baseline: bool = False,
+    signal_smoothing: bool = False,
 ) -> Dict[str, Any]:
     if not reporter_curve:
         return {"ct": None, "ct_status": "missing_reporter_curve"}
@@ -1107,46 +1300,23 @@ def _calculate_ct_from_eds_curves(
             normalized.append(float(reporter_value) / float(passive_value))
         else:
             normalized.append(float(reporter_value))
-    start_idx = max(0, min(n - 1, baseline_start - 1))
-    end_idx = max(start_idx, min(n - 1, baseline_end - 1))
-    baseline_values = [value for value in normalized[start_idx : end_idx + 1] if math.isfinite(value)]
-    if not baseline_values:
-        return {"ct": None, "ct_status": "invalid_baseline_window"}
-    baseline = _mean(baseline_values)
-    delta_rn = [value - baseline if math.isfinite(value) else None for value in normalized]
-    scan_start = min(n - 1, max(1, end_idx + 1))
-    ct_value: Optional[float] = None
-    for idx in range(scan_start, n):
-        prev = delta_rn[idx - 1]
-        cur = delta_rn[idx]
-        if prev is None or cur is None:
-            continue
-        if prev < threshold <= cur and cur != prev:
-            fraction = (threshold - prev) / (cur - prev)
-            ct_value = (idx) + fraction
-            break
-        if idx == scan_start and cur >= threshold:
-            ct_value = float(idx + 1)
-            break
-    if ct_value is None:
-        return {
-            "ct": None,
-            "ct_status": "no_threshold_crossing",
-            "baseline_rn": baseline,
-            "threshold": threshold,
-            "baseline_start": baseline_start,
-            "baseline_end": baseline_end,
-            "amplification_curve": {"cycle": list(range(1, n + 1)), "delta_rn": delta_rn, "rn": normalized},
-        }
-    return {
-        "ct": ct_value,
-        "baseline_rn": baseline,
-        "threshold": threshold,
-        "baseline_start": baseline_start,
-        "baseline_end": baseline_end,
-        "amplification_curve": {"cycle": list(range(1, n + 1)), "delta_rn": delta_rn, "rn": normalized},
-        "ct_source": "multicomponentdata_delta_rn_threshold",
-    }
+    configured_end = max(1, min(n, baseline_end))
+    selected_end = configured_end
+    preliminary_ct: Optional[float] = None
+    if auto_baseline and n >= 8:
+        preliminary = _eds_ct_for_baseline(normalized, threshold, baseline_start, configured_end, signal_smoothing)
+        preliminary_ct = _finite_float(preliminary.get("ct"))
+        if preliminary_ct is not None:
+            min_end = max(baseline_start + 1, 2)
+            max_end = max(min_end, min(n - 3, 30))
+            selected_end = max(min_end, min(max_end, int(round(preliminary_ct - 7.0))))
+    result = _eds_ct_for_baseline(normalized, threshold, baseline_start, selected_end, signal_smoothing)
+    result["auto_baseline"] = bool(auto_baseline)
+    result["baseline_end_configured"] = configured_end
+    if preliminary_ct is not None:
+        result["preliminary_ct"] = preliminary_ct
+        result["auto_baseline_offset_cycles"] = 7.0
+    return result
 
 
 def _parse_quantstudio_eds_zip_xml(data: bytes, qslib_error: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any], List[str]]:
@@ -1205,7 +1375,8 @@ def _parse_quantstudio_eds_zip_xml(data: bytes, qslib_error: Optional[str] = Non
         generic_name = next((name for name in names if name.lower().endswith("generic_properties.json")), None)
         generic_summary: Dict[str, Any] = {}
         ct_settings_by_target: Dict[str, Dict[str, Any]] = {}
-        default_ct_settings: Dict[str, Any] = {"threshold": 0.2, "baseline_start": 3, "baseline_end": 15}
+        default_ct_settings: Dict[str, Any] = {"threshold": 0.2, "baseline_start": 3, "baseline_end": 15, "auto_baseline": False, "auto_threshold": False}
+        analysis_protocol_settings: Dict[str, Any] = {}
         if generic_name is not None:
             try:
                 generic = json.loads(archive.read(generic_name).decode("utf-8"))
@@ -1222,7 +1393,8 @@ def _parse_quantstudio_eds_zip_xml(data: bytes, qslib_error: Optional[str] = Non
 
         analysis_protocol_name = next((name for name in names if name.lower().endswith("analysis_protocol.xml")), None)
         if analysis_protocol_name is not None:
-            protocol_settings = _eds_ct_settings_from_analysis_protocol(archive.read(analysis_protocol_name))
+            protocol_settings, analysis_protocol_settings = _eds_analysis_settings_from_analysis_protocol(archive.read(analysis_protocol_name))
+            default_ct_settings = {**default_ct_settings, **{key: value for key, value in analysis_protocol_settings.items() if key in {"threshold", "baseline_start", "baseline_end", "auto_baseline", "auto_threshold"}}}
             for target, settings in protocol_settings.items():
                 ct_settings_by_target.setdefault(target, settings)
 
@@ -1280,6 +1452,8 @@ def _parse_quantstudio_eds_zip_xml(data: bytes, qslib_error: Optional[str] = Non
                 threshold = _finite_float(settings.get("threshold"), 0.2) or 0.2
                 baseline_start = _safe_int(settings.get("baseline_start"), 3)
                 baseline_end = _safe_int(settings.get("baseline_end"), 15)
+                auto_baseline = _coerce_bool(settings.get("auto_baseline"), _coerce_bool(default_ct_settings.get("auto_baseline"), False))
+                signal_smoothing = _coerce_bool(analysis_protocol_settings.get("signal_smoothing"), False)
                 reporter_curve = curves.get(str(reporter)) if reporter else None
                 passive_curve = curves.get(str(passive_reference)) if passive_reference else None
                 task_name = str(task.get("task") or "").upper()
@@ -1296,7 +1470,7 @@ def _parse_quantstudio_eds_zip_xml(data: bytes, qslib_error: Optional[str] = Non
                     "passive_reference": passive_reference,
                 }
                 if reporter_curve:
-                    ct_result = _calculate_ct_from_eds_curves(reporter_curve, passive_curve, threshold, baseline_start, baseline_end)
+                    ct_result = _calculate_ct_from_eds_curves(reporter_curve, passive_curve, threshold, baseline_start, baseline_end, auto_baseline=auto_baseline, signal_smoothing=signal_smoothing)
                     well.update(ct_result)
                     if well.get("ct") is not None:
                         calculated_ct_count += 1
@@ -1333,10 +1507,13 @@ def _parse_quantstudio_eds_zip_xml(data: bytes, qslib_error: Optional[str] = Non
             "ct_values_calculated_from_multicomponentdata": calculated_ct_count,
             "ct_values_missing_reporter_curve": missing_curve_count,
             "ct_values_without_threshold_crossing": no_crossing_count,
-            "ct_algorithm": "baseline-subtracted reporter/passive ΔRn threshold crossing with linear interpolation",
+            "ct_algorithm": "reporter/passive Rn + auto-linear-baseline + Savitzky-Golay smoothing + cubic threshold interpolation"
+            if _coerce_bool(analysis_protocol_settings.get("signal_smoothing"), False)
+            else "reporter/passive Rn + configured linear baseline + linear threshold interpolation",
             "ct_values_are_authoritative": False,
             "ct_provenance": "computed_from_multicomponentdata_no_scalar_result_table",
             "default_ct_settings": default_ct_settings,
+            "analysis_protocol_settings": analysis_protocol_settings,
             "recommendation": "Use the QuantStudio/StepOnePlus Excel Results export as the authoritative Ct/Cq and result Quantity source when available; EDS-derived Ct values are computed from raw curves because this EDS archive does not expose a scalar result table.",
             "note": "Cq values were calculated from real EDS multicomponent amplification curves and per-target threshold/baseline settings; no scalar Cq table was present in the EDS archive.",
         }
