@@ -18,7 +18,23 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     // Top-level state
     const [jobNamePrefix, setJobNamePrefix] = useState('mutagenesis_lib');
     const [baseSequence, setBaseSequence] = useState('');
-    const [mode, setMode] = useState<'library' | 'manual'>('library');
+    const [mode, setMode] = useState<'library' | 'manual' | 'affinityMaturation'>('library');
+
+    // Affinity Maturation State
+    const [frustrampnnResults, setFrustrampnnResults] = useState<Array<{
+        position: number;
+        aa: string;
+        frustration: number;
+        suggestedAAs: string[];
+        selected: boolean;
+    }>>([]);
+    const [frustrampnnLoading, setFrustrampnnLoading] = useState(false);
+    const [maturationAllowedAAs, setMaturationAllowedAAs] = useState('');
+    const [maturationGenMode, setMaturationGenMode] = useState<'singles' | 'combos' | 'sample'>('singles');
+    const [maturationSampleN, setMaturationSampleN] = useState(20);
+    const [ppiflowRotamer, setPpiflowRotamer] = useState(false);
+    const [ppiflowFlow, setPpiflowFlow] = useState(false);
+    const [ppiflowFinalBoltz, setPpiflowFinalBoltz] = useState(false);
 
     // Library Generator State
     const [regionInput, setRegionInput] = useState('');
@@ -346,6 +362,12 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     >
                         ✍️ Manual Editor
                     </button>
+                    <button
+                        onClick={() => setMode('affinityMaturation')}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'affinityMaturation' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                        🧬 Affinity Maturation
+                    </button>
                 </div>
 
                 {/* 3. Library Generator UI */}
@@ -401,11 +423,10 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                                     <button
                                                         key={pos}
                                                         onClick={() => toggleExcludedPosition(pos)}
-                                                        className={`w-7 h-7 rounded border transition-colors ${
-                                                            isExcluded
-                                                                ? 'bg-red-600/30 border-red-400 text-red-200 line-through'
-                                                                : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                                                        }`}
+                                                        className={`w-7 h-7 rounded border transition-colors ${isExcluded
+                                                            ? 'bg-red-600/30 border-red-400 text-red-200 line-through'
+                                                            : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                                                            }`}
                                                         title={`Pos ${pos}: ${aa}${isExcluded ? ' (excluded)' : ''}`}
                                                     >
                                                         {aa}
@@ -686,7 +707,183 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     </div>
                 )}
 
-                {/* 5. Predictor Settings */}
+                {/* 5. Affinity Maturation Mode */}
+                {mode === 'affinityMaturation' && (
+                    <div className="space-y-6 border-l-2 border-emerald-800 pl-4">
+                        <div className="flex justify-between items-start">
+                            <div>
+                                <h3 className="text-sm font-semibold text-slate-200 mb-1">FrustraMPNN-Guided Maturation</h3>
+                                <p className="text-xs text-slate-500">Identify frustrated CDR positions and generate optimized variants</p>
+                            </div>
+                        </div>
+
+                        {/* FrustraMPNN Analysis Section */}
+                        <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
+                            <div className="flex justify-between items-center mb-4">
+                                <h4 className="text-sm font-semibold text-slate-300">🔬 FrustraMPNN Analysis</h4>
+                                <button
+                                    onClick={() => {
+                                        setFrustrampnnLoading(true);
+                                        // Placeholder: In production, call API
+                                        setTimeout(() => {
+                                            setFrustrampnnResults([
+                                                { position: 103, aa: 'S', frustration: 0.82, suggestedAAs: ['A', 'T', 'N'], selected: true },
+                                                { position: 105, aa: 'Y', frustration: 0.71, suggestedAAs: ['F', 'W'], selected: true },
+                                                { position: 108, aa: 'G', frustration: 0.45, suggestedAAs: [], selected: false },
+                                            ]);
+                                            setFrustrampnnLoading(false);
+                                        }, 1000);
+                                    }}
+                                    disabled={!baseSequence || frustrampnnLoading}
+                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded transition-colors flex items-center gap-2"
+                                >
+                                    {frustrampnnLoading ? (
+                                        <><span className="animate-spin">⏳</span> Analyzing...</>
+                                    ) : (
+                                        <>Run Analysis</>
+                                    )}
+                                </button>
+                            </div>
+
+                            {frustrampnnResults.length > 0 ? (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="text-left text-slate-400 border-b border-slate-700">
+                                                <th className="py-2 px-2">Select</th>
+                                                <th className="py-2 px-2">Position</th>
+                                                <th className="py-2 px-2">WT</th>
+                                                <th className="py-2 px-2">Frustration</th>
+                                                <th className="py-2 px-2">Suggested AAs</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {frustrampnnResults.map((row, idx) => (
+                                                <tr key={row.position} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                                                    <td className="py-2 px-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={row.selected}
+                                                            onChange={() => {
+                                                                setFrustrampnnResults(prev => {
+                                                                    const next = [...prev];
+                                                                    next[idx] = { ...next[idx], selected: !next[idx].selected };
+                                                                    return next;
+                                                                });
+                                                            }}
+                                                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-emerald-600"
+                                                        />
+                                                    </td>
+                                                    <td className="py-2 px-2 font-mono text-slate-300">{row.position}</td>
+                                                    <td className="py-2 px-2 font-mono font-bold text-purple-400">{row.aa}</td>
+                                                    <td className="py-2 px-2">
+                                                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${row.frustration > 0.7 ? 'bg-red-500/20 text-red-400' :
+                                                                row.frustration > 0.5 ? 'bg-amber-500/20 text-amber-400' :
+                                                                    'bg-green-500/20 text-green-400'
+                                                            }`}>
+                                                            {row.frustration.toFixed(2)}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-2 px-2 font-mono text-slate-400">
+                                                        {row.suggestedAAs.length > 0 ? row.suggestedAAs.join(', ') : '-'}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            ) : (
+                                <div className="text-center py-6 text-slate-600 text-sm italic">
+                                    {baseSequence ? 'Click "Run Analysis" to identify frustrated positions' : 'Load a sequence first, then run analysis'}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Mutation Generation Options */}
+                        {frustrampnnResults.filter(r => r.selected).length > 0 && (
+                            <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
+                                <h4 className="text-sm font-semibold text-slate-300 mb-3">🎯 Generation Options</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-2">Allowed AAs (override FrustraMPNN)</label>
+                                        <input
+                                            type="text"
+                                            value={maturationAllowedAAs}
+                                            onChange={(e) => setMaturationAllowedAAs(e.target.value.toUpperCase())}
+                                            placeholder="Leave empty to use FrustraMPNN suggestions"
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-2">Generation Mode</label>
+                                        <select
+                                            value={maturationGenMode}
+                                            onChange={(e) => setMaturationGenMode(e.target.value as any)}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+                                        >
+                                            <option value="singles">Single Mutants Only</option>
+                                            <option value="combos">Top Combinations</option>
+                                            <option value="sample">Random Sample</option>
+                                        </select>
+                                    </div>
+                                    {maturationGenMode === 'sample' && (
+                                        <div>
+                                            <label className="block text-xs text-slate-400 mb-2">Sample N Variants</label>
+                                            <input
+                                                type="number"
+                                                value={maturationSampleN}
+                                                onChange={(e) => setMaturationSampleN(parseInt(e.target.value) || 20)}
+                                                min={1}
+                                                max={100}
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* PPIFlow Refinement Options */}
+                        <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
+                            <h4 className="text-sm font-semibold text-slate-300 mb-3">⚙️ Refinement Pipeline</h4>
+                            <p className="text-xs text-slate-500 mb-4">Order: Boltz-2 → [PPIFlow Rotamer] → [PPIFlow Flow] → [Final Boltz-2]</p>
+                            <div className="space-y-3">
+                                <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={ppiflowRotamer}
+                                        onChange={(e) => setPpiflowRotamer(e.target.checked)}
+                                        className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-cyan-600"
+                                    />
+                                    <span>PPIFlow Rotamer Enrichment</span>
+                                    <span className="text-xs text-slate-500">(sidechain optimization)</span>
+                                </label>
+                                <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={ppiflowFlow}
+                                        onChange={(e) => setPpiflowFlow(e.target.checked)}
+                                        className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-cyan-600"
+                                    />
+                                    <span>PPIFlow Flow Matching</span>
+                                    <span className="text-xs text-slate-500">(interface polish)</span>
+                                </label>
+                                <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={ppiflowFinalBoltz}
+                                        onChange={(e) => setPpiflowFinalBoltz(e.target.checked)}
+                                        className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600"
+                                    />
+                                    <span>Final Boltz-2 Validation</span>
+                                    <span className="text-xs text-slate-500">(after PPIFlow)</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 6. Predictor Settings */}
                 <section className="pt-6 border-t border-slate-800">
                     <h3 className="text-sm font-semibold text-slate-200 mb-4">Prediction Settings</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
