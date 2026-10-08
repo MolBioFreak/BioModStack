@@ -105,6 +105,7 @@ test('viewer events are fully scoped and retain origin provenance', () => {
         sceneId: 'scene-a',
         generation: 9,
         documentId: 'doc-a',
+        resourceId: null,
         origin: 'canvas',
         payload: { selectionId: 'sel-1' },
         emittedAt: '2026-07-18T00:02:00.000Z',
