@@ -564,6 +564,13 @@ def resolve_runtime_paths(
         else:
             container_dir = data_root / "apptainer"
 
+    # Shared-image authority: one installation store, not a lane/task SIF cache.
+    # The profile contributes container_dir; the explicit store override is an
+    # environment selector, not an additional persisted profile field.
+    runtime_image_store = Path(env.get("BMS_RUNTIME_IMAGE_STORE", "").strip()
+                               or str(container_dir / ".image-store")).expanduser()
+    # Do not resolve symlinks here: the shared publisher/verifier must see them.
+
     def resolve_data_like(env_name: str, profile_key: str, leaf: str) -> Path:
         if env.get(env_name):
             return _resolve_path(env[env_name])
@@ -642,6 +649,7 @@ def resolve_runtime_paths(
         "work_dir": str(resolve_data_like("BMS_WORK", "work_dir", "work")),
         "db_path": str(db_path),
         "container_dir": str(container_dir),
+        "runtime_image_store": str(runtime_image_store),
         "weights_root": str(weights_root),
         "colabfold_db": str(colabfold_db),
         "msa_cache_dir": str(msa_cache_dir),

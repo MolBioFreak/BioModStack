@@ -148,13 +148,15 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
                 with os.fdopen(os.dup(fd)) as stream:
                     state = json.load(stream)
         except FileNotFoundError:
-            state = {'manifest_digest': artifact.manifest_digest, 'bytes': 0,
+            state = {'store_root': str(cache), 'manifest_digest': artifact.manifest_digest, 'bytes': 0,
                      'partial_sha256': hashlib.sha256(b'').hexdigest()}
             _write_state(stage, state)
         except (ValueError, OSError) as exc:
             raise AcquisitionError('invalid durable acquisition state') from exc
         if not isinstance(state, dict):
             raise AcquisitionError('invalid durable acquisition state')
+        if state.get('store_root') != str(cache):
+            raise AcquisitionError('stale acquisition store: explicit operator reconciliation required')
         if state.get('rejected'):
             raise AcquisitionError('previous acquisition rejected: explicit operator reconciliation required')
         if state.get('manifest_digest') != artifact.manifest_digest:
@@ -165,10 +167,15 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
             raise AcquisitionError('invalid durable acquisition checkpoint')
         result = cache / 'objects' / 'sha256' / artifact.sha256 / 'runtime.sif'
         if os.path.lexists(result.parent):
-            receipt = verify_image(result, artifact.sha256)
+            with _lock(cache, 'lifecycle'):
+                receipt = verify_image(result, artifact.sha256)
             if receipt['size'] != artifact.size_bytes:
                 raise AcquisitionError('cached byte size differs from manifest')
+            if state.get('status') == 'verified' and state.get('receipt') != receipt:
+                raise AcquisitionError('published acquisition identity drift: explicit reconciliation required')
         else:
+            if state.get('status') == 'verified':
+                raise AcquisitionError('published acquisition object missing: explicit reconciliation required')
             if os.path.lexists(partial):
                 digest, size = _observed(partial)
                 if (digest, size) != (state.get('partial_sha256'), state.get('bytes')):
@@ -240,6 +247,16 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
             receipt = verify_image(result, artifact.sha256)
         state.update(status='verified', receipt=receipt)
         _write_state(stage, state)
+        # Only discard our authenticated download staging, never a published
+        # object, reference, legacy image, alias or operator-owned source.
+        if os.path.lexists(partial):
+            with _file(partial) as (fd, parent, before):
+                if (before.st_nlink != 1 or before.st_size != state['bytes']
+                        or _hash(fd) != state['partial_sha256']):
+                    raise AcquisitionError('unrecognized acquisition staging; reconciliation required')
+                _check_file(partial, fd, parent, before)
+                os.unlink(partial.name, dir_fd=parent)
+                os.fsync(parent)
         return {'artifact_id': artifact.artifact_id, 'kind': artifact.kind,
                 'path': str(result), 'manifest_digest': artifact.manifest_digest,
                 'verification': receipt, 'qualification': 'not_checked',

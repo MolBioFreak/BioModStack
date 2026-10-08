@@ -48,8 +48,10 @@ def _plan(project_root, models):
         profiles.validate_install_profile_raw(raw)
         profile = profiles.normalize_install_profile(raw)
     paths = profiles.resolve_runtime_paths(project_root=project_root, profile=profile)
-    roots = {key: str(paths[key]) for key in ('container_dir', 'weights_root')}
+    roots = {key: str(paths[key]) for key in ('runtime_image_store', 'weights_root')}
     image_root, weight_root = map(Path, roots.values())
+    if not image_root.is_absolute() or '..' in image_root.parts:
+        raise ProvisionBlocked('invalid_runtime_image_store: absolute path without parent traversal required')
     if image_root.is_relative_to(weight_root) or weight_root.is_relative_to(image_root):
         raise ProvisionBlocked('overlapping_artifact_stores: image and licensed weight stores must be disjoint')
     for value in roots.values():
@@ -191,7 +193,7 @@ def provision_report(action, *, project_root, models=(), expected_plan_digest=No
                         if saved.get('status') != 'bytes-materialized':
                             raise ProvisionBlocked('provision_incomplete: resume provisioning explicitly')
                         receipt = authority.revalidate_model_receipt(row['model_id'],
-                            Path(plan['store_roots']['container_dir']),
+                            Path(plan['store_roots']['runtime_image_store']),
                             weights_root=Path(plan['store_roots']['weights_root']),
                             expected_plan_digest=model_plan['plan_digest'], receipt=saved.get('receipt'))
                         bindings = receipt_bindings(receipt)
@@ -201,7 +203,7 @@ def provision_report(action, *, project_root, models=(), expected_plan_digest=No
                         # Rehash after evidence validation too: no stale observation
                         # may survive a mutation during the handoff.
                         authority.revalidate_model_receipt(row['model_id'],
-                            Path(plan['store_roots']['container_dir']),
+                            Path(plan['store_roots']['runtime_image_store']),
                             weights_root=Path(plan['store_roots']['weights_root']),
                             expected_plan_digest=model_plan['plan_digest'], receipt=receipt)
                         row.update(evidence, bytes_materialized=True, receipt=receipt, bindings=bindings)
@@ -222,7 +224,7 @@ def provision_report(action, *, project_root, models=(), expected_plan_digest=No
                         journal['events'].append({'model_id': row['model_id'], 'status': 'materializing'})
                         _write(journal_path, json.dumps(journal, sort_keys=True), replace=True)
                         try:
-                            receipt = authority.acquire_model(row['model_id'], Path(plan['store_roots']['container_dir']),
+                            receipt = authority.acquire_model(row['model_id'], Path(plan['store_roots']['runtime_image_store']),
                                 weights_root=Path(plan['store_roots']['weights_root']),
                                 expected_plan_digest=model_plan['plan_digest'], accepted_licenses=licenses)
                             row.update(status='bytes-materialized', bytes_materialized=True, receipt=receipt, bindings=receipt_bindings(receipt))

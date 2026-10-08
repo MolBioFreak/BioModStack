@@ -9,8 +9,12 @@ approval bypass is exposed to operators.
 
 1. Use the existing configuration preview/configure transaction to select external
    storage. Provision resolves the same install profile and supported environment
-   overrides, using **container_dir** for image objects and **weights_root** for
-   licensed objects and directory generations. The two stores must be disjoint.
+   overrides. Image objects use **runtime_image_store**: explicit
+   `BMS_RUNTIME_IMAGE_STORE`, otherwise `${BMS_CONTAINER_DIR}/.image-store`
+   with `container_dir` resolved through the installation profile. This is the
+   shared lifecycle store, not `container_dir/objects` or a lane/task cache.
+   **weights_root** remains separate for licensed objects and directory
+   generations. The two stores must be disjoint.
 2. Preview a selected closure (repeat `--model` for multiple models):
    ```sh
    ./start_ui.sh provision-plan --model esmfold2 --json
