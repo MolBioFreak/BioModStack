@@ -128,7 +128,8 @@ workflow {
             }
         }
         else {
-            // Standard RFdiffusion path (default)
+            // Legacy RFdiffusion path (DEPRECATED - use rfd3 instead)
+            log.warn("DEPRECATION WARNING: diffusion_method='rfd' is deprecated. Consider using 'rfd3' (RFdiffusion3) instead.")
             def rfdParams = new RFDiffusionParams(params)
             def rfdCommand = rfdParams.generateCommandString()
             log.info("RFdiffusion command: ${rfdCommand} inference.num_designs=${batch_size}")
