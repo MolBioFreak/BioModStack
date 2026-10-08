@@ -39,6 +39,7 @@ include { DoradoBasecall ; DoradoAlign ; PrepareBamForAnalysis ; ValidateMappedB
 
 include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
 include { PROTEIN_LOCAL_REDESIGN } from './workflows/protein_local_redesign.nf'
+include { PROTEIN_CAD_EXPERIMENTAL } from './workflows/protein_cad_experimental.nf'
 
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
@@ -450,6 +451,20 @@ workflow {
         }
 
         PROTEIN_LOCAL_REDESIGN()
+        return null
+    }
+
+    /////////////////////////////
+    // PROTEIN CAD EXPERIMENTAL //
+    /////////////////////////////
+    if (params.rfd_mode == 'protein_cad_experimental') {
+        println("Running Protein CAD Experimental Workflow")
+        println("* Backend: ${params.pcad_backend}")
+        println("* Task: ${params.pcad_task}")
+        println("* Num designs: ${params.pcad_num_designs}")
+        println("* Target lengths: ${params.pcad_target_lengths}")
+
+        PROTEIN_CAD_EXPERIMENTAL()
         return null
     }
 
