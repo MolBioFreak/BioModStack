@@ -615,6 +615,18 @@ export function Layout({ children }: LayoutProps) {
                                 >
                                     NGS Toolkit
                                 </Link>
+                                <Link
+                                    to="/stats"
+                                    data-bms-primary-nav-active={isActive('/stats') ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                    style={{
+                                        backgroundColor: isActive('/stats') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/stats') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                    title="BioModStack Stats Toolkit"
+                                >
+                                    Stats Toolkit
+                                </Link>
 
                                 {showSystemAnalyticsTab && (
                                     <Link
