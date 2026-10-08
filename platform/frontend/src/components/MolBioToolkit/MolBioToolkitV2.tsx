@@ -663,6 +663,12 @@ export function MolBioToolkitV2() {
                             <SearchPanel
                                 sequenceData={sequenceData}
                                 onHighlight={setHighlightedRegions}
+                                onOrfsFound={(orfs) => {
+                                    setSequenceData({
+                                        ...sequenceData,
+                                        translations: orfs
+                                    });
+                                }}
                             />
                         )}
                         {activePanel === 'edit' && (
