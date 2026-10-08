@@ -10,12 +10,6 @@ const STATS_TOOLS_COMMANDS = [
     'bms stats-tools logs --tail 120',
 ];
 
-const STATS_TOOLS_DOC_LINKS = [
-    { label: 'BMS stats plan', href: 'https://github.com/MolBioFreak/BioModStack/blob/main/docs/reports/2026-05-05-bms-workflow-stats-tools-containerization-plan.md' },
-    { label: 'R Project', href: 'https://www.r-project.org/' },
-    { label: 'Plotly docs', href: 'https://plotly.com/javascript/' },
-] as const;
-
 interface StatsToolsStatus {
     component?: string;
     service_name?: string;
@@ -46,7 +40,7 @@ interface StatsToolsControlPanelProps {
 export function StatsToolsControlPanel({
     embeddedContext = 'stats-toolkit-debug',
     title = 'Stats Tools',
-    subtitle = 'Stats runtime actions + logs.',
+    subtitle = 'Actions + logs.',
     className = '',
     autoRefresh = true,
 }: StatsToolsControlPanelProps) {
@@ -158,23 +152,6 @@ export function StatsToolsControlPanel({
                 </div>
             )}
 
-            <div className="rounded border border-slate-700 bg-slate-950/50 p-2">
-                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Documentation</p>
-                <div className="flex flex-wrap gap-2">
-                    {STATS_TOOLS_DOC_LINKS.map((link) => (
-                        <a
-                            key={link.href}
-                            href={link.href}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="rounded border border-slate-600 px-2 py-1 text-[11px] font-semibold text-cyan-300 hover:border-cyan-500/70 hover:bg-cyan-500/10"
-                        >
-                            {link.label}
-                        </a>
-                    ))}
-                </div>
-            </div>
-
             <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
                 <button onClick={() => void runAction('start')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50">Start</button>
                 <button onClick={() => void runAction('stop')} disabled={loading !== null} className="px-2 py-1.5 text-xs rounded border border-rose-500/50 text-rose-300 hover:bg-rose-500/20 disabled:opacity-50">Stop</button>
@@ -207,7 +184,7 @@ export function StatsToolsMenu() {
             <button
                 onClick={() => setIsOpen(!isOpen)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-500"
-                title="Stats Toolkit control panel"
+                title="Stats Tools"
             >
                 <span className="h-2 w-2 rounded-full bg-slate-500" />
                 Stats Tools
@@ -223,7 +200,7 @@ export function StatsToolsMenu() {
                         <StatsToolsControlPanel
                             embeddedContext="topbar-control-panel"
                             title="Stats Tools"
-                            subtitle="Stats runtime actions + logs."
+                            subtitle="Actions + logs."
                             autoRefresh={isOpen}
                         />
                     </div>

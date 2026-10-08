@@ -9,12 +9,6 @@ const DB_SERVICE_COMMANDS = [
     'bms db-service logs --tail 120',
 ];
 
-const DB_SERVICE_DOC_LINKS = [
-    { label: 'BMS DB spec', href: 'https://github.com/MolBioFreak/BioModStack/blob/main/docs/plans/2026-05-06-bms-db-service-host-agent-code-level-spec.md' },
-    { label: 'PostgreSQL docs', href: 'https://www.postgresql.org/docs/current/' },
-    { label: 'SQLite docs', href: 'https://www.sqlite.org/docs.html' },
-] as const;
-
 interface DbLogicalDatabaseStatus {
     name?: string;
     role?: string;
@@ -29,6 +23,7 @@ interface DbServiceStatus {
     service_id?: string;
     display_name?: string;
     service_name?: string;
+    implementation_service_name?: string;
     container_name?: string;
     optional_at_boot?: boolean;
     control_mode?: string;
@@ -57,7 +52,7 @@ interface DbServiceControlPanelProps {
 export function DbServiceControlPanel({
     embeddedContext = 'assay-db-debug',
     title = 'BMS DB',
-    subtitle = 'DB state, actions, logs.',
+    subtitle = 'State, actions, logs.',
     className = '',
     autoRefresh = true,
 }: DbServiceControlPanelProps) {
@@ -179,7 +174,7 @@ export function DbServiceControlPanel({
             <div className="grid grid-cols-2 gap-2 text-xs text-slate-300 md:grid-cols-4">
                 <div><span className="text-slate-500">State:</span> {state}</div>
                 <div><span className="text-slate-500">Health:</span> {health}</div>
-                <div><span className="text-slate-500">Service:</span> {status?.service_name || 'bms-analytical-postgres'}</div>
+                <div><span className="text-slate-500">Service:</span> {displayName}</div>
                 <div><span className="text-slate-500">Mode:</span> {status?.control_mode || 'unknown'}</div>
             </div>
 
@@ -188,23 +183,6 @@ export function DbServiceControlPanel({
                     {note}
                 </div>
             )}
-
-            <div className="rounded border border-slate-700 bg-slate-950/50 p-2">
-                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Documentation</p>
-                <div className="flex flex-wrap gap-2">
-                    {DB_SERVICE_DOC_LINKS.map((link) => (
-                        <a
-                            key={link.href}
-                            href={link.href}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="rounded border border-slate-600 px-2 py-1 text-[11px] font-semibold text-cyan-300 hover:border-cyan-500/70 hover:bg-cyan-500/10"
-                        >
-                            {link.label}
-                        </a>
-                    ))}
-                </div>
-            </div>
 
             {logicalDatabases.length > 0 && (
                 <div className="grid gap-2 text-xs text-slate-300 md:grid-cols-2">
@@ -249,7 +227,7 @@ export function DbServiceMenu() {
             <button
                 onClick={() => setIsOpen(!isOpen)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-500"
-                title="BMS DB service control panel"
+                title="BMS DB"
             >
                 <span className="h-2 w-2 rounded-full bg-slate-500" />
                 BMS DB
@@ -265,7 +243,7 @@ export function DbServiceMenu() {
                         <DbServiceControlPanel
                             embeddedContext="topbar-control-panel"
                             title="BMS DB"
-                            subtitle="DB state, actions, logs."
+                            subtitle="State, actions, logs."
                             autoRefresh={isOpen}
                         />
                     </div>

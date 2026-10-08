@@ -16,6 +16,11 @@ import {
     type RuntimeMode,
     type RuntimePortSettings,
 } from '../runtime/runtimeSwitch';
+import {
+    type BmsFeatureKey,
+    setBmsFeature as putBmsFeature,
+    useBmsFeatures,
+} from '../runtime/installFeatures';
 import { ThemeSelector } from './ThemeSelector';
 import { StatsToolsMenu } from './StatsToolsControlPanel';
 import { DbServiceMenu } from './DbServiceControlPanel';
@@ -334,13 +339,15 @@ function TopbarUtilityControls({
     showSystemAnalyticsTab,
     onSetShowSystemAnalyticsTab,
 }: TopbarUtilityControlsProps) {
+    const bmsFeatures = useBmsFeatures();
+
     return (
         <>
             <ThemeSelector />
-            <BioXpInterlinkMenu />
+            {bmsFeatures.bioxp && <BioXpInterlinkMenu />}
             {showSystemMenus && <PowerControlMenu />}
-            {showSystemMenus && <DbServiceMenu />}
-            {showSystemMenus && <StatsToolsMenu />}
+            {showSystemMenus && bmsFeatures.assay_db && <DbServiceMenu />}
+            {showSystemMenus && bmsFeatures.stats_tools && <StatsToolsMenu />}
             {showSystemMenus && <MSAServerSettingsMenu />}
             <DebugMenu
                 showSystemAnalyticsTab={showSystemAnalyticsTab}
@@ -439,6 +446,7 @@ function MobileTopbarTools({
 export function Layout({ children }: LayoutProps) {
     const location = useLocation();
     const isMobileTopbar = useIsMobileTopbar();
+    const bmsFeatures = useBmsFeatures();
     const [showSystemAnalyticsTab, setShowSystemAnalyticsTab] = useState<boolean>(() => readShowSystemAnalyticsTab());
 
     const isActive = (path: string) => location.pathname === path;
@@ -599,18 +607,20 @@ export function Layout({ children }: LayoutProps) {
                                         System Analytics
                                     </Link>
                                 )}
-                                <Link
-                                    to="/bioxp"
-                                    data-bms-primary-nav-active={isActive('/bioxp') ? 'true' : undefined}
-                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
-                                    style={{
-                                        backgroundColor: isActive('/bioxp') ? 'color-mix(in srgb, var(--warning) 20%, transparent)' : 'transparent',
-                                        color: isActive('/bioxp') ? 'var(--warning)' : 'var(--text-secondary)'
-                                    }}
-                                    title="BioXP Handler Controls"
-                                >
-                                    BioXP Handler
-                                </Link>
+                                {bmsFeatures.bioxp && (
+                                    <Link
+                                        to="/bioxp"
+                                        data-bms-primary-nav-active={isActive('/bioxp') ? 'true' : undefined}
+                                        className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                        style={{
+                                            backgroundColor: isActive('/bioxp') ? 'color-mix(in srgb, var(--warning) 20%, transparent)' : 'transparent',
+                                            color: isActive('/bioxp') ? 'var(--warning)' : 'var(--text-secondary)'
+                                        }}
+                                        title="BioXP Handler Controls"
+                                    >
+                                        BioXP Handler
+                                    </Link>
+                                )}
                             </>
                         </DragScrollRail>
 
@@ -738,10 +748,10 @@ function DiagnosticsMenu() {
                     setCopyStatus(null);
                 }}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border bg-emerald-950/40 text-emerald-200 border-emerald-700/70 hover:border-emerald-400 hover:bg-emerald-900/50"
-                title="Diagnostics/About"
+                title="Diagnostics"
             >
                 <span aria-hidden="true">ⓘ</span>
-                <span>Diagnostics/About</span>
+                <span>Diagnostics</span>
             </button>
 
             {isOpen && (
@@ -757,8 +767,8 @@ function DiagnosticsMenu() {
                     >
                         <div className="flex items-center justify-between gap-3 border-b border-slate-700 pb-2">
                             <div>
-                                <p className="text-xs font-semibold text-emerald-300 uppercase tracking-wider">Diagnostics/About</p>
-                                <p className="text-[11px] text-slate-400">Live surface + API status</p>
+                                <p className="text-xs font-semibold text-emerald-300 uppercase tracking-wider">Diagnostics</p>
+                                <p className="text-[11px] text-slate-400">Surface + API</p>
                             </div>
                             <button
                                 onClick={() => void refreshDiagnostics()}
@@ -777,7 +787,7 @@ function DiagnosticsMenu() {
                             <div className="flex items-center justify-between gap-3">
                                 <div>
                                     <p className="text-xs font-semibold text-slate-200">Runtime channel</p>
-                                    <p className="text-[11px] text-slate-400">Channel switch + start</p>
+                                    <p className="text-[11px] text-slate-400">Switch + start</p>
                                 </div>
                                 <button
                                     onClick={() => void handleStartRuntimeTarget('both')}
@@ -832,6 +842,9 @@ function DebugMenu({
     const [isOpen, setIsOpen] = useState(false);
     const [loading, setLoading] = useState<string | null>(null);
     const [result, setResult] = useState<string | null>(null);
+    const [featureAction, setFeatureAction] = useState<string | null>(null);
+    const queryClient = useQueryClient();
+    const bmsFeatures = useBmsFeatures();
 
     const runCleanup = async (days: number) => {
         const label = days === 0 ? 'full' : `${days}d`;
@@ -853,6 +866,23 @@ function DebugMenu({
             setLoading(null);
         }
     };
+
+    const setBmsFeature = async (feature: BmsFeatureKey, enabled: boolean) => {
+        const label = `${feature}-${enabled ? 'add' : 'remove'}`;
+        setFeatureAction(label);
+        setResult(null);
+        try {
+            const features = await putBmsFeature(feature, enabled);
+            queryClient.setQueryData(['bms-install-features'], features);
+            setResult(`✓ ${feature} ${enabled ? 'added' : 'removed'}; restart required`);
+        } catch (error) {
+            setResult(`✗ Add-on update failed: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+            setFeatureAction(null);
+        }
+    };
+
+    const addOnButtonClass = 'px-2 py-1 rounded border border-slate-600 text-[11px] text-slate-200 disabled:opacity-50 hover:bg-slate-700';
 
     return (
         <div className="relative">
@@ -877,7 +907,7 @@ function DebugMenu({
 
                     {/* Dropdown */}
                     <div
-                        className="absolute right-0 top-full mt-2 w-64 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 py-2"
+                        className="absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-1rem)] bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 py-2"
                         data-bms-drag-scroll-ignore="true"
                     >
                         <div className="px-3 py-2 border-b border-slate-700">
@@ -894,6 +924,36 @@ function DebugMenu({
                                     className="h-4 w-4"
                                 />
                             </label>
+                        </div>
+
+                        <div className="px-3 py-2 border-b border-slate-700">
+                            <div className="mb-2 flex items-center justify-between gap-3">
+                                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Install add-ons</p>
+                                <span className="text-[10px] text-slate-500">restart required</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    onClick={() => void setBmsFeature('bioxp', !bmsFeatures.bioxp)}
+                                    disabled={featureAction === 'bioxp-add' || featureAction === 'bioxp-remove'}
+                                    className={addOnButtonClass}
+                                >
+                                    {bmsFeatures.bioxp ? 'Remove BioXP' : 'Add BioXP'}
+                                </button>
+                                <button
+                                    onClick={() => void setBmsFeature('stats_tools', !bmsFeatures.stats_tools)}
+                                    disabled={featureAction === 'stats_tools-add' || featureAction === 'stats_tools-remove'}
+                                    className={addOnButtonClass}
+                                >
+                                    {bmsFeatures.stats_tools ? 'Remove Stats Tools' : 'Add Stats Tools'}
+                                </button>
+                                <button
+                                    onClick={() => void setBmsFeature('assay_db', !bmsFeatures.assay_db)}
+                                    disabled={featureAction === 'assay_db-add' || featureAction === 'assay_db-remove'}
+                                    className={addOnButtonClass}
+                                >
+                                    {bmsFeatures.assay_db ? 'Remove BMS DB' : 'Add BMS DB'}
+                                </button>
+                            </div>
                         </div>
 
                         <div className="px-3 py-2 border-b border-slate-700">
@@ -1353,8 +1413,8 @@ function PowerControlMenu() {
 
                         {coolerControlActive && (
                             <div className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-1.5 text-[11px] text-cyan-100">
-                                <span className="font-semibold text-cyan-200">CoolerControl device backend active.</span>{' '}
-                                Fan mode and target changes apply per GPU through CoolerControl channel settings.
+                                <span className="font-semibold text-cyan-200">CoolerControl active.</span>{' '}
+                                Per-GPU channel control.
                                 {fanState?.available_modes?.length ? (
                                     <span className="text-cyan-200"> Modes available: {fanState.available_modes.join(', ')}</span>
                                 ) : null}
@@ -1805,7 +1865,7 @@ function MSAServerSettingsMenu() {
                                 ))}
                             </select>
                             <p className="text-xs text-slate-400">
-                                Sets the default GPU for MSA server status, start, and stop actions. Leave on auto to use scheduler preference.
+                                Default GPU for MSA controls.
                             </p>
                         </div>
 
