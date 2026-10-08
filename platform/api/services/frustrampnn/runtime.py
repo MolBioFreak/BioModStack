@@ -8,12 +8,18 @@ import os
 import re
 import stat
 import subprocess
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from paths import get_container_path
+from paths import get_container_path, get_container_dir
+
+_SCRIPTS_ROOT = Path(__file__).resolve().parents[4] / "scripts"
+if str(_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_ROOT))
+from lib.shared_runtime_images import verify_image, SharedRuntimeImageError
 
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -45,7 +51,7 @@ FRUSTRAMPNN_RUNTIME_IDENTITY = FrustraMPNNRuntimeIdentity(
     sif_name="frustrampnn.sif",
     # Snapshot installation authority at process startup, just like the immutable
     # registry below. Configuration changes require a new runtime process.
-    configured_sif_path=str(get_container_path("frustrampnn.sif")),
+    configured_sif_path=os.environ.get("BMS_FRUSTRAMPNN_SIF") or str(get_container_path("frustrampnn.sif")),
     sif_sha256="c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
     executable_path="/opt/venv/bin/frustrampnn",
     executable_sha256="32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f",
@@ -64,6 +70,25 @@ def runtime_identity_dict(
     identity: FrustraMPNNRuntimeIdentity = FRUSTRAMPNN_RUNTIME_IDENTITY,
 ) -> dict[str, str]:
     return asdict(identity)
+
+
+def compatible_runtime_identity(recorded: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
+    """Compare scientific authority, not a retained receipt's host location.
+
+    This never authorizes execution of the recorded path. Executions must use
+    validate_configured_container_path and pin the current installation object.
+    Retained request/configuration hashes still bind the original location bytes.
+    """
+    for value in (recorded, current):
+        path = value.get("configured_sif_path")
+        if not isinstance(path, str) or not path.startswith("/"):
+            return False
+        try:
+            _lexical_parts(path, label="recorded FrustraMPNN image")
+        except RuntimeValidationError:
+            return False
+    return ({key: value for key, value in recorded.items() if key != "configured_sif_path"}
+            == {key: value for key, value in current.items() if key != "configured_sif_path"})
 
 
 def _immutable_mapping(value: Mapping[str, Any]) -> MappingProxyType:
@@ -223,9 +248,29 @@ def open_verified_container(path: Path | str, expected_sha256: object) -> Pinned
     """Lexically validate, no-follow open, hash, and pin one SIF generation."""
 
     expected = _validate_digest(expected_sha256, label="registered FrustraMPNN image")
+    # Shared objects keep the store's mode/link/inode checks, then execution
+    # retains its own no-follow descriptor of that exact verified generation.
+    shared_identity = None
+    if Path(path).name == "runtime.sif" and Path(path).parent.name == expected:
+        try:
+            shared_identity = verify_image(Path(path), expected)
+        except (OSError, SharedRuntimeImageError) as exc:
+            raise RuntimeValidationError(str(exc)) from exc
     descriptor = open_regular_no_follow(path, label="FrustraMPNN container")
     try:
+        before = os.fstat(descriptor)
+        if shared_identity is not None and any(
+            shared_identity[key] != getattr(before, attribute)
+            for key, attribute in (("device", "st_dev"), ("inode", "st_ino"),
+                                   ("size", "st_size"), ("mtime_ns", "st_mtime_ns"),
+                                   ("ctime_ns", "st_ctime_ns"))
+        ):
+            raise RuntimeValidationError("verified FrustraMPNN image generation changed")
         actual = sha256_fd(descriptor)
+        after = os.fstat(descriptor)
+        if any(getattr(before, key) != getattr(after, key) for key in
+               ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")):
+            raise RuntimeValidationError("FrustraMPNN image changed during verification")
         if actual != expected:
             raise RuntimeValidationError(
                 "registered FrustraMPNN image SHA-256 does not match installed bytes"
@@ -239,15 +284,27 @@ def open_verified_container(path: Path | str, expected_sha256: object) -> Pinned
 def validate_configured_container_path(
     path: Path | str,
     *,
-    identity: FrustraMPNNRuntimeIdentity = FRUSTRAMPNN_RUNTIME_IDENTITY,
+    identity: FrustraMPNNRuntimeIdentity | None = None,
 ) -> str:
-    """Require the exact centrally registered host path before descriptor pinning."""
+    """Resolve the registered semantic selector without following image aliases."""
 
+    identity = FRUSTRAMPNN_RUNTIME_IDENTITY if identity is None else identity
     raw = os.fspath(path)
     if not isinstance(raw, str) or not raw or "\x00" in raw:
         raise RuntimeValidationError("configured FrustraMPNN container path is invalid")
+    _lexical_parts(raw, label="configured FrustraMPNN container")
     configured = os.path.abspath(raw)
-    if configured != identity.configured_sif_path:
+    selected = identity.configured_sif_path
+    legacy = str(get_container_path(identity.sif_name))
+    if selected != legacy and selected == os.environ.get("BMS_FRUSTRAMPNN_SIF"):
+        store = Path(os.environ.get("BMS_RUNTIME_IMAGE_STORE") or (get_container_dir() / ".image-store"))
+        canonical = str(store / "objects" / "sha256" / identity.sif_sha256 / "runtime.sif")
+        if selected != canonical:
+            raise RuntimeValidationError("FrustraMPNN selector must name the registered digest in the shared image store")
+        # The semantic installation name is a selector, not an alias to follow.
+        if configured == legacy:
+            configured = selected
+    if configured != selected:
         raise RuntimeValidationError(
             "configured FrustraMPNN container path does not match the central runtime registry"
         )
@@ -260,6 +317,10 @@ def cm_analysis_runtime_registry_v1(container_dir: Path | str) -> dict[str, str]
     raw_root = os.fspath(container_dir)
     separator = "" if raw_root.endswith("/") else "/"
     image_path = f"{raw_root}{separator}{FRUSTRAMPNN_RUNTIME_IDENTITY.sif_name}"
+    if os.environ.get("BMS_FRUSTRAMPNN_SIF"):
+        image_path = validate_configured_container_path(FRUSTRAMPNN_RUNTIME_IDENTITY.configured_sif_path)
+        with open_verified_container(image_path, FRUSTRAMPNN_RUNTIME_IDENTITY.sif_sha256):
+            pass
     descriptor = open_regular_no_follow(image_path, label="registered FrustraMPNN container")
     os.close(descriptor)
     return {

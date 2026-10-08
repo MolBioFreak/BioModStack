@@ -10,8 +10,62 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 from typing import Any
+
+# Also support importlib-based qualification consumers.
+sys.path.insert(0, str(Path(__file__).absolute().parent))
+from lib.shared_runtime_images import verify_image
+
+
+def _verified_runtime_location(runtime_sif: Path, expected: str) -> tuple[Path, dict | None]:
+    """Select location only; the retained lock remains scientific authority.
+
+    No publication or history edits. A compatibility symlink is only a name for
+    the configured exact object, never a path passed to the container runtime.
+    Unpublished regular inputs remain usable when no store is configured.
+    """
+    selected = Path(runtime_sif).absolute()
+    if ".." in selected.parts:
+        raise ValueError("Dorado runtime path may not contain parent traversal")
+    configured = os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip()
+    container_dir = os.environ.get("BMS_CONTAINER_DIR", "").strip()
+    store = Path(configured).expanduser() if configured else (
+        Path(container_dir).expanduser() / ".image-store" if container_dir else None
+    )
+    if store is not None and (not store.is_absolute() or ".." in store.parts):
+        raise ValueError("Dorado shared runtime image store path is invalid")
+    # An explicit canonical selector needs no environment or source-parent
+    # inference. Do not resolve it: verify_image must see every path component.
+    canonical_selector = (selected.name == "runtime.sif"
+                          and selected.parent.parent.name == "sha256"
+                          and selected.parent.parent.parent.name == "objects")
+    canonical = store / "objects" / "sha256" / expected / "runtime.sif" if store else None
+    if canonical_selector:
+        if selected.parent.name != expected or (configured and canonical is not None and selected != canonical):
+            raise ValueError("Dorado runtime canonical selector identity mismatch")
+        canonical = selected
+    if canonical is None:
+        if selected.is_symlink() or not selected.is_file() or _sha256(selected) != expected:
+            raise ValueError("Dorado runtime SIF identity mismatch")
+        return selected, None
+    try:
+        identity = verify_image(canonical, expected)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Dorado runtime SIF identity mismatch") from exc
+    if selected != canonical:
+        if selected.is_symlink():
+            # Inspect only the final link text, not an arbitrary symlink chain.
+            # Execution never opens this compatibility name.
+            target = selected.readlink()
+            if not target.is_absolute():
+                target = selected.parent / target
+            if Path(os.path.abspath(target)) != canonical:
+                raise ValueError("Dorado runtime compatibility alias identity mismatch")
+        elif not selected.is_file() or _sha256(selected) != expected:
+            raise ValueError("Dorado runtime SIF identity mismatch")
+    return canonical, identity
 
 SCHEMA = "biomodstack.dorado_preflight.v1"
 LOCK_SCHEMA = "biomodstack.dorado_lock.v1"
@@ -481,9 +535,9 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
 
     assets: dict[str, Any] = {"verified": False}
     if verify_assets:
-        runtime_sif = Path(runtime_sif)
-        if runtime_sif.is_symlink() or not runtime_sif.is_file() or _sha256(runtime_sif) != lock["dorado"]["sif_sha256"]:
-            raise ValueError("Dorado runtime SIF identity mismatch")
+        runtime_sif, image_identity = _verified_runtime_location(
+            Path(runtime_sif), lock["dorado"]["sif_sha256"]
+        )
         completed = subprocess.run(["apptainer", "exec", str(runtime_sif), "dorado", "--version"], text=True, capture_output=True, check=False, timeout=60)
         version = (completed.stdout or completed.stderr).strip().splitlines()[0] if (completed.stdout or completed.stderr).strip() else ""
         if completed.returncode != 0 or version != lock["dorado"]["version"]:
@@ -495,7 +549,15 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
         if modified_bases != "none":
             mod_model = lock["models"]["modified_bases"][modified_bases]
             verified_models["modified_bases"] = verify_model_identity(mod_model, Path(model_root) / mod_model["id"])
-        assets = {"verified": True, "runtime_sif": {"path": str(runtime_sif.resolve()), "sha256": _sha256(runtime_sif), "version": version}, "capabilities": capabilities, "models": verified_models}
+        if image_identity is not None:
+            if verify_image(runtime_sif, lock["dorado"]["sif_sha256"]) != image_identity:
+                raise ValueError("Dorado runtime canonical object identity changed during preflight")
+            runtime_digest = image_identity["sha256"]
+        else:
+            runtime_digest = _sha256(runtime_sif)
+            if runtime_digest != lock["dorado"]["sif_sha256"]:
+                raise ValueError("Dorado runtime SIF identity mismatch")
+        assets = {"verified": True, "runtime_sif": {"path": str(runtime_sif), "sha256": runtime_digest, "version": version}, "capabilities": capabilities, "models": verified_models}
 
     return {
         "schema": SCHEMA,

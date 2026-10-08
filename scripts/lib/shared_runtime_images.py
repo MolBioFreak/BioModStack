@@ -176,6 +176,66 @@ def _lock(root: Path, digest: str) -> Iterator[None]:
 
 
 def publish_image(source: Path, store_root: Path, expected_sha256: str) -> Path:
+    """Publish under the same admission fence used by references and retirement."""
+    _digest(expected_sha256)  # Invalid input must not create a store.
+    with _lock(_absolute(store_root), "lifecycle"):
+        return _publish_image_locked(source, store_root, expected_sha256)
+
+
+def _recover_stages(objects_fd: int, digest: str) -> None:
+    """Recover only our exact private stage format, while holding its lock.
+
+    No age heuristic: flock proves the cooperating writer is gone. Unknown
+    contents/types fail closed, never recursively remove operator data.
+    """
+    prefix = ".publish-" + digest + "-"
+    for name in os.listdir(objects_fd):
+        if not name.startswith(prefix):
+            continue
+        suffix = name[len(prefix):]
+        if len(suffix) != 32 or any(c not in "0123456789abcdef" for c in suffix):
+            raise SharedRuntimeImageError("unknown publication staging name")
+        fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=objects_fd)
+        try:
+            entries = os.listdir(fd)
+            if set(entries) - {"runtime.sif"}:
+                raise SharedRuntimeImageError("unknown publication staging contents")
+            if entries:
+                info = os.stat("runtime.sif", dir_fd=fd, follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise SharedRuntimeImageError("unknown publication staging object")
+            os.fchmod(fd, 0o700)
+            if entries:
+                os.unlink("runtime.sif", dir_fd=fd)
+            os.rmdir(name, dir_fd=objects_fd)
+            os.fsync(objects_fd)
+        finally:
+            os.close(fd)
+
+
+def recover_publications(store_root: Path) -> None:
+    """Explicit restart recovery; excludes every cooperating publisher."""
+    with _lock(_absolute(store_root), "lifecycle"):
+        _recover_publications_locked(_absolute(store_root))
+
+
+def _recover_publications_locked(root: Path) -> None:
+    try:
+        with _directory(root / "objects" / "sha256") as fd:
+            for name in os.listdir(fd):
+                if name.startswith(".publish-"):
+                    digest = _digest(name[len(".publish-"):len(".publish-") + 64])
+                    if not name.startswith(".publish-" + digest + "-"):
+                        raise SharedRuntimeImageError("unknown publication staging name")
+                    with _lock(root, digest):
+                        _recover_stages(fd, digest)
+    except FileNotFoundError:
+        # An unused store has no object directory yet.
+        if (root / "objects" / "sha256").exists():
+            raise
+
+
+def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str) -> Path:
     """Publish once, or verify/reuse objects/sha256/<digest>/runtime.sif.
 
     Source identity and SHA-256 are checked before and after the sole byte copy.
@@ -186,9 +246,13 @@ def publish_image(source: Path, store_root: Path, expected_sha256: str) -> Path:
     expected = _digest(expected_sha256)
     root = _absolute(store_root)
     source = _absolute(source)
+    _recover_publications_locked(root)
     objects = root / "objects" / "sha256"
     result = objects / expected / "runtime.sif"
     with _lock(root, expected), _directory(objects, create=True) as objects_fd:
+        _recover_stages(objects_fd, expected)
+        if any(name.startswith(".quarantine-" + expected + "-") for name in os.listdir(objects_fd)):
+            raise SharedRuntimeImageError("runtime image is quarantined; explicit maintenance recovery required")
         try:
             os.stat(expected, dir_fd=objects_fd, follow_symlinks=False)
         except FileNotFoundError:

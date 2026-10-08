@@ -993,7 +993,11 @@ def _validate_receipt_argv(receipt: Mapping[str, Any]) -> None:
         raise ManifestValidationError("receipt stdout/stderr artifact references are not canonical")
     if (
         receipt["sif_sha256"] != identity.sif_sha256
-        or receipt["configured_sif_path"] != identity.configured_sif_path
+        # Retained v1 receipts may name the original installation object.
+        # This is provenance only; it never selects a new execution path.
+        or receipt["configured_sif_path"] not in {
+            identity.configured_sif_path, str(_runtime.get_container_path(identity.sif_name)),
+        }
         or receipt["executable_path"] != identity.executable_path
         or receipt["executable_sha256"] != identity.executable_sha256
         or receipt["checkpoint_path"] != identity.checkpoint_path
