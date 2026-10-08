@@ -446,7 +446,7 @@ export function EmpowerImport() {
                         >
                             {loadingDataset ? 'Loading persisted dataset...' : 'Load selected persisted import + plots'}
                         </button>
-                        <p className="text-xs text-text-muted">Reloads durable Empower review plots from the BMS DB service analytical store, not browser cache.</p>
+                        <p className="text-xs text-text-muted">Reload from BMS DB.</p>
                     </div>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}
@@ -462,7 +462,7 @@ export function EmpowerImport() {
                             <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div>
                                     <div className="font-semibold text-text-primary">Durable analytical-store review</div>
-                                    <div>{persistedNotice || 'Latest Empower import is loaded from the BMS DB service response.'}</div>
+                                    <div>{persistedNotice || 'Loaded from BMS DB.'}</div>
                                 </div>
                                 <button
                                     type="button"

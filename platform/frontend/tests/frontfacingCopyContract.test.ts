@@ -41,11 +41,11 @@ test('Stats Toolkit landing keeps tabs/status copy compact', () => {
     const source = readSource('src', 'components', 'AssayAnalytics.tsx');
 
     for (const snippet of [
-        'Curves, recovery, replicate QC, ΔCq/ΔΔCq.',
-        'Empower imports, peaks, calibration, recovery, isoforms.',
-        'QC, DOE/RSM, SPC, capability, tests, Plotly.',
-        'qPCR, chromatography, DOE/statistics, runtime',
-        'Stats runtime actions + logs.',
+        'Curves, QC, ΔCq/ΔΔCq.',
+        'Empower, peaks, calibration, isoforms.',
+        'QC, DOE/RSM, SPC, capability.',
+        'qPCR · chromatography · DOE/statistics',
+        'Actions + logs.',
     ]) {
         requireSnippet(source, snippet);
     }
@@ -70,12 +70,12 @@ test('Stats Toolkit sub-workbenches keep import/QC copy compact', () => {
     const combined = qpcrSource + hplcSource + statsSource;
 
     for (const snippet of [
-        'Instrument exports or pasted Cq tables; no built-in rows.',
+        'Instrument exports or pasted Cq tables.',
         'Plate, well QC, curves, standards, rows. Focus:',
         'A-H × 1-12 visible. Click wells; Ctrl/Shift builds groups.',
-        'Empower AIA/ARW/CSV exports, chromatograms, calibration, plasmid isoforms.',
+        'Imports, peaks, calibration, isoforms.',
         'AIA/ARW/ZIP/CSV imports; injections, peaks, SST, plasmid logs.',
-        'DOE, RSM/regression, SPC, capability, tests, Plotly.',
+        'DOE, RSM/regression, SPC, capability.',
         'Paste rows → map columns → clean/exclude/bunch → QC stats.',
     ]) {
         requireSnippet(combined, snippet);

@@ -436,7 +436,7 @@ export function RawDataImport() {
                         >
                             {loadingDataset ? 'Loading persisted qPCR dataset...' : 'Load selected persisted qPCR import'}
                         </button>
-                        <p className="text-xs text-text-muted">Loads selected qPCR rows from BMS DB.</p>
+                        <p className="text-xs text-text-muted">Load from BMS DB.</p>
                     </div>
 
                     {error && <div className="p-3 bg-error/20 border border-error text-error text-sm">{error}</div>}

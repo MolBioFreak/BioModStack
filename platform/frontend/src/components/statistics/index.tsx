@@ -22,9 +22,9 @@ type AnalysisType = 'qc' | 'spc' | 'capability' | 'doe' | 'hypothesis' | 'regres
 const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
     {
         id: 'qc',
-        label: 'Manual Analytical QC',
+        label: 'Analytical QC',
         status: 'Clean + group data',
-        description: 'Clean rows, exclude, bunch, group/run stats.',
+        description: 'Clean, group, run stats.',
     },
     {
         id: 'spc',
@@ -42,7 +42,7 @@ const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
         id: 'doe',
         label: 'Design of Experiments',
         status: 'pyDOE3 + RSM',
-        description: 'Factorial/RSM design + contour/surface views.',
+        description: 'Factorial/RSM + plots.',
     },
     {
         id: 'hypothesis',
@@ -66,7 +66,7 @@ const statusItems = [
     },
     {
         title: 'Core engines',
-        value: 'pyDOE3, statsmodels, scipy, and Plotly surfaces',
+        value: 'pyDOE3, statsmodels, scipy, Plotly',
     },
     {
         title: 'Data policy',
@@ -82,8 +82,8 @@ export function StatisticsPage() {
         <div className="space-y-6 p-6">
             <AssayWorkbenchIntro
                 eyebrow="BMS DOE + Statistics Workbench"
-                title="JMP-like core statistics with explicit real inputs"
-                description="DOE, RSM/regression, SPC, capability, tests, Plotly."
+                title="DOE + statistics"
+                description="DOE, RSM/regression, SPC, capability."
             >
                 <AssayStatusStrip items={statusItems} />
             </AssayWorkbenchIntro>
