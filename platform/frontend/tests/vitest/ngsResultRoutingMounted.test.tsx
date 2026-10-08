@@ -43,7 +43,8 @@ vi.mock('../../src/components/useThemeColors', () => ({
     useThemeColors: () => new Proxy({}, { get: () => '#000000' }),
     useThemePlotlyLayout: () => ({}),
 }));
-vi.mock('../../src/lib/ngsAlignmentSession', () => ({
+vi.mock('../../src/lib/ngsAlignmentSession', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../../src/lib/ngsAlignmentSession')>()),
     ...alignmentMocks,
 }));
 
