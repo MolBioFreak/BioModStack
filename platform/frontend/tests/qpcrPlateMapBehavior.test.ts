@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
   QPCR_PLATE_COLUMNS,
   QPCR_PLATE_ROWS,
+  buildQpcrAssayReviewMetrics,
   buildQpcrPlateMap,
   buildSelectedQpcrWellAnalytics,
   normalizeQpcrWellPosition,
@@ -124,7 +125,30 @@ test('qPCR selected-well analytics exposes labels, Ct summary, replicate QC, sta
   assert.equal(analytics.spikeRecovery.length, 1);
 });
 
-test('qPCR raw import renders a software-style circular plate map with selected-well analytics instead of a Plotly heatmap tab', () => {
+test('qPCR assay review metrics summarize parsed wells, replicate CV, and spike recovery for top-line cards', () => {
+  const metrics = buildQpcrAssayReviewMetrics(sampleWells, {
+    replicate_qc: [
+      { sample_name: 'Std 1e6', target_name: 'gag', n: 3, ct_cv_percent: 0.44 },
+      { sample_name: 'Spike 80%', target_name: 'gag', n: 3, ct_cv_percent: '1.28' },
+    ],
+    spike_recovery: [
+      { sample_name: 'Spike 80%', target_name: 'gag', recovery_percent: 96.4 },
+      { sample_name: 'Spike 120%', target_name: 'gag', recovery_percent: '104.8' },
+    ],
+  });
+
+  assert.equal(metrics.parsedRows, 3);
+  assert.equal(metrics.populatedWells, 2);
+  assert.equal(metrics.standardRows, 2);
+  assert.equal(metrics.replicateGroups, 2);
+  assert.equal(metrics.replicateCvMeanLabel, '0.86%');
+  assert.equal(metrics.replicateCvMaxLabel, '1.28%');
+  assert.equal(metrics.spikeRecoveryCount, 2);
+  assert.equal(metrics.spikeRecoveryMeanLabel, '100.60%');
+  assert.equal(metrics.spikeRecoveryRangeLabel, '96.40–104.80%');
+});
+
+test('qPCR raw import renders a software-style compact circular plate map with selected-well analytics instead of a Plotly heatmap tab', () => {
   const source = readFileSync(join(root, 'src/components/qpcr/RawDataImport.tsx'), 'utf8');
 
   assert.match(source, /96-well Plate Map/);
@@ -132,5 +156,8 @@ test('qPCR raw import renders a software-style circular plate map with selected-
   assert.match(source, /buildQpcrPlateMap/);
   assert.match(source, /buildSelectedQpcrWellAnalytics/);
   assert.match(source, /rounded-full/);
+  assert.match(source, /h-\[1\.95rem\] w-\[1\.95rem\]/);
+  assert.match(source, /min-w-\[520px\]/);
+  assert.doesNotMatch(source, /min-w-\[760px\]/);
   assert.doesNotMatch(source, /Plate Heatmap/);
 });
