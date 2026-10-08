@@ -534,10 +534,25 @@ def path_urls(path, index=None):
 
 
 def index_path(path):
-    pysam = require_runtime()
-    with path_urls(path) as urls, compute():
+    require_runtime()
+    import ctypes
+    import pysam.libchtslib
+    # pysam's samtools dispatcher rejects URLs with os.path.exists before
+    # invoking HTSlib. Use the public API in the same authenticated library;
+    # CDLL releases the GIL so managed delivery can make progress.
+    index = ctypes.CDLL(pysam.libchtslib.__file__).sam_index_build3
+    index.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
+    index.restype = ctypes.c_int
+    # This file is a freshly generated derivative, not an immutable path input.
+    # Reused workspace names must bind to the exact newly opened generation.
+    with storage()._open_regular_file_no_symlinks(path) as generated, \
+            snapshot_handle(generated) as snapshot, compute(), \
+            delivery.grant({"data.bam": snapshot}) as urls:
+        require_bam_bytes(snapshot)
         try:
-            pysam.index("-o", str(path) + ".bai", urls["data.bam"])
+            status = index(urls["data.bam"].encode(), os.fsencode(str(path) + ".bai"), 0, 1)
+            if status != 0:
+                raise ValueError("native index failed")
         except Exception:
             raise storage().AlignmentSessionError("verified native index generation failed") from None
 

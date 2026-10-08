@@ -16,6 +16,7 @@ import pytest
 
 from services import ngs_alignment_sessions as storage
 from services import verified_native_reads as native
+from tests.ngs_resource_fixture import ngs_resources
 
 
 @pytest.mark.parametrize("value,size,expected", [
@@ -504,3 +505,33 @@ async def test_nonlocal_or_credential_origin_is_unavailable(monkeypatch, origin)
     monkeypatch.setenv("BMS_NATIVE_READ_ORIGIN", origin)
     with pytest.raises(storage.AlignmentCapacityUnavailable):
         await native.Delivery().start()
+
+
+@pytest.mark.native_http
+def test_generated_index_reads_verified_http_and_reused_workspace_generation(tmp_path, monkeypatch, ngs_resources, native_http):
+    import pysam
+    monkeypatch.setattr(pysam, "index", lambda *a, **k: pytest.fail("URL-rejecting dispatcher used"))
+    path = tmp_path / "generated.bam"
+    index_path = Path(str(path) + ".bai")
+    for name in ("first", "replacement"):
+        replacement = tmp_path / "next.bam"
+        with pysam.AlignmentFile(str(replacement), "wb", header={
+            "HD": {"VN": "1.6", "SO": "coordinate"},
+            "SQ": [{"SN": "ref", "LN": 100}],
+        }) as output:
+            read = pysam.AlignedSegment(output.header)
+            read.query_name = name
+            read.query_sequence = "ACGT"
+            read.flag = 0
+            read.reference_id = 0
+            read.reference_start = 3
+            read.mapping_quality = 60
+            read.cigarstring = "4M"
+            output.write(read)
+        replacement.replace(path)
+        index_path.unlink(missing_ok=True)
+        native.index_path(path)
+        assert index_path.is_file() and index_path.stat().st_size > 0
+        with path.open("rb") as generated, index_path.open("rb") as generated_index, \
+                native.alignment(generated, generated_index) as bam:
+            assert [r.query_name for r in bam.fetch("ref", 0, 20)] == [name]
