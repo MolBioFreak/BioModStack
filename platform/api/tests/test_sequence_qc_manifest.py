@@ -55,13 +55,18 @@ def test_legacy_governed_manifest_route_uses_closed_typed_error(
     response = TestClient(app).get(f"/api/jobs/{job_id}/manifest")
     assert response.status_code == 409
     assert response.json() == {
-        "schema": "bms.ngs.error.v1",
+        "schema": "bms.ngs.error.v2",
         "code": "NGS_PACKAGE_INTEGRITY_CONFLICT",
         "message": "The governed result package failed integrity validation.",
         "job_id": job_id,
         "resource": "manifest",
         "retryable": False,
     }
+    documented = app.openapi()["paths"]["/api/jobs/{job_id}/manifest"]["get"]["responses"]
+    for status in ("403", "404", "409"):
+        assert documented[status]["content"]["application/json"]["schema"] == {
+            "$ref": "#/components/schemas/OntNgsErrorV2",
+        }
 
 
 def _write_manifest(path: Path, payload: dict) -> None:
@@ -426,7 +431,7 @@ async def test_ngs_manifest_receipt_resolver_rejects_symlinked_fastq_parent(
     (outside / "qc_manifest.json").write_text("{}", encoding="utf-8")
     result_root.mkdir()
     (result_root / "fastq_qc").symlink_to(outside, target_is_directory=True)
-    job = SimpleNamespace(id="job-receipt", model_id="nanopore", params={"ont_workflow_id": "ont_fastq_qc"})
+    job = SimpleNamespace(id="job-receipt", model_id="nanopore", params={"ont_workflow_id": "ont_fastq_qc"}, provenance={})
 
     class Session:
         async def get(self, _model, _job_id):

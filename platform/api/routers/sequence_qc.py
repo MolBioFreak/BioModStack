@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from database import Job
 from routers.ngs_alignment_sessions import (
-    OntNgsErrorV1,
+    OntNgsErrorV2,
     OntNgsRouteError,
     _validated_pinned_result_root,
     require_alignment_job,
@@ -46,7 +46,7 @@ def _error_to_http(exc: Exception, *, job_id: str) -> OntNgsRouteError:
 @router.get(
     "/jobs/{job_id}/manifest",
     responses={
-        status: {"model": OntNgsErrorV1, "description": "Typed governed NGS failure"}
+        status: {"model": OntNgsErrorV2, "description": "Typed governed NGS failure"}
         for status in (403, 404, 409)
     },
 )
