@@ -72,7 +72,17 @@ export function Layout({ children }: LayoutProps) {
                                     color: isActive('/submit') ? 'var(--accent-primary)' : 'var(--text-secondary)'
                                 }}
                             >
-                                New Job
+                                Job Launcher
+                            </Link>
+                            <Link
+                                to="/designs"
+                                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                                style={{
+                                    backgroundColor: isActive('/designs') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                    color: isActive('/designs') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                }}
+                            >
+                                Data Viewer
                             </Link>
                             <Link
                                 to="/designer"
@@ -83,16 +93,6 @@ export function Layout({ children }: LayoutProps) {
                                 }}
                             >
                                 Molecular Biology Toolkit
-                            </Link>
-                            <Link
-                                to="/designs"
-                                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
-                                style={{
-                                    backgroundColor: isActive('/designs') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                    color: isActive('/designs') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                }}
-                            >
-                                Results
                             </Link>
 
                             {/* Theme Selector */}
