@@ -1,0 +1,68 @@
+{
+  "compatibility_patch": {
+    "base_commit": "b3bf4ee47f730bba2239fa7f1d5e8e9bac328b42",
+    "path": "../../patches/wf-clone-validation-v1.8.4-nextflow25.patch",
+    "result_commit": "7e6b7f0dfe31ee855ec1342c5ea8c5a73021d5a4",
+    "result_tree": "6d76e709d6ba599f30854fc0478da555c924e18e",
+    "sha256": "a7c0cc4a19d5bc3195c96a8fb842bb5031adb37ab6a126f33669b020f756bc95"
+  },
+  "containers": {
+    "cache_dir": "/mnt/BioModStack/apptainer/singularity_cache",
+    "images": [
+      {
+        "cache_file": "ontresearch-wf-clone-validation-sha0ebc91d22c0ea5183272af8bf2b96ca51e88ad5d.img",
+        "sha256": "28d79c632f990c4a220b0d9d55fa7af1684320f77c8f907dcd37c803205eb8cc",
+        "uri": "docker://ontresearch/wf-clone-validation:sha0ebc91d22c0ea5183272af8bf2b96ca51e88ad5d"
+      },
+      {
+        "cache_file": "ontresearch-canu-sha50e56c57b7dfcc28ea176895c6ad98b43c607df2.img",
+        "sha256": "fd26bc095b1970900d60b9a3a81f925218da39934ecad04054e1ffe9773762f1",
+        "uri": "docker://ontresearch/canu:sha50e56c57b7dfcc28ea176895c6ad98b43c607df2"
+      },
+      {
+        "cache_file": "ontresearch-medaka-shacf8338462607b17b1d68dbce212cb93daea50bad.img",
+        "sha256": "abb862dd733af213eb874600f314aa58b22b8d4c7f5eb62bfe385a32731cea54",
+        "uri": "docker://ontresearch/medaka:shacf8338462607b17b1d68dbce212cb93daea50bad"
+      },
+      {
+        "cache_file": "ontresearch-wf-common-shafdd79f8e4a6faad77513c36f623693977b92b08e.img",
+        "sha256": "8cacb6a3c0a9a1ad3dd0f0e0624e7da512ae6d247bb878d16b3b8457d8342262",
+        "uri": "docker://ontresearch/wf-common:shafdd79f8e4a6faad77513c36f623693977b92b08e"
+      },
+      {
+        "cache_file": "ontresearch-plannotate-shae4901fb4353581a26049f564d279edd81fe38805.img",
+        "sha256": "46ed6a2c15c986f9d04a452199f741b84e06d48dd5d16ced20a095b4cdbaf3b1",
+        "uri": "docker://ontresearch/plannotate:shae4901fb4353581a26049f564d279edd81fe38805"
+      }
+    ]
+  },
+  "lock_version": 1,
+  "models": {
+    "accepted_upstream_ids": [
+      "dna_r10.4.1_e8.2_400bps_hac@v5.0.0"
+    ],
+    "default": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0",
+    "store": "/mnt/BioModStack/models/dorado/1.3.1"
+  },
+  "nextflow": {
+    "build": "10289",
+    "executable": "/usr/local/bin/nextflow",
+    "version": "25.10.0"
+  },
+  "patched_source": {
+    "commit": "7e6b7f0dfe31ee855ec1342c5ea8c5a73021d5a4",
+    "path": "/mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1",
+    "tree": "6d76e709d6ba599f30854fc0478da555c924e18e"
+  },
+  "runtime_policy": {
+    "network": "forbidden",
+    "nxf_offline": true
+  },
+  "schema": "biomodstack.wf_clone_validation_lock.v1",
+  "upstream": {
+    "commit": "b3bf4ee47f730bba2239fa7f1d5e8e9bac328b42",
+    "repository": "https://github.com/epi2me-labs/wf-clone-validation.git",
+    "tag": "v1.8.4",
+    "tree": "9cc0a24beee74eccdb07765b755fa64e04bd8141"
+  }
+}

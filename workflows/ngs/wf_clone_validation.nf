@@ -16,7 +16,7 @@ include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
 include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
-include { RunCloneValidation } from '../../modules/ngs/clone_validation.nf'
+include { RunCloneValidation; CloneValidationAdapter } from '../../modules/ngs/clone_validation.nf'
 
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
@@ -45,7 +45,7 @@ workflow WF_CLONE_VALIDATION {
     println("  Assembly:    ${params.wf_clone_assembly_tool ?: 'flye'}")
     println("  Run QC:      ${runFastqQc}")
     println("  Approx size: ${params.wf_clone_approx_size ?: 7000}")
-    println("  Dorado model:${params.dorado_model ?: 'sup'}")
+    println("  Upstream model: ${params.wf_clone_basecaller_model ?: 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0'}")
 
     // --- Input validation ---
     def has_pod5 = params.pod5_dir && params.pod5_dir.toString().trim()
@@ -71,6 +71,9 @@ workflow WF_CLONE_VALIDATION {
 
     if (has_fastq && !has_reference) {
         error("FASTQ analysis requires --reference_fasta for alignment and QC")
+    }
+    if (!has_reference) {
+        error("wf_clone_validation requires --reference_fasta for authoritative Phase-2 construct verification")
     }
 
     // Validate minimap2 preset for FASTQ
@@ -186,14 +189,33 @@ workflow WF_CLONE_VALIDATION {
     }
 
     println("Running wf-clone-validation assembly stage")
-    def clone_input = analysis_bam.map { bam, bai -> [bam, (params.reference_fasta ?: "").toString()] }
+    def clone_input = analysis_bam.map { bam, bai -> [bam, reference_file.toString()] }
     RunCloneValidation(clone_input)
+    CloneValidationAdapter(
+        RunCloneValidation.out.out,
+        RunCloneValidation.out.runtime_provenance,
+        analysis_bam,
+        Channel.of(reference_file),
+    )
+    ConstructVerify(
+        Channel.of(reference_file),
+        CloneValidationAdapter.out.verification_input,
+        CloneValidationAdapter.out.per_base_support,
+        analysis_bam,
+        CloneValidationAdapter.out.alignment_stats,
+        CloneValidationAdapter.out.breakpoint_call,
+        CloneValidationAdapter.out.secondary_summary,
+    )
     RunCloneValidation.out.out.subscribe { _ignored ->
         reportStage(params, "wf_clone_validation", [
             "${params.out_dir}/assembly/wf_clone_out",
             "${params.out_dir}/assembly/wf_clone.log",
+            "${params.out_dir}/assembly/runtime_provenance.json",
             "${params.out_dir}/assembly/wf_clone_out/wf-clone-validation-report.html",
             "${params.out_dir}/assembly/wf_clone_out/sample_status.txt",
+            "${params.out_dir}/assembly/adapter/adapter_manifest.json",
+            "${params.out_dir}/verification/qc_manifest.json",
+            "${params.out_dir}/verification/verification_summary.tsv",
         ])
     }
 
@@ -209,15 +231,6 @@ workflow WF_CLONE_VALIDATION {
             FastqDimerAnalysis.out.dimer_reference
         )
         FastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(file(params.fastq_path)))
-        ConstructVerify(
-            FastqPlasmidQC.out.reference,
-            FastqPlasmidQC.out.verification_input,
-            FastqPlasmidQC.out.per_base_support,
-            FastqAlign.out.aligned,
-            FastqPlasmidQC.out.alignment_stats,
-            BuildDimerCanonicalOutputs.out.breakpoint_call,
-            BuildDimerCanonicalOutputs.out.secondary_summary,
-        )
         FastqPlasmidQC.out.summary.subscribe { _ignored ->
             reportStage(params, "fastq_qc", [
                 "${params.out_dir}/fastq_qc/read_lengths.tsv",
