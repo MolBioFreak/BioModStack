@@ -89,6 +89,9 @@ function withUpdatedSequenceData(
         primers,
         // ORFs/translations are derived from the sequence and should be regenerated.
         translations: [],
+        // Analysis/evidence tracks are position-aligned to the original sequence.
+        // Clear them on sequence-altering edits instead of leaving stale coordinates.
+        analysisTracks: [],
     };
 }
 

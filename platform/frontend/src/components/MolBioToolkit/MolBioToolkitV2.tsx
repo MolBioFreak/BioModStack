@@ -11,17 +11,21 @@ import { SequenceHeader } from './SequenceHeader';
 import { VisibilityPanel } from './VisibilityPanel';
 import { useSequenceHistory } from './hooks/useSequenceHistory';
 import { useSequenceOperations } from './hooks/useSequenceOperations';
-import { DigestPanel, PCRPanel, PrimerPanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
+import { DigestPanel, PCRPanel, PrimerPanel, RnaStructurePanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
 import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePanel';
 import { GCContentTrack } from './GCContentTrack';
 import { MolecularInputModal } from './MolecularInputModal';
+import { RnaStructureViewer, type RnaStructureDisplayMode } from './RnaStructureViewer';
 import { DEMO_PLASMIDS } from './demoConstructs';
 import {
     fetchPrimerTmOptions,
+    type SequenceAnalysisTrack,
     type PrimerTmOptionsResponse,
     type PrimerTmSettings,
+    type RnaStructureResult,
 } from '../../lib/api';
 import type {
+    AnalysisTrack,
     SequenceData,
     VisibilityState,
     SelectionInfo,
@@ -162,9 +166,10 @@ function SequenceLibrary({
 interface PanelTabsProps {
     active: ActivePanel;
     onChange: (panel: ActivePanel) => void;
+    sequenceType: SequenceData['sequenceType'];
 }
 
-const PANELS: { id: ActivePanel; label: string }[] = [
+const BASE_PANELS: { id: ActivePanel; label: string }[] = [
     { id: 'view', label: 'View' },
     { id: 'search', label: 'Find' },
     { id: 'edit', label: 'Edit' },
@@ -189,10 +194,14 @@ const DEFAULT_DNA_TM_SETTINGS: PrimerTmSettings = {
     self_complementary: false,
 };
 
-function PanelTabs({ active, onChange }: PanelTabsProps) {
+function PanelTabs({ active, onChange, sequenceType }: PanelTabsProps) {
+    const panels = sequenceType === 'rna'
+        ? [...BASE_PANELS.slice(0, 6), { id: 'rna' as const, label: 'RNA' }, ...BASE_PANELS.slice(6)]
+        : BASE_PANELS;
+
     return (
         <div className="panel-tabs flex flex-wrap border-b border-slate-700 bg-slate-800">
-            {PANELS.map(({ id, label }) => (
+            {panels.map(({ id, label }) => (
                 <button
                     key={id}
                     onClick={() => onChange(active === id ? 'view' : id)}
@@ -223,6 +232,42 @@ function getFeatureColor(type: string): string {
         misc_feature: '#6b7280'
     };
     return colors[type] || colors.misc_feature;
+}
+
+function trackFromApi(track: SequenceAnalysisTrack): AnalysisTrack {
+    return {
+        id: track.id,
+        name: track.name,
+        kind: track.kind,
+        description: track.description ?? undefined,
+        color: track.color ?? undefined,
+        sourceFormat: track.source_format ?? undefined,
+        sourceName: track.source_name ?? undefined,
+        sourceUrl: track.source_url ?? undefined,
+        normalization: track.normalization ?? undefined,
+        values: track.values || [],
+        minValue: track.min_value ?? undefined,
+        maxValue: track.max_value ?? undefined,
+        createdAt: track.created_at ?? undefined,
+    };
+}
+
+function trackToApi(track: AnalysisTrack): SequenceAnalysisTrack {
+    return {
+        id: track.id,
+        name: track.name,
+        kind: track.kind,
+        description: track.description,
+        color: track.color,
+        source_format: track.sourceFormat,
+        source_name: track.sourceName,
+        source_url: track.sourceUrl,
+        normalization: track.normalization,
+        values: track.values,
+        min_value: track.minValue,
+        max_value: track.maxValue,
+        created_at: track.createdAt,
+    };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -310,6 +355,9 @@ export function MolBioToolkitV2() {
     const [colorPalette, setColorPalette] = useState<ColorPaletteName>('classic');
     const [visibleFrames, setVisibleFrames] = useState<Set<1 | 2 | 3 | -1 | -2 | -3>>(new Set([1]));
     const [derivedTranslations, setDerivedTranslations] = useState<SequenceData['translations']>([]);
+    const [rnaStructureResult, setRnaStructureResult] = useState<RnaStructureResult | null>(null);
+    const [rnaDisplayMode, setRnaDisplayMode] = useState<RnaStructureDisplayMode>('probability');
+    const [selectedRnaTrackId, setSelectedRnaTrackId] = useState<string | null>(null);
 
     // Enzymes currently displayed on the viewer - controlled by DigestPanel
     const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([
@@ -371,6 +419,24 @@ export function MolBioToolkitV2() {
         translations: derivedTranslations,
     }), [sequenceData, derivedTranslations]);
 
+    useEffect(() => {
+        if (sequenceData.sequenceType !== 'rna') {
+            if (activePanel === 'rna') {
+                setActivePanel('view');
+            }
+            setRnaStructureResult(null);
+            setSelectedRnaTrackId(null);
+            return;
+        }
+
+        if (
+            rnaStructureResult &&
+            (rnaStructureResult.sequence !== sequenceData.sequence || rnaStructureResult.circular !== sequenceData.circular)
+        ) {
+            setRnaStructureResult(null);
+        }
+    }, [activePanel, rnaStructureResult, sequenceData.circular, sequenceData.sequence, sequenceData.sequenceType]);
+
     // Load selected sequence
     const loadSequence = useCallback(async (id: string) => {
         const seq = await getSequence(id);
@@ -397,23 +463,31 @@ export function MolBioToolkitV2() {
                     sequenceType: p.sequenceType ?? (p as Primer & { sequence_type?: 'dna' | 'rna' }).sequence_type ?? inferSequenceTypeFromSequence(p.sequence),
                     strand: p.strand === -1 ? -1 : 1,
                 })),
-                translations: []
+                translations: [],
+                analysisTracks: (seq.analysis_tracks || []).map(trackFromApi),
             };
             resetHistory(converted);
             setSelectedSequenceId(id);
             setSelection(null);
             setHighlightedRegions([]);
             setIsDirty(false);
+            setRnaStructureResult(null);
+            setSelectedRnaTrackId(converted.analysisTracks?.[0]?.id || null);
         }
     }, [getSequence, resetHistory]);
 
     // Load demo plasmid (no API, direct)
     const loadDemo = useCallback((demo: SequenceData) => {
-        resetHistory(demo);
+        resetHistory({
+            ...demo,
+            analysisTracks: demo.analysisTracks || [],
+        });
         setSelectedSequenceId(null); // Not a saved sequence
         setSelection(null);
         setHighlightedRegions([]);
         setIsDirty(false);
+        setRnaStructureResult(null);
+        setSelectedRnaTrackId(demo.analysisTracks?.[0]?.id || null);
     }, [resetHistory]);
 
     // Create a new in-memory sequence from pasted text (can be saved afterward)
@@ -432,7 +506,8 @@ export function MolBioToolkitV2() {
             sequenceType: data.sequenceType,
             features: [],
             primers: [],
-            translations: []
+            translations: [],
+            analysisTracks: [],
         };
 
         resetHistory(newSequence);
@@ -440,6 +515,8 @@ export function MolBioToolkitV2() {
         setSelection(null);
         setHighlightedRegions([]);
         setIsDirty(true);
+        setRnaStructureResult(null);
+        setSelectedRnaTrackId(null);
     }, [resetHistory]);
 
     const handleOpenPrimerAsConstruct = useCallback((data: {
@@ -514,7 +591,8 @@ export function MolBioToolkitV2() {
                     tm_salt_correction: p.tm_salt_correction,
                     tm_settings: p.tm_settings,
                 })),
-                translations: []
+                translations: [],
+                analysisTracks: [],
             };
 
             console.log('Imported sequence:', sequenceData.name, 'length:', sequenceData.sequence.length);
@@ -523,6 +601,8 @@ export function MolBioToolkitV2() {
             setSelection(null);
             setHighlightedRegions([]);
             setIsDirty(true);
+            setRnaStructureResult(null);
+            setSelectedRnaTrackId(null);
         } catch (error) {
             console.error('Import error:', error);
             alert(`Failed to parse file: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -544,7 +624,8 @@ export function MolBioToolkitV2() {
             primers: sequenceData.primers?.map((primer) => ({
                 ...primer,
                 sequence_type: primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence),
-            }))
+            })),
+            analysis_tracks: (sequenceData.analysisTracks || []).map(trackToApi),
         };
 
         let saved = false;
@@ -618,6 +699,14 @@ export function MolBioToolkitV2() {
         setSequenceData({
             ...sequenceData,
             primers: (sequenceData.primers || []).filter(p => p.id !== primerId)
+        });
+        setIsDirty(true);
+    }, [sequenceData, setSequenceData]);
+
+    const handleAnalysisTracksChange = useCallback((tracks: AnalysisTrack[]) => {
+        setSequenceData({
+            ...sequenceData,
+            analysisTracks: tracks,
         });
         setIsDirty(true);
     }, [sequenceData, setSequenceData]);
@@ -827,6 +916,17 @@ export function MolBioToolkitV2() {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [undo, redo, saveSequence]);
 
+    const selectedRnaEvidenceTrack = useMemo(
+        () => viewerSequenceData.analysisTracks?.find((track) => track.id === selectedRnaTrackId) || null,
+        [selectedRnaTrackId, viewerSequenceData.analysisTracks],
+    );
+
+    const showRnaStructureViewer = Boolean(
+        sequenceData.sequenceType === 'rna' &&
+        activePanel === 'rna' &&
+        rnaStructureResult,
+    );
+
     return (
         <>
             <div className="molbio-toolkit h-full w-full flex bg-slate-900 text-slate-100 overflow-hidden">
@@ -879,17 +979,28 @@ export function MolBioToolkitV2() {
                                 )}
 
                                 {/* Sequence Viewer */}
-                                <div className="flex-1 overflow-hidden">
-                                    <SequenceViewer
-                                        sequenceData={viewerSequenceData}
-                                        visibility={visibility}
-                                        selectedEnzymes={selectedEnzymes}
-                                        onSelection={handleSelection}
-                                        highlightedRegions={highlightedRegions}
-                                        viewMode={viewMode}
-                                        colorPalette={colorPalette}
-                                        visibleFrames={visibleFrames}
-                                    />
+                                <div className={`flex-1 overflow-hidden ${showRnaStructureViewer ? 'grid grid-rows-[minmax(220px,42%)_minmax(280px,58%)]' : ''}`}>
+                                    <div className="min-h-0 overflow-hidden">
+                                        <SequenceViewer
+                                            sequenceData={viewerSequenceData}
+                                            visibility={visibility}
+                                            selectedEnzymes={selectedEnzymes}
+                                            onSelection={handleSelection}
+                                            highlightedRegions={highlightedRegions}
+                                            viewMode={viewMode}
+                                            colorPalette={colorPalette}
+                                            visibleFrames={visibleFrames}
+                                        />
+                                    </div>
+                                    {showRnaStructureViewer && rnaStructureResult && (
+                                        <div className="min-h-0 overflow-hidden border-t border-slate-700">
+                                            <RnaStructureViewer
+                                                result={rnaStructureResult}
+                                                displayMode={rnaDisplayMode}
+                                                evidenceTrack={selectedRnaEvidenceTrack}
+                                            />
+                                        </div>
+                                    )}
                                 </div>
                             </>
                         ) : (
@@ -917,7 +1028,7 @@ export function MolBioToolkitV2() {
 
                 {/* Right: Tool Panels */}
                 <div className="w-72 flex-shrink-0 border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden">
-                    <PanelTabs active={activePanel} onChange={setActivePanel} />
+                    <PanelTabs active={activePanel} onChange={setActivePanel} sequenceType={sequenceData.sequenceType} />
 
                     <div className="flex-1 overflow-y-auto">
                         {(activePanel === 'view' || activePanel === null) && (
@@ -977,6 +1088,18 @@ export function MolBioToolkitV2() {
                                 tmOptions={primerTmOptions}
                                 tmSettings={primerTmSettings}
                                 onTmSettingsChange={setPrimerTmSettings}
+                            />
+                        )}
+                        {activePanel === 'rna' && (
+                            <RnaStructurePanel
+                                sequenceData={sequenceData}
+                                structureResult={rnaStructureResult}
+                                displayMode={rnaDisplayMode}
+                                onDisplayModeChange={setRnaDisplayMode}
+                                onStructureResultChange={setRnaStructureResult}
+                                selectedTrackId={selectedRnaTrackId}
+                                onSelectedTrackChange={setSelectedRnaTrackId}
+                                onAnalysisTracksChange={handleAnalysisTracksChange}
                             />
                         )}
                         {activePanel === 'features' && (

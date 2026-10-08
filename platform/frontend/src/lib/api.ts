@@ -1401,6 +1401,22 @@ export interface SequencePrimer {
     tm_settings?: PrimerTmSettings;
 }
 
+export interface SequenceAnalysisTrack {
+    id: string;
+    name: string;
+    kind: 'reactivity' | 'coverage' | 'mismatch' | 'custom';
+    description?: string | null;
+    color?: string | null;
+    source_format?: string | null;
+    source_name?: string | null;
+    source_url?: string | null;
+    normalization?: string | null;
+    values: Array<number | null>;
+    min_value?: number | null;
+    max_value?: number | null;
+    created_at?: string | null;
+}
+
 export interface NucleotideSequence {
     id: string;
     name: string;
@@ -1411,6 +1427,7 @@ export interface NucleotideSequence {
     length: number;
     features: SequenceFeature[] | null;
     primers: SequencePrimer[] | null;
+    analysis_tracks?: SequenceAnalysisTrack[] | null;
     organism: string | null;
     accession: string | null;
     source_file: string | null;
@@ -1447,6 +1464,7 @@ export interface NucleotideSequenceCreate {
     is_circular?: boolean;
     features?: SequenceFeature[];
     primers?: SequencePrimer[];
+    analysis_tracks?: SequenceAnalysisTrack[];
     organism?: string;
     accession?: string;
     source_file?: string;
@@ -1482,6 +1500,91 @@ export const addSequenceFeature = (sequenceId: string, feature: Omit<SequenceFea
 
 export const deleteSequenceFeature = (sequenceId: string, featureId: string) =>
     api.delete(`/api/sequences/${sequenceId}/features/${featureId}`);
+
+export interface RnaStructureSettings {
+    temperature_c: number;
+    no_lonely_pairs: boolean;
+    dangles: number;
+    circular?: boolean | null;
+    max_bp_span?: number | null;
+    gamma: number;
+    probability_cutoff: number;
+    max_pairs: number;
+}
+
+export interface RnaStructurePrediction {
+    dot_bracket: string;
+    energy_kcal_mol?: number | null;
+    score?: number | null;
+    distance?: number | null;
+    paired_count: number;
+}
+
+export interface RnaPartitionSummary {
+    dot_bracket: string;
+    ensemble_free_energy_kcal_mol: number;
+    mean_bp_distance: number;
+    probability_cutoff: number;
+    pair_count: number;
+    truncated: boolean;
+}
+
+export interface RnaPairProbability {
+    i: number;
+    j: number;
+    probability: number;
+}
+
+export interface RnaBaseProbability {
+    index: number;
+    base: string;
+    paired_probability: number;
+    unpaired_probability: number;
+    positional_entropy?: number | null;
+}
+
+export interface RnaStructureResult {
+    source_sequence_id?: string | null;
+    name?: string | null;
+    sequence: string;
+    length: number;
+    circular: boolean;
+    settings: RnaStructureSettings;
+    mfe: RnaStructurePrediction;
+    centroid?: RnaStructurePrediction | null;
+    mea?: RnaStructurePrediction | null;
+    partition?: RnaPartitionSummary | null;
+    pair_probabilities: RnaPairProbability[];
+    bases: RnaBaseProbability[];
+    warnings: string[];
+}
+
+export interface RnaStructureOptionsResponse {
+    defaults: RnaStructureSettings;
+    limits: {
+        max_global_fold_length: number;
+        max_partition_length: number;
+        max_bounded_fold_length: number;
+        max_bp_span: number;
+    };
+}
+
+export interface RnaStructureRequest {
+    sequence_id?: string;
+    name?: string;
+    sequence?: string;
+    is_circular?: boolean;
+    settings?: Partial<RnaStructureSettings>;
+}
+
+export const fetchRnaStructureOptions = () =>
+    api.get<RnaStructureOptionsResponse>('/api/molbio/rna-structure/options');
+
+export const foldRnaStructure = (data: RnaStructureRequest & { include_partition?: boolean }) =>
+    api.post<RnaStructureResult>('/api/molbio/rna-structure/fold', data);
+
+export const partitionRnaStructure = (data: RnaStructureRequest) =>
+    api.post<RnaStructureResult>('/api/molbio/rna-structure/partition', data);
 
 // Antibody API
 export interface AntibodyOverlaySelection {

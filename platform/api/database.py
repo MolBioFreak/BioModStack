@@ -430,6 +430,10 @@ class NucleotideSequence(Base):
     # Primers associated with this sequence
     # Format: [{"id": "p1", "name": "Fwd", "sequence": "ATCG...", "start": 0, "end": 20, "tm": 58.5}]
     primers = Column(JSON, nullable=True)
+
+    # Analysis/evidence tracks aligned to the nucleotide sequence
+    # Format: [{"id": "t1", "name": "SHAPE", "kind": "reactivity", "values": [0.1, 0.2, ...]}]
+    analysis_tracks = Column(JSON, nullable=True)
     
     # Metadata
     organism = Column(String(255), nullable=True)

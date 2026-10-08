@@ -51,6 +51,23 @@ class PrimerSchema(BaseModel):
     tm_settings: Optional[dict] = None
 
 
+class AnalysisTrackSchema(BaseModel):
+    """Analysis/evidence track aligned to a nucleotide sequence."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
+    name: str
+    kind: str = "custom"
+    description: Optional[str] = None
+    color: Optional[str] = None
+    source_format: Optional[str] = None
+    source_name: Optional[str] = None
+    source_url: Optional[str] = None
+    normalization: Optional[str] = None
+    values: List[Optional[float]] = Field(default_factory=list)
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    created_at: Optional[str] = None
+
+
 class NucleotideSequenceCreate(BaseModel):
     """Schema for creating a new sequence."""
     name: str
@@ -60,6 +77,7 @@ class NucleotideSequenceCreate(BaseModel):
     is_circular: bool = False
     features: Optional[List[FeatureSchema]] = None
     primers: Optional[List[PrimerSchema]] = None
+    analysis_tracks: Optional[List[AnalysisTrackSchema]] = None
     organism: Optional[str] = None
     accession: Optional[str] = None
     source_file: Optional[str] = None
@@ -74,6 +92,7 @@ class NucleotideSequenceUpdate(BaseModel):
     is_circular: Optional[bool] = None
     features: Optional[List[FeatureSchema]] = None
     primers: Optional[List[PrimerSchema]] = None
+    analysis_tracks: Optional[List[AnalysisTrackSchema]] = None
     organism: Optional[str] = None
     accession: Optional[str] = None
 
@@ -89,6 +108,7 @@ class NucleotideSequenceResponse(BaseModel):
     length: int
     features: Optional[List[Any]]
     primers: Optional[List[Any]]
+    analysis_tracks: Optional[List[Any]]
     organism: Optional[str]
     accession: Optional[str]
     source_file: Optional[str]
@@ -182,6 +202,7 @@ def serialize_sequence(seq: NucleotideSequence) -> NucleotideSequenceResponse:
         length=seq.length,
         features=seq.features,
         primers=seq.primers,
+        analysis_tracks=seq.analysis_tracks,
         organism=seq.organism,
         accession=seq.accession,
         source_file=seq.source_file,
@@ -195,6 +216,34 @@ def serialize_sequence(seq: NucleotideSequence) -> NucleotideSequenceResponse:
         created_at=seq.created_at,
         updated_at=seq.updated_at,
     )
+
+
+def normalize_analysis_tracks(
+    tracks: Optional[List[AnalysisTrackSchema]],
+    sequence_length: int,
+) -> List[dict]:
+    """Validate and serialize aligned analysis/evidence tracks."""
+    if not tracks:
+        return []
+
+    normalized: List[dict] = []
+    for track in tracks:
+        payload = track.model_dump()
+        values = payload.get("values") or []
+        if len(values) != sequence_length:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Analysis track '{payload.get('name', 'unnamed')}' has {len(values)} values but sequence length is {sequence_length}",
+            )
+
+        numeric_values = [value for value in values if value is not None]
+        if numeric_values:
+            payload["min_value"] = min(numeric_values) if payload.get("min_value") is None else payload["min_value"]
+            payload["max_value"] = max(numeric_values) if payload.get("max_value") is None else payload["max_value"]
+
+        normalized.append(payload)
+
+    return normalized
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -299,6 +348,7 @@ async def create_sequence(
         length=len(cleaned_seq),
         features=[f.model_dump() for f in data.features] if data.features else [],
         primers=[p.model_dump() for p in data.primers] if data.primers else [],
+        analysis_tracks=normalize_analysis_tracks(data.analysis_tracks, len(cleaned_seq)),
         organism=data.organism,
         accession=data.accession,
         source_file=data.source_file,
@@ -355,6 +405,8 @@ async def update_sequence(
         seq.sequence = cleaned_seq
         seq.length = len(cleaned_seq)
         seq.gc_content = calculate_gc_content(cleaned_seq)
+        if data.analysis_tracks is None:
+            seq.analysis_tracks = []
     if data.sequence_type is not None:
         seq.sequence_type = next_sequence_type
     if data.is_circular is not None:
@@ -363,6 +415,8 @@ async def update_sequence(
         seq.features = [f.model_dump() for f in data.features]
     if data.primers is not None:
         seq.primers = [p.model_dump() for p in data.primers]
+    if data.analysis_tracks is not None:
+        seq.analysis_tracks = normalize_analysis_tracks(data.analysis_tracks, seq.length)
     if data.organism is not None:
         seq.organism = data.organism
     if data.accession is not None:
