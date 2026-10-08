@@ -155,4 +155,3 @@ except BaseException as exc:
     meta['failure']=repr(exc);save();raise
 finally:
     print('EVIDENCE_DIRECTORY='+str(run),flush=True)
-

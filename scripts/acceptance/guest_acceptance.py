@@ -154,4 +154,3 @@ print('BMS_EVIDENCE_BEGIN='+json.dumps({'sha256':hashlib.sha256(raw).hexdigest()
 for index, chunk in enumerate(chunks):
     print(f'BMS_EVIDENCE_CHUNK={index}:{chunk}', flush=True)
 print('BMS_EVIDENCE_END='+hashlib.sha256(raw).hexdigest(), flush=True)
-
