@@ -1621,6 +1621,8 @@ def _normalize_structure_prediction_pred_method(
 
 def _job_has_retired_structure_predictor(job: Any) -> bool:
     params = job.params if isinstance(getattr(job, "params", None), dict) else {}
+    if isinstance(params.get("mutation_variant"), dict):
+        return False
     model_id = str(getattr(job, "model_id", "") or "").strip().lower()
     mode = str(getattr(job, "mode", "") or "").strip().lower()
     if not _is_structure_prediction_request(model_id, mode, params):

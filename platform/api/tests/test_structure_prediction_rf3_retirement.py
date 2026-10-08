@@ -26,14 +26,16 @@ def test_structure_template_has_no_rf3_launch_contract() -> None:
     assert "RF3" not in validation_template["stages"][0]["tool"]
 
 
-def test_structure_nextflow_has_no_rf3_dispatch_and_keeps_boltz_protenix() -> None:
+def test_structure_nextflow_limits_rf3_dispatch_to_persisted_mutagenesis_children() -> None:
     workflow = (REPO_ROOT / "workflows/structure_prediction.nf").read_text(encoding="utf-8")
     module = (REPO_ROOT / "modules/structure_prediction.nf").read_text(encoding="utf-8")
 
-    assert "RF3FromSequence" not in module
-    assert "params.rf3_" not in module
-    assert "pred_method == 'rf3'" not in module
-    assert "pred_method == 'both'" not in module
+    assert "process RF3FromSequence" in module
+    assert "params.containsKey('mutagenesis_prediction') && params.mutagenesis_prediction == true" in module
+    assert "is_mutagenesis_prediction && pred_method in ['rf3', 'both']" in module
+    assert "params.containsKey('mutagenesis_prediction') && params.mutagenesis_prediction == true" in workflow
+    assert "def allowedPredictors = isMutagenesisPrediction" in workflow
+    assert "['boltz', 'rf3', 'both', 'esmfold2']" in workflow
     assert "pred_method == 'all'" not in module
     assert "pred_method == 'boltz_protenix'" in module
     assert "['boltz', 'protenix', 'esmfold2', 'boltz_protenix']" in workflow

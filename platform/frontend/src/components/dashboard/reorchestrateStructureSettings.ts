@@ -175,6 +175,7 @@ const isBoltzCpLaunch = (job: StructureRetryJob): boolean => {
 const isStructurePredictionContext = (job: StructureRetryJob): boolean => {
     const params = job.params || {};
     if ('mutagenesis_variants' in params) return false;
+    if (params.mutation_variant && typeof params.mutation_variant === 'object') return false;
     const modelId = String(job.model_id || '').trim().toLowerCase();
     const mode = String(job.mode || '').trim().toLowerCase();
     const templateModels = ['template_structure_prediction', 'template_structure_validation'];

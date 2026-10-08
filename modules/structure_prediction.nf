@@ -1,6 +1,7 @@
 // Structure Prediction from Sequence
 // Modules for predicting 3D protein structure directly from amino acid sequence
-// Supported predictors: Boltz-2, Protenix, ESMFold2
+// New Structure launches support Boltz-2, Protenix, and ESMFold2.
+// RF3 remains available only to persisted Mutagenesis variant children.
 
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
@@ -20,6 +21,7 @@ def resolveBooleanParam(value, defaultValue) {
 
 def canonicalProducerOutputs(outputs, producerMethod) {
     def outputRoots = [
+        rf3: '/output/',
         protenix: '/predictions/',
         esmfold2: '/esmfold2_results/',
     ]
@@ -1393,6 +1395,103 @@ process BoltzFromComplex {
     """
 }
 
+process RF3FromSequence {
+    label 'Foundry'
+    label 'gpu'
+    publishDir "${params.out_dir}/run/rf3_seq", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/pdb_files/rf3", mode: 'copy', pattern: "output/**/*.cif"
+    publishDir "${params.out_dir}/pdb_files/rf3", mode: 'copy', pattern: "output/**/*.json"
+
+    input:
+    tuple val(producer_meta), val(sequence), val(sequence_name), path(msa)
+
+    output:
+    tuple val(producer_meta), path("output/**/*.pdb"), emit: typed_pdbs, optional: true
+    tuple val(producer_meta), path("output/**/*.cif"), emit: typed_cifs, optional: true
+    path "output/**/*.json", emit: jsons, optional: true
+    path "*.log"
+
+    script:
+    def numRecycles = params.rf3_num_recycles ?: 10
+    def earlyStop = params.rf3_early_stopping_plddt ?: 0.5
+
+    """
+    mkdir -p output inputs
+    export PROJECT_ROOT=\$(pwd)
+    MSA_ABS_PATH=\$(readlink -f ${msa})
+
+    if [ "${msa.name}" != "NO_MSA" ]; then
+        cat > inputs/${sequence_name}.json << JSONEOF
+{
+  "name": "${sequence_name}",
+  "components": [
+    {
+      "seq": "${sequence}",
+      "msa_path": "\${MSA_ABS_PATH}"
+    }
+  ]
+}
+JSONEOF
+        echo "Using pre-computed MSA: \${MSA_ABS_PATH}"
+    else
+        cat > inputs/${sequence_name}.json << 'JSONEOF'
+{
+  "name": "${sequence_name}",
+  "components": [
+    {
+      "seq": "${sequence}"
+    }
+  ]
+}
+JSONEOF
+        echo "No MSA provided - running without alignments"
+    fi
+
+    (python3 << 'PYEOF'
+import os
+from pathlib import Path
+
+import rf3
+rf3_pkg = Path(rf3.__file__).parent
+config_path = str(rf3_pkg / "configs")
+
+print(f"RF3 package: {rf3_pkg}", flush=True)
+print(f"Config path: {config_path}", flush=True)
+
+os.environ["PROJECT_ROOT"] = str(rf3_pkg.parent.parent.parent)
+
+import rootutils
+def mock_setup_root(*args, **kwargs):
+    print("Bypassing rootutils.setup_root()", flush=True)
+    return Path(os.environ["PROJECT_ROOT"])
+rootutils.setup_root = mock_setup_root
+
+from hydra import initialize_config_dir, compose
+
+with initialize_config_dir(config_dir=config_path, version_base="1.3"):
+    cfg = compose(config_name="inference", overrides=[
+        "inputs=inputs/${sequence_name}.json",
+        "ckpt_path=/root/.foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt",
+        "out_dir=output",
+        "n_recycles=${numRecycles}",
+        "early_stopping_plddt_threshold=${earlyStop}",
+        "inference_engine=rf3"
+    ])
+
+    from rf3.inference import run_inference
+    run_inference(cfg)
+
+print("RF3 inference completed successfully", flush=True)
+PYEOF
+    ) 2>&1 | tee rf3_seq_${sequence_name}.log
+
+    if [ ! -f output/*.cif ] && [ ! -f output/*.pdb ]; then
+        echo "RF3 produced no output files"
+        touch output/rf3_failed.txt
+    fi
+    """
+}
+
 // Workflow for structure prediction from sequence
 workflow structure_prediction_wf {
     take:
@@ -1400,18 +1499,25 @@ workflow structure_prediction_wf {
 
     main:
     def pred_method = params.pred_method ?: 'boltz'
+    def is_mutagenesis_prediction =
+        params.containsKey('mutagenesis_prediction') && params.mutagenesis_prediction == true
     def boltz_use_msa = resolveBooleanParam(params.boltz_use_msa, false)
+    def rf3_use_msa = resolveBooleanParam(params.rf3_use_msa, false)
     def protenix_use_msa = resolveBooleanParam(params.protenix_use_msa, true)
+    def run_mutagenesis_rf3 = is_mutagenesis_prediction && pred_method in ['rf3', 'both']
+    def run_boltz = pred_method in ['boltz', 'boltz_protenix'] ||
+        (is_mutagenesis_prediction && pred_method == 'both')
     typed_inputs = normalizeSequenceProducerInputs(input_ch)
 
     structures = channel.empty()
     canonical_structures = channel.empty()
 
     // Determine which predictors need MSA
-    def need_boltz_msa  = (pred_method in ['boltz', 'boltz_protenix'] && boltz_use_msa)
+    def need_boltz_msa = run_boltz && boltz_use_msa
+    def need_rf3_msa = run_mutagenesis_rf3 && rf3_use_msa
     // Protenix resolves its own MSA backend in the prediction module.
     // Do not trigger parent GenerateLocalMSA just because Protenix MSA is enabled.
-    def need_msa = need_boltz_msa
+    def need_msa = need_boltz_msa || need_rf3_msa
 
     if (need_msa) {
         def provided_msa = params.msa_path ? file(params.msa_path) : null
@@ -1423,10 +1529,21 @@ workflow structure_prediction_wf {
                 tuple(producer_meta, seq, name, provided_msa)
             }
 
-            if (pred_method == 'boltz' || pred_method == 'boltz_protenix') {
+            if (run_boltz) {
                 BoltzFromSequenceWithMSA(inputs_with_msa)
                 structures = structures.mix(BoltzFromSequenceWithMSA.out.pdbs, BoltzFromSequenceWithMSA.out.cifs)
                 canonical_structures = canonical_structures.mix(BoltzFromSequenceWithMSA.out.canonical_structures)
+            }
+
+            if (run_mutagenesis_rf3) {
+                RF3FromSequence(inputs_with_msa)
+                rf3_canonical_outputs = canonicalProducerOutputs(
+                    RF3FromSequence.out.typed_pdbs.mix(RF3FromSequence.out.typed_cifs), 'rf3'
+                )
+                structures = structures.mix(
+                    rf3_canonical_outputs.map { producer_meta, predicted -> predicted }
+                )
+                canonical_structures = canonical_structures.mix(rf3_canonical_outputs)
             }
 
             if (pred_method == 'protenix' || pred_method == 'boltz_protenix') {
@@ -1453,10 +1570,21 @@ workflow structure_prediction_wf {
             def inputs_with_msa = typed_inputs.combine(msa_ch)
 
             // STEP 3: Run predictions with cached MSA
-            if (pred_method == 'boltz' || pred_method == 'boltz_protenix') {
+            if (run_boltz) {
                 BoltzFromSequenceWithMSA(inputs_with_msa)
                 structures = structures.mix(BoltzFromSequenceWithMSA.out.pdbs, BoltzFromSequenceWithMSA.out.cifs)
                 canonical_structures = canonical_structures.mix(BoltzFromSequenceWithMSA.out.canonical_structures)
+            }
+
+            if (run_mutagenesis_rf3) {
+                RF3FromSequence(inputs_with_msa)
+                rf3_canonical_outputs = canonicalProducerOutputs(
+                    RF3FromSequence.out.typed_pdbs.mix(RF3FromSequence.out.typed_cifs), 'rf3'
+                )
+                structures = structures.mix(
+                    rf3_canonical_outputs.map { producer_meta, predicted -> predicted }
+                )
+                canonical_structures = canonical_structures.mix(rf3_canonical_outputs)
             }
 
             if (pred_method == 'protenix' || pred_method == 'boltz_protenix') {
@@ -1473,10 +1601,25 @@ workflow structure_prediction_wf {
     }
     else {
         // No MSA needed - run directly
-        if (pred_method == 'boltz' || pred_method == 'boltz_protenix') {
+        if (run_boltz) {
             BoltzFromSequence(typed_inputs)
             structures = structures.mix(BoltzFromSequence.out.pdbs, BoltzFromSequence.out.cifs)
             canonical_structures = canonical_structures.mix(BoltzFromSequence.out.canonical_structures)
+        }
+
+        if (run_mutagenesis_rf3) {
+            def dummy_msa = file("${params.code_root}/NO_MSA")
+            def inputs_no_msa = typed_inputs.map { producer_meta, seq, name ->
+                tuple(producer_meta, seq, name, dummy_msa)
+            }
+            RF3FromSequence(inputs_no_msa)
+            rf3_canonical_outputs = canonicalProducerOutputs(
+                RF3FromSequence.out.typed_pdbs.mix(RF3FromSequence.out.typed_cifs), 'rf3'
+            )
+            structures = structures.mix(
+                rf3_canonical_outputs.map { producer_meta, predicted -> predicted }
+            )
+            canonical_structures = canonical_structures.mix(rf3_canonical_outputs)
         }
 
         if (pred_method == 'protenix' || pred_method == 'boltz_protenix') {
