@@ -21,6 +21,7 @@ include { Compress as CompressAF2 } from './modules/compress'
 include { Compress as CompressBoltz } from './modules/compress'
 include { MergeUncroppedTarget } from './modules/merge_uncropped_target.nf'
 include { BoltzFromSequence } from './modules/structure_prediction.nf'
+include { BoltzFromComplex } from './modules/structure_prediction.nf'
 include { RF3FromSequence } from './modules/structure_prediction.nf'
 include { structure_prediction_wf } from './modules/structure_prediction.nf'
 
@@ -29,7 +30,7 @@ workflow {
     try {
         nextflow.preview.topic = true
     }
-    catch (Exception _e) {
+    catch (_e: Exception) {
     }
 
     def outputDirectory = params.out_dir
@@ -72,6 +73,33 @@ workflow {
     // Create output directory for copy of input files used in run
     def inputsDir = file("${outputDirectory}/inputs")
     inputsDir.mkdirs()
+
+    ///////////////////////////////////
+    // COMPLEX-BASED STRUCTURE PRED  //
+    ///////////////////////////////////
+
+    // If complex_json_path is provided, run complex prediction (multi-chain + ligands)
+    if (params.complex_json_path) {
+        println("Running complex-based structure prediction (multi-chain + ligands)")
+        println("* Complex definition: ${params.complex_json_path}")
+        println("* Predictor: boltz")
+        // Complex mode only supports Boltz for now
+
+        def complex_name = params.sequence_name ?: 'complex_pred'
+        def complex_json = file(params.complex_json_path)
+
+        def complex_ch = Channel.of(tuple(complex_name, complex_json, file("${projectDir}/NO_MSA")))
+        BoltzFromComplex(complex_ch)
+
+        BoltzFromComplex.out.pdbs
+            .flatten()
+            .collect()
+            .ifEmpty(file("${projectDir}/lib/placeholder.pdb"))
+            .set { final_pdbs }
+
+        // Skip all other stages for complex prediction
+        return null
+    }
 
     ///////////////////////////////////
     // SEQUENCE-BASED STRUCTURE PRED //
@@ -230,6 +258,10 @@ workflow {
             params.boltzgen_ntp_type ?: '',
             params.boltzgen_scaffold_length,
             params.boltzgen_num_designs,
+            params.boltzgen_binding_site_residues ?: '',
+            params.boltzgen_catalytic_site ?: false,
+            params.boltzgen_input_pdb ? file(params.boltzgen_input_pdb) : file("${projectDir}/lib/NO_FILE"),
+            params.boltzgen_ligand_pdb ? file(params.boltzgen_ligand_pdb) : file("${projectDir}/lib/NO_FILE"),
         )
 
         // Run generation
@@ -265,6 +297,12 @@ workflow {
                 .flatten()
                 .collect()
                 .set { filt_seq_pdbs }
+
+            // Also set analysis_input_pdbs for analysis stage (BoltzGen skips prediction)
+            FilterBoltzGen.out.pdbs
+                .flatten()
+                .collect()
+                .set { analysis_input_pdbs }
 
             // Set RFD/Seq channels empty since we skipped them
             rfd_tuples = Channel.empty()
@@ -628,16 +666,26 @@ workflow {
     if (params.run_docking && !params.run_rfd_only && !params.run_boltzgen_only) {
         println("Running Docking Stage (DiffDock)...")
 
-        // Inputs can come from Prediction Stage (analysis_input_pdbs) or directly if prediction skipped
-        // PrepDiffDock needs a list of PDBs
-        def ligand_smiles = params.diffdock_ligand_smiles ?: ''
-        def ntp_type = params.diffdock_ntp_type ?: ''
+        // Determine input source: BoltzGen outputs go directly to docking, others go through prediction
+        def docking_input_pdbs
+        if (params.diffusion_method == 'boltzgen') {
+            // BoltzGen skips prediction, use filtered designs directly
+            docking_input_pdbs = filt_seq_pdbs
+        }
+        else {
+            // Standard flow uses prediction outputs
+            docking_input_pdbs = analysis_input_pdbs
+        }
 
-        PrepDiffDock(analysis_input_pdbs, ligand_smiles, ntp_type)
+        // Ligand SMILES: prefer diffdock-specific, fall back to boltzgen params
+        def ligand_smiles = params.diffdock_ligand_smiles ?: params.boltzgen_ligand_smiles ?: ''
+        def ntp_type = params.diffdock_ntp_type ?: params.boltzgen_ntp_type ?: ''
+
+        PrepDiffDock(docking_input_pdbs, ligand_smiles, ntp_type)
 
         // Batch for GPU
         PrepDiffDock.out.csv
-            .combine(PrepDiffDock.out.pdbs.collect().map { [it] })
+            .combine(PrepDiffDock.out.pdbs.collect().map { pdbs -> [pdbs] })
             .map { csv, pdbs -> tuple("batch_0", csv, pdbs) }
             .set { docking_input }
 
