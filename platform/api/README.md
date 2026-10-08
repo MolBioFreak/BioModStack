@@ -159,5 +159,3 @@ robot runtime before they exist under `/api/bioxp/*`.
 - [../../docs/Platform_Overview.md](../../docs/Platform_Overview.md)
 - [../../docs/Desktop_Runtime_and_Shell_Architecture.md](../../docs/Desktop_Runtime_and_Shell_Architecture.md)
 - [../../docs/Results_and_Analysis.md](../../docs/Results_and_Analysis.md)
-- [../../docs/ai_guidance/Database_Instructions.md](../../docs/ai_guidance/Database_Instructions.md)
-- [../../docs/ai_guidance/Centralization_and_Standardization.md](../../docs/ai_guidance/Centralization_and_Standardization.md)

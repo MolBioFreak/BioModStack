@@ -7,7 +7,6 @@
 **Architecture:** Today the control plane is partially real: the UI exposes logical shard plans, the backend records plan metadata, the coordinator/spawn/wait/finalize Nextflow path exists, and distributed OOM fail-fast handling is implemented in the Fold-CP fork. The data plane is not yet real: the active child compute path still goes through the legacy `size_cp` / `world_size` DTensor runtime, and the separate `large_protein` DRAM-store runtime scaffold is not wired into the prediction entrypoint. The required refactor is to make the experimental path launch bundle-scoped worker jobs against a shared DRAM-first tile store, with logical plan geometry coming from the manifest rather than selected GPU count.
 
 **Tech Stack:**
-- `/home/dalab/biomodstack/biomodstack/docs/plans/2026-04-20-fold-cp-large-protein-sharding-plan.md`
 - `/home/dalab/biomodstack/biomodstack/platform/frontend/src/components/structurePredictionUiState.ts`
 - `/home/dalab/biomodstack/biomodstack/platform/api/services/nextflow.py`
 - `/home/dalab/biomodstack/biomodstack/scripts/spawn_boltz_cp_children.py`
@@ -49,25 +48,18 @@ Blunt version:
 
 ---
 
-## 2. What the canonical plan says should happen
+## 2. Target architecture summary
 
-The canonical plan already defines the target architecture clearly.
+The target architecture remains:
 
-Evidence:
-- `2026-04-20-fold-cp-large-protein-sharding-plan.md:3-7`
-  - The goal is to replace the GPU-count-coupled launch path with an experimental large-protein workflow that plans a logical shard grid independent of physical GPU count, persists shared state in a DRAM-first tile store, and treats physical GPUs as workers.
-- `2026-04-20-fold-cp-large-protein-sharding-plan.md:107-114`
-  - Logical sharding correctness should be defined by a shard plan, not selected GPU count.
-  - Physical GPUs should affect throughput/scheduling, not mathematical validity.
-  - Shared state is the thing being sharded.
-  - Worker OOM must abort the whole run.
-- `2026-04-20-fold-cp-large-protein-sharding-plan.md:199-206`
-  - The same valid plan should run on 1, 2, 3, or 4 workers; the runtime becomes faster/slower with workers, but the plan stays mathematically the same.
-- `2026-04-20-fold-cp-large-protein-sharding-plan.md:597-619`
-  - Phase 3 explicitly calls for one-GPU sequential execution through a DRAM-backed tile store without `world_size == logical_shards`.
-  - Phase 4 explicitly calls for the same logical plan to run on 1..N workers, where GPUs affect throughput and bundle assignment rather than correctness.
+- Replace the GPU-count-coupled launch path with an experimental large-protein workflow that plans a logical shard grid independent of physical GPU count.
+- Persist shared state in a DRAM-first tile store and treat physical GPUs as worker resources.
+- Define logical sharding correctness by a shard plan, not selected GPU count.
+- Let physical GPUs affect throughput/scheduling, not mathematical validity.
+- Abort the whole run when a worker OOMs.
+- Support sequential and 1..N-worker execution without requiring `world_size == logical_shards`.
 
-This means the intended design is already documented. The current gap is implementation reality.
+The current gap remains implementation reality, not target architecture clarity.
 
 ---
 

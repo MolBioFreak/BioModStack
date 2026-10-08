@@ -101,5 +101,5 @@ For operator use:
 For developers:
 
 1. start with [platform/api/README.md](../platform/api/README.md)
-2. then check [docs/ai_guidance/Database_Instructions.md](ai_guidance/Database_Instructions.md)
+2. then inspect the current database/data-model services under `platform/api/services/` and `platform/api/routers/`
 3. then inspect the relevant workflow and ingester/review services

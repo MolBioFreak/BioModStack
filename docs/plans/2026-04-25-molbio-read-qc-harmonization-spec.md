@@ -95,9 +95,9 @@ Interpretation:
 - It is still path/artifact oriented rather than data-model oriented.
 - It produces aggregate evidence, not a stable per-read/per-base evidence contract that the MolBio editor can consume.
 
-### 1.4 Existing docs already recommend the right viewer split
+### 1.4 Viewer split
 
-`docs/MolBioToolkit_Alpha_Release_Spec_2026-04-12.md:542-683` is still directionally correct:
+The intended viewer split remains:
 
 - IGV.js should handle read-to-reference inspection, BAM/CRAM pileups, coverage, mismatch review, variant-support evidence, methylation/auxiliary tracks, and consensus review.
 - SeqViz should remain the plasmid/construct editor.

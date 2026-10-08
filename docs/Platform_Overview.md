@@ -70,9 +70,11 @@ The API does more than submit jobs. It currently:
   surface
 
 For BioXP specifically, the BMS proxy should be read as the current cockpit
-surface rather than a full mirror of every robot-local endpoint. Some live
-robot-local routes, including reference-state and liquid-handling surfaces,
-still exist only on the robot runtime today.
+surface rather than a full mirror of every robot-local endpoint. Current builds
+proxy the reference-state and liquid-handling route families through
+`/api/bioxp/*`; treat older notes claiming those surfaces are robot-only as
+stale, and verify new capability claims against live route parity because the
+robot runtime can still expose additional non-cockpit endpoints.
 
 ## Workflow families
 

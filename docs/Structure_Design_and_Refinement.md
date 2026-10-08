@@ -21,7 +21,7 @@ Current pipeline shape:
 
 1. RFantibody backbone generation
 2. sequence design with FAMPNN, AntiFold, or ProteinMPNN
-3. structure validation with Boltz-2 or Protenix
+3. structure validation with Boltz-2, plus workflow-level Protenix validation when explicitly selected by the antibody/structure workflows
 4. downstream scoring and review
 5. optional refinement/maturation branches such as PPIFlow and OpenMM
 
@@ -30,7 +30,7 @@ Important notes:
 - this is the main staged antibody/binder refinement surface in BMS
 - refinement is designed to consume upstream artifacts rather than always start
   from RFantibody
-- Boltz-2 and Protenix are the live validator backends for this path
+- Boltz-2 is the registry-backed validator exposed for this path; Protenix remains a workflow-level validator module/param path, not a standalone model-registry YAML in the current tracked tree
 - RF3 exists as a generic structure predictor but should not be described here
   as the main antibody-validator backend
 
@@ -57,17 +57,21 @@ BioModStack exposes standalone prediction/validation surfaces through
 [platform/api/config/models](../platform/api/config/models), and the structure
 prediction modules.
 
-Current predictor families present in the live registry:
+Current registry-backed predictor families:
 
 - [Boltz-2](../platform/api/config/models/boltz2.yaml)
-- [Protenix](../platform/api/config/models/protenix.yaml)
 - [AlphaFold2](../platform/api/config/models/af2.yaml)
 - [RF3](../platform/api/config/models/rf3.yaml)
 - [Fold-CP Experimental](../platform/api/config/models/boltz_cp_experimental.yaml)
 
+Workflow-level predictor/validator modules also include [Protenix](../modules/protenix.nf),
+but there is no tracked `platform/api/config/models/protenix.yaml` in the current
+registry. Do not describe Protenix as a standalone registry card until that YAML
+or an equivalent API registry entry exists again.
+
 Important distinction:
 
-- Boltz-2 / Protenix / AF2 / RF3 are the normal structure-prediction family
+- Boltz-2 / AF2 / RF3 are the normal registry-backed structure-prediction family
 - Fold-CP Experimental is a specialized multi-GPU Boltz-2 context-parallel path,
   not a generic replacement for the standard launcher/runtime
 
