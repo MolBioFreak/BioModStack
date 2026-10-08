@@ -3,6 +3,12 @@ import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BioXpOperatorReceiptDetailV2 } from '../../src/lib/bioxpClient';
+import coherentFailureProducer from '../fixtures/bioxp_xy_coherent_failure.json';
+import bmsMetadata from '../fixtures/bioxp_xy_bms_metadata.json';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { api } from '../../src/lib/api';
+vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
+const nativeMetadataMode = vi.hoisted(() => ({ enabled: false }));
 import retainedHistory from '../fixtures/bioxp_retained_history.json';
 import manualCatalogProducer from '../fixtures/bioxpManualCatalogProducer.json';
 import zTargetProducer from '../fixtures/bioxp_z_target_producer.json';
@@ -406,7 +412,9 @@ const xHomeAction = () => ({
     stages: [],
 });
 
-vi.mock('../../src/lib/bioxpClient', () => ({
+vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
+    const real = await importOriginal<typeof import('../../src/lib/bioxpClient')>();
+    return ({
     BIOXP_Y_RELATIVE_MIN_STEPS: -2_147_483_648,
     BIOXP_Y_RELATIVE_MAX_STEPS: 2_147_483_647,
     BIOXP_Y_ABSOLUTE_MIN_STEPS: -2_147_483_648,
@@ -438,7 +446,10 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         return state.dashboard;
     },
     useBioXpOperatorDashboardV2: () => ({ ...state.v2Dashboard, data: { ...state.v2Dashboard.data, telemetry: state.dashboard.data } }),
-    useBioXpOperatorControlCatalogV2: (...args: unknown[]) => { state.catalogArgs.push(args); return state.v2Catalog; },
+    useBioXpOperatorControlCatalogV2: (...args: Parameters<typeof real.useBioXpOperatorControlCatalogV2>) => {
+        state.catalogArgs.push(args);
+        return nativeMetadataMode.enabled ? real.useBioXpOperatorControlCatalogV2(...args) : state.v2Catalog;
+    },
     useBioXpOperatorMethodV1: (...args: unknown[]) => { state.methodHookArgs.push(args); return state.methodReceipt; },
     bioXpMethodV1IsTerminal: (method: { status?: string } | undefined) => !method?.status || ['completed', 'failed', 'interrupted', 'ambiguous', 'completed_partial', 'cleared'].includes(method.status),
     useBioXpOperatorReceiptV2: (commandId: string | null, generation: number, enabled: boolean) => {
@@ -449,7 +460,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         ].find((receipt) => receipt.command_id === commandId
             && ['oem.deck.move_to_location', 'oem.deck._mov_execution', 'oem.deck._finite_operation'].includes(String(receipt.action_id)));
         if (dashboardReceipt) return { data: dashboardReceipt, error: null, isStale: false };
-        if (commandId?.startsWith('xy-')) return state.xyReceipt;
+        if (commandId?.startsWith('xy-') || commandId === coherentFailureProducer.compact.command_id || commandId === bmsMetadata.compact.command_id) return state.xyReceipt;
         if (commandId?.startsWith('deck-command-')) return state.deckReceipt;
         if (commandId?.startsWith('lifecycle-command-')) return state.lifecycleReceipt;
         if (commandId?.startsWith('z-command-')) return state.zReceipt;
@@ -589,7 +600,8 @@ vi.mock('../../src/lib/bioxpClient', () => ({
             rawJson: JSON.stringify(response?.data ?? null, null, 2),
         };
     },
-}));
+    });
+});
 
 vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: (props: Record<string, unknown>) => <output data-testid="camera-session">{JSON.stringify(props)}</output> }));
 vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({ BioXpOperatorControlTabs: () => null }));
@@ -870,6 +882,98 @@ describe('primary cockpit query ownership', () => {
         expect(panel().textContent).toContain('XY command failed');
         expect(state.xyCalls).toHaveLength(1);
     });
+    it('polls actual strict-BMS native metadata with the production hook after failed XY, without retry or activation', async () => {
+        vi.useFakeTimers();
+        // No payload timestamps/authority are rewritten. Run at native export time;
+        // repeated identical responses must eventually expire, not renew authority.
+        vi.setSystemTime(bmsMetadata.catalog.dashboard.generated_at * 1000);
+        nativeMetadataMode.enabled = true;
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        vi.mocked(api.get).mockReset();
+        vi.mocked(api.post).mockReset();
+        vi.mocked(api.get).mockImplementation(async (url) => {
+            expect(url).toBe('/api/bioxp/operator-controls/v2/catalog');
+            return { data: structuredClone(bmsMetadata.catalog) };
+        });
+        const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+        const advance = async (ms: number) => {
+            await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+            await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+        };
+        const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
+        const button = () => panel().querySelector('button') as HTMLButtonElement;
+        try {
+            await render(); await advance(1);
+            expect(button().disabled).toBe(false);
+            // Only the original submission callback is a transport fixture.
+            await act(async () => {
+                button().click();
+                state.xyCallbacks?.onSuccess?.({ command_id: bmsMetadata.compact.command_id, status: 'dispatched', terminal: false });
+            });
+            expect(button().disabled).toBe(true);
+            state.xyReceipt = { data: structuredClone(bmsMetadata.compact), error: null, isError: false };
+            await render();
+            for (let poll = 0; poll < 3; poll++) {
+                if (poll) await advance(5000);
+                expect(panel().textContent).toContain('XY command failed');
+                expect(button().disabled).toBe(false);
+                expect(state.xyReceipt.data).toEqual(bmsMetadata.compact);
+            }
+            expect(api.get).toHaveBeenCalledTimes(3);
+            await advance(6000);
+            expect(button().disabled).toBe(true); // same old producer observation expires
+            expect(panel().textContent).toContain('XY command failed');
+            expect(state.xyCalls).toHaveLength(1);
+            expect(state.lifecycleInvokeCalls).toHaveLength(0);
+            expect(state.yInterruptCalls).toHaveLength(0);
+            expect(state.invokeCalls).toHaveLength(0);
+            expect(api.post).not.toHaveBeenCalled();
+        } finally {
+            await act(async () => root.render(null));
+            client.clear(); nativeMetadataMode.enabled = false; vi.useRealTimers();
+        }
+    });
+
+    it.each(['eligible', 'unknown', 'interrupted'] as const)('keeps failed XY truthful and follows fresh producer %s authority without retry', async (authority) => {
+        vi.useFakeTimers();
+        try {
+            const render = () => act(async () => root.render(<BioXpCockpit />));
+            const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
+            const button = () => panel().querySelector('button') as HTMLButtonElement;
+            await render();
+            const commandId = coherentFailureProducer.compact.command_id;
+            await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({ command_id: commandId, status: 'dispatched', terminal: false }); });
+            expect(button().disabled).toBe(true);
+            // Raw native → SQLite export; admission metadata below remains the
+            // existing contract fixture, not a producer catalog compatibility claim.
+            state.xyReceipt = { data: structuredClone(coherentFailureProducer.compact), error: null, isError: false };
+            state.statusError = true;
+            await render();
+            expect(panel().textContent).toContain('XY command failed');
+            expect(button().disabled).toBe(true);
+            state.statusError = false;
+            const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(row => row.action_id === 'oem.xy.move_absolute')!;
+            action.enabled = authority === 'eligible';
+            action.disabled_reason = authority === 'eligible' ? null : `producer ${authority}: reconciliation required`;
+            for (let poll = 0; poll < 3; poll++) {
+                await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+                Object.assign(state.v2Catalog, { dataUpdatedAt: Date.now() });
+                catalogDashboard().generated_at = Date.now() / 1000;
+                await render();
+                expect(panel().textContent).toContain('XY command failed');
+                expect(button().disabled).toBe(authority !== 'eligible');
+                expect(state.xyCalls).toHaveLength(1);
+                expect(state.lifecycleInvokeCalls).toHaveLength(0);
+                expect(state.yInterruptCalls).toHaveLength(0);
+                expect(state.invokeCalls).toHaveLength(0);
+            }
+            state.connectionGeneration = 2;
+            await render();
+            expect(panel().textContent).not.toContain(commandId);
+            expect(state.xyCalls).toHaveLength(1);
+        } finally { vi.useRealTimers(); }
+    });
+
     it.each(['completed', 'failed', 'interrupted', 'stopped', 'ambiguous'])('follows XY to %s and ignores other identities', async (status) => {
         await act(async () => { root.render(<BioXpCockpit />); });
         const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
