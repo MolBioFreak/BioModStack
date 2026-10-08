@@ -21,6 +21,7 @@ from molbio_database import (  # noqa: E402
 from molbio_models import (  # noqa: E402
     MolecularOperationInput,
     MolecularOperationOutput,
+    MolecularRevision,
     NucleotideSequence,
     PCRExperimentRevision,
 )
@@ -188,11 +189,26 @@ async def test_pcr_saved_product_has_immutable_revision_and_lineage(tmp_path: Pa
         ).scalar_one()
         assert input_count == 1
         assert output_count == 1
+        product_id = response.sequence.id
+        revision_id = experiment.product_revision_id
+        await session.commit()
+
+    # A new session must read committed bases, not the writer's identity map.
+    async with sessions() as session:
+        expected = "ATGCGTACGTTAGCTAGCTAGGCTAACCGGTTACGATCGATCGTACGTTAGC"
+        saved = await session.get(NucleotideSequence, product_id)
+        revision = await session.get(MolecularRevision, revision_id)
+        assert saved.sequence == revision.snapshot["sequence"] == expected
+        replay = await pcr(request, session)
+        assert replay.reused is True
+        assert replay.sequence is not None
+        assert replay.sequence.id == product_id
+        assert replay.sequence.sequence == response.sequence.sequence == expected
 
         with pytest.raises(DatabaseError, match="immutable"):
             await session.execute(
                 text("UPDATE molecular_revisions SET change_kind='tampered' WHERE id=:id"),
-                {"id": experiment.product_revision_id},
+                {"id": revision_id},
             )
             await session.commit()
         await session.rollback()

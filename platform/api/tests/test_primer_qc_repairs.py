@@ -38,6 +38,25 @@ def _paired_run(left, right, terminal=False):
     return best
 
 
+def _hairpin_oracle(sequence, *, min_stem=3, min_loop=3, max_loop=12):
+    sequence = "".join(sequence.upper().split()).replace("U", "T")
+    candidates = []
+    # Pair physical opposite-strand indices; preserve longest/leftmost/loop tie order.
+    for left in range(len(sequence)):
+        for right in range(left + min_stem + min_loop, len(sequence)):
+            for stem in range(min_stem, min(right - left - min_loop, len(sequence) - right) + 1):
+                loop = right - left - stem
+                if min_loop <= loop <= max_loop and all(
+                    sequence[left + i] == _COMPLEMENT[sequence[right + stem - 1 - i]]
+                    for i in range(stem)
+                ):
+                    candidates.append((-stem, left, loop))
+    if not candidates:
+        return 0, None
+    stem, _, loop = min(candidates)
+    return -stem, loop
+
+
 def _site_oracle(template, primer, reverse, circular, minimum):
     # Brute-force every suffix at every start; collapse by physical 3' anchor.
     sites = {}
@@ -71,8 +90,8 @@ def test_all_site_coordinate_oracle(reverse, circular):
         assert actual == _site_oracle(template, primer, reverse, circular, minimum), (template, primer, minimum)
 
 
-@pytest.mark.parametrize("alphabet", ["ACGT", "ACGU"])
-def test_antiparallel_coordinate_oracle(alphabet):
+@pytest.mark.parametrize("alphabet", ["ACGT", "ACGU", "ACGTNRYSWKMBDHV"])
+def test_antiparallel_coordinate_oracle(alphabet, monkeypatch):
     rng = random.Random(803)
     cases = [("", "A"), ("AAAA", "AAAA"), ("GGATCC", "GGATCC"),
              ("CCAGTA", "TACTGG"), ("CGCGCGAAAAGG", "GCGCGCTTTTCC")]
@@ -83,6 +102,17 @@ def test_antiparallel_coordinate_oracle(alphabet):
     for left, right in cases:
         assert qc._longest_contiguous_complement(left, right) == _paired_run(left, right)
         assert qc._three_prime_dimer_length(left, right) == _paired_run(left, right, True)
+    for left, right in cases[:45]:
+        for limits in ({}, {"min_stem": 2, "min_loop": 1, "max_loop": 5}):
+            assert qc._find_hairpin(left, **limits) == _hairpin_oracle(left, **limits)
+        if not left:
+            continue
+        kwargs = dict(sequence_type="rna" if alphabet == "ACGU" else "dna",
+                      template_sequence=right + left + right, circular_template=True)
+        actual = asdict(qc.evaluate_primer_qc(left, **kwargs))
+        with monkeypatch.context() as oracle:
+            oracle.setattr(qc, "_find_hairpin", _hairpin_oracle)
+            assert asdict(qc.evaluate_primer_qc(left, **kwargs)) == actual
 
 
 def test_candidate_antiparallel_regressions_and_warnings():

@@ -26,7 +26,8 @@ from molbio_models import (  # noqa: E402
     MolecularRevision,
     NucleotideSequence,
 )
-from routers.molbio_ops import router as molbio_router  # noqa: E402
+from routers.molbio_ops import router as molbio_router, get_sequence_revision  # noqa: E402
+from routers.nucleotide_sequences import get_sequence  # noqa: E402
 from services.assembly.pydna_gibson import design_gibson  # noqa: E402
 from services.assembly.types import AssemblyError, AssemblyFragment  # noqa: E402
 
@@ -107,10 +108,6 @@ def test_three_pcr_fragments_design_exact_circular_candidate() -> None:
     assert selected.circular is True
     assert selected.exact_match is True
     assert len(selected.product.junctions) == 3
-    assert all(
-        primer.full_sequence.endswith(primer.annealing_sequence)
-        for primer in result.primers
-    )
     assert all(
         primer.full_sequence == primer.tail_sequence + primer.annealing_sequence
         for primer in result.primers
@@ -404,6 +401,8 @@ def test_design_save_rejects_forged_checksum_and_persists_server_candidate(
                 "/api/molbio/assembly/gibson/design",
                 json=payload,
             )
+            assert design_response.status_code == 200
+            computation_id = design_response.json()["computation_id"]
             checksum = design_response.json()["selected_candidate_checksum"]
 
             forged_response = client.post(
@@ -419,13 +418,23 @@ def test_design_save_rejects_forged_checksum_and_persists_server_candidate(
                 json={
                     **payload,
                     "selected_candidate_checksum": checksum,
+                    "computation_id": computation_id,
                     "new_name": "Designed product",
                 },
             )
 
+            assert valid_response.status_code == 200
+            selected_forgery = client.post(
+                "/api/molbio/assembly/gibson/design/save",
+                json={**payload, "computation_id": computation_id,
+                      "selected_candidate_checksum": "0" * 64,
+                      "new_name": "Forged selected product"},
+            )
+            assert selected_forgery.status_code == 400
+            assert "checksum" in selected_forgery.json()["detail"].lower()
+
         assert forged_response.status_code == 400
         assert "checksum" in forged_response.json()["detail"].lower()
-        assert valid_response.status_code == 200
         response_payload = valid_response.json()
         saved_payload = response_payload["saved_sequence"]
         assert (
@@ -447,16 +456,43 @@ def test_design_save_rejects_forged_checksum_and_persists_server_candidate(
         assert len(saved_payload["primers"]) == 4
         assert all(primer["sequence"] for primer in saved_payload["primers"])
 
-        async def load_saved() -> NucleotideSequence | None:
+        async def readback() -> None:
             async with sessions() as session:
-                return await session.scalar(
-                    select(NucleotideSequence).where(
-                        NucleotideSequence.name == "Designed product"
-                    )
-                )
+                saved = await session.get(NucleotideSequence, saved_payload["id"])
+                assert saved is not None
+                revision = await session.scalar(select(MolecularRevision).where(
+                    MolecularRevision.document_id == saved.id))
+                assert revision is not None
+                # Detail contracts, not the number/shape of stored workup copies.
+                detail = await get_sequence(saved.id, session)
+                history = await get_sequence_revision(saved.id, revision.id, session)
+                expected = _dna(1) + _dna(2)
+                assert detail.sequence == history["snapshot"]["sequence"] == expected
+                assert detail.operation_params == saved_payload["operation_params"]
+                assert history["snapshot"]["operation_params"] == detail.operation_params
+                assert detail.primers == saved_payload["primers"]
 
-        saved = asyncio.run(load_saved())
-        assert saved is not None
-        assert saved.operation_params["candidate_checksum"] == checksum
+                # Legacy full inline workup without an operation reference must
+                # remain readable; no historical migration is required.
+                legacy_snapshot = {**history["snapshot"], "id": "legacy-product"}
+                session.add(MolecularDocument(id="legacy-product", document_kind="dna", name="Legacy"))
+                session.add(NucleotideSequence(
+                    id="legacy-product", name="Legacy", sequence=expected,
+                    sequence_type="dna", length=len(expected), is_circular=False,
+                    operation="gibson", operation_params=detail.operation_params,
+                    features=[], primers=saved_payload["primers"], analysis_tracks=[]))
+                await session.flush()
+                session.add(MolecularRevision(
+                    id="legacy-revision", document_id="legacy-product", revision_number=1,
+                    change_kind="create", content_sha256=hashlib.sha256(expected.encode()).hexdigest(),
+                    content_length=len(expected), snapshot=legacy_snapshot, provenance={}))
+                await session.commit()
+            async with sessions() as session:
+                legacy = await get_sequence("legacy-product", session)
+                history = await get_sequence_revision("legacy-product", "legacy-revision", session)
+                assert legacy.sequence == history["snapshot"]["sequence"] == expected
+                assert legacy.operation_params == history["snapshot"]["operation_params"] == saved_payload["operation_params"]
+
+        asyncio.run(readback())
     finally:
         asyncio.run(engine.dispose())

@@ -42,7 +42,7 @@ def test_sequence_type_accepts_molecule_labels() -> None:
     assert normalize_sequence_type("dsDNA", "AUGUAA") == "dna"
 
 
-def test_backend_persists_ds_ss_dna_rna_strandedness_and_orientation() -> None:
+def test_normalizes_ds_ss_dna_rna_strandedness_and_orientation() -> None:
     cases = [
         ("dsDNA", "dna", None, "double", "not_applicable", "dsDNA"),
         ("single strand DNA", "dna", "positive strand", "single", "positive", "(+)ssDNA"),
