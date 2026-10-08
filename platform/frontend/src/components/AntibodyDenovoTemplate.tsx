@@ -36,6 +36,7 @@ import {
     ANTIBODY_DENOVO_PIPELINE_MODE,
     ANTIBODY_REFINEMENT_PIPELINE_MODE,
 } from '../lib/antibodyModes';
+import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -212,6 +213,7 @@ const buildAvailableResidueKeySet = (chains: Chain[]) =>
 
 export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues }) => {
     const location = useLocation();
+    const { gpuOptions } = useLiveGpuCatalog();
     const refinementQueryEnabled = useMemo(
         () => new URLSearchParams(location.search).get('refinement') === '1',
         [location.search]
@@ -2971,25 +2973,20 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 >
                                     Auto
                                 </button>
-                                {[
-                                    { id: 0, name: '5090' },
-                                    { id: 1, name: '5060Ti' },
-                                    { id: 2, name: '3090#1' },
-                                    { id: 3, name: '3090#2' },
-                                ].map(gpu => (
+                                {gpuOptions.map(gpu => (
                                     <button
-                                        key={gpu.id}
+                                        key={gpu.index}
                                         onClick={() => {
                                             setPinnedGpus(prev =>
-                                                prev.includes(gpu.id)
-                                                    ? prev.filter(g => g !== gpu.id)
-                                                    : [...prev, gpu.id].sort()
+                                                prev.includes(gpu.index)
+                                                    ? prev.filter(g => g !== gpu.index)
+                                                    : [...prev, gpu.index].sort((a, b) => a - b)
                                             );
                                         }}
                                         className="rounded-lg border px-3 py-2 text-sm font-medium transition-all"
-                                        style={pinnedGpus.includes(gpu.id) ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
+                                        style={pinnedGpus.includes(gpu.index) ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
                                     >
-                                        {gpu.name}
+                                        {gpu.label}
                                     </button>
                                 ))}
                             </div>
