@@ -77,28 +77,39 @@
       },
       "required": ["top_offset", "bottom_offset", "overhang_kind", "overhang_length_nt"]
     },
+    "nickOrientation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strand": {"enum": ["top", "bottom"]},
+        "boundary_offset": {"type": "integer"}
+      },
+      "required": ["strand", "boundary_offset"]
+    },
     "nick": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "strand": {"enum": ["top", "bottom"]},
-        "top_offset": {"$ref": "#/$defs/nullableInteger"},
-        "bottom_offset": {"$ref": "#/$defs/nullableInteger"}
+        "boundary_offset": {"type": "integer"},
+        "reverse_orientation": {"$ref": "#/$defs/nickOrientation"}
       },
-      "required": ["strand", "top_offset", "bottom_offset"],
+      "required": ["strand", "boundary_offset", "reverse_orientation"],
       "oneOf": [
         {
           "properties": {
             "strand": {"const": "top"},
-            "top_offset": {"type": "integer"},
-            "bottom_offset": {"type": "null"}
+            "reverse_orientation": {
+              "properties": {"strand": {"const": "bottom"}}
+            }
           }
         },
         {
           "properties": {
             "strand": {"const": "bottom"},
-            "top_offset": {"type": "null"},
-            "bottom_offset": {"type": "integer"}
+            "reverse_orientation": {
+              "properties": {"strand": {"const": "top"}}
+            }
           }
         }
       ]
