@@ -2,17 +2,20 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 import threading
 from collections import OrderedDict, defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import Literal, Sequence
 
 import rfc8785
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from services.restriction_catalog import (
     ANALYSIS_CACHE_MAXIMUM_ENTRIES,
+    ANALYSIS_CACHE_MAXIMUM_RESULT_WEIGHT_BYTES,
+    ANALYSIS_CACHE_MAXIMUM_TOTAL_WEIGHT_BYTES,
     ANALYSIS_EVENT_MAXIMUM,
     ANALYSIS_EXPLICIT_ENZYME_MAXIMUM,
     ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH,
@@ -21,12 +24,23 @@ from services.restriction_catalog import (
     ANALYSIS_REGION_MAXIMUM,
     ANALYSIS_RESPONSE_MAXIMUM_BYTES,
     ANALYSIS_SCAN_WORK_MAXIMUM,
+    ANALYSIS_CANCELLATION_POLICY,
+    ANALYSIS_QUEUE_POLICY,
+    ANALYSIS_TIMEOUT_SECONDS,
+    ANALYSIS_WORKER_CONCURRENCY,
+    ANALYSIS_RESPONSE_BASE_BUDGET_BYTES,
+    ANALYSIS_RESPONSE_EVENT_BUDGET_BYTES,
+    ANALYSIS_RESPONSE_OCCURRENCE_BUDGET_BYTES,
+    ANALYSIS_SCAN_WORK_FORMULA_ID,
+    ANALYSIS_SCAN_WORK_FORMULA_VERSION,
     CatalogView,
     RestrictionRecord,
 )
 
 ALGORITHM_ID = "bms-restriction-analysis"
 ALGORITHM_VERSION = "2.1.0"
+SCAN_WORK_FORMULA_ID = ANALYSIS_SCAN_WORK_FORMULA_ID
+SCAN_WORK_FORMULA_VERSION = ANALYSIS_SCAN_WORK_FORMULA_VERSION
 MAX_INLINE_SEQUENCE_LENGTH = ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH
 MAX_EXPLICIT_ENZYME_IDS = ANALYSIS_EXPLICIT_ENZYME_MAXIMUM
 MAX_REGIONS = ANALYSIS_REGION_MAXIMUM
@@ -36,9 +50,11 @@ MAX_RETURNED_OCCURRENCES = ANALYSIS_OCCURRENCE_MAXIMUM
 MAX_RETURNED_EVENTS = ANALYSIS_EVENT_MAXIMUM
 MAX_RESPONSE_BYTES = ANALYSIS_RESPONSE_MAXIMUM_BYTES
 CACHE_MAX_ENTRIES = ANALYSIS_CACHE_MAXIMUM_ENTRIES
-_RESPONSE_BASE_BUDGET = 64 * 1024
-_RESPONSE_OCCURRENCE_BUDGET = 2_048
-_RESPONSE_EVENT_BUDGET = 1_024
+CACHE_MAX_TOTAL_WEIGHT_BYTES = ANALYSIS_CACHE_MAXIMUM_TOTAL_WEIGHT_BYTES
+CACHE_MAX_RESULT_WEIGHT_BYTES = ANALYSIS_CACHE_MAXIMUM_RESULT_WEIGHT_BYTES
+_RESPONSE_BASE_BUDGET = ANALYSIS_RESPONSE_BASE_BUDGET_BYTES
+_RESPONSE_OCCURRENCE_BUDGET = ANALYSIS_RESPONSE_OCCURRENCE_BUDGET_BYTES
+_RESPONSE_EVENT_BUDGET = ANALYSIS_RESPONSE_EVENT_BUDGET_BYTES
 
 _IUPAC = MappingProxyType(
     {
@@ -168,6 +184,94 @@ class GroupedCleavage(StrictModel):
     contributors: tuple[CleavageContributor, ...]
 
 
+_RESOURCE_POLICY_OPENAPI_EXAMPLE = {
+    "schema": "bms.molbio.restriction-analysis-resource-policy.v1",
+    "policy_version": "1.0.0",
+    "scan_work_formula_id": "candidate-starts-times-motif-width",
+    "scan_work_formula_version": "1.0.0",
+    "sequence_length_maximum": 5_000_000,
+    "explicit_enzyme_maximum": 256,
+    "region_maximum": 128,
+    "actual_scan_pattern_maximum": 1_056,
+    "scan_work_maximum": 32_000_000,
+    "occurrence_maximum": 25_000,
+    "event_maximum": 50_000,
+    "response_maximum_bytes": 32 * 1024 * 1024,
+    "response_base_budget_bytes": 64 * 1024,
+    "response_occurrence_budget_bytes": 2_048,
+    "response_event_budget_bytes": 1_024,
+    "worker_concurrency": 2,
+    "queue_policy": "reject_when_all_workers_busy",
+    "timeout_seconds": 60,
+    "cancellation_policy": "worker_continues_and_capacity_is_retained_until_completion",
+    "cache_entry_maximum": 32,
+    "cache_total_weight_maximum_bytes": 64 * 1024 * 1024,
+    "cache_result_weight_maximum_bytes": 8 * 1024 * 1024,
+    "cache_weight_formula_id": "recursive-sys-getsizeof-object-graph",
+    "cache_weight_formula_version": "1.0.0",
+}
+
+
+class ResourcePolicyReceipt(StrictModel):
+    model_config = ConfigDict(
+        extra="forbid", frozen=True,
+        json_schema_extra={"examples": [_RESOURCE_POLICY_OPENAPI_EXAMPLE]},
+    )
+    schema_: Literal["bms.molbio.restriction-analysis-resource-policy.v1"] = Field(alias="schema")
+    policy_version: Literal["1.0.0"]
+    scan_work_formula_id: Literal["candidate-starts-times-motif-width"]
+    scan_work_formula_version: Literal["1.0.0"]
+    sequence_length_maximum: int
+    explicit_enzyme_maximum: int
+    region_maximum: int
+    actual_scan_pattern_maximum: int
+    scan_work_maximum: int
+    occurrence_maximum: int
+    event_maximum: int
+    response_maximum_bytes: int
+    response_base_budget_bytes: int
+    response_occurrence_budget_bytes: int
+    response_event_budget_bytes: int
+    worker_concurrency: int
+    queue_policy: Literal["reject_when_all_workers_busy"]
+    timeout_seconds: int
+    cancellation_policy: Literal["worker_continues_and_capacity_is_retained_until_completion"]
+    cache_entry_maximum: int
+    cache_total_weight_maximum_bytes: int
+    cache_result_weight_maximum_bytes: int
+    cache_weight_formula_id: Literal["recursive-sys-getsizeof-object-graph"]
+    cache_weight_formula_version: Literal["1.0.0"]
+
+
+def resource_policy_receipt() -> ResourcePolicyReceipt:
+    return ResourcePolicyReceipt(
+        schema="bms.molbio.restriction-analysis-resource-policy.v1",
+        policy_version="1.0.0",
+        scan_work_formula_id=SCAN_WORK_FORMULA_ID,
+        scan_work_formula_version=SCAN_WORK_FORMULA_VERSION,
+        sequence_length_maximum=MAX_INLINE_SEQUENCE_LENGTH,
+        explicit_enzyme_maximum=MAX_EXPLICIT_ENZYME_IDS,
+        region_maximum=MAX_REGIONS,
+        actual_scan_pattern_maximum=MAX_ANALYSIS_PATTERNS,
+        scan_work_maximum=MAX_SCAN_WORK,
+        occurrence_maximum=MAX_RETURNED_OCCURRENCES,
+        event_maximum=MAX_RETURNED_EVENTS,
+        response_maximum_bytes=MAX_RESPONSE_BYTES,
+        response_base_budget_bytes=_RESPONSE_BASE_BUDGET,
+        response_occurrence_budget_bytes=_RESPONSE_OCCURRENCE_BUDGET,
+        response_event_budget_bytes=_RESPONSE_EVENT_BUDGET,
+        worker_concurrency=ANALYSIS_WORKER_CONCURRENCY,
+        queue_policy=ANALYSIS_QUEUE_POLICY,
+        timeout_seconds=ANALYSIS_TIMEOUT_SECONDS,
+        cancellation_policy=ANALYSIS_CANCELLATION_POLICY,
+        cache_entry_maximum=CACHE_MAX_ENTRIES,
+        cache_total_weight_maximum_bytes=CACHE_MAX_TOTAL_WEIGHT_BYTES,
+        cache_result_weight_maximum_bytes=CACHE_MAX_RESULT_WEIGHT_BYTES,
+        cache_weight_formula_id="recursive-sys-getsizeof-object-graph",
+        cache_weight_formula_version="1.0.0",
+    )
+
+
 class AnalysisResult(StrictModel):
     algorithm_id: Literal["bms-restriction-analysis"] = ALGORITHM_ID
     algorithm_version: Literal["2.1.0"] = ALGORITHM_VERSION
@@ -177,6 +281,8 @@ class AnalysisResult(StrictModel):
     catalog_sha256: str
     scope_sha256: str
     region_policy_sha256: str
+    resource_policy_receipt: ResourcePolicyReceipt
+    resource_policy_sha256: str
     counts: AnalysisCounts
     enzyme_summaries: tuple[EnzymeSummary, ...]
     occurrences: tuple[AnalysisOccurrence, ...]
@@ -186,19 +292,53 @@ class AnalysisResult(StrictModel):
     result_sha256: str
 
     def canonical_result_bytes(self) -> bytes:
-        payload = self.model_dump(mode="json")
+        payload = self.model_dump(mode="json", by_alias=True)
         payload.pop("result_sha256", None)
         return rfc8785.dumps(payload)
 
 
 _cache_lock = threading.RLock()
-_cache: OrderedDict[tuple[str, ...], AnalysisResult] = OrderedDict()
+_cache: OrderedDict[tuple[str, ...], tuple[AnalysisResult, int]] = OrderedDict()
+_cache_total_weight = 0
 _compiled_lock = threading.Lock()
 _compiled: dict[str, tuple[frozenset[str], ...]] = {}
 
 
 def reverse_complement(sequence: str) -> str:
     return sequence.translate(_COMPLEMENT)[::-1]
+
+
+def _retained_weight(value: object, seen: set[int] | None = None) -> int:
+    """Conservatively count the retained Python object graph once by identity."""
+    if seen is None:
+        seen = set()
+    identity = id(value)
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    size = sys.getsizeof(value)
+    if isinstance(value, BaseModel):
+        return size + _retained_weight(value.__dict__, seen)
+    if isinstance(value, Mapping):
+        return size + sum(
+            _retained_weight(key, seen) + _retained_weight(item, seen)
+            for key, item in value.items()
+        )
+    if isinstance(value, (tuple, list, set, frozenset)):
+        return size + sum(_retained_weight(item, seen) for item in value)
+    return size
+
+
+def _clear_cache_for_testing() -> None:
+    global _cache_total_weight
+    with _cache_lock:
+        _cache.clear()
+        _cache_total_weight = 0
+
+
+def _cache_snapshot_for_testing() -> tuple[int, int]:
+    with _cache_lock:
+        return len(_cache), _cache_total_weight
 
 
 def normalize_dna(sequence: str) -> str:
@@ -375,8 +515,48 @@ def _event_cardinality(record: RestrictionRecord) -> int:
     return 0
 
 
-def _analysis_pattern_count(records: Sequence[RestrictionRecord]) -> int:
-    return len({pattern for record in records for pattern in record.recognition.site_alternatives_iupac})
+def _candidate_starts(sequence_length: int, motif_length: int, topology: str) -> int:
+    if topology == "circular":
+        return sequence_length if motif_length <= sequence_length else 0
+    return max(sequence_length - motif_length + 1, 0)
+
+
+def _build_scan_plan(
+    records: Sequence[RestrictionRecord], sequence_length: int, topology: str,
+) -> tuple[
+    tuple[tuple[str, tuple[tuple[RestrictionRecord, str], ...]], ...],
+    dict[str, set[str]],
+    int,
+]:
+    """Build the one exact, deduplicated plan shared by admission and scanning."""
+    long_motifs: dict[str, set[str]] = defaultdict(set)
+    jobs: dict[str, dict[tuple[str, str], RestrictionRecord]] = defaultdict(dict)
+    for record in records:
+        for motif in record.recognition.site_alternatives_iupac:
+            if len(motif) > sequence_length:
+                long_motifs[motif].add(record.enzyme_id)
+            else:
+                jobs[motif][(record.enzyme_id, "forward")] = record
+        if not record.recognition.palindromic:
+            for motif in record.recognition.reverse_complement_alternatives_iupac:
+                if len(motif) <= sequence_length:
+                    jobs[motif][(record.enzyme_id, "reverse")] = record
+
+    plan = tuple(
+        (
+            motif,
+            tuple(
+                (consumers[key], key[1])
+                for key in sorted(consumers, key=lambda item: (item[0].casefold(), item[1]))
+            ),
+        )
+        for motif, consumers in sorted(jobs.items())
+    )
+    charged_work = sum(
+        _candidate_starts(sequence_length, len(motif), topology) * len(motif)
+        for motif, _consumers in plan
+    )
+    return plan, long_motifs, charged_work
 
 
 def analyze_sequence(
@@ -402,10 +582,16 @@ def analyze_sequence(
         raise InvalidDNAError("analysis regions overlap")
 
     selected = {record.enzyme_id: record for record in records}
-    pattern_count = _analysis_pattern_count(tuple(selected.values()))
+    policy_receipt = resource_policy_receipt()
+    policy_sha256 = hashlib.sha256(
+        rfc8785.dumps(policy_receipt.model_dump(mode="json", by_alias=True))
+    ).hexdigest()
+    scan_plan, long_motifs, scan_work = _build_scan_plan(
+        tuple(selected.values()), len(normalized), topology,
+    )
+    pattern_count = len(scan_plan)
     if pattern_count > MAX_ANALYSIS_PATTERNS:
         raise AnalysisLimitError("pattern count exceeds analysis limit")
-    scan_work = len(normalized) * pattern_count
     if scan_work > MAX_SCAN_WORK:
         raise AnalysisLimitError("scan work exceeds analysis limit")
 
@@ -417,19 +603,14 @@ def analyze_sequence(
     })).hexdigest()
     cache_key = tuple(str(item) for item in (
         source_sha, topology, catalog.content_sha256, scope_sha, region_sha, ALGORITHM_VERSION,
-        MAX_RETURNED_OCCURRENCES, MAX_RETURNED_EVENTS, MAX_RESPONSE_BYTES, MAX_SCAN_WORK,
+        policy_sha256,
     ))
     with _cache_lock:
         cached = _cache.get(cache_key)
         if cached is not None:
             _cache.move_to_end(cache_key)
-            return cached
+            return cached[0]
 
-    long_motifs: dict[str, set[str]] = defaultdict(set)
-    for record in selected.values():
-        for motif in record.recognition.site_alternatives_iupac:
-            if len(motif) > len(normalized):
-                long_motifs[motif].add(record.enzyme_id)
     typed_limitations = tuple(
         AnalysisLimitation(
             code="recognition_motif_longer_than_molecule",
@@ -442,21 +623,11 @@ def analyze_sequence(
     )
     long_limited_enzymes = {enzyme_id for ids in long_motifs.values() for enzyme_id in ids}
 
-    scan_jobs: dict[str, list[tuple[RestrictionRecord, str]]] = defaultdict(list)
-    for record in selected.values():
-        if record.enzyme_id in long_limited_enzymes:
-            continue
-        for pattern in record.recognition.site_alternatives_iupac:
-            scan_jobs[pattern].append((record, "forward"))
-        if not record.recognition.palindromic:
-            for pattern in record.recognition.reverse_complement_alternatives_iupac:
-                scan_jobs[pattern].append((record, "reverse"))
-
     raw_occurrences: list[tuple[RestrictionRecord, int, str, str, str, str]] = []
     seen: set[tuple[str, int, str]] = set()
     event_count = 0
     encoded_budget = _RESPONSE_BASE_BUDGET
-    for pattern, consumers in scan_jobs.items():
+    for pattern, consumers in scan_plan:
         for start, certainty, window in _scan(normalized, pattern, topology):
             if (certainty == "possible" and not include_possible_sites) or not _region_contains(start, ordered_regions):
                 continue
@@ -607,6 +778,8 @@ def analyze_sequence(
         "catalog_sha256": catalog.content_sha256,
         "scope_sha256": scope_sha,
         "region_policy_sha256": region_sha,
+        "resource_policy_receipt": policy_receipt,
+        "resource_policy_sha256": policy_sha256,
         "counts": AnalysisCounts(
             recognition_site_count_definite=definite,
             recognition_site_count_possible=possible,
@@ -626,11 +799,23 @@ def analyze_sequence(
     })
     if len(rfc8785.dumps(result.model_dump(mode="json"))) > MAX_RESPONSE_BYTES:
         raise AnalysisLimitError("analysis response exceeds byte limit")
-    with _cache_lock:
-        _cache[cache_key] = result
-        _cache.move_to_end(cache_key)
-        while len(_cache) > CACHE_MAX_ENTRIES:
-            _cache.popitem(last=False)
+    weight = _retained_weight(result)
+    if weight <= CACHE_MAX_RESULT_WEIGHT_BYTES:
+        global _cache_total_weight
+        with _cache_lock:
+            concurrent = _cache.get(cache_key)
+            if concurrent is not None:
+                _cache.move_to_end(cache_key)
+                return concurrent[0]
+            _cache[cache_key] = (result, weight)
+            _cache_total_weight += weight
+            _cache.move_to_end(cache_key)
+            while (
+                len(_cache) > CACHE_MAX_ENTRIES
+                or _cache_total_weight > CACHE_MAX_TOTAL_WEIGHT_BYTES
+            ):
+                _old_key, (_old_result, old_weight) = _cache.popitem(last=False)
+                _cache_total_weight -= old_weight
     return result
 
 

@@ -1,29 +1,36 @@
 # Phase 2 restriction-analysis benchmark and binding limits
 
-Run on 2026-08-31 with CPython 3.12 / Biopython 1.87 on Linux x86_64, AMD Ryzen Threadripper 9960X. The benchmark driver was kept under `/tmp`; no generated output is committed. Each fixture ran in a fresh process with circular topology, the pinned catalog, and RFC 8785 serialization. Peak memory is process maximum RSS (`ru_maxrss`).
+Re-run on 2026-08-31 with CPython 3.12 / Biopython 1.87 on Linux x86_64, AMD Ryzen Threadripper 9960X. The benchmark driver remained under `/tmp`; no generated benchmark artifact is committed. Every row ran in a fresh process against the pinned catalog with a linear molecule and RFC 8785 serialization. Peak memory is process maximum RSS (`ru_maxrss`).
 
-| Fixture | DNA bp | Admitted patterns | Scan work | Wall s | Peak RSS KiB | Occurrences | Events | JCS result bytes | Disposition |
+The scanner-job inventory was derived from the current catalog bytes, not from `str(enzyme.site)`: the complete `all_analysis_capable` scope has exactly **1,056** deduplicated forward plus distinct reverse-complement scanner jobs; `all_geometry_ready` has exactly **408**. Palindromic reverse jobs and duplicate grouped-pattern consumers do not add scanner jobs.
+
+| Fixture | DNA bp | Actual scan jobs | Charged work | Wall s | Peak RSS KiB | Occurrences | Events | JCS result bytes | Disposition |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 5 Mb explicit `BsaI`, no-site `A` source | 5,000,000 | 1 | 5,000,000 | 2.054200 | 81,552 | 0 | 0 | 1,022 | complete |
-| largest admitted full geometry-ready scope, no-site `A` source | 342,465 | 292 | 99,999,780 | 24.449547 | 68,364 | 0 | 0 | 199,242 | complete |
-| worst-case short motif, `DpnI` over repeated `GATC` | 100,004 | 1 | 100,004 | 0.019893 | 68,296 | 10,902 observed before stop | 10,902 projected | — | bounded before append by conservative response budget |
-| two-event `BcgI` | 54 | 1 | 54 | 0.000477 | 68,220 | 1 | 2 | 3,761 | complete |
-| ambiguous `N` source with explicit `EcoRI` | 5,000 | 1 | 5,000 | 0.705386 | 110,184 | 5,000 possible | 5,000 | 8,118,930 | complete |
+| largest admitted explicit `BsaI`; repeated `GGTCTA` forces full-width forward near-misses | 2,666,666 | 2 | 31,999,932 | 1.409210 | 74,392 | 0 | 0 | 2,055 | complete |
+| largest admitted full geometry-ready scope; no-site `A` source | 11,845 | 408 | 31,999,699 | 1.032891 | 69,264 | 0 | 0 | 200,274 | complete |
+| largest admitted full analysis-capable scope; no-site `A` source | 4,452 | 1,056 | 31,994,922 | 1.026062 | 69,776 | 0 | 0 | 287,001 | complete |
+| two-event `BcgI` | 54 | 2 | 1,032 | 0.000654 | 69,748 | 1 | 2 | 4,794 | complete |
+| ambiguous `N` source with explicit `EcoRI` | 5,000 | 1 | 29,970 | 0.640293 | 109,352 | 4,995 possible | 4,995 | 8,111,844 | complete; retained weight 12,663,084 bytes, so cache bypassed |
 
-## Selected limits
+All rows carried resource-policy SHA-256 `94d0ab410dec1f2510e3b13f0434cc1561ec133f8c042e4e8c76ec32ba647e64`.
 
-The evidence supports the following published, machine-readable bounds:
+## Selected limits and exact semantics
 
-- inline sequence: **5,000,000 bp**;
+- inline sequence: **5,000,000 bp** (subject independently to charged scan work);
 - explicit enzymes: **256**;
 - nonoverlapping regions: **128**;
-- catalog-wide forward recognition patterns: **619** (the geometry-ready scope has **292**);
-- pre-scan work: **100,000,000 source-bp × forward-pattern units**;
+- actual scanner jobs: **1,056**, exactly the catalog-wide deduplicated forward plus distinct reverse-complement set;
+- charged scan work: **32,000,000 motif comparisons** under `candidate-starts-times-motif-width` version `1.0.0`;
 - returned occurrences: **25,000**;
 - returned cleavage events: **50,000**;
 - encoded response: **32 MiB**;
-- immutable cache: **32 entries**.
+- CPU worker concurrency: **2**, with no queue (`reject_when_all_workers_busy`) and a **60 s** request wait timeout;
+- cache: **32 entries**, **64 MiB** total retained-object weight, and **8 MiB** per result.
 
-Admission computes source length × unique forward patterns before any scan. Thus a 5 Mb source remains admitted for a small explicit scope, while 5 Mb × 292 `all_geometry_ready` fails before scanning. Scanning yields matches incrementally. Before retaining each raw occurrence, the implementation enforces the occurrence cap, the record's event cardinality, and a conservative encoded-response budget (2,048 bytes per occurrence plus 1,024 bytes per event and a 64 KiB envelope). It constructs Pydantic occurrence/event models only after collection has remained within those bounds. Final RFC 8785 serialization remains a backstop.
+For each admitted scanner job with motif width `m` and molecule length `L`, charged work is `candidate_starts × m`. Linear candidate starts are `max(L-m+1, 0)`. Circular jobs use `L` starts when `m <= L`; when `m > L`, they charge zero scan work and produce the typed `recognition_motif_longer_than_molecule` limitation without calling the scanner. Admission and execution consume the same immutable deduplicated job plan.
 
-The 32 MiB limit is intentionally above the observed 8.12 MiB ambiguous-input result and below an unbounded worst-case expansion. The conservative incremental budget stopped the short-motif fixture after 10,902 yielded matches without constructing result models. The full 292-pattern boundary completed in 24.45 seconds and the admitted 5 Mb explicit boundary completed in 2.05 seconds on the recorded host.
+The former nominal 100,000,000 source-bp × forward-pattern policy was removed: it omitted reverse jobs and motif width and admitted a 24.45 s geometry-wide boundary. The 32,000,000 comparison bound preserves a multi-megabase explicit Type IIS lane while bringing both catalog-wide measured boundaries to about one second on the recorded host.
+
+The worker lane is process-wide and fixed at two threads. A request is rejected with `analysis_busy` when both workers are occupied. Timeout or caller cancellation does not cancel a running Python worker and does not release its capacity; capacity is released only by the worker future's completion callback.
+
+Cache weight uses `recursive-sys-getsizeof-object-graph` version `1.0.0`, counting each retained Python object identity once. LRU eviction enforces entry count and total weight together. A result above the per-result threshold bypasses caching. The complete policy receipt and digest are included in the request authority, inner analysis-result JCS hash, outer public result hash, and cache key.

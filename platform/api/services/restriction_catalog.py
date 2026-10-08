@@ -39,12 +39,23 @@ CURSOR_MAX_LENGTH = 4096
 ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH = 5_000_000
 ANALYSIS_EXPLICIT_ENZYME_MAXIMUM = 256
 ANALYSIS_REGION_MAXIMUM = 128
-ANALYSIS_PATTERN_MAXIMUM = 619
-ANALYSIS_SCAN_WORK_MAXIMUM = 100_000_000
+ANALYSIS_PATTERN_MAXIMUM = 1_056
+ANALYSIS_SCAN_WORK_MAXIMUM = 32_000_000
 ANALYSIS_OCCURRENCE_MAXIMUM = 25_000
 ANALYSIS_EVENT_MAXIMUM = 50_000
 ANALYSIS_RESPONSE_MAXIMUM_BYTES = 32 * 1024 * 1024
 ANALYSIS_CACHE_MAXIMUM_ENTRIES = 32
+ANALYSIS_CACHE_MAXIMUM_TOTAL_WEIGHT_BYTES = 64 * 1024 * 1024
+ANALYSIS_CACHE_MAXIMUM_RESULT_WEIGHT_BYTES = 8 * 1024 * 1024
+ANALYSIS_WORKER_CONCURRENCY = 2
+ANALYSIS_TIMEOUT_SECONDS = 60
+ANALYSIS_QUEUE_POLICY = "reject_when_all_workers_busy"
+ANALYSIS_CANCELLATION_POLICY = "worker_continues_and_capacity_is_retained_until_completion"
+ANALYSIS_SCAN_WORK_FORMULA_ID = "candidate-starts-times-motif-width"
+ANALYSIS_SCAN_WORK_FORMULA_VERSION = "1.0.0"
+ANALYSIS_RESPONSE_BASE_BUDGET_BYTES = 64 * 1024
+ANALYSIS_RESPONSE_OCCURRENCE_BUDGET_BYTES = 2_048
+ANALYSIS_RESPONSE_EVENT_BUDGET_BYTES = 1_024
 SOURCE_YEAR = 2024
 SOURCE_RELEASE = "REBASE_EMBOSS_404_2024"
 SOURCE_DICTIONARY_SHA256 = "2a79099295dbad6061ea67a11e053787c591fcb2eb10fc8c0f89ead908dfa02b"
@@ -526,12 +537,42 @@ class CatalogAuthority:
                         "analysis_inline_sequence_max_length": ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH,
                         "analysis_explicit_enzyme_maximum": ANALYSIS_EXPLICIT_ENZYME_MAXIMUM,
                         "analysis_region_maximum": ANALYSIS_REGION_MAXIMUM,
-                        "analysis_pattern_maximum": ANALYSIS_PATTERN_MAXIMUM,
+                        "analysis_scan_pattern_maximum": ANALYSIS_PATTERN_MAXIMUM,
                         "analysis_scan_work_maximum": ANALYSIS_SCAN_WORK_MAXIMUM,
                         "analysis_occurrence_maximum": ANALYSIS_OCCURRENCE_MAXIMUM,
                         "analysis_event_maximum": ANALYSIS_EVENT_MAXIMUM,
                         "analysis_response_maximum_bytes": ANALYSIS_RESPONSE_MAXIMUM_BYTES,
                         "analysis_cache_maximum_entries": ANALYSIS_CACHE_MAXIMUM_ENTRIES,
+                        "analysis_cache_maximum_total_weight_bytes": ANALYSIS_CACHE_MAXIMUM_TOTAL_WEIGHT_BYTES,
+                        "analysis_cache_maximum_result_weight_bytes": ANALYSIS_CACHE_MAXIMUM_RESULT_WEIGHT_BYTES,
+                    }
+                ),
+                "resource_policy": MappingProxyType(
+                    {
+                        "schema": "bms.molbio.restriction-analysis-resource-policy.v1",
+                        "policy_version": "1.0.0",
+                        "scan_work_formula_id": ANALYSIS_SCAN_WORK_FORMULA_ID,
+                        "scan_work_formula_version": ANALYSIS_SCAN_WORK_FORMULA_VERSION,
+                        "sequence_length_maximum": ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH,
+                        "explicit_enzyme_maximum": ANALYSIS_EXPLICIT_ENZYME_MAXIMUM,
+                        "region_maximum": ANALYSIS_REGION_MAXIMUM,
+                        "actual_scan_pattern_maximum": ANALYSIS_PATTERN_MAXIMUM,
+                        "scan_work_maximum": ANALYSIS_SCAN_WORK_MAXIMUM,
+                        "occurrence_maximum": ANALYSIS_OCCURRENCE_MAXIMUM,
+                        "event_maximum": ANALYSIS_EVENT_MAXIMUM,
+                        "response_maximum_bytes": ANALYSIS_RESPONSE_MAXIMUM_BYTES,
+                        "response_base_budget_bytes": ANALYSIS_RESPONSE_BASE_BUDGET_BYTES,
+                        "response_occurrence_budget_bytes": ANALYSIS_RESPONSE_OCCURRENCE_BUDGET_BYTES,
+                        "response_event_budget_bytes": ANALYSIS_RESPONSE_EVENT_BUDGET_BYTES,
+                        "worker_concurrency": ANALYSIS_WORKER_CONCURRENCY,
+                        "queue_policy": ANALYSIS_QUEUE_POLICY,
+                        "timeout_seconds": ANALYSIS_TIMEOUT_SECONDS,
+                        "cancellation_policy": ANALYSIS_CANCELLATION_POLICY,
+                        "cache_entry_maximum": ANALYSIS_CACHE_MAXIMUM_ENTRIES,
+                        "cache_total_weight_maximum_bytes": ANALYSIS_CACHE_MAXIMUM_TOTAL_WEIGHT_BYTES,
+                        "cache_result_weight_maximum_bytes": ANALYSIS_CACHE_MAXIMUM_RESULT_WEIGHT_BYTES,
+                        "cache_weight_formula_id": "recursive-sys-getsizeof-object-graph",
+                        "cache_weight_formula_version": "1.0.0",
                     }
                 ),
                 "analysis_enabled": True,
