@@ -26,6 +26,7 @@ class RobotClientProtocol(Protocol):
         *,
         json_data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]: ...
 
     async def close(self) -> None: ...
@@ -147,6 +148,33 @@ class BioXpConnectionService:
                 self._clear_observation()
             await self._probe_locked()
         return self.snapshot()
+
+    async def request_active(
+        self,
+        route_name: str,
+        *,
+        expected_generation: int,
+        require_fresh: bool = True,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Dispatch against one generation while excluding disconnect/rebind."""
+        async with self._transition_lock:
+            if self._client is None or self._active_target is None:
+                raise ConnectionStateError("BioXP saved profile is not actively connected")
+            if self._generation != expected_generation:
+                raise ConnectionStateError("Expected connection generation does not match the active generation")
+            if require_fresh and self.snapshot().observation_fresh is not True:
+                raise ConnectionStateError("A fresh process-local BioXP status observation is required")
+            kwargs: dict[str, Any] = {}
+            if json_data is not None:
+                kwargs["json_data"] = json_data
+            if params is not None:
+                kwargs["params"] = params
+            if path_params is not None:
+                kwargs["path_params"] = path_params
+            return await self._client.request(route_name, **kwargs)
 
     async def _probe_locked(self) -> None:
         assert self._client is not None

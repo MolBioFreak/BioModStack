@@ -112,7 +112,9 @@ export function BioXpCockpit() {
     const lifecyclePlanAvailable = mutationAccessEnabled
         && controlPlaneFresh
         && lifecycleContract?.plan_available === true
-        && lifecycleContract?.source_authority_verified === true
+        && lifecycleContract?.evidence_lock_verified === true
+        && lifecycleContract?.source_registry_identity_verified === true
+        && lifecycleContract?.machine_configuration_verified === true
         && connection?.generation !== undefined;
     const lifecyclePlanBlockedReason = fullLifecycleContract.isError
         ? bioXpErrorText(fullLifecycleContract.error)
@@ -120,8 +122,10 @@ export function BioXpCockpit() {
             ? `BMS mutation gate ${mutationAccessSetting} is disabled.`
             : !controlPlaneFresh
                 ? 'The process-local BioXP control plane is not fresh.'
-                : lifecycleContract?.source_authority_verified !== true
-                    ? 'The robot has not verified the frozen OEM source authority.'
+                : lifecycleContract?.evidence_lock_verified !== true
+                    || lifecycleContract?.source_registry_identity_verified !== true
+                    || lifecycleContract?.machine_configuration_verified !== true
+                    ? 'The robot has not verified the selected evidence lock, source registry identity, and machine configuration.'
                     : lifecycleContract?.plan_blockers?.join('; ') || 'The robot has not admitted lifecycle planning.';
     const protocol: BioXpProtocol = {
         name: protocolName,
@@ -192,10 +196,13 @@ export function BioXpCockpit() {
     };
 
     const cancelCurrentLifecyclePlan = () => {
-        if (!lifecycleRun || !connection) return;
+        if (!lifecycleRun || !connection || !lifecycleContract) return;
         cancelFullLifecycle.mutate({
             runId: lifecycleRun.run_id,
             generation: connection.generation,
+            machineSerial: lifecycleContract.machine_serial,
+            registrySha256: lifecycleContract.registry_sha256,
+            evidenceLockSha256: lifecycleContract.evidence_lock_sha256,
         });
     };
 
@@ -285,7 +292,9 @@ export function BioXpCockpit() {
                             <div><dt className="text-slate-500">plan_available</dt><dd>{String(lifecycleContract.plan_available)}</dd></div>
                             <div><dt className="text-slate-500">live_creation_enabled</dt><dd>{String(lifecycleContract.live_creation_enabled)}</dd></div>
                             <div><dt className="text-slate-500">commissioned</dt><dd>{String(lifecycleContract.physical_commissioning_complete)}</dd></div>
-                            <div><dt className="text-slate-500">source_authority_verified</dt><dd>{String(lifecycleContract.source_authority_verified)}</dd></div>
+                            <div><dt className="text-slate-500">evidence_lock_verified</dt><dd>{String(lifecycleContract.evidence_lock_verified)}</dd></div>
+                            <div><dt className="text-slate-500">source_registry_identity_verified</dt><dd>{String(lifecycleContract.source_registry_identity_verified)}</dd></div>
+                            <div><dt className="text-slate-500">machine_configuration_verified</dt><dd>{String(lifecycleContract.machine_configuration_verified)}</dd></div>
                             <div className="sm:col-span-2 lg:col-span-4"><dt className="text-slate-500">registry_sha256</dt><dd className="break-all font-mono">{lifecycleContract.registry_sha256}</dd></div>
                             <div className="sm:col-span-2 lg:col-span-4"><dt className="text-slate-500">evidence_lock_sha256</dt><dd className="break-all font-mono">{lifecycleContract.evidence_lock_sha256}</dd></div>
                         </dl>
@@ -323,12 +332,12 @@ export function BioXpCockpit() {
                             >Cancel dry-run record</button>
                         </div>
                         <p className="mt-2 text-xs text-slate-400">
-                            physical_command_sent={String(lifecycleRun.physical_command_sent)} · physical_effect_verified={String(lifecycleRun.physical_effect_verified)}
+                            physical_motion_commanded={String(lifecycleRun.physical_motion_commanded)} · physical_effect_verified={String(lifecycleRun.physical_effect_verified)}
                         </p>
                         <div className="mt-3 max-h-[32rem] space-y-2 overflow-auto">
-                            {lifecycleRun.stages.map((stage) => (
-                                <article key={`${stage.stage_index}-${stage.stage_id}`} className="rounded border border-slate-800 p-3 text-xs">
-                                    <div className="flex flex-wrap justify-between gap-2"><span className="font-mono text-violet-200">{stage.stage_index}. {stage.stage_id}</span><span>{stage.state}</span></div>
+                            {lifecycleRun.stages.map((stage, stageIndex) => (
+                                <article key={`${stageIndex}-${stage.stage_id}`} className="rounded border border-slate-800 p-3 text-xs">
+                                    <div className="flex flex-wrap justify-between gap-2"><span className="font-mono text-violet-200">{stageIndex + 1}. {stage.stage_id}</span><span>{stage.status}</span></div>
                                     <p className="mt-1 text-slate-400">{stage.source_anchor}</p>
                                     <p className="mt-1">would_command_hardware={String(stage.would_command_hardware)} · would_command_physical_motion={String(stage.would_command_physical_motion)}</p>
                                     {stage.execution_semantics && <p className="text-slate-400">execution_semantics={stage.execution_semantics}</p>}
