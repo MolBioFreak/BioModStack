@@ -276,6 +276,13 @@ def _is_runtime_image(path: Path, relative: str) -> bool:
     return relative.lower().endswith(".sif") and path.is_file()
 
 
+def _native_design_analysis_only(params: dict[str, Any]) -> bool:
+    return (all(params.get(key) is True for key in (
+        'skip_rfd', 'skip_rfd_seq', 'skip_rfd_seq_pred'))
+        and params.get('run_rfd_only') is not True
+        and params.get('diffusion_method') != 'boltzgen')
+
+
 def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tuple[Path, str]]:
     container_root = get_container_dir().resolve()
     weights_root = get_weights_root().resolve()
@@ -316,6 +323,8 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
     # filter image. Helpers themselves travel in the full committed source tree.
     if normalized_model in {"boltzgen", "boltzgen_child"} or params.get("diffusion_method") == "boltzgen":
         container_names.update({"boltzgen.sif", "pyrosetta_tools.sif"})
+    if _native_design_analysis_only(params):
+        container_names.add('pyrosetta_tools.sif')
     if normalized_model == "boltz_cp_experimental" and not params.get("bcp_container_path"):
         container_names.add("fold-cp.sif")
     if normalized_model == "conformational_mapping":
@@ -502,7 +511,8 @@ def compile_remote_dependencies(model_id: str, mode: str, command: list[str]) ->
             params[value[2:]] = {"true": True, "false": False}.get(raw, raw) if isinstance(raw, str) else raw
     if ('protein_design.nf' in selected_workflows
             and model_id.lower() not in {'boltzgen', 'boltzgen_child'}
-            and params.get('diffusion_method') != 'boltzgen'):
+            and params.get('diffusion_method') != 'boltzgen'
+            and not _native_design_analysis_only(params)):
         raise RemoteBundleError(
             'Native protein-design components are implemented, but this non-BoltzGen '
             'parent still lacks a complete remote scientific-runtime dependency binding. '
