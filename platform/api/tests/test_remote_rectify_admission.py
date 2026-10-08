@@ -14,6 +14,98 @@ from routers import jobs
 from tests.test_msa_bundle_integration import offline_bundle
 
 
+@pytest.fixture
+def remote_project_store(monkeypatch, tmp_path):
+    from tests import test_md_typed_launch as typed
+    from tests.test_md_job_v2_contract import _catalog
+    catalog = _catalog()
+    view = catalog.view()
+    profile = view.get_profile('gmx_amber99sb_ildn_tip3p_smoke_v1')
+    assert profile is not None
+    original = typed._intent_payload
+    monkeypatch.setattr(typed, '_Catalog', lambda: catalog)
+    monkeypatch.setattr(typed, '_profile', lambda: profile)
+    monkeypatch.setattr(typed, '_intent_payload', lambda: {**original(),
+        'chemistry_profile_id': profile['id'], 'chemistry_profile_sha256': profile['profile_sha256'],
+        'catalog_digest': view.catalog_digest})
+    # Existing real Project DB producer, now with its full catalog rather than
+    # the old preview-only profile double (which lacks native preparation).
+    for store in typed.project_context_preview_store.__wrapped__(monkeypatch, tmp_path):
+        import asyncio, json, hashlib
+        from experiment_models import (ExperimentRevision, ExperimentWorkflowPreparation,
+            ExperimentValidation, ExperimentLaunchContext, ExperimentRunGroup)
+        canonical = lambda value: json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+        sha = lambda value: hashlib.sha256(value.encode()).hexdigest()
+        async def qualify_catalog_authority():
+            async with store['experiment_sessions']() as session:
+                ids = store['ids']
+                revision = await session.get(ExperimentRevision, ids['workflow_revision'])
+                preparation = await session.get(ExperimentWorkflowPreparation, ids['preparation'])
+                validation = await session.get(ExperimentValidation, ids['validation'])
+                context = await session.get(ExperimentLaunchContext, ids['context'])
+                group = await session.get(ExperimentRunGroup, ids['run_group'])
+                workflow = json.loads(revision.canonical_payload)
+                workflow['scheduler']['params'].update(chemistry_profile_id=profile['id'],
+                    chemistry_profile_sha256=profile['profile_sha256'], catalog_digest=view.catalog_digest)
+                revision.canonical_payload = canonical(workflow)
+                revision.payload_sha256 = sha(revision.canonical_payload)
+                normalized = json.loads(preparation.normalized_request_json)
+                normalized['workflow'] = workflow
+                preparation.normalized_request_json = canonical(normalized)
+                preparation.normalized_request_sha256 = sha(preparation.normalized_request_json)
+                preparation.scheduler_payload_json = canonical(workflow['scheduler'])
+                receipt = json.loads(validation.receipt_json)
+                receipt['normalized_request_sha256'] = preparation.normalized_request_sha256
+                preparation.validation_receipt_json = validation.receipt_json = canonical(receipt)
+                validation.receipt_sha256 = sha(validation.receipt_json)
+                context.normalized_request_sha256 = group.request_sha256 = preparation.normalized_request_sha256
+                context.validation_receipt_sha256 = validation.receipt_sha256
+                await session.commit()
+        asyncio.run(qualify_catalog_authority())
+        yield store
+
+
+def test_remote_typed_project_uses_validated_approval_handoff(remote_project_store, monkeypatch):
+    import asyncio
+    from component_runtime import SourceIdentity
+    from services.remote_execution import bundle
+    from services.md import launch_contract
+    from tests.test_md_typed_launch import _Catalog, _intent_payload
+    store = remote_project_store
+    monkeypatch.setenv('BMS_FEATURE_MOLECULAR_DYNAMICS', '1')
+    monkeypatch.setattr(jobs, '_raise_if_workflow_launches_disabled', lambda *_: None)
+    monkeypatch.setattr(launch_contract, 'get_chemistry_catalog', lambda: _Catalog())
+    source = SourceIdentity('1' * 40, '2' * 40)
+    monkeypatch.setattr(SourceIdentity, 'from_checkout', lambda *_: source)
+    monkeypatch.setattr(bundle, 'current_source_identity', lambda: (source.revision, source.tree))
+    async def target():
+        async with store['core_sessions']() as session:
+            session.add(ExecutionTarget(id='vast:project', provider='vast', provider_instance_id='project',
+                active=True, state='ready', capabilities={'gpu_count': 1},
+                provider_metadata={'inventory': {'checked_at': datetime.utcnow().isoformat(),
+                    'status': 'complete', 'present': True, 'running': True}}))
+            await session.commit()
+    asyncio.run(target())
+    intent = {**_intent_payload(), 'name': 'Typed-MD-launch', 'execution_target_id': 'vast:project',
+        'launch_context_id': store['ids']['context'],
+        'source_ref': {'kind': 'design', 'id': store['expected_design_id']}}
+    client = store['client']
+    headers = {'x-bms-launch-context-id': store['ids']['context']}
+    preview = client.post('/api/molecular-dynamics/launch-preview', headers=headers, json={
+        'schema_version': 'bms.md.launch-preview-request.v1', 'intent': intent})
+    assert preview.status_code == 200, preview.text
+    launched = client.post('/api/molecular-dynamics/launch', headers=headers, json={
+        'schema_version': 'bms.md.launch-request.v1', 'intent': intent,
+        'preview_digest': preview.json()['preview_digest']})
+    assert launched.status_code == 201, launched.text
+    async def verify():
+        async with store['core_sessions']() as session:
+            job = await session.get(Job, launched.json()['id'])
+            assert job.execution_target_id == 'vast:project'
+            assert job.provenance['execution_plan_approval']['approval_digest'] == preview.json()['preview_digest']
+    asyncio.run(verify())
+
+
 def test_preparation_rebind_keeps_approved_scientific_identity(offline_bundle):
     from pathlib import Path
     from schemas import JobCreate
@@ -83,6 +175,9 @@ async def empty(factory):
 async def test_missing_stale_and_valid_direct_approval(admission):
     client, factory = admission
     payload = request()
+    mismatch = await client.post('/jobs/execution-plan/preview', json={**payload, 'launch_context_id': 'unbound'})
+    assert mismatch.status_code == 409, mismatch.text
+    await empty(factory)
     response = await client.post('/jobs', json=payload)
     assert response.status_code == 409, response.text
     await empty(factory)
@@ -227,6 +322,29 @@ async def test_md_native_preview_binds_shared_plan_without_second_approval(admis
         assert successor.parent_job_id is None
         assert successor.execution_target_id == intent['execution_target_id']
         assert successor.provenance['execution_plan_approval']['approval_digest'] == preview['preview_digest']
+
+    # Faithful native result fixture; actual retry route and canonical producer.
+    import hashlib, json
+    from pathlib import Path
+    from routers import md_results
+    from tests.test_molecular_dynamics_orchestration import _write_completed_replica
+    async with factory() as session:
+        parent = await session.get(Job, job_id)
+        root = Path(parent.output_dir)
+        monkeypatch.setenv('BMS_MD_RESULT_ROOT', str(root.parent))
+        manifest, sha = _write_completed_replica(root, job_id)
+        accepted_set = hashlib.sha256(json.dumps([(0, sha)], separators=(',', ':')).encode()).hexdigest()
+        parent.provenance = {**parent.provenance, 'md': {
+            'dynamics_state': 'completed', 'analysis_state': 'failed',
+            'aggregate_manifest_sha256': hashlib.sha256((root / 'manifest.json').read_bytes()).hexdigest(),
+            'replica_manifest_set_sha256': accepted_set}}
+        await session.commit()
+        retry = await md_results.retry_md_analysis(job_id, session)
+        child = await session.get(Job, retry['created_child_ids'][0])
+        assert child.mode == 'analyze' and child.parent_job_id == job_id
+        assert child.execution_target_id == intent['execution_target_id']
+        assert child.provenance['execution_plan_approval']['approval_digest'] == preview['preview_digest']
+        assert hashlib.sha256(manifest.read_bytes()).hexdigest() == sha
 
 
 @pytest.mark.asyncio

@@ -5785,8 +5785,23 @@ def _execution_plan_preview(job_data: JobCreate) -> dict[str, Any]:
 
 
 @router.post('/execution-plan/preview', response_model=JobExecutionPlanPreview)
-async def preview_job_execution_plan(job_data: JobCreate, session: AsyncSession = Depends(get_session)):
+async def preview_job_execution_plan(
+    job_data: JobCreate, session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
+):
     """Browser and agent use the exact same typed, nonexecuting preview."""
+    job_data = job_data.model_copy(deep=True)
+    if job_data.launch_context_id:
+        if current_launch_context_id.get() != job_data.launch_context_id:
+            raise HTTPException(status_code=409, detail='Launch context header and body must match')
+        try:
+            context = await resolve_launch_context(experiment_session, job_data.launch_context_id)
+            job_data.params = await validate_bound_job_request(
+                experiment_session, context, job_name=job_data.name,
+                model_id=job_data.model_id, mode=job_data.mode,
+                params=job_data.params, pinned_gpu=job_data.pinned_gpu)
+        except LaunchContextError as exc:
+            raise _launch_context_http_error(exc) from exc
     from services.remote_execution.targets import target_eligible
     if job_data.execution_target_id:
         target = await session.get(ExecutionTarget, job_data.execution_target_id, populate_existing=True)
@@ -5899,7 +5914,10 @@ async def _create_job(
         else:
             if not job_data.execution_plan_approval:
                 raise HTTPException(status_code=409, detail='Remote submission requires explicit execution-plan preview approval')
-            execution_preview = await preview_job_execution_plan(approval_request, session)
+            try:
+                execution_preview = await asyncio.to_thread(_execution_plan_preview, approval_request)
+            except (ValueError, OSError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not execution_preview['admissible']:
             raise HTTPException(status_code=422, detail={'message': 'Selected execution plan is unsupported', 'blockers': execution_preview['blockers']})
         if (not isinstance(_approved_execution_plan, ApprovedExecutionPlan)
@@ -6878,8 +6896,16 @@ async def _validated_typed_md_project_params(
     preview = deepcopy(dict(adapter.preview))
     md_job_spec = deepcopy(dict(adapter.md_job_spec))
     supplied_params = dict(job_data.params or {})
-    if set(intent) != _TYPED_MD_INTENT_AUTHORITY_FIELDS | {"name", "launch_context_id"}:
+    if set(intent) != _TYPED_MD_INTENT_AUTHORITY_FIELDS | {
+            "name", "launch_context_id", "execution_target_id", "execution_policy"}:
         raise _typed_md_adapter_error("Typed MD intent authority is not the sealed v1 schema.")
+    if (
+        intent.get("execution_target_id") != job_data.execution_target_id
+        or intent.get("execution_policy") != job_data.execution_policy.model_dump(mode='json')
+        or preview.get("execution_target_id") != intent.get("execution_target_id")
+        or preview.get("execution_policy") != intent.get("execution_policy")
+    ):
+        raise _typed_md_adapter_error('Typed MD placement or execution policy changed after preview.')
     if (
         intent.get("schema_version") != "bms.md.launch-intent.v1"
         or intent.get("launch_context_id") != context.launch_context_id
@@ -7214,6 +7240,10 @@ async def create_job(
                 pinned_gpu=job_data.pinned_gpu,
             )
         else:
+            from component_runtime import canonical_bytes
+            if isinstance(_approved_execution_plan, ApprovedExecutionPlan):
+                if canonical_bytes(job_data.model_dump(mode='json')) != _approved_execution_plan.request_json:
+                    raise _typed_md_adapter_error('Trusted remote MD request changed before Project binding.')
             job_data.params = await _validated_typed_md_project_params(
                 experiment_session=experiment_session,
                 context=preview_context,
@@ -7221,6 +7251,12 @@ async def create_job(
                 adapter=typed_md_project_launch,
                 md_input_resolver=_md_input_resolver,
             )
+            if isinstance(_approved_execution_plan, ApprovedExecutionPlan):
+                # The existing adapter verified identical source/profile/science;
+                # only its server-owned Project materialization fields were added.
+                _approved_execution_plan = ApprovedExecutionPlan(
+                    canonical_bytes(job_data.model_dump(mode='json')),
+                    _approved_execution_plan.preview_json)
         if _preallocated_job_id:
             existing_job = await session.get(Job, str(_preallocated_job_id))
             if existing_job is not None:
