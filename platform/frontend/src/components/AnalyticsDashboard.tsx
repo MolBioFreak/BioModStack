@@ -5,7 +5,7 @@
  * with 2 custom chart builders (2D and 3D) at the bottom.
  */
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, PlotSelectionEvent, PlotMouseEvent } from 'plotly.js';
@@ -94,11 +94,35 @@ interface ChartCardProps {
     hasData?: boolean;
     isHidden?: boolean;
     onToggleHidden?: () => void;
-    onToggleExpanded?: () => void;
     children: React.ReactNode;
 }
 
-function ChartCard({ title, hasData = true, isHidden = false, onToggleHidden, onToggleExpanded, children }: ChartCardProps) {
+function ChartCard({ title, hasData = true, isHidden = false, onToggleHidden, children }: ChartCardProps) {
+    const cardRef = useRef<HTMLDivElement>(null);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+
+    // Toggle native browser fullscreen
+    const toggleFullscreen = useCallback(() => {
+        if (!cardRef.current) return;
+
+        if (!document.fullscreenElement) {
+            cardRef.current.requestFullscreen().catch(err => {
+                console.error('Failed to enter fullscreen:', err);
+            });
+        } else {
+            document.exitFullscreen();
+        }
+    }, []);
+
+    // Listen to fullscreen changes
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            setIsFullscreen(!!document.fullscreenElement);
+        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    }, []);
+
     // Eye icon (visible)
     const EyeIcon = () => (
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -122,35 +146,40 @@ function ChartCard({ title, hasData = true, isHidden = false, onToggleHidden, on
     );
 
     return (
-        <div className={`bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden transition-all ${isHidden ? 'opacity-60' : ''} ${!hasData ? 'border-amber-700/30' : ''}`}>
+        <div
+            ref={cardRef}
+            className={`bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden transition-all ${isHidden ? 'opacity-60' : ''} ${!hasData ? 'border-amber-700/30' : ''} ${isFullscreen ? 'fixed inset-0 z-50 bg-slate-900 rounded-none' : ''}`}
+        >
             <div className="px-3 py-2 bg-slate-800/80 border-b border-slate-700/50 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-medium text-slate-300">{title}</h3>
+                    <h3 className={`font-medium text-slate-300 ${isFullscreen ? 'text-lg' : 'text-sm'}`}>{title}</h3>
                     {!hasData && (
                         <span className="px-1.5 py-0.5 text-xs bg-amber-900/50 text-amber-400 rounded">No data</span>
                     )}
                 </div>
                 <div className="flex items-center gap-1">
-                    <button
-                        onClick={onToggleHidden}
-                        className="p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-slate-200 transition-colors"
-                        title={isHidden ? "Show chart" : "Hide chart"}
-                    >
-                        {isHidden ? <EyeOffIcon /> : <EyeIcon />}
-                    </button>
+                    {!isFullscreen && (
+                        <button
+                            onClick={onToggleHidden}
+                            className="p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-slate-200 transition-colors"
+                            title={isHidden ? "Show chart" : "Hide chart"}
+                        >
+                            {isHidden ? <EyeOffIcon /> : <EyeIcon />}
+                        </button>
+                    )}
                     {hasData && (
                         <button
-                            onClick={onToggleExpanded}
-                            className="p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-slate-200 transition-colors"
-                            title="Expand to fullscreen"
+                            onClick={toggleFullscreen}
+                            className={`p-1.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-slate-200 transition-colors ${isFullscreen ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30' : ''}`}
+                            title={isFullscreen ? "Exit fullscreen" : "Expand to fullscreen"}
                         >
-                            <ExpandIcon />
+                            {isFullscreen ? <span className="text-sm">✕</span> : <ExpandIcon />}
                         </button>
                     )}
                 </div>
             </div>
             {!isHidden && (
-                <div className="p-2">
+                <div className={`p-2 ${isFullscreen ? 'h-[calc(100vh-48px)]' : ''}`}>
                     {children}
                 </div>
             )}
@@ -922,7 +951,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                         hasData={hasScatterData('plddt_overall', 'pae_overall')}
                         isHidden={hiddenCharts.has('plddt-pae')}
                         onToggleHidden={() => toggleHidden('plddt-pae')}
-                        onToggleExpanded={() => setExpandedChart('plddt-pae')}
+                        
                     >
                         <Plot data={makeScatter('plddt_overall', 'pae_overall', 'iptm')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
                     </ChartCard>
@@ -934,7 +963,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                         hasData={hasScatterData('conf_score', 'iptm')}
                         isHidden={hiddenCharts.has('conf-iptm')}
                         onToggleHidden={() => toggleHidden('conf-iptm')}
-                        onToggleExpanded={() => setExpandedChart('conf-iptm')}
+                        
                     >
                         <Plot data={makeScatter('conf_score', 'iptm', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
                     </ChartCard>
@@ -946,7 +975,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                         hasData={hasScatterData('affinity_score', 'binder_probability')}
                         isHidden={hiddenCharts.has('affinity-binder')}
                         onToggleHidden={() => toggleHidden('affinity-binder')}
-                        onToggleExpanded={() => setExpandedChart('affinity-binder')}
+                        
                     >
                         <Plot data={makeScatter('affinity_score', 'binder_probability', 'plddt_overall')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
                     </ChartCard>
@@ -958,7 +987,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                         hasData={hasScatterData('plddt_overall', 'rog')}
                         isHidden={hiddenCharts.has('plddt-rog')}
                         onToggleHidden={() => toggleHidden('plddt-rog')}
-                        onToggleExpanded={() => setExpandedChart('plddt-rog')}
+                        
                     >
                         <Plot data={makeScatter('plddt_overall', 'rog', 'mpnn_score')} layout={miniLayout()} config={miniConfig} style={scatterStyle} onSelected={handlePlotlySelect} />
                     </ChartCard>
@@ -970,7 +999,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={hasHistogramData('plddt_overall')}
                     isHidden={hiddenCharts.has('hist-plddt')}
                     onToggleHidden={() => toggleHidden('hist-plddt')}
-                    onToggleExpanded={() => setExpandedChart('hist-plddt')}
+                    
                 >
                     <Plot data={makeHistogram('plddt_overall', 0)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
@@ -980,7 +1009,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={hasHistogramData('pae_overall')}
                     isHidden={hiddenCharts.has('hist-pae')}
                     onToggleHidden={() => toggleHidden('hist-pae')}
-                    onToggleExpanded={() => setExpandedChart('hist-pae')}
+                    
                 >
                     <Plot data={makeHistogram('pae_overall', 2)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
@@ -990,7 +1019,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={hasHistogramData('iptm')}
                     isHidden={hiddenCharts.has('hist-iptm')}
                     onToggleHidden={() => toggleHidden('hist-iptm')}
-                    onToggleExpanded={() => setExpandedChart('hist-iptm')}
+                    
                 >
                     <Plot data={makeHistogram('iptm', 4)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
@@ -1000,7 +1029,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={hasHistogramData('conf_score')}
                     isHidden={hiddenCharts.has('hist-conf')}
                     onToggleHidden={() => toggleHidden('hist-conf')}
-                    onToggleExpanded={() => setExpandedChart('hist-conf')}
+                    
                 >
                     <Plot data={makeHistogram('conf_score', 6)} layout={miniLayout()} config={miniConfig} style={chartStyle} />
                 </ChartCard>
@@ -1065,7 +1094,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={has3DData('plddt_overall', 'iptm', 'pae_overall')}
                     isHidden={hiddenCharts.has('3d-quality')}
                     onToggleHidden={() => toggleHidden('3d-quality')}
-                    onToggleExpanded={() => setExpandedChart('3d-quality')}
+                    
                 >
                     <Plot
                         data={make3DScatter('plddt_overall', 'iptm', 'pae_overall', 'conf_score')}
@@ -1081,7 +1110,7 @@ export function AnalyticsDashboard({ designs, jobName }: AnalyticsDashboardProps
                     hasData={has3DData('affinity_score', 'binder_probability', 'iptm')}
                     isHidden={hiddenCharts.has('3d-binding')}
                     onToggleHidden={() => toggleHidden('3d-binding')}
-                    onToggleExpanded={() => setExpandedChart('3d-binding')}
+                    
                 >
                     <Plot
                         data={make3DScatter('affinity_score', 'binder_probability', 'iptm', 'plddt_overall')}
