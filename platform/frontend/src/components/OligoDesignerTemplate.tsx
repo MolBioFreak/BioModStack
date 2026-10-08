@@ -137,26 +137,32 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     // Submit mutation
     const submitMutation = useMutation({
         mutationFn: async () => {
-            const jobParams = {
+            // Conform to JobCreate schema: { name, model_id, mode, params }
+            const jobPayload = {
+                name: designName || `oligo_${Date.now()}`,
+                model_id: 'oligo_design',  // Registered in platform/api/config/models/
                 mode: 'oligo_design',
-                design_name: designName || `oligo_${Date.now()}`,
-                rfdpoly_enabled: true,
-                rfdpoly_contigs: contigsString,
-                rfdpoly_polymer_chains: polymerChainsString,
-                rfdpoly_num_designs: numDesigns,
-                rfdpoly_diffusion_steps: QUALITY_PRESETS[qualityPreset].steps,
-                rfdpoly_checkpoint: checkpoint,
-                oligo_validate_boltz: validateWithBoltz,
-                oligo_min_plddt: minPlddt,
-                // Physics
-                openmm_enabled: physicsSettings.enabled,
-                openmm_compute_tier: physicsSettings.computeTier,
-                // Advanced
-                ...(temperature !== 1.0 && { rfdpoly_temperature: temperature }),
-                ...(seed !== null && { rfdpoly_seed: seed }),
+                params: {
+                    rfdpoly_enabled: true,
+                    rfdpoly_contigs: contigsString,
+                    rfdpoly_polymer_chains: polymerChainsString,
+                    rfdpoly_num_designs: numDesigns,
+                    rfdpoly_diffusion_steps: QUALITY_PRESETS[qualityPreset].steps,
+                    rfdpoly_checkpoint: checkpoint,
+                    oligo_validate_boltz: validateWithBoltz,
+                    oligo_min_plddt: minPlddt,
+                    // Physics refinement
+                    openmm_enabled: physicsSettings.enabled,
+                    openmm_compute_tier: physicsSettings.computeTier,
+                    // Map oligo thresholds to boltz params (Critical #6)
+                    boltz_min_plddt: minPlddt,
+                    // Advanced options
+                    ...(temperature !== 1.0 && { rfdpoly_temperature: temperature }),
+                    ...(seed !== null && { rfdpoly_seed: seed }),
+                }
             };
 
-            return api.submitJob(jobParams);
+            return api.submitJob(jobPayload);
         },
         onSuccess: (data) => {
             navigate(`/results/${data.job_id}`);
@@ -202,8 +208,8 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                             key={mode}
                             onClick={() => handleModeChange(mode)}
                             className={`p-4 rounded-lg border-2 transition-all text-left ${designMode === mode
-                                    ? 'border-emerald-500 bg-emerald-500/10'
-                                    : 'border-slate-600 hover:border-slate-500 bg-slate-700/50'
+                                ? 'border-emerald-500 bg-emerald-500/10'
+                                : 'border-slate-600 hover:border-slate-500 bg-slate-700/50'
                                 }`}
                         >
                             <div className="text-2xl mb-1">{info.icon}</div>

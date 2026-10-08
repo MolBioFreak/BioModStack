@@ -53,32 +53,3 @@ workflow OLIGO_DESIGNER {
     rfdpoly_metrics = OLIGO_DESIGN.out.metrics
     boltz_logs = boltz_logs
 }
-
-/*
- * Standalone entry for direct workflow invocation
- */
-workflow {
-    // Check if this is an oligo design run
-    if (params.mode == 'oligo_design' || params.rfdpoly_enabled) {
-
-        // Prepare input PDB channel
-        input_pdb = params.rfdpoly_input_pdb
-            ? channel.fromPath(params.rfdpoly_input_pdb)
-            : channel.of(file('NO_INPUT'))
-
-        // Run the workflow
-        OLIGO_DESIGNER(
-            channel.of(params.design_id ?: 'oligo_design'),
-            channel.of(params.rfdpoly_contigs),
-            channel.of(params.rfdpoly_polymer_chains),
-            input_pdb,
-        )
-
-        // Collect outputs
-        OLIGO_DESIGNER.out.pdbs
-            .collect()
-            .subscribe { pdbs ->
-                println("Oligo Designer completed: ${pdbs.size()} designs generated")
-            }
-    }
-}
