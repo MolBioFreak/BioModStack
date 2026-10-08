@@ -65,7 +65,7 @@ const FAMILY_META: Record<AnalysisLens, { title: string; description: string; ac
     },
     fampnn: {
         title: 'FAMPNN Sequence Design',
-        description: 'Sequence design quality centered on PSCE plus unknown additional flattened FAMPNN sidechain signals.',
+        description: 'FA-MPNN pSCE sidechain QC plus sequence-probability/log-prob/entropy metrics when sample_pkls are available.',
         accent: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
     },
     caliby: {
@@ -75,7 +75,7 @@ const FAMILY_META: Record<AnalysisLens, { title: string; description: string; ac
     },
     ppiflow: {
         title: 'PPIFlow Maturation',
-        description: 'Refinement deltas, interface score shifts, contact geometry, and structural drift for PPIFlow outputs.',
+        description: 'BMS-local maturation/refinement deltas, interface score shifts, contact geometry, and structural drift for PPIFlow outputs.',
         accent: 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200',
     },
     frustrampnn: {
@@ -147,7 +147,7 @@ const CORE_METRICS: MetricOption[] = [
     { key: 'rfa_plddt_final', label: 'RFA Global pLDDT', color: '#7c3aed', family: 'rfantibody' },
     { key: 'rfa_plddt_selected', label: 'RFA Selected pLDDT', color: '#8b5cf6', family: 'rfantibody' },
     { key: 'rfa_plddt_delta', label: 'RFA pLDDT Delta', color: '#8b5cf6', family: 'rfantibody' },
-    { key: 'fampnn_psce', label: 'FAMPNN PSCE', color: '#22c55e', family: 'fampnn' },
+    { key: 'fampnn_psce', label: 'FA-MPNN avg pSCE', color: '#22c55e', family: 'fampnn' },
     { key: 'caliby_potts_energy', label: 'Caliby Potts Energy', color: '#14b8a6', family: 'caliby' },
     { key: 'maturation_delta_interface', label: 'Global Delta Interface', color: '#e879f9', family: 'ppiflow' },
     { key: 'maturation_selected_delta_interface', label: 'Selected Delta Interface', color: '#f0abfc', family: 'ppiflow' },

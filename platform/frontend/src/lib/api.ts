@@ -782,6 +782,13 @@ export interface Design {
     chains_ptm: Record<string, number> | number[] | null;
     pair_chains_iptm: Record<string, Record<string, number>> | number[][] | null;
     confidence_metrics: Record<string, unknown> | null;
+    metric_provenance?: Record<string, unknown> | null;
+    metric_completeness?: {
+        overall_status?: string;
+        status?: string;
+        missing?: string[];
+        [key: string]: unknown;
+    } | null;
     ipsae: number | null;
     // Backbone grouping & epitope analysis
     backbone_id: number | null;
