@@ -64,6 +64,15 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     core_runtime_env = runtime_profile.get_core_runtime_env_path()
     core_runtime_text = core_runtime_env.read_text(encoding="utf-8")
     assert f"BMS_STATE_DIR={resolved_data_root}" in core_runtime_text
+    assert f"BMS_DATA={resolved_data_root}" in core_runtime_text
+    assert f"BMS_INPUTS={resolved_data_root / 'inputs'}" in core_runtime_text
+    assert f"BMS_DB_PATH={resolved_data_root / 'biomodstack.db'}" in core_runtime_text
+    assert f"BMS_CONTAINER_DIR={resolved_data_root / 'apptainer'}" in core_runtime_text
+    assert f"BMS_WEIGHTS={resolved_data_root / 'weights'}" in core_runtime_text
+    assert f"BMS_COLABFOLD_DB={resolved_data_root / 'colabfold_db'}" in core_runtime_text
+    assert f"BMS_MSA_CACHE={resolved_data_root / 'msa_cache'}" in core_runtime_text
+    assert f"BMS_SABDAB_CACHE={resolved_data_root / 'sabdab_cache'}" in core_runtime_text
+    assert f"BMS_WORK={resolved_data_root / 'work'}" in core_runtime_text
     assert "BMS_CONTAINER_STATE_PATH=/var/lib/biomodstack-custom" in core_runtime_text
     assert "BMS_INPUTS_CONTAINER_PATH=/var/lib/biomodstack-custom/inputs" in core_runtime_text
     assert "BMS_DB_CONTAINER_PATH=/var/lib/biomodstack-custom/biomodstack.db" in core_runtime_text
@@ -114,3 +123,68 @@ def test_api_paths_prefer_install_profile_when_env_is_missing(tmp_path: Path, mo
     assert reloaded_paths.get_data_root() == (home_dir / "operator-state").resolve()
     assert reloaded_paths.get_inputs_dir() == (home_dir / "operator-inputs").resolve()
     assert reloaded_paths.get_db_path() == (home_dir / "operator-state" / "shared.db").resolve()
+
+
+def test_resolve_runtime_paths_puts_work_and_results_under_install_data_root(tmp_path: Path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    config_home = home_dir / ".config"
+    project_root = tmp_path / "repo-on-os-drive"
+    nvme_root = tmp_path / "BMS-4TB-NVME"
+    home_dir.mkdir()
+    config_home.mkdir(parents=True)
+    project_root.mkdir()
+    nvme_root.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    for name in (
+        "BMS_DATA",
+        "BMS_INPUTS",
+        "BMS_DB_PATH",
+        "BMS_CONTAINER_DIR",
+        "BMS_WEIGHTS",
+        "BMS_COLABFOLD_DB",
+        "BMS_MSA_CACHE",
+        "BMS_SABDAB_CACHE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    resolved = runtime_profile.resolve_runtime_paths(
+        project_root=project_root,
+        profile={"data_root": str(nvme_root)},
+    )
+
+    assert resolved["data_root"] == str(nvme_root.resolve())
+    assert resolved["results_dir"] == str(nvme_root.resolve() / "bms_results")
+    assert resolved["work_dir"] == str(nvme_root.resolve() / "work")
+    assert not str(resolved["results_dir"]).startswith(str(project_root.resolve()))
+    assert not str(resolved["work_dir"]).startswith(str(project_root.resolve()))
+
+
+def test_heuristic_data_root_keeps_model_and_cache_paths_with_data_root(tmp_path: Path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    config_home = home_dir / ".config"
+    project_root = tmp_path / "repo-on-os-drive"
+    nvme_root = tmp_path / "BMS-4TB-NVME"
+    home_dir.mkdir()
+    config_home.mkdir(parents=True)
+    project_root.mkdir()
+    (nvme_root / "bms_results").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setattr(runtime_profile, "_candidate_data_roots", lambda: [nvme_root, home_dir / ".biomodstack"])
+    for name in (
+        "BMS_DATA",
+        "BMS_WEIGHTS",
+        "BMS_COLABFOLD_DB",
+        "BMS_MSA_CACHE",
+        "BMS_SABDAB_CACHE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    resolved = runtime_profile.resolve_runtime_paths(project_root=project_root, profile={})
+
+    assert resolved["data_root"] == str(nvme_root.resolve())
+    assert resolved["weights_root"] == str(nvme_root.resolve() / "weights")
+    assert resolved["colabfold_db"] == str(nvme_root.resolve() / "colabfold_db")
+    assert resolved["msa_cache_dir"] == str(nvme_root.resolve() / "msa_cache")
+    assert resolved["sabdab_cache_dir"] == str(nvme_root.resolve() / "sabdab_cache")

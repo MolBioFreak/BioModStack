@@ -2368,6 +2368,7 @@ def build_nextflow_command(
     explicit_weights_root = params.get("weights_root") or os.getenv("BMS_WEIGHTS") or str(get_weights_root())
     explicit_msa_db = params.get("msa_local_db") or os.getenv("BMS_COLABFOLD_DB") or str(get_colabfold_db())
     explicit_msa_cache = params.get("msa_cache_dir") or os.getenv("BMS_MSA_CACHE") or str(get_msa_cache_dir())
+    explicit_work_dir = params.get("work_dir") or os.getenv("BMS_WORK") or str(get_work_dir())
     explicit_container_dir = (
         params.get("container_dir")
         or os.getenv("BMS_CONTAINER_DIR")
@@ -2398,6 +2399,7 @@ def build_nextflow_command(
         cmd = [
             "nextflow", "run", workflow_entrypoint,
             "-profile", profile,
+            "-w", str(explicit_work_dir),
             "--out_dir", output_dir,
         ]
     

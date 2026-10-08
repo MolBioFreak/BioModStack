@@ -359,6 +359,8 @@ def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> Non
     runtime_unit = units[services.CORE_RUNTIME_SERVICE]
     assert f"Environment=BMS_HOME={project_root}" in runtime_unit
     assert "Environment=BMS_RUNTIME_MODE=container" in runtime_unit
+    assert "Type=oneshot" in runtime_unit
+    assert "RemainAfterExit=yes" in runtime_unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_core_runtime.sh'}" in runtime_unit
     assert f"ExecStop={project_root / 'scripts' / 'run_biomodstack_core_runtime.sh'} down" in runtime_unit
     assert f"StandardOutput=append:{services.CORE_RUNTIME_LOG}" in runtime_unit
@@ -820,6 +822,15 @@ def test_restart_all_container_mode_enables_target_before_restart(monkeypatch, t
         ("wait", (services.API_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.FRONTEND_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
     ]
+
+
+def test_core_runtime_script_start_does_not_rebuild_images() -> None:
+    script = (services.get_project_root() / "scripts" / "run_biomodstack_core_runtime.sh").read_text(encoding="utf-8")
+
+    assert "up -d --remove-orphans" in script
+    assert "up --build --remove-orphans" not in script
+    assert "up -d --build --remove-orphans" in script
+    assert "rebuild|build)" in script
 
 
 def test_stop_all_container_mode_stops_both_runtime_flavors(monkeypatch, tmp_path: Path) -> None:
