@@ -510,6 +510,13 @@ def _public_receipt(value: Any) -> Any:
                 token in str(key).lower()
                 for token in ("path", "directory", "output_dir", "command", "executable")
             )
+            and str(key).lower() not in {
+                "input",
+                "input_structure",
+                "input_pdb",
+                "input_cif",
+                "plr_input_pdb",
+            }
         }
     if isinstance(value, list):
         return [_public_receipt(child) for child in value]
@@ -1424,7 +1431,7 @@ async def build_project_manager_read_model(
     elif selected.get("node_type") == "domain_experiment" and selected_subject_id in domain_payloads:
         selected_payload = domain_payloads[str(selected_subject_id)]
     elif selected.get("node_type") == "workflow" and selected_subject_id in workflow_payloads:
-        selected_payload = workflow_payloads[str(selected_subject_id)]
+        selected_payload = _public_receipt(workflow_payloads[str(selected_subject_id)])
     elif selected.get("node_type") == "workflow_run" and selected_run_item is not None:
         selected_payload = selected_run_item
 
