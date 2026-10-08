@@ -31,7 +31,8 @@ Raw benchmark record: `benchmarks/md/adh_engine_comparison_2026-07-17.json`.
 - CLI: `python3 -m scripts.bms_md.cli validate|run|aggregate`
 - Runner: `scripts/bms_md/gromacs_pipeline.py`
 - API model: `molecular_dynamics` / mode `simulate`
-- Nextflow entrypoint: `workflows/molecular_dynamics.nf`
+- Parent coordinator: `workflows/experimental/molecular_dynamics/orchestrator.nf`
+- Scheduler-visible singleton replica entrypoint: `workflows/experimental/molecular_dynamics/replica.nf`
 
 The normalized job contract explicitly records:
 

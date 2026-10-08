@@ -681,6 +681,7 @@ interface SchedulerConfig {
         auto_cpu_thread_job_threshold: number;
         enabled: boolean;
         target_vram_fill: number;
+        vram_safety_margin_mb: number;
         capacity_weight: number;
         emptiness_weight: number;
         max_launches_per_cycle: number;
@@ -695,7 +696,7 @@ interface SchedulerConfig {
         threshold: number | null;
         disabled?: boolean;
         priority_tier?: number | null;
-        vram_safety_margin_mb?: number;
+        vram_safety_margin_mb?: number | null;
         max_concurrent_jobs?: number | null;
     }>;
 }
@@ -782,7 +783,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
             const override = config.overrides[gpuIdStr] || {};
             const maxVram = getMaxVramMb(gpuEntry.index);
             const thresholdPct = override.threshold ?? (config.global?.target_vram_fill ?? 0.75);
-            const safetyMb = override.vram_safety_margin_mb ?? 0;
+            const safetyMb = override.vram_safety_margin_mb ?? config.global.vram_safety_margin_mb;
             gpuStates[gpuIdStr] = {
                 vramLimitMb: Math.max(1024, Math.round(maxVram * thresholdPct - safetyMb)),
                 priorityTier: override.priority_tier ?? null,
@@ -801,14 +802,14 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
 
         const override = (config?.overrides[gpuId] || {}) as {
             threshold?: number | null;
-            vram_safety_margin_mb?: number;
+            vram_safety_margin_mb?: number | null;
             priority_tier?: number | null;
             max_concurrent_jobs?: number | null;
         };
 
         // Calculate vramLimit from threshold and safety margin
         const thresholdPct = override.threshold ?? (config?.global?.target_vram_fill ?? 0.75);
-        const safetyMb = override.vram_safety_margin_mb ?? 0;
+        const safetyMb = override.vram_safety_margin_mb ?? config?.global?.vram_safety_margin_mb ?? 2048;
 
         return {
             vramLimitMb: Math.max(1024, Math.round(maxVram * thresholdPct - safetyMb)),
@@ -849,7 +850,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     threshold: thresholdPct,
                     disabled: existing.disabled ?? false,
                     priority_tier: local.priorityTier,
-                    vram_safety_margin_mb: existing.vram_safety_margin_mb ?? 0,
+                    vram_safety_margin_mb: existing.vram_safety_margin_mb ?? null,
                     max_concurrent_jobs: local.maxConcurrentJobs,
                 })
             });
@@ -884,7 +885,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                         threshold: thresholdPct,
                         disabled: existing.disabled ?? false,
                         priority_tier: existing.priority_tier ?? null,
-                        vram_safety_margin_mb: existing.vram_safety_margin_mb ?? 0,
+                        vram_safety_margin_mb: existing.vram_safety_margin_mb ?? null,
                         max_concurrent_jobs: existing.max_concurrent_jobs ?? null,
                     })
                 });
@@ -926,6 +927,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     auto_cpu_thread_job_threshold: localAutoCpuThreadJobThreshold,
                     enabled: config?.global?.enabled ?? true,
                     target_vram_fill: localThreshold / 100,
+                    vram_safety_margin_mb: config?.global?.vram_safety_margin_mb ?? 2048,
                     capacity_weight: localCapacityWeight,
                     emptiness_weight: localEmptinessWeight,
                     max_launches_per_cycle: localMaxLaunchesPerCycle,
@@ -960,7 +962,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     threshold: config.overrides[gpuId]?.threshold ?? null,
                     disabled: config.overrides[gpuId]?.disabled ?? false,
                     priority_tier: config.overrides[gpuId]?.priority_tier ?? null,
-                    vram_safety_margin_mb: config.overrides[gpuId]?.vram_safety_margin_mb ?? 0,
+                    vram_safety_margin_mb: config.overrides[gpuId]?.vram_safety_margin_mb ?? null,
                     max_concurrent_jobs: config.overrides[gpuId]?.max_concurrent_jobs ?? null,
                 })
             });
@@ -987,7 +989,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     threshold: config.overrides[gpuId]?.threshold ?? null,
                     disabled: config.overrides[gpuId]?.disabled ?? false,
                     priority_tier: config.overrides[gpuId]?.priority_tier ?? null,
-                    vram_safety_margin_mb: config.overrides[gpuId]?.vram_safety_margin_mb ?? 0,
+                    vram_safety_margin_mb: config.overrides[gpuId]?.vram_safety_margin_mb ?? null,
                     max_concurrent_jobs: config.overrides[gpuId]?.max_concurrent_jobs ?? null,
                 })
             });
@@ -1289,7 +1291,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                                     // Check if this GPU has unsaved changes
                                     const serverOverride = config.overrides[gpuId] || {};
                                     const serverThreshold = serverOverride.threshold ?? (config.global?.target_vram_fill ?? 0.75);
-                                    const serverSafetyMb = serverOverride.vram_safety_margin_mb ?? 0;
+                                    const serverSafetyMb = serverOverride.vram_safety_margin_mb ?? config.global.vram_safety_margin_mb;
                                     const serverVramLimitMb = Math.round(maxVram * serverThreshold - serverSafetyMb);
                                     const serverPriorityTier = serverOverride.priority_tier ?? null;
                                     const serverMaxConcurrentJobs = serverOverride.max_concurrent_jobs ?? null;

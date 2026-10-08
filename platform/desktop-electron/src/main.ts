@@ -4,7 +4,7 @@ import path from 'node:path';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, Tray } from 'electron';
 
 import { buildApplicationMenu } from './menu.js';
-import { resolveElectronBuildIdentity } from './buildIdentity.js';
+import { electronAboutVersion, resolveElectronBuildIdentity } from './buildIdentity.js';
 import { applyShellGraphicsWorkarounds } from './graphicsWorkarounds.js';
 import { resolveShellPaths } from './shellPaths.js';
 import { createServiceControl, type ServiceRuntimeTarget } from './serviceControl.js';
@@ -402,11 +402,14 @@ async function bootstrap(): Promise<void> {
   const context = resolveShellContext();
   activeContext = context;
   applyShellContextEnvironment(context);
+  const aboutVersion = electronAboutVersion(
+    resolveElectronBuildIdentity(process.env, app.getVersion()),
+  );
 
   app.setAboutPanelOptions({
     applicationName: 'BioModStack Shell',
-    applicationVersion: app.getVersion(),
-    version: app.getVersion(),
+    applicationVersion: aboutVersion,
+    version: aboutVersion,
     iconPath: resolveShellPaths().appIconPath,
   });
 

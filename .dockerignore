@@ -32,3 +32,6 @@ inputs
 *.db
 *.sqlite
 *.sqlite3
+.gpu_config.json
+.gpu_*.json
+.gpu_*.lock

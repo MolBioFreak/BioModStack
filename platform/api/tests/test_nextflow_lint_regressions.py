@@ -5,6 +5,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TARGET_LINT_FILES = [
@@ -14,8 +16,25 @@ TARGET_LINT_FILES = [
     "workflows/boltz_cp_experimental.nf",
     "workflows/ppiflow_generator_design.nf",
     "modules/boltzgen.nf",
+    "workflows/ngs/ont_basecall_dna.nf",
+    "workflows/ngs/ont_basecall_rna.nf",
+    "workflows/ngs/ont_construct_screening.nf",
+    "workflows/ngs/ont_fastq_qc.nf",
+    "workflows/ngs/ont_methylation_analysis.nf",
+    "workflows/ngs/ont_plasmid_qc.nf",
+    "workflows/ngs/wf_clone_validation.nf",
     "main.nf",
 ]
+
+CANONICAL_NGS_PREVIEW_ARGS = {
+    "ont_basecall_dna": ("--pod5_dir", "pod5"),
+    "ont_basecall_rna": ("--pod5_dir", "pod5"),
+    "ont_plasmid_qc": ("--fastq_path", "reads.fastq", "--reference_fasta", "reference.fa"),
+    "ont_construct_screening": ("--fastq_path", "reads.fastq", "--reference_fasta", "reference.fa"),
+    "ont_methylation_analysis": ("--bam_path", "reads.bam", "--reference_fasta", "reference.fa"),
+    "ont_fastq_qc": ("--fastq_path", "reads.fastq", "--reference_fasta", "reference.fa"),
+    "wf_clone_validation": ("--fastq_path", "reads.fastq", "--reference_fasta", "reference.fa"),
+}
 
 
 def _run_nextflow(*args: str, env_overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -60,6 +79,52 @@ def test_targeted_nextflow_lint_has_no_errors_for_regressed_files() -> None:
     result = _run_nextflow("lint", *TARGET_LINT_FILES)
 
     assert result.returncode == 0, _format_failure(result)
+
+
+def test_canonical_ngs_workflows_avoid_reserved_closure_parameter() -> None:
+    for workflow_id in CANONICAL_NGS_PREVIEW_ARGS:
+        source = (REPO_ROOT / "workflows" / "ngs" / f"{workflow_id}.nf").read_text(encoding="utf-8")
+        assert "{ _ ->" not in source
+
+
+@pytest.mark.parametrize("workflow_id", sorted(CANONICAL_NGS_PREVIEW_ARGS))
+def test_canonical_ngs_standalone_preview_resolves_code_root(
+    tmp_path: Path,
+    workflow_id: str,
+) -> None:
+    visible_tmp = _repo_visible_tmp_dir(tmp_path)
+    try:
+        (visible_tmp / "pod5").mkdir()
+        (visible_tmp / "pod5" / "read.pod5").write_bytes(b"")
+        (visible_tmp / "reads.fastq").write_text("@read\nACGT\n+\n!!!!\n", encoding="utf-8")
+        (visible_tmp / "reads.bam").write_bytes(b"")
+        (visible_tmp / "reference.fa").write_text(">ref\nACGT\n", encoding="utf-8")
+        nextflow_home = visible_tmp / "nextflow-home"
+        work_dir = visible_tmp / "work"
+        out_dir = visible_tmp / "out"
+        nextflow_home.mkdir()
+        work_dir.mkdir()
+        out_dir.mkdir()
+        raw_args = CANONICAL_NGS_PREVIEW_ARGS[workflow_id]
+        resolved_args = tuple(
+            str(visible_tmp / value) if not value.startswith("--") else value
+            for value in raw_args
+        )
+        result = _run_nextflow(
+            "run",
+            f"workflows/ngs/{workflow_id}.nf",
+            "-preview",
+            "-offline",
+            "-w",
+            str(work_dir),
+            "--out_dir",
+            str(out_dir),
+            *resolved_args,
+            env_overrides={"NEXTFLOW_HOME": str(nextflow_home), "BMS_HOME": ""},
+        )
+        assert result.returncode == 0, _format_failure(result)
+    finally:
+        shutil.rmtree(visible_tmp, ignore_errors=True)
 
 
 def test_boltzgen_parent_workflow_preview_does_not_require_skip_input_dir(tmp_path: Path) -> None:

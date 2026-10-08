@@ -112,6 +112,7 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     assert "BMS_DEV_WEB_HOST_PORT=5179" in core_runtime_text
     assert f"CORS_ORIGINS={EXPECTED_CORS_ORIGINS}" in core_runtime_text
     assert "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001" in core_runtime_text
+    assert core_runtime_env.stat().st_mode & 0o777 == 0o600
 
 
 def test_resolve_runtime_paths_defaults_include_cordova_and_loopback_cors_origins(tmp_path: Path, monkeypatch) -> None:

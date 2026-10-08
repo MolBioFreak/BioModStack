@@ -113,6 +113,19 @@ Priority for database location is:
 4. `${BMS_DATA}/biomodstack.db`
 5. repo-local fallback
 
+GPU scheduler state defaults to `${BMS_DATA}/scheduler/gpu_config.json`. Set
+`BMS_SCHEDULER_STATE_DIR` to select a different persistent scheduler-state
+directory; the service resolves it at process start, so restart the scheduling
+authority after changing that environment variable.
+
+Nextflow launcher logs remain append-only and durable on disk while diagnostic
+tails are bounded in memory. Incremental reads are also byte-bounded. Deployments
+can tune the in-memory/read limits with:
+
+- `BMS_NEXTFLOW_LOG_READ_BYTES` (maximum incremental read size)
+- `BMS_NEXTFLOW_RETAINED_LOG_MAX_BYTES` (in-memory diagnostic tail bytes)
+- `BMS_NEXTFLOW_RETAINED_LOG_MAX_LINES` (in-memory diagnostic tail lines)
+
 ## Core runtime env vars
 
 Common env vars include:
@@ -121,6 +134,7 @@ Common env vars include:
 - `BMS_DATA`
 - `BMS_INPUTS`
 - `BMS_DB_PATH`
+- `BMS_SCHEDULER_STATE_DIR`
 - `DATABASE_URL`
 - `BMS_WEIGHTS`
 - `BMS_CONTAINER_DIR`

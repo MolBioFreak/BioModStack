@@ -91,7 +91,7 @@ workflow ONT_CONSTRUCT_SCREENING {
         }
 
         DoradoBasecall(Channel.of(pod5_input))
-        DoradoBasecall.out.bam.subscribe { _ ->
+        DoradoBasecall.out.bam.subscribe { _ignored ->
             reportStage(params, "dorado_basecall", [
                 "${params.out_dir}/basecall/calls.bam",
                 "${params.out_dir}/basecall/basecall.log",
@@ -188,7 +188,7 @@ workflow ONT_CONSTRUCT_SCREENING {
     println("Running clone validation for construct screening")
     def clone_input = analysis_bam.map { bam, bai -> [bam, (params.reference_fasta ?: "").toString()] }
     RunCloneValidation(clone_input)
-    RunCloneValidation.out.out.subscribe { _ ->
+    RunCloneValidation.out.out.subscribe { _ignored ->
         reportStage(params, "clone_validation", [
             "${params.out_dir}/assembly/wf_clone_out",
             "${params.out_dir}/assembly/wf_clone.log",
@@ -218,7 +218,7 @@ workflow ONT_CONSTRUCT_SCREENING {
             BuildDimerCanonicalOutputs.out.breakpoint_call,
             BuildDimerCanonicalOutputs.out.secondary_summary,
         )
-        FastqPlasmidQC.out.summary.subscribe { _ ->
+        FastqPlasmidQC.out.summary.subscribe { _ignored ->
             reportStage(params, "fastq_qc", [
                 "${params.out_dir}/fastq_qc/read_lengths.tsv",
                 "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
