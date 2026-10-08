@@ -367,10 +367,10 @@ export function BioXpCockpit() {
 
             <section className="rounded-xl border border-cyan-700/60 bg-cyan-950/20 p-5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2 className="text-lg font-semibold">OEM initializeMotors · M01–M04</h2>
+                    <h2 className="text-lg font-semibold">OEM initializeMotors · M01, M03–M04</h2>
                     <span className="text-xs text-cyan-200">Queued, typed, source-bound</span>
                 </div>
-                <p className="mt-2 text-sm text-slate-300">Only the first four completed OEM stages are exposed. Each request is routed to the robot-owned stage ledger; it rejects any out-of-order stage, missing predecessor observation, unavailable runtime, or non-admitted hardware state.</p>
+                <p className="mt-2 text-sm text-slate-300">Only M01, M03, and M04 are operator controls. OEM M02 is internal action-current setup and is never exposed as a standalone operator action. Each request is routed to the robot-owned stage ledger; it rejects any out-of-order stage, missing predecessor observation, unavailable runtime, or non-admitted hardware state.</p>
                 <div className="mt-4 grid gap-3 lg:grid-cols-2">
                     {OEM_MOTOR_STAGE_CONTROLS.map(({ stage, label, detail }) => {
                         const available = mutationAccessEnabled && controlPlaneFresh
