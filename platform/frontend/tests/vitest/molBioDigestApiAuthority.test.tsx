@@ -1,0 +1,42 @@
+import React, { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import './setup';
+import { DigestPanel } from '../../src/components/MolBioToolkit/panels/DigestPanel';
+import type { RestrictionAnalysisResponse, RestrictionCatalogReceipt, RestrictionDigestSimulation, RestrictionRecord } from '../../src/lib/restrictionAnalysis';
+import type { SequenceData } from '../../src/components/MolBioToolkit/types';
+
+const sequence: SequenceData = { name: 'API fixture', sequence: 'TTGAATTCAA', circular: false, sequenceType: 'dna', features: [] };
+const catalog = { catalog_id: 'catalog-v1', catalog_sha256: 'a'.repeat(64), source_release: 'REBASE 404', counts: { total: 1, geometry_ready: 1, commercial_geometry_ready: 1, unknown_geometry: 0, nicking: 0, two_event_double_strand: 0 } } as RestrictionCatalogReceipt;
+const record = { enzyme_id: 'EcoRI', canonical_name: 'EcoRI', aliases: [], recognition: { site_iupac: 'GAATTC', site_alternatives_iupac: ['GAATTC'], palindromic: true }, cleavage: { status: 'known_double_strand', events: [{ top_offset: 1, bottom_offset: 5, overhang_kind: 'five_prime' }], nick: null }, enzyme_kind: 'double_strand_endonuclease', analysis_capability: 'digest_simulation', supplier_provenance: { reported_commercial: true, historical_supplier_codes: [] } } as unknown as RestrictionRecord;
+const occurrence = { occurrence_id: 'occ:1', occurrence_ordinal: 0, enzyme_id: 'EcoRI', canonical_name: 'EcoRI', orientation: 'forward', certainty: 'definite', site_start: 2, site_end_unwrapped: 8, site_segments: [[2, 8]], wraps_origin: false, double_strand_events: [{ enzyme_id: 'EcoRI', occurrence_id: 'occ:1', event_ordinal: 0, orientation: 'forward', status: 'complete', top_boundary: 3, bottom_boundary: 7, top_boundary_unwrapped: 3, bottom_boundary_unwrapped: 7, contributor_group_id: 'cut:1' }], nicks: [], limitations: [] };
+const analysis = { result_sha256: 'b'.repeat(64), analysis: { counts: { recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: 1, nick_count: 0 }, enzyme_summaries: [{ enzyme_id: 'EcoRI', canonical_name: 'EcoRI', analysis_capability: 'digest_simulation', cleavage_status: 'known_double_strand', recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: 1, nick_count: 0, limitations: [] }], occurrences: [occurrence] } } as unknown as RestrictionAnalysisResponse;
+const end = (side: 'left' | 'right', kind: 'five_prime_overhang' | 'three_prime_overhang' | 'blunt') => ({ kind, enzyme_created: true, side, protruding_strand: kind === 'blunt' ? null : 'top', overhang_sequence_5to3: kind === 'blunt' ? null : 'AATT', length_nt: kind === 'blunt' ? 0 : 4, contributing_enzyme_ids: ['EcoRI'], contributor_group_id: 'cut:1' });
+const simulation = { fragments: [
+    { fragment_index: 0, reference_span_bp: 3, source_segments: [[0, 3]], left_end: end('left', 'five_prime_overhang'), right_end: end('right', 'three_prime_overhang') },
+    { fragment_index: 1, reference_span_bp: 7, source_segments: [[3, 10]], left_end: end('left', 'blunt'), right_end: end('right', 'blunt') },
+] } as unknown as RestrictionDigestSimulation;
+
+describe('DigestPanel backend authority', () => {
+    let root: Root | undefined;
+    let container: HTMLDivElement | undefined;
+    afterEach(async () => { if (root) await act(async () => root?.unmount()); container?.remove(); });
+
+    it('keeps recognition, DSB and nick counts separate and submits only stable IDs', async () => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const simulate = vi.fn();
+        await act(async () => root?.render(<DigestPanel sequenceData={sequence} sequenceId={null} onHighlight={vi.fn()} selectedEnzymes={[]} onEnzymesChange={vi.fn()} catalog={catalog} catalogRecords={[record]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={simulation} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={simulate} />));
+        expect(container.textContent).toContain('1 recognition sites');
+        expect(container.textContent).toContain('1 DSBs');
+        expect(container.textContent).toContain('0 nicks');
+        const add = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Digest');
+        await act(async () => add?.click());
+        const run = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('Run Digest'));
+        await act(async () => run?.click());
+        expect(simulate).toHaveBeenCalledWith(['EcoRI']);
+        expect(container.textContent).toContain('5′ AATT overhang');
+        expect(container.textContent).toContain('3′ AATT overhang');
+        expect(container.textContent).toContain('blunt end');
+        expect(container.textContent).not.toContain('top_strand_sequence');
+    });
+});

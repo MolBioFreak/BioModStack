@@ -6,7 +6,7 @@ import { useCallback, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotSelectionEvent, Shape } from 'plotly.js';
 import type { SelectionInfo } from './SequenceViewer';
-import { findRestrictionSites, getRestrictionEnzyme } from './utils/restrictionEnzymes';
+import type { RestrictionOccurrence } from '../../lib/restrictionAnalysis';
 import {
     createSelectionSnapshot,
     selectionForPlotDisplay,
@@ -46,12 +46,35 @@ interface GCContentTrackProps {
     reverseCoordinates?: boolean;
     circular?: boolean;
     selectedEnzymes?: string[];
+    restrictionOccurrences?: RestrictionOccurrence[];
     windowSize?: number;
     stepSize?: number;
     height?: number;
     selection?: SelectionInfo | null;
     onSelectionChange?: (selection: SelectionInfo) => void;
     onClearSelection?: () => void;
+}
+
+export function restrictionBoundaryPositions(
+    occurrences: RestrictionOccurrence[],
+    selectedEnzymes: string[],
+    sequenceLength: number,
+    reverseCoordinates = false,
+): number[] {
+    if (sequenceLength <= 0) return [];
+    const selected = new Set(selectedEnzymes);
+    const positions = occurrences.flatMap((occurrence) => {
+        if (!selected.has(occurrence.enzyme_id)) return [];
+        const eventBoundaries = [
+            ...occurrence.double_strand_events.flatMap((event) => event.status === 'complete'
+                ? [event.top_boundary, event.bottom_boundary]
+                : []),
+            ...occurrence.nicks.flatMap((event) => event.status === 'complete' ? [event.boundary] : []),
+        ].filter((position): position is number => position !== null);
+        return eventBoundaries.length > 0 ? eventBoundaries : [occurrence.site_start];
+    }).map((position) => ((position % sequenceLength) + sequenceLength) % sequenceLength)
+        .map((position) => reverseCoordinates ? sequenceLength - 1 - position : position);
+    return Array.from(new Set(positions)).sort((left, right) => left - right);
 }
 
 const CANONICAL_BASES = new Set(['A', 'C', 'G', 'T']);
@@ -312,6 +335,7 @@ export function GCContentTrack({
     reverseCoordinates = false,
     circular = false,
     selectedEnzymes = [],
+    restrictionOccurrences = [],
     windowSize = 60,
     stepSize,
     height = 156,
@@ -331,13 +355,13 @@ export function GCContentTrack({
         if (!shouldComputeRestrictionPositions(metricId)) {
             return [];
         }
-        const allPositions = selectedEnzymes.flatMap((name) => {
-            const enzyme = getRestrictionEnzyme(name);
-            if (!enzyme) return [];
-            return findRestrictionSites(normalizedSequence, enzyme.site, circular);
-        });
-        return Array.from(new Set(allPositions)).sort((left, right) => left - right);
-    }, [circular, metricId, normalizedSequence, selectedEnzymes]);
+        return restrictionBoundaryPositions(
+            restrictionOccurrences,
+            selectedEnzymes,
+            normalizedSequence.length,
+            reverseCoordinates,
+        );
+    }, [metricId, normalizedSequence.length, restrictionOccurrences, reverseCoordinates, selectedEnzymes]);
 
     const analyticsData = useMemo<AnalyticsPoint[]>(() => {
         if (!normalizedSequence || normalizedSequence.length < 10) return [];
