@@ -67,7 +67,7 @@ def test_raw_roundtrip_independent_expected(enzyme, site, spacer, width, kind, r
     assert result.selected_solution_id == product.id
     retained = design_material(result, result.preparations[1].retained_material_id)
     assert retained.sequence == middle + B
-    assert retained.parent_id == "insert:prepared"
+    assert retained.parent_id == "preparation:insert"
     assert retained.id not in {m.id for m in result.materials}  # no duplicate digest DNA
     donor, insert = result.digests
     assert donor.retained_fragment_index == 0
@@ -95,7 +95,7 @@ def test_raw_roundtrip_independent_expected(enzyme, site, spacer, width, kind, r
         assert reverse_primer.full_sequence == "AA" + site + spacer + rc(left) + rc(B[-21:])
         assert result.preparations[1].pcr_verification == "verified"
         reconstructed = pcr_product(B, forward.full_sequence, reverse_primer.full_sequence)
-        intermediate = next(m for m in result.materials if m.id == "insert:prepared")
+        intermediate = next(m for m in result.materials if m.id == "preparation:insert")
         assert reconstructed.sequence == intermediate.sequence
         assert forward.tm == calculate_primer_tm_result(B[:20], "dna", req.primer_settings)
         assert forward.qc.length == len(forward.full_sequence)
@@ -250,6 +250,16 @@ def test_reconstructed_junction_site_is_warning_not_stable_product():
     assert result.solutions[0].sequence == "AATG" + a + "TCTC" + B
     assert result.solutions[0].occurrences
     assert any("recut" in w for w in result.solutions[0].warnings)
+
+
+def test_material_ids_are_disjoint_for_operator_supplied_instance_ids():
+    data = request().model_dump()
+    data["sources"][1]["id"] = "x:prepared"
+    data["parts"][1].update(id="source:x", source_id="x:prepared")
+    result = design_golden_gate(GoldenGateDesignRequest.model_validate(data))
+    ids = [m.id for m in result.materials] + [mid for d in result.digests for mid in d.fragment_material_ids]
+    assert len(ids) == len(set(ids))
+    assert result.solutions[0].sequence == "AATG" + A + "GGAG" + B
 
 
 def test_json_roundtrip_references_and_closed_contract():
