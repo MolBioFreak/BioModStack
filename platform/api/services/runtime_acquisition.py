@@ -12,7 +12,8 @@ _SCRIPTS = Path(__file__).resolve().parents[3] / 'scripts'
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 from lib.pinned_acquisition import AcquisitionError, Artifact, acquire
-from lib.pinned_weight_layout import materialize_weights, validate_members
+from lib.pinned_weight_layout import materialize_weights, validate_members, _verify_tree
+from lib.shared_runtime_images import verify_image
 
 
 def _layouts(plan):
@@ -45,6 +46,58 @@ def preview_model_acquisition(model_id: str) -> dict:
     canonical = json.dumps(plan, sort_keys=True, separators=(',', ':')).encode()
     return {**plan, 'plan_digest': hashlib.sha256(canonical).hexdigest(),
             'qualification': 'not_checked'}
+
+
+def revalidate_model_receipt(model_id, store_root, *, weights_root, expected_plan_digest,
+                             receipt, test_only=False):
+    """Offline verification, never acquire/repair/accept/activate.
+
+    Paths are reconstructed from current authority, not read from saved receipts.
+    Saved observations must match fresh no-follow hashes AND filesystem identity.
+    test_only is a library fixture seam, never a supported CLI/config option.
+    """
+    plan = preview_model_acquisition(model_id)
+    if plan['plan_digest'] != expected_plan_digest or plan['blockers']:
+        raise AcquisitionError('acquisition authority changed or blocked')
+    if (not isinstance(receipt, dict) or receipt.get('model_id') != model_id
+            or receipt.get('plan_digest') != expected_plan_digest
+            or not isinstance(receipt.get('artifacts'), list)
+            or not isinstance(receipt.get('layouts'), list)
+            or len(receipt['artifacts']) != len(plan['artifacts'])):
+        raise AcquisitionError('invalid provision receipt identity')
+    roots = {'image': Path(store_root).absolute(), 'weights': Path(weights_root).absolute()}
+    if test_only:
+        roots = {key: root / 'test-fixtures-not-scientific-assets' for key, root in roots.items()}
+    artifacts = []
+    for entry, saved in zip(plan['artifacts'], receipt['artifacts']):
+        artifact = Artifact(**entry['manifest'])
+        path = roots[artifact.kind] / 'objects' / 'sha256' / artifact.sha256 / 'runtime.sif'
+        observation = verify_image(path, artifact.sha256)
+        if observation['size'] != artifact.size_bytes:
+            raise AcquisitionError('artifact byte size mismatch')
+        fresh = {'dependency': entry['dependency'], 'artifact_id': artifact.artifact_id,
+                 'kind': artifact.kind, 'path': str(path), 'manifest_digest': artifact.manifest_digest,
+                 'verification': observation, 'test_only': test_only}
+        if not isinstance(saved, dict) or any(saved.get(k) != v for k, v in fresh.items()):
+            raise AcquisitionError('provision artifact path/bytes/identity drift')
+        artifacts.append({**fresh, 'qualification': 'not_checked'})
+    groups = list(_layouts(plan))
+    if len(groups) != len(receipt['layouts']):
+        raise AcquisitionError('invalid provision layout count')
+    layouts = []
+    for (dependency, entries), saved in zip(groups, receipt['layouts']):
+        validate_members(dependency, entries, test_only=test_only)
+        entries = sorted(entries, key=lambda e: e['member_path'])
+        digest = hashlib.sha256(json.dumps({'dependency': dependency, 'members': entries},
+            sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        path = roots['weights'] / 'layouts' / dependency['relative_path'] / digest
+        fresh = {'dependency': dependency, 'path': str(path), 'layout_digest': digest,
+                 'members': _verify_tree(path, entries, frozen=True), 'test_only': test_only}
+        if not isinstance(saved, dict) or any(saved.get(k) != v for k, v in fresh.items()):
+            raise AcquisitionError('provision layout path/bytes/identity drift')
+        layouts.append({**fresh, 'qualification': 'not_checked'})
+    return {'model_id': model_id, 'plan_digest': expected_plan_digest,
+            'artifacts': artifacts, 'layouts': layouts, 'qualification': 'not_checked'}
 
 
 def acquire_model(model_id: str, store_root: Path, *, expected_plan_digest: str,
