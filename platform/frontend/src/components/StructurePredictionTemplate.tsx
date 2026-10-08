@@ -1,27 +1,41 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, fetchMsaCacheInfo, uploadFile, type MsaCacheInfo } from '../lib/api';
+import { submitJob, fetchBoltzCpShardPlans, fetchMsaCacheInfo, uploadFile, type BoltzCpShardPlan, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { SequenceManager } from './SequenceManager';
 import { LigandSelector, componentIdFromIndex, type LigandEntry } from './LigandSelector';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
 import MolstarViewer from './MolstarViewer';
 import {
+    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
+    BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
     BOLTZ_QUALITY_PRESETS,
+    DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB,
+    DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE,
+    DEFAULT_STRUCTURE_MSA_TARGET_SHARDS,
     buildBoltzCpSubmitParams,
+    buildStructureMsaSubmitParams,
     buildTargetPreviewSelection,
     buildTargetPreviewSelections,
     deriveBoltzCpGpuLaunchSettings,
+    getBoltzCpLogicalSizeCp,
+    getBoltzCpRuntimeBridgeSummary,
     getBoltzQualityPresetValues,
     getBoltzQualitySliderState,
     getPredictorFamiliesForSelection,
     getStructurePredictorOptions,
+    inferBoltzCpShardPlanId,
+    normalizeBoltzCpShardPlanId,
+    normalizeMsaTargetShardMinSizeGb,
+    normalizeMsaTargetShardMode,
+    normalizeMsaTargetShards,
     resolveBoltzSamplingStepsFromSlider,
     resolveStructureLaunchConfig,
     resolveStructurePredictorSelection,
     resolveStructureSubmitTarget,
     resolveTargetPreviewSource,
     type StructurePredictionMode,
+    type StructureMsaTargetShardMode,
     type StructurePredictorSelection,
 } from './structurePredictionUiState.js';
 import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../utils/pdbUtils';
@@ -93,6 +107,14 @@ const resolveInitialPrimaryProteinComponent = (initialValues?: Record<string, an
 
 const MIN_BOLTZ_NO_MSA_RECYCLING_STEPS = 3;
 const MIN_BOLTZ_NO_MSA_SAMPLING_STEPS = 50;
+const DEFAULT_BOLTZ_CP_SHARD_PLANS: BoltzCpShardPlan[] = BOLTZ_CP_SHARD_PLAN_DEFINITIONS.map((plan) => ({
+    id: plan.id,
+    label: plan.label,
+    topology: plan.id,
+    logical_size_cp: plan.logicalSizeCp,
+    description: plan.description,
+    physical_gpu_resolutions: [],
+}));
 
 const clampBoltzRecyclingSteps = (value: unknown, useMsa: boolean): number => {
     const parsed = Number.parseInt(String(value), 10);
@@ -132,6 +154,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const launchConfig = resolveStructureLaunchConfig(initialValues);
     const isBoltzCpLaunch = launchConfig.variant === 'boltz_cp_experimental';
     const initialBoltzCpSizeCp = Number.parseInt(String(initialValues?.size_cp ?? initialValues?.bcp_size_cp ?? 4), 10);
+    const initialBoltzCpShardPlanId = normalizeBoltzCpShardPlanId(
+        initialValues?.bcp_shard_plan_id ?? initialValues?.shard_plan_id ?? inferBoltzCpShardPlanId(initialBoltzCpSizeCp)
+    );
     const initialBoltzCpSeed = initialValues?.seed ?? initialValues?.bcp_seed;
 
     // Core state
@@ -206,9 +231,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const [numParallelJobs, setNumParallelJobs] = useState(initialValues?.num_parallel_jobs ?? 1);
 
     // Boltz-CP-specific settings
-    const [bcpRequestedSizeCp, setBcpRequestedSizeCp] = useState(
-        Number.isFinite(initialBoltzCpSizeCp) && initialBoltzCpSizeCp > 0 ? initialBoltzCpSizeCp : 4
-    );
+    const [bcpShardPlanId, setBcpShardPlanId] = useState(initialBoltzCpShardPlanId || BOLTZ_CP_DEFAULT_SHARD_PLAN_ID);
+    const [bcpShardPlans, setBcpShardPlans] = useState<BoltzCpShardPlan[]>(DEFAULT_BOLTZ_CP_SHARD_PLANS);
     const [bcpOutputFormat, setBcpOutputFormat] = useState<'mmcif' | 'pdb'>(
         String(initialValues?.output_format ?? initialValues?.bcp_output_format ?? 'mmcif').toLowerCase() === 'pdb' ? 'pdb' : 'mmcif'
     );
@@ -240,6 +264,15 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const [msaNumIterations, setMsaNumIterations] = useState<number | undefined>(initialValues?.msa_num_iterations);
     const [msaProvider, setMsaProvider] = useState<'local' | 'colabfold_api'>(
         initialValues?.msa_provider === 'colabfold_api' ? 'colabfold_api' : 'local'
+    );
+    const [msaTargetShardMode, setMsaTargetShardMode] = useState<StructureMsaTargetShardMode>(
+        normalizeMsaTargetShardMode(initialValues?.msa_target_shard_mode ?? DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE)
+    );
+    const [msaTargetShards, setMsaTargetShards] = useState<number>(
+        normalizeMsaTargetShards(initialValues?.msa_target_shards ?? DEFAULT_STRUCTURE_MSA_TARGET_SHARDS)
+    );
+    const [msaTargetShardMinSizeGb, setMsaTargetShardMinSizeGb] = useState<number>(
+        normalizeMsaTargetShardMinSizeGb(initialValues?.msa_target_shard_min_size_gb ?? DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB)
     );
     const [colabfoldApiHost, setColabfoldApiHost] = useState<string>(
         initialValues?.colabfold_api_host || 'https://api.colabfold.com'
@@ -540,9 +573,29 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         (usesProtenix && protenixUseMsa);
     const boltzCpGpuSettings = deriveBoltzCpGpuLaunchSettings({
         pinnedGpus,
-        requestedSizeCp: bcpRequestedSizeCp,
+        requestedSizeCp: getBoltzCpLogicalSizeCp(bcpShardPlanId),
         fallbackGpuIds: String(initialValues?.gpu_ids ?? initialValues?.bcp_gpu_ids ?? '0,1,2,3'),
     });
+    useEffect(() => {
+        if (!isBoltzCpLaunch) return;
+        let cancelled = false;
+        fetchBoltzCpShardPlans()
+            .then(({ data }) => {
+                if (cancelled || !Array.isArray(data?.plans) || data.plans.length === 0) return;
+                setBcpShardPlans(data.plans);
+                if (!data.plans.some((plan) => plan.id === bcpShardPlanId)) {
+                    setBcpShardPlanId(normalizeBoltzCpShardPlanId(data.default_plan_id));
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setBcpShardPlans(DEFAULT_BOLTZ_CP_SHARD_PLANS);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [isBoltzCpLaunch, bcpShardPlanId]);
     const boltzQualityState = getBoltzQualitySliderState({
         samplingSteps: boltzSamplingSteps,
         recyclingSteps: boltzRecyclingSteps,
@@ -563,11 +616,11 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         if (isBoltzCpLaunch) {
             params.structure_launch_variant = 'boltz_cp_experimental';
             Object.assign(params, buildBoltzCpSubmitParams({
+                shardPlanId: bcpShardPlanId,
                 outputFormat: bcpOutputFormat,
                 writeFullPae: bcpWriteFullPae,
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
-                sizeCp: boltzCpGpuSettings.sizeCp,
             }));
         }
 
@@ -599,7 +652,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         }
 
         if (msaNeeded) {
-            params.msa_preset = msaPreset;
+            Object.assign(params, buildStructureMsaSubmitParams({
+                provider: msaProvider,
+                preset: msaPreset,
+                targetShardMode: msaTargetShardMode,
+                targetShards: msaTargetShards,
+                targetShardMinSizeGb: msaTargetShardMinSizeGb,
+            }));
             if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
             if (msaEvalue) params.msa_evalue = parseFloat(msaEvalue);
             if (msaMinSeqId) params.msa_min_seq_id = parseFloat(msaMinSeqId);
@@ -608,7 +667,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             params.msa_min_depth_fail = msaMinDepthFail;
             if (msaCacheOnly) params.msa_cache_only = true;
             if (msaAllowEmptyFallback) params.msa_allow_empty_fallback = true;
-            params.msa_provider = msaProvider;
             if (msaProvider === 'colabfold_api') {
                 params.colabfold_api_host = colabfoldApiHost.trim() || 'https://api.colabfold.com';
                 params.colabfold_api_min_interval = Math.max(0, Number(colabfoldApiMinInterval) || 0);
@@ -660,7 +718,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         allowRetries,
         batchEntriesPreview,
         bcpOutputFormat,
-        bcpRequestedSizeCp,
+        bcpShardPlanId,
         bcpSeed,
         bcpWriteFullPae,
         boltzCpGpuSettings.gpuIds,
@@ -693,6 +751,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         msaNumIterations,
         msaPreset,
         msaProvider,
+        msaTargetShardMinSizeGb,
+        msaTargetShardMode,
+        msaTargetShards,
         msaTaxonomy,
         msaUseEnv,
         msaUseExpand,
@@ -889,11 +950,11 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
         if (isBoltzCpLaunch) {
             Object.assign(params, buildBoltzCpSubmitParams({
+                shardPlanId: bcpShardPlanId,
                 outputFormat: bcpOutputFormat,
                 writeFullPae: bcpWriteFullPae,
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
-                sizeCp: boltzCpGpuSettings.sizeCp,
             }));
         }
 
@@ -939,7 +1000,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
         // MSA Quality parameters (when MSA is enabled for any predictor)
         if (msaNeeded) {
-            params.msa_preset = msaPreset;  // Fast (default), Balanced, or Maximum
+            Object.assign(params, buildStructureMsaSubmitParams({
+                provider: msaProvider,
+                preset: msaPreset,
+                targetShardMode: msaTargetShardMode,
+                targetShards: msaTargetShards,
+                targetShardMinSizeGb: msaTargetShardMinSizeGb,
+            }));
             if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
             if (msaEvalue) params.msa_evalue = parseFloat(msaEvalue);
             if (msaMinSeqId) params.msa_min_seq_id = parseFloat(msaMinSeqId);
@@ -949,7 +1016,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             if (msaForceRefresh && !msaCacheOnly) params.msa_force_refresh = true;
             if (msaCacheOnly) params.msa_cache_only = true;
             if (msaAllowEmptyFallback) params.msa_allow_empty_fallback = true;
-            params.msa_provider = msaProvider;
             if (msaProvider === 'colabfold_api') {
                 params.colabfold_api_host = colabfoldApiHost.trim() || 'https://api.colabfold.com';
                 params.colabfold_api_min_interval = Math.max(0, Number(colabfoldApiMinInterval) || 0);
@@ -1722,17 +1788,26 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         {isBoltzCpLaunch && (
                             <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-4 space-y-4">
                                 <div>
-                                    <label className="text-xs text-orange-100/80 block mb-1">Context Parallel Size Request</label>
-                                    <input
-                                        type="number"
-                                        value={bcpRequestedSizeCp}
-                                        onChange={(e) => setBcpRequestedSizeCp(Math.max(1, Math.min(16, Number.parseInt(e.target.value || '1', 10) || 1)))}
-                                        min={1}
-                                        max={16}
-                                        className="w-full max-w-xs bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                    />
+                                    <label className="text-xs text-orange-100/80 block mb-1">Logical shard plan</label>
+                                    <select
+                                        value={bcpShardPlanId}
+                                        onChange={(e) => setBcpShardPlanId(normalizeBoltzCpShardPlanId(e.target.value))}
+                                        className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                    >
+                                        {bcpShardPlans.map((plan) => (
+                                            <option key={plan.id} value={plan.id}>{plan.label}</option>
+                                        ))}
+                                    </select>
                                     <p className="mt-2 text-xs text-slate-400">
-                                        Runtime launch will use square-divisor sizing. Current pinned-GPU resolution: {boltzCpGpuSettings.gpuIds || 'auto fallback'} → size_cp {boltzCpGpuSettings.sizeCp}.
+                                        {bcpShardPlans.find((plan) => plan.id === bcpShardPlanId)?.description}
+                                    </p>
+                                    <p className="mt-2 text-xs text-slate-400">
+                                        {getBoltzCpRuntimeBridgeSummary({
+                                            shardPlanId: bcpShardPlanId,
+                                            gpuIds: boltzCpGpuSettings.gpuIds,
+                                            sizeCp: boltzCpGpuSettings.sizeCp,
+                                            autoFallbackLabel: 'auto-selected GPU pool',
+                                        })}
                                     </p>
                                 </div>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -2042,6 +2117,48 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                         </div>
                                         <p className="md:col-span-3 text-xs text-cyan-200/80">
                                             Remote provider is scoped to single structure-prediction jobs in this release.
+                                        </p>
+                                    </div>
+                                )}
+
+                                {msaProvider === 'local' && (
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
+                                        <div>
+                                            <label className="text-xs text-[var(--text-secondary)] block mb-1">EnvDB Target Sharding</label>
+                                            <select
+                                                value={msaTargetShardMode}
+                                                onChange={(e) => setMsaTargetShardMode(normalizeMsaTargetShardMode(e.target.value))}
+                                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                            >
+                                                <option value="auto">Auto for balanced/maximum</option>
+                                                <option value="required">Required (fail if unavailable)</option>
+                                                <option value="off">Off / unsharded fallback</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-[var(--text-secondary)] block mb-1">Target Shards</label>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                step={1}
+                                                value={msaTargetShards}
+                                                onChange={(e) => setMsaTargetShards(normalizeMsaTargetShards(e.target.value))}
+                                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-[var(--text-secondary)] block mb-1">Min DB Size (GB)</label>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                step={0.1}
+                                                value={msaTargetShardMinSizeGb}
+                                                onChange={(e) => setMsaTargetShardMinSizeGb(normalizeMsaTargetShardMinSizeGb(e.target.value))}
+                                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                            />
+                                        </div>
+                                        <p className="md:col-span-3 text-xs text-emerald-200/80">
+                                            Keeps the total MSA CPU budget fixed while splitting EnvDB target search for high-quality balanced/maximum runs. Fast remains a screening preset; use Off for rollback/debug.
                                         </p>
                                     </div>
                                 )}

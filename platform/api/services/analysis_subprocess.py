@@ -12,7 +12,7 @@ from typing import Any
 from sqlalchemy import select
 
 from database import AnalysisRun, Design, Job, async_session
-from paths import resolve_allowed_path
+from paths import resolve_allowed_path, resolve_runtime_data_path
 from services.analysis_registry import (
     ANTIBODY_ANNOTATION_PACK_ANALYSIS,
     CHAIN_METRICS_ANALYSIS,
@@ -162,7 +162,7 @@ def _confidence_file_candidates(pdb_path: Path) -> list[Path]:
 
 
 def _choose_confidence_file(design: Design) -> Path | None:
-    pdb_path = Path(design.pdb_path)
+    pdb_path = _resolve_design_structure_path(design)
     candidates = _confidence_file_candidates(pdb_path)
     for candidate in candidates:
         if pdb_path.stem in candidate.stem:
@@ -170,8 +170,20 @@ def _choose_confidence_file(design: Design) -> Path | None:
     return candidates[0] if candidates else None
 
 
+def _resolve_design_structure_path(design: Design) -> Path:
+    if not design.pdb_path:
+        raise ValueError(f"Design {design.id} has no structure file")
+    return resolve_runtime_data_path(design.pdb_path)
+
+
+def _resolve_design_aligned_error_path(design: Design) -> Path:
+    if not design.aligned_error_path:
+        raise ValueError(f"Design {design.id} has no aligned-error artifact")
+    return resolve_runtime_data_path(design.aligned_error_path)
+
+
 def _compute_structure_summary(design: Design) -> tuple[dict[str, Any], dict[str, Any], Any]:
-    structure_path = Path(design.pdb_path)
+    structure_path = _resolve_design_structure_path(design)
     result = {
         "design_id": design.id,
         "design_name": design.name,
@@ -189,7 +201,7 @@ def _compute_structure_summary(design: Design) -> tuple[dict[str, Any], dict[str
 
 
 def _compute_contact_map(design: Design, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any]:
-    structure_path = Path(design.pdb_path)
+    structure_path = _resolve_design_structure_path(design)
     max_size = int((params or {}).get("max_size") or 300)
     distance_matrix, residue_numbers, chain_ids = compute_contact_map(structure_path, max_size=max_size)
     if distance_matrix is None or residue_numbers is None or chain_ids is None:
@@ -211,7 +223,8 @@ def _compute_contact_map(design: Design, params: dict[str, Any]) -> tuple[dict[s
 
 
 def _compute_chain_metrics(design: Design) -> tuple[dict[str, Any], dict[str, Any], Any, dict[str, Any]]:
-    metrics = get_per_chain_metrics(design.pdb_path)
+    structure_path = _resolve_design_structure_path(design)
+    metrics = get_per_chain_metrics(str(structure_path))
     result = metrics or {}
     polymer_chains = [value for value in result.values() if isinstance(value, dict) and value.get("type") != "ligand"]
     summary = {
@@ -223,8 +236,9 @@ def _compute_chain_metrics(design: Design) -> tuple[dict[str, Any], dict[str, An
 
 
 def _compute_fampnn_psce_profile(design: Design, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any]:
+    structure_path = _resolve_design_structure_path(design)
     ignore_cbeta = bool((params or {}).get("ignore_cbeta", False))
-    chains = get_per_chain_fampnn_psce(design.pdb_path, ignore_cbeta=ignore_cbeta) or {}
+    chains = get_per_chain_fampnn_psce(str(structure_path), ignore_cbeta=ignore_cbeta) or {}
     all_scores = [
         float(score)
         for chain in chains.values()
@@ -254,12 +268,14 @@ def _compute_fampnn_psce_profile(design: Design, params: dict[str, Any]) -> tupl
 
 
 def _compute_pae_matrix(design: Design, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any]:
+    structure_path = _resolve_design_structure_path(design)
+    aligned_error_path = _resolve_design_aligned_error_path(design)
     max_size = int((params or {}).get("max_size") or 200)
     artifact = load_aligned_error_artifact(
-        aligned_error_path=design.aligned_error_path,
+        aligned_error_path=str(aligned_error_path),
         aligned_error_format=design.aligned_error_format,
         matrix_key=design.aligned_error_key,
-        structure_path=design.pdb_path,
+        structure_path=str(structure_path),
     )
     pae_matrix = artifact.matrix.tolist()
     size = len(pae_matrix)
@@ -285,11 +301,13 @@ def _compute_pae_matrix(design: Design, params: dict[str, Any]) -> tuple[dict[st
 
 
 def _compute_ipsae_interface(design: Design, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any, dict[str, Any]]:
+    structure_path = _resolve_design_structure_path(design)
+    aligned_error_path = _resolve_design_aligned_error_path(design)
     artifact = load_aligned_error_artifact(
-        aligned_error_path=design.aligned_error_path,
+        aligned_error_path=str(aligned_error_path),
         aligned_error_format=design.aligned_error_format,
         matrix_key=design.aligned_error_key,
-        structure_path=design.pdb_path,
+        structure_path=str(structure_path),
     )
     binder_chains, target_chains = _design_chain_lists(design)
     result = compute_ipsae_interface(
@@ -320,7 +338,7 @@ def _compute_ipsae_interface(design: Design, params: dict[str, Any]) -> tuple[di
 
 
 def _compute_antibody_annotation_pack(design: Design) -> tuple[dict[str, Any], dict[str, Any], Any, dict[str, Any]]:
-    structure_path = Path(design.pdb_path)
+    structure_path = _resolve_design_structure_path(design)
     sequences = extract_sequence_from_pdb(str(structure_path))
     binder_chains = identify_binder_chains(sequences, str(structure_path)) if sequences else {}
     detected_antibody_chains = ",".join(
@@ -730,9 +748,8 @@ async def _run_analysis(run_id: str) -> int:
             design = design_result.scalar_one_or_none()
             if design is None:
                 raise ValueError(f"Design {run.subject_id} not found")
-            if not design.pdb_path:
-                raise ValueError(f"Design {run.subject_id} has no structure file")
-            if not Path(design.pdb_path).exists():
+            structure_path = _resolve_design_structure_path(design)
+            if not structure_path.exists():
                 raise FileNotFoundError(f"Structure file not found: {design.pdb_path}")
 
             if run.analysis_type == STRUCTURE_SUMMARY_ANALYSIS:

@@ -1268,6 +1268,7 @@ export function MolBioToolkitV2() {
 
     const startPanelResize = useCallback((side: ResizeHandleSide) => (event: ReactPointerEvent<HTMLButtonElement>) => {
         event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
         resizeStateRef.current = {
             side,
             pointerX: event.clientX,
@@ -1689,7 +1690,7 @@ export function MolBioToolkitV2() {
                                 aria-label="Resize construct shelf"
                                 title="Resize construct shelf"
                                 onPointerDown={startPanelResize('left')}
-                                className="w-1.5 flex-shrink-0 cursor-col-resize bg-slate-950/80 transition-colors hover:bg-blue-500/60"
+                                className="touch-none w-4 md:w-1.5 flex-shrink-0 cursor-col-resize bg-slate-950/80 transition-colors hover:bg-blue-500/60"
                             />
                         )}
                     </>
@@ -1898,7 +1899,7 @@ export function MolBioToolkitV2() {
                                 aria-label="Resize toolkit panels"
                                 title="Resize toolkit panels"
                                 onPointerDown={startPanelResize('right')}
-                                className="w-1.5 flex-shrink-0 cursor-col-resize bg-slate-950/80 transition-colors hover:bg-blue-500/60"
+                                className="touch-none w-4 md:w-1.5 flex-shrink-0 cursor-col-resize bg-slate-950/80 transition-colors hover:bg-blue-500/60"
                             />
                         )}
                         <div

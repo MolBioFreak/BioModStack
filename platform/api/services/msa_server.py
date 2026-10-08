@@ -16,7 +16,22 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
+
+from local_msa_runtime import (
+    DEFAULT_GPUSERVER_DB_LOAD_MODE,
+    DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
+    filter_matching_servers,
+    is_matching_gpuserver_process,
+    normalize_gpuserver_db_load_mode,
+    normalize_gpuserver_startup_wait,
+)
 
 from paths import get_colabfold_db, get_msa_cache_dir
 from services.gpu_config import read_scheduler_config
@@ -55,12 +70,12 @@ def _read_proc_cmdline(pid: int) -> str:
 
 
 def _is_matching_gpuserver_process(pid: int, target_db: Path) -> bool:
-    if not _pid_is_alive(pid):
-        return False
-    cmdline = _read_proc_cmdline(pid)
-    if not cmdline:
-        return True
-    return "gpuserver" in cmdline and str(target_db) in cmdline
+    return is_matching_gpuserver_process(
+        pid,
+        target_db,
+        pid_is_alive=_pid_is_alive,
+        read_proc_cmdline=_read_proc_cmdline,
+    )
 
 
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -439,11 +454,14 @@ def ensure_server_for_db(
     gpu_id: int,
     max_seqs: int = 300,
     prefilter_mode: int = 1,
-    db_load_mode: int = 0,
-    startup_wait_seconds: float = 1.0,
+    db_load_mode: int = DEFAULT_GPUSERVER_DB_LOAD_MODE,
+    startup_wait_seconds: float = DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
 ) -> Dict[str, Any]:
     if db_alias not in DB_ALIASES:
         raise ValueError(f"Unknown db alias '{db_alias}'. Expected one of: {sorted(DB_ALIASES)}")
+
+    normalized_db_load_mode = normalize_gpuserver_db_load_mode(db_load_mode)
+    normalized_startup_wait_seconds = normalize_gpuserver_startup_wait(startup_wait_seconds)
 
     db_root = get_colabfold_db()
     mmseqs_bin = _resolve_mmseqs_gpu_binary(db_root)
@@ -464,7 +482,7 @@ def ensure_server_for_db(
         cuda_visible_devices=env["CUDA_VISIBLE_DEVICES"],
         max_seqs=max_seqs,
         prefilter_mode=prefilter_mode,
-        db_load_mode=db_load_mode,
+        db_load_mode=normalized_db_load_mode,
     )
     server_dir = runtime_root / key
     server_dir.mkdir(parents=True, exist_ok=True)
@@ -505,7 +523,7 @@ def ensure_server_for_db(
             str(target_db),
             "--max-seqs", str(max(1, int(max_seqs))),
             "--prefilter-mode", str(int(prefilter_mode)),
-            "--db-load-mode", str(int(db_load_mode)),
+            "--db-load-mode", str(int(normalized_db_load_mode)),
         ]
 
         with open(log_path, "a", encoding="utf-8") as log_handle:
@@ -518,7 +536,7 @@ def ensure_server_for_db(
                 start_new_session=True,
             )
 
-        time.sleep(max(0.0, float(startup_wait_seconds)))
+        time.sleep(max(0.0, normalized_startup_wait_seconds))
         early_exit = proc.poll()
         if early_exit is not None:
             tail = _tail_text_file(log_path)
@@ -534,7 +552,7 @@ def ensure_server_for_db(
             "cuda_visible_devices": env["CUDA_VISIBLE_DEVICES"],
             "max_seqs": int(max(1, max_seqs)),
             "prefilter_mode": int(prefilter_mode),
-            "db_load_mode": int(db_load_mode),
+            "db_load_mode": normalized_db_load_mode,
             "log_path": str(log_path),
             "started_at": datetime.utcnow().isoformat() + "Z",
             "db_alias": db_alias,
@@ -603,7 +621,7 @@ def server_status(
     include_envdb: Optional[bool] = None,
     max_seqs: int = 300,
     prefilter_mode: int = 1,
-    db_load_mode: int = 0,
+    db_load_mode: int = DEFAULT_GPUSERVER_DB_LOAD_MODE,
     has_active_batch_job: bool = False,
 ) -> Dict[str, Any]:
     settings = read_server_settings()
@@ -624,7 +642,9 @@ def server_status(
     selected_servers = servers
     if effective_gpu_id is not None:
         selected_servers = [
-            s for s in servers if str(s.get("cuda_visible_devices", "")) == str(effective_gpu_id)
+            s
+            for s in servers
+            if str(s.get("cuda_visible_devices", s.get("gpu_id", ""))) == str(effective_gpu_id)
         ]
 
     # Optional auto-stop if idle timeout is enabled.
@@ -668,15 +688,72 @@ def server_status(
                 selected_servers = servers
                 if effective_gpu_id is not None:
                     selected_servers = [
-                        s for s in servers if str(s.get("cuda_visible_devices", "")) == str(effective_gpu_id)
+                        s
+                        for s in servers
+                        if str(s.get("cuda_visible_devices", s.get("gpu_id", ""))) == str(effective_gpu_id)
                     ]
+
+    normalized_db_load_mode = normalize_gpuserver_db_load_mode(db_load_mode)
+    requested_contract = {
+        "gpu_id": effective_gpu_id,
+        "max_seqs": int(max(1, max_seqs)),
+        "prefilter_mode": int(prefilter_mode),
+        "db_load_mode": normalized_db_load_mode,
+        "include_envdb": effective_include_envdb,
+    }
 
     running_aliases = {s.get("db_alias") for s in selected_servers if s.get("running")}
     expected_aliases = {"uniref", "envdb"} if effective_include_envdb else {"uniref"}
+    matching_servers = filter_matching_servers(
+        selected_servers,
+        target_db=get_colabfold_db() / DB_ALIASES["uniref"],
+        gpu_id=effective_gpu_id,
+        max_seqs=max_seqs,
+        prefilter_mode=prefilter_mode,
+        db_load_mode=normalized_db_load_mode,
+    )
+    matching_contract_by_alias: Dict[str, Dict[str, Any]] = {}
+    matching_aliases: set[str] = set()
+    for server in matching_servers:
+        contract_source = str(server.get("target_db") or server.get("alias") or "")
+        contract_alias = str(
+            server.get("db_alias")
+            or (_db_alias_from_path(contract_source) if contract_source else "")
+            or ""
+        )
+        if contract_alias:
+            matching_contract_by_alias[contract_alias] = server
+        raw_alias = str(server.get("alias") or server.get("db_alias") or "")
+        if raw_alias:
+            matching_aliases.add(raw_alias)
+    if effective_include_envdb:
+        env_matches = filter_matching_servers(
+            selected_servers,
+            target_db=get_colabfold_db() / DB_ALIASES["envdb"],
+            gpu_id=effective_gpu_id,
+            max_seqs=max_seqs,
+            prefilter_mode=prefilter_mode,
+            db_load_mode=normalized_db_load_mode,
+        )
+        for server in env_matches:
+            contract_source = str(server.get("target_db") or server.get("alias") or "")
+            contract_alias = str(
+                server.get("db_alias")
+                or (_db_alias_from_path(contract_source) if contract_source else "")
+                or ""
+            )
+            if contract_alias:
+                matching_contract_by_alias[contract_alias] = server
+            raw_alias = str(server.get("alias") or server.get("db_alias") or "")
+            if raw_alias:
+                matching_aliases.add(raw_alias)
+    matching_contract_aliases = sorted(matching_contract_by_alias.keys())
+    matching_servers = [matching_contract_by_alias[alias] for alias in matching_contract_aliases]
+    matching_aliases_list = sorted(matching_aliases)
 
     return {
         "running": any(s.get("running") for s in selected_servers),
-        "all_running": expected_aliases.issubset(running_aliases),
+        "all_running": expected_aliases.issubset(set(matching_contract_aliases)),
         "active_batch_job": bool(has_active_batch_job),
         "effective_gpu_id": effective_gpu_id,
         "gpu_selection_error": selection_error,
@@ -687,8 +764,12 @@ def server_status(
         "auto_stopped": auto_stopped,
         "auto_stop_reason": auto_stop_reason,
         "expected_aliases": sorted(expected_aliases),
+        "running_aliases": sorted(alias for alias in running_aliases if alias),
+        "requested_contract": requested_contract,
+        "matching_aliases": matching_aliases_list,
+        "matching_servers": matching_servers,
         "max_seqs": int(max(1, max_seqs)),
         "prefilter_mode": int(prefilter_mode),
-        "db_load_mode": int(db_load_mode),
+        "db_load_mode": normalized_db_load_mode,
         "servers": selected_servers,
     }

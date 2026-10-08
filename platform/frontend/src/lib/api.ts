@@ -71,6 +71,25 @@ export interface JobLogs {
     parsed_error: string | null;
 }
 
+export interface BoltzCpPhysicalGpuResolution {
+    gpu_count: number;
+    launch_size_cp: number;
+}
+
+export interface BoltzCpShardPlan {
+    id: string;
+    label: string;
+    topology: string;
+    logical_size_cp: number;
+    description: string;
+    physical_gpu_resolutions: BoltzCpPhysicalGpuResolution[];
+}
+
+export interface BoltzCpShardPlanCatalog {
+    default_plan_id: string;
+    plans: BoltzCpShardPlan[];
+}
+
 export interface GPUProcess {
     pid: number;
     name: string;
@@ -199,6 +218,7 @@ export const fetchJobs = (params?: {
     offset?: number;
     include_children?: boolean;
 }) => api.get<{ jobs: Job[]; total: number }>('/api/jobs', { params });
+export const fetchBoltzCpShardPlans = () => api.get<BoltzCpShardPlanCatalog>('/api/jobs/boltz-cp/shard-plans');
 export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status');
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);

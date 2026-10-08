@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
     clampMolBioPanelWidth,
     getDefaultMolBioToolPanelWidth,
+    getMolBioPanelBounds,
     MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS,
     MOLBIO_VIEWER_MIN_WIDTH,
     resolveMolBioViewerLayout,
@@ -117,6 +118,11 @@ test('phone-sized viewports start with both side panels collapsed', () => {
     assert.equal(shouldCollapseMolBioPanelsForViewport(1280), false);
 });
 
+test('phone-sized panel bounds allow narrower side menus without consuming the entire viewer', () => {
+    assert.deepEqual(getMolBioPanelBounds('left', 390), { min: 176, max: 294 });
+    assert.deepEqual(getMolBioPanelBounds('right', 390), { min: 208, max: 294 });
+});
+
 test('mol bio toolkit source wires fullscreen and side-panel collapse controls', () => {
     const source = readFileSync(TOOLKIT_PATH, 'utf8');
 
@@ -139,4 +145,20 @@ test('sequence header exposes focus and panel collapse actions', () => {
     assert.match(source, /Focus Viewer/);
     assert.match(source, /Hide Shelf|Show Shelf/);
     assert.match(source, /Hide Tools|Show Tools/);
+});
+
+test('sequence header source keeps the plasmid toolbar horizontally scrollable on narrow screens', () => {
+    const source = readFileSync(HEADER_PATH, 'utf8');
+
+    assert.match(source, /data-sequence-header-scroll/);
+    assert.match(source, /overflow-x-auto/);
+    assert.match(source, /min-w-max/);
+});
+
+test('mol bio toolkit source gives mobile resize handles touch-safe hit targets', () => {
+    const source = readFileSync(TOOLKIT_PATH, 'utf8');
+
+    assert.match(source, /touch-none/);
+    assert.match(source, /w-4/);
+    assert.match(source, /md:w-1\.5/);
 });

@@ -1,5 +1,9 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { ensureMolstarLoaded, isMolstarLoaded, rgbToHex } from '../lib/molstar-loader';
+import {
+    MOLSTAR_TOUCH_INTERACTION_SELECTOR,
+    resolveMolstarTouchAction,
+} from './molstarTouchInteraction';
 
 interface Selection {
     chain_id?: string;  // Will be mapped to struct_asym_id
@@ -83,6 +87,15 @@ export default function MolstarViewer({
     }, [structureUrl]);
     const selectionSignature = useMemo(() => buildSelectionSignature(selections), [selections]);
     const residueColorSignature = useMemo(() => buildResidueColorSignature(residueColors), [residueColors]);
+    const interactionTouchAction = useMemo(() => {
+        const coarsePointer = typeof window.matchMedia === 'function'
+            && (window.matchMedia('(any-pointer: coarse)').matches || window.matchMedia('(pointer: coarse)').matches);
+
+        return resolveMolstarTouchAction({
+            maxTouchPoints: navigator.maxTouchPoints ?? 0,
+            coarsePointer,
+        });
+    }, []);
 
     // Load the web component script
     useEffect(() => {
@@ -93,6 +106,71 @@ export default function MolstarViewer({
         lastAppliedSelectionSignatureRef.current = '';
         lastAppliedResidueColorSignatureRef.current = '';
     }, [absoluteUrl]);
+
+    useEffect(() => {
+        if (!isScriptLoaded || interactionTouchAction !== 'none') {
+            return;
+        }
+
+        let observer: MutationObserver | null = null;
+        let retryTimer: number | null = null;
+        let cancelled = false;
+
+        const applyInteractionTouchAction = (): boolean => {
+            const host = viewerRef.current;
+            if (!host) {
+                return false;
+            }
+
+            host.style.touchAction = interactionTouchAction;
+            const shadowRoot = host.shadowRoot;
+            if (!shadowRoot) {
+                return false;
+            }
+
+            shadowRoot.querySelectorAll<HTMLElement>(MOLSTAR_TOUCH_INTERACTION_SELECTOR).forEach((element) => {
+                element.style.touchAction = interactionTouchAction;
+            });
+
+            return shadowRoot.querySelector('canvas') !== null;
+        };
+
+        const ensureObserver = (): void => {
+            const shadowRoot = viewerRef.current?.shadowRoot;
+            if (!shadowRoot || observer) {
+                return;
+            }
+
+            observer = new MutationObserver(() => {
+                applyInteractionTouchAction();
+            });
+            observer.observe(shadowRoot, { childList: true, subtree: true });
+        };
+
+        const pollForViewerShadowDom = (remainingAttempts = 40): void => {
+            if (cancelled) {
+                return;
+            }
+
+            const ready = applyInteractionTouchAction();
+            ensureObserver();
+            if (!ready && remainingAttempts > 0) {
+                retryTimer = window.setTimeout(() => {
+                    pollForViewerShadowDom(remainingAttempts - 1);
+                }, 100);
+            }
+        };
+
+        pollForViewerShadowDom();
+
+        return () => {
+            cancelled = true;
+            observer?.disconnect();
+            if (retryTimer !== null) {
+                window.clearTimeout(retryTimer);
+            }
+        };
+    }, [absoluteUrl, interactionTouchAction, isScriptLoaded]);
 
     // Apply selections after viewer loads
     const applySelections = useCallback(async () => {
@@ -286,7 +364,7 @@ export default function MolstarViewer({
                 'select-interaction': 'true',
                 'granularity': 'residue',
                 'pdbe-link': 'false',
-                style: { width: '100%', height: '100%', display: 'block' }
+                style: { width: '100%', height: '100%', display: 'block', touchAction: interactionTouchAction }
             })}
         </div>
     );
