@@ -269,63 +269,128 @@ def test_panel_periodic_refresh_calls_read_only_bioxp_refresh_without_obsolete_a
     assert calls == ["status", "jobs", "db", "bioxp"]
 
 
-def test_panel_open_browser_uses_runtime_aware_frontend_url(monkeypatch) -> None:
+def test_panel_open_browser_uses_explicit_runtime_frontend_url(monkeypatch) -> None:
     module = load_module(monkeypatch)
-    captured = {}
+    captured = []
     panel = module.BioModStackPanel.__new__(module.BioModStackPanel)
 
-    monkeypatch.setattr(module, "operator_frontend_url", lambda project_root=None: "http://127.0.0.1:5173/")
-    monkeypatch.setattr(module.webbrowser, "open", lambda url: captured.setdefault("url", url))
+    monkeypatch.setattr(
+        module,
+        "runtime_port_settings",
+        lambda project_root=None: {
+            "dev_url": "http://127.0.0.1:5173/",
+            "prod_url": "http://127.0.0.1:18080/bms/",
+        },
+    )
+    monkeypatch.setattr(module.webbrowser, "open", captured.append)
 
-    module.BioModStackPanel._on_open_browser(panel, None)
+    module.BioModStackPanel._on_open_browser(panel, None, module.DEV_RUNTIME_MODE)
+    module.BioModStackPanel._on_open_browser(panel, None, module.CONTAINER_RUNTIME_MODE)
 
-    assert captured["url"] == "http://127.0.0.1:5173/"
+    assert captured == ["http://127.0.0.1:5173/", "http://127.0.0.1:18080/bms/"]
 
 
-def test_panel_restart_all_passes_detected_runtime_to_wrapper(monkeypatch) -> None:
+def test_panel_jobs_row_labels_raw_production_database_scope(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+
+    class Row:
+        subtitle = ""
+
+        def set_subtitle(self, value: str) -> None:
+            self.subtitle = value
+
+    row = Row()
+    panel = SimpleNamespace(jobs_row=row)
+    monkeypatch.setattr(module, "get_job_counts", lambda: (0, 1, 1733))
+
+    module.BioModStackPanel._update_jobs_row(panel)
+
+    assert row.subtitle == "0 running  |  1 queued  |  1,733 raw production DB rows"
+
+
+def test_panel_source_checkout_owns_control_scripts_even_with_inherited_bms_home(monkeypatch) -> None:
+    monkeypatch.setenv("BMS_HOME", "/tmp/wrong-runtime-owner")
+    module = load_module(monkeypatch)
+
+    assert module.PROJECT_ROOT == REPO_ROOT
+    assert module.START_SCRIPT == REPO_ROOT / "start_ui.sh"
+    assert module.STOP_SCRIPT == REPO_ROOT / "stop_services.sh"
+
+
+def test_panel_script_env_scrubs_inherited_runtime_identity(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    monkeypatch.setenv("BMS_HOME", "/tmp/wrong-runtime-owner")
+    monkeypatch.setenv("BMS_DEV_API_HOST_PORT", "8002")
+    monkeypatch.setenv("BMS_API_IMAGE", "biomodstack/api:stale")
+    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "wrong-project")
+    panel = SimpleNamespace(cached_sudo_password="secret-in-memory")
+
+    env = module.BioModStackPanel._script_env(panel)
+
+    assert "BMS_HOME" not in env
+    assert "BMS_DEV_API_HOST_PORT" not in env
+    assert "BMS_API_IMAGE" not in env
+    assert "COMPOSE_PROJECT_NAME" not in env
+    assert env["BMS_SUDO_PASSWORD"] == "secret-in-memory"
+
+
+def test_panel_restart_all_passes_detected_runtime_to_action_runner(monkeypatch) -> None:
     module = load_module(monkeypatch)
     captured = {}
     panel = SimpleNamespace(
-        _script_env=lambda: {"TEST_ENV": "1"},
-        _refresh_status_once=lambda: False,
+        _run_service_action=lambda label, command: captured.setdefault("action", (label, command)),
     )
 
     monkeypatch.setattr(module, "operator_runtime_mode", lambda project_root=None: module.DEV_RUNTIME_MODE)
-    monkeypatch.setattr(module, "show_notification", lambda *args, **kwargs: None)
-    monkeypatch.setattr(module.GLib, "timeout_add_seconds", lambda seconds, callback: captured.setdefault("timeout", (seconds, callback)))
-    monkeypatch.setattr(module.subprocess, "Popen", lambda command, **kwargs: captured.setdefault("spawn", (command, kwargs.get("env"))))
 
     module.BioModStackPanel._on_restart_all(panel, None)
 
-    assert captured["spawn"] == (
+    assert captured["action"] == (
+        "Restart",
         ["bash", str(module.START_SCRIPT), "restart", "--runtime", module.DEV_RUNTIME_MODE],
-        {"TEST_ENV": "1"},
     )
-    assert captured["timeout"][0] == 3
-    assert captured["timeout"][1] is panel._refresh_status_once
 
 
-def test_panel_start_button_uses_explicit_runtime_target(monkeypatch) -> None:
+def test_panel_start_button_uses_explicit_runtime_target_and_action_runner(monkeypatch) -> None:
     module = load_module(monkeypatch)
     captured = {}
     panel = SimpleNamespace(
-        _script_env=lambda: {"TEST_ENV": "1"},
-        _refresh_status_once=lambda: False,
         _selected_runtime_target=lambda: "both",
+        _run_service_action=lambda label, command: captured.setdefault("action", (label, command)),
     )
-
-    monkeypatch.setattr(module, "show_notification", lambda *args, **kwargs: None)
-    monkeypatch.setattr(module.GLib, "timeout_add_seconds", lambda seconds, callback: captured.setdefault("timeout", (seconds, callback)))
-    monkeypatch.setattr(module.subprocess, "Popen", lambda command, **kwargs: captured.setdefault("spawn", (command, kwargs.get("env"))))
 
     module.BioModStackPanel._on_start_all(panel, None)
 
-    assert captured["spawn"] == (
+    assert captured["action"] == (
+        "Start both",
         ["bash", str(module.START_SCRIPT), "start-target", "--target", "both"],
-        {"TEST_ENV": "1"},
     )
-    assert captured["timeout"][0] == 5
-    assert captured["timeout"][1] is panel._refresh_status_once
+
+
+def test_panel_failed_service_action_is_visible_and_actionable(monkeypatch) -> None:
+    module = load_module(monkeypatch)
+    notifications = []
+
+    class Row:
+        subtitle = ""
+
+        def set_subtitle(self, value: str) -> None:
+            self.subtitle = value
+
+    row = Row()
+    panel = SimpleNamespace(
+        action_status_row=row,
+        _service_action_active=True,
+        _refresh_status_once=lambda: False,
+    )
+    result = SimpleNamespace(returncode=78, stdout="", stderr="ERROR: api port 8000 owner: foreign\n")
+    monkeypatch.setattr(module, "show_notification", lambda title, message: notifications.append((title, message)))
+
+    assert module.BioModStackPanel._finish_service_action(panel, "Start both", result, None) is False
+    assert panel._service_action_active is False
+    assert "failed (exit 78)" in row.subtitle
+    assert "api port 8000 owner: foreign" in row.subtitle
+    assert notifications == [("Start both Failed", "api port 8000 owner: foreign")]
 
 
 def test_panel_one_shot_refresh_does_not_register_a_recurring_timer(monkeypatch) -> None:
