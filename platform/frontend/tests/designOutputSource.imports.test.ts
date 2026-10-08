@@ -117,3 +117,24 @@ test('keeps boltz2 prediction rows tagged as validation even when pSCE metrics a
     assert.equal(inferDesignAnalysisLens(boltzPredictionDesign), 'validation');
     assert.equal(getOutputSourceLabel(boltzPredictionDesign), 'Boltz-2');
 });
+
+test('keeps fold-cp prediction rows tagged as boltz-2 validation even when pSCE metrics are present', () => {
+    const foldCpPredictionDesign = {
+        name: 'boltz_cp_input_model_0',
+        pdb_path: '/mnt/BioModStack/bms_results/Boltz2 Context Parallelism Test 002_20260419_190648/cif_files/predictions/boltz_cp_input_model_0.cif',
+        confidence_metrics: {
+            fampnn: {
+                fampnn_avg_psce: 48.97,
+            },
+        },
+        provenance: {
+            model_id: 'boltz_cp_experimental',
+            mode: 'design',
+        },
+        fampnn_psce: 48.97,
+    };
+
+    assert.equal(inferDesignOutputSource(foldCpPredictionDesign), 'validation');
+    assert.equal(inferDesignAnalysisLens(foldCpPredictionDesign), 'validation');
+    assert.equal(getOutputSourceLabel(foldCpPredictionDesign), 'Boltz-2');
+});

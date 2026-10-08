@@ -1249,6 +1249,16 @@ def _normalize_boltz_no_msa_quality_params(
     return normalized
 
 
+def _supports_colabfold_api_single_job(model_id: str, mode: str) -> bool:
+    normalized_model = str(model_id or "").strip().lower()
+    normalized_mode = str(mode or "").strip().lower()
+
+    if normalized_model == "boltz_cp_experimental":
+        return normalized_mode == "design"
+
+    return normalized_model in {"boltz2", "rf3", "protenix"} and normalized_mode in {"predict", "complex"}
+
+
 def _normalize_target_geometry_mode(raw: Any) -> Optional[str]:
     value = str(raw or "").strip().lower()
     if not value:
@@ -4690,14 +4700,13 @@ async def create_job(
         )
 
     if msa_provider == "colabfold_api":
-        is_structure_model = job_data.model_id in {"boltz2", "rf3", "protenix"}
-        is_structure_mode = job_data.mode in {"predict", "complex"}
-        if not is_structure_model or not is_structure_mode:
+        if not _supports_colabfold_api_single_job(job_data.model_id, job_data.mode):
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "msa_provider=colabfold_api is currently supported only for "
-                    "single structure_prediction jobs (boltz2/rf3/protenix predict|complex)."
+                    "msa_provider=colabfold_api is currently supported only for single-job "
+                    "structure launches (boltz2/rf3/protenix predict|complex, "
+                    "boltz_cp_experimental design)."
                 ),
             )
         if mutagenesis_variants:
