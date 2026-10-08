@@ -76,8 +76,8 @@ test('assay sections use BMS-native workbench copy and explicit unavailable stat
   assert.match(qpcrIndex, /BMS does not preload\s+built-in assay rows/);
 
   assert.match(hplcIndex, /BMS Chromatography Workbench/);
-  assert.match(hplcIndex, /Proprietary Empower DB\/RAW files: export AIA \.cdf\/\.arw or CSV\/ASCII first/);
-  assert.match(hplcIndex, /Waters chromatogram review/);
+  assert.match(hplcIndex, /Export AIA \.cdf\/\.arw or CSV\/ASCII first/);
+  assert.match(hplcIndex, /Waters \/ Empower chromatography/);
 
   assert.match(statsIndex, /BMS DOE \+ Statistics Workbench/);
   assert.match(statsIndex, /\/api\/assay-analytics DOE\/statistics routes/);

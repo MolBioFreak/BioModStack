@@ -115,8 +115,8 @@ test('qPCR raw import source wires clicked wells into standard-curve and amplifi
 
   assert.match(source, /highlightSelectedWellStandardCurvePoints/);
   assert.match(source, /highlightSelectedWellAmplificationTraces/);
-  assert.match(source, /Selected well spot is overlaid on the active target standard curve/);
-  assert.match(source, /clicked well traces are brightened while other amplification traces are dimmed/);
+  assert.match(source, /Selected well overlays the matching standard curve/);
+  assert.match(source, /Clicked well bright; other traces dim/);
 });
 
 test('qPCR raw import warns that EDS curve-derived Cq/Ct values are not authoritative', () => {
@@ -134,7 +134,7 @@ test('qPCR raw import reloads persisted datasets from BMS DB service, not browse
   assert.match(source, /listAnalyticalDatasets\('qpcr', 25\)/);
   assert.match(source, /loadAnalyticalDataset\(selectedDatasetId\)/);
   assert.match(source, /Saved qPCR import to BMS DB service dataset/);
-  assert.match(source, /Loads selected qPCR rows from BMS DB/);
+  assert.match(source, /Load from BMS DB/);
   assert.match(source, /Persisted qPCR imports/);
   assert.doesNotMatch(source, /QPCR_RAW_IMPORT_CACHE_KEY/);
   assert.doesNotMatch(source, /loadAssaySnapshot/);
