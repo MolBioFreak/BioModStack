@@ -1,10 +1,10 @@
-[🏠 ProteinDJ](../README.md) > End-To-End Testing
+[🏠 BioModStack](../README.md) > End-To-End Testing
 
-# ProteinDJ End-To-End Testing
+# BioModStack End-To-End Testing
 
 ## Overview
 
-The `end2end_test.sh` script is a comprehensive testing framework for the ProteinDJ pipeline that automatically tests all supported pipeline modes and generates detailed reports. It helps ensure pipeline reliability and provides insights into the performance of different protein design modes. A full test takes ~40 minutes on 4 A30 GPUs.
+The `end2end_test.sh` script is a comprehensive testing framework for the BioModStack pipeline that automatically tests all supported pipeline modes and generates detailed reports. It helps ensure pipeline reliability and provides insights into the performance of different protein design modes. A full test takes ~40 minutes on 4 A30 GPUs.
 
 ## Features
 
@@ -40,7 +40,7 @@ module load nextflow/24.10.5
 
 ## Pipeline Modes Tested
 
-The script tests the following ProteinDJ pipeline modes:
+The script tests the following BioModStack pipeline modes:
 
 ### Monomer Modes
 - `monomer_denovo` - De novo protein design
@@ -110,6 +110,6 @@ If tests fail:
 
 ---
 
-**Note**: This testing framework is designed to validate the ProteinDJ pipeline functionality across all supported modes. Regular testing helps ensure pipeline reliability and catches regressions early in the development process.
+**Note**: This testing framework is designed to validate the BioModStack pipeline functionality across all supported modes. Regular testing helps ensure pipeline reliability and catches regressions early in the development process.
 
 [⬅️ Back to Main README](../README.md)

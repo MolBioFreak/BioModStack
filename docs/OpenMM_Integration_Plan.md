@@ -775,3 +775,31 @@ sqlite3 platform/biomodstack.db ".schema designs" | grep -E "openmm|mmgbsa"
 2. All changes are additive—no existing functionality modified
 3. Database columns nullable—no data loss on rollback
 4. Container is separate—can be deleted without affecting other containers
+
+---
+
+## Implementation Status (Audit: 2026-01-21)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **Container** (`openmm.sif`) | ✅ Complete | CUDA 12.1 + OpenMM 8.4, pdbfixer from GitHub |
+| **Backend Module** (`modules/openmm.nf`) | ✅ Complete | 4 processes + workflow |
+| **Frontend UI** (`PhysicsRefinementPanel.tsx`) | ✅ Complete | Reusable component with tooltips |
+| **Template Integration** | ✅ Complete | AntibodyDenovo, BindCraft, BoltzGen, Mutagenesis |
+| **Backend API Wiring** (`jobs.py`) | ❌ Pending | Params not yet passed to Nextflow |
+| **Results Viewer** | ❌ Pending | MM-GBSA, ΔG, clash count not exposed |
+| **Database Migration** | ❌ Pending | Schema changes not applied |
+
+### Files Modified
+- `apptainer/openmm.def` - Container definition
+- `modules/openmm.nf` - Nextflow module
+- `main.nf` - OpenMM import
+- `workflows/bindcraft_design.nf` - OpenMM integration
+- `platform/frontend/src/components/PhysicsRefinementPanel.tsx` - UI component
+- `platform/frontend/src/components/*Template.tsx` - 4 templates updated
+
+### Remaining Work (~5 hours)
+1. Wire `physicsSettings` from `jobs.py` → Nextflow CLI args
+2. Add Results Viewer columns (MM-GBSA, ΔG, clash count)
+3. Database migration for OpenMM fields
+4. End-to-end verification
