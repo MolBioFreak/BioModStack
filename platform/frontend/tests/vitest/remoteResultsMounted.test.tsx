@@ -82,6 +82,8 @@ it('queue renders completed queue-state waits and running transfers through refr
     act(() => root.render(<QueryClientProvider client={client}><MemoryRouter><JobQueuePanel /></MemoryRouter></QueryClientProvider>));
     await settle();
     expect(container.textContent).toContain('Pull results');
+    expect(container.querySelectorAll('[aria-label="Remote job phases"]')).toHaveLength(1);
+    expect(container.querySelector('[aria-label="Remote job phases"] h4')?.textContent).toBe('Remote jobs');
     act(() => client.setQueryData(['queue'], { data: [{ ...returning, name: 'Remote prediction', model_id: 'protenix', mode: 'structure_prediction', paused: false }] }));
     await settle();
     expect(container.querySelector('[data-remote-results-job] button')?.getAttribute('disabled')).not.toBeNull();

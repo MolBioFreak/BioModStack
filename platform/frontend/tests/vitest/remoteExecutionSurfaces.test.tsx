@@ -374,7 +374,7 @@ describe('remote execution operator surfaces', () => {
             client.clear();
         }
     });
-    it.each([true, false])('shows current empty or unknown inventory and clears saved placement on Dashboard (available=%s)', async (available) => {
+    it.each([true, false])('shows current empty or unknown inventory without changing saved placement on Dashboard (available=%s)', async (available) => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, readyTarget.id);
         api.defaults.adapter = async (config) => {
@@ -399,7 +399,7 @@ describe('remote execution operator surfaces', () => {
             button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
             await new Promise((resolve) => setTimeout(resolve, 20));
         });
-        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe(readyTarget.id);
         expect(container.textContent).not.toContain('Remote 4090');
         expect(container.textContent).toContain(available ? 'No owned Vast instances' : 'Vast inventory unavailable');
         if (!available) {
