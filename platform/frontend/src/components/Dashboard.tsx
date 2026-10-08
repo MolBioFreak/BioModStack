@@ -1064,6 +1064,10 @@ function LogsModal({
                                 Remote logs have not returned to BioModStack yet.
                             </div>
                         )}
+                        {logs.remote_result_identity && <p className="mb-3 text-xs text-slate-400">
+                            {logs.remote_result_identity.kind === 'diagnostics' ? 'Returned diagnostic logs' : 'Returned current logs'} — attempt {logs.remote_result_identity.attempt_id}, generation {logs.remote_result_identity.generation}
+                        </p>}
+                        {logs.remote_read_error && <p role="alert" className="mb-3 text-xs text-amber-200">{logs.remote_read_error}</p>}
                         <pre className="text-sm text-slate-300 font-mono whitespace-pre-wrap break-words">
                             {activeTab === 'parsed' && (
                                 logs.parsed_error || <span className="text-slate-500 italic">No specific error extracted</span>
