@@ -359,8 +359,8 @@ PY
             ${msa_excluded_gpu_csv ? '--excluded-gpus "' + msa_excluded_gpu_csv + '"' : ''} \\
             --gpu-server-mode "${params.msa_gpu_server_mode ?: 'persistent'}" \\
             --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
-            --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 0} \\
-            --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 1.0} \\
+            --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 2} \\
+            --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 5.0} \\
             --local-msa-timeout-seconds ${local_msa_timeout_seconds} \\
             ${msa_cache_only_flag} \\
             ${msa_allow_cpu_fallback_flag} \\

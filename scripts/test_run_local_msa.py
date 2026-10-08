@@ -90,3 +90,43 @@ def test_run_colabfold_msa_workflow_binds_uniref_db_for_search(monkeypatch, tmp_
 
     assert search_calls, "expected the UniRef search step to run"
     assert search_calls[0][2] == str(tmp_path / "db" / "uniref30_2302_db")
+
+
+def test_is_matching_gpuserver_process_rejects_empty_cmdline(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(run_local_msa, "_pid_is_alive", lambda pid: True)
+    monkeypatch.setattr(run_local_msa, "_read_proc_cmdline", lambda pid: "")
+
+    assert run_local_msa._is_matching_gpuserver_process(123, tmp_path / "uniref30_2302_db") is False
+
+
+def test_inspect_mmseqs_runtime_keeps_requested_gpuserver_wait_timeout(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        run_local_msa,
+        "resolve_mmseqs_binaries",
+        lambda db_path: (Path("/bin/echo"), Path("/bin/echo")),
+    )
+
+    runtime = run_local_msa.inspect_mmseqs_runtime(
+        db_path=str(tmp_path),
+        cache_dir=str(tmp_path / "cache"),
+        cpu_only=True,
+        gpu_server_wait_timeout=120,
+        verbose=False,
+    )
+
+    assert runtime["effective_gpu_server_wait_timeout"] == 120
+
+
+def test_build_arg_parser_defaults_gpuserver_client_db_load_mode_to_fast_path() -> None:
+    parser = run_local_msa.build_arg_parser()
+
+    args = parser.parse_args([
+        "--sequence",
+        "ACDEFGHIK",
+        "--name",
+        "parser_defaults",
+        "--out_dir",
+        "/tmp/out",
+    ])
+
+    assert args.gpu_server_db_load_mode == 2

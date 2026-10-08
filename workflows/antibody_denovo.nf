@@ -1349,8 +1349,8 @@ process CheckProtenixMsaPreflight {
         ${msa_excluded_gpu_csv ? '--excluded-gpus "' + msa_excluded_gpu_csv + '"' : ''} \\
         --gpu-server-mode "${params.msa_gpu_server_mode ?: 'persistent'}" \\
         --gpu-server-wait-timeout ${params.msa_gpu_server_wait_timeout ?: 120} \\
-        --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 0} \\
-        --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 1.0} \\
+        --gpu-server-db-load-mode ${params.msa_gpu_server_db_load_mode ?: 2} \\
+        --gpu-server-startup-wait ${params.msa_gpu_server_startup_wait ?: 5.0} \\
         --small-max-tasks ${params.protenix_msa_small_max_tasks ?: 1} \\
         --small-max-protein-chains ${params.protenix_msa_small_max_protein_chains ?: 4} \\
         --small-max-total-residues ${params.protenix_msa_small_max_total_residues ?: 1500}

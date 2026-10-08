@@ -2,14 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
+    BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
     buildBoltzCpSubmitParams,
     buildTargetPreviewSelection,
     buildTargetPreviewSelections,
     deriveBoltzCpGpuLaunchSettings,
+    getBoltzCpLogicalSizeCp,
+    getBoltzCpRuntimeBridgeSummary,
     getBoltzQualityPresetValues,
     getBoltzQualitySliderState,
     getPredictorFamiliesForSelection,
     getStructurePredictorOptions,
+    inferBoltzCpShardPlanId,
     inferTargetStructureFormat,
     resolveBoltzSamplingStepsFromSlider,
     resolveStructureLaunchConfig,
@@ -103,12 +108,12 @@ test('structure submit target preserves native predictor routing but forces bolt
 
 test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to a valid square divisor', () => {
     assert.deepEqual(
-        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [0, 1, 2, 3], requestedSizeCp: undefined }),
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [0, 1, 2, 3], requestedSizeCp: getBoltzCpLogicalSizeCp('2x2') }),
         { gpuIds: '0,1,2,3', sizeCp: 4 },
     );
 
     assert.deepEqual(
-        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [2, 3], requestedSizeCp: 4 }),
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [2, 3], requestedSizeCp: getBoltzCpLogicalSizeCp('4x4') }),
         { gpuIds: '2,3', sizeCp: 1 },
     );
 
@@ -118,14 +123,41 @@ test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to
     );
 
     assert.deepEqual(
-        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [], requestedSizeCp: 9, fallbackGpuIds: '0,1,2,3' }),
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [], requestedSizeCp: getBoltzCpLogicalSizeCp('4x4'), fallbackGpuIds: '0,1,2,3' }),
         { gpuIds: '0,1,2,3', sizeCp: 4 },
+    );
+});
+
+test('boltz cp shard plan helpers expose stable logical topologies and non-collapsing plan descriptions', () => {
+    assert.equal(BOLTZ_CP_DEFAULT_SHARD_PLAN_ID, '2x2');
+    assert.equal(getBoltzCpLogicalSizeCp('1x1'), 1);
+    assert.equal(getBoltzCpLogicalSizeCp('2x2'), 4);
+    assert.equal(getBoltzCpLogicalSizeCp('4x4'), 16);
+    assert.equal(inferBoltzCpShardPlanId(1), '1x1');
+    assert.equal(inferBoltzCpShardPlanId(4), '2x2');
+    assert.equal(inferBoltzCpShardPlanId(16), '4x4');
+    assert.match(BOLTZ_CP_SHARD_PLAN_DEFINITIONS.find((plan) => plan.id === '4x4')?.description || '', /does not change with GPU count/i);
+});
+
+test('boltz cp runtime bridge summary makes the logical plan primary and bridge sizing secondary', () => {
+    assert.equal(
+        getBoltzCpRuntimeBridgeSummary({ shardPlanId: '4x4', gpuIds: '0,1,2,3', sizeCp: 4 }),
+        'The selected logical plan stays 4x4 (16 logical shards); GPU count only affects the current runtime bridge. 0,1,2,3 → launch size_cp 4.',
+    );
+    assert.match(
+        getBoltzCpRuntimeBridgeSummary({ shardPlanId: '2x2', gpuIds: '', sizeCp: 1 }),
+        /selected logical plan stays 2x2/i,
+    );
+    assert.match(
+        getBoltzCpRuntimeBridgeSummary({ shardPlanId: '2x2', gpuIds: '', sizeCp: 1 }),
+        /auto-selected GPU pool → launch size_cp 1/i,
     );
 });
 
 test('boltz cp submit params expose only the workflow-specific knobs on top of shared structure inputs', () => {
     assert.deepEqual(
         buildBoltzCpSubmitParams({
+            shardPlanId: '4x4',
             outputFormat: 'pdb',
             writeFullPae: true,
             seed: '17',
@@ -136,6 +168,7 @@ test('boltz cp submit params expose only the workflow-specific knobs on top of s
             structure_launch_variant: 'boltz_cp_experimental',
             num_parallel_jobs: 1,
             bcp_input_format: 'config_files',
+            bcp_shard_plan_id: '4x4',
             bcp_output_format: 'pdb',
             bcp_write_full_pae: true,
             bcp_gpu_ids: '0,1,2,3',
@@ -146,6 +179,7 @@ test('boltz cp submit params expose only the workflow-specific knobs on top of s
 
     assert.deepEqual(
         buildBoltzCpSubmitParams({
+            shardPlanId: '1x1',
             outputFormat: 'mmcif',
             writeFullPae: false,
             seed: '  ',
@@ -156,6 +190,7 @@ test('boltz cp submit params expose only the workflow-specific knobs on top of s
             structure_launch_variant: 'boltz_cp_experimental',
             num_parallel_jobs: 1,
             bcp_input_format: 'config_files',
+            bcp_shard_plan_id: '1x1',
             bcp_output_format: 'mmcif',
             bcp_write_full_pae: false,
             bcp_size_cp: 1,

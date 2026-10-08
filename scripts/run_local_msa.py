@@ -50,6 +50,19 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 
+from local_msa_runtime import (
+    DEFAULT_GPUSERVER_DB_LOAD_MODE,
+    DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
+    DEFAULT_GPUSERVER_WAIT_TIMEOUT,
+    DEFAULT_MSA_SERVER_STATUS_URL,
+    is_isolated_task_runtime,
+    is_matching_gpuserver_process,
+    normalize_gpuserver_db_load_mode,
+    normalize_gpuserver_startup_wait,
+    normalize_gpuserver_wait_timeout,
+    query_host_gpuserver_status,
+)
+
 _default_data_root = Path(os.path.expanduser(os.getenv("BMS_DATA") or "~/.biomodstack"))
 DEFAULT_DB_PATH = os.getenv("BMS_COLABFOLD_DB") or str(_default_data_root / "colabfold_db")
 DEFAULT_CACHE_DIR = os.getenv("BMS_MSA_CACHE") or str(_default_data_root / "msa_cache")
@@ -858,9 +871,9 @@ def inspect_mmseqs_runtime(
     preferred_gpus: Optional[List[int]] = None,
     excluded_gpus: Optional[List[int]] = None,
     gpu_server_mode: str = "persistent",
-    gpu_server_wait_timeout: int = 120,
-    gpu_server_db_load_mode: int = 0,
-    gpu_server_startup_wait: float = 1.0,
+    gpu_server_wait_timeout: int = DEFAULT_GPUSERVER_WAIT_TIMEOUT,
+    gpu_server_db_load_mode: int = DEFAULT_GPUSERVER_DB_LOAD_MODE,
+    gpu_server_startup_wait: float = DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """Inspect whether this local MSA request will run on GPU or CPU."""
@@ -879,19 +892,17 @@ def inspect_mmseqs_runtime(
             f"Invalid gpu_server_mode='{gpu_server_mode}'. Choose from: auto, required, persistent, off"
         )
 
-    effective_gpu_server_wait_timeout = int(gpu_server_wait_timeout)
-    if (
-        normalized_gpu_mode in {"auto", "opportunistic"}
-        and effective_gpu_server_wait_timeout > 30
-    ):
-        effective_gpu_server_wait_timeout = 30
-        if verbose:
-            print(
-                "Capping gpuserver wait timeout to 30s for opportunistic/auto mode.",
-                flush=True,
-            )
-    if gpu_server_wait_timeout < -1:
-        raise ValueError("gpu_server_wait_timeout must be -1 (infinite), 0, or a positive integer")
+    effective_gpu_server_wait_timeout = normalize_gpuserver_wait_timeout(gpu_server_wait_timeout)
+    normalized_gpu_server_db_load_mode = normalize_gpuserver_db_load_mode(gpu_server_db_load_mode)
+    normalized_gpu_server_startup_wait = normalize_gpuserver_startup_wait(gpu_server_startup_wait)
+    gpu_server_db_load_mode = normalized_gpu_server_db_load_mode
+    gpu_server_startup_wait = normalized_gpu_server_startup_wait
+    isolated_task_context = is_isolated_task_runtime()
+    if isolated_task_context and normalized_gpu_server_mode == "persistent" and verbose:
+        print(
+            "Detected isolated task runtime; will reuse host gpuserver when available and avoid task-local persistent metadata.",
+            flush=True,
+        )
     if cpu_only:
         normalized_gpu_mode = "cpu"
     elif use_gpu is True and normalized_gpu_mode in {"auto", "opportunistic"}:
@@ -955,8 +966,9 @@ def inspect_mmseqs_runtime(
         "normalized_gpu_mode": normalized_gpu_mode,
         "normalized_gpu_server_mode": normalized_gpu_server_mode,
         "effective_gpu_server_wait_timeout": effective_gpu_server_wait_timeout,
-        "gpu_server_db_load_mode": int(gpu_server_db_load_mode),
-        "gpu_server_startup_wait": float(gpu_server_startup_wait),
+        "gpu_server_db_load_mode": normalized_gpu_server_db_load_mode,
+        "gpu_server_startup_wait": normalized_gpu_server_startup_wait,
+        "isolated_task_context": isolated_task_context,
         "persisted_pinned_gpu_id": persisted_pinned_gpu_id,
         "ignored_pinned_gpu_id": ignored_pinned_gpu_id,
         "effective_preferred_gpus": list(effective_preferred_gpus) if effective_preferred_gpus else [],
@@ -1192,14 +1204,12 @@ def _is_matching_gpuserver_process(pid: int, target_db: Path) -> bool:
 
     This guards against stale PID files after PID reuse.
     """
-    if not _pid_is_alive(pid):
-        return False
-    cmdline = _read_proc_cmdline(pid)
-    if not cmdline:
-        # If /proc cmdline is not available but PID exists, assume alive.
-        return True
-    target_db_text = str(target_db)
-    return "gpuserver" in cmdline and target_db_text in cmdline
+    return is_matching_gpuserver_process(
+        pid,
+        target_db,
+        pid_is_alive=_pid_is_alive,
+        read_proc_cmdline=_read_proc_cmdline,
+    )
 
 
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -1640,7 +1650,7 @@ def ensure_persistent_mmseqs_gpuserver(
     prefilter_mode: int,
     db_load_mode: int,
     cache_dir: Optional[str],
-    startup_wait_seconds: float = 1.0,
+    startup_wait_seconds: float = DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
 ) -> Dict[str, Any]:
     """
     Ensure an MMseqs2 gpuserver stays alive across jobs for this DB/GPU key.
@@ -1758,7 +1768,7 @@ def run_mmseqs_gpuserver(
     prefilter_mode: int,
     db_load_mode: int,
     log_path: Path,
-    startup_wait_seconds: float = 1.0,
+    startup_wait_seconds: float = DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
 ):
     """
     Run an MMseqs2 GPU server process for a single target DB.
@@ -1966,9 +1976,9 @@ def run_colabfold_api_msa_workflow(
     preferred_gpus: Optional[List[int]] = None,
     excluded_gpus: Optional[List[int]] = None,
     gpu_server_mode: str = "persistent",
-    gpu_server_wait_timeout: int = 120,
-    gpu_server_db_load_mode: int = 0,
-    gpu_server_startup_wait: float = 1.0,
+    gpu_server_wait_timeout: int = DEFAULT_GPUSERVER_WAIT_TIMEOUT,
+    gpu_server_db_load_mode: int = DEFAULT_GPUSERVER_DB_LOAD_MODE,
+    gpu_server_startup_wait: float = DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
     reference_sequence: str = None,
     preset: str = "balanced",
     num_iterations: int = None,
@@ -2232,9 +2242,9 @@ def run_colabfold_msa_workflow(
     preferred_gpus: Optional[List[int]] = None,
     excluded_gpus: Optional[List[int]] = None,
     gpu_server_mode: str = "persistent",
-    gpu_server_wait_timeout: int = 120,
-    gpu_server_db_load_mode: int = 0,
-    gpu_server_startup_wait: float = 1.0,
+    gpu_server_wait_timeout: int = DEFAULT_GPUSERVER_WAIT_TIMEOUT,
+    gpu_server_db_load_mode: int = DEFAULT_GPUSERVER_DB_LOAD_MODE,
+    gpu_server_startup_wait: float = DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
     disallow_cpu_fallback: bool = False,
     reference_sequence: str = None,
     # Preset and override parameters
@@ -2508,7 +2518,108 @@ def run_colabfold_msa_workflow(
             use_gpu=use_gpu_flag,
             gpu_id=selected_gpu_id,
         )
-        
+        gpuserver_status_url = os.getenv("BMS_MSA_SERVER_STATUS_URL") or DEFAULT_MSA_SERVER_STATUS_URL
+        gpuserver_sources: Dict[str, str] = {}
+        gpuserver_host_status: Dict[str, Dict[str, Any]] = {}
+        isolated_task_context = bool(runtime.get("isolated_task_context"))
+
+        def _run_search_with_gpu_server(
+            *,
+            target_db: Path,
+            base_search_params: List[str],
+            prefilter_mode: int,
+            tmp_dir: str,
+        ) -> None:
+            host_status: Optional[Dict[str, Any]] = None
+            if isolated_task_context and normalized_gpu_server_mode != "off":
+                host_status = query_host_gpuserver_status(
+                    target_db=target_db,
+                    gpu_id=selected_gpu_id,
+                    max_seqs=config["max_seqs"],
+                    prefilter_mode=prefilter_mode,
+                    db_load_mode=gpu_server_db_load_mode,
+                    include_envdb=(target_db.name == envdb.name),
+                    status_url=gpuserver_status_url,
+                )
+                gpuserver_host_status[target_db.name] = host_status
+                if host_status.get("ready"):
+                    print(
+                        f"Reusing host gpuserver for {target_db.name} via {gpuserver_status_url}.",
+                        flush=True,
+                    )
+                    run_mmseqs(mmseqs_bin, base_search_params + [
+                        "--db-load-mode", str(gpu_server_db_load_mode),
+                        "--gpu", "1",
+                        "--gpu-server", "1",
+                        "--gpu-server-wait-timeout", str(effective_gpu_server_wait_timeout),
+                        "--prefilter-mode", str(prefilter_mode),
+                        "--threads", str(num_threads),
+                    ], env)
+                    gpuserver_sources[target_db.name] = "host"
+                    return
+                if host_status.get("checked"):
+                    print(
+                        f"Host gpuserver not ready for {target_db.name}; starting task-local server for this search.",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"Host gpuserver status check failed for {target_db.name} ({host_status.get('error')}); starting task-local server for this search.",
+                        flush=True,
+                    )
+
+            if normalized_gpu_server_mode == "persistent" and not isolated_task_context:
+                server_meta = ensure_persistent_mmseqs_gpuserver(
+                    mmseqs_bin=mmseqs_bin,
+                    target_db=target_db,
+                    env=env,
+                    max_seqs=config["max_seqs"],
+                    prefilter_mode=prefilter_mode,
+                    db_load_mode=gpu_server_db_load_mode,
+                    cache_dir=cache_dir,
+                    startup_wait_seconds=gpu_server_startup_wait,
+                )
+                action = "Reusing" if server_meta.get("reused") else "Started"
+                print(
+                    f"{action} persistent gpuserver for {target_db.name} "
+                    f"(pid={server_meta.get('pid')}, gpu={env.get('CUDA_VISIBLE_DEVICES', 'auto')})",
+                    flush=True,
+                )
+                run_mmseqs(mmseqs_bin, base_search_params + [
+                    "--db-load-mode", str(gpu_server_db_load_mode),
+                    "--gpu", "1",
+                    "--gpu-server", "1",
+                    "--gpu-server-wait-timeout", str(effective_gpu_server_wait_timeout),
+                    "--prefilter-mode", str(prefilter_mode),
+                    "--threads", str(num_threads),
+                ], env)
+                gpuserver_sources[target_db.name] = "persistent"
+                return
+
+            gpuserver_log = Path(tmp_dir) / f"gpuserver_{target_db.stem}.log"
+            server_label = "task-local transient" if isolated_task_context else "transient"
+            print(f"Starting {server_label} gpuserver for {target_db.name}...", flush=True)
+            with run_mmseqs_gpuserver(
+                mmseqs_bin=mmseqs_bin,
+                target_db=target_db,
+                env=env,
+                max_seqs=config["max_seqs"],
+                prefilter_mode=prefilter_mode,
+                db_load_mode=gpu_server_db_load_mode,
+                log_path=gpuserver_log,
+                startup_wait_seconds=gpu_server_startup_wait,
+            ):
+                run_mmseqs(mmseqs_bin, base_search_params + [
+                    "--db-load-mode", str(gpu_server_db_load_mode),
+                    "--gpu", "1",
+                    "--gpu-server", "1",
+                    "--gpu-server-wait-timeout", str(effective_gpu_server_wait_timeout),
+                    "--prefilter-mode", str(prefilter_mode),
+                    "--threads", str(num_threads),
+                ], env)
+            print(f"gpuserver completed for {target_db.name}", flush=True)
+            gpuserver_sources[target_db.name] = "transient"
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             # ═══════════════════════════════════════════════════════════════════
             # STEP 1: Create query database
@@ -2543,53 +2654,12 @@ def run_colabfold_msa_workflow(
                 direct_gpu_allowed = True
                 if normalized_gpu_server_mode != "off":
                     try:
-                        if normalized_gpu_server_mode == "persistent":
-                            server_meta = ensure_persistent_mmseqs_gpuserver(
-                                mmseqs_bin=mmseqs_bin,
-                                target_db=uniref_db,
-                                env=env,
-                                max_seqs=config["max_seqs"],
-                                prefilter_mode=1,
-                                db_load_mode=gpu_server_db_load_mode,
-                                cache_dir=cache_dir,
-                                startup_wait_seconds=gpu_server_startup_wait,
-                            )
-                            action = "Reusing" if server_meta.get("reused") else "Started"
-                            print(
-                                f"{action} persistent gpuserver for {uniref_db.name} "
-                                f"(pid={server_meta.get('pid')}, gpu={env.get('CUDA_VISIBLE_DEVICES', 'auto')})",
-                                flush=True,
-                            )
-                            run_mmseqs(mmseqs_bin, base_search_params + [
-                                "--db-load-mode", str(gpu_server_db_load_mode),
-                                "--gpu", "1",
-                                "--gpu-server", "1",
-                                "--gpu-server-wait-timeout", str(effective_gpu_server_wait_timeout),
-                                "--prefilter-mode", "1",
-                                "--threads", str(num_threads),
-                            ], env)
-                        else:
-                            gpuserver_log = Path(tmp_dir) / "gpuserver_uniref.log"
-                            print(f"Starting gpuserver for {uniref_db.name}...", flush=True)
-                            with run_mmseqs_gpuserver(
-                                mmseqs_bin=mmseqs_bin,
-                                target_db=uniref_db,
-                                env=env,
-                                max_seqs=config["max_seqs"],
-                                prefilter_mode=1,
-                                db_load_mode=gpu_server_db_load_mode,
-                                log_path=gpuserver_log,
-                                startup_wait_seconds=gpu_server_startup_wait,
-                            ):
-                                run_mmseqs(mmseqs_bin, base_search_params + [
-                                    "--db-load-mode", str(gpu_server_db_load_mode),
-                                    "--gpu", "1",
-                                    "--gpu-server", "1",
-                                    "--gpu-server-wait-timeout", str(effective_gpu_server_wait_timeout),
-                                    "--prefilter-mode", "1",
-                                    "--threads", str(num_threads),
-                                ], env)
-                            print(f"gpuserver completed for {uniref_db.name}", flush=True)
+                        _run_search_with_gpu_server(
+                            target_db=uniref_db,
+                            base_search_params=base_search_params,
+                            prefilter_mode=1,
+                            tmp_dir=tmp_dir,
+                        )
                         used_gpu_server = True
                     except Exception as e:
                         if normalized_gpu_server_mode == "required":
@@ -2850,53 +2920,12 @@ def run_colabfold_msa_workflow(
                     direct_gpu_allowed = True
                     if normalized_gpu_server_mode != "off":
                         try:
-                            if normalized_gpu_server_mode == "persistent":
-                                server_meta = ensure_persistent_mmseqs_gpuserver(
-                                    mmseqs_bin=mmseqs_bin,
-                                    target_db=envdb,
-                                    env=env,
-                                    max_seqs=config["max_seqs"],
-                                    prefilter_mode=1,
-                                    db_load_mode=gpu_server_db_load_mode,
-                                    cache_dir=cache_dir,
-                                    startup_wait_seconds=gpu_server_startup_wait,
-                                )
-                                action = "Reusing" if server_meta.get("reused") else "Started"
-                                print(
-                                    f"{action} persistent gpuserver for {envdb.name} "
-                                    f"(pid={server_meta.get('pid')}, gpu={env.get('CUDA_VISIBLE_DEVICES', 'auto')})",
-                                    flush=True,
-                                )
-                                run_mmseqs(mmseqs_bin, env_base_search_params + [
-                                    "--db-load-mode", str(gpu_server_db_load_mode),
-                                    "--gpu", "1",
-                                    "--gpu-server", "1",
-                                    "--gpu-server-wait-timeout", str(effective_gpu_server_wait_timeout),
-                                    "--prefilter-mode", "1",
-                                    "--threads", str(num_threads),
-                                ], env)
-                            else:
-                                gpuserver_log = Path(tmp_dir) / "gpuserver_envdb.log"
-                                print(f"Starting gpuserver for {envdb.name}...", flush=True)
-                                with run_mmseqs_gpuserver(
-                                    mmseqs_bin=mmseqs_bin,
-                                    target_db=envdb,
-                                    env=env,
-                                    max_seqs=config["max_seqs"],
-                                    prefilter_mode=1,
-                                    db_load_mode=gpu_server_db_load_mode,
-                                    log_path=gpuserver_log,
-                                    startup_wait_seconds=gpu_server_startup_wait,
-                                ):
-                                    run_mmseqs(mmseqs_bin, env_base_search_params + [
-                                        "--db-load-mode", str(gpu_server_db_load_mode),
-                                        "--gpu", "1",
-                                        "--gpu-server", "1",
-                                        "--gpu-server-wait-timeout", str(effective_gpu_server_wait_timeout),
-                                        "--prefilter-mode", "1",
-                                        "--threads", str(num_threads),
-                                    ], env)
-                                print(f"gpuserver completed for {envdb.name}", flush=True)
+                            _run_search_with_gpu_server(
+                                target_db=envdb,
+                                base_search_params=env_base_search_params,
+                                prefilter_mode=1,
+                                tmp_dir=tmp_dir,
+                            )
                             used_gpu_server = True
                         except Exception as e:
                             if normalized_gpu_server_mode == "required":
@@ -3128,6 +3157,21 @@ def run_colabfold_msa_workflow(
                 "sanitized_invalid_chars_removed": int(removed_invalid_chars),
                 "selected_gpu_id": selected_gpu_id,
                 "used_gpu_mmseqs": use_gpu_flag,
+                "gpuserver_mode_requested": gpu_server_mode,
+                "gpuserver_mode_effective": normalized_gpu_server_mode,
+                "gpuserver_db_load_mode": gpu_server_db_load_mode,
+                "gpuserver_wait_timeout": effective_gpu_server_wait_timeout,
+                "gpuserver_startup_wait": gpu_server_startup_wait,
+                "isolated_task_context": isolated_task_context,
+                "gpuserver_sources": gpuserver_sources,
+                "gpuserver_host_status": {
+                    name: {
+                        "checked": bool(status.get("checked")),
+                        "ready": bool(status.get("ready")),
+                        "error": status.get("error"),
+                    }
+                    for name, status in gpuserver_host_status.items()
+                },
                 "from_cache": False,
             }
             
@@ -3215,11 +3259,16 @@ Quality Presets:
     parser.add_argument("--gpu-server-mode", type=str, default="persistent",
                         choices=["auto", "required", "persistent", "off"],
                         help="MMseqs gpuserver policy: persistent|auto|required|off")
-    parser.add_argument("--gpu-server-wait-timeout", type=int, default=120,
+    parser.add_argument("--gpu-server-wait-timeout", type=int, default=DEFAULT_GPUSERVER_WAIT_TIMEOUT,
                         help="Seconds to wait for gpuserver handshake (0=no wait, -1=infinite)")
-    parser.add_argument("--gpu-server-db-load-mode", type=int, default=0, choices=[0, 1, 2, 3],
-                        help="MMseqs db-load-mode for gpuserver-backed searches (default: 0)")
-    parser.add_argument("--gpu-server-startup-wait", type=float, default=1.0,
+    parser.add_argument(
+        "--gpu-server-db-load-mode",
+        type=int,
+        default=DEFAULT_GPUSERVER_DB_LOAD_MODE,
+        choices=[0, 1, 2, 3],
+        help=f"MMseqs db-load-mode for gpuserver-backed searches (default: {DEFAULT_GPUSERVER_DB_LOAD_MODE})",
+    )
+    parser.add_argument("--gpu-server-startup-wait", type=float, default=DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
                         help="Seconds to wait after starting gpuserver before first search")
     parser.add_argument("--disallow-cpu-fallback", action="store_true",
                         help="Fail instead of falling back to CPU MMseqs when GPU MMseqs is unavailable")

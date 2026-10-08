@@ -21,6 +21,8 @@ import time
 from database import Job, NucleotideSequence, get_session
 from services.gpu_orchestrator import estimate_vram
 from services.msa_server import (
+    DEFAULT_GPUSERVER_DB_LOAD_MODE,
+    DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
     ensure_server_for_db,
     read_server_settings,
     resolve_msa_gpu_id,
@@ -221,8 +223,8 @@ class MSAServerStartRequest(BaseModel):
     include_envdb: Optional[bool] = None
     max_seqs: int = 300
     prefilter_mode: int = 1
-    db_load_mode: int = 0
-    startup_wait_seconds: float = 1.0
+    db_load_mode: int = DEFAULT_GPUSERVER_DB_LOAD_MODE
+    startup_wait_seconds: float = DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS
 
 
 class MSAServerStopRequest(BaseModel):
@@ -242,7 +244,7 @@ async def get_msa_server_status(
     include_envdb: Optional[bool] = None,
     max_seqs: int = 300,
     prefilter_mode: int = 1,
-    db_load_mode: int = 0,
+    db_load_mode: int = DEFAULT_GPUSERVER_DB_LOAD_MODE,
     session: AsyncSession = Depends(get_session),
 ):
     """Get current persistent MSA server state for the selected/default GPU."""

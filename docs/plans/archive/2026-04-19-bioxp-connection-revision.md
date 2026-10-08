@@ -209,7 +209,7 @@ Normal operators should not need a big workstation-side Start Daemon / Stop Daem
 **Objective:** Stop treating workstation-side SSH daemon supervision as the desired end state.
 
 **Files:**
-- Create: `docs/plans/2026-04-19-bioxp-connection-revision.md`
+- Create: `docs/plans/archive/2026-04-19-bioxp-connection-revision.md`
 - Review: `platform/api/routers/bioxp.py`
 - Review: `platform/frontend/src/lib/bioxpClient.ts`
 - Review: `platform/frontend/src/components/BioXpCockpit.tsx`

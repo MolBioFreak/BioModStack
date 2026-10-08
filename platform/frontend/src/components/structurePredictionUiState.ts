@@ -62,6 +62,15 @@ export interface BoltzCpGpuLaunchInput {
     fallbackGpuIds?: string | null;
 }
 
+export type BoltzCpShardPlanId = '1x1' | '2x2' | '4x4';
+
+export interface BoltzCpShardPlanDefinition {
+    id: BoltzCpShardPlanId;
+    label: string;
+    logicalSizeCp: number;
+    description: string;
+}
+
 export interface StructureSubmitTarget {
     modelId: 'boltz2' | 'rf3' | 'protenix' | 'boltz_cp_experimental';
     mode: 'predict' | 'complex' | 'design';
@@ -74,6 +83,7 @@ export interface ResolveStructureSubmitTargetInput {
 }
 
 export interface BoltzCpSubmitParamsInput {
+    shardPlanId: BoltzCpShardPlanId;
     outputFormat: 'mmcif' | 'pdb';
     writeFullPae: boolean;
     seed?: string | null;
@@ -85,6 +95,54 @@ const COMPLEX_RF3_DISABLED_REASON = 'RF3 is predict-only and cannot be launched 
 const TARGET_PREVIEW_HIGHLIGHT = { r: 59, g: 130, b: 246 };
 type StructureInitialValues = Record<string, unknown>;
 type BoltzCpSubmitParams = Record<string, string | number | boolean>;
+
+export const BOLTZ_CP_DEFAULT_SHARD_PLAN_ID: BoltzCpShardPlanId = '2x2';
+const BOLTZ_CP_LOGICAL_SIZE_CP_BY_ID: Record<BoltzCpShardPlanId, number> = {
+    '1x1': 1,
+    '2x2': 4,
+    '4x4': 16,
+};
+
+export const BOLTZ_CP_SHARD_PLAN_DEFINITIONS: BoltzCpShardPlanDefinition[] = [
+    {
+        id: '1x1',
+        label: '1×1 (single logical shard)',
+        logicalSizeCp: 1,
+        description: 'No logical sharding; useful for fallback/debug runs.',
+    },
+    {
+        id: '2x2',
+        label: '2×2 (4 logical shards)',
+        logicalSizeCp: 4,
+        description: 'Defines a 2×2 logical tile mesh. The selected logical plan does not change with GPU count.',
+    },
+    {
+        id: '4x4',
+        label: '4×4 (16 logical shards)',
+        logicalSizeCp: 16,
+        description: 'Defines a 4×4 logical tile mesh. The selected logical plan does not change with GPU count.',
+    },
+];
+
+export const normalizeBoltzCpShardPlanId = (value: unknown): BoltzCpShardPlanId => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === '1x1' || normalized === '2x2' || normalized === '4x4') {
+        return normalized;
+    }
+    return BOLTZ_CP_DEFAULT_SHARD_PLAN_ID;
+};
+
+export const getBoltzCpLogicalSizeCp = (shardPlanId: unknown): number => (
+    BOLTZ_CP_LOGICAL_SIZE_CP_BY_ID[normalizeBoltzCpShardPlanId(shardPlanId)]
+);
+
+export const inferBoltzCpShardPlanId = (sizeCp: unknown): BoltzCpShardPlanId => {
+    const parsed = Number.parseInt(String(sizeCp), 10);
+    if (parsed === 1) return '1x1';
+    if (parsed === 16) return '4x4';
+    if (parsed === 4) return '2x2';
+    return BOLTZ_CP_DEFAULT_SHARD_PLAN_ID;
+};
 
 const toStructureLaunchVariant = (initialValues?: StructureInitialValues | null): StructureLaunchVariant => {
     const normalized = String(
@@ -180,6 +238,24 @@ export const deriveBoltzCpGpuLaunchSettings = ({
     };
 };
 
+export const getBoltzCpRuntimeBridgeSummary = ({
+    shardPlanId,
+    gpuIds,
+    sizeCp,
+    autoFallbackLabel = 'auto-selected GPU pool',
+}: {
+    shardPlanId: unknown;
+    gpuIds?: string | null;
+    sizeCp: number;
+    autoFallbackLabel?: string;
+}): string => {
+    const normalizedPlanId = normalizeBoltzCpShardPlanId(shardPlanId);
+    const logicalSizeCp = getBoltzCpLogicalSizeCp(normalizedPlanId);
+    const resolvedGpuLabel = String(gpuIds || '').trim() || autoFallbackLabel;
+    const logicalShardLabel = logicalSizeCp === 1 ? 'logical shard' : 'logical shards';
+    return `The selected logical plan stays ${normalizedPlanId} (${logicalSizeCp} ${logicalShardLabel}); GPU count only affects the current runtime bridge. ${resolvedGpuLabel} → launch size_cp ${sizeCp}.`;
+};
+
 export const resolveStructureSubmitTarget = ({
     launchConfig,
     predictionMode,
@@ -204,6 +280,7 @@ export const resolveStructureSubmitTarget = ({
 };
 
 export const buildBoltzCpSubmitParams = ({
+    shardPlanId,
     outputFormat,
     writeFullPae,
     seed,
@@ -214,6 +291,7 @@ export const buildBoltzCpSubmitParams = ({
         structure_launch_variant: 'boltz_cp_experimental',
         num_parallel_jobs: 1,
         bcp_input_format: 'config_files',
+        bcp_shard_plan_id: normalizeBoltzCpShardPlanId(shardPlanId),
         bcp_output_format: outputFormat,
         bcp_write_full_pae: writeFullPae,
         bcp_size_cp: sizeCp,

@@ -894,7 +894,7 @@ This Electron plan intentionally assumes the first-wave containerization spec is
 
 Reference document:
 
-- `docs/plans/2026-04-19-core-runtime-containerization-spec.md`
+- `docs/plans/archive/2026-04-19-core-runtime-containerization-spec.md`
 
 ### 14.1 What Electron should rely on from that plan
 
