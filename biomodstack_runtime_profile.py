@@ -356,6 +356,12 @@ def _validate_raw_bool(value: object, field: str) -> None:
         raise ValueError(f"{field} must be a boolean or supported legacy boolean spelling")
 
 
+MUTABLE_RUNTIME_STORAGE_FIELDS = (
+    "data_root", "inputs_dir", "results_dir", "db_path", "work_dir",
+    "analysis_cache_dir", "msa_cache_dir", "sabdab_cache_dir",
+)
+
+
 def managed_runtime_storage_paths(resolved: Mapping[str, object], runtime: str) -> dict[str, str]:
     """Host destinations used by managed lanes, without IO or service rendering.
 
@@ -365,8 +371,7 @@ def managed_runtime_storage_paths(resolved: Mapping[str, object], runtime: str) 
     if runtime not in {"dev", "container"}:
         raise ValueError("runtime must be dev or container")
     shared = ("container_dir", "weights_root", "colabfold_db")
-    mutable = ("data_root", "inputs_dir", "results_dir", "db_path", "work_dir",
-               "analysis_cache_dir", "msa_cache_dir", "sabdab_cache_dir")
+    mutable = MUTABLE_RUNTIME_STORAGE_FIELDS
     shared_root = Path(str(resolved.get("data_root", "/mnt/BioModStack")))
     paths = {key: str(resolved.get(key, shared_root / leaf)) for key, leaf in
              zip(shared, ("apptainer", "weights", "colabfold_db"))}
@@ -377,8 +382,7 @@ def managed_runtime_storage_paths(resolved: Mapping[str, object], runtime: str) 
               "analysis_cache", "msa_cache", "sabdab_cache")
     for key, leaf in zip(mutable, leaves):
         source = f"dev_{key}" if runtime == "dev" else key
-        paths[source] = (str(base / leaf) if source == "dev_analysis_cache_dir"
-                         else str(resolved.get(source, base / leaf)))
+        paths[source] = str(resolved.get(source, base / leaf))
     return paths
 
 

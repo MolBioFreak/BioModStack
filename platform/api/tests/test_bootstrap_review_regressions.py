@@ -142,7 +142,8 @@ def test_existing_database_observes_parent_not_file(isolated):
 def archived(isolated):
     # Archive the actual current source, not imported/precompiled modules. The
     # bounded import closure is sufficient even with no optional model packages.
-    names = ['biomodstack_bootstrap.py', 'biomodstack_runtime_profile.py',
+    names = ['biomodstack_install_document.py',
+             'biomodstack_bootstrap.py', 'biomodstack_runtime_profile.py',
              'biomodstack_local_resources.py', 'scripts/manage_desktop_services.py',
              'start_ui.sh']
     data = io.BytesIO()

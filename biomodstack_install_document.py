@@ -17,10 +17,7 @@ SCHEMA_VERSION = "bms.install.v1"
 PATH_FIELDS = tuple(k for k in profiles._PATH_FIELDS if not k.endswith("project_root"))
 # Cross-lane isolation concerns mutable state, not intentionally shared runtime
 # images, weights or reference databases (container_dir/weights_root/colabfold_db).
-MUTABLE_PATH_FIELDS = (
-    "data_root", "inputs_dir", "results_dir", "db_path", "work_dir",
-    "analysis_cache_dir", "msa_cache_dir", "sabdab_cache_dir",
-)
+MUTABLE_PATH_FIELDS = profiles.MUTABLE_RUNTIME_STORAGE_FIELDS
 PORT_FIELDS = profiles._INT_FIELDS
 FEATURE_FIELDS = tuple(profiles._FEATURE_DEFAULTS)
 PROFILE_FIELDS = set(PATH_FIELDS + PORT_FIELDS + (
