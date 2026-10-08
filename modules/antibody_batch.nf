@@ -108,6 +108,8 @@ process BatchBoltzValidation {
         --boltz_dir ./ \\
         --output_dir predictions \\
         --design_type binder \\
+        --binder_chains "${params.antibody_chains ?: 'H,L'}" \\
+        --target_chains "${params.antigen_chains ?: 'T'}" \\
         --ncpus ${task.cpus} \\
         2>&1 | tee alignment_batch.log
 

@@ -34,7 +34,7 @@ def get_chain_ids(structure):
     return sorted(set(chain_ids))
 
 
-def get_ca_atoms_by_key(structure, chain_id=None):
+def get_ca_atoms_by_key(structure, chains=None):
     """
     Collect CA atoms keyed by (chain_id, resseq, insertion_code).
     Using keyed intersections avoids misalignment when residue lists differ.
@@ -42,7 +42,7 @@ def get_ca_atoms_by_key(structure, chain_id=None):
     ca_atoms = {}
     for model in structure:
         for chain in model:
-            if chain_id is not None and chain.id != chain_id:
+            if chains is not None and chain.id not in chains:
                 continue
             for residue in chain:
                 if 'CA' not in residue:
@@ -53,17 +53,17 @@ def get_ca_atoms_by_key(structure, chain_id=None):
     return ca_atoms
 
 
-def get_matched_ca_atoms(ref_structure, mobile_structure, chain_id=None):
+def get_matched_ca_atoms(ref_structure, mobile_structure, chains=None):
     """
     Match CA atoms by residue identifiers so RMSD can be computed robustly even
     when one structure has missing residues.
     """
-    ref_map = get_ca_atoms_by_key(ref_structure, chain_id=chain_id)
-    mobile_map = get_ca_atoms_by_key(mobile_structure, chain_id=chain_id)
+    ref_map = get_ca_atoms_by_key(ref_structure, chains=chains)
+    mobile_map = get_ca_atoms_by_key(mobile_structure, chains=chains)
     common_keys = sorted(set(ref_map.keys()) & set(mobile_map.keys()), key=lambda k: (k[0], k[1], k[2]))
 
     if len(common_keys) < 3:
-        region = f"chain {chain_id}" if chain_id is not None else "all chains"
+        region = f"chains {chains}" if chains is not None else "all chains"
         raise ValueError(
             f"Insufficient matched CA atoms in {region}: "
             f"matched={len(common_keys)} ref={len(ref_map)} mobile={len(mobile_map)}"
@@ -90,7 +90,7 @@ def rmsd_without_refit(ref_atoms, mobile_atoms):
 def align_structures(args):
     """Align Boltz structure to Design template with chain-specific handling"""
     (design_path, boltz_path, out_pdb, src_json, dst_json, 
-     fold_id, seq_id, design_type) = args  # Added design_type
+     fold_id, seq_id, design_type, binder_chains_arg, target_chains_arg) = args  # Added multi-chain args
     
     try:
         parser = PDBParser(QUIET=True)
@@ -98,21 +98,21 @@ def align_structures(args):
         boltz_structure = parser.get_structure("boltz", boltz_path)
 
         if design_type == 'binder':
-            binder_chain = 'A'
-            target_chain = 'B'
+            binder_chains = [c.strip() for c in binder_chains_arg.split(',')] if binder_chains_arg else ['A']
+            target_chains = [c.strip() for c in target_chains_arg.split(',')] if target_chains_arg else ['B']
 
             ref_chain_ids = set(get_chain_ids(ref_structure))
             boltz_chain_ids = set(get_chain_ids(boltz_structure))
-            if not ({binder_chain, target_chain} <= ref_chain_ids and {binder_chain, target_chain} <= boltz_chain_ids):
+            if not (set(binder_chains + target_chains) <= ref_chain_ids and set(binder_chains + target_chains) <= boltz_chain_ids):
                 shared = sorted(ref_chain_ids & boltz_chain_ids)
                 if len(shared) >= 2:
-                    binder_chain, target_chain = shared[0], shared[1]
+                    binder_chains, target_chains = [shared[0]], [shared[1]]
                     logger.warning(
-                        "Expected binder/target chains A/B were not found for %s. "
+                        "Expected binder/target chains were not found for %s. "
                         "Falling back to shared chains: binder=%s target=%s",
                         boltz_path.name,
-                        binder_chain,
-                        target_chain,
+                        binder_chains,
+                        target_chains,
                     )
                 else:
                     raise ValueError(
@@ -121,7 +121,7 @@ def align_structures(args):
                     )
 
             # 1. Align target chain for final structure transform
-            ref_target, boltz_target = get_matched_ca_atoms(ref_structure, boltz_structure, target_chain)
+            ref_target, boltz_target = get_matched_ca_atoms(ref_structure, boltz_structure, target_chains)
             
             superimposer = Superimposer()
             superimposer.set_atoms(ref_target, boltz_target)
@@ -129,11 +129,11 @@ def align_structures(args):
             rmsd_target = superimposer.rms 
 
             # 2. Calculate overall RMSD after target-based alignment
-            ref_all_ca, boltz_all_ca = get_matched_ca_atoms(ref_structure, boltz_structure, chain_id=None)
+            ref_all_ca, boltz_all_ca = get_matched_ca_atoms(ref_structure, boltz_structure, chains=None)
             rmsd_overall = rmsd_without_refit(ref_all_ca, boltz_all_ca)
 
             # 3. Calculate binder RMSD after target-based alignment
-            ref_binder, boltz_binder = get_matched_ca_atoms(ref_structure, boltz_structure, binder_chain)
+            ref_binder, boltz_binder = get_matched_ca_atoms(ref_structure, boltz_structure, binder_chains)
             rmsd_binder = rmsd_without_refit(ref_binder, boltz_binder)
 
             rmsd_data = {
@@ -143,7 +143,7 @@ def align_structures(args):
             }
 
         else:  # Monomer design
-            ref_atoms, boltz_atoms = get_matched_ca_atoms(ref_structure, boltz_structure, chain_id=None)
+            ref_atoms, boltz_atoms = get_matched_ca_atoms(ref_structure, boltz_structure, chains=None)
             
             superimposer = Superimposer()
             superimposer.set_atoms(ref_atoms, boltz_atoms)
@@ -216,6 +216,10 @@ def main():
                       help="Output directory for results")
     parser.add_argument("--design_type", choices=['binder', 'monomer'], required=True,
                       help="Design type: 'binder' (A/B chains) or 'monomer (A chain)'")
+    parser.add_argument("--binder_chains", type=str, default="",
+                      help="Comma separated list of binder chains (e.g. H,L or A)")
+    parser.add_argument("--target_chains", type=str, default="",
+                      help="Comma separated list of target chains (e.g. T or B)")
     parser.add_argument("--ncpus", type=int, default=1,
                       help="Number of CPUs for parallel processing")
     args = parser.parse_args()
@@ -279,7 +283,9 @@ def main():
             dst_json,
             fold_id,
             seq_id,
-            args.design_type
+            args.design_type,
+            args.binder_chains,
+            args.target_chains
         ))
 
     if not tasks:
