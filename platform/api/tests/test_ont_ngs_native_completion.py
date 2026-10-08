@@ -11,9 +11,13 @@ from types import SimpleNamespace
 
 import pysam
 import pytest
+from ngs_resource_fixture import ngs_resources
+
+pytestmark = [pytest.mark.native_http, pytest.mark.usefixtures("ngs_resources", "native_http")]
 
 from services import ont_ngs_completion as completion
 from services.ont_ngs_contract import DORADO_LOCK_PATH
+from ngs_producer_fixtures import producer_receipt
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +31,7 @@ def _sha(path):
 
 
 def _fixture(tmp_path, molecule="dna"):
-    root = tmp_path / "result"
+    root = tmp_path / "results" / "result"
     base = root / "basecall"
     base.mkdir(parents=True)
     source = tmp_path / "inputs"
@@ -67,6 +71,10 @@ def _fixture(tmp_path, molecule="dna"):
         "pairs": None, "barcoding": {"kit": None, "sample_sheet": None},
         "execution_policy": {"device": "cuda:0", "batch_size": 64, "min_qscore": 10},
     }
+    preflight["producer_receipt"] = producer_receipt(
+        base / "fixture-preflight",
+        ("modules/ngs/dorado_basecall.nf", "scripts/dorado_p4_preflight.py"),
+        ("python", "apptainer"))
     (base / "dorado_preflight.json").write_text(json.dumps(preflight))
     runtime = {
         "schema": "biomodstack.dorado_runtime_provenance.v1",
@@ -79,7 +87,10 @@ def _fixture(tmp_path, molecule="dna"):
         "network": "denied_by_namespace", "model_download": "denied_by_namespace_and_sealed_models",
     }
     (base / "dorado_runtime_provenance.json").write_text(json.dumps(runtime))
-    (base / "basecall.log").write_text("")  # Native stderr may legitimately be empty.
+    (base / "basecall.log").write_text(producer_receipt(
+        base / "fixture-basecall",
+        ("modules/ngs/dorado_basecall.nf", "scripts/dorado_supports_option.sh"),
+        ("dorado", "samtools")))
     outputs = [str(base / name) for name in ("calls.bam", "basecall.log", "dorado_preflight.json", "dorado_runtime_provenance.json")]
     job = SimpleNamespace(id="native-job", model_id="nanopore", mode=f"basecall_{molecule}", params=params,
                           output_dir=str(root), child_output_dir=None, status="running", queue_status="running",
@@ -145,6 +156,42 @@ def test_native_basecall_rejects_invalid_products_without_publication(tmp_path, 
     runtime_path.write_text(json.dumps(runtime))
     before = copy.deepcopy(job.__dict__)
     with pytest.raises(completion.OntNgsCompletionError):
+        _validate(job)
+    assert job.__dict__ == before
+
+
+@pytest.mark.parametrize("stage,damage", [
+    (stage, damage) for stage in ("preflight", "basecall")
+    for damage in ("missing", "source_digest", "duplicate", "runtime_digest")
+])
+def test_native_producer_identity_rejects_tampering(tmp_path, stage, damage):
+    job, root = _fixture(tmp_path)
+    base = root / "basecall"
+    preflight_path = base / "dorado_preflight.json"
+    preflight = json.loads(preflight_path.read_text())
+    receipt = preflight["producer_receipt"] if stage == "preflight" else (base / "basecall.log").read_text()
+    lines = receipt.splitlines()
+    if damage == "missing":
+        receipt = ""
+    elif damage == "source_digest":
+        lines[0] = lines[0].split("=", 1)[0] + "=" + "0" * 64
+        receipt = "\n".join(lines) + "\n"
+    elif damage == "duplicate":
+        receipt += lines[0] + "\n"
+    else:
+        receipt = receipt.replace(next(line for line in lines if line.startswith("bms_producer_tool:")),
+                                  "bms_producer_tool:python=not-a-digest")
+    if stage == "preflight":
+        preflight["producer_receipt"] = receipt
+        preflight_path.write_text(json.dumps(preflight))
+        runtime_path = base / "dorado_runtime_provenance.json"
+        runtime = json.loads(runtime_path.read_text())
+        runtime["preflight_sha256"] = _sha(preflight_path)
+        runtime_path.write_text(json.dumps(runtime))
+    else:
+        (base / "basecall.log").write_text(receipt)
+    before = copy.deepcopy(job.__dict__)
+    with pytest.raises(completion.OntNgsCompletionError, match="producer identity|producer source/runtime"):
         _validate(job)
     assert job.__dict__ == before
 
@@ -256,7 +303,7 @@ async def test_native_completion_losing_cas_publishes_no_result(tmp_path, summar
     from services import nextflow
     native, root = _fixture(tmp_path)
     if summary_support is not None:
-        from test_dorado_summary_emitter import emit_receipt
+        from ngs_producer_fixtures import emit_receipt
         native.params["emit_summary"] = True
         emitted = emit_receipt(root / "basecall", supported=summary_support)
         assert emitted.returncode == 0, emitted.stderr

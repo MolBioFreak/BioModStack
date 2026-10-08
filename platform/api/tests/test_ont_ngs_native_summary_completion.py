@@ -6,10 +6,13 @@ import json
 
 import pysam
 import pytest
+from ngs_resource_fixture import ngs_resources
+
+pytestmark = [pytest.mark.native_http, pytest.mark.usefixtures("ngs_resources", "native_http")]
 
 from services import ont_ngs_completion as completion
 from test_ont_ngs_native_completion import _fixture, _sha, _validate, _nextflow_native_entry, isolated_result_root
-from test_dorado_summary_emitter import emit_receipt, summary_text
+from ngs_producer_fixtures import emit_receipt, summary_text
 
 
 def summary_fixture(tmp_path, molecule='dna', requested=True, supported=True):

@@ -7,6 +7,9 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
+from ngs_resource_fixture import ngs_resources
+
+pytestmark = [pytest.mark.native_http, pytest.mark.usefixtures("ngs_resources", "native_http")]
 import rfc8785
 
 from services import ngs_native_alignment_sources as native_sources
@@ -25,7 +28,7 @@ def test_claim_completion_sources_and_delivery_keep_one_receipt(tmp_path, monkey
     requested = deepcopy(job.params)
     job.params = attach_scheduler_gpu_assignment(job.params, 0)
     claimed = deepcopy(job.params)
-    async def no_managed_reference(unused):
+    async def no_managed_reference(unused_job, unused_session):
         return None
     monkeypatch.setattr(native_sources, "reference_binding", no_managed_reference)
     session = SimpleNamespace(info={})

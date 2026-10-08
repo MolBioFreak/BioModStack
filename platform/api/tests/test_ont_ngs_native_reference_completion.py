@@ -5,11 +5,15 @@ import hashlib
 
 import pysam
 import pytest
+from ngs_resource_fixture import ngs_resources
+
+pytestmark = [pytest.mark.native_http, pytest.mark.usefixtures("ngs_resources", "native_http")]
 
 from services import ont_ngs_completion as completion
 from services.ont_ngs_native_completion import validate_native_basecall
 from test_ont_ngs_native_completion import _sha, _nextflow_native_entry, isolated_result_root
 from test_ont_ngs_native_summary_completion import summary_fixture
+from ngs_producer_fixtures import producer_receipt
 
 
 def reference_fixture(tmp_path, molecule='dna', requested=False, supported=True, mapq=0, outcome='mapped'):
@@ -42,7 +46,8 @@ def reference_fixture(tmp_path, molecule='dna', requested=False, supported=True,
         'reference_sequence_sha256': job.params['reference_sequence_sha256'], 'reference_immutable': 'true',
         'bam_min_mapq': str(mapq), 'input_records': '1', 'output_records': '0' if outcome == 'filtered' else '1',
     }
-    (align / 'align.log').write_text(''.join(f'{k}={v}\n' for k, v in evidence.items()))
+    (align / 'align.log').write_text(''.join(f'{k}={v}\n' for k, v in evidence.items())
+        + producer_receipt(align / 'fixture-align', ('modules/ngs/dorado_align.nf',), ('dorado', 'samtools')))
     outputs = [str(align / name) for name in ('aligned.bam', 'aligned.bam.bai', 'reference.fasta', 'reference.fasta.fai', 'align.log')]
     job.provenance['stage_terminal_states']['dorado_align'] = {'status': 'complete', 'outputs': outputs}
     return job, root
@@ -56,7 +61,9 @@ def test_reference_native_dispatch_and_summary_independence(tmp_path, monkeypatc
     def forbidden(*args, **kwargs):
         raise AssertionError('scientific completion must not require derived readiness')
     monkeypatch.setattr(ngs_alignment_sessions, 'build_alignment_sessions', forbidden)
-    monkeypatch.setattr(ngs_alignment_sessions, 'open_verified_artifact_snapshot', forbidden)
+    # Verified snapshots are now the native byte transport, not a derived
+    # catalog/preview. Completion must still never build those products.
+    monkeypatch.setattr(ngs_alignment_sessions, 'build_alignment_presentation', forbidden)
     job, root = reference_fixture(tmp_path, molecule, requested, supported)
     assert asyncio.run(_nextflow_native_entry(job)) is True
     result = job.provenance['result_integrity']
