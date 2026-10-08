@@ -2,17 +2,23 @@
 
 FastAPI backend for the ProteinDJ web interface.
 
-## Setup
+## Setup (using uv)
 
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate
+# Install uv if not installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install dependencies
-pip install -r requirements.txt
+# Sync dependencies
+uv sync
 
 # Run development server
+uv run uvicorn main:app --reload --port 8000
+```
+
+## Setup (alternative: pip)
+
+```bash
+pip install -e .
 uvicorn main:app --reload --port 8000
 ```
 
@@ -23,3 +29,10 @@ uvicorn main:app --reload --port 8000
 - `POST /api/jobs` - Submit new job
 - `GET /api/jobs/{id}` - Get job details
 - `DELETE /api/jobs/{id}` - Cancel job
+- `GET /api/gpu/status` - GPU monitoring
+- `GET /api/files/browse` - Browse directories
+
+## Interactive Docs
+
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
