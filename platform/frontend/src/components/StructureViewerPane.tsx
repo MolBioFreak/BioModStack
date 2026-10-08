@@ -36,6 +36,7 @@ import {
     type StructureViewerSectionId,
     type StructureViewerSummaryCardSpec,
 } from './structureViewerSemantics.js';
+import { resolveStructureViewerLayout } from './structureViewerLayout.js';
 
 interface Selection {
     chain_id?: string;
@@ -296,6 +297,9 @@ export default function StructureViewerPane({
     setRfMetricScope,
 }: Props) {
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [viewportWidth, setViewportWidth] = useState(() => (
+        typeof window === 'undefined' ? 1280 : window.innerWidth
+    ));
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
     const [focusedMetricSection, setFocusedMetricSection] = useState<StructureViewerSectionId>('summary');
     const [showReferenceDock, setShowReferenceDock] = useState(false);
@@ -316,8 +320,23 @@ export default function StructureViewerPane({
     const referenceDragRef = useRef<{ pointerX: number; pointerY: number; startX: number; startY: number } | null>(null);
     const referenceResizeRef = useRef<{ pointerX: number; pointerY: number; startWidth: number; startHeight: number } | null>(null);
 
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return undefined;
+        }
+
+        const handleViewportResize = () => setViewportWidth(window.innerWidth);
+        handleViewportResize();
+        window.addEventListener('resize', handleViewportResize);
+        return () => window.removeEventListener('resize', handleViewportResize);
+    }, []);
+
     // Theme-aware colors for Molstar viewer
     const themeColors = useThemeColors();
+    const viewerLayout = useMemo(() => resolveStructureViewerLayout({
+        viewportWidth,
+        isFullscreen,
+    }), [viewportWidth, isFullscreen]);
     const designOrigin = getDesignOriginLabel(selectedDesign);
     const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as any) : null;
     const selectedDesignPpiflowRecord = asRecord(asRecord(selectedDesign?.provenance)?.ppiflow);
@@ -1764,12 +1783,25 @@ export default function StructureViewerPane({
         </div>
     );
 
+    const analyticsSidebarSpacingClass = viewerLayout.isStacked ? 'space-y-3' : 'space-y-4';
+    const analyticsSidebarWidthClass = viewerLayout.isStacked ? 'w-full min-w-0' : 'flex-1 min-w-[280px] max-w-[400px]';
+    const analyticsPanelPaddingClass = viewerLayout.isStacked ? 'p-3' : 'p-4';
+    const analyticsSectionGridClass = viewerLayout.isStacked ? 'grid grid-cols-2 gap-2' : 'grid grid-cols-2 gap-3';
+    const analyticsStatCardClass = viewerLayout.isStacked
+        ? 'rounded-lg bg-slate-900/50 px-2.5 py-2.5 text-center'
+        : 'rounded-lg bg-slate-900/50 px-3 py-3 text-center';
+    const analyticsHeadlineMetricClass = viewerLayout.isStacked ? 'text-xl font-bold' : 'text-2xl font-bold';
+    const analyticsSecondaryValueClass = viewerLayout.isStacked ? 'text-base font-semibold' : 'text-lg font-semibold';
+
     // Full sidebar for normal mode
     const AnalyticsSidebar = () => (
-        <div className="flex-1 min-w-[280px] max-w-[400px] space-y-4">
+        <div
+            data-structure-viewer-analytics-layout={viewerLayout.isStacked ? 'stacked' : 'sidebar'}
+            className={`${analyticsSidebarWidthClass} ${analyticsSidebarSpacingClass}`}
+        >
             {/* Design Title */}
             {selectedDesign && (
-                <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
+                <div className={`bg-slate-800/50 rounded-lg border border-slate-700/50 ${analyticsPanelPaddingClass}`}>
                     <h3 className="font-medium text-white truncate mb-2">{selectedDesign.name}</h3>
                     <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap">
                         {activeJob?.model_id} • {new Date(selectedDesign.created_at).toLocaleDateString()}
@@ -1784,7 +1816,7 @@ export default function StructureViewerPane({
 
             {/* Key Metrics */}
             {selectedDesign && (
-                <div className={`rounded-lg border p-4 ${focusedMetricSection === 'summary' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
+                <div className={`rounded-lg border ${analyticsPanelPaddingClass} ${focusedMetricSection === 'summary' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
                     <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
                             <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Summary</h4>
@@ -1799,7 +1831,7 @@ export default function StructureViewerPane({
                             {stageGuidance}
                         </div>
                     )}
-                    {renderSectionButtons()}
+                    {renderSectionButtons(viewerLayout.isStacked)}
                     {designLens === 'rfantibody' && setRfMetricScope && (
                         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
                             <div className="text-[10px] uppercase tracking-wider text-violet-200">RF Lens</div>
@@ -1817,10 +1849,10 @@ export default function StructureViewerPane({
                             </div>
                         </div>
                     )}
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className={analyticsSectionGridClass}>
                         {structureMetricCards.map((metric) => (
                             <div key={metric.label} className="bg-slate-900/50 rounded-lg p-3 text-center">
-                                <div className={`text-2xl font-bold ${metric.accentClass}`}>
+                                <div className={`${analyticsHeadlineMetricClass} ${metric.accentClass}`}>
                                     {metric.value}
                                 </div>
                                 <div className="text-xs text-slate-500 mt-1">{metric.label}</div>
@@ -1856,7 +1888,7 @@ export default function StructureViewerPane({
 
             {/* Confidence Section */}
             {selectedDesign && (
-                <div className={`rounded-lg border p-4 ${focusedMetricSection === 'confidence' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
+                <div className={`rounded-lg border ${analyticsPanelPaddingClass} ${focusedMetricSection === 'confidence' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
                     <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
                             <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Confidence</h4>
@@ -1866,13 +1898,13 @@ export default function StructureViewerPane({
                             {hasResidueConfidence ? 'Ready' : chainMetricsStatusCopy}
                         </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div className="rounded-lg bg-slate-900/50 px-3 py-3 text-center">
-                            <div className="text-lg font-semibold text-white">{confidenceResidueCount || '—'}</div>
+                    <div className={analyticsSectionGridClass}>
+                        <div className={analyticsStatCardClass}>
+                            <div className={`${analyticsSecondaryValueClass} text-white`}>{confidenceResidueCount || '—'}</div>
                             <div className="mt-1 text-[10px] uppercase tracking-wider text-slate-500">Residue Values</div>
                         </div>
-                        <div className="rounded-lg bg-slate-900/50 px-3 py-3 text-center">
-                            <div className="text-lg font-semibold text-cyan-200">{chainMetricChainCount || '—'}</div>
+                        <div className={analyticsStatCardClass}>
+                            <div className={`${analyticsSecondaryValueClass} text-cyan-200`}>{chainMetricChainCount || '—'}</div>
                             <div className="mt-1 text-[10px] uppercase tracking-wider text-slate-500">Chains With Metrics</div>
                         </div>
                     </div>
@@ -1915,7 +1947,7 @@ export default function StructureViewerPane({
 
             {/* Interface Section */}
             {selectedDesign && (
-                <div className={`rounded-lg border p-4 ${focusedMetricSection === 'interface' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
+                <div className={`rounded-lg border ${analyticsPanelPaddingClass} ${focusedMetricSection === 'interface' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
                     <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
                             <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Interface</h4>
@@ -1925,13 +1957,13 @@ export default function StructureViewerPane({
                             {ipsaeInterfaceStatusCopy}
                         </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div className="rounded-lg bg-slate-900/50 px-3 py-3 text-center">
-                            <div className="text-lg font-semibold text-amber-200">{formatMetricValue(ipsaeInterface?.ipsae ?? selectedDesign.ipsae ?? null, 3)}</div>
+                    <div className={analyticsSectionGridClass}>
+                        <div className={analyticsStatCardClass}>
+                            <div className={`${analyticsSecondaryValueClass} text-amber-200`}>{formatMetricValue(ipsaeInterface?.ipsae ?? selectedDesign.ipsae ?? null, 3)}</div>
                             <div className="mt-1 text-[10px] uppercase tracking-wider text-slate-500">Interface ipSAE</div>
                         </div>
-                        <div className="rounded-lg bg-slate-900/50 px-3 py-3 text-center">
-                            <div className="text-lg font-semibold text-cyan-200">{chainPairIptmChainCount || interfacePairScoreCount || '—'}</div>
+                        <div className={analyticsStatCardClass}>
+                            <div className={`${analyticsSecondaryValueClass} text-cyan-200`}>{chainPairIptmChainCount || interfacePairScoreCount || '—'}</div>
                             <div className="mt-1 text-[10px] uppercase tracking-wider text-slate-500">Interface Pairs</div>
                         </div>
                     </div>
@@ -1972,7 +2004,7 @@ export default function StructureViewerPane({
             )}
 
             {/* Structure Analysis */}
-            <div className={`rounded-lg border p-4 ${focusedMetricSection === 'geometry' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
+            <div className={`rounded-lg border ${analyticsPanelPaddingClass} ${focusedMetricSection === 'geometry' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
                 <div className="mb-3 flex items-center justify-between gap-3">
                     <div>
                         <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Geometry</h4>
@@ -2079,7 +2111,7 @@ export default function StructureViewerPane({
             )}
 
             {selectedDesign && hasDesignabilitySection && (
-                <div className={`rounded-lg border p-4 ${focusedMetricSection === 'designability' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
+                <div className={`rounded-lg border ${analyticsPanelPaddingClass} ${focusedMetricSection === 'designability' ? 'border-blue-500/40 bg-blue-500/5' : 'border-slate-700/50 bg-slate-800/50'}`}>
                     <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
                             <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Designability</h4>
@@ -2405,12 +2437,15 @@ export default function StructureViewerPane({
             className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950' : 'p-4'}`}
         >
             {/* Main layout container - always present */}
-            <div className={isFullscreen ? 'h-full w-full relative' : 'flex gap-4'}>
+            <div
+                data-structure-viewer-layout={viewerLayout.isStacked ? 'stacked' : 'split'}
+                className={isFullscreen ? 'h-full w-full relative' : viewerLayout.isStacked ? 'flex flex-col gap-4' : 'flex gap-4'}
+            >
                 {/* Left Column / Fullscreen: Viewer Area */}
-                <div ref={viewerAreaRef} className={isFullscreen ? 'absolute inset-0' : 'flex-[2] min-w-0'}>
+                <div ref={viewerAreaRef} className={isFullscreen ? 'absolute inset-0' : viewerLayout.isStacked ? 'min-w-0' : 'flex-[2] min-w-0'}>
                     {/* Toolbar - positioned differently based on mode */}
                     <div className={isFullscreen ? 'absolute top-3 left-3 z-40' : ''}>
-                        <ViewerToolbar isCompact={isFullscreen} />
+                        <ViewerToolbar isCompact={isFullscreen || viewerLayout.isStacked} />
                     </div>
 
                     {/* Main Viewer - ALWAYS at this exact tree position */}
@@ -2419,7 +2454,7 @@ export default function StructureViewerPane({
                             ? 'absolute inset-0'
                             : 'relative rounded-lg overflow-hidden border border-slate-700'
                         }
-                        style={isFullscreen ? undefined : { height: 450 }}
+                        style={isFullscreen ? undefined : { height: viewerLayout.viewerHeight }}
                     >
                         <MolstarViewer
                             key={selectedDesignId + '_' + effectiveColorMode}
