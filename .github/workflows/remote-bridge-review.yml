@@ -2,7 +2,7 @@ name: Remote bridge review
 
 on:
   push:
-    branches: [test-remote-bridge-repairs-20260917, test-remote-bridge-integration-20260920, test, test-repository-cleanup-20260921]
+    branches: [test]
   workflow_dispatch:
 
 # No deployment, provider credentials, rental operations, or repository writes.
@@ -31,7 +31,7 @@ jobs:
           version: '0.12.17'
           python-version: '3.12'
           enable-cache: false
-      - name: Run locked source, provisioning, transport and multiworker gates
+      - name: Run locked provisioning, transport and multiworker tests
         working-directory: platform/api
         shell: bash
         run: |
@@ -43,7 +43,7 @@ jobs:
           sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" UV_PYTHON="$UV_PYTHON" UV_CACHE_DIR="$UV_CACHE_DIR" \
             _BIOXP_PYTEST_NETNS=1 _BIOXP_PYTEST_PARENT_NETNS="$parent_namespace" \
             unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
-            timeout --signal=TERM --kill-after=15s 900s uv run --offline --frozen --group dev python -m pytest -vv -o faulthandler_timeout=90 \
+            timeout --signal=TERM --kill-after=15s 900s uv run --offline --frozen --group dev python -m pytest -vv --capture=no -o addopts="" -o faulthandler_timeout=90 \
             tests/test_remote_provision_isolation.py \
             tests/test_remote_inventory_supersession.py \
             tests/test_remote_incremental_admission.py \

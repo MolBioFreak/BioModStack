@@ -16,7 +16,7 @@
 > artifacts nor unrelated cross-source row counts are result-display prerequisites.
 
 
-**Status:** Retry3 recovery specification with later contract corrections; historical acceptance packaging is not a current release seal
+**Status:** Retained result-behavior reference; historical release procedure retired
 **Date:** 2026-08-20
 **Parent specification:** `docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md`
 **Target branch:** `test`
@@ -167,31 +167,21 @@ The standard Nextflow terminal publication CAS is the sole transition from activ
 
 Cancellation, awaiting-input, stale-attempt, and operator-gated rows remain authoritative over late worker publication.
 
-### 6.4 Runtime contracts and historical recovery package
+### 6.4 Runtime contracts
 
-Current API and retained-record contracts:
+The runtime contracts retained by this result path are:
 
-- `schemas/ngs/ont_fastq_qc_result_v1.schema.json` for the bounded result response;
-- `schemas/ngs/ont_fastq_qc_reconciliation_receipt_v1.schema.json` for the additive retry3 repair receipt;
-- `schemas/ngs/ont_alignment_session_v1.schema.json` for alignment-session list and detail responses;
-- `schemas/ngs/ont_ngs_error_v1.schema.json` for governed error responses;
-- `schemas/ngs/ont_ngs_rotation_success_v1.schema.json` for capability-rotation success;
-- `schemas/ngs/ont_ngs_capability_revocation_success_v1.schema.json` for idempotent capability revocation.
+- `schemas/ngs/ont_fastq_qc_result_v1.schema.json`;
+- `schemas/ngs/ont_fastq_qc_reconciliation_receipt_v1.schema.json`;
+- `schemas/ngs/ont_alignment_session_v1.schema.json`;
+- `schemas/ngs/ont_ngs_error_v1.schema.json`;
+- `schemas/ngs/ont_ngs_rotation_success_v1.schema.json`;
+- `schemas/ngs/ont_ngs_capability_revocation_success_v1.schema.json`;
+- `platform/api/tests/fixtures/ont_fastq_qc_result_retry3_v1.json`.
 
-The following standalone schemas describe the frozen retry3 recovery package, not
-general runtime contracts or new-run admission rules. They remain available to
-historical schema readers; their literal snapshots are not maintained as current
-result examples:
-
-- `schemas/ngs/ont_fastq_qc_evidence_bundle_v1.schema.json` for each A1 through A17 evidence body;
-- `schemas/ngs/ont_fastq_qc_gate_evidence_body_v1.schema.json` for the closed content of every required evidence file;
-- `schemas/ngs/ont_fastq_qc_browser_evidence_manifest_v1.schema.json` for ordered browser evidence;
-- `schemas/ngs/ont_fastq_qc_independent_review_receipt_v1.schema.json` for each exact-tree review;
-- `schemas/ngs/ont_fastq_qc_deployment_receipt_v1.schema.json` for fencing, quiescence, backup, source, process, listener, database, and migration authority;
-- `schemas/ngs/ont_fastq_qc_final_acceptance_receipt_v1.schema.json` for the retained release verdict;
-- `platform/api/tests/fixtures/ont_fastq_qc_result_retry3_v1.json` for the shared retry3 result fixture.
-
-`docs/specs/2026-08-20-ont-fastq-qc-result-recovery-spec-package.json` is the historical v1 seal manifest for the original recovery package. It does not seal the current tree: later corrections changed this SOW and the runtime result schema without reissuing that manifest. Its original sizes, hashes and package digest are retained unchanged, not refreshed to imply new acceptance. Current result validation uses `schemas/ngs/ont_fastq_qc_result_v1.schema.json` through the result service and response model, independently of this historical seal. The manifest’s `records` array records the original normative order, with the review ledger immediately after the SOW. Each row contains exactly path, size, and SHA-256. `package_sha256` is `SHA256(UTF8(RFC8785(manifest_without_package_sha256)))`. Only the top-level `package_sha256` field is omitted. Record order is preserved and participates in the digest. The manifest schema literal `bms.ont-fastq-qc-specification-package.v1` supplies domain separation.
+The frozen review/evidence/deployment schemas, byte-sealed document package,
+review ledger and final acceptance ceremony are retired. Git retains their
+history. They are not current runtime contracts or release prerequisites.
 
 Every timestamp in these contracts is UTC RFC 3339 with a terminal `Z`. A timezone-free timestamp is invalid. Every validator must assert `format` and the UTC lexical form.
 
@@ -716,7 +706,9 @@ The alignment track and required reference must reach a visible ready state. `Lo
 
 ## 13. Required tests
 
-Tests must be added before implementation fixes for each uncovered behavior.
+Select existing behavior tests at the changed owner and its consumer. Keep independent
+scientific values, identity, persistence and race checks; do not maintain source-text,
+schema-property or historical-receipt inventories as execution coverage.
 
 ### 13.1 Backend focused tests
 
@@ -736,7 +728,7 @@ Tests must be added before implementation fixes for each uncovered behavior.
 - normative JSON Schema validation against the shared valid fixture and adversarial invariant fixtures;
 - construction-validator parity for complete producer rows and wire-validator parity for every bounded `bms.ngs.fastq-qc-result-wire-validator.v1` rule;
 - OpenAPI response-model equality with the normative closed result contract;
-- closed alignment-session, governed-error, reconciliation-receipt, and final-acceptance-receipt schema tests;
+- actual alignment-session, governed-error and reconciliation-receipt receiving behavior;
 - exact sequence versus verification manifest selection;
 - malformed, foreign, oversized, duplicate, non-finite, and digest-drift result rejection;
 - bounded response size, coverage envelope, artifact count, and session count;
@@ -786,162 +778,12 @@ Unrelated baseline failures must be reported separately and may not hide a candi
 
 ## 14. Integration and Development release
 
-### REL-1: Candidate seal
+Use the current [Development deployment procedure](../development-deployment.md)
+and [repository maintenance guide](../Repository_Maintenance.md). Preserve existing
+scientific bytes, historical receipts, authorization and cancellation behavior.
+No new sequencing run or historical-row repair is implied by code cleanup.
 
-Stage only specification-owned paths. Record branch, commit, tree, status, changed-path manifest, and lockfile hashes.
-
-### REL-2: Current parent
-
-Fetch `origin/test` immediately before reconciliation. Merge it into the sealed feature branch without force or unrelated source loss.
-
-### REL-3: Conflict resolution
-
-Resolve overlapping files by preserving both current upstream behavior and this specification. Regenerate dependency locks only from merged manifests when a lock conflict exists.
-
-### REL-4: Exact-tree review
-
-Run independent backend/security and frontend/product reviews against the exact post-merge tree. Every accepted finding must name that tree. Fixes invalidate earlier exact-tree PASS results.
-
-### REL-5: Deployment fence and pre-push safety
-
-Before any push to `test`, pause the canonical Development sync owner through `scripts/biomodstack_dev_sync.py --pause-deploy` and verify a durable paused receipt. Preserve a pre-existing pause as pre-existing operator state.
-
-While the fence is active, require:
-
-- verified online backups for affected Development databases;
-- zero running Jobs;
-- zero actively queued Jobs;
-- zero live workflow transient units;
-- preserved paused and awaiting-input rows;
-- no Production action.
-
-A failure before push restores the prior sync state only when this operation created the pause and `origin/test` remains at the previously accepted revision. A failure after push keeps automatic deployment fenced, records the exact failure and target revision, and requires repair or an explicit supported rollback before resume. The fence may not be left without a named owner and receipt.
-
-### REL-6: Guarded push
-
-Fetch again after final review. Require the current `origin/test` to equal the recorded merge parent. Push feature and `HEAD:refs/heads/test` without force while the deployment fence is active. Fetch and require local HEAD, `origin/test`, and `git ls-remote` to match. Prove the pushed revision has not deployed yet.
-
-### REL-7: Canonical deployment
-
-Resume only through the supported managed Development sync owner. Deploy the exact fenced revision and prove its source/process/listener/database identity. Do not launch an alternate API or frontend from the feature worktree.
-
-### REL-8: Runtime identity
-
-Prove canonical checkout SHA/tree, managed service names, process PIDs/start times/owners, API and frontend listeners, environment lane, Development database paths, and migration versions.
-
-### REL-9: Retry3 repair
-
-After deployed source identity is proven, run reconciliation dry-run, inspect exact proposed JSON changes, apply once, and read back the row through both SQLite and live API.
-
-### REL-10: Drift rule
-
-Any source, remote, service, database, artifact, or browser-build drift during acceptance invalidates affected evidence. Re-establish the exact state before continuing.
-
-### REL-11: Final acceptance receipt
-
-After A1 through A17 pass, emit one `bms.ont-fastq-qc-final-acceptance.v1` receipt that validates against `schemas/ngs/ont_fastq_qc_final_acceptance_receipt_v1.schema.json`. It binds:
-
-- exact hashes for the SOW, review ledger, result schema, reconciliation schema, alignment-session schema, error schema, rotation-success schema, capability-revocation schema, evidence-bundle schema, gate-evidence-body schema, browser-evidence schema, independent-review schema, deployment-receipt schema, final-receipt schema, and retry3 fixture;
-- accepted commit/tree, remote `test`, canonical Development checkout, served frontend build, API process, listeners, database identity, and migration identity;
-- exact independent review identities and PASS verdict digests;
-- hierarchy, reconciliation receipt, package authority, source FASTQ, reference, and both manifest digests;
-- one ordered PASS row for each A1 through A17 with an immutable evidence-bundle ID and SHA-256;
-- browser screenshots, console/network audit, Range evidence, and normal-reopen evidence digests;
-- `no_fifth_compute_job=true`, `scientific_artifacts_modified=false`, and `production_action=false`.
-
-Every A1 through A17 body is embedded as a `bms.ont-fastq-qc-evidence-bundle.v1` object in canonical gate order. `bundle_sha256` is SHA-256 over UTF-8 RFC 8785 of the complete bundle with only `bundle_sha256` omitted. Files are resolved from the immutable release evidence directory by exact bundle ID, filename, size, and digest. The ordered browser manifest and all three exact-scope independent review receipts are embedded and self-digested by the same omit-only-own-digest rule.
-
-The gate-specific assertion and required-file denominator is: A1 `A1_PACKAGE_AUTHORITY_CLOSED` with `package_manifest`, `artifact_inventory`; A2 `A2_LIFECYCLE_MIRRORS_CLOSED` with `lifecycle_db`, `reconciliation_receipt`; A3 `A3_RESULT_ENDPOINT_CLOSED` with `result_response`; A4 `A4_BROWSER_RECOVERY_CLOSED` with `rotation_trace`; A5 `A5_HIERARCHY_AUTHORIZATION_CLOSED` with `authorization_matrix`; A6 `A6_FULL_DOWNLOAD_CLOSED` with `full_download`; A7 `A7_RANGE_CLOSED` with `range_matrix`; A8 `A8_FIRST_VIEWPORT_CLOSED` with `first_viewport`; A9 `A9_DECISION_REPORT_CLOSED` with `decision_report`; A10 `A10_LOCAL_VIEWER_OPEN` with `igv_open`; A11 `A11_RANGE_NAVIGATION_CLOSED` with `navigation`; A12 `A12_BULK_DATA_BEHAVIOR_CLOSED` with `transfer_audit`; A13 `A13_FAILURE_ISOLATION_CLOSED` with `failure_isolation`; A14 `A14_CONSOLE_NETWORK_CLOSED` with `console_network`; A15 `A15_NORMAL_REOPEN_CLOSED` with `normal_reopen`; A16 `A16_RUNTIME_RELEASE_CLOSED` with `runtime_identity`; and A17 `A17_ISOLATION_CLOSED` with `isolation_audit`. The bundle verifier requires each named file exactly once and no unlisted file. It validates each file's typed content against the corresponding A-row evidence requirements.
-
-`ont_fastq_qc_gate_evidence_body_v1.schema.json` is the content schema for those JSON files. Each body retains the exact source response or trace filename and digest plus gate-specific rows. A5 contains the owner/operator positives and every named foreign-binding denial. A8 retains every required label. A9 retains all five check IDs, both plot IDs, variant anchor/affected-base semantics, downloads, and disclosures. A11 retains separate range and variant screenshots. A13 retains the failure-injection trace and three visibility observations. A14 retains uncaught, integrity-denial, hanging-request, external-request, and disclosure counts. A15 retains the ten ordered ordinary-navigation/reopen/foreign-Job steps and the foreign outcome. Summary booleans or counts without these retained rows are invalid.
-
-A1 embeds the exact 36-row scientific package manifest and artifact inventory with canonical byte sizes and SHA-256 values. A2 embeds the complete reconciliation receipt and binds its canonical size/digest. A3 embeds the complete frozen `bms.ngs.fastq-qc-result.v1` retry3 fixture. Its body digest and byte count are recomputed over UTF-8 RFC 8785 bytes. The outer A3 Job, embedded response Job, all evidence-bundle Jobs, browser Job, and final scientific Job equal `31f02bd5-830f-4558-aa78-3873c515de68`. A4 retains `rotation_trace.json`, its size, SHA-256, `bms.ont-fastq-qc-rotation-trace.v1`, and seven exact events in order: initial capability denial, one successful rotation, one protected result retry, sessions list load, primary-session load, artifact HEAD load, and capability revocation. A5 retains exactly 26 rows: owner/operator read success, 12 named read denials, and the same 12 rotation denials. Counts are 2 positive and 24 negative. A6 fixes the retry3 `alignment_bam` download to opaque artifact ID `0fe950758c4b3f1bb04700d4f80a831bae6c4fb2c0903569cb73f7657671bdad`, Job `31f02bd5-830f-4558-aa78-3873c515de68`, 305,396,924 bytes, file SHA-256 `c14a54c6152b72789a6932a8b2e70adc35188835d5df1970042af10b54183971`, strong ETag `"sha256:c14a54c6152b72789a6932a8b2e70adc35188835d5df1970042af10b54183971"`, `Accept-Ranges: bytes`, `application/octet-stream`, and `inline; filename="alignment_bam-c14a54c6152b.bam"`. Route ID, file digest, body, ETag, Content-Length, and package authority must agree with their distinct roles.
-
-A2 also embeds exact canonical DB and API lifecycle readbacks. Each contains the four complete stage rows and the exact 25 ordered output suffixes. The verifier requires DB, API, and reconciliation receipt equality. A12 embeds the closed transfer/network trace. The verifier hashes its retained canonical bytes, validates every completed request row, recomputes initial BAM transfer bytes, rejects a full BAM transfer or hanging request, and requires viewer readiness. A17 embeds pre/post four-Job inventories, pre/post 25-file retry3 artifact snapshots, a zero-action Production audit, and pre/post unrelated-worktree manifests. The verifier requires equal pre/post Job IDs, artifact rows, and unrelated-path manifests before accepting no fifth compute, no scientific mutation, no Production action, and no unrelated worktree change.
-
-The browser manifest has exactly five screenshot rows in order: 1 `first_viewport`, 2 `decision_report`, 3 `range_3400_3600`, 4 `variant_3515_3516`, and 5 `compact_igv`. Every row and A15 bind the same ordinary route `/projects/4af72c1d-27d8-4e14-8f39-4259a80494a0/experiments/9a10c5a8-b233-4bf3-af14-9c2880525278/domains/916a611b-6879-486f-bf9e-e1b5a796e01c`. Duplicate order or view, gaps, omissions, extra rows, diagnostic routes, and quick-viewer routes are invalid.
-
-Each screenshot row binds immutable filename, byte size, `image/png`, SHA-256, pixel dimensions, exact route, loopback Development origin, CSS viewport, device scale, UTC capture time, and accepted frontend-build SHA-256. The verifier resolves the filename only below the immutable evidence root and hashes the bytes before accepting view semantics.
-
-The A7 range matrix includes these exact retry3 vectors: BAM `bytes=0-1023` returns 206, `Content-Range: bytes 0-1023/305396924`, 1,024 bytes, fragment SHA-256 `3f5cec6120ee6e15883ff1b40dbf4f959a2e864c6c20c41cb85b075519c97f6d`; FASTA `bytes=0-255` returns 206, `Content-Range: bytes 0-255/5654`, 256 bytes, fragment SHA-256 `746ab93c063e8a9f7780352e555bbdb169d5075af264e55a5fb01a241300296e`; VCF `bytes=0-127` returns 206, `Content-Range: bytes 0-127/423`, 128 bytes, fragment SHA-256 `414536db288b87df3b508e2a407ae0a5bb14ca4194458c470a6218b005704c71`. It also records one end-beyond-size normalization, one suffix-beyond-size normalization, 416 at start=size, invalid multipart 400, absent/matching/mismatching If-Range, If-None-Match precedence, and HEAD behavior.
-
-The A7 body fixes `vector_count=3`. Its nine positional boundary rows retain exact method, request headers, status, typed code, Content-Range, Content-Length, ETag, disposition, and body presence for end normalization, suffix normalization, 416, malformed multipart 400, absent/matching/mismatching If-Range, If-None-Match 304, and HEAD. `matrix_sha256` is `8183cd3e271f670cb354771fc20024a9bd2e9e705169e266b4aadcfcf68938cf`, computed as SHA-256 over UTF-8 RFC 8785 of `{"schema":"bms.ont-fastq-qc-range-matrix.v1","vectors":<exact-three-vectors>,"boundary_rows":<exact-nine-rows>}`.
-
-The deployment receipt embeds owner-issued typed identities. Each nested identity stores the schema ID, source handle, canonical preimage digest, and native receipt digest. Canonical extraction preimages are:
-
-- fence: pause owner, prior pause state, pause receipt ID, creation time, target commit/tree, and resume disposition;
-- quiescence: one transaction timestamp plus exact running, queued, transient-unit, paused, and awaiting-input row identities and counts;
-- backup: database logical name, device/inode, online-backup ID, source/backup integrity results, exact size, and SHA-256;
-- process: systemd unit, InvocationID, PID, UID, start monotonic time, executable SHA-256, source commit/tree, and lane;
-- listener: protocol, numeric address, port, owning PID, socket inode, and service unit;
-- database: the RECON-5 database-identity preimage plus migration identity;
-- migration: ordered migration IDs and SHA-256 values as RFC 8785 array;
-- frontend: build manifest with sorted relative asset path, size, SHA-256, source commit, and source tree.
-
-Every nested `canonical_preimage_sha256` is SHA-256 over UTF-8 RFC 8785 of that exact typed preimage. Native receipt bytes remain immutable evidence files and their digest is `receipt_sha256`.
-
-`bms.ont-fastq-qc-final-acceptance-verifier.v1` first validates every embedded object. It recomputes all contract hashes, every evidence-file digest, each nested self-digest, and each gate pointer. It then requires one commit/tree across source, remote `test`, canonical checkout, deployment, browser manifest, all evidence bundles, and all three review receipts. It requires exactly one PASS review in canonical order for `backend_security_scientific`, `frontend_browser_viewer`, and `integration_minimality`. It verifies all A1 through A17 assertions against their typed bodies. It verifies the final `receipt_sha256` last as SHA-256 over UTF-8 RFC 8785 of the complete final receipt with only `receipt_sha256` omitted. The receipt is emitted only after live acceptance and cannot be a prerequisite for itself.
-
-The final verifier also requires A8 screenshot digest = browser row 1, A9 = row 2, A10 = row 5, and A11 range/variant screenshot digests = rows 3/4 respectively. It resolves every referenced response, matrix, trace, and screenshot below the immutable evidence root and verifies filename, size, schema, and SHA-256 before evaluating its gate.
-
-The A4 verifier requires all eight revocation precedence rows in order, including status, typed code, expiry behavior, and CAS reload outcome. A successful revocation event alone cannot satisfy WEB-2.
-
-## 15. Live acceptance ledger
-
-Every row is required unless marked otherwise.
-
-| ID | Pass condition | Required evidence |
-|---|---|---|
-| A1 | Retry3 package authority closes | Exact 36-descriptor denominator, 34 present, 2 unavailable, sizes, SHA-256, exact manifest digests, source/reference cross-binding, and artifact-set SHA-256 `e122e032836df10c0d7e1756fb5ea00d5e65384c6cf942c1f684c155b3a57650` |
-| A2 | Lifecycle mirrors close | Four canonical completed stages with 25 terminal output descriptors total in DB/API, per-stage counts 5/6/8/6, outputs match immutable terminal receipts, reconciliation receipt valid, resource evidence explicitly `historical_unavailable` |
-| A3 | Result endpoint closes | Fresh governed request returns exact bounded result for retry3 with no raw paths or generic design fields |
-| A4 | Browser recovery closes | Fresh page with no cookie rotates once, retries once, and loads result/sessions/artifacts |
-| A5 | Hierarchy authorization closes | Owner/operator positive path passes; non-owner, non-operator, guessed Job, cross-Project/Global/Domain/state/member/sample/reference, stale-binding, rotation, and second-Job governed reads all fail closed |
-| A6 | Full download closes | Exact artifact bytes, size, digest ETag, media type, and attachment policy match authority |
-| A7 | Range closes | BAM, FASTA, and one small artifact return exact 206 fragments and Content-Range; invalid Range fails correctly |
-| A8 | First viewport closes | Result-first hierarchy visibly shows execution complete plus scientific review, exact metrics, and reason codes |
-| A9 | Decision report closes | Checks, two purpose-labeled plots, variant table, downloads, and progressive audit disclosures render from retry3 |
-| A10 | Local viewer opens | Bundled compact IGV loads exact reference and alignment without external requests or automatic fullscreen |
-| A11 | Range navigation closes | `eGFP_plasmid:3400-3600` and the 3515-3516 VCF record context both display with exact case and affected-base semantics |
-| A12 | Bulk-data behavior closes | No full BAM transfer; initial BAM Range bodies total under 64 MiB; viewer reaches ready state |
-| A13 | Failure isolation closes | Optional viewer failure does not suppress valid report or downloads |
-| A14 | Console/network closes | No uncaught errors, integrity denials, hanging requests, external genomic calls, or secret/path disclosure |
-| A15 | Normal reopen closes | Start at frozen BFX6NB Project, enter the frozen Global/Domain Experiment and state revision through ordinary controls, open retry3 from its exact member receipt, close page state, repeat, and recover the same result; substituting a foreign readable Job clears context or fails closed |
-| A16 | Runtime release closes | Remote, canonical checkout, managed processes, listeners, database, and served frontend/API all bind to one accepted revision |
-| A17 | Isolation closes | No fifth compute Job, no retry3 artifact mutation, no Production action, no unrelated worktree change |
-
-## 16. Implementation order
-
-1. Add this specification and exact RED tests for backend lifecycle and result authority.
-2. Repair terminal-output resolution, persisted stage mirrors, finalizer tests, and generic-ingestion/resource isolation.
-3. Add the bounded, audited retry3 reconciliation service and command with dry-run/apply tests.
-4. Add strict parser/query tests and repair current frontend contract defects.
-5. Rebuild the canonical FASTQ-QC result hierarchy, checks, plots, variant actions, and governed downloads.
-6. Make IGV local-only and compact; add the governed Range control and keep the existing read inspector collapsed and nonblocking.
-7. Run the pre-merge focused matrix and seal the feature candidate.
-8. Merge current `origin/test`, resolve exact overlaps, and rerun the complete matrix.
-9. Obtain exact-tree reviews, apply required fixes, and rerun affected gates.
-10. Fence the managed Development sync owner, back up state, prove pre-push safety, and perform the guarded non-force push while deployment remains paused.
-11. Prove the pushed revision is still fenced, then resume the managed owner and prove runtime identity.
-12. Reconcile retry3 through the deployed supported path.
-13. Run live API, Range, fresh-browser, normal-reopen, report, and viewer acceptance.
-14. Repair any specification-owned live defect and repeat every affected row.
-
-## 17. Definition of done
-
-This specification is complete only when A1 through A17 pass against one exact deployed Development revision and the retry3 fixture.
-
-Source implementation, local tests, a push, healthy services, persisted files, or one successful API request cannot independently satisfy completion.
-
-A final completion claim must include:
-
-- accepted commit and tree;
-- remote `test` identity;
-- managed Development source/process/listener/database identity;
-- retry3 reconciliation receipt;
-- exact artifact and Range evidence;
-- fresh-browser and normal-reopen evidence;
-- screenshots of the first result viewport, decision visuals, exact Range, and compact loaded IGV;
-- browser console/network audit;
-- explicit proof of no fifth compute job and no scientific artifact mutation.
-- the validated final acceptance receipt and its SHA-256.
+The former fixed A1–A17 release ledger and self-digested acceptance package are
+retired. Record the actual changed behavior and executed tests, distinguish live
+acceptance from inert fixtures, and report missing evidence without creating a
+new launch, result-access or deployment condition.

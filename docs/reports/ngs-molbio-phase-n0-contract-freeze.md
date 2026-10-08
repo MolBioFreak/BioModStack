@@ -1,6 +1,6 @@
 # NGS/MolBio and Protein Phase N0 Contract Freeze
 
-## Status
+## Historical status
 
 The static Phase N0 management-plane package is complete at baseline commit `d2fc413d6d0224fe9fbecb1cb1797e0456ca1517` and tree `f89094ba373e3dd8fa181fd17d942e54a6f0f63e`.
 
@@ -89,4 +89,8 @@ These gates do not reopen the frozen N0 denominator. A future Protein payload or
 
 ## Receipt semantics
 
-`docs/reports/ngs-molbio-phase-n0-verification-v1.json` binds every package payload byte and records `not_run_by_operator_instruction` for post-harmonization verification. Its status is `static_contract_freeze_complete`.
+`docs/reports/ngs-molbio-phase-n0-verification-v1.json` remains the static fingerprint
+input used by the shared-package acceptance reader. It records
+`not_run_by_operator_instruction`, not executed tests or current qualification.
+The historical HEAD-bound N0 verifier is retired; current capabilities are owned
+by the runtime registry.
