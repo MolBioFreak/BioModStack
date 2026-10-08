@@ -44,11 +44,14 @@ class ExperimentTemplate(BaseModel):
     icon: str
     color: str
     description: str
+    goal: Optional[str] = None
+    status: Optional[str] = None
     stages: List[TemplateStage]
     preset_params: dict
     user_params: List[TemplateParam]
     ntp_templates: Optional[List[NTPTemplate]] = None
     enabled: bool = True
+    experimental: bool = False
 
 
 class TemplateRegistry:
@@ -96,11 +99,14 @@ class TemplateRegistry:
                     icon=data.get('icon', 'beaker'),
                     color=data.get('color', '#6366F1'),
                     description=data.get('description', ''),
+                    goal=data.get('goal'),
+                    status=data.get('status'),
                     stages=stages,
                     preset_params=data.get('preset_params', {}),
                     user_params=user_params,
                     ntp_templates=ntp_templates,
-                    enabled=data.get('enabled', True)
+                    enabled=data.get('enabled', True),
+                    experimental=data.get('experimental', False)
                 )
                 
                 self._templates[template.id] = template
