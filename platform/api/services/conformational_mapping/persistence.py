@@ -27,6 +27,10 @@ from .contracts import (
     validate_contract_bundle,
     validate_schema,
 )
+from .state_landscape_analysis import (
+    StateLandscapeAnalysisError,
+    validate_state_landscape_analysis_binding,
+)
 
 
 RESULT_CONTRACT_BY_BACKEND = {
@@ -398,6 +402,29 @@ async def ingest_result_bundle(
         )
     if not isinstance(bundle.get("cm_analysis_v1"), Mapping):
         raise ConformationalPersistenceError("canonical analysis authority is missing")
+    state_analysis_value = bundle.get("cm_state_landscape_analyses")
+    state_analysis_requested = "state_landscape_comparison" in record.request_json
+    if state_analysis_value is None:
+        if state_analysis_requested:
+            raise ConformationalPersistenceError("requested state landscape analysis is missing")
+    else:
+        state_analyses = state_analysis_value if isinstance(state_analysis_value, list) else [state_analysis_value]
+        if len(state_analyses) != 1:
+            raise ConformationalPersistenceError("state landscape analysis must materialize exactly once")
+        try:
+            proposed_state_analysis = state_analyses[0]
+            if not isinstance(proposed_state_analysis, Mapping):
+                raise TypeError("state landscape analysis is not an object")
+            validate_schema("cm_state_landscape_analysis_v1", proposed_state_analysis)
+            validate_state_landscape_analysis_binding(
+                record.request_json,
+                ensemble,
+                bundle.get("cm_frustration_landscapes") or [],
+                bundle.get("cm_structure_maps") or [],
+                proposed_state_analysis,
+            )
+        except (ContractValidationError, StateLandscapeAnalysisError, KeyError, TypeError) as exc:
+            raise ConformationalPersistenceError("state landscape analysis binding validation failed") from exc
     for bundle_key, record_type in optional_records.items():
         value = bundle.get(bundle_key)
         if value is None:

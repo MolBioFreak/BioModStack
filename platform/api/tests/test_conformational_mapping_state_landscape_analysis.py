@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -10,9 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, ConformationalMappingRecord, Job
-from services.conformational_mapping.contracts import AA_ORDER, canonical_json_bytes, validate_schema
+from services.conformational_mapping.contracts import AA_ORDER, canonical_json_bytes, canonical_sha256, validate_schema
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
+    ingest_result_bundle,
     persist_derived_record,
     register_prepared_request,
 )
@@ -310,6 +313,68 @@ def test_cm_state_001c_request_gate_requires_dedicated_authority_and_ignores_res
     assert artifact["resolved_pairs"] == _pairwise()["resolved_pairs"]
 
 
+def test_cm_state_001d_pairwise_authority_fails_closed_when_final_ensemble_has_fewer_than_two_candidates() -> None:
+    ensemble, _, _ = _sources()
+    ensemble["candidates"] = [ensemble["candidates"][0]]
+
+    with pytest.raises(StateLandscapeAnalysisError, match="fewer than two"):
+        state_landscape_analysis.resolve_state_landscape_comparison(
+            ensemble,
+            {
+                "mode": "pairwise",
+                "target_id": "target-a",
+                "scope": "all_within_target",
+            },
+        )
+
+
+@pytest.mark.parametrize("forgery", [
+    "source_ensemble_sha256",
+    "source_landscape_sha256",
+    "source_structure_map_sha256",
+    "formula_sha256",
+    "policy_sha256",
+    "analysis_id",
+    "resolved_pair_ledger",
+])
+def test_cm_state_001e_binding_rejects_schema_valid_forged_artifact(forgery: str) -> None:
+    ensemble, maps, landscapes = _sources()
+    request = {
+        "state_landscape_comparison": {
+            "mode": "pairwise",
+            "target_id": "target-a",
+            "scope": "all_within_target",
+        }
+    }
+    expected = state_landscape_analysis.derive_state_landscape_analysis_for_request(
+        request, ensemble, landscapes, maps,
+    )
+    assert expected is not None
+    forged = copy.deepcopy(expected)
+    if forgery == "analysis_id":
+        forged["analysis_id"] = "cm_state_landscape_analysis_" + "0" * 32
+    elif forgery == "resolved_pair_ledger":
+        for entries in (forged["resolved_pairs"], forged["support_ledger"], forged["rows"], forged["exclusion_ledger"]):
+            for entry in entries:
+                entry["pair_id"] = "forged-pair"
+        forged["comparison_sha256"] = canonical_sha256({
+            "mode": forged["comparison_mode"],
+            "comparison_target_id": forged["comparison_target_id"],
+            "comparison_scope": forged["comparison_scope"],
+            "reference_backend_coordinates": forged["reference_backend_coordinates"],
+            "reference_candidate_id": forged["reference_candidate_id"],
+            "resolved_pairs": forged["resolved_pairs"],
+        })
+    else:
+        forged[forgery] = "0" * 64
+    validate_schema("cm_state_landscape_analysis_v1", forged)
+
+    binding = getattr(state_landscape_analysis, "validate_state_landscape_analysis_binding", None)
+    assert callable(binding), "persistence binding must be public and deterministic"
+    with pytest.raises(StateLandscapeAnalysisError, match="binding"):
+        binding(request, ensemble, landscapes, maps, forged)
+
+
 @pytest.mark.parametrize("mutation", ["wt", "provenance"])
 def test_cm_state_002_mismatch_records_exclusion_without_fabricated_delta(mutation: str) -> None:
     ensemble, maps, landscapes = _sources()
@@ -356,6 +421,57 @@ async def _session(tmp_path: Path) -> tuple[AsyncSession, object]:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)(), engine
+
+
+@pytest.mark.asyncio
+async def test_cm_state_003a_ingestion_rejects_requested_analysis_that_did_not_materialize(tmp_path: Path) -> None:
+    """A completed worker bundle cannot silently omit explicit comparison authority."""
+
+    fixture_path = Path(__file__).parent / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json"
+    bundle = json.loads(fixture_path.read_text())
+    bundle.pop("cm_state_landscape_analysis_v1", None)
+    bundle.pop("cm_mutagenesis_handoff_v1", None)
+    root = tmp_path / "result"
+    root.mkdir()
+    native = bundle["cm_native_artifacts_v1"]
+    for index, item in enumerate(native["files"], start=1):
+        path = root / item["relative_path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = bytes([index]) * index
+        path.write_bytes(payload)
+        item["sha256"] = hashlib.sha256(payload).hexdigest()
+        item["bytes"] = len(payload)
+    ensemble = bundle["cm_ensemble_v1"]
+    authoritative_path = ensemble["candidates"][0]["authoritative_structure_path"]
+    ensemble["candidates"][0]["authoritative_structure_sha256"] = next(
+        item["sha256"] for item in native["files"] if item["relative_path"] == authoritative_path
+    )
+    ensemble["native_manifest_sha256"] = canonical_sha256(native)
+    bundle["cm_analysis_v1"]["source_ensemble_sha256"] = canonical_sha256(ensemble)
+    session, engine = await _session(tmp_path)
+    try:
+        request = bundle["cm_request_v1"]
+        record = await register_prepared_request(
+            session,
+            job=Job(id=request["request_id"], name="state", model_id="conformational_mapping", mode="map", status="queued", params={}, created_at=datetime.utcnow()),
+            principal_id="alice", request=request,
+            coordinate_plan={"coordinate_plan_sha256": "b" * 64, "expected_cardinality": 1, "coordinates": ensemble["expected_coordinates"]},
+            resume_key="0" * 64, capability_sha256="c" * 64,
+        )
+        with pytest.raises(ConformationalPersistenceError, match="requested state landscape analysis is missing"):
+            await ingest_result_bundle(
+                session,
+                record,
+                bundle={
+                    **bundle,
+                    "cm_structure_maps": [bundle["cm_structure_map_v1"]],
+                    "cm_frustration_landscapes": [bundle["cm_frustration_landscape_v1"]],
+                },
+                result_root=root,
+            )
+    finally:
+        await session.close()
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
