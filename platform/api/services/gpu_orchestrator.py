@@ -580,7 +580,7 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
             # active. Once its phase is terminal, generic scheduler reconciliation
             # may publish the matching terminal status onto Job.
             with session.no_autoflush:
-                md_run = await session.get(MdRun, str(candidate.id))
+                md_run = await session.get(MdRun, str(candidate.id), populate_existing=True)
             if md_run is not None and md_run.phase not in TERMINAL_PHASES:
                 session.expunge(candidate)
                 continue
