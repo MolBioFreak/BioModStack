@@ -5,6 +5,7 @@ bms_python_runtime_resolve() {
     # A managed but stale/incomplete environment must not fall back to host uv.
     BMS_MANAGED_PYTHON="$(PYTHONPATH="$_BMS_PYTHON_GUARD_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -B -c '
 import sys
+sys.path.insert(0, sys.argv[2])
 from pathlib import Path
 from biomodstack_python_prerequisites import resolve_python_environment
 try:
@@ -13,7 +14,7 @@ try:
 except (OSError, ValueError, RuntimeError) as exc:
     print(f"BioModStack Python prerequisite environment is blocked: {exc}", file=sys.stderr)
     raise SystemExit(78)
-' "${PROJECT_DIR:-$_BMS_PYTHON_GUARD_ROOT}")" || return 78
+' "${PROJECT_DIR:-$_BMS_PYTHON_GUARD_ROOT}" "$_BMS_PYTHON_GUARD_ROOT")" || return 78
     BMS_MANAGED_PYTHON_ROOT="${BMS_MANAGED_PYTHON%/environment/bin/python}"
     export BMS_MANAGED_PYTHON BMS_MANAGED_PYTHON_ROOT
 }
